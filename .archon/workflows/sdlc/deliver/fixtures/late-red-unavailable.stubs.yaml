@@ -53,6 +53,7 @@ review__publish:
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"ci/external (failure)"}'
+ci-settle: '{"state":"red","detail":"ci/external (failure)"}'
 ci-verdict: '{"state":"red","detail":"ci/external (failure)"}'
 ci-rerun: { requested: false, reason: "stub: the external CI cannot be re-run from here" }
 ci-reverdict: '{"state":"red","detail":"ci/external (failure)"}'
@@ -69,7 +70,7 @@ attention-ci-probe: '{"state":"red","detail":"ci/external (failure)"}'
 file-discoveries: '{"records":[]}'
 match-discoveries: { matches: [] }
 fork: '{"fork":true}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/10" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/10", flipped_at: null }
 mark-draft: "mark-draft: the pull request is a draft while CI stays red"
 publish-pr-body: {}
 fixture:

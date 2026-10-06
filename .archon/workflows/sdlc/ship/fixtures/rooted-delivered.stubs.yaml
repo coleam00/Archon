@@ -31,9 +31,10 @@ deliver__pr__synced: { recorded: true }
 deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 deliver__discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
 ci-probe: '{"state":"concluded","detail":"all checks passed"}'
+deliver__ci-settle: '{"state":"concluded","detail":"all checks green"}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__publish-pr-body: {}
-deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
+deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/2", flipped_at: null }
 deliver__confirm-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 deliver__outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
 deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }

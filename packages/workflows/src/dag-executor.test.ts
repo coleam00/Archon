@@ -35786,11 +35786,20 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       recorded: false,
       requested: true,
     };
-    const inheritedRouteText = JSON.stringify(inheritedRoute);
+    // The merged tree's two routes exclude each other, so the shared value cannot
+    // activate both: this delivery took the correction, which converged without the
+    // operator, and its gate passed.
+    const routeOverrides: Record<string, Record<string, unknown>> = {
+      pr__validate__result: { ...inheritedRoute, red_cause: 'introduced' },
+      'pr__merge-fix-route': { ...inheritedRoute, attention: false },
+    };
     const completedBeforeAttention = new Map<string, PersistedNodeOutput>(
       workflow.nodes
         .filter(node => !activeNodeIds.has(node.id))
-        .map(node => [node.id, { output: inheritedRouteText, structuredOutput: inheritedRoute }])
+        .map(node => {
+          const value = routeOverrides[node.id] ?? inheritedRoute;
+          return [node.id, { output: JSON.stringify(value), structuredOutput: value }];
+        })
     );
 
     const initialStore = createEscalationStore('deliver-attention-resume');

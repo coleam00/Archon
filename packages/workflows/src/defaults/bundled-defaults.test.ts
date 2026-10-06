@@ -384,9 +384,10 @@ describe('bundled-defaults', () => {
       expect(unreviewed).toEqual([]);
     });
 
-    // Delivery waits on CI once, before the flip, on the final head. Only a re-run
-    // or the one CI fix earns another wait, and the operator's attention loop waits
-    // for an explicit re-run; nothing reads or waits on CI earlier in the run.
+    // Delivery waits on CI once, before the flip, on the final head. Only a check
+    // that registers after that wait concluded, a re-run, or the one CI fix earns
+    // another wait, and the operator's attention loop waits for an explicit re-run;
+    // nothing reads or waits on CI earlier in the run.
     it('archon-deliver waits on CI only before the flip', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],
@@ -403,7 +404,13 @@ describe('bundled-defaults', () => {
             )
         )
         .map(node => node.id);
-      expect(waiting).toEqual(['await-checks', 'await-rerun', 'await-fix-checks', 'ci-attention']);
+      expect(waiting).toEqual([
+        'await-checks',
+        'await-late-checks',
+        'await-rerun',
+        'await-fix-checks',
+        'ci-attention',
+      ]);
       const corrections = parsed.workflow.nodes.find(node => node.id === 'corrections');
       if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
       expect(corrections.loop_group.nodes.map(node => node.id)).toEqual([
@@ -418,7 +425,8 @@ describe('bundled-defaults', () => {
       // publish-pr-body runs after every gate and is skipped when one failed; the
       // single CI wait follows the flip. confirm-ready runs however the CI path ended
       // (ci-settled is all_done), so it may bind only values that exist once the flip
-      // ran: the PR record and discover-ci's facts, which the flip waits on. A
+      // ran: the PR record, discover-ci's facts, which the flip waits on, and the
+      // flip's own time. A
       // binding to a failed CI-path node would fail it before it drafts the PR.
       // That the gates really block is proved by execution: deliver's validate-red*
       // fixtures fail at the gate and never reach the flip.
@@ -443,6 +451,7 @@ describe('bundled-defaults', () => {
       expect(confirm && 'with' in confirm ? Object.keys(confirm.with ?? {}) : []).toEqual([
         'pr',
         'expected',
+        'flipped_at',
       ]);
       expect(node('mark-draft')?.depends_on).toEqual(['ci-attention-route']);
       expect(node('ci-attention')?.depends_on).toEqual(['mark-draft']);
@@ -1012,7 +1021,7 @@ describe('bundled-defaults', () => {
         detail: 'non-green checks: build (failure)',
       });
       expect(probe.gh[0]).toBe(
-        'pr checks 42 --repo ghe.example.com/example/repo --json name,state'
+        'pr checks 42 --repo ghe.example.com/example/repo --json name,state,completedAt'
       );
 
       const confirm = await runShipped('confirm-ready', {

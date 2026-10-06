@@ -96,7 +96,7 @@ match-discoveries: { matches: [] }
 sync-pr-body: { body: null, summary: "stub: the body is still accurate" }
 fork: '{"fork":true}'
 push-fix: "push-head: fixture-branch is at fixturehead"
-flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/7", flipped_at: null }
 publish-pr-body: {}
 fixture:
   expect: paused

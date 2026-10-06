@@ -10,7 +10,9 @@
  * Which checks gate a merge is a project fact discover-ci recorded; this acts on
  * that record and never guesses from silence. States, declared through this node's
  * `output_format` so `when:` and `until_bash` branch on a certified field:
- *   pending    a check is running, or an expected check has not registered yet
+ *   pending    a check is running, an expected check has not registered yet, a
+ *              check was skipped before the ready flip (a draft-time run the ready
+ *              run replaces), or every check was skipped
  *   concluded  green; no checks expected and none registered; or CI gated on a
  *              maintainer's approval, which the forge reports structurally (an
  *              `action_required` conclusion) — named, never blocked on, never green
@@ -23,14 +25,17 @@
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
  * - INPUTS_EXPECTED: JSON list of the check names discover-ci expects to gate.
+ * - INPUTS_FLIPPED_AT: when flip-ready marked the pull request ready, or null.
  */
 
 import {
   approvalPending,
   atRevision,
   describeUnits,
+  draftSkips,
   gateState,
   missingChecks,
+  parseFlippedAt,
   readPrChecks,
 } from '../../.shared/checks.ts';
 import { parseQualifiedPr } from '../../.shared/forge.ts';
@@ -42,10 +47,18 @@ function probe(): void {
   const read = readPrChecks(pr);
   const at = atRevision(read);
   const units = read.units;
-  const state = gateState(units);
+  const flippedAt = parseFlippedAt(text(process.env.INPUTS_FLIPPED_AT));
+  const state = gateState(units, flippedAt);
   if (state === 'pending') {
-    const count = units.filter(unit => unit.state === 'pending').length;
-    emit({ state: 'pending', detail: `${count} check(s) running${at}` });
+    const running = units.filter(unit => unit.state === 'pending');
+    const stale = draftSkips(units, flippedAt);
+    const parts: string[] = [];
+    if (running.length > 0) parts.push(`${running.length} check(s) running${at}`);
+    if (stale.length > 0) {
+      parts.push(`skipped before the ready flip, so not yet run for review${at}: ${describeUnits(stale)}`);
+    }
+    if (parts.length === 0) parts.push(`every check was skipped${at}; waiting for one that runs`);
+    emit({ state: 'pending', detail: parts.join('; ') });
     return;
   }
   if (state === 'red') {

@@ -12,6 +12,10 @@
  * the source the run selected, and reads the state back. A pull request already
  * merged needs no flip; one closed without a merge refuses.
  *
+ * It reports when it flipped (`flipped_at`, null when the pull request was already
+ * ready or merged): checks a draft skipped before that moment are not the ready
+ * pull request's, and the CI wait reads them as not yet run.
+ *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
  */
@@ -26,14 +30,20 @@ function flipReady(): void {
   const observed = viewPr(pr, source).pr;
   if (observed.state === 'merged') {
     note('flip-ready: the PR was already merged, so no flip was needed.');
-    emit({ pr_url: observed.url });
+    emit({ pr_url: observed.url, flipped_at: null });
     return;
   }
   if (observed.state === 'closed') {
     throw new Error('the PR is CLOSED without a merge, so there is no delivery to report.');
   }
   assertMergesCleanly(pr.repo, pr.base);
-  emit({ pr_url: observed.is_draft ? markPrReady(pr, source).url : observed.url });
+  if (!observed.is_draft) {
+    emit({ pr_url: observed.url, flipped_at: null });
+    return;
+  }
+  // Taken before the flip: every check that concluded earlier ran on the draft.
+  const flippedAt = new Date().toISOString();
+  emit({ pr_url: markPrReady(pr, source).url, flipped_at: flippedAt });
 }
 
 try {

@@ -24,7 +24,7 @@ export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 const trackTempRoot = trackTempRoots();
 
 /**
- * One row of `gh pr checks --json name,state,bucket`, as gh 2.92 prints it.
+ * One row of `gh pr checks --json name,state,bucket,completedAt`, as gh 2.92 prints it.
  * `state` is a check run's conclusion once it completes, its status before
  * that, or a commit status's own state; `bucket` is gh's collapse of `state`
  * (cli/cli pkg/cmd/pr/checks/aggregate.go).
@@ -33,6 +33,8 @@ export interface GhCheckRow {
   readonly name: string;
   readonly state: string;
   readonly bucket: 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel';
+  /** When the check concluded; gh prints the zero time for one still running. */
+  readonly completedAt?: string;
 }
 
 /** One row of `gh api .../issues/<n>/comments`. */

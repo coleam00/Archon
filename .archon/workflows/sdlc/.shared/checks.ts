@@ -16,26 +16,65 @@ import {
   type QualifiedPr,
 } from './forge.ts';
 
+/**
+ * A check as one read observed it. `completedAt` (epoch milliseconds) is when it
+ * concluded, null while it runs or when the source does not report it: the forge
+ * contract carries no check times, so only the gh source has them.
+ */
+export interface ReadUnit extends CheckUnit {
+  readonly completedAt: number | null;
+}
+
 /** Checks for one read. `revision` is null when the source does not report the evaluated head. */
 export interface CheckRead {
   readonly source: ForgeSource;
   readonly revision: string | null;
-  readonly units: readonly CheckUnit[];
+  readonly units: readonly ReadUnit[];
+}
+
+/**
+ * Checks skipped before the pull request was marked ready. A project whose CI
+ * skips drafts reports its draft-time jobs as skipped; they say nothing about the
+ * ready pull request, whose own runs register only after the flip. `flippedAt` is
+ * null when this run did not flip the pull request, and then nothing is stale.
+ */
+export function draftSkips(units: readonly ReadUnit[], flippedAt: number | null): ReadUnit[] {
+  if (flippedAt === null) return [];
+  return units.filter(
+    unit => unit.result === 'skipped' && unit.completedAt !== null && unit.completedAt < flippedAt
+  );
 }
 
 /**
  * The pack's gate policy over one read. A running check wins, so a gate never
- * concludes while anything is still running; red and unknown both block; gated
- * is reported as a maintainer's gate, never as green.
+ * concludes while anything is still running, and a check skipped before the ready
+ * flip counts as not yet run; red and unknown both block; gated is reported as a
+ * maintainer's gate, never as green. A set in which every check was skipped is no
+ * green either: nothing ran, which is what CI looks like between a draft's skipped
+ * jobs and the ready runs that replace them, whatever the source can time.
  */
 export type GateState = 'none' | 'pending' | 'red' | 'gated' | 'green';
 
-export function gateState(units: readonly CheckUnit[]): GateState {
+export function gateState(units: readonly ReadUnit[], flippedAt: number | null): GateState {
   if (units.length === 0) return 'none';
   if (units.some(unit => unit.state === 'pending')) return 'pending';
+  if (draftSkips(units, flippedAt).length > 0) return 'pending';
   if (units.some(unit => unit.state === 'red' || unit.state === 'unknown')) return 'red';
   if (units.some(unit => unit.state === 'gated')) return 'gated';
+  if (units.every(unit => unit.result === 'skipped')) return 'pending';
   return 'green';
+}
+
+/**
+ * The flip time a binding carries: `flip-ready`'s ISO timestamp, or empty/`null`
+ * when this run did not flip the pull request.
+ */
+export function parseFlippedAt(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed === '' || trimmed === 'null') return null;
+  const time = Date.parse(trimmed);
+  if (Number.isNaN(time)) throw new Error(`the flip time is not a timestamp: ${trimmed}`);
+  return time;
 }
 
 interface Ran {
@@ -60,10 +99,11 @@ function ghRepo(pr: QualifiedPr): string {
   return `${pr.repo.host}/${pr.repo.path}`;
 }
 
-/** One row of `gh pr checks --json name,state`. */
+/** One row of `gh pr checks --json name,state,completedAt`. */
 export interface GhCheck {
   readonly name: string;
   readonly state: string;
+  readonly completedAt?: string;
 }
 
 function isGhCheck(value: unknown): value is GhCheck {
@@ -104,9 +144,15 @@ export function ghCheckUnit(check: GhCheck): CheckUnit {
   return { unit, phase: state === 'unknown' ? 'unknown' : 'completed', result, state };
 }
 
-function readGhChecks(pr: QualifiedPr): readonly CheckUnit[] {
+/** gh's completion time, or null: a running check reports the zero time. */
+function ghCompletedAt(check: GhCheck): number | null {
+  const time = check.completedAt === undefined ? Number.NaN : Date.parse(check.completedAt);
+  return Number.isNaN(time) || time <= 0 ? null : time;
+}
+
+function readGhChecks(pr: QualifiedPr): readonly ReadUnit[] {
   const number = String(pr.number);
-  const result = gh('pr', 'checks', number, '--repo', ghRepo(pr), '--json', 'name,state');
+  const result = gh('pr', 'checks', number, '--repo', ghRepo(pr), '--json', 'name,state,completedAt');
   let parsed: unknown;
   try {
     // The document decides, not the exit status: gh prints it and exits non-zero
@@ -133,7 +179,7 @@ function readGhChecks(pr: QualifiedPr): readonly CheckUnit[] {
   if (!Array.isArray(parsed) || !parsed.every(isGhCheck)) {
     throw new Error(`unexpected check payload shape: ${result.stdout.slice(0, 200)}`);
   }
-  return parsed.map(ghCheckUnit);
+  return parsed.map(check => ({ ...ghCheckUnit(check), completedAt: ghCompletedAt(check) }));
 }
 
 /** Read the recorded pull request's checks from the selected source. */
@@ -145,7 +191,7 @@ export function readPrChecks(pr: QualifiedPr): CheckRead {
     return {
       source,
       revision: observation.revision,
-      units: preferredChecks(observation).units,
+      units: preferredChecks(observation).units.map(unit => ({ ...unit, completedAt: null })),
     };
   } catch (error) {
     throw new Error(

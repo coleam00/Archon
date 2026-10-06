@@ -182,7 +182,7 @@ describe('the forge opt-in delivers through plugin operations', () => {
 
     // 5. The ready flip reads checks, then flips.
     const flipped = through('deliver/scripts/flip-ready', { inputs: { INPUTS_PR: created.stdout } });
-    expect(JSON.parse(flipped.stdout)).toEqual({ pr_url: record.url });
+    expect(JSON.parse(flipped.stdout)).toEqual({ pr_url: record.url, flipped_at: expect.any(String) });
 
     const state = github();
     expect(state.pulls).toHaveLength(1);

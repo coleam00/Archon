@@ -82,6 +82,12 @@ describe('confirm-ready on the final head, default gh source', () => {
     ['a cancelled check', { checks: [{ name: 'e2e', state: 'CANCELLED', bucket: 'cancel' }] }, {}, 'red checks: e2e (cancelled)'],
     ['no checks when some were expected', { rollup: 0 }, { INPUTS_EXPECTED: '["build"]' }, 'expected check(s) never ran: build'],
     ['an expected check that never ran', { checks: green }, { INPUTS_EXPECTED: '["build","e2e"]' }, 'expected check(s) never ran: e2e'],
+    [
+      'checks the draft skipped before the flip',
+      { checks: [...green, { name: 'test', state: 'SKIPPED', bucket: 'skipping', completedAt: '2026-10-06T07:20:03Z' }] },
+      { INPUTS_FLIPPED_AT: '2026-10-06T07:23:35.120Z' },
+      'pending checks: test (skipped)',
+    ],
   ];
   for (const [label, gh, inputs, reason] of unresolved) {
     it(`puts the pull request back in draft on ${label}`, () => {
@@ -195,7 +201,9 @@ describe('flip-ready once the work is done', () => {
     expect(result.code).toBe(0);
     expect(result.gh).toContain('pr ready 42 --repo ghe.example.com/example/repo');
     expect(result.gh.some(call => call.startsWith('pr checks'))).toBe(false);
-    expect(JSON.parse(result.stdout)).toEqual({ pr_url: PR_URL });
+    const out = JSON.parse(result.stdout) as { pr_url: string; flipped_at: string };
+    expect(out.pr_url).toBe(PR_URL);
+    expect(Number.isNaN(Date.parse(out.flipped_at))).toBe(false);
   });
 
   it('refuses a head that conflicts with its freshly fetched base, before the write', () => {
@@ -248,10 +256,12 @@ describe('flip-ready once the work is done', () => {
     expect(readyCalled(result.gh)).toBe(false);
   });
 
+  // No flip, no flip time: checks a ready pull request already has are its own.
   it('does not flip an already-ready pull request again', () => {
     const result = flip({ gh: { pr: { isDraft: false } } });
     expect(result.code).toBe(0);
     expect(readyCalled(result.gh)).toBe(false);
+    expect(JSON.parse(result.stdout)).toEqual({ pr_url: PR_URL, flipped_at: null });
   });
 
   it("fails with gh's own words when the flip itself is refused", () => {

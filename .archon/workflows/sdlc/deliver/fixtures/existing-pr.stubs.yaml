@@ -80,8 +80,9 @@ validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], grou
 validate__run: { status: green, summary: "stub: full gate green" }
 gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":"","head":null}'
 ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
+ci-settle: '{"state":"concluded","detail":"all 2 check(s) green"}'
 ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/42" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/42", flipped_at: null }
 confirm-ready: { pr_url: "https://github.com/example/repo/pull/42" }
 outcome: { pr_url: "https://github.com/example/repo/pull/42", summary: "https://github.com/example/repo/pull/42" }
 review-policy: { risks: "fixture-owned-policy" }

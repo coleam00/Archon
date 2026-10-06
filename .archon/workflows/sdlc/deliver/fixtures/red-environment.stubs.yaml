@@ -88,8 +88,9 @@ validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], grou
 validate__run: { status: green, summary: "stub: the contention cleared; full gate green" }
 gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":"","head":null}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
+ci-settle: '{"state":"concluded","detail":"all checks green"}'
 ci-verdict: '{"state":"concluded","detail":"all checks green"}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/7", flipped_at: null }
 confirm-ready: { pr_url: "https://github.com/example/repo/pull/7" }
 outcome: { pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
 file-discoveries: '{"records":[]}'

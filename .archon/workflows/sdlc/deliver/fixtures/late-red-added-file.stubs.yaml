@@ -57,6 +57,7 @@ review__publish:
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-settle: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-rerun: { requested: false, reason: "stub: no re-run warranted" }
 ci-reverdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
@@ -77,7 +78,7 @@ ci-fix__assert-changed: "1 file changed"
 ci-delta-scope: '{"moved":false}'
 fix-ci-probe: '{"state":"concluded","detail":"all 9 required check(s) green"}'
 fix-verdict: '{"state":"concluded","detail":"all 9 required check(s) green"}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/9" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/9", flipped_at: null }
 confirm-ready: { pr_url: "https://github.com/example/repo/pull/9" }
 outcome: { pr_url: "https://github.com/example/repo/pull/9", summary: "https://github.com/example/repo/pull/9" }
 file-discoveries: '{"records":[]}'

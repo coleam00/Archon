@@ -54,6 +54,7 @@ review__publish:
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
+ci-settle: '{"state":"red","detail":"e2e-smoke (fail)"}'
 ci-verdict: '{"state":"red","detail":"e2e-smoke (fail)"}'
 ci-rerun: { requested: false, reason: "stub: no re-run warranted" }
 ci-reverdict: '{"state":"red","detail":"e2e-smoke (fail)"}'
@@ -74,7 +75,7 @@ ci-fix__assert-changed: "1 file changed"
 push-ci-fix: "push-head: fixture-branch is at fixturehead"
 fix-ci-probe: '{"state":"concluded","detail":"all 9 observed check(s) green"}'
 fix-verdict: '{"state":"concluded","detail":"all 9 observed check(s) green"}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/10" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/10", flipped_at: null }
 confirm-ready: { pr_url: "https://github.com/example/repo/pull/10" }
 outcome: { pr_url: "https://github.com/example/repo/pull/10", summary: "https://github.com/example/repo/pull/10" }
 file-discoveries: '{"records":[]}'

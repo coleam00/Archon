@@ -546,7 +546,8 @@ nodes:
       type: object
       properties:
         pr_url: { type: string, minLength: 1 }
-      required: [pr_url]
+        flipped_at: { type: [string, 'null'] }
+      required: [pr_url, flipped_at]
     with:
       pr:
         from: "$pr.output"
@@ -584,6 +585,8 @@ nodes:
               from: "$pr.output"
             expected:
               from: "$discover-ci.output.expected_checks"
+            flipped_at:
+              from: "$flip-ready.output.flipped_at"
           timeout: 120000
           output_format: &ci_state
             type: object
@@ -606,6 +609,52 @@ nodes:
   # re-run once when warranted, classify, correct, re-await, and classify again.
   # It sits after the wait because loop completion is computed externally (see
   # await-checks) and a DAG has no back-edges.
+  - id: ci-settle
+    script: check-ci
+    runtime: bun
+    with:
+      pr:
+        from: "$pr.output"
+      expected:
+        from: "$discover-ci.output.expected_checks"
+      flipped_at:
+        from: "$flip-ready.output.flipped_at"
+    timeout: 120000
+    depends_on: [await-checks]
+    output_format: *ci_state
+
+  # A check can register after the probe that ended the wait concluded (a ready
+  # run starting late, a workflow chained on another). Pending here goes back to
+  # the same wait instead of reaching the ready confirmation, which would read it
+  # as not green and put the pull request back in draft.
+  - id: await-late-checks
+    depends_on: [ci-settle]
+    when: "$ci-settle.output.state == 'pending'"
+    loop_group:
+      max_iterations: 13
+      until_bash: |
+        value=$late-probe.output.state
+        test "$value" != "pending"
+      nodes:
+        - id: late-probe
+          script: check-ci
+          runtime: bun
+          with:
+            pr:
+              from: "$pr.output"
+            expected:
+              from: "$discover-ci.output.expected_checks"
+            flipped_at:
+              from: "$flip-ready.output.flipped_at"
+          timeout: 120000
+          output_format: *ci_state
+        - id: late-pause
+          wait:
+            event: checks.complete
+            deadline_ms: 300000
+          when: $late-probe.output.state == 'pending'
+          depends_on: [late-probe]
+
   - id: ci-verdict
     script: check-ci
     runtime: bun
@@ -614,8 +663,11 @@ nodes:
         from: "$pr.output"
       expected:
         from: "$discover-ci.output.expected_checks"
+      flipped_at:
+        from: "$flip-ready.output.flipped_at"
     timeout: 120000
-    depends_on: [await-checks]
+    depends_on: [ci-settle, await-late-checks]
+    trigger_rule: none_failed_min_one_success
     output_format: *ci_state
 
   # Whether a red deserves one re-run before anyone attributes it, and how this
@@ -654,6 +706,8 @@ nodes:
               from: "$pr.output"
             expected:
               from: "$discover-ci.output.expected_checks"
+            flipped_at:
+              from: "$flip-ready.output.flipped_at"
           timeout: 120000
           output_format: *ci_state
         - id: rerun-pause
@@ -673,6 +727,8 @@ nodes:
         from: "$pr.output"
       expected:
         from: "$discover-ci.output.expected_checks"
+      flipped_at:
+        from: "$flip-ready.output.flipped_at"
     timeout: 120000
     depends_on: [ci-verdict, ci-rerun, await-rerun]
     trigger_rule: none_failed_min_one_success
@@ -860,6 +916,8 @@ nodes:
               from: "$pr.output"
             expected:
               from: "$discover-ci.output.expected_checks"
+            flipped_at:
+              from: "$flip-ready.output.flipped_at"
           timeout: 120000
           output_format: *ci_state
         - id: fix-ci-pause
@@ -882,6 +940,8 @@ nodes:
         from: "$pr.output"
       expected:
         from: "$discover-ci.output.expected_checks"
+      flipped_at:
+        from: "$flip-ready.output.flipped_at"
     timeout: 120000
     depends_on: [await-fix-checks]
     when: "$ci-cause.output.cause == 'introduced' || $ci-cause.output.cause == 'inherited'"
@@ -956,6 +1016,8 @@ nodes:
               from: "$pr.output"
             expected:
               from: "$discover-ci.output.expected_checks"
+            flipped_at:
+              from: "$flip-ready.output.flipped_at"
           timeout: 120000
           output_format: *ci_state
         - id: attention-ci-pause
@@ -994,6 +1056,8 @@ nodes:
       pr: "$pr.output"
       expected:
         from: "$discover-ci.output.expected_checks"
+      flipped_at:
+        from: "$flip-ready.output.flipped_at"
     depends_on: [flip-ready, ci-settled]
 
   # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts).

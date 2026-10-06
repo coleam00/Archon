@@ -56,9 +56,10 @@ exec-code: true
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":"","head":null}'
+deliver__ci-settle: '{"state":"concluded","detail":"all checks green"}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__publish-pr-body: {}
-deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/4" }
+deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/4", flipped_at: null }
 deliver__confirm-ready: { pr_url: "https://github.com/example/repo/pull/4" }
 deliver__outcome: { pr_url: "https://github.com/example/repo/pull/4", summary: "https://github.com/example/repo/pull/4" }
 deliver__pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }

@@ -15,6 +15,6 @@ $INPUTS.pr
 
 ## Declare
 
-- `expected_checks` — the confirmed names of the checks that must conclude green before this pull request can stay ready. Empty when nothing gates a merge on this project.
+- `expected_checks` — the confirmed names of the checks that must conclude green before this pull request can stay ready: every check this project's CI runs on this change, whether or not the forge declares it required. A branch with no required checks still has the checks its CI runs. Empty only when no CI runs on this change.
 - `logs_reachable` — whether this run can read the failing jobs' logs.
 - `evidence` — two to four sentences: the CI system, where its configuration lives, what the forge declares required, how you confirmed the names, and any check you left out and why.

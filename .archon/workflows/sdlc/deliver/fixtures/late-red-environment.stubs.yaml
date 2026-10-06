@@ -53,6 +53,7 @@ review__publish:
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"hosted runner lost network (fail)"}'
+ci-settle: '{"state":"red","detail":"hosted runner lost network (fail)"}'
 ci-verdict: '{"state":"red","detail":"hosted runner lost network (fail)"}'
 ci-rerun: { requested: false, reason: "stub: no re-run warranted" }
 ci-reverdict: '{"state":"red","detail":"hosted runner lost network (fail)"}'
@@ -69,7 +70,7 @@ attention-ci-probe: '{"state":"red","detail":"hosted runner lost network (fail)"
 file-discoveries: '{"records":[]}'
 match-discoveries: { matches: [] }
 fork: '{"fork":true}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/11" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/11", flipped_at: null }
 mark-draft: "mark-draft: the pull request is a draft while CI stays red"
 publish-pr-body: {}
 fixture:

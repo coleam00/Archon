@@ -60,9 +60,10 @@ validate__result:
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":"","head":null}'
 ci-probe: '{"state":"concluded","detail":"no checks configured"}'
+ci-settle: '{"state":"concluded","detail":"no checks configured"}'
 ci-verdict: '{"state":"concluded","detail":"no checks configured"}'
 ci-attention-route: '{"attention":false,"red_cause":""}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/5" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/5", flipped_at: null }
 confirm-ready: { pr_url: "https://github.com/example/repo/pull/5" }
 outcome: { pr_url: "https://github.com/example/repo/pull/5", summary: "https://github.com/example/repo/pull/5" }
 file-discoveries: '{"records":[]}'

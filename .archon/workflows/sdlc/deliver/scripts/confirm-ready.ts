@@ -20,8 +20,16 @@
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
  * - INPUTS_EXPECTED: JSON list of the check names discover-ci expects to gate.
+ * - INPUTS_FLIPPED_AT: when flip-ready marked the pull request ready, or null.
  */
-import { atRevision, describeUnits, gateState, missingChecks, readPrChecks } from '../../.shared/checks.ts';
+import {
+  atRevision,
+  describeUnits,
+  gateState,
+  missingChecks,
+  parseFlippedAt,
+  readPrChecks,
+} from '../../.shared/checks.ts';
 import { forgeSource, parsePrRecord, type PrRecord } from '../../.shared/forge.ts';
 import { markPrDraft, markPrReady, viewPr } from '../../.shared/pr.ts';
 import { artifactsDir, emit, note, refuse, text } from '../../.shared/io.ts';
@@ -48,16 +56,23 @@ function unreviewedFix(): string | undefined {
 }
 
 /** Why the final head cannot stay ready, or undefined when it can. */
-function unresolved(pr: PrRecord, expected: readonly string[]): string | undefined {
+function unresolved(
+  pr: PrRecord,
+  expected: readonly string[],
+  flippedAt: number | null
+): string | undefined {
   let read;
   try {
     read = readPrChecks(pr);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
-  const state = gateState(read.units);
+  const state = gateState(read.units, flippedAt);
   if (state !== 'green' && state !== 'none') {
-    const notGreen = read.units.filter(unit => unit.state !== 'green');
+    // A pending verdict can rest on skipped checks, which are green units.
+    const notGreen = read.units.filter(
+      unit => unit.state !== 'green' || (state === 'pending' && unit.result === 'skipped')
+    );
     return `${state} checks${atRevision(read)}: ${describeUnits(notGreen)}`;
   }
   const missing = missingChecks(read.units, expected);
@@ -77,7 +92,11 @@ function confirm(): void {
   if (observed.state === 'closed') {
     throw new Error('the PR is CLOSED without a merge, so there is no delivery to report.');
   }
-  const reason = unresolved(pr, JSON.parse(text(process.env.INPUTS_EXPECTED)) as string[]);
+  const reason = unresolved(
+    pr,
+    JSON.parse(text(process.env.INPUTS_EXPECTED)) as string[],
+    parseFlippedAt(text(process.env.INPUTS_FLIPPED_AT))
+  );
   if (reason !== undefined) {
     markPrDraft(pr);
     throw new Error(`the pull request is back in draft: ${reason}`);

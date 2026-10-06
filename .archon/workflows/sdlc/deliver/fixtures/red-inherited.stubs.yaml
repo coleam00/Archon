@@ -65,7 +65,7 @@ ci-probe: '{"state":"pending","detail":"stub: 1 check still running"}'
 file-discoveries: '{"records":[]}'
 match-discoveries: { matches: [] }
 fork: '{"fork":true}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/6" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/6", flipped_at: null }
 publish-pr-body: {}
 fixture:
   expect: paused

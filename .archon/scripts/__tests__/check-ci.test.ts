@@ -18,8 +18,55 @@ describe('check-ci on the default gh source', () => {
       state: 'concluded',
       detail: 'all 2 observed check(s) green; skipped (non-blocking): docs',
     });
-    expect(result.gh[0]).toBe('pr checks 42 --repo ghe.example.com/example/repo --json name,state');
+    expect(result.gh[0]).toBe('pr checks 42 --repo ghe.example.com/example/repo --json name,state,completedAt');
     expect(result.forge).toEqual([]);
+  });
+
+  // A project whose CI skips drafts: at the flip only the draft's skipped runs exist,
+  // and the ready runs register seconds later (#3882's run 54793aad).
+  it('waits on checks a draft skipped before the ready flip', () => {
+    const result = probe({
+      gh: {
+        checks: [
+          { name: 'changes', state: 'SKIPPED', bucket: 'skipping', completedAt: '2026-10-06T07:20:02Z' },
+          { name: 'test', state: 'SKIPPED', bucket: 'skipping', completedAt: '2026-10-06T07:20:03Z' },
+        ],
+      },
+      inputs: { INPUTS_FLIPPED_AT: '2026-10-06T07:23:35.120Z' },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'pending',
+      detail: 'skipped before the ready flip, so not yet run for review: changes (skipped), test (skipped)',
+    });
+  });
+
+  it('concludes on a check skipped after the flip beside one that ran', () => {
+    const result = probe({
+      gh: {
+        checks: [
+          { name: 'build', state: 'SUCCESS', bucket: 'pass', completedAt: '2026-10-06T07:30:00Z' },
+          { name: 'docs', state: 'SKIPPED', bucket: 'skipping', completedAt: '2026-10-06T07:23:39Z' },
+        ],
+      },
+      inputs: { INPUTS_FLIPPED_AT: '2026-10-06T07:23:35.120Z' },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'concluded',
+      detail: 'all 2 observed check(s) green; skipped (non-blocking): docs',
+    });
+  });
+
+  // Nothing ran, so nothing is green, whether or not this run flipped the pull
+  // request or the source reports when the checks concluded.
+  it('keeps waiting when every check was skipped, even with no flip time', () => {
+    const result = probe({
+      gh: { checks: [{ name: 'test', state: 'SKIPPED', bucket: 'skipping' }] },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'pending',
+      detail: 'every check was skipped; waiting for one that runs',
+    });
   });
 
   it('keeps a running check pending even when another already failed', () => {

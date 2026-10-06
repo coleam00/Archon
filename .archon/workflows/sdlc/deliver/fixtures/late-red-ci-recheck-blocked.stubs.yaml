@@ -55,6 +55,7 @@ review__publish:
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-settle: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-rerun: { requested: false, reason: "stub: no re-run warranted" }
 ci-reverdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
@@ -92,7 +93,7 @@ ci-recheck__publish:
   findings_summary: "stub: the CI fix reimplements an existing helper"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
-flip-ready: { pr_url: "https://github.com/example/repo/pull/9" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/9", flipped_at: null }
 confirm-ready: "confirm-ready: the pull request is back in draft"
 outcome: { pr_url: "https://github.com/example/repo/pull/9", summary: "https://github.com/example/repo/pull/9" }
 file-discoveries: '{"records":[]}'
