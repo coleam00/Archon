@@ -18,7 +18,6 @@ import {
   type ChecksObservation as PackObservation,
   parseQualifiedPr,
   parseCreatedWorkItem,
-  type WorkItemRecord,
   type PrRecord,
   type QualifiedPr,
 } from '../../workflows/sdlc/.shared/forge';
@@ -186,8 +185,6 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
   expect(verdicts[0].parserAccepts).toBe(true);
 });
 
-const consumesWorkItem = (value: ForgeWorkItemRecord): WorkItemRecord => value;
-const producesWorkItem = (value: WorkItemRecord): ForgeWorkItemRecord => value;
 test('standalone work-item projection accepts the owning identity and rejects a foreign repository', () => {
   const repo = { host: 'tracker.example', path: 'group/team/repo' };
   const workitem: ForgeWorkItemRecord = {
@@ -197,7 +194,7 @@ test('standalone work-item projection accepts the owning identity and rejects a 
     state: 'closed',
   };
   const value = { outcome: 'applied', changed: false, workitem };
-  expect(producesWorkItem(consumesWorkItem(parseCreatedWorkItem(value, repo)))).toEqual(workitem);
+  expect(parseCreatedWorkItem(value, repo)).toBe(workitem.url);
   expect(() => parseCreatedWorkItem(value, { ...repo, path: 'other' })).toThrow();
 });
 

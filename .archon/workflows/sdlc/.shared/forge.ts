@@ -388,13 +388,7 @@ export function preferredChecks(observation: ChecksObservation): CheckSet {
   return observation.required ?? observation;
 }
 
-export interface WorkItemRecord {
-  readonly ref: QualifiedPr;
-  readonly kind: 'issue';
-  readonly url: string;
-  readonly state: 'open' | 'closed';
-}
-export function parseCreatedWorkItem(value: unknown, repo: QualifiedPr['repo']): WorkItemRecord {
+export function parseCreatedWorkItem(value: unknown, repo: QualifiedPr['repo']): string {
   const result = record(value);
   const item = record(result?.workitem);
   const ref = parseQualifiedPr(JSON.stringify(item?.ref));
@@ -408,7 +402,7 @@ export function parseCreatedWorkItem(value: unknown, repo: QualifiedPr['repo']):
     (item.state !== 'open' && item.state !== 'closed')
   )
     throw new Error('forge returned an invalid created work item');
-  return { ref, kind: 'issue', url: item.url, state: item.state };
+  return item.url;
 }
 export function readWorkItemLabels(ref: QualifiedPr): string[] {
   const value = invokeForge('workitem.view', { ref });

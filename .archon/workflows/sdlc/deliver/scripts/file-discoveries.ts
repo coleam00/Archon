@@ -111,7 +111,7 @@ try {
             body: `${marker}\n${body(record, pr.url)}`,
           }),
           pr.repo
-        ).url;
+        );
         record.issue = url;
         writeFileSync(path, `${JSON.stringify(records, null, 2)}\n`);
       } else {
