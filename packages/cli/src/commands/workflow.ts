@@ -24,6 +24,7 @@ import {
   loadConfig,
   loadRepoConfig,
   generateAndSetTitle,
+  resolveTitleRequest,
   createWorkflowStore,
   getUserAiPrefs,
   isPerUserGitHubEnabled,
@@ -3255,13 +3256,15 @@ async function runWorkflowWithOwnedSource(
           conversation.ai_assistant_type
         );
         const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
+        const titleRequest = await resolveTitleRequest(titleAssistantType, cliUserId, cwd);
         await generateAndSetTitle(
           conversation.id,
           userMessage,
-          titleAssistantType,
+          titleRequest.provider,
           workingCwd,
           workflowName,
-          titleAssistantConfig
+          titleAssistantConfig,
+          titleRequest.options
         );
       } catch (error) {
         getLog().warn(
