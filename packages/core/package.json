@@ -298,6 +298,9 @@
       "src/workflows/commit-author.integration.test.ts"
     ],
     [
+      "src/github-auth/bootstrap.test.ts"
+    ],
+    [
       "src/db/workflows.origin.integration.test.ts"
     ],
     [
