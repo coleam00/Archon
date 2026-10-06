@@ -39,6 +39,8 @@ async function main(): Promise<number> {
         '--no-error-on-unmatched-pattern',
         '--no-warn-ignored',
         ...eslintArgs,
+        // ESLint's cache does not track imported types; this must override caller flags.
+        '--no-cache',
       ],
       {
         cwd: REPO_ROOT,
