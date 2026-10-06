@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { expect, mock, test } from 'bun:test';
 import type { IWorkflowEngine, WorkflowResumeInput } from '@archon/workflows/engine-port';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';

@@ -1,3 +1,4 @@
+import { prepareRunAiConfiguration } from './run-preflight';
 import type { ExecuteWorkflowOptions } from './executor';
 /**
  * Tests for executeWorkflow() — the top-level orchestration function.
@@ -379,6 +380,255 @@ describe('executeWorkflow', () => {
     mockExecuteDagWorkflow.mockImplementation(async () => undefined);
   });
 
+  describe('recorded launch AI configuration', () => {
+    it.each(['pending', 'running'] as const)(
+      'restores %s rows despite a different caller-prepared configuration',
+      async status => {
+        const updateRun = mock<IWorkflowStore['updateWorkflowRun']>(async () => {});
+        const createRun = mock<IWorkflowStore['createWorkflowRun']>(async () => makeRun());
+        const store = makeStore({ updateWorkflowRun: updateRun, createWorkflowRun: createRun });
+        const deps = makeDeps(store);
+        const workflow = makeWorkflow();
+        deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async () => ({
+          assistant: 'codex',
+          commands: {},
+          assistants: { claude: {}, codex: { model: 'gpt-5.6-sol', webSearchMode: 'disabled' } },
+        }));
+        const launch = await prepareRunAiConfiguration(deps, workflow, '/launch');
+        deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async () => ({
+          assistant: 'claude',
+          commands: {},
+          assistants: {
+            claude: { model: 'opus' },
+            codex: { model: 'changed', webSearchMode: 'live' },
+          },
+        }));
+        const different = await prepareRunAiConfiguration(deps, workflow, '/current');
+        const run = makeRun({
+          status,
+          metadata: {
+            ai_configuration: JSON.parse(JSON.stringify(launch.aiConfigurationSnapshot)),
+          },
+        });
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          workflow,
+          'msg',
+          { conversationId: 'db-conv-1' },
+          {
+            preCreatedRun: run,
+            preparedAiConfiguration: different,
+            ...(status === 'running' ? { priorCompletedNodes: new Map() } : {}),
+          }
+        );
+        const dag = mockExecuteDagWorkflow.mock.calls[0]?.[0];
+        expect(dag?.workflowProvider).toBe('codex');
+        expect(dag?.workflowModel).toBe('gpt-5.6-sol');
+        expect(dag?.config.assistants.codex).toEqual({
+          model: 'gpt-5.6-sol',
+          webSearchMode: 'live',
+        });
+        const stamps = updateRun.mock.calls.flatMap(([, update]) =>
+          update.metadata ? [update.metadata] : []
+        );
+        expect(stamps.every(metadata => !Object.hasOwn(metadata, 'ai_configuration'))).toBe(true);
+        expect(run.metadata.ai_configuration).toEqual(launch.aiConfigurationSnapshot);
+      }
+    );
+
+    it.each(['adopt', 'supersede'] as const)('%s uses the correct AI owner', async mode => {
+      const deps = makeDeps();
+      const workflow = makeWorkflow();
+      deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async () => ({
+        assistant: 'codex',
+        commands: {},
+        assistants: { claude: {}, codex: { model: 'launch-model' } },
+      }));
+      const launch = await prepareRunAiConfiguration(deps, workflow, '/tmp');
+      const ancestor = makeRun({
+        id: 'ancestor',
+        status: 'completed',
+        user_id: 'old-actor',
+        output_root: join(WS, 'workspaces', 'acme', 'widget'),
+        metadata: { ai_configuration: launch.aiConfigurationSnapshot },
+      });
+      deps.store.getWorkflowRun = mock(async id =>
+        id === 'ancestor' ? ancestor : makeRun({ status: 'completed' })
+      );
+      deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async () => ({
+        assistant: 'claude',
+        commands: {},
+        assistants: { claude: { model: 'opus' }, codex: {} },
+      }));
+      const different = await prepareRunAiConfiguration(deps, workflow, '/tmp');
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        workflow,
+        'msg',
+        { conversationId: 'db-conv-1', userId: 'new-actor' },
+        {
+          adoptedFromRunId: 'ancestor',
+          continuationMode: mode,
+          preparedAiConfiguration: different,
+        }
+      );
+      expect(result.success).toBe(true);
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe(
+        mode === 'adopt' ? 'codex' : 'claude'
+      );
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowModel).toBe(
+        mode === 'adopt' ? 'launch-model' : 'opus'
+      );
+      expect(deps.store.createWorkflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({ origin: expect.objectContaining({ userId: 'new-actor' }) })
+      );
+    });
+
+    it('direct adoption rejects explicit AI overrides before dispatch', async () => {
+      const deps = makeDeps();
+      const workflow = makeWorkflow();
+      const launch = await prepareRunAiConfiguration(deps, workflow, '/tmp');
+      deps.store.getWorkflowRun = mock(async () =>
+        makeRun({ metadata: { ai_configuration: launch.aiConfigurationSnapshot } })
+      );
+      await expect(
+        executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          workflow,
+          'msg',
+          { conversationId: 'db-conv-1' },
+          {
+            adoptedFromRunId: 'ancestor',
+            modelOverrideLayer: { kind: 'raw', overrides: { tiers: { large: 'claude/opus' } } },
+            preparedAiConfiguration: launch,
+          }
+        )
+      ).rejects.toThrow('Cannot override AI configuration');
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('records fresh policy and never backfills a legacy continuation', async () => {
+      const updateRun = mock<IWorkflowStore['updateWorkflowRun']>(async () => {});
+      const createRun = mock<IWorkflowStore['createWorkflowRun']>(async () => makeRun());
+      const store = makeStore({ updateWorkflowRun: updateRun, createWorkflowRun: createRun });
+      const deps = makeDeps(store);
+      await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+        conversationId: 'db-conv-1',
+      });
+      expect(createRun.mock.calls[0]?.[0].metadata?.ai_configuration).toMatchObject({
+        version: 1,
+        assistant: 'claude',
+      });
+      updateRun.mockClear();
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        { conversationId: 'db-conv-1' },
+        {
+          preCreatedRun: makeRun(),
+          priorCompletedNodes: new Map(),
+        }
+      );
+      expect(
+        updateRun.mock.calls.every(
+          ([, update]) => !Object.hasOwn(update.metadata ?? {}, 'ai_configuration')
+        )
+      ).toBe(true);
+    });
+
+    it('legacy continuation still accepts caller-prepared values without backfilling', async () => {
+      const updateRun = mock<IWorkflowStore['updateWorkflowRun']>(async () => {});
+      const deps = makeDeps(makeStore({ updateWorkflowRun: updateRun }));
+      const workflow = makeWorkflow();
+      const prepared = await prepareRunAiConfiguration(deps, workflow, '/launch');
+      deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async () => ({
+        assistant: 'codex',
+        commands: {},
+        assistants: { claude: {}, codex: {} },
+      }));
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        workflow,
+        'msg',
+        { conversationId: 'db-conv-1' },
+        {
+          preCreatedRun: makeRun(),
+          priorCompletedNodes: new Map(),
+          preparedAiConfiguration: prepared,
+        }
+      );
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('claude');
+      expect(
+        updateRun.mock.calls.every(
+          ([, update]) => !Object.hasOwn(update.metadata ?? {}, 'ai_configuration')
+        )
+      ).toBe(true);
+    });
+
+    it('rejects corrupt recorded policy before dispatch even with prepared values', async () => {
+      const deps = makeDeps();
+      const workflow = makeWorkflow();
+      const prepared = await prepareRunAiConfiguration(deps, workflow, '/tmp');
+      await expect(
+        executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          workflow,
+          'msg',
+          { conversationId: 'db-conv-1' },
+          {
+            preCreatedRun: makeRun({ metadata: { ai_configuration: { version: 2 } } }),
+            priorCompletedNodes: new Map(),
+            preparedAiConfiguration: prepared,
+          }
+        )
+      ).rejects.toThrow('Invalid recorded run AI configuration');
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('stops a pending run before dispatch when snapshot persistence fails', async () => {
+      const store = makeStore({
+        updateWorkflowRun: mock(async (_id, update) => {
+          if (Object.hasOwn(update.metadata ?? {}, 'ai_configuration'))
+            throw new Error('write failed');
+        }),
+      });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        { conversationId: 'db-conv-1' },
+        {
+          preCreatedRun: makeRun({ status: 'pending' }),
+        }
+      );
+      expect(result.success).toBe(false);
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    });
+  });
+
   it.each(['fresh', 'precreated', 'resume'] as const)(
     'persists creation proof only on %s invocation',
     async mode => {
@@ -427,6 +677,7 @@ describe('executeWorkflow', () => {
       }
     }
   );
+
   it.each([false, true])('persists loaded graph before DAG execution (resume=%s)', async resume => {
     const store = makeStore();
     const workflow = makeWorkflow({ returns: 'node1' });

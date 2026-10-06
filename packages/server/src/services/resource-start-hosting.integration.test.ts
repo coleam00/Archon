@@ -357,8 +357,13 @@ describe('server resource-start host', () => {
     }, 30000);
   }
 
-  test('a queued receipt starts when its blocker ends and the scheduler tick drains', async () => {
+  test('a queued receipt retains its prepared AI policy when config changes before admission', async () => {
     const { deliver, engine, host } = await fixture();
+    const configPath = join(root, 'project', '.archon', 'config.yaml');
+    await writeFile(
+      configPath,
+      'assistant: codex\nassistants:\n  codex:\n    model: launch-model\n'
+    );
     expect((await deliver('first', 'queue')).status).toBe(200);
     const firstRun = (await until(() => engine.submitted[0])).options?.preCreatedRun?.id;
     await until(() => (engine.claimed.length === 1 ? true : undefined));
@@ -374,6 +379,10 @@ describe('server resource-start host', () => {
     });
     await host.requestDrain();
     expect(engine.submitted).toHaveLength(1);
+    await writeFile(
+      configPath,
+      'assistant: claude\nassistants:\n  codex:\n    model: changed-model\n'
+    );
 
     await getDatabase().query(
       "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
@@ -387,6 +396,13 @@ describe('server resource-start host', () => {
     );
     const second = await until(() => engine.submitted[1]);
     expect(second.options?.preCreatedRun?.id).toBe(queued.disposition?.requestId);
+    expect(second.options?.preparedAiConfiguration?.config.assistant).toBe('codex');
+    expect(second.options?.preparedAiConfiguration?.config.assistants.codex.model).toBe(
+      'launch-model'
+    );
+    expect(second.options?.preCreatedRun?.metadata.ai_configuration).toEqual(
+      second.options?.preparedAiConfiguration?.aiConfigurationSnapshot
+    );
     expect((await bindingOf('second')).disposition).toMatchObject({ status: 'admitted' });
   });
 

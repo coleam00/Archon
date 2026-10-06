@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { providerRegistry } from '@archon/providers';
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';

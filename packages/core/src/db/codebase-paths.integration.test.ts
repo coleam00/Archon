@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { test, mock, expect } from 'bun:test';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { createMockPlatform } from '../test/mocks/platform';

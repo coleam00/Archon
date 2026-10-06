@@ -23,7 +23,9 @@ describe('ci-note', () => {
   it('proceeds without evidence on a failed read but tells the operator why', () => {
     const result = note({ gh: { checks: 'fail', rollup: 'fail' } });
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain('No CI evidence is available for this round (the check read failed)');
+    expect(result.stdout).toContain(
+      'No CI evidence is available for this round (the check read failed)'
+    );
     expect(result.stderr).toContain('ci-note: could not read check state: HTTP 502');
   });
 
@@ -44,4 +46,27 @@ describe('ci-note', () => {
     expect(result.stderr).toContain('no forge plugin claims ghe.example.com');
     expect(result.gh).toEqual([]);
   });
+});
+
+it('reports explicit approval with no registered check units', () => {
+  const result = runDeliverScript('ci-note', {
+    source: 'forge',
+    forge: { kind: 'fake', response: forgeResponse([], { approvalPending: true }) },
+  });
+  expect(result.stdout).toContain("CI needs a maintainer's approval at deadbeef");
+  expect(result.stdout).not.toContain('No CI evidence');
+  expect(result.gh).toEqual([]);
+});
+
+it('keeps failure evidence when workflow approval is also pending', () => {
+  const result = note({
+    source: 'forge',
+    forge: {
+      kind: 'fake',
+      response: forgeResponse([{ name: 'failed', state: 'red' }], { approvalPending: true }),
+    },
+  });
+  expect(result.stdout).toContain('failed (failure)');
+  expect(result.stdout).toContain("CI needs a maintainer's approval");
+  expect(result.gh).toEqual([]);
 });

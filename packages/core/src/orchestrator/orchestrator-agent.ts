@@ -786,21 +786,20 @@ async function dispatchOrchestratorWorkflowOwned(
   // whatever surface declared it — CLI, API, or chat. A non-terminal target, a
   // cross-codebase id, or a missing estate refuses here, before any worktree is
   // cut; the resolved lane then drives where the run actually executes.
-  const adoptionLane = options?.adoptRunId
-    ? (
-        await resolveWorkflowAdoption({
-          deps: {
-            getRun: sqlWorkflow.getWorkflowRun,
-            getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
-            findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
-          },
-          adoptedRunId: options.adoptRunId,
-          codebaseId: codebase.id,
-          codebasePath: codebase.default_cwd,
-          codebaseKind: codebase.kind,
-        })
-      ).lane
+  const adoption = options?.adoptRunId
+    ? await resolveWorkflowAdoption({
+        deps: {
+          getRun: sqlWorkflow.getWorkflowRun,
+          getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+          findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
+        },
+        adoptedRunId: options.adoptRunId,
+        codebaseId: codebase.id,
+        codebasePath: codebase.default_cwd,
+        codebaseKind: codebase.kind,
+      })
     : undefined;
+  const adoptionLane = adoption?.lane;
 
   // A lane other than in-place inherits a worktree or branch estate; a workflow
   // that opted out of worktrees runs in the parent checkout and has nothing to
@@ -955,6 +954,7 @@ async function dispatchOrchestratorWorkflowOwned(
             {
               codebaseId: codebase.id,
               userId,
+              aiConfigurationRun: adoption?.adoptedRun,
               runConfig: options?.runConfig,
               ...(options?.modelOverrides
                 ? { modelOverrideLayer: { kind: 'raw', overrides: options.modelOverrides } }
@@ -1076,6 +1076,7 @@ async function dispatchOrchestratorWorkflowOwned(
       ? await prepareRunAiConfiguration(createWorkflowDeps(), workflow, captureCwd, {
           codebaseId: codebase.id,
           userId,
+          aiConfigurationRun: adoption?.adoptedRun,
           runConfig: options?.runConfig,
           ...(options?.modelOverrides
             ? { modelOverrideLayer: { kind: 'raw', overrides: options.modelOverrides } }

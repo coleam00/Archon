@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterAll, describe, expect, mock, test } from 'bun:test';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 import { WORKFLOW_ORIGIN_ANCHOR_ID } from './workflow-origin-anchor';

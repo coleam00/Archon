@@ -226,7 +226,7 @@ per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `nodes` | Yes | node[] | Sub-DAG body re-run in full each iteration. Executable nodes, `include:`, and nested `loop_group` are supported; runtime `workflow:` sub-runs are not. `depends_on` is body-scoped; body ids must not shadow outer ids |
-| `until` | One channel required | string | Completion signal — checked in the body's terminal-node output. Omit it for a deterministic group |
+| `until` | One channel required | string | Deprecated prose signal, checked in the body's terminal-node output. When it is the sole channel, the terminal node's enforced `output_format` must permit strings. Use `until_bash` for structured fields; omit `until` for a deterministic group |
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | `true` starts fresh body AI sessions each iteration (default: false — sessions continue) |
 | `until_bash` | One channel required | string | Shell script run after each iteration; exit 0 signals completion. Skipped once a cheaper channel already fired |

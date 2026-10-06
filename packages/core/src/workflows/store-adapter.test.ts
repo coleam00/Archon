@@ -1,7 +1,8 @@
+// @archon-test-isolated
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { DagResumeSnapshot, IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
-import type { CredentialStatus } from '@archon/provider-contract';
+import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { StoredCredential } from '../db/user-provider-key-store';
 import type { ResolvedCredential } from '../credentials/delivery';
@@ -97,11 +98,11 @@ mock.module('../db/codebases', () => ({
 
 const credentialCatalog = await import('../../../providers/src/credential-catalog');
 mock.module('@archon/providers', () => ({
+  providerRegistry: { get: () => undefined, list: () => [] } satisfies ProviderRegistry,
   LEGACY_VENDOR_ALIASES: credentialCatalog.LEGACY_VENDOR_ALIASES,
   normalizeCredentialVendor: credentialCatalog.normalizeCredentialVendor,
   getAgentProvider: mock(() => ({})),
   getRegisteredProviders: mock(() => []),
-  providerRegistry: { get: () => undefined, list: () => [] },
   getRegistration: mock(
     (): { parseConfig: (raw: Record<string, unknown>) => Record<string, unknown> } => ({
       parseConfig: (raw: Record<string, unknown>): Record<string, unknown> => raw,
@@ -128,11 +129,6 @@ mock.module('@archon/providers', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
-  // Required even though nothing here calls it: this factory replaces the module
-  // for the whole process, and child-isolation-resolver.ts (same `bun test
-  // src/workflows/` batch) does `import { loadRepoConfig }`. Omit it and that
-  // import fails at module-eval with "Export named 'loadRepoConfig' not found".
-  loadRepoConfig: mock(() => Promise.resolve(null)),
 }));
 
 // Per-user provider credentials mocks

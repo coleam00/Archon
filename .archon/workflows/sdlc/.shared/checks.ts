@@ -18,6 +18,7 @@ import {
 
 /** Checks for one read. `revision` is null when the source does not report the evaluated head. */
 export interface CheckRead {
+  readonly approvalPending?: boolean | null;
   readonly source: ForgeSource;
   readonly revision: string | null;
   readonly units: readonly CheckUnit[];
@@ -30,11 +31,15 @@ export interface CheckRead {
  */
 export type GateState = 'none' | 'pending' | 'red' | 'gated' | 'green';
 
-export function gateState(units: readonly CheckUnit[]): GateState {
-  if (units.length === 0) return 'none';
+export function approvalPending(read: CheckRead): boolean {
+  return read.approvalPending === true || read.units.some(unit => unit.state === 'gated');
+}
+
+export function gateState(units: readonly CheckUnit[], approval = false): GateState {
+  if (units.length === 0 && !approval) return 'none';
   if (units.some(unit => unit.state === 'pending')) return 'pending';
   if (units.some(unit => unit.state === 'red' || unit.state === 'unknown')) return 'red';
-  if (units.some(unit => unit.state === 'gated')) return 'gated';
+  if (approval || units.some(unit => unit.state === 'gated')) return 'gated';
   return 'green';
 }
 
@@ -145,6 +150,7 @@ export function readPrChecks(pr: QualifiedPr): CheckRead {
     return {
       source,
       revision: observation.revision,
+      approvalPending: observation.approvalPending,
       units: preferredChecks(observation).units,
     };
   } catch (error) {

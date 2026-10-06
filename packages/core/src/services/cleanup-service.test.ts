@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { mock, describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';

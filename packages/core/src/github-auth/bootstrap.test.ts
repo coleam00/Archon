@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, expect, mock, test } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';

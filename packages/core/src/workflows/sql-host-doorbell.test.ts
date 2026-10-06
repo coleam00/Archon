@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { beforeEach, expect, mock, test } from 'bun:test';
 import type { DbNotificationListener } from '../db/adapters/types';
 import { WORKFLOW_EVENT_NOTIFY_CHANNEL } from '../db/adapters/types';

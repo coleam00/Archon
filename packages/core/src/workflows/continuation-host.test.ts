@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';

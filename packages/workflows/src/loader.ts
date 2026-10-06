@@ -1482,6 +1482,36 @@ export function validateNodeOutputFormats(
   return null;
 }
 
+/** A root `type` without "string" means the node's output is serialized JSON, never prose. */
+function outputSchemaExcludesStrings(schema: Record<string, unknown>): boolean {
+  const { type } = schema;
+  if (type === undefined) return false;
+  return Array.isArray(type) ? !type.includes('string') : type !== 'string';
+}
+
+export function validateLoopGroupProseCompletion(
+  nodes: readonly (DagNode | IncludeDirective)[]
+): string | null {
+  for (const node of nodes) {
+    if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
+    const bodyError = validateLoopGroupProseCompletion(node.loop_group.nodes);
+    if (bodyError) return bodyError;
+    const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
+    if (
+      node.loop_group.until !== undefined &&
+      node.loop_group.until_bash === undefined &&
+      soleSink !== undefined &&
+      !isIncludeDirective(soleSink) &&
+      isOutputFormatEnforced(soleSink) &&
+      soleSink.output_format !== undefined &&
+      outputSchemaExcludesStrings(soleSink.output_format)
+    ) {
+      return `loop_group '${node.id}': terminal node '${soleSink.id}' declares a non-string output_format, so the prose until signal cannot be detected in serialized structured output. Use loop_group.until_bash to read the terminal node's structured field instead`;
+    }
+  }
+  return null;
+}
+
 export type ParseResult =
   | { workflow: WorkflowDefinition; error: null; warnings: string[] }
   | { workflow: null; error: WorkflowLoadError; warnings?: never };
@@ -1612,6 +1642,15 @@ export function parseWorkflow(
       return {
         workflow: null,
         error: { filename, error: outputFormatError, errorType: 'validation_error' },
+      };
+    }
+
+    const proseCompletionError = validateLoopGroupProseCompletion(dagNodes);
+    if (proseCompletionError) {
+      getLog().debug({ filename, proseCompletionError }, 'loop_group_prose_completion_rejected');
+      return {
+        workflow: null,
+        error: { filename, error: proseCompletionError, errorType: 'validation_error' },
       };
     }
 

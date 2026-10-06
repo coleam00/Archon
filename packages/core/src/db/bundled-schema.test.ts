@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect, mock } from 'bun:test';
 
 // Binary-mode variant — must be in a separate file from source-mode tests

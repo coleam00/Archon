@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { resolvePackageTestGroups } from './package-test-groups';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 
 /**
@@ -11,24 +12,12 @@ import { bunTestCommand, bunTestEnv } from './bun-test-command';
  * runs the whole chain and then tacks the path onto the last group. Going through this
  * runner makes the argument mean what it says.
  *
- * Groups live in the package's own `package.json` under `testGroups`, which is also
- * where `scripts/test-inventory.test.ts` reads them to prove every test file is run.
+ * Execution and inventory share the resolver for manifest groups or file discovery.
  */
-
-interface PackageManifest {
-  name?: string;
-  testGroups?: string[][];
-}
 
 const packageDir = process.cwd();
 const manifestPath = join(packageDir, 'package.json');
-const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
-const groups = manifest.testGroups;
-
-if (!Array.isArray(groups) || groups.length === 0) {
-  console.error(`${manifestPath} has no "testGroups" array`);
-  process.exit(1);
-}
+const manifest: unknown = await Bun.file(manifestPath).json();
 
 const run = async (args: string[]): Promise<number> => {
   const child = Bun.spawn(bunTestCommand(args), {
@@ -48,7 +37,7 @@ const requested = Bun.argv.slice(2);
 // from `bun run` appending the argument to a chain whose other selectors still matched.
 if (requested.length > 0) process.exit(await run(requested));
 
-for (const group of groups) {
+for (const group of resolvePackageTestGroups(packageDir, manifest)) {
   const code = await run(group);
   if (code !== 0) process.exit(code);
 }

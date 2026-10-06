@@ -14,9 +14,6 @@ import {
   type GhFake,
 } from './deliver-checks-harness';
 
-/** A forge run of flip-ready: read the checks, view the PR, then flip it. */
-const forgeFlip = (checks: string, ...rest: string[]): readonly string[] => [checks, ...rest];
-
 const READY_REFUSAL = 'Only draft pull requests can be marked as "ready for review"';
 const flip = runDeliverScript.bind(null, 'flip-ready');
 const readyCalled = (calls: readonly string[]): boolean =>
@@ -48,9 +45,21 @@ describe('flip-ready preflight on the default gh source', () => {
 
   const refusals: [string, GhFake, string][] = [
     ['a failed check read', { checks: 'fail', rollup: 'fail' }, 'could not read check state'],
-    ['a red check', { checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }] }, 'red checks: build (failure)'],
-    ['a running check', { checks: [{ name: 'unit', state: 'IN_PROGRESS', bucket: 'pending' }] }, 'pending checks: unit'],
-    ['a cancelled check', { checks: [{ name: 'e2e', state: 'CANCELLED', bucket: 'cancel' }] }, 'red checks: e2e (cancelled)'],
+    [
+      'a red check',
+      { checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }] },
+      'red checks: build (failure)',
+    ],
+    [
+      'a running check',
+      { checks: [{ name: 'unit', state: 'IN_PROGRESS', bucket: 'pending' }] },
+      'pending checks: unit',
+    ],
+    [
+      'a cancelled check',
+      { checks: [{ name: 'e2e', state: 'CANCELLED', bucket: 'cancel' }] },
+      'red checks: e2e (cancelled)',
+    ],
   ];
   for (const [label, gh, reason] of refusals) {
     it(`refuses ${label} before the ready write`, () => {
@@ -78,12 +87,13 @@ describe('flip-ready preflight on the opt-in forge source', () => {
       source: 'forge',
       forge: {
         kind: 'fake',
-        response: forgeFlip(forgeResponse([{ name: 'build', state: 'green' }]), view, flipped),
+        response: [view, forgeResponse([{ name: 'build', state: 'green' }]), flipped],
       },
     });
     expect(result.code).toBe(0);
-    expect(result.forge[0]).toContain('forge checks --json --data');
-    expect(result.forge[0]).toContain('ghe.example.com');
+    expect(result.forge[0]).toContain('forge pr.view --json --data-file');
+    expect(result.forge[1]).toContain('forge checks --json --data');
+    expect(result.forge[1]).toContain('ghe.example.com');
     expect(result.forge[2]).toContain('forge pr.ready --json --data-file');
     expect(result.gh).toEqual([]);
     expect(JSON.parse(result.stdout)).toEqual({ pr_url: PR_URL });
@@ -92,7 +102,7 @@ describe('flip-ready preflight on the opt-in forge source', () => {
   it('allows an empty observation without leaking captured vendor output', () => {
     const result = flip({
       source: 'forge',
-      forge: { kind: 'fake', response: forgeFlip(forgeResponse([]), view, flipped) },
+      forge: { kind: 'fake', response: [view, forgeResponse([]), flipped] },
     });
     expect(result.code).toBe(0);
     expect(result.forge.some(call => call.startsWith('forge pr.ready'))).toBe(true);
@@ -104,9 +114,9 @@ describe('flip-ready preflight on the opt-in forge source', () => {
       source: 'forge',
       forge: {
         kind: 'fake',
-        response: forgeFlip(
-          forgeResponse([{ name: 'build', state: 'green' }]),
+        response: [
           view,
+          forgeResponse([{ name: 'build', state: 'green' }]),
           JSON.stringify({
             operationId: 'op-ready',
             ok: false,
@@ -117,8 +127,8 @@ describe('flip-ready preflight on the opt-in forge source', () => {
               outcome: 'verification_failed',
               leaveBehind: 'the pull request draft state may have changed',
             },
-          })
-        ),
+          }),
+        ],
       },
     });
     expect(result.code).not.toBe(0);
@@ -131,7 +141,7 @@ describe('flip-ready preflight on the opt-in forge source', () => {
     it(`refuses ${state} checks before the ready write`, () => {
       const result = flip({
         source: 'forge',
-        forge: { kind: 'fake', response: forgeResponse([{ name: 'build', state }]) },
+        forge: { kind: 'fake', response: [view, forgeResponse([{ name: 'build', state }])] },
       });
       expect(result.code).not.toBe(0);
       expect(result.forge.some(call => call.startsWith('forge pr.ready'))).toBe(false);
@@ -140,7 +150,20 @@ describe('flip-ready preflight on the opt-in forge source', () => {
   }
 
   it('refuses a failed forge read before the ready write', () => {
-    const result = flip({ source: 'forge', forge: { kind: 'fake' } });
+    const result = flip({
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        response: [
+          view,
+          JSON.stringify({
+            operationId: 'checks',
+            ok: false,
+            error: { kind: 'forge_error', message: 'read unavailable' },
+          }),
+        ],
+      },
+    });
     expect(result.code).not.toBe(0);
     expect(result.forge.some(call => call.startsWith('forge pr.ready'))).toBe(false);
     expect(result.stderr).toContain('forge check read failed');
@@ -154,12 +177,34 @@ describe('flip-ready preflight on the opt-in forge source', () => {
     });
     expect(result.code).not.toBe(0);
     expect(result.gh).toEqual([]);
-    expect(result.stderr).toContain('flip-ready: ARCHON_SDLC_FORGE=forge:');
+    expect(result.stderr).toContain('flip-ready: forge pr.view failed:');
     expect(result.stderr).toContain('no forge plugin claims ghe.example.com');
   });
 });
 
 describe('flip-ready terminal-state classification', () => {
+  it('reports a merged PR even when retained-head CI still awaits approval', () => {
+    const result = flip({
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        response: [
+          forgeOperation('pr.view', {
+            pr: forgePrRecord({ state: 'merged' }),
+            title: 't',
+            body: 'b',
+          }),
+          forgeResponse([], { approvalPending: true }),
+        ],
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ pr_url: PR_URL });
+    expect(result.forge).toHaveLength(1);
+    expect(result.forge[0]).toContain('forge pr.view');
+    expect(result.gh).toEqual([]);
+  });
+
   const green: GhFake = { checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }] };
 
   it('reports the delivery when the recorded PR is already merged, without writing', () => {
@@ -171,10 +216,11 @@ describe('flip-ready terminal-state classification', () => {
   });
 
   it('refuses a PR closed without a merge and names the state', () => {
-    const result = flip({ gh: { ...green, pr: { state: 'CLOSED' } } });
+    const result = flip({ gh: { checks: 'fail', pr: { state: 'CLOSED' } } });
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('CLOSED');
+    expect(result.gh.some(call => call.startsWith('pr checks'))).toBe(false);
     expect(readyCalled(result.gh)).toBe(false);
   });
 
@@ -200,3 +246,23 @@ describe('flip-ready terminal-state classification', () => {
     expect(result.stderr).toContain('still reports draft');
   });
 });
+
+it.each([[[]], [[{ name: 'green', state: 'green' as const }]]])(
+  'refuses workflow-level approval before any ready write: %j',
+  units => {
+    const result = flip({
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        response: [
+          forgeOperation('pr.view', { pr: forgePrRecord(), title: 't', body: 'b' }),
+          forgeResponse(units, { approvalPending: true }),
+        ],
+      },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('gated');
+    expect(result.forge).toHaveLength(2);
+    expect(result.gh).toEqual([]);
+  }
+);
