@@ -1378,6 +1378,35 @@ describe('workflow list arguments', () => {
     expect(output.workflows[0].descriptionTruncated).toBe(false);
   });
 
+  // Core no longer registers providers, so the CLI route default is what makes a
+  // provider-scoped workflow parse.
+  it('registers providers before discovering workflows', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'archon-cli-provider-route-'));
+    try {
+      mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+      spawnSync('git', ['init', '-q', '.'], { cwd: repo });
+      writeFileSync(
+        join(repo, '.archon', 'workflows', 'scoped.yaml'),
+        'name: scoped\ndescription: Provider scoped.\nprovider: claude\nnodes:\n  - id: a\n    prompt: hi\n'
+      );
+      const { status, envelope } = spawnJsonError([
+        'workflow',
+        'list',
+        'scoped',
+        '--json',
+        '--cwd',
+        repo,
+      ]);
+
+      expect(status).toBe(0);
+      const output = envelope() as { workflows: Array<{ name: string }>; errors: unknown[] };
+      expect(output.errors).toEqual([]);
+      expect(output.workflows.map(w => w.name)).toEqual(['scoped']);
+    } finally {
+      await removeTempTree(repo);
+    }
+  });
+
   it('rejects extra positionals with human-readable usage', () => {
     const result = spawnSync(
       process.execPath,

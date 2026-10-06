@@ -33,6 +33,10 @@ import { TelegramAdapter } from './adapter';
 type SendMessage = Api['sendMessage'];
 
 describe('TelegramAdapter', () => {
+  test('supports durable conversation project detachment', () => {
+    expect(new TelegramAdapter('fake-token-for-testing').capabilities.canDetachProject).toBe(true);
+  });
+
   describe('streaming mode configuration', () => {
     test('should return batch mode when configured', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing', 'batch');

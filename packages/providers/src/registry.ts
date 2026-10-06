@@ -26,7 +26,8 @@ import { registerPiProvider } from './community/pi/registration';
 import { createLogger } from '@archon/paths';
 import {
   EFFORT_LADDER,
-  InvalidProviderRunConfigError,
+  type ProviderRegistry,
+  parseProviderRunModel as parseRegisteredRunModel,
   UnknownProviderError,
 } from '@archon/provider-contract';
 
@@ -39,6 +40,11 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /** Backing store for registered providers. */
 const registry = new Map<string, ProviderRegistration>();
+
+export const providerRegistry: ProviderRegistry = {
+  get: id => registry.get(id),
+  list: () => [...registry.values()],
+};
 
 /** Deprecated providers whose notice this process already logged. */
 const deprecationNoticed = new Set<string>();
@@ -55,6 +61,10 @@ function assertValidCapabilities(entry: ProviderRegistration): void {
 export function registerProvider(entry: ProviderRegistration): void {
   if (registry.has(entry.id)) {
     throw new Error(`Provider '${entry.id}' is already registered`);
+  }
+  const owner = [...registry.values()].find(provider => provider.ownsUnprefixedModelRefs);
+  if (entry.ownsUnprefixedModelRefs && owner) {
+    throw new Error(`Provider '${owner.id}' already owns unprefixed model refs`);
   }
   assertValidCapabilities(entry);
   registry.set(entry.id, entry);
@@ -101,11 +111,7 @@ export function getProviderCapabilities(id: string): ProviderCapabilities {
 
 /** Validate and normalize a run-owned model through the provider's strict parser. */
 export function parseProviderRunModel(id: string, model: string): string {
-  const parsed = getRegistration(id).parseConfig({ model }, 'run');
-  if (typeof parsed.model !== 'string' || parsed.model.trim().length === 0) {
-    throw new InvalidProviderRunConfigError('model', 'provider did not accept the model');
-  }
-  return parsed.model;
+  return parseRegisteredRunModel(getRegistration(id), model);
 }
 
 /**
@@ -173,9 +179,7 @@ export function registerBuiltinProviders(): void {
 
   for (const entry of builtins) {
     if (!registry.has(entry.id)) {
-      assertValidCapabilities(entry);
-      registry.set(entry.id, entry);
-      getLog().debug({ provider: entry.id }, 'builtin_provider.registered');
+      registerProvider(entry);
     }
   }
 }
@@ -183,7 +187,7 @@ export function registerBuiltinProviders(): void {
 /**
  * Register all bundled community providers in one call.
  *
- * Process entrypoints (server, CLI, config-loader) call this once after
+ * Process entrypoints (server, CLI) call this once after
  * `registerBuiltinProviders()`. Adding a new community provider means:
  *   1. Drop the implementation under `packages/providers/src/community/<id>/`.
  *   2. Export a `register<Name>Provider()` function from it.
@@ -195,7 +199,7 @@ export function registerBuiltinProviders(): void {
  * providers are a localized addition.
  *
  * Each `register*Provider` is itself idempotent, so calling this
- * aggregator multiple times (e.g. from both CLI and config-loader paths)
+ * aggregator multiple times
  * is safe. Errors during registration are not caught here — a broken
  * community provider should fail loud at bootstrap, not silently
  * disappear.

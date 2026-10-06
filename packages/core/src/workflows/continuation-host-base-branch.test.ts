@@ -6,6 +6,7 @@ import { toBranchName } from '@archon/git';
 import { HeadlessPlatform } from './headless-platform';
 
 const run: WorkflowRun = {
+  origin: { conversationId: 'conv' },
   id: 'run',
   workflow_name: 'deliver',
   conversation_id: 'conv',
@@ -33,7 +34,11 @@ const providerCreate = mock<IIsolationProvider['create']>(async () => ({
   branchName: toBranchName('child'),
   status: 'active',
   createdAt: new Date(),
-  metadata: { adopted: false },
+  metadata: {
+    provenance: 'created',
+    adopted: false,
+    creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+  },
 }));
 const isolation = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
@@ -81,7 +86,7 @@ for (const choice of [null, '', ' release ']) {
     };
     await resumeWorkflowContinuation(engine, run.id, async () => ({
       kind: 'ready',
-      platform: new HeadlessPlatform('conv'),
+      platform: new HeadlessPlatform(),
       conversationId: 'conv',
     }));
     expect(captured?.options?.baseBranch).toBe(choice?.trim() || undefined);

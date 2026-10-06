@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { describe, test, expect } from 'bun:test';
 import { parseNodeHooks } from './loader';
 import { buildSDKHooksFromYAML } from '@archon/providers/claude/provider';
@@ -213,7 +214,7 @@ nodes:
         - response:
             systemMessage: "Verify output"
 `;
-    const result = parseWorkflow(yaml, 'test.yaml');
+    const result = parseWorkflow(yaml, 'test.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const workflow = result.workflow!;
     expect(workflow.nodes).toBeDefined();
@@ -236,7 +237,7 @@ nodes:
         - response:
             decision: block
 `;
-    const result = parseWorkflow(yaml, 'test.yaml');
+    const result = parseWorkflow(yaml, 'test.yaml', providerRegistry);
     // Bash nodes ignore AI fields including hooks — the node should parse successfully
     // but hooks should not be on the parsed node
     expect(result.error).toBeNull();

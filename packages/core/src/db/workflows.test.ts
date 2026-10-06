@@ -21,6 +21,8 @@ mock.module('./connection', () => ({
 
 import {
   createWorkflowRun,
+  resolveApprovalGate,
+  resolveAndCancelApprovalGate,
   getWorkflowRun,
   getWorkflowRunStatus,
   getActiveWorkflowRun,
@@ -60,7 +62,28 @@ describe('workflows database', () => {
     mockQuery.mockImplementation(() => Promise.resolve(createQueryResult([])));
   });
 
+  test('resolution binds the expected gate node in the PostgreSQL CAS', async () => {
+    const metadata = { approval: { nodeId: 'review', resolved: 'approved' } };
+    expect(await resolveApprovalGate('run-1', metadata, [], 'review')).toEqual({ resolved: false });
+    expect(mockQuery.mock.calls[0]?.[0]).toContain("metadata->'approval'->>'nodeId' = $3");
+    expect(mockQuery.mock.calls[0]?.[1]).toEqual([
+      'run-1',
+      JSON.stringify(metadata),
+      'review',
+      null,
+    ]);
+  });
+
+  test('terminal rejection binds the expected gate node in the PostgreSQL CAS', async () => {
+    expect(
+      await resolveAndCancelApprovalGate('run-1', [], { step_name: 'review' }, 'review')
+    ).toEqual({ resolved: false });
+    expect(mockQuery.mock.calls[0]?.[0]).toContain("metadata->'approval'->>'nodeId' = $2");
+    expect(mockQuery.mock.calls[0]?.[1]).toEqual(['run-1', 'review', null]);
+  });
+
   const mockWorkflowRun: WorkflowRun = {
+    origin: { conversationId: 'conv-456' },
     id: 'workflow-run-123',
     workflow_name: 'feature-development',
     conversation_id: 'conv-456',
@@ -92,12 +115,15 @@ describe('workflows database', () => {
   }
 
   describe('createWorkflowRun', () => {
+    beforeEach(() => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+    });
     test('creates a new workflow run', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([mockWorkflowRun]));
 
       const result = await createWorkflowRun({
         workflow_name: 'feature-development',
-        conversation_id: 'conv-456',
+        origin: { conversationId: 'conv-456' },
         codebase_id: 'codebase-789',
         user_message: 'Add dark mode support',
       });
@@ -116,6 +142,7 @@ describe('workflows database', () => {
           null,
           null,
           null, // adopted_from_run_id (#2747)
+          JSON.stringify({ conversationId: 'conv-456' }),
         ]
       );
     });
@@ -129,7 +156,7 @@ describe('workflows database', () => {
 
       const result = await createWorkflowRun({
         workflow_name: 'feature-development',
-        conversation_id: 'conv-456',
+        origin: { conversationId: 'conv-456' },
         codebase_id: 'codebase-789',
         user_message: 'Add dark mode support',
         metadata: { github_context: 'Issue #42 context' },
@@ -149,6 +176,7 @@ describe('workflows database', () => {
           null,
           null,
           null, // adopted_from_run_id (#2747)
+          JSON.stringify({ conversationId: 'conv-456' }),
         ]
       );
     });
@@ -159,7 +187,7 @@ describe('workflows database', () => {
 
       const result = await createWorkflowRun({
         workflow_name: 'feature-development',
-        conversation_id: 'conv-456',
+        origin: { conversationId: 'conv-456' },
         user_message: 'Add dark mode support',
       });
 
@@ -177,6 +205,7 @@ describe('workflows database', () => {
           null,
           null,
           null, // adopted_from_run_id (#2747)
+          JSON.stringify({ conversationId: 'conv-456' }),
         ]
       );
     });
@@ -190,7 +219,7 @@ describe('workflows database', () => {
 
       expect(result).toEqual(mockWorkflowRun);
       expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
         ['workflow-run-123']
       );
     });
@@ -274,6 +303,34 @@ describe('workflows database', () => {
       expect(listSql).not.toContain('step_started');
       expect(listSql).not.toContain('step_completed');
       expect(listSql).not.toContain('step_failed');
+    });
+
+    test('reads PostgreSQL text counts as numbers', async () => {
+      mockQuery
+        .mockResolvedValueOnce(
+          createQueryResult([
+            {
+              ...mockWorkflowRun,
+              codebase_name: null,
+              platform_type: null,
+              worker_platform_id: null,
+              parent_platform_id: null,
+              agents_completed: '2',
+              agents_failed: '1',
+              agents_total: null,
+            },
+          ])
+        )
+        .mockResolvedValueOnce(createQueryResult([{ status: 'running', cnt: '1' }]))
+        .mockResolvedValueOnce(createQueryResult([]));
+
+      const result = await listDashboardRuns();
+
+      expect(result.runs[0]).toMatchObject({
+        agents_completed: 2,
+        agents_failed: 1,
+        agents_total: null,
+      });
     });
 
     test('does not collapse parallel active nodes into the singular compatibility fields', async () => {
@@ -1256,7 +1313,7 @@ describe('workflows database', () => {
       await expect(
         createWorkflowRun({
           workflow_name: 'test',
-          conversation_id: 'conv',
+          origin: { conversationId: 'conv' },
           user_message: 'test',
         })
       ).rejects.toThrow('Failed to create workflow run: Connection refused');
@@ -1312,7 +1369,7 @@ describe('workflows database', () => {
       await expect(
         createWorkflowRun({
           workflow_name: 'test',
-          conversation_id: 'conv',
+          origin: { conversationId: 'conv' },
           user_message: 'test',
           metadata: circularObj,
         })
@@ -1324,18 +1381,19 @@ describe('workflows database', () => {
       const circularObj: Record<string, unknown> = { someKey: 'value' };
       circularObj.self = circularObj;
 
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([{ ...mockWorkflowRun, metadata: {} }]));
 
       const result = await createWorkflowRun({
         workflow_name: 'test',
-        conversation_id: 'conv',
+        origin: { conversationId: 'conv' },
         user_message: 'test',
         metadata: circularObj,
       });
 
       // Should succeed with empty metadata fallback
       expect(result.metadata).toEqual({});
-      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      const [, params] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(params[4]).toBe('{}');
     });
 
@@ -1344,11 +1402,12 @@ describe('workflows database', () => {
         ...mockWorkflowRun,
         metadata: { github_context: 'Issue #99: Fix bug' },
       };
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([runWithContext]));
 
       const result = await createWorkflowRun({
         workflow_name: 'test',
-        conversation_id: 'conv',
+        origin: { conversationId: 'conv' },
         user_message: 'test',
         metadata: { github_context: 'Issue #99: Fix bug' },
       });
@@ -1517,7 +1576,9 @@ describe('workflows database', () => {
       expect(result).toEqual([paused, failed]);
       expect(mockQuery).toHaveBeenCalledTimes(8);
       const [selectSql, selectParams] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(selectSql).toContain('SELECT * FROM remote_agent_workflow_runs');
+      expect(selectSql).toContain(
+        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs'
+      );
       expect(selectSql).toContain('conversation_id = $1 OR parent_conversation_id = $2');
       expect(selectSql).toContain('FOR UPDATE');
       expect(selectParams).toEqual(['conv-1', 'conv-1']);
