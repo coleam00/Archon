@@ -108,9 +108,6 @@ export interface SerializedNodeEvent {
 
 export const DEFERRED_NODE_USAGE_EVENT_TYPE = 'node_deferred_usage';
 export const serializedDeferredNodeUsageDataSchema = serializedNodeDataSchema.pick({
-  type: true,
-  invocation: true,
-  attempt: true,
   accounting: true,
   aggregate: true,
   tokens: true,

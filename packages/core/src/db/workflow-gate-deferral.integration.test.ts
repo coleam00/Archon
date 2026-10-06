@@ -56,112 +56,142 @@ afterEach(async () => {
 });
 
 describe('per-run gate deferral — real SQLite', () => {
-  test('paid deferred loops retain spend through cold resumes and completion', async () => {
-    let providerCalls = 0;
-    let prompts = 0;
-    const store = createWorkflowStore();
-    const pause = store.pauseWorkflowRun;
-    let releaseFirst = () => {};
-    const firstPaused = new Promise<void>(resolve => {
-      releaseFirst = resolve;
-    });
-    store.pauseWorkflowRun = async (...args) => {
-      if (args[1].nodeId === 'second') await firstPaused;
-      const result = await pause(...args);
-      if (args[1].nodeId === 'first') releaseFirst();
-      return result;
-    };
-    const platform: IWorkflowPlatform = {
-      sendMessage: async (_id, message) => {
-        if (message.includes('**Input required**')) prompts++;
-      },
-      getPlatformType: () => 'test',
-      getStreamingMode: () => 'batch',
-    };
-    const deps: WorkflowDeps = {
-      store,
-      providers: providerRegistry,
-      getAgentProvider: () => ({
-        getType: () => 'claude',
-        getCapabilities: () => getProviderCapabilities('claude'),
-        checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
-        sendQuery: async function* () {
-          providerCalls++;
-          yield { type: 'agent_message_chunk', text: 'COMPLETE' };
-          yield {
-            type: 'result',
-            sessionId: `session-${providerCalls}`,
-            cost: 0.25,
-            tokens: { input: 10, output: 5 },
-          };
-          yield { type: 'settled' };
+  test.each([2, 3])(
+    '%s paid gates retain each deferred segment through cold resumes',
+    async gateCount => {
+      let providerCalls = 0;
+      let prompts = 0;
+      const store = createWorkflowStore();
+      const pause = store.pauseWorkflowRun;
+      const nodeIds = ['first', 'second', 'third'].slice(0, gateCount);
+      let winner = nodeIds[0];
+      let releaseWinner = () => {};
+      const admissionBarrier = () =>
+        new Promise<void>(resolve => {
+          releaseWinner = resolve;
+        });
+      let winnerPaused = admissionBarrier();
+      store.pauseWorkflowRun = async (...args) => {
+        if (args[1].nodeId !== winner) await winnerPaused;
+        const result = await pause(...args);
+        if (args[1].nodeId === winner) releaseWinner();
+        return result;
+      };
+      const platform: IWorkflowPlatform = {
+        sendMessage: async (_id, message) => {
+          if (message.includes('**Input required**')) prompts++;
         },
-      }),
-      loadConfig: async () => ({
-        assistant: 'claude',
-        baseBranch: 'main',
-        assistants: { claude: {}, codex: {} },
-        commands: {},
-        defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
-      }),
-    };
-    const workflow = makeTestResolvedWorkflow({
-      name: 'paid-gates',
-      nodes: ['first', 'second'].map(id => ({
-        id,
-        loop: {
-          prompt: 'Review',
-          until: 'COMPLETE',
-          interactive: true,
-          gate_message: 'Feedback?',
-          max_iterations: 2,
-        },
-      })),
-    });
-    const result = await new InProcessWorkflowEngine(deps).submit({
-      platform,
-      conversationId,
-      origin: { conversationId },
-      cwd: root,
-      workflow,
-      userMessage: 'goal',
-    });
-    const id = result.workflowRunId!;
-    expect(providerCalls).toBe(2);
-    expect(prompts).toBe(1);
-    expect((await getWorkflowRun(id))?.metadata.total_cost_usd).toBe(0.5);
-    const coldResume = async () => {
-      await closeDatabase();
-      resetDatabase();
-      const admission = await new InProcessWorkflowEngine(deps).resume({
-        run: (await getWorkflowRun(id))!,
+        getPlatformType: () => 'test',
+        getStreamingMode: () => 'batch',
+      };
+      const deps: WorkflowDeps = {
+        store,
+        providers: providerRegistry,
+        getAgentProvider: () => ({
+          getType: () => 'claude',
+          getCapabilities: () => getProviderCapabilities('claude'),
+          checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+          sendQuery: async function* () {
+            providerCalls++;
+            yield { type: 'agent_message_chunk', text: 'COMPLETE' };
+            yield {
+              type: 'result',
+              sessionId: `session-${providerCalls}`,
+              cost: 0.25,
+              tokens: { input: 10, output: 5 },
+            };
+            yield { type: 'settled' };
+          },
+        }),
+        loadConfig: async () => ({
+          assistant: 'claude',
+          baseBranch: 'main',
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+          defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
+        }),
+      };
+      const workflow = makeTestResolvedWorkflow({
+        name: 'paid-gates',
+        nodes: nodeIds.map(id => ({
+          id,
+          loop: {
+            prompt: 'Review',
+            until: 'COMPLETE',
+            interactive: true,
+            gate_message: 'Feedback?',
+            max_iterations: 2,
+          },
+        })),
+      });
+      const result = await new InProcessWorkflowEngine(deps).submit({
         platform,
         conversationId,
         origin: { conversationId },
         cwd: root,
-        legacyWorkflow: workflow,
+        workflow,
         userMessage: 'goal',
       });
-      expect(admission.accepted).toBe(true);
-      if (admission.accepted) await admission.settled;
-    };
-    await approveWorkflow(id, undefined, { kind: 'operator' });
-    await coldResume();
-    expect(providerCalls).toBe(3);
-    expect(prompts).toBe(2);
-    expect((await getWorkflowRun(id))?.metadata.total_cost_usd).toBe(0.75);
-    await approveWorkflow(id, undefined, { kind: 'operator' });
-    await coldResume();
-    const completed = await getWorkflowRun(id);
-    expect(completed?.status).toBe('completed');
-    expect(completed?.metadata).toMatchObject({
-      total_cost_usd: 0.75,
-      total_tokens_in: 30,
-      total_tokens_out: 15,
-    });
-    expect((await store.getDagResumeSnapshot(id)).tokens).toEqual({ input: 30, output: 15 });
-    expect(providerCalls).toBe(3);
-  });
+      const id = result.workflowRunId!;
+      expect(providerCalls).toBe(gateCount);
+      expect(prompts).toBe(1);
+      expect((await getWorkflowRun(id))?.metadata.total_cost_usd).toBe(gateCount * 0.25);
+      const coldResume = async () => {
+        await closeDatabase();
+        resetDatabase();
+        const admission = await new InProcessWorkflowEngine(deps).resume({
+          run: (await getWorkflowRun(id))!,
+          platform,
+          conversationId,
+          origin: { conversationId },
+          cwd: root,
+          legacyWorkflow: workflow,
+          userMessage: 'goal',
+        });
+        expect(admission.accepted).toBe(true);
+        if (admission.accepted) await admission.settled;
+      };
+      let expectedCalls = gateCount;
+      for (let index = 0; index < gateCount; index++) {
+        const approval = (await getWorkflowRun(id))?.metadata.approval;
+        if (!isApprovalContext(approval)) throw new Error('Missing paid loop gate');
+        expect(approval.nodeId).toBe(nodeIds[index]);
+        await approveWorkflow(id, undefined, { kind: 'operator' });
+        winner = nodeIds[index + 1];
+        winnerPaused = admissionBarrier();
+        await coldResume();
+        expectedCalls += gateCount - index - 1;
+        expect(providerCalls).toBe(expectedCalls);
+        expect(prompts).toBe(Math.min(index + 2, gateCount));
+        expect((await getWorkflowRun(id))?.metadata.total_cost_usd).toBe(expectedCalls * 0.25);
+      }
+      const completed = await getWorkflowRun(id);
+      expect(completed?.status).toBe('completed');
+      expect(completed?.metadata).toMatchObject({
+        total_cost_usd: expectedCalls * 0.25,
+        total_tokens_in: expectedCalls * 10,
+        total_tokens_out: expectedCalls * 5,
+      });
+      expect((await store.getDagResumeSnapshot(id)).tokens).toEqual({
+        input: expectedCalls * 10,
+        output: expectedCalls * 5,
+      });
+      const deferred = await getDatabase().query<{ step_name: string; data: string }>(
+        "SELECT step_name, data FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND event_type = 'node_deferred_usage' ORDER BY event_order",
+        [id]
+      );
+      for (const [index, nodeId] of nodeIds.entries()) {
+        const segments = deferred.rows.filter(row => row.step_name === nodeId);
+        expect(segments).toHaveLength(index);
+        for (const segment of segments) {
+          expect(JSON.parse(segment.data)).toMatchObject({
+            cost_usd: 0.25,
+            tokens: { input: 10, output: 5 },
+          });
+        }
+      }
+    }
+  );
 
   for (const kind of ['loop', 'loop_group'] as const) {
     test.each(['immediate decision', 'failed delivery', 'failed delivery after decision'] as const)(

@@ -76,16 +76,12 @@ describe('node record serializers', () => {
       step_name: 'group.review',
       event_type: 'node_deferred_usage',
       data: {
-        invocation: source.invocation,
-        attempt: source.attempt,
         accounting: 'node',
         tokens: { input: 0, output: 0 },
         cost_usd: 0,
       },
     });
-    expect(Object.keys(event.data).sort()).toEqual(
-      ['type', 'invocation', 'attempt', 'accounting', 'tokens', 'cost_usd'].sort()
-    );
+    expect(Object.keys(event.data).sort()).toEqual(['accounting', 'tokens', 'cost_usd'].sort());
     expect(readNodeRecordEvent(event)).toBeUndefined();
   });
 

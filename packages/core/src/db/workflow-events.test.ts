@@ -1422,7 +1422,10 @@ describe('workflow-events', () => {
         {
           step_name: 'text',
           event_type: 'node_deferred_usage',
-          data: { cost_usd: 0.25, tokens: { input: 2, output: 1 } },
+          data: {
+            cost_usd: 0.25,
+            tokens: { input: 2, output: 1, cacheRead: 4, cacheWrite: 2, cachePartial: true },
+          },
         },
         {
           step_name: 'rollup',
@@ -1444,7 +1447,13 @@ describe('workflow-events', () => {
         executionMetadata(failedFanOut),
       ]);
       expect(double.unfinishedInvocations).toEqual(production.unfinishedInvocations);
-      expect(production.tokens).toEqual({ input: 5, output: 2 });
+      expect(production.tokens).toEqual({
+        input: 5,
+        output: 2,
+        cacheRead: 4,
+        cacheWrite: 2,
+        cachePartial: true,
+      });
       expect(production.costUsd).toBe(0.75);
       expect(double.tokens).toEqual(production.tokens);
       expect(double.costUsd).toBe(production.costUsd);
@@ -1462,13 +1471,12 @@ describe('workflow-events', () => {
         invocation: { id: 'inv', startedAt: '2026-09-22T10:00:00Z', loopPath: [] },
       });
       const started = serializeNodeStateRecord(execution);
-      const suspended = serializeNodeStateRecord(
-        finishNodeExecution(
-          execution,
-          { status: 'suspended', point: 'interactive_loop' },
-          { tokens: { input: 10, output: 5 }, costUsd: 0.25 }
-        )
+      const suspendedExecution = finishNodeExecution(
+        execution,
+        { status: 'suspended', point: 'interactive_loop' },
+        { tokens: { input: 10, output: 5 }, costUsd: 0.25 }
       );
+      const suspended = serializeNodeStateRecord(suspendedExecution);
       const deferred = {
         step_name: 'group.review',
         event_type: 'node_deferred_usage',
@@ -1489,13 +1497,7 @@ describe('workflow-events', () => {
       expect(running.completedNodeOutputs.size).toBe(0);
       expect(running.unresolvedNodeStarts.has('group.review')).toBe(true);
       expect([...running.unfinishedInvocations!.values()]).toEqual([
-        executionMetadata(
-          finishNodeExecution(
-            execution,
-            { status: 'suspended', point: 'interactive_loop' },
-            { tokens: { input: 10, output: 5 }, costUsd: 0.25 }
-          )
-        ),
+        executionMetadata(suspendedExecution),
       ]);
       expect(running.costUsd).toBe(0.5);
       expect(running.tokens).toEqual(deferred.data.tokens);

@@ -2,6 +2,7 @@
  * Test factories for workflow types.
  * Use these instead of inline fixture objects — schema changes update one file.
  */
+import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
 import { workflowDefinitionSchema } from './schemas/workflow';
 import type {
   DeclaredWorkflowConfig,
@@ -150,7 +151,7 @@ export function inMemoryDagResumeSnapshot(
 ): DagResumeSnapshot {
   const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
   const unfinishedInvocations: NonNullable<DagResumeSnapshot['unfinishedInvocations']> = new Map();
-  const tokens = { input: 0, output: 0 };
+  const tokenContributions: TokenUsage[] = [];
   let costUsd = 0;
   for (const e of events) {
     if (
@@ -223,8 +224,17 @@ export function inMemoryDagResumeSnapshot(
       Number.isFinite(eventTokens.input) &&
       Number.isFinite(eventTokens.output)
     ) {
-      tokens.input += eventTokens.input;
-      tokens.output += eventTokens.output;
+      const normalized: TokenUsage = { input: eventTokens.input, output: eventTokens.output };
+      for (const axis of ['cacheRead', 'cacheWrite'] as const) {
+        if (axis in eventTokens) {
+          const value = eventTokens[axis];
+          if (typeof value === 'number' && Number.isFinite(value)) normalized[axis] = value;
+        }
+      }
+      if ('cachePartial' in eventTokens && eventTokens.cachePartial === true) {
+        normalized.cachePartial = true;
+      }
+      tokenContributions.push(normalized);
     }
     const eventCost = e.data?.cost_usd;
     if (typeof eventCost === 'number' && Number.isFinite(eventCost)) {
@@ -236,7 +246,7 @@ export function inMemoryDagResumeSnapshot(
     unfinishedInvocations,
     fanOutSnapshots: new Map(),
     unresolvedNodeStarts: new Set(),
-    tokens,
+    tokens: mergeTokenUsage(tokenContributions) ?? { input: 0, output: 0 },
     costUsd,
   };
 }
