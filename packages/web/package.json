@@ -60,6 +60,12 @@
     ],
     [
       "src/experiments/console/"
+    ],
+    [
+      "src/experiments/AddProjectDialog.test.tsx"
+    ],
+    [
+      "src/experiments/ApprovalPanelResponse.test.tsx"
     ]
   ]
 }

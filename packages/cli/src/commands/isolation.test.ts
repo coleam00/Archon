@@ -179,6 +179,7 @@ type ActiveWorkflowRun = NonNullable<
 
 function makeActiveWorkflowRun(overrides: Partial<ActiveWorkflowRun> = {}): ActiveWorkflowRun {
   return {
+    origin: { conversationId: 'conv-123' },
     id: 'run-abc',
     workflow_name: 'implement',
     conversation_id: 'conv-123',

@@ -2,6 +2,7 @@
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
+import { providerRegistry } from '@archon/providers';
 
 import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
 import { nodeCostScope } from '@archon/workflows/node-record-serialization';
@@ -9,6 +10,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
+import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
@@ -34,6 +36,8 @@ import {
   toSafeConfig,
   updateGlobalConfig,
   cloneRepository,
+  inspectProjectBaseBranch,
+  ProjectRegistrationError,
   registerRepository,
   registerFolder,
   ConversationNotFoundError,
@@ -69,9 +73,16 @@ import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/cor
 import { InvalidConfigError, parseWorkflowRunConfig } from '@archon/core/config';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { EffortLevel } from '@archon/workflows/schemas/effort';
-import { findRepoRoot, removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
+import {
+  ConfiguredBaseBranchNotFoundError,
+  findRepoRoot,
+  removeWorktree,
+  toRepoPath,
+  toWorktreePath,
+} from '@archon/git';
 import {
   createLogger,
+  canonicalizeProjectPath,
   getWorkflowFolderSearchPaths,
   getCommandFolderSearchPaths,
   getBundledWorkflowsPath,
@@ -97,7 +108,7 @@ import {
   isValidWorkflowFolderSegment,
 } from '@archon/workflows/workflow-discovery';
 import { FIXTURES_DIR } from '@archon/workflows/fixture-layout';
-import { parseWorkflow } from '@archon/workflows/loader';
+import { parseWorkflow, parseYaml } from '@archon/workflows/loader';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
@@ -139,7 +150,7 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
     const absolutePath = join(dir, filename);
     try {
       const content = await readFile(absolutePath, 'utf-8');
-      const parsed = parseWorkflow(content, filename);
+      const parsed = parseWorkflow(content, filename, providerRegistry);
       if (parsed.workflow !== null && !acceptedNames.has(parsed.workflow.name)) continue;
       return { absolutePath, filename, packaged: false, parsed, content };
     } catch (error) {
@@ -153,10 +164,10 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
  * The workflow as authored: the YAML mapping before the engine's normalizing
  * transform. The builder edits this shape, and the normalized `workflow` cannot
  * be sent back (validate rejects it), so GET returns both. Parsed with the same
- * `Bun.YAML` the loader uses; undefined when the top level is not a mapping.
+ * parser the loader uses; undefined when the top level is not a mapping.
  */
 function authoredForm(content: string): Record<string, unknown> | undefined {
-  const raw: unknown = Bun.YAML.parse(content);
+  const raw = parseYaml(content);
   return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : undefined;
@@ -225,7 +236,7 @@ async function findPackagedWorkflowAt(
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw error;
       }
-      const parsed = parseWorkflow(content, yamlFilename);
+      const parsed = parseWorkflow(content, yamlFilename, providerRegistry);
       const yamlStem = yamlFilename.replace(/\.ya?ml$/, '');
       const isMalformedTarget =
         parsed.workflow === null && (yamlStem === name || workflowFolder === name);
@@ -265,7 +276,7 @@ function findBundledWorkflow(
   const direct = BUNDLED_WORKFLOWS[name];
   if (direct !== undefined) {
     const filename = `${name}.yaml`;
-    const parsed = parseWorkflow(direct, filename);
+    const parsed = parseWorkflow(direct, filename, providerRegistry);
     if (parsed.error !== null || parsed.workflow?.name === name) {
       return { filename, parsed, content: direct };
     }
@@ -279,7 +290,7 @@ function findBundledWorkflow(
   for (const [filenameStem, content] of Object.entries(BUNDLED_WORKFLOWS)) {
     if (filenameStem === name) continue;
     const filename = `${filenameStem}.yaml`;
-    const parsed = parseWorkflow(content, filename);
+    const parsed = parseWorkflow(content, filename, providerRegistry);
     if (parsed.workflow?.name !== name) continue;
     if (match !== null) throw new Error(`Multiple bundled workflows declare the name '${name}'`);
     match = { filename, parsed, content };
@@ -299,6 +310,8 @@ import {
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
   describeAbandonOwner,
+  describeReleasedWorktrees,
+  AbandonRefusedError,
   assertRespondable,
 } from '@archon/core/operations/workflow-operations';
 import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
@@ -350,6 +363,8 @@ import {
   codebaseSchema,
   codebaseIdParamsSchema,
   addCodebaseBodySchema,
+  inspectBaseBranchBodySchema,
+  inspectBaseBranchResponseSchema,
   deleteCodebaseResponseSchema,
   codebaseEnvVarsResponseSchema,
   setEnvVarBodySchema,
@@ -364,6 +379,7 @@ import {
   updateAliasesBodySchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
+import { validateAliasName } from './alias-name';
 import {
   TIER_NAMES,
   isTierName,
@@ -774,6 +790,27 @@ const getCodebaseRoute = createRoute({
   },
 });
 
+const inspectBaseBranchRoute = createRoute({
+  method: 'post',
+  path: '/api/codebases/base-branch',
+  tags: ['Codebases'],
+  summary: 'Inspect the remote default without registering a project',
+  request: {
+    body: {
+      content: { 'application/json': { schema: inspectBaseBranchBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: inspectBaseBranchResponseSchema } },
+      description: 'Base branch inspection',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
 const addCodebaseRoute = createRoute({
   method: 'post',
   path: '/api/codebases',
@@ -1055,7 +1092,7 @@ const abandonWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
-    409: jsonError('A live owner answered but could not be stopped; the run was not changed'),
+    409: jsonError('Abandonment or worktree release refused; inspect the reported reason'),
     500: jsonError('Server error'),
   },
 });
@@ -2134,7 +2171,7 @@ export function registerApiRoutes(
         .join(', ')}`;
     }
     if (entry.effort !== undefined) {
-      const validEfforts = validEffortsForProvider(entry.provider);
+      const validEfforts = validEffortsForProvider(providerRegistry, entry.provider);
       if (validEfforts === null) {
         return `Provider '${entry.provider}' does not support effort (${label}).`;
       }
@@ -2144,17 +2181,6 @@ export function registerApiRoutes(
           `Valid: ${validEfforts.join(', ')}`
         );
       }
-    }
-    return null;
-  }
-
-  /** Validate a custom alias name: must start with '@' and not shadow a tier keyword. */
-  function validateAliasName(name: string): string | null {
-    if ((TIER_NAMES as readonly string[]).includes(name)) {
-      return `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`;
-    }
-    if (!name.startsWith('@')) {
-      return `Alias name '${name}' must start with '@' (e.g. '@${name}').`;
     }
     return null;
   }
@@ -3029,20 +3055,20 @@ export function registerApiRoutes(
     return c.json(result);
   });
 
-  // GET /api/stream/__dashboard__ — multiplexed dashboard SSE (all workflow events)
+  // GET /api/stream/__dashboard__ — dashboard SSE (workflow lifecycle events)
   // IMPORTANT: Must be registered before /api/stream/:conversationId to avoid param capture.
-  app.get('/api/stream/__dashboard__', async c => {
+  app.get(`/api/stream/${DASHBOARD_STREAM}`, async c => {
     return streamSSE(c, async stream => {
       await stream.writeSSE({
         data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
       });
 
-      webAdapter.registerStream('__dashboard__', stream);
-      getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_opened');
+      webAdapter.registerStream(DASHBOARD_STREAM, stream);
+      getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_opened');
 
       stream.onAbort(() => {
-        getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_disconnected');
-        webAdapter.removeStream('__dashboard__', stream);
+        getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_disconnected');
+        webAdapter.removeStream(DASHBOARD_STREAM, stream);
       });
 
       try {
@@ -3060,8 +3086,8 @@ export function registerApiRoutes(
           getLog().warn({ err: e as Error }, 'dashboard_sse_heartbeat_error');
         }
       } finally {
-        webAdapter.removeStream('__dashboard__', stream);
-        getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_closed');
+        webAdapter.removeStream(DASHBOARD_STREAM, stream);
+        getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_closed');
       }
     });
   });
@@ -3152,21 +3178,31 @@ export function registerApiRoutes(
     }
   });
 
+  registerOpenApiRoute(inspectBaseBranchRoute, async c => {
+    const body = getValidatedBody(c, inspectBaseBranchBodySchema);
+    try {
+      return c.json(await inspectProjectBaseBranch(body), 200);
+    } catch (error) {
+      if (error instanceof ProjectRegistrationError) return apiError(c, 400, error.message);
+      getLog().error({ err: error }, 'inspect_base_branch_failed');
+      return apiError(c, 500, `Failed to inspect base branch: ${(error as Error).message}`);
+    }
+  });
+
   // POST /api/codebases - Add a project (clone from URL or register local path)
   registerOpenApiRoute(addCodebaseRoute, async c => {
     const body = getValidatedBody(c, addCodebaseBodySchema);
 
     try {
-      // .refine() guarantees exactly one of url/path is present.
       // For a local path, detect git-ness: a non-git directory registers as a
       // folder project (kind: 'folder') instead of being rejected. Folder-ness
       // is detected here, not declared in the request body, so the web form
       // needs no new field.
       let result;
-      if (body.url) {
-        result = await cloneRepository(body.url);
+      if ('url' in body) {
+        result = await cloneRepository(body.url, { baseBranch: body.base_branch ?? undefined });
       } else {
-        const localPath = body.path ?? '';
+        const localPath = await canonicalizeProjectPath(body.path);
         // Detect git-ness. A resolvable repo root → register as a repo project;
         // a definitive null ("not a git repository") → folder project. A THROW
         // is ambiguous: findRepoRoot throws both for a nonexistent path (benign
@@ -3187,7 +3223,11 @@ export function registerApiRoutes(
             );
           }
         }
-        result = repoRoot ? await registerRepository(localPath) : await registerFolder(localPath);
+        result = repoRoot
+          ? await registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
+          : await registerFolder(localPath, undefined, {
+              baseBranch: body.base_branch ?? undefined,
+            });
       }
 
       // Fetch the full codebase record for a consistent response
@@ -3198,6 +3238,11 @@ export function registerApiRoutes(
 
       return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
     } catch (error) {
+      if (
+        error instanceof ProjectRegistrationError ||
+        error instanceof ConfiguredBaseBranchNotFoundError
+      )
+        return apiError(c, 400, error.message);
       getLog().error({ err: error }, 'add_codebase_failed');
       return apiError(
         c,
@@ -3348,7 +3393,11 @@ export function registerApiRoutes(
       // pass null to discovery so it returns bundled + home-scoped workflows.
       // This avoids a misleading empty state on first run, before any project
       // is registered, when bundled defaults are present
-      const result = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+      const result = await discoverWorkflowsWithConfig(
+        workingDir ?? null,
+        loadConfig,
+        providerRegistry
+      );
 
       // Resolve repo-owner-curated recommended list (per-project only).
       // Filter to names present in the discovered set; preserve declared order.
@@ -3849,23 +3898,13 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      // A `failed` run is terminal per TERMINAL_WORKFLOW_STATUSES but remains
-      // resumable, so the user must be able to discard it — only the two
-      // non-resumable terminal states are blocked (the 400 mapping lives here;
-      // abandonWorkflow re-validates).
-      if (run.status === 'completed' || run.status === 'cancelled') {
-        return apiError(
-          c,
-          400,
-          `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
-        );
-      }
-      // Delegate to the SHARED op — a raw cancelWorkflowRun here previously skipped
-      // the sub-run cascade cancel AND the container reclaim (M2), so a web abandon
-      // orphaned children that CLI/chat abandons cleaned up.
-      const { cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+      const { cascadeFailures, cleanupWarnings, releasedWorktrees, blockedParentRunId, owner } =
         await abandonWorkflow(runId);
-      let message = `${describeAbandonOwner(owner).join(' ')} Abandoned workflow: ${run.workflow_name}`;
+      let message = [
+        ...describeAbandonOwner(owner),
+        `Abandoned workflow: ${run.workflow_name}`,
+        ...describeReleasedWorktrees(releasedWorktrees),
+      ].join(' ');
       for (const warning of cleanupWarnings ?? []) message += ` — warning: ${warning}`;
       if (cascadeFailures > 0) {
         message += ` — warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
@@ -3875,7 +3914,7 @@ export function registerApiRoutes(
       }
       return c.json({ success: true, message });
     } catch (error) {
-      if (error instanceof AbandonOwnerNotStoppedError) {
+      if (error instanceof AbandonOwnerNotStoppedError || error instanceof AbandonRefusedError) {
         return apiError(c, 409, error.message);
       }
       getLog().error({ err: error, runId }, 'api.workflow_run_abandon_failed');
@@ -4121,23 +4160,7 @@ export function registerApiRoutes(
       if (respondBlocker) {
         return c.json(respondBlocker, 400);
       }
-      const rawBody = await c.req.text();
-      let body: { decision?: string; text?: string } = {};
-      if (rawBody.trim().length > 0) {
-        try {
-          body = JSON.parse(rawBody) as { decision?: string; text?: string };
-        } catch (parseError) {
-          getLog().warn({ err: parseError, runId }, 'api.respond_body_parse_failed');
-          return apiError(
-            c,
-            400,
-            'Request body is not valid JSON — send {"decision": "...", "text": "..."}'
-          );
-        }
-      }
-      if (!body.decision) {
-        return apiError(c, 400, 'Request body must include a non-empty "decision"');
-      }
+      const body = getValidatedBody(c, respondWorkflowRunBodySchema);
       const decision = body.decision;
 
       // Pre-validate a non-default decision so an undeclared id is a 400 naming the
@@ -4159,7 +4182,7 @@ export function registerApiRoutes(
       // Only for decision === 'reject' — every other decision (including 'approve',
       // which stays optional/undefined) is unaffected.
       const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const result = await respondToWorkflow(runId, decision, text);
+      const result = await respondToWorkflow(runId, decision, text, body.expectedGate);
 
       if ('cancelled' in result && result.cancelled) {
         return c.json({
@@ -4402,7 +4425,7 @@ export function registerApiRoutes(
     }
 
     try {
-      const result = parseWorkflow(yamlContent, 'validate-input.yaml');
+      const result = parseWorkflow(yamlContent, 'validate-input.yaml', providerRegistry);
 
       if (result.error) {
         return c.json({ valid: false, errors: [result.error.error] });
@@ -4439,7 +4462,11 @@ export function registerApiRoutes(
       // CLI and chat use for a qualified name. Any other name, including a legacy file
       // whose name contains `:`, continues to the file lookups below.
       if (name.includes(':')) {
-        const { workflows } = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+        const { workflows } = await discoverWorkflowsWithConfig(
+          workingDir ?? null,
+          loadConfig,
+          providerRegistry
+        );
         const hit = resolveWorkflowName(
           name,
           workflows.filter(entry => entry.source === 'installed').map(entry => entry.workflow)
@@ -4607,7 +4634,7 @@ export function registerApiRoutes(
         return apiError(c, 400, 'Failed to serialize workflow definition');
       }
 
-      const parsed = parseWorkflow(yamlContent, `${name}.yaml`);
+      const parsed = parseWorkflow(yamlContent, `${name}.yaml`, providerRegistry);
       if (parsed.error) {
         return apiError(c, 400, 'Workflow definition is invalid', parsed.error.error);
       }
@@ -5209,7 +5236,7 @@ export function registerApiRoutes(
     const lockActiveSet = new Set(stats.activeConversationIds);
     const backgroundConversationIds = runningWorkflowRows
       .map(r => r.conversation_id)
-      .filter(id => !lockActiveSet.has(id));
+      .filter((id): id is string => id !== null && !lockActiveSet.has(id));
     const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
     const wslDistro = getWSLDistroName();
 

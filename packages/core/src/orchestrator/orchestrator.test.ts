@@ -1,3 +1,4 @@
+import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
   withBranchLaunchSource: async (
     _repo: string,
@@ -5,7 +6,8 @@ mock.module('../workflows/branch-launch-source', () => ({
     prepare: (path: string) => Promise<unknown>
   ) => prepare('/adopted/snapshot'),
 }));
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import * as git from '@archon/git';
+import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import { mkdtemp, realpath } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { tmpdir } from 'os';
@@ -231,17 +233,26 @@ const mockGetProviderCapabilities = mock<typeof Providers.getProviderCapabilitie
   () => providerCapabilities
 );
 
+const providerRegistry: ProviderRegistry = {
+  get: id => ({
+    id,
+    displayName: id,
+    builtIn: true,
+    capabilities: mockGetProviderCapabilities(id),
+    parseConfig: raw => raw,
+    credentials: { kind: 'static', specs: [], vendorFor: () => 'anthropic' },
+  }),
+  list: () => [],
+};
+
 mock.module('@archon/providers', () => ({
+  providerRegistry,
   getRegistration: () => ({
     parseConfig: (raw: Record<string, unknown>) => raw,
     credentials: { vendorFor: () => 'anthropic' },
   }),
   getAgentProvider: mockGetAgentProvider,
   getProviderCapabilities: mockGetProviderCapabilities,
-  // `validEffortsForProvider` (@archon/workflows/model-validation) reads the
-  // registry to decide whether a tier's `effort` reaches this provider (#2556).
-  // Without this the REAL implementation runs against an empty registry and
-  // every provider looks unregistered.
   isRegisteredProvider: mock(() => true),
   getRegisteredProviders: mock(() => []),
   // credentials/delivery (#1955) imports these from '@archon/providers'.
@@ -262,6 +273,7 @@ const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflo
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
+    providers: providerRegistry,
     store: { getCodebaseEnvVars: async () => ({}) },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
       version: 1,
@@ -353,10 +365,10 @@ const mockBuildOrchestratorPrompt = mock<typeof PromptBuilder.buildOrchestratorP
   () => 'You are the orchestrator agent.'
 );
 const mockBuildProjectScopedPrompt = mock<typeof PromptBuilder.buildProjectScopedPrompt>(
-  () => 'You are scoped to project X.'
+  async () => 'You are scoped to project X.'
 );
 const mockBuildOrchestratorSystemAppend = mock<typeof PromptBuilder.buildOrchestratorSystemAppend>(
-  () => 'orchestrator system append'
+  async () => 'orchestrator system append'
 );
 
 mock.module('./prompt-builder', () => ({
@@ -1477,8 +1489,6 @@ describe('orchestrator-agent handleMessage', () => {
 
       await handleMessage(platform, 'chat-456', 'do that analysis thing');
 
-      // userMessage (position 5) carries the synthesized prompt; the opts bag
-      // (trailing arg) carries parentConversationId for approve/reject resume.
       expect(mockExecuteWorkflow).toHaveBeenCalledWith(
         expect.anything(), // deps
         expect.anything(), // platform
@@ -1486,10 +1496,11 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(), // cwd
         expect.anything(), // workflow
         synthesized, // synthesizedPrompt, not original message
-        expect.anything(), // conversation.id
         expect.objectContaining({
-          parentConversationId: expect.anything() as unknown, // web approval auto-resume
-        })
+          conversationId: 'conv-123',
+          parentConversationId: 'conv-123',
+        }),
+        expect.anything()
       );
     });
 
@@ -1513,10 +1524,11 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(), // cwd
         expect.anything(), // workflow
         'fix the login bug', // original message used as fallback
-        expect.anything(), // conversation.id
         expect.objectContaining({
-          parentConversationId: expect.anything() as unknown, // web approval auto-resume
-        })
+          conversationId: 'conv-123',
+          parentConversationId: 'conv-123',
+        }),
+        expect.anything()
       );
     });
 
@@ -1567,7 +1579,8 @@ describe('orchestrator-agent handleMessage', () => {
       // Home-scoped workflows (~/.archon/workflows/) are discovered internally.
       expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
         '/home/test/.archon/workspaces',
-        expect.any(Function)
+        expect.any(Function),
+        providerRegistry
       );
     });
 
@@ -1586,6 +1599,7 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
         '/workspace/project',
         expect.any(Function),
+        providerRegistry,
         undefined // non-worktree cwd: source root is the cwd itself
       );
     });
@@ -1605,7 +1619,7 @@ describe('orchestrator-agent handleMessage', () => {
       );
 
       const seenRoots: (string | undefined)[] = [];
-      mockDiscoverWorkflows.mockImplementation(async (cwd, _loadConfig, roots) => {
+      mockDiscoverWorkflows.mockImplementation(async (cwd, _loadConfig, _providers, roots) => {
         if (cwd === '/workspace/project') seenRoots.push(roots?.project ?? undefined);
         return { workflows: [], errors: [] };
       });
@@ -1796,7 +1810,6 @@ describe('orchestrator-agent handleMessage', () => {
           name: 'my-app',
           default_cwd: canonicalPath,
           default_branch: null,
-          ai_assistant_type: 'claude',
           kind: 'folder',
         });
         expect(platform.sendMessage).toHaveBeenCalledWith(
@@ -1808,27 +1821,13 @@ describe('orchestrator-agent handleMessage', () => {
       }
     });
 
-    test('/register-project stores detected current branch', async () => {
+    test('/register-project stores no branch choice and asks nothing', async () => {
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-project-'));
       // handleRegisterProject canonicalizes before storing (macOS tmpdir lives
       // under /var → /private/var), so the stored default_cwd is canonical.
       const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
+      const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(git.toRepoPath(canonicalPath));
       try {
-        const initExit = await Bun.spawn(['git', 'init', '-b', 'develop'], {
-          cwd: projectPath,
-        }).exited;
-        expect(initExit, 'git init failed during registration fixture setup').toBe(0);
-        const commitExit = await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
-          cwd: projectPath,
-          env: {
-            ...process.env,
-            GIT_AUTHOR_NAME: 'Archon Test',
-            GIT_AUTHOR_EMAIL: 'archon-test@example.com',
-            GIT_COMMITTER_NAME: 'Archon Test',
-            GIT_COMMITTER_EMAIL: 'archon-test@example.com',
-          },
-        }).exited;
-        expect(commitExit, 'git commit failed during registration fixture setup').toBe(0);
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
         mockCreateCodebase.mockResolvedValue({
@@ -1843,11 +1842,11 @@ describe('orchestrator-agent handleMessage', () => {
         expect(mockCreateCodebase).toHaveBeenCalledWith({
           name: 'my-app',
           default_cwd: canonicalPath,
-          default_branch: 'develop',
-          ai_assistant_type: 'claude',
+          default_branch: null,
           kind: 'repo',
         });
       } finally {
+        repoSpy.mockRestore();
         await removeTempTree(projectPath);
       }
     });

@@ -410,6 +410,8 @@ export function registerBuiltinProviders(): void {
 }
 ```
 
+The host process (CLI or server) calls `registerBuiltinProviders()` and `registerCommunityProviders()` before loading config or workflows. Core does not register providers. The host supplies the read-only `ProviderRegistry` to workflow parsing, discovery and validation, and through `WorkflowDeps.providers` for execution. The port exposes provider metadata without factories; provider instances still pass through host admission.
+
 Community providers use `registerCommunityProviders()` (same file). See the [community provider guide](../contributing/adding-a-community-provider/) for that path.
 
 **4. Add environment variables:** `.env.example`
@@ -1070,8 +1072,8 @@ remote_agent_codebases
 ├── name (VARCHAR)
 ├── repository_url (VARCHAR)
 ├── default_cwd (VARCHAR)
-├── default_branch (VARCHAR, nullable) -- detected branch used as sync context when available
-├── ai_assistant_type (VARCHAR) -- registered provider identifier (e.g. 'claude', 'codex')
+├── default_branch (VARCHAR, nullable) -- optional explicit base branch; NULL resolves the remote default at use
+├── ai_assistant_type (VARCHAR, nullable) -- optional explicit provider choice; NULL follows project configuration for new conversations
 ├── kind (VARCHAR, default 'repo') -- 'repo' | 'folder' (folder projects are non-git, run in place)
 └── commands (JSONB) -- {command_name: {path, description}}
 

@@ -115,7 +115,7 @@ describe('conversations', () => {
       expect(mockQuery).toHaveBeenCalledTimes(3);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
-        'SELECT ai_assistant_type FROM remote_agent_codebases WHERE id = $1',
+        'SELECT ai_assistant_type, default_cwd FROM remote_agent_codebases WHERE id = $1',
         ['codebase-123']
       );
       expect(mockQuery).toHaveBeenNthCalledWith(
@@ -153,25 +153,14 @@ describe('conversations', () => {
       );
     });
 
-    test('falls back to claude when config load fails', async () => {
+    test('rejects invalid configuration without recording a fallback provider', async () => {
       loadConfigSpy.mockRejectedValueOnce(new Error('config unavailable'));
-
-      const newConversation: Conversation = {
-        ...existingConversation,
-        id: 'conv-new',
-      };
-
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([newConversation]));
 
-      const result = await getOrCreateConversation('web', 'web-new-chat');
-
-      expect(result).toEqual(newConversation);
-      expect(mockQuery).toHaveBeenNthCalledWith(
-        2,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-        ['web', 'web-new-chat', 'claude', null, null, null]
+      await expect(getOrCreateConversation('web', 'web-new-chat')).rejects.toThrow(
+        'config unavailable'
       );
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
 
     test('falls back to configured default when codebase not found', async () => {
@@ -236,7 +225,7 @@ describe('conversations', () => {
       // Verify parent lookup
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
-        'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
+        `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND id <> '00000000-0000-4000-8000-000000003640'`,
         ['discord', 'parent-channel']
       );
       // Verify inherited values in INSERT
@@ -247,6 +236,32 @@ describe('conversations', () => {
       );
       // Parent inheritance short-circuits the config chain.
       expect(loadConfigSpy).not.toHaveBeenCalled();
+    });
+
+    test('an unpinned explicit project overrides the parent provider through project configuration', async () => {
+      loadConfigSpy.mockResolvedValueOnce(mergedConfig('pi'));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...existingConversation, ai_assistant_type: 'codex' }])
+      );
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ai_assistant_type: null, default_cwd: '/project' }])
+      );
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...existingConversation, ai_assistant_type: 'pi' }])
+      );
+
+      await getOrCreateConversation('discord', 'new-thread', 'project-id', 'parent');
+
+      expect(loadConfigSpy).toHaveBeenCalledWith('/project');
+      expect(mockQuery).toHaveBeenNthCalledWith(4, expect.any(String), [
+        'discord',
+        'new-thread',
+        'pi',
+        'project-id',
+        null,
+        null,
+      ]);
     });
 
     test('does not inherit when parent has no context', async () => {
@@ -309,7 +324,7 @@ describe('conversations', () => {
 
       expect(result).toEqual(cliConversation);
       expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1',
+        `SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1 AND id <> '00000000-0000-4000-8000-000000003640'`,
         ['cli-1234-abc']
       );
     });
@@ -336,7 +351,7 @@ describe('conversations', () => {
       expect(result).toEqual(telegramConv);
       // Verify no platform_type in the query
       expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1',
+        `SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1 AND id <> '00000000-0000-4000-8000-000000003640'`,
         ['tg-chat-999']
       );
     });

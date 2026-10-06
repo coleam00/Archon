@@ -1,8 +1,10 @@
+import type { ExecuteWorkflowOptions } from './executor';
 /**
  * Tests for executeWorkflow() — the top-level orchestration function.
  * Covers concurrent-run guards, model/provider resolution, and resume logic
  * that the inner dag-executor.test.ts cannot reach.
  */
+import { providerRegistry } from '@archon/providers';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
@@ -120,6 +122,7 @@ mock.module('@archon/paths', () => ({
 const mockGetDefaultBranch = mock(async () => 'main');
 mock.module('@archon/git', () => ({
   getDefaultBranch: mockGetDefaultBranch,
+  getDefaultRemote: mock(async () => 'origin'),
   toRepoPath: mock((p: string) => p),
   // The checkout baseline of a container run probes the container through here. Tests use
   // container ids that do not exist, so answer the way a real `docker exec` would.
@@ -263,7 +266,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
         },
       })
     ),
-    rewriteApprovalContext: mock(async () => ({ resolved: true })),
+    failPausedApproval: mock(async () => ({ failed: true })),
     claimWriteback: mock(async () => ({ claimed: true })),
     releaseWritebackClaim: mock(async () => {}),
     cancelWorkflowRun: mock(async () => ({ cancelled: false })),
@@ -285,6 +288,7 @@ function makePlatform(): IWorkflowPlatform {
 
 function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store: store ?? makeStore(),
     getUserProviderCredentialStatus: mock(async () => ({ state: 'usable', source: 'archon' })),
     loadConfig: mock(
@@ -316,6 +320,7 @@ function makeWorkflow(overrides: Partial<WorkflowDefinition> = {}): ResolvedWork
 
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id: 'run-123',
     workflow_name: 'test-workflow',
     conversation_id: 'conv-1',
@@ -350,6 +355,54 @@ describe('executeWorkflow', () => {
     mockExecuteDagWorkflow.mockImplementation(async () => undefined);
   });
 
+  it.each(['fresh', 'precreated', 'resume'] as const)(
+    'persists creation proof only on %s invocation',
+    async mode => {
+      const store = makeStore();
+      const updatesSpy = spyOn(store, 'updateWorkflowRun');
+      const original = {
+        envId: 'env-original',
+        creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+      };
+      const incoming = { envId: 'env-new', creationId: 'c226ac7a-33cb-4ae0-aa9f-f07df1141dde' };
+      const prior = makeRun({
+        status: mode === 'precreated' ? 'pending' : 'running',
+        metadata: { owned_worktree: original },
+      });
+      const options: ExecuteWorkflowOptions =
+        mode === 'fresh'
+          ? { ownedWorktree: incoming }
+          : mode === 'resume'
+            ? { ownedWorktree: incoming, preCreatedRun: prior, priorCompletedNodes: new Map() }
+            : { ownedWorktree: incoming, preCreatedRun: prior };
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/repo',
+        makeWorkflow(),
+        'msg',
+        { conversationId: 'db-conv-1' },
+        options
+      );
+      if (mode === 'fresh') {
+        expect(store.createWorkflowRun).toHaveBeenCalledWith(
+          expect.objectContaining({
+            metadata: expect.objectContaining({ owned_worktree: incoming }),
+          })
+        );
+      } else {
+        const updates = updatesSpy.mock.calls;
+        const proofWrites = updates.filter(
+          ([, update]) => update.metadata?.owned_worktree !== undefined
+        );
+        expect(proofWrites.length).toBe(mode === 'resume' ? 0 : 1);
+        if (mode === 'precreated')
+          expect(proofWrites[0]?.[1].metadata?.owned_worktree).toEqual(incoming);
+        expect(prior.metadata.owned_worktree).toEqual(original);
+      }
+    }
+  );
   it.each([false, true])('persists loaded graph before DAG execution (resume=%s)', async resume => {
     const store = makeStore();
     const workflow = makeWorkflow({ returns: 'node1' });
@@ -368,7 +421,7 @@ describe('executeWorkflow', () => {
       '/tmp',
       workflow,
       'msg',
-      'db-conv-1',
+      { conversationId: 'db-conv-1' },
       resume ? { preCreatedRun: makeRun(), priorCompletedNodes: new Map() } : {}
     );
     expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
@@ -393,7 +446,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'msg',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(store.createWorkflowRun).toHaveBeenCalledWith(
         expect.objectContaining({ metadata: expect.objectContaining(owner) })
@@ -414,7 +467,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { preCreatedRun, ...(priorCompletedNodes ? { priorCompletedNodes } : {}) }
       );
       expect(store.updateWorkflowRun).toHaveBeenCalledWith(
@@ -437,7 +490,9 @@ describe('executeWorkflow', () => {
     const deps = makeDeps(store);
 
     await expect(
-      executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp/ops', workflow, 'msg', 'db-conv-1')
+      executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp/ops', workflow, 'msg', {
+        conversationId: 'db-conv-1',
+      })
     ).rejects.toThrow('without returns:');
 
     expect(store.createWorkflowRun).not.toHaveBeenCalled();
@@ -473,7 +528,7 @@ describe('executeWorkflow', () => {
       '/tmp/ops',
       makeWorkflow(),
       'msg',
-      'db-conv-1'
+      { conversationId: 'db-conv-1' }
     );
 
     expect(result).toEqual({
@@ -506,7 +561,7 @@ describe('executeWorkflow', () => {
           '/tmp/ops',
           workflow,
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           { execContext: { kind: 'container', containerId: 'cid' } }
         )
       ).rejects.toThrow('durable wait, which is not supported in container isolation');
@@ -534,7 +589,7 @@ describe('executeWorkflow', () => {
           '/tmp/ops',
           workflow,
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           {
             execContext: { kind: 'container', containerId: 'cid' },
             preCreatedRun: makeRun({ id: 'pending-run', status: 'pending' }),
@@ -557,7 +612,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { preCreatedRun, priorCompletedNodes: new Map([['node1', { output: 'out' }]]) }
       );
       expect(result.success).toBe(false);
@@ -586,7 +641,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun,
           priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
@@ -638,7 +693,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun: makeRun({ status: 'running', adopted_from_run_id: 'prior-run' }),
           priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
@@ -680,7 +735,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           adoptedFromRunId: supersededId,
           continuationMode: 'supersede',
@@ -711,7 +766,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun: makeRun({
             status: 'running',
@@ -757,7 +812,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           adoptedFromRunId: adoptedId,
           continuationMode: 'adopt',
@@ -779,7 +834,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           adoptedFromRunId: supersededId,
           continuationMode: 'supersede',
@@ -832,7 +887,7 @@ describe('executeWorkflow', () => {
           '/tmp/ops',
           makeWorkflow(),
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           {
             adoptedFromRunId: adoptedId,
             continuationMode: 'adopt',
@@ -891,7 +946,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           adoptedFromRunId: adoptedId,
           continuationMode: 'adopt',
@@ -932,7 +987,7 @@ describe('executeWorkflow', () => {
           '/tmp/ops',
           makeWorkflow(),
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           {
             preCreatedRun: makeRun({ status: 'running', adopted_from_run_id: adoptedId }),
             priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
@@ -988,7 +1043,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun: makeRun({ status: 'running', adopted_from_run_id: adoptedId }),
           priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
@@ -1016,7 +1071,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(result.workflowRunId).toBe('run-123');
     });
@@ -1035,7 +1090,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(result.success).toBe(false);
       if (result.success) throw new Error('Expected workflow guard failure');
@@ -1061,7 +1116,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(result.success).toBe(false);
       if (result.success) throw new Error('Expected active-workflow rejection');
@@ -1085,7 +1140,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow(),
           'test message',
-          'db-conv-1'
+          { conversationId: 'db-conv-1' }
         );
         expect(result.workflowRunId).toBe('run-123');
         expect(acquireSpy).toHaveBeenCalledTimes(1);
@@ -1111,7 +1166,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow(),
           'test message',
-          'db-conv-1'
+          { conversationId: 'db-conv-1' }
         );
         expect(result.success).toBe(false);
         expect(acquireSpy).toHaveBeenCalledTimes(1);
@@ -1145,7 +1200,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
 
       expect(getActiveSpy).toHaveBeenCalledWith(
@@ -1172,7 +1227,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
 
       // Without this, every guard-blocked dispatch would leak a `pending`
@@ -1201,15 +1256,9 @@ describe('executeWorkflow', () => {
       });
       const deps = makeDeps(store);
 
-      await executeWorkflow(
-        deps,
-        platform,
-        'conv-1',
-        '/tmp',
-        makeWorkflow(),
-        'test message',
-        'db-conv-1'
-      );
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test message', {
+        conversationId: 'db-conv-1',
+      });
 
       expect(sendMessageSpy).toHaveBeenCalled();
       const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
@@ -1221,6 +1270,131 @@ describe('executeWorkflow', () => {
       expect(sentMessage).toContain('/workflow cancel abc12345');
       expect(sentMessage).toContain('/workflow abandon abc12345');
       expect(sentMessage).toContain('--branch');
+    });
+
+    it.each(['event', 'time'] as const)(
+      'describes a durable %s wait without offering human approval actions',
+      async kind => {
+        const resumeAt = '2026-10-06T12:00:00.000Z';
+        const otherRun = makeRun({
+          id: 'abc12345-rest-of-uuid',
+          status: 'paused',
+          metadata: {
+            wait: {
+              owner: 'node',
+              nodeId: 'wait-for-checks',
+              kind,
+              waitingSince: '2026-10-05T12:00:00.000Z',
+              resumeAt,
+              ...(kind === 'event' ? { event: 'checks.complete' } : {}),
+            },
+          },
+        });
+        const sendMessage = mock<IWorkflowPlatform['sendMessage']>(async () => {});
+        const platform = { ...makePlatform(), sendMessage };
+        const result = await executeWorkflow(
+          makeDeps(makeStore({ getActiveWorkflowRunByPath: mock(async () => otherRun) })),
+          platform,
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test message',
+          { conversationId: 'db-conv-1' }
+        );
+
+        expect(result.success).toBe(false);
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        const message = sendMessage.mock.calls[0][1];
+        expect(message).toContain('This worktree is in use');
+        expect(message).toContain(resumeAt);
+        expect(message).toContain('Wait until');
+        expect(message).toContain('/workflow status');
+        expect(message).toContain('/workflow abandon abc12345');
+        expect(message).toContain('--branch <other>');
+        expect(message).not.toContain('user input');
+        expect(message).not.toContain('Approve');
+        expect(message).not.toContain('Reject');
+        expect(message).not.toContain('/workflow approve');
+        expect(message).not.toContain('/workflow reject');
+        if (kind === 'event') {
+          expect(message).toContain('waiting for event `checks.complete`');
+          expect(message).toContain('Signal');
+          expect(message).toContain('abc12345-rest-of-uuid');
+        } else {
+          expect(message).toContain('waiting until');
+          expect(message).not.toContain('Signal');
+        }
+      }
+    );
+
+    it.each(['node', 'loop_group'] as const)(
+      'describes a %s attention wait with outside-action and resume guidance',
+      async owner => {
+        const otherRun = makeRun({
+          id: 'abc12345-rest-of-uuid',
+          status: 'paused',
+          metadata: {
+            wait: {
+              owner,
+              nodeId: 'wait-for-access',
+              kind: 'attention',
+              waitingSince: '2026-10-05T12:00:00.000Z',
+              message: 'Restore repository access',
+              ...(owner === 'loop_group'
+                ? { bodyWaitId: 'access', iteration: 1, sessionId: null, sessionProvider: null }
+                : {}),
+            },
+          },
+        });
+        const sendMessage = mock<IWorkflowPlatform['sendMessage']>(async () => {});
+        const result = await executeWorkflow(
+          makeDeps(makeStore({ getActiveWorkflowRunByPath: mock(async () => otherRun) })),
+          { ...makePlatform(), sendMessage },
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test message',
+          { conversationId: 'db-conv-1' }
+        );
+
+        expect(result.success).toBe(false);
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        const message = sendMessage.mock.calls[0][1];
+        expect(message).toContain('paused waiting for an outside action');
+        expect(message).toContain('Restore repository access');
+        expect(message).toContain('/workflow resume abc12345');
+        expect(message).toContain('/workflow abandon abc12345');
+        expect(message).toContain('--branch <other>');
+        expect(message).not.toContain('user input');
+        expect(message).not.toContain('/workflow approve');
+        expect(message).not.toContain('/workflow reject');
+      }
+    );
+
+    it('preserves human-pause wording and actions for an approval gate', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        status: 'paused',
+        metadata: { approval: { type: 'approval', nodeId: 'review', message: 'Approve?' } },
+      });
+      const sendMessage = mock<IWorkflowPlatform['sendMessage']>(async () => {});
+      const result = await executeWorkflow(
+        makeDeps(makeStore({ getActiveWorkflowRunByPath: mock(async () => otherRun) })),
+        { ...makePlatform(), sendMessage },
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        { conversationId: 'db-conv-1' }
+      );
+
+      expect(result.success).toBe(false);
+      const message = sendMessage.mock.calls[0][1];
+      expect(message).toContain('paused waiting for user input');
+      expect(message).toContain('/workflow approve abc12345');
+      expect(message).toContain('/workflow reject abc12345');
+      expect(message).toContain('/workflow abandon abc12345');
+      expect(message).toContain('--branch <other>');
     });
 
     it('skips path-lock check when mutates_checkout is false', async () => {
@@ -1236,7 +1410,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow({ mutates_checkout: false }),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       // Guard skipped: spy never called, run succeeds
       expect(getActiveSpy).not.toHaveBeenCalled();
@@ -1254,7 +1428,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow({ mutates_checkout: true }),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(result.success).toBe(false);
       if (result.success) throw new Error('Expected checkout-lock rejection');
@@ -1291,7 +1465,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow(),
           'test',
-          'db-conv-1'
+          { conversationId: 'db-conv-1' }
         ).then(
           () => undefined,
           (error: unknown) => error
@@ -1339,7 +1513,7 @@ describe('executeWorkflow', () => {
             '/tmp',
             makeWorkflow(),
             'test',
-            'db-conv-1'
+            { conversationId: 'db-conv-1' }
           );
         } finally {
           globalThis.setTimeout = realSetTimeout;
@@ -1371,15 +1545,9 @@ describe('executeWorkflow', () => {
       });
       const deps = makeDeps(store);
 
-      await executeWorkflow(
-        deps,
-        platform,
-        'conv-1',
-        '/tmp',
-        makeWorkflow(),
-        'test message',
-        'db-conv-1'
-      );
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test message', {
+        conversationId: 'db-conv-1',
+      });
 
       expect(sendMessageSpy).toHaveBeenCalled();
       const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
@@ -1416,7 +1584,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
 
       const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
@@ -1444,15 +1612,9 @@ describe('executeWorkflow', () => {
       });
       const deps = makeDeps(store);
 
-      await executeWorkflow(
-        deps,
-        platform,
-        'conv-1',
-        '/tmp',
-        makeWorkflow(),
-        'test message',
-        'db-conv-1'
-      );
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test message', {
+        conversationId: 'db-conv-1',
+      });
 
       expect(sendMessageSpy).toHaveBeenCalled();
       const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
@@ -1487,7 +1649,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       // Should succeed — uses config.assistant (claude) as default
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
@@ -1505,7 +1667,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow({ model: 'sonnet' }),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
     });
@@ -1524,7 +1686,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow({ provider: 'codex', model: 'sonnet' }),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
     });
@@ -1540,7 +1702,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow({ provider: 'claud', model: 'sonnet' }),
           'test message',
-          'db-conv-1'
+          { conversationId: 'db-conv-1' }
         )
       ).rejects.toThrow(/unknown provider 'claud'/);
     });
@@ -1557,7 +1719,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow({ model: 'large' }),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           modelOverrideLayer: {
             kind: 'raw',
@@ -1599,7 +1761,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow({ model: 'large' }),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun,
           modelOverrideLayer: {
@@ -1631,7 +1793,7 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { preCreatedRun }
       );
 
@@ -1659,7 +1821,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun: makeRun({ id: 'pending-run', status: 'pending', working_path: null }),
           execContext: { kind: 'container', containerId: 'cid' },
@@ -1693,7 +1855,7 @@ describe('executeWorkflow', () => {
         '/tmp/somewhere-else',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { preCreatedRun }
       );
 
@@ -1714,7 +1876,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow({ model: 'large' }),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun,
           modelOverrideLayer: {
@@ -1764,7 +1926,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow({ model: 'large' }),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { preCreatedRun, priorCompletedNodes: new Map() }
       );
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('pi');
@@ -1778,7 +1940,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow({ model: 'large' }),
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           {
             preCreatedRun,
             priorCompletedNodes: new Map(),
@@ -1831,7 +1993,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow({ model: 'large' }),
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           { preCreatedRun, priorCompletedNodes: new Map() }
         )
       ).rejects.toThrow(/cannot apply effort to provider 'opencode'/);
@@ -1869,7 +2031,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow({ model: 'large' }),
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           { preCreatedRun, priorCompletedNodes: new Map() }
         )
       ).rejects.toThrow(/invalid model_bindings aliases/);
@@ -1909,7 +2071,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow({ model: 'large' }),
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           { preCreatedRun, priorCompletedNodes: new Map() }
         )
       ).rejects.toThrow(/unknown provider 'removed-provider'/);
@@ -1950,7 +2112,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow({ model: 'large' }),
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           { preCreatedRun, priorCompletedNodes: new Map() }
         )
       ).rejects.toThrow(/thinking:.*effort:/);
@@ -1974,7 +2136,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow({ model: 'large' }),
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           {
             preCreatedRun,
             modelOverrideLayer: {
@@ -2001,7 +2163,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           workflow,
           'a',
-          'db-a',
+          { conversationId: 'db-a' },
           {
             modelOverrideLayer: {
               kind: 'raw',
@@ -2016,7 +2178,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           workflow,
           'b',
-          'db-b',
+          { conversationId: 'db-b' },
           {
             modelOverrideLayer: {
               kind: 'raw',
@@ -2040,7 +2202,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         workflow,
         'c',
-        'db-c'
+        { conversationId: 'db-c' }
       );
       const cleanCall = mockExecuteDagWorkflow.mock.calls[2];
       expect(cleanCall?.[0].workflowProvider).toBe('claude');
@@ -2095,7 +2257,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow({ model: 'large' }),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1', userId: 'user-1' },
         {
           codebaseId: 'codebase-1',
           runConfig: {
@@ -2110,7 +2272,6 @@ describe('executeWorkflow', () => {
             kind: 'raw',
             overrides: { tiers: { large: 'openai/gpt-5.6' } },
           },
-          userId: 'user-1',
         }
       );
 
@@ -2157,7 +2318,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { preCreatedRun, priorCompletedNodes: new Map() }
       );
 
@@ -2189,7 +2350,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow(),
           'msg',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           { preCreatedRun, priorCompletedNodes: new Map() }
         )
       ).rejects.toThrow('could not be decrypted');
@@ -2213,7 +2374,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           workflow,
           id,
-          `db-${id}`,
+          { conversationId: `db-${id}` },
           {
             runConfig: {
               source: sealedMetadata.source,
@@ -2255,7 +2416,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         workflow,
         'clean',
-        'db-clean'
+        { conversationId: 'db-clean' }
       );
       const cleanConfig = mockExecuteDagWorkflow.mock.calls[2]?.[0].config;
       expect(cleanConfig?.envVars?.RUN_MARKER).toBeUndefined();
@@ -2313,9 +2474,8 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow({ model: 'large' }),
         'caller input',
-        'db-conv-1',
+        { conversationId: 'db-conv-1', userId: 'user-1' },
         {
-          userId: 'user-1',
           baseBranch: 'caller-base',
           baseOverride: 'override-base',
           isolationContext: { branchName: 'feature/snapshot' },
@@ -2358,7 +2518,7 @@ describe('executeWorkflow', () => {
         '/tmp/folder',
         makeWorkflow(),
         'folder input',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
 
       const startedEvent = createEventSpy.mock.calls
@@ -2391,7 +2551,7 @@ describe('executeWorkflow', () => {
         '/tmp/container',
         makeWorkflow(),
         'container input',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           execContext: { kind: 'container', containerId: 'container-1' },
           isolationContext: { branchName: 'feature/snapshot' },
@@ -2422,8 +2582,8 @@ describe('executeWorkflow', () => {
         '/tmp/shared-worktree',
         makeWorkflow(),
         'transient caller input',
-        'db-conv-1',
-        { preCreatedRun, userId: 'transient-user' }
+        { conversationId: 'db-conv-1', userId: 'transient-user' },
+        { preCreatedRun }
       );
 
       const startedEvent = createEventSpy.mock.calls
@@ -2457,7 +2617,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { parseWarnings: ["Node 'plan': unknown key 'interactive' will be ignored."] }
       );
 
@@ -2481,7 +2641,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {}
       );
 
@@ -2509,7 +2669,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { parseWarnings: ['dropped a key'] }
       ).catch(() => {
         // A broken platform may fail the run downstream; irrelevant here.
@@ -2538,7 +2698,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow({ deprecated: { message: 'Switch to the sdlc pack instead.' } }),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
 
       const noticeEvent = createEventSpy.mock.calls
@@ -2565,7 +2725,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
 
       const noticeEvent = createEventSpy.mock.calls
@@ -2590,7 +2750,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
       const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[0].docsDir;
@@ -2600,6 +2760,7 @@ describe('executeWorkflow', () => {
     it('passes configured docsPath when set', async () => {
       const store = makeStore();
       const deps = {
+        providers: providerRegistry,
         store,
         loadConfig: mock(
           async (): Promise<WorkflowConfig> => ({
@@ -2622,7 +2783,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
       const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[0].docsDir;
@@ -2649,7 +2810,7 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { baseBranch: 'develop' }
       );
 
@@ -2675,7 +2836,7 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { baseBranch: 'develop' }
       );
 
@@ -2706,7 +2867,7 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { baseBranch: 'develop', baseOverride: 'epic/foo' }
       );
 
@@ -2724,10 +2885,10 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
 
-      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree', 'origin');
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
     });
 
@@ -2750,7 +2911,7 @@ describe('executeWorkflow', () => {
         '/tmp/ops',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { codebaseId: 'cb-folder' }
       );
 
@@ -2784,11 +2945,11 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { codebaseId: 'cb-repo' }
       );
 
-      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree', 'origin');
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
     });
 
@@ -2803,7 +2964,7 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { baseBranch: 'develop', source: 'bundled' }
       );
 
@@ -2837,7 +2998,7 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun: makeRun({
             metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'release-2026' } },
@@ -2873,7 +3034,7 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun: makeRun({
             metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch: '' } },
@@ -2900,7 +3061,7 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun: makeRun({
             metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'release-2026' } },
@@ -2926,7 +3087,7 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun: makeRun({
             metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'release-2026' } },
@@ -2951,7 +3112,7 @@ describe('executeWorkflow', () => {
         '/tmp/worktree',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { preCreatedRun: makeRun({ metadata: {} }), priorCompletedNodes: new Map() }
       );
 
@@ -2983,7 +3144,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(findSpy).not.toHaveBeenCalled();
       expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
@@ -3005,7 +3166,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { preCreatedRun: resumed, priorCompletedNodes }
       );
       const passedPriors = mockExecuteDagWorkflow.mock.calls[0]?.[0].priorCompletedNodes as
@@ -3037,7 +3198,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow(),
           'test message',
-          'db-conv-1',
+          { conversationId: 'db-conv-1' },
           {
             preCreatedRun,
             priorCompletedNodes: new Map([['source', { output: 'prior output' }]]),
@@ -3090,7 +3251,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         hydrated
       );
 
@@ -3120,7 +3281,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(result.success).toBe(true);
       if (!result.success || 'paused' in result) {
@@ -3140,7 +3301,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       expect(result.success).toBe(true);
       if (!result.success || 'paused' in result) {
@@ -3174,7 +3335,7 @@ describe('executeWorkflow', () => {
           ],
         }),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       // Positional arg 20 = scopeArtifactsDir (after workflowPreset). Root is the
       // unregistered-cwd project (`_cwd/tmp`, #2200); scope = workflow name +
@@ -3196,7 +3357,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].scopeArtifactsDir;
       expect(scopeArg).toBeUndefined();
@@ -3219,7 +3380,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { preCreatedRun: preRun }
       );
       // Guards still run (no bypass)
@@ -3256,7 +3417,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { codebaseId: 'codebase-1' }
       );
 
@@ -3278,7 +3439,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
         // no codebaseId
       );
 
@@ -3309,8 +3470,8 @@ describe('executeWorkflow', () => {
           nodes: [{ id: 'exec', kind: 'exec', runtime: 'sh', script: 'true' }],
         }),
         'msg',
-        'db-c1',
-        { userId: 'u-1' }
+        { conversationId: 'db-c1', userId: 'u-1' },
+        {}
       );
       expect(result.success).toBe(true);
       expect(getUserProviderEnv).not.toHaveBeenCalled();
@@ -3334,8 +3495,8 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'msg',
-        'db-c1',
-        { userId: 'u-1' }
+        { conversationId: 'db-c1', userId: 'u-1' },
+        {}
       );
       expect(getUserProviderEnv).not.toHaveBeenCalled();
     });
@@ -3358,7 +3519,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'msg',
-        'db-c1'
+        { conversationId: 'db-c1' }
         // no userId
       );
       expect(getUserProviderEnv).not.toHaveBeenCalled();
@@ -3389,8 +3550,8 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'msg',
-        'db-c1',
-        { codebaseId: 'codebase-1', userId: 'u-1' }
+        { conversationId: 'db-c1', userId: 'u-1' },
+        { codebaseId: 'codebase-1' }
       );
       const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].config;
       expect(configArg?.envVars).toMatchObject({
@@ -3419,16 +3580,10 @@ describe('executeWorkflow', () => {
           isPerUserGitHubEnabled: () => enabled,
           getUserGithubAuthor: author,
         };
-        await executeWorkflow(
-          deps,
-          makePlatform(),
-          'conv-1',
-          '/tmp',
-          makeWorkflow(),
-          'msg',
-          'db-c1',
-          { userId }
-        );
+        await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+          conversationId: 'db-c1',
+          userId,
+        });
         expect(author).not.toHaveBeenCalled();
         expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].config.envVars).not.toHaveProperty(
           'GIT_AUTHOR_NAME'
@@ -3477,8 +3632,8 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'msg',
-        'db-c1',
-        { codebaseId: 'codebase-1', userId: 'u-1' }
+        { conversationId: 'db-c1', userId: 'u-1' },
+        { codebaseId: 'codebase-1' }
       );
 
       const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].config;
@@ -3526,10 +3681,8 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow(),
           'msg',
-          'db-c1',
-          {
-            userId: 'u-1',
-          }
+          { conversationId: 'db-c1', userId: 'u-1' },
+          {}
         );
         expect(result.success).toBe(false);
         expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
@@ -3567,10 +3720,8 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow(),
           'msg',
-          'db-c1',
-          {
-            userId: 'u-1',
-          }
+          { conversationId: 'db-c1', userId: 'u-1' },
+          {}
         );
         expect(result.success).toBe(false);
         expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
@@ -3603,10 +3754,9 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'msg',
-        'db-c1',
+        { conversationId: 'db-c1', userId: 'transient-resumer' },
         {
           preCreatedRun: makeRun({ user_id: 'persisted-user' }),
-          userId: 'transient-resumer',
         }
       );
 
@@ -3650,7 +3800,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
 
       expect(result.success).toBe(false);
@@ -3684,7 +3834,9 @@ describe('executeWorkflow', () => {
       const store = makeStore({ getActiveWorkflowRunByPath: mock(async () => pausedRun) });
       const deps = makeDeps(store);
 
-      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', 'db-conv-1');
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', {
+        conversationId: 'db-conv-1',
+      });
 
       const msg = (sendMessageSpy.mock.calls[0] as [string, string])[1];
       // Wrong action ("wait for it to finish") would let users sit forever
@@ -3712,7 +3864,9 @@ describe('executeWorkflow', () => {
       const store = makeStore({ getActiveWorkflowRunByPath: mock(async () => pendingRun) });
       const deps = makeDeps(store);
 
-      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', 'db-conv-1');
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', {
+        conversationId: 'db-conv-1',
+      });
 
       const msg = (sendMessageSpy.mock.calls[0] as [string, string])[1];
       expect(msg).toContain('starting');
@@ -3735,7 +3889,9 @@ describe('executeWorkflow', () => {
       const store = makeStore({ getActiveWorkflowRunByPath: mock(async () => runningRun) });
       const deps = makeDeps(store);
 
-      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', 'db-conv-1');
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', {
+        conversationId: 'db-conv-1',
+      });
 
       const msg = (sendMessageSpy.mock.calls[0] as [string, string])[1];
       expect(msg).toContain('running 1m');
@@ -3769,7 +3925,7 @@ describe('executeWorkflow', () => {
         '/repos/widget',
         makeWorkflow(),
         'test',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { codebaseId: 'cb-boom' }
       );
 
@@ -3812,7 +3968,7 @@ describe('executeWorkflow', () => {
         '/repos/widget',
         makeWorkflow(),
         'test',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { codebaseId: 'cb-repo' }
       );
 
@@ -3857,7 +4013,7 @@ describe('executeWorkflow', () => {
         '/repos/widget',
         makeWorkflow(),
         'test',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { codebaseId: 'cb-repo' }
       );
 
@@ -3903,7 +4059,7 @@ describe('executeWorkflow', () => {
         '/repos/widget',
         makeWorkflow(),
         'test',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { codebaseId: 'cb-repo' }
       );
 
@@ -3949,7 +4105,7 @@ describe('executeWorkflow', () => {
         '/repos/widget',
         makeWorkflow(),
         'test',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { codebaseId: 'cb-repo' }
       );
 
@@ -4001,7 +4157,7 @@ describe('terminal status writes in executor setup', () => {
         '/tmp',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         { preCreatedRun: makeRun({ id: 'pending-run', status: 'pending' }) }
       )
     ).rejects.toThrow('Failed to persist terminal workflow status');
@@ -4025,7 +4181,7 @@ describe('terminal status writes in executor setup', () => {
       '/tmp',
       makeWorkflow(),
       'msg',
-      'db-conv-1',
+      { conversationId: 'db-conv-1' },
       { preCreatedRun: makeRun({ id: 'pending-run', status: 'pending' }) }
     );
 
@@ -4051,7 +4207,7 @@ describe('terminal status writes in executor setup', () => {
         '/tmp',
         makeWorkflow(),
         'msg',
-        'db-conv-1',
+        { conversationId: 'db-conv-1' },
         {
           preCreatedRun: makeRun({ id: 'pending-run', status: 'pending' }),
           // No `sealRunConfig` on the test deps, so the guard throws.
@@ -4075,15 +4231,9 @@ describe('terminal status writes in executor setup', () => {
     });
 
     await expect(
-      executeWorkflow(
-        makeDeps(store),
-        makePlatform(),
-        'conv-1',
-        '/tmp',
-        makeWorkflow(),
-        'msg',
-        'db-conv-1'
-      )
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+        conversationId: 'db-conv-1',
+      })
     ).rejects.toThrow('terminal failure write failed');
 
     expect(failWorkflowRun).toHaveBeenCalledTimes(1);
@@ -4100,15 +4250,9 @@ describe('terminal status writes in executor setup', () => {
     });
 
     await expect(
-      executeWorkflow(
-        makeDeps(store),
-        makePlatform(),
-        'conv-1',
-        '/tmp',
-        makeWorkflow(),
-        'msg',
-        'db-conv-1'
-      )
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+        conversationId: 'db-conv-1',
+      })
     ).rejects.toThrow('Failed to persist terminal workflow status');
   });
 });
@@ -4122,15 +4266,9 @@ describe('finally backstop', () => {
     });
     const deps = makeDeps(store);
 
-    await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-1',
-      '/tmp',
-      makeWorkflow(),
-      'test',
-      'db-conv-1'
-    );
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'test', {
+      conversationId: 'db-conv-1',
+    });
 
     const call = (failSpy.mock.calls as unknown[][]).find(
       c => typeof c[1] === 'string' && (c[1] as string).includes('exited without finalizing')
@@ -4146,15 +4284,9 @@ describe('finally backstop', () => {
     });
     const deps = makeDeps(store);
 
-    await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-1',
-      '/tmp',
-      makeWorkflow(),
-      'test',
-      'db-conv-1'
-    );
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'test', {
+      conversationId: 'db-conv-1',
+    });
 
     const backstopCall = (failSpy.mock.calls as unknown[][]).find(
       c => typeof c[1] === 'string' && (c[1] as string).includes('exited without finalizing')
@@ -4182,15 +4314,9 @@ describe('telemetry wiring', () => {
     const store = makeStore();
     const deps = makeDeps(store);
 
-    await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-1',
-      '/tmp',
-      makeWorkflow(),
-      'msg',
-      'db-conv-1'
-    );
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+      conversationId: 'db-conv-1',
+    });
 
     // The store reports the committed transition; the executor only states the reason.
     expect(mockCaptureWorkflowTerminal).not.toHaveBeenCalled();
@@ -4223,7 +4349,7 @@ describe('telemetry wiring', () => {
       '/tmp',
       makeWorkflow(),
       'msg',
-      'db-conv-1'
+      { conversationId: 'db-conv-1' }
     );
     expect(store.failWorkflowRun).toHaveBeenCalledWith(
       expect.any(String),
@@ -4241,15 +4367,9 @@ describe('telemetry wiring', () => {
     });
 
     await expect(
-      executeWorkflow(
-        makeDeps(store),
-        makePlatform(),
-        'conv-1',
-        '/tmp',
-        makeWorkflow(),
-        'msg',
-        'db-conv-1'
-      )
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+        conversationId: 'db-conv-1',
+      })
     ).rejects.toThrow('terminal failure write failed');
   });
 
@@ -4261,15 +4381,9 @@ describe('telemetry wiring', () => {
     const store = makeStore({ failWorkflowRun });
 
     await expect(
-      executeWorkflow(
-        makeDeps(store),
-        makePlatform(),
-        'conv-1',
-        '/tmp',
-        makeWorkflow(),
-        'msg',
-        'db-conv-1'
-      )
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+        conversationId: 'db-conv-1',
+      })
     ).rejects.toThrow('terminal completion write failed');
 
     expect(failWorkflowRun).not.toHaveBeenCalled();
@@ -4305,7 +4419,9 @@ describe('telemetry wiring', () => {
       ],
     } as Partial<WorkflowDefinition>);
 
-    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', workflow, 'msg', 'db-conv-1');
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', workflow, 'msg', {
+      conversationId: 'db-conv-1',
+    });
 
     expect(mockCaptureWorkflowInvoked).toHaveBeenCalledTimes(1);
     expect(mockCaptureWorkflowInvoked).toHaveBeenCalledWith(
@@ -4331,7 +4447,7 @@ describe('telemetry wiring', () => {
         '/tmp',
         workflow,
         'msg',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
       return mockCaptureWorkflowInvoked.mock.calls[0]?.[0]?.usesPersistSession;
     };
@@ -4359,15 +4475,9 @@ describe('telemetry wiring', () => {
     const store = makeStore();
     const deps = makeDeps(store);
 
-    await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-1',
-      '/tmp',
-      makeWorkflow(),
-      'msg',
-      'db-conv-1'
-    );
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+      conversationId: 'db-conv-1',
+    });
 
     expect(mockCaptureWorkflowInvoked).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -4395,7 +4505,7 @@ describe('telemetry wiring', () => {
       '/tmp',
       makeWorkflow(),
       'msg',
-      'db-conv-1',
+      { conversationId: 'db-conv-1' },
       { source: 'bundled' }
     );
 
@@ -4420,7 +4530,7 @@ describe('telemetry wiring', () => {
       '/tmp',
       makeWorkflow(),
       'msg',
-      'db-conv-1',
+      { conversationId: 'db-conv-1' },
       {
         source: 'bundled',
       }
@@ -4456,7 +4566,7 @@ describe('telemetry wiring', () => {
       '/tmp',
       makeWorkflow({ model: 'large' }),
       'msg',
-      'db-conv-1'
+      { conversationId: 'db-conv-1' }
     );
 
     expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('codex');
@@ -4503,8 +4613,8 @@ describe('telemetry wiring', () => {
       '/tmp',
       makeWorkflow({ model: 'large' }),
       'msg',
-      'db-conv-1',
-      { userId: 'user-1' }
+      { conversationId: 'db-conv-1', userId: 'user-1' },
+      {}
     );
 
     expect(getUserAiPrefs).toHaveBeenCalledWith('user-1');
@@ -4518,15 +4628,9 @@ describe('telemetry wiring', () => {
     const getUserAiPrefs = mock(async () => ({}));
     const deps = { ...makeDeps(store), getUserAiPrefs } as WorkflowDeps;
 
-    await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-1',
-      '/tmp',
-      makeWorkflow(),
-      'msg',
-      'db-conv-1'
-    );
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+      conversationId: 'db-conv-1',
+    });
 
     expect(getUserAiPrefs).not.toHaveBeenCalled();
   });
@@ -4547,8 +4651,8 @@ describe('telemetry wiring', () => {
       '/tmp',
       makeWorkflow({ model: 'large' }),
       'msg',
-      'db-conv-1',
-      { userId: 'user-1' }
+      { conversationId: 'db-conv-1', userId: 'user-1' },
+      {}
     );
 
     // Config default is claude → built-in tier defaults resolve 'large'.
@@ -4572,8 +4676,8 @@ describe('telemetry wiring', () => {
       '/tmp',
       makeWorkflow({ model: 'large' }),
       'msg',
-      'db-conv-1',
-      { userId: 'user-1' }
+      { conversationId: 'db-conv-1', userId: 'user-1' },
+      {}
     );
 
     expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('claude');
@@ -4593,8 +4697,8 @@ describe('telemetry wiring', () => {
       '/tmp',
       makeWorkflow({ model: 'large' }),
       'msg',
-      'db-conv-1',
-      { userId: 'user-1' }
+      { conversationId: 'db-conv-1', userId: 'user-1' },
+      {}
     );
 
     // No tiers configured anywhere → built-in tier defaults follow the
@@ -4606,15 +4710,9 @@ describe('telemetry wiring', () => {
     const store = makeStore();
     const deps = makeDeps(store);
 
-    await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-1',
-      '/tmp',
-      makeWorkflow(),
-      'msg',
-      'db-conv-1'
-    );
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+      conversationId: 'db-conv-1',
+    });
 
     expect(mockCaptureWorkflowInvoked.mock.calls.at(-1)?.[0].workflowSource).toBeUndefined();
   });
@@ -5408,11 +5506,13 @@ describe('run checkout baseline (#3305)', () => {
       repo,
       makeWorkflow(),
       'msg',
-      'db-conv-1',
+      { conversationId: 'db-conv-1' },
       { cutFromCommit: cutFrom }
     );
 
     expect(order).toEqual(['claim', 'baseline', 'first node']);
+    // The claim carries the checkout so a pre-created row without a path is fenced by it.
+    expect(store.claimPendingWorkflowRun).toHaveBeenCalledWith('run-123', repo);
     expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledTimes(1);
     expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledWith(
       'run-123',
@@ -5434,7 +5534,7 @@ describe('run checkout baseline (#3305)', () => {
       repo,
       makeWorkflow(),
       'msg',
-      'db-conv-1',
+      { conversationId: 'db-conv-1' },
       { preCreatedRun: makeRun(), priorCompletedNodes: new Map() }
     );
     expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
@@ -5454,7 +5554,7 @@ describe('run checkout baseline (#3305)', () => {
       repo,
       makeWorkflow(),
       'msg',
-      'db-conv-1'
+      { conversationId: 'db-conv-1' }
     );
     expect(result.success).toBe(false);
     expect(store.failWorkflowRun).toHaveBeenCalledWith(
@@ -5488,9 +5588,8 @@ describe('credential preflight lifecycle', () => {
         '/tmp',
         makeWorkflow(),
         'resume',
-        'db',
+        { conversationId: 'db', userId: 'resumer' },
         {
-          userId: 'resumer',
           preCreatedRun: makeRun({ status, user_id: 'origin' }),
           priorCompletedNodes: new Map([['completed', { output: 'done' }]]),
         }
@@ -5539,8 +5638,8 @@ describe('credential preflight lifecycle', () => {
       '/tmp',
       makeWorkflow(),
       'start',
-      'db',
-      { userId: 'origin' }
+      { conversationId: 'db', userId: 'origin' },
+      {}
     );
     if (result.success) throw new Error('Expected credential refusal');
     expect(result.error).toBe(

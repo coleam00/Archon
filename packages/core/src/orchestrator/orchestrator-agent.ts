@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
@@ -39,7 +40,6 @@ import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import {
-  execFileAsync,
   findRepoRoot,
   getDefaultRemote,
   syncWorkspace,
@@ -145,7 +145,7 @@ function applyPresetToRequestOptions(
   // is shared with `applyPresetOptions` in the DAG executor rather than
   // restated, so the same tier cannot mean different depths in chat and in a
   // workflow.
-  const decision = resolvePresetEffort(provider, preset.effort);
+  const decision = resolvePresetEffort(providerRegistry, provider, preset.effort);
   if (!decision.ok) {
     // `unsupported` = the provider has no reasoning control at all. Warn instead
     // of silently dropping.
@@ -1085,6 +1085,7 @@ async function dispatchOrchestratorWorkflowOwned(
   // run live (e.g. read-only triage, docs generation on the main checkout).
   let cwd: string;
   let cutFromCommit: string | undefined;
+  let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
   if (adoptionLane?.kind === 'reuse-worktree') {
     // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
     // instead of cutting a fresh one (same shape as the background dispatch in
@@ -1137,7 +1138,10 @@ async function dispatchOrchestratorWorkflowOwned(
         userId
       );
       cwd = result.cwd;
-      if (result.status === 'new') cutFromCommit = result.cutFromCommit;
+      if (result.status === 'new') {
+        cutFromCommit = result.cutFromCommit;
+        ownedWorktree = result.ownedWorktree;
+      }
     } catch (error) {
       if (error instanceof IsolationBlockedError) {
         getLog().warn(
@@ -1272,12 +1276,14 @@ async function dispatchOrchestratorWorkflowOwned(
             cwd: resumableWorkingPath,
             legacyWorkflow: workflow,
             userMessage,
-            conversationDbId: conversation.id,
+            origin: {
+              conversationId: conversation.id,
+              userId,
+              parentConversationId: conversation.id,
+            },
             run: resumableRun,
             options: {
               codebaseId: codebase.id,
-              parentConversationId: conversation.id,
-              userId,
               source,
               parseWarnings,
               baseBranch: codebaseBaseBranch,
@@ -1352,11 +1358,13 @@ async function dispatchOrchestratorWorkflowOwned(
             cwd: resumableWorkingPath,
             workflow,
             userMessage,
-            conversationDbId: conversation.id,
+            origin: {
+              conversationId: conversation.id,
+              userId,
+              parentConversationId: conversation.id,
+            },
             options: {
               codebaseId: codebase.id,
-              parentConversationId: conversation.id,
-              userId,
               source,
               preparedSource: captured.preparedSource,
               parseWarnings,
@@ -1454,11 +1462,13 @@ async function dispatchOrchestratorWorkflowOwned(
         cwd,
         workflow,
         userMessage,
-        conversationDbId: conversation.id,
-        options: {
-          codebaseId: codebase.id,
+        origin: {
+          conversationId: conversation.id,
           parentConversationId: conversation.id,
           userId,
+        },
+        options: {
+          codebaseId: codebase.id,
           source,
           preparedSource: captured.preparedSource,
           preparedAiConfiguration,
@@ -1468,6 +1478,7 @@ async function dispatchOrchestratorWorkflowOwned(
           capturedSourceOwner: owner,
           inputs: resolvedInputs,
           ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+          ownedWorktree,
           ...(options?.adoptRunId
             ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
             : options?.supersedesRunId
@@ -1528,6 +1539,7 @@ async function captureFreshSource(
       const { workflows: capturedWorkflows } = await discoverWorkflowsWithConfig(
         runCwd,
         loadConfig,
+        providerRegistry,
         preparedSource.roots
       );
       const reResolved = resolveWorkflowName(
@@ -1786,7 +1798,11 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
   try {
     // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically
     // by discoverWorkflowsWithConfig — no option needed.
-    const result = await discoverWorkflowsWithConfig(getArchonWorkspacesPath(), loadConfig);
+    const result = await discoverWorkflowsWithConfig(
+      getArchonWorkspacesPath(),
+      loadConfig,
+      providerRegistry
+    );
     workflows = [...result.workflows];
     allErrors.push(...result.errors);
   } catch (error) {
@@ -1846,6 +1862,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
         const repoResult = await discoverWorkflowsWithConfig(
           workflowCwd,
           () => Promise.resolve(loadedConfig),
+          providerRegistry,
           workflowSourceRoot === undefined ? undefined : liveSourceRoots(workflowSourceRoot)
         );
         const workflowMap = new Map(workflows.map(w => [w.workflow.name, w]));
@@ -1940,6 +1957,20 @@ export async function handleMessage(
   try {
     getLog().debug({ conversationId, userId }, 'orchestrator_message_received');
 
+    const parsed = trimmedMessage.startsWith('/')
+      ? commandHandler.parseCommand(message)
+      : undefined;
+    if (parsed?.command === 'detach-project') {
+      const reply = await handleDetachProject(
+        platform,
+        conversationId,
+        parsed.args,
+        parentConversationId
+      );
+      await platform.sendMessage(conversationId, reply);
+      return;
+    }
+
     // 1. Get/create conversation and inherit thread context.
     // userId is recorded on the conversation row only on first creation —
     // first-user-wins. The row's user_id is provenance plus a fallback for
@@ -1961,8 +1992,8 @@ export async function handleMessage(
     );
 
     // 2. Check for deterministic commands
-    if (trimmedMessage.startsWith('/')) {
-      const { command } = commandHandler.parseCommand(message);
+    if (parsed) {
+      const { command } = parsed;
       const deterministicCommands = [
         'help',
         'status',
@@ -2445,7 +2476,7 @@ export async function handleMessage(
 
     // Claude supports the preset object for prompt caching; other providers
     // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
-    let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    let systemAppend = await buildOrchestratorSystemAppend(conversation, codebases, workflows);
     // Capabilities are only consulted for project-scoped chats (both the native tool
     // and the CLI pointer are scoped features), so look them up lazily — this also
     // avoids a registry lookup (and a throw for an unregistered provider) on the
@@ -3398,9 +3429,6 @@ async function handleRegisterProject(
     return `Project "${projectName}" is already registered (path: ${alreadyExists.stored_default_cwd}).`;
   }
 
-  // Use config default provider instead of hardcoding 'claude'
-  const config = await loadConfig();
-
   // Detect whether the path is a git repository. Non-git paths (multi-repo roots
   // or plain ops folders) register as folder projects — run-in-place, no branch.
   // findRepoRoot returns null ONLY for a definitive "not a git repository"; it
@@ -3420,12 +3448,10 @@ async function handleRegisterProject(
     );
   }
   const kind: 'repo' | 'folder' = repoRoot ? 'repo' : 'folder';
-  const detectedBranch = kind === 'repo' ? await detectCurrentGitBranch(canonicalPath) : null;
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: canonicalPath,
-    default_branch: detectedBranch,
-    ai_assistant_type: config.assistant,
+    default_branch: null,
     kind,
   });
 
@@ -3440,20 +3466,6 @@ async function handleRegisterProject(
       'If this should be a git repo, resolve the error and re-register.';
   }
   return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
-}
-
-async function detectCurrentGitBranch(projectPath: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', projectPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
-      { timeout: 5000 }
-    );
-    const branch = stdout.trim();
-    return branch && branch !== 'HEAD' ? branch : null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -3668,4 +3680,47 @@ async function handleWorkflowRunCommand(
       ? `Choose a project for this conversation, then retry \`${spellWorkflowCommand(platform, `resume ${request.run.id}`)}\`.\n\n${projectList}`
       : `Which project should this workflow run on?\n\n${projectList}\n\nReply with the project name, or use: ${spellWorkflowCommand(platform, `run ${request.definition.name} --project <name> "${request.args}"`)}`
   );
+}
+
+async function handleDetachProject(
+  platform: IPlatformAdapter,
+  platformId: string,
+  args: string[],
+  parentPlatformId?: string
+): Promise<string> {
+  if (args.length !== 1 || !args[0].trim()) {
+    return 'Usage: /detach-project "<current-project-name>". Supply the exact project name; quote names containing spaces.';
+  }
+  if (!platform.capabilities.canDetachProject) {
+    return 'Project detachment is not supported on this conversation surface.';
+  }
+  const conversation = await db.getConversationByPlatformId(platform.getPlatformType(), platformId);
+  if (!conversation) return 'Cannot detach: this conversation does not exist.';
+  const result = await db.detachConversationProject({
+    conversationId: conversation.id,
+    projectName: args[0],
+    platformType: platform.getPlatformType(),
+    parentPlatformId,
+  });
+  switch (result.status) {
+    case 'detached':
+      return `This conversation is now neutral. Project "${result.projectName}" remains registered and available to other conversations.`;
+    case 'blocked': {
+      const blockers = result.runs.map(run => `- Run ${run.id}: ${run.status}`);
+      if (result.environmentId !== null)
+        blockers.push(`- Attached environment: ${result.environmentId}`);
+      return `Cannot detach while this conversation owns work or an environment:\n${blockers.join('\n')}\nResolve runs through manage_run, CLI or Web run controls, and clean the environment through the existing isolation controls before retrying. Nothing was cancelled or removed.`;
+    }
+    case 'refused':
+      switch (result.reason) {
+        case 'parent-bound':
+          return 'Cannot detach this child conversation: it would inherit its bound parent project on the next message.';
+        case 'parent-changed':
+          return 'Cannot detach: the parent conversation changed during validation. Retry the command.';
+        case 'neutral':
+          return 'This conversation is already neutral.';
+        case 'name':
+          return 'Cannot detach: supply the exact, unambiguous name of the project currently bound to this conversation.';
+      }
+  }
 }

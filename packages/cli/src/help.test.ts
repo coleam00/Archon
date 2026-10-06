@@ -171,6 +171,7 @@ Usage:
 Commands:
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
+  user <list|role>           List users and manage roles as the operator
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator
@@ -237,6 +238,7 @@ Options:
   --cwd <path>               Override working directory (default: current directory)
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
+  --base-branch <name>       Initial repository registration only; omit to follow the remote default. Use --base for a run override.
   --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
   --workflow-source <path>   Read the workflow, its commands and scripts from this directory
                              instead of --cwd (which stays the workspace the run acts on)
@@ -351,4 +353,11 @@ Examples:
   it('renders --full in workflow list --help', () => {
     expect(scopedHelpOptions(['workflow', 'list'])).toContain('--full');
   });
+});
+
+it('workflow run help distinguishes initial registration from the dispatch override', () => {
+  const text = scopedHelpOptions(['workflow', 'run']);
+  expect(text).toContain('--base-branch <name>');
+  expect(text).toContain('Initial repository registration only');
+  expect(text).toContain('--base <branch>');
 });

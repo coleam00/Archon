@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { describe, it, expect } from 'bun:test';
 import { spawnSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
@@ -234,17 +235,9 @@ describe('bundled-defaults', () => {
         // discovery. Every reviewer states it in the same words.
         expect(content).toContain('is a finding, even when the contract never named it');
         expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
-        // The risk taxonomy the removed file used to own, now stated in every prompt
-        // that depends on it rather than cited.
-        expect(content).toContain(
-          'irreversible or destructive paths, lifecycle ownership, persisted contracts and ' +
-            'schemas, credentials and auth boundaries, integration boundaries'
-        );
-      }
-      // Synthesis judges whether the lenses engaged those risks; the lenses scale their
-      // own depth by them.
-      for (const key of lenses) {
-        expect(BUNDLED_COMMANDS[key]).toContain('scale depth to what the change can destroy');
+        if (!key.includes(':simplify::')) {
+          expect(content).toContain('$mode.output.risks');
+        }
       }
     });
 
@@ -279,7 +272,7 @@ describe('bundled-defaults', () => {
 
     it('archon-ship carries its target through triage.md without downstream target prose', () => {
       const content = BUNDLED_WORKFLOWS['archon-ship'];
-      const parsed = parseWorkflow(content, 'archon-ship.yaml');
+      const parsed = parseWorkflow(content, 'archon-ship.yaml', providerRegistry);
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       expect(parsed.workflow.inputs?.target?.default).toBe('');
@@ -313,7 +306,11 @@ describe('bundled-defaults', () => {
     });
 
     it('archon-deliver preserves the conditional-lens bindings', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver'],
+        'archon-deliver.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       const resolveScope = parsed.workflow.nodes.find(node => node.id === 'resolve-scope');
@@ -345,7 +342,11 @@ describe('bundled-defaults', () => {
     // as correctness. A pass that writes code with no review after it ships that code
     // unread, and any structure finding it declines goes unjudged.
     it('archon-deliver follows every implementation pass with a review', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver'],
+        'archon-deliver.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       type ParsedNode = (typeof parsed.workflow.nodes)[number];
@@ -380,7 +381,11 @@ describe('bundled-defaults', () => {
     });
 
     it('archon-deliver delegates the optional CI read timeout to the engine', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver'],
+        'archon-deliver.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       const corrections = parsed.workflow.nodes.find(node => node.id === 'corrections');
@@ -430,7 +435,11 @@ describe('bundled-defaults', () => {
       // That the cascade really blocks is proved by execution, not by this list —
       // deliver's validate-red* and late-red-unconverged fixtures expect the gate
       // itself as the failed node and never reach the flip.
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver'],
+        'archon-deliver.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       const flipReady = parsed.workflow.nodes.find(node => node.id === 'flip-ready');
       expect(flipReady?.depends_on).toEqual([
@@ -442,8 +451,37 @@ describe('bundled-defaults', () => {
       expect(flipReady?.trigger_rule).toBe('none_failed_min_one_success');
     });
 
+    it('synthesis requires the review-lens membership declared by the graph', () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review'],
+        'archon-review.yaml',
+        providerRegistry
+      );
+      if (!parsed.workflow) throw new Error('archon-review did not parse');
+      const lenses = parsed.workflow.nodes
+        .filter(node => 'output_type' in node && node.output_type === 'review-lens')
+        .map(node => node.id)
+        .sort();
+      const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
+      const membership = synthesize.match(
+        /Require completed artifacts for every enabled specialist: `review-lens` for (.+?), and `structure-review` for simplify\./
+      );
+      if (!membership) throw new Error('synthesis has no specialist completion inventory');
+      expect(membership[1].split(/, | and /).sort()).toEqual(lenses);
+    });
+
+    it('the errors lens probes the complete independent-work blast radius', () => {
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-errors']).toContain(
+        "- **Blast radius** — does a failure owned by one item (another project, one case, one iteration) abort work that does not depend on it? 'Identifiable' does not clear it."
+      );
+    });
+
     it('archon-review exposes the three-way action contract behind a successful preflight', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-review'], 'archon-review.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review'],
+        'archon-review.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       expect(parsed.workflow.inputs?.work_order?.default).toBe('');
@@ -503,17 +541,15 @@ describe('bundled-defaults', () => {
       const specialists = ['seams', 'code', 'tests', 'focused', 'simplify', 'errors', 'docs'];
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
       expect(reviewComplete?.kind).toBe('exec');
-      expect(reviewComplete?.depends_on).toEqual(specialists);
-      // Seams runs on every tier; code and tests only on the full one, where the
-      // focused reviewer stands in for them on a low-risk change.
+      expect(reviewComplete?.depends_on).toEqual(['coverage', ...specialists]);
       const lensWhen = (id: string) => parsed.workflow?.nodes.find(node => node.id === id)?.when;
       expect(lensWhen('seams')).not.toContain('tier');
-      expect(lensWhen('code')).toContain("$INPUTS.tier != 'focused'");
-      expect(lensWhen('tests')).toContain("$INPUTS.tier != 'focused'");
+      expect(lensWhen('code')).toContain('$coverage.output.full == true');
+      expect(lensWhen('tests')).toContain('$coverage.output.full == true');
       expect(lensWhen('focused')).toContain("$INPUTS.tier == 'focused'");
       // Structure is a full-tier lens again: delivery's pre-PR pass is the first look,
       // not a replacement for this one.
-      expect(lensWhen('simplify')).toContain("$INPUTS.tier != 'focused'");
+      expect(lensWhen('simplify')).toContain('$coverage.output.full == true');
       // Reviewers are read-only by the engine's check, not only by their prompts.
       for (const id of [
         'scope',
@@ -650,7 +686,11 @@ describe('bundled-defaults', () => {
     });
 
     it('archon-validate re-discovers and re-runs the checks on resume (#3092)', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-validate'], 'archon-validate.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-validate'],
+        'archon-validate.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       for (const id of ['discover', 'run']) {
@@ -710,7 +750,7 @@ describe('bundled-defaults', () => {
       };
 
       for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-        const parsed = parseWorkflow(content, `${name}.yaml`);
+        const parsed = parseWorkflow(content, `${name}.yaml`, providerRegistry);
         if (parsed.workflow === null) throw new Error(parsed.error.error);
         walk(parsed.workflow.nodes, parsed.workflow.provider, name);
       }
@@ -779,7 +819,7 @@ describe('bundled-defaults', () => {
       expect(pr).toContain('output_type: pull-request');
       expect(deliver).not.toContain('output_type: public-action');
       expect(deliver).toContain('scope: "$pr.output"');
-      const parsedDelivery = parseWorkflow(deliver, 'archon-deliver.yaml');
+      const parsedDelivery = parseWorkflow(deliver, 'archon-deliver.yaml', providerRegistry);
       if (parsedDelivery.workflow === null) throw new Error(parsedDelivery.error.error);
       const flip = parsedDelivery.workflow.nodes.find(node => node.id === 'flip-ready');
       expect(flip).toMatchObject({
@@ -800,7 +840,7 @@ describe('bundled-defaults', () => {
       // The public write belongs to a deterministic node, not to a prompt: the
       // identity it writes to is the recorded record, and the same node performs
       // the write whichever forge source the run selected.
-      const prParsed = parseWorkflow(pr, 'archon-pr.yaml');
+      const prParsed = parseWorkflow(pr, 'archon-pr.yaml', providerRegistry);
       if (prParsed.workflow === null) throw new Error(prParsed.error.error);
       const prNode = prParsed.workflow.nodes.find(node => node.id === 'pr');
       expect(prNode?.kind).toBe('agent');
@@ -823,7 +863,7 @@ describe('bundled-defaults', () => {
       });
       expect(prParsed.workflow.returns).toBe('publish');
 
-      const deliverParsed = parseWorkflow(deliver, 'archon-deliver.yaml');
+      const deliverParsed = parseWorkflow(deliver, 'archon-deliver.yaml', providerRegistry);
       if (deliverParsed.workflow === null) throw new Error(deliverParsed.error.error);
       const syncNode = deliverParsed.workflow.nodes.find(node => node.id === 'sync-pr-body');
       expect(syncNode?.kind).toBe('agent');
@@ -852,7 +892,11 @@ describe('bundled-defaults', () => {
     });
 
     it('publishes the review report from a deterministic node, not the reviewer', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-review'], 'archon-review.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review'],
+        'archon-review.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       expect(parsed.workflow.returns).toBe('publish');
       const publish = parsed.workflow.nodes.find(node => node.id === 'publish');
@@ -875,7 +919,11 @@ describe('bundled-defaults', () => {
     });
 
     it('uses check events as wake-ups while retaining bounded probes and deadlines', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver'],
+        'archon-deliver.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
       for (const [groupId, probeId, pauseId] of [
@@ -1007,7 +1055,7 @@ describe('bundled-defaults', () => {
         const source = BUNDLED_WORKFLOWS[name];
         if (source === undefined) continue;
 
-        const parsed = parseWorkflow(source, name);
+        const parsed = parseWorkflow(source, name, providerRegistry);
         expect(parsed.error).toBeNull();
         const workflow = parsed.workflow;
         if (workflow === null) continue;

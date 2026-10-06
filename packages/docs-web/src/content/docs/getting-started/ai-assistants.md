@@ -82,8 +82,6 @@ If none of the three resolves in a compiled binary, Archon throws with install i
 
 The Claude Agent SDK accepts the native compiled binary, a JS `cli.js`, or the npm platform-package directory (e.g. `@anthropic-ai/claude-code-win32-x64`) — directories are auto-expanded to the contained `claude`/`claude.exe`.
 
-**Dev mode override:** when running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. Config-file `claudeBinaryPath` is intentionally binary-mode-only (per-repo, not per-machine).
-
 **CLI version:** Archon asks the Claude Code CLI for its session-state events (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`) and finishes a node when the session goes idle after its final result. This is verified with Claude Code 2.1.282, the CLI the bundled SDK ships. A configured binary that does not emit those events still works when its process exits after the turn. If its process hangs instead, the node fails at the idle timeout, saying that the provider never signalled that its turn settled.
 
 **Typical paths by install method:**
@@ -99,6 +97,10 @@ The Claude Agent SDK accepts the native compiled binary, a JS `cli.js`, or the n
 | Docker (`ghcr.io/coleam00/archon`) | Pre-set via `ENV CLAUDE_BIN_PATH` in the image — no action required |
 
 If in doubt, `which claude` (macOS/Linux) or `where claude` (Windows) will resolve the executable on your PATH after any of the installers above.
+
+### Binary path configuration for source installs
+
+When running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. The env pin takes precedence over the config pin. An invalid explicit pin fails in either mode.
 
 ### Authentication Options
 
@@ -369,6 +371,12 @@ nodes:
 
 Pi is registered as `builtIn: false` — it validates the community-provider seam rather than being a core-team-maintained option. If it proves stable and valuable it may be promoted to `builtIn: true` later.
 
+### Azure models
+
+Pi uses `azure/<model-id>` for Azure models, including Foundry Chat Completions deployments. The `AZURE_OPENAI_*` environment variables remain unchanged. Archon credentials previously connected as `azure-openai-responses` still deliver to `azure`.
+
+When upgrading from Pi 1.0.2 or earlier, change `azure-openai-responses` to `azure` in your Archon model references and in Pi's provider keys in `auth.json` and `models.json`, plus `defaultProvider`, `enabledModels`, and `modelThinkingLevels` in `settings.json`. The API id `azure-openai-responses` is unchanged. Archon does not rewrite native Pi configuration. Existing Pi sessions using the old provider may select another model on resume and lose their prompt cache; see the [Pi 1.0.3 release notes](https://github.com/earendil-works/pi/releases/tag/v1.0.3).
+
 ### Install
 
 Pi is included as a dependency of `@archon/providers` — no separate install needed. It's available immediately.
@@ -416,6 +424,14 @@ assistants:
 ```
 
 Archon logs an info-level `pi.auth_missing` event when no credentials are found and continues — Pi's SDK then connects directly to the local endpoint defined in `models.json`. If the provider does require auth (a less-common cloud backend not in the env-var table) the SDK call fails downstream; the `pi.auth_missing` breadcrumb in the log lets you trace it back to a missing env-var mapping.
+
+### Stored key-command caching (Pi 1.0.2)
+
+In the pinned Pi **1.0.2**, an API key stored as `!command` in `~/.pi/agent/auth.json` uses Pi's process-wide command-result cache, keyed by command text. Fresh Pi runtimes for different Archon nodes share that cache in one server process. If the command returns a short-lived token, the server can keep sending the cached value after it expires. Restart the Archon server to resolve the command again, or use a suitable longer-lived credential.
+
+A separately invoked `archon doctor` runs in a fresh process and can resolve a usable key while the server retains an expired cached value. "Usable" means the key resolved; only a model request proves the vendor accepts it. Launch and execution checks within one process can reuse the stored command result.
+
+This limitation concerns stored `auth.json` key commands, not `models.json` commands. Pi's request-time `models.json` key/header resolution uses uncached commands. For catalogued models (and Anthropic), Archon pins a resolved models-command key for the node; a short-lived token can still expire during a long node. Extension-provider models can retain Pi's per-request resolution. [Pi issue #1835](https://github.com/earendil-works/pi/issues/1835) is closed and describes that `models.json` change, not a fix for the stored-auth cache. This is a version-specific limitation and can go away if Pi changes stored-key resolution.
 
 ### Pi settings (baseline behavior)
 
@@ -760,7 +776,7 @@ You can configure Copilot's behavior in `.archon/config.yaml`:
 assistants:
   copilot:
     model: gpt-5-mini             # 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5', 'auto', etc.
-    modelReasoningEffort: medium  # 'minimal'..'ultra' — clamped to the SDK's 'low'..'xhigh'
+    modelReasoningEffort: medium  # 'minimal'..'persistent' — clamped to the SDK's 'low'..'max'
     # configDir: /absolute/path/to/copilot-config
     # enableConfigDiscovery: false  # only enable for trusted repos — bypasses Archon's workflow MCP/skill validation
     # useLoggedInUser: false        # opt into env-token auth (GH_TOKEN / GITHUB_TOKEN); default uses `copilot login`
@@ -774,7 +790,7 @@ Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`clau
 | Feature | Support | Notes |
 |---|---|---|
 | Session resume | ✅ | Returns `sessionId`; reused on resume. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/guides/authoring-workflows/#concurrent-runs)) |
-| Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max`, `ultra`, and `persistent` map to SDK `xhigh`, while `minimal` maps to `low` |
+| Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max` passes through; `ultra` and `persistent` map to SDK `max`, while `minimal` maps to `low` |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars | ✅ | merged into the spawned Copilot CLI environment |
 | Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` |
@@ -805,7 +821,7 @@ Everything above configures the **install-wide** assistant credentials (env vars
 
 Runs check the credentials required by their AI nodes before creating isolation and again when execution starts or resumes. An unreadable or rejected connected credential blocks the run instead of falling back to another account. An inconclusive check also blocks, reported as "could not verify" rather than rejected. Credentials for vendors the run does not use are not checked. Child workflows check their own graph when they start.
 
-Without a connected credential, the provider checks its native login. Providers that cannot check without a model session, including Claude, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime during each native check. Launch and execution checks are separate, so a key command can run or prompt more than once.
+Without a connected credential, the provider checks its native login. Providers that cannot check without a model session, including Claude, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime, subject to the [Pi 1.0.2 stored-key cache](#stored-key-command-caching-pi-102). Launch and execution checks are separate: `models.json` commands can run or prompt more than once, while stored `auth.json` commands can reuse a process-cached result.
 
 ### When you need this
 
@@ -843,7 +859,7 @@ The console **AI Settings** page (Settings in the web UI) has four sections:
 
 ### Per-user model preferences ("Just me")
 
-When you're logged in (a web identity resolves), the **Model Tiers** and **Model Aliases** panels show a **"This install / Just me"** scope toggle, and **Defaults** gains a just-me "Chat runs on" combo (provider + model). The "Just me" scope stores your personal tiers/aliases/default assistant (and optional chat-model pin) in Archon's database and applies them as the **highest-precedence** layer — your overrides win over the install config for runs and chats *you* start, without changing anyone else's. This needs an identity but **no** `TOKEN_ENCRYPTION_KEY` (model names aren't secrets); on a solo install without web auth the toggle simply doesn't appear and everything behaves exactly as before.
+When you're logged in (a web identity resolves), the **Model Tiers** and **Model Aliases** panels show a **"This install / Just me"** scope toggle, and **Defaults** gains a just-me "Chat runs on" combo (provider + model). The "Just me" scope stores your personal tiers/aliases/default assistant (and optional chat-model pin) in Archon's database and applies them as the **highest-precedence** layer — your overrides win over the install config for runs and chats *you* start, without changing anyone else's. This needs an identity but **no** `TOKEN_ENCRYPTION_KEY` (model names aren't secrets); on a solo install without web auth the toggle simply doesn't appear and everything behaves exactly as before. If your personal settings fail to load for any other reason, the panels say so ("Couldn't load your personal settings") and stay on install scope.
 
 If a chat asks for the `large` tier and only a different tier is configured, Archon uses the nearest preset and posts a one-line notice telling you which tier answered and where to set `large`.
 

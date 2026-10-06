@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { afterAll, expect, test } from 'bun:test';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -49,10 +50,14 @@ async function validateCorpus(cwd: string): Promise<{ findings: Finding[]; files
       .safeParse(Bun.YAML.parse(await readFile(join(workflowRoot, file), 'utf8')));
     if (value.success) fileByName.set(value.data.name, file);
   }
-  const discovered = await discoverWorkflowsWithConfig(cwd, async () => ({
-    ...config,
-    envVars: config.env,
-  }));
+  const discovered = await discoverWorkflowsWithConfig(
+    cwd,
+    async () => ({
+      ...config,
+      envVars: config.env,
+    }),
+    providerRegistry
+  );
   const findings: Finding[] = discovered.errors.map(error => ({
     file:
       files.find(file => file.endsWith('/' + error.filename) || file === error.filename) ??
@@ -68,6 +73,7 @@ async function validateCorpus(cwd: string): Promise<{ findings: Finding[]; files
     const issues = await validateWorkflowResources(
       workflow,
       cwd,
+      providerRegistry,
       {
         ...workflowValidationConfig(config),
         workflowSource: source,

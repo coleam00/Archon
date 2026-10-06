@@ -9,6 +9,7 @@
  * seams need stubbing here too. This file deliberately does NOT mock
  * `./executor` or `@archon/workflows/executor` itself.
  */
+import { providerRegistry } from '@archon/providers';
 import { mock } from 'bun:test';
 
 // --- Mock logger ---
@@ -63,6 +64,7 @@ mock.module('@archon/paths', () => ({
 
 mock.module('@archon/git', () => ({
   getDefaultBranch: mock(async () => 'main'),
+  getDefaultRemote: mock(async () => 'origin'),
   toRepoPath: mock((p: string) => p),
 }));
 
@@ -112,6 +114,6 @@ registerCommunityProviders();
 import { InProcessWorkflowEngine } from './in-process-engine';
 import { runWorkflowEngineContractTests } from './engine-contract-tests';
 
-runWorkflowEngineContractTests(deps => new InProcessWorkflowEngine(deps), {
+runWorkflowEngineContractTests(providerRegistry, deps => new InProcessWorkflowEngine(deps), {
   executedWorkflow: () => executedWorkflow,
 });

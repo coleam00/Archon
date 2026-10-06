@@ -19,7 +19,6 @@
     "./handlers": "./src/handlers/command-handler.ts",
     "./config": "./src/config/index.ts",
     "./config/run-config-handoff": "./src/config/run-config-handoff.ts",
-    "./config/resolve-assistant": "./src/config/resolve-assistant.ts",
     "./utils/*": "./src/utils/*.ts",
     "./services/*": "./src/services/*.ts",
     "./state/*": "./src/state/*.ts",
@@ -55,6 +54,9 @@
   },
   "testGroups": [
     [
+      "src/db/codebase-assistant.integration.test.ts"
+    ],
+    [
       "src/db/codebase-paths.integration.test.ts"
     ],
     [
@@ -62,6 +64,12 @@
     ],
     [
       "src/workflows/branch-launch-source.test.ts"
+    ],
+    [
+      "src/db/conversation-detach.integration.test.ts"
+    ],
+    [
+      "src/db/conversation-detach.postgres.integration.test.ts"
     ],
     [
       "src/db/resource-starts.integration.test.ts"
@@ -119,7 +127,6 @@
       "src/utils/github-graphql.test.ts",
       "src/types/message-metadata.test.ts",
       "src/config/config-loader.test.ts",
-      "src/config/resolve-assistant.test.ts",
       "src/state/"
     ],
     [
@@ -139,6 +146,9 @@
     ],
     [
       "src/db/workflows.resume-cas.integration.test.ts"
+    ],
+    [
+      "src/db/workflow-gate-deferral.integration.test.ts"
     ],
     [
       "src/db/workflow-terminal-telemetry.integration.test.ts"
@@ -279,7 +289,25 @@
       "src/db/isolation-environments.retention.integration.test.ts"
     ],
     [
+      "src/handlers/register-base-branch.integration.test.ts"
+    ],
+    [
+      "src/workflows/continuation-host-base-branch.test.ts"
+    ],
+    [
       "src/workflows/commit-author.integration.test.ts"
+    ],
+    [
+      "src/db/workflows.origin.integration.test.ts"
+    ],
+    [
+      "src/db/workflows.origin.postgres.integration.test.ts"
+    ],
+    [
+      "src/db/users.sqlite.integration.test.ts"
+    ],
+    [
+      "src/services/cleanup-worktree.integration.test.ts"
     ]
   ]
 }

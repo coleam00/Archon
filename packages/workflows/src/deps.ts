@@ -1,4 +1,3 @@
-import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * Workflow dependency injection types.
  *
@@ -7,6 +6,7 @@ import type { CredentialStatus } from '@archon/provider-contract';
  *
  * Provider types are imported directly from @archon/provider-contract.
  */
+import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
 import type { IWorkflowStore } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type {
@@ -116,6 +116,7 @@ export interface WorkflowConfig {
   /** Default assistant provider (validated against provider registry at runtime) */
   assistant: string;
   baseBranch?: string;
+  remote?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
   /** Archon-managed env entries that nodes cannot override. */
@@ -164,6 +165,7 @@ export type AgentProviderFactory = (provider: string) => IAgentProvider;
 // ---------------------------------------------------------------------------
 
 export interface WorkflowDeps {
+  providers: ProviderRegistry;
   store: IWorkflowStore;
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;

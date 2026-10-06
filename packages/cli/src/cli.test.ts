@@ -1274,6 +1274,35 @@ describe('workflow list arguments', () => {
     expect(output.workflows[0].descriptionTruncated).toBe(false);
   });
 
+  // Core no longer registers providers, so the CLI route default is what makes a
+  // provider-scoped workflow parse.
+  it('registers providers before discovering workflows', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'archon-cli-provider-route-'));
+    try {
+      mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+      spawnSync('git', ['init', '-q', '.'], { cwd: repo });
+      writeFileSync(
+        join(repo, '.archon', 'workflows', 'scoped.yaml'),
+        'name: scoped\ndescription: Provider scoped.\nprovider: claude\nnodes:\n  - id: a\n    prompt: hi\n'
+      );
+      const { status, envelope } = spawnJsonError([
+        'workflow',
+        'list',
+        'scoped',
+        '--json',
+        '--cwd',
+        repo,
+      ]);
+
+      expect(status).toBe(0);
+      const output = envelope() as { workflows: Array<{ name: string }>; errors: unknown[] };
+      expect(output.errors).toEqual([]);
+      expect(output.workflows.map(w => w.name)).toEqual(['scoped']);
+    } finally {
+      await removeTempTree(repo);
+    }
+  });
+
   it('rejects extra positionals with human-readable usage', () => {
     const result = spawnSync(
       process.execPath,
@@ -1664,6 +1693,29 @@ it('CLI cleanup retains historical Telegram workspaces with no adapter credentia
     }
   } finally {
     await removeTempTree(root);
+  }
+});
+
+describe('registration base branch parsing', () => {
+  it('rejects the registration flag outside workflow run', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'version', '--base-branch', 'release', '--json'],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('--base-branch is only supported by workflow run');
+  });
+  for (const choice of [['--base-branch', 'release'], ['--base-branch=release']]) {
+    it(`keeps ${choice[0]} distinct from the dispatch base`, () => {
+      const { values } = parseArgs({
+        args: ['workflow', 'run', 'deliver', ...choice, '--base', 'dev'],
+        options: cliArgOptions,
+        allowPositionals: true,
+      });
+      expect(values['base-branch']).toBe('release');
+      expect(values.base).toBe('dev');
+    });
   }
 });
 

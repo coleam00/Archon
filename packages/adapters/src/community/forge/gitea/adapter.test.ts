@@ -51,7 +51,7 @@ mock.module('@archon/core/db/users', () => ({
 }));
 const mockGetOrCreateConversation = mock(
   async (): Promise<
-    Pick<Conversation, 'id' | 'codebase_id' | 'platform_type' | 'platform_conversation_id'>
+    Pick<Conversation, 'id' | 'codebase_id' | 'cwd' | 'platform_type' | 'platform_conversation_id'>
   > => {
     throw new Error('DB not mocked in tests');
   }
@@ -173,6 +173,7 @@ describe('GiteaAdapter', () => {
   let originalFetch: typeof fetch;
 
   beforeEach(() => {
+    mockGetOrCreateConversation.mockClear();
     mockCloneRepository.mockClear();
     mockSyncRepository.mockClear();
     mockAddSafeDirectory.mockClear();
@@ -768,6 +769,7 @@ describe('GiteaAdapter', () => {
       mockGetOrCreateConversation.mockResolvedValueOnce({
         id: 'conv-test-uuid',
         codebase_id: 'codebase-test-uuid',
+        cwd: '/tmp/project',
         platform_type: 'gitea',
         platform_conversation_id: 'testuser/testrepo!42',
       });
@@ -1147,6 +1149,7 @@ describe('GiteaAdapter', () => {
       mockGetOrCreateConversation.mockImplementation(async () => ({
         id: 'conv-test-uuid',
         codebase_id: 'codebase-test-uuid',
+        cwd: '/tmp/project',
         platform_type: 'gitea',
         platform_conversation_id: 'testuser/testrepo#42',
       }));
@@ -1185,6 +1188,11 @@ describe('GiteaAdapter', () => {
 
       await adapter.handleWebhook(payload, 'mock-signature');
 
+      expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
+        'gitea',
+        expect.any(String),
+        'codebase-test-uuid'
+      );
       expect(mockHandleMessage).toHaveBeenCalledWith(
         expect.anything(),
         expect.anything(),
@@ -1198,6 +1206,7 @@ describe('GiteaAdapter', () => {
       mockGetOrCreateConversation.mockImplementation(async () => ({
         id: 'conv-test-uuid',
         codebase_id: 'codebase-test-uuid',
+        cwd: '/tmp/project',
         platform_type: 'gitea',
         platform_conversation_id: 'testuser/testrepo#42',
       }));

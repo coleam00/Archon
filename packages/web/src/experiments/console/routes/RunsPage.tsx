@@ -9,7 +9,6 @@ import { DraftRunCard } from '../components/DraftRunCard';
 import { PendingInputBanner } from '../components/PendingInputBanner';
 import { useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
-import { useDashboardSSE } from '../lib/sse';
 import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
 import { runDetailPath, type Run } from '../primitives/run';
@@ -50,6 +49,7 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
     conversationPlatformId: null as string | null,
     workerPlatformId: null as string | null,
     outcome: null,
+    terminalRecord: null,
     workingPath: null,
     userMessage: '',
     activeNodes: [] as string[],
@@ -288,11 +288,6 @@ export function RunsPage(): ReactElement {
   const { data, loading, error } = useEntity<FeedData>(K.runs(scope), () =>
     skill.listRuns(scope === 'all' ? {} : { codebaseId: scope })
   );
-
-  // Dashboard SSE keeps the runs feed in sync: every workflow_status /
-  // dag_node event invalidates the active runs:* cache keys, triggering a
-  // refetch through useEntity. Replaces the 3s polling loop.
-  useDashboardSSE();
 
   // Scoped project (drives the DraftRunCard inside the feed when not ALL).
   // Typed as `Project | null` rather than `Project` so the ALL scope can

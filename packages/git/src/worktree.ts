@@ -1,5 +1,6 @@
-import { readFile, access } from 'fs/promises';
-import { isAbsolute, join, relative, resolve } from 'path';
+import { readFile, access, realpath } from 'fs/promises';
+import * as nodePath from 'path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'path';
 import {
   createLogger,
   getArchonWorkspacesPath,
@@ -196,7 +197,7 @@ export async function listWorktrees(repoPath: RepoPath): Promise<WorktreeInfo[]>
 
     for (const line of stdout.split('\n')) {
       if (line.startsWith('worktree ')) {
-        currentPath = line.substring(9);
+        currentPath = toNativeWorktreePath(line.substring(9));
       } else if (line.startsWith('branch ')) {
         const branch = line.substring(7).replace('refs/heads/', '');
         if (currentPath) {
@@ -551,5 +552,76 @@ export async function verifyWorktreeOwnership(
       `Worktree at ${worktreePath} belongs to a different clone (${worktreeIdentity.commonGitDir}). ` +
         'Remove it from that clone or use a different codebase registration.'
     );
+  }
+}
+
+/**
+ * Convert a path from `git worktree list` to the form Node builds for the same
+ * checkout, which is what Archon uses as a worktree environment's id.
+ *
+ * Git for Windows prints forward slashes, keeping the drive letter it was given;
+ * Archon gives it Node's paths, so normalizing the separators reproduces them.
+ * Elsewhere git's absolute path already is Node's form and is returned unchanged.
+ */
+export function toNativeWorktreePath(
+  gitPath: string,
+  paths: nodePath.PlatformPath = nodePath
+): string {
+  return paths.sep === '\\' ? paths.normalize(gitPath) : gitPath;
+}
+
+/**
+ * Whether two spellings name the same worktree path.
+ *
+ * Git prints Windows paths with forward slashes and its own drive-letter case,
+ * so on win32 both sides are normalized and compared case-insensitively.
+ * Symlinks are not resolved here; callers that need that resolve first.
+ */
+export function isSameWorktreePath(
+  a: string,
+  b: string,
+  paths: nodePath.PlatformPath = nodePath
+): boolean {
+  const normalize = (value: string): string => {
+    const resolved = paths.resolve(value);
+    return paths.sep === '\\' ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(a) === normalize(b);
+}
+
+/**
+ * Whether Git still lists `worktreePath` as a worktree of `repoPath`.
+ *
+ * Unlike listWorktrees, this counts detached worktrees and lets a failed
+ * `git worktree list` throw: a caller deletes files on a `false`. Git prints
+ * symlink-resolved paths, so both sides are compared resolved; a path that no
+ * longer exists resolves through its nearest existing ancestor.
+ */
+export async function isWorktreeRegistered(
+  repoPath: RepoPath,
+  worktreePath: string
+): Promise<boolean> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
+    { timeout: 10000 }
+  );
+  const target = await resolveThroughExistingAncestor(worktreePath);
+  for (const record of stdout.split('\0')) {
+    if (!record.startsWith('worktree ')) continue;
+    const listed = await resolveThroughExistingAncestor(record.slice('worktree '.length));
+    if (isSameWorktreePath(listed, target)) return true;
+  }
+  return false;
+}
+
+async function resolveThroughExistingAncestor(path: string): Promise<string> {
+  const absolute = resolve(path);
+  try {
+    return await realpath(absolute);
+  } catch (error) {
+    const parent = dirname(absolute);
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || parent === absolute) throw error;
+    return join(await resolveThroughExistingAncestor(parent), basename(absolute));
   }
 }

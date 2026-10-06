@@ -1,11 +1,19 @@
 /**
  * Database operations for conversations
  */
-import { pool, getDialect } from './connection';
-import type { Conversation } from '../types';
+import { lockConversationOwnership } from './conversation-ownership';
+import { listConversationDetachBlockers } from './workflows';
+import { pool, getDialect, getDatabase, getDatabaseType } from './connection';
+import type { Codebase, Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
+import {
+  assertPublicConversation,
+  assertPublicConversationIdentity,
+  notOriginAnchor,
+} from './workflow-origin-anchor';
 import { loadConfig } from '../config/config-loader';
+import { resolveProjectAssistant } from '../config/project-assistant';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -18,6 +26,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * Get a conversation by its database ID
  */
 export async function getConversationById(id: string): Promise<Conversation | null> {
+  assertPublicConversation(id);
   const result = await pool.query<Conversation>(
     'SELECT * FROM remote_agent_conversations WHERE id = $1',
     [id]
@@ -34,7 +43,7 @@ export async function findConversationByPlatformId(
   platformId: string
 ): Promise<Conversation | null> {
   const result = await pool.query<Conversation>(
-    'SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1',
+    `SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1 AND ${notOriginAnchor('id')}`,
     [platformId]
   );
   return result.rows[0] ?? null;
@@ -49,7 +58,7 @@ export async function getConversationByPlatformId(
   platformId: string
 ): Promise<Conversation | null> {
   const result = await pool.query<Conversation>(
-    'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
+    `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND ${notOriginAnchor('id')}`,
     [platformType, platformId]
   );
   return result.rows[0] ?? null;
@@ -62,6 +71,7 @@ export async function getOrCreateConversation(
   parentConversationId?: string,
   userId?: string
 ): Promise<Conversation> {
+  assertPublicConversationIdentity(platformType, platformId);
   const existing = await pool.query<Conversation>(
     'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
     [platformType, platformId]
@@ -81,7 +91,7 @@ export async function getOrCreateConversation(
 
   if (parentConversationId) {
     const parent = await pool.query<Conversation>(
-      'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
+      `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND ${notOriginAnchor('id')}`,
       [platformType, parentConversationId]
     );
     if (parent.rows[0]) {
@@ -98,40 +108,23 @@ export async function getOrCreateConversation(
   // Use provided codebase or inherited codebase
   const finalCodebaseId = codebaseId ?? inheritedCodebaseId;
 
-  // Determine assistant type from codebase if provided (overrides inherited)
+  // An explicitly scoped project overrides the parent conversation provider.
   if (codebaseId) {
-    const codebase = await pool.query<{ ai_assistant_type: string }>(
-      'SELECT ai_assistant_type FROM remote_agent_codebases WHERE id = $1',
+    const codebase = await pool.query<Pick<Codebase, 'ai_assistant_type' | 'default_cwd'>>(
+      'SELECT ai_assistant_type, default_cwd FROM remote_agent_codebases WHERE id = $1',
       [codebaseId]
     );
     if (codebase.rows[0]) {
-      assistantType = codebase.rows[0].ai_assistant_type;
+      assistantType = await resolveProjectAssistant(codebase.rows[0]);
     }
   }
 
-  // No parent or codebase signal: resolve the configured default assistant
-  // instead of hard-defaulting to Claude (#2241). loadConfig() owns the
-  // fallback chain — explicit config (repo assistant > global defaultAssistant)
-  // > DEFAULT_AI_ASSISTANT env > first registered built-in provider. The
-  // per-user default assistant (#1998) deliberately stays OUT of this row: the
-  // orchestrator applies it per turn (userAiPrefs.defaultProvider ??
-  // conversation.ai_assistant_type), sender-first (#1982), so a personal
-  // preference is never baked into a shared conversation.
+  // Personal defaults are applied per turn, so shared conversations store only
+  // the project choice or configured default. Configuration errors must surface
+  // rather than recording a different provider that could spend on later turns.
   if (assistantType === undefined) {
-    try {
-      const config = await loadConfig();
-      assistantType = config.assistant;
-    } catch (err) {
-      // Intentional fallback: a broken config (e.g. an unregistered
-      // DEFAULT_AI_ASSISTANT value makes loadConfig throw) must not block
-      // conversation creation — the turn itself surfaces config errors.
-      getLog().warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        'db.conversation_default_assistant_config_load_failed'
-      );
-    }
+    assistantType = (await loadConfig()).assistant;
   }
-  assistantType ??= 'claude';
 
   const created = await pool.query<Conversation>(
     'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
@@ -147,6 +140,7 @@ export async function updateConversation(
     hidden?: boolean;
   }
 ): Promise<void> {
+  assertPublicConversation(id);
   const fields: string[] = [];
   const values: (string | number | null)[] = [];
   let i = 1;
@@ -262,6 +256,7 @@ export async function listConversations(
  * Update last_activity_at for staleness tracking
  */
 export async function touchConversation(id: string): Promise<void> {
+  assertPublicConversation(id);
   const dialect = getDialect();
   await pool.query(
     `UPDATE remote_agent_conversations SET last_activity_at = ${dialect.now()} WHERE id = $1`,
@@ -273,6 +268,7 @@ export async function touchConversation(id: string): Promise<void> {
  * Update conversation title
  */
 export async function updateConversationTitle(id: string, title: string): Promise<void> {
+  assertPublicConversation(id);
   const dialect = getDialect();
   const result = await pool.query(
     `UPDATE remote_agent_conversations SET title = $1, updated_at = ${dialect.now()} WHERE id = $2`,
@@ -287,6 +283,7 @@ export async function updateConversationTitle(id: string, title: string): Promis
  * Soft delete a conversation (sets deleted_at timestamp)
  */
 export async function softDeleteConversation(id: string): Promise<void> {
+  assertPublicConversation(id);
   const dialect = getDialect();
   const result = await pool.query(
     `UPDATE remote_agent_conversations SET deleted_at = ${dialect.now()}, updated_at = ${dialect.now()} WHERE id = $1`,
@@ -295,4 +292,77 @@ export async function softDeleteConversation(id: string): Promise<void> {
   if (result.rowCount === 0) {
     throw new ConversationNotFoundError(id);
   }
+}
+
+export type ConversationDetachResult =
+  | { status: 'detached'; projectName: string }
+  | {
+      status: 'refused';
+      reason: 'parent-bound' | 'parent-changed' | 'neutral' | 'name';
+    }
+  | {
+      status: 'blocked';
+      runs: Awaited<ReturnType<typeof listConversationDetachBlockers>>;
+      environmentId: string | null;
+    };
+
+export async function detachConversationProject(input: {
+  conversationId: string;
+  projectName: string;
+  platformType: string;
+  parentPlatformId?: string;
+}): Promise<ConversationDetachResult> {
+  return getDatabase().withTransaction(async query => {
+    // SQLite must acquire its writer lock before the parent lookup creates a read snapshot.
+    if (getDatabaseType() === 'sqlite') {
+      await lockConversationOwnership(query, [input.conversationId]);
+    }
+    const findParent = async (): Promise<Conversation | undefined> => {
+      if (!input.parentPlatformId) return undefined;
+      const result = await query<Conversation>(
+        `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND ${notOriginAnchor('id')}`,
+        [input.platformType, input.parentPlatformId]
+      );
+      return result.rows[0];
+    };
+    const parent = await findParent();
+    await lockConversationOwnership(query, [input.conversationId, ...(parent ? [parent.id] : [])]);
+    const currentParent = await findParent();
+    if (currentParent?.id !== parent?.id) return { status: 'refused', reason: 'parent-changed' };
+    if (currentParent?.codebase_id) return { status: 'refused', reason: 'parent-bound' };
+    const result = await query<Conversation>(
+      'SELECT * FROM remote_agent_conversations WHERE id = $1',
+      [input.conversationId]
+    );
+    const conversation = result.rows[0];
+    if (!conversation) throw new ConversationNotFoundError(input.conversationId);
+    if (!conversation.codebase_id) return { status: 'refused', reason: 'neutral' };
+    if (!input.projectName.trim()) return { status: 'refused', reason: 'name' };
+    const projects = await query<{ id: string; name: string }>(
+      'SELECT id, name FROM remote_agent_codebases WHERE name = $1',
+      [input.projectName]
+    );
+    // Both dialects compare names byte-for-byte, so case-only mismatches already miss here.
+    if (projects.rows.length !== 1 || projects.rows[0].id !== conversation.codebase_id) {
+      return { status: 'refused', reason: 'name' };
+    }
+    const runs = await listConversationDetachBlockers(query, conversation.id);
+    if (runs.length || conversation.isolation_env_id !== null) {
+      return { status: 'blocked', runs, environmentId: conversation.isolation_env_id };
+    }
+    await query(
+      `UPDATE remote_agent_sessions
+       SET active = false, ended_at = ${getDialect().now()}, ended_reason = 'project-changed'
+       WHERE conversation_id = $1 AND active = true`,
+      [conversation.id]
+    );
+    const cleared = await query(
+      `UPDATE remote_agent_conversations
+       SET codebase_id = NULL, cwd = NULL, isolation_env_id = NULL, updated_at = ${getDialect().now()}
+       WHERE id = $1`,
+      [conversation.id]
+    );
+    if (cleared.rowCount !== 1) throw new ConversationNotFoundError(conversation.id);
+    return { status: 'detached', projectName: projects.rows[0].name };
+  });
 }

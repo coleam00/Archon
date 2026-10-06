@@ -1,3 +1,5 @@
+import { gitCredentialOptions, sanitizeGitError } from './credentials';
+import { inspectRemoteBranches, ConfiguredBaseBranchNotFoundError } from './remote-branches';
 import { existsSync } from 'fs';
 import { readdir } from 'fs/promises';
 import { join } from 'path';
@@ -216,21 +218,26 @@ export async function syncWorkspace(
     await fetchWithRefLockRetry(workspacePath, remote, branchToSync, { timeoutMs: 60000 });
   } catch (error) {
     const err = error as Error;
-    const errorMessage = err.message.toLowerCase();
-
-    // If configured branch doesn't exist on remote, provide actionable error
-    if (
-      baseBranch &&
-      (errorMessage.includes("couldn't find remote ref") || errorMessage.includes('not found'))
-    ) {
-      throw new Error(
-        `Configured base branch '${baseBranch}' not found on remote '${remote}'. ` +
-          'Either create the branch, update worktree.baseBranch in .archon/config.yaml, ' +
-          'or remove the setting to use the auto-detected default branch.'
-      );
+    if (baseBranch) {
+      const inspection = await inspectRemoteBranches({
+        kind: 'local',
+        repoPath: workspacePath,
+        remote,
+      }).catch((inspectionError: unknown) => {
+        getLog().warn(
+          { err: inspectionError, workspacePath, remote },
+          'workspace.fetch_failure_inspection_failed'
+        );
+        return null;
+      });
+      if (inspection?.status === 'available' && !inspection.branches.includes(baseBranch)) {
+        throw new ConfiguredBaseBranchNotFoundError(baseBranch, remote);
+      }
     }
 
-    throw new Error(`Sync fetch from ${remote}/${branchToSync} failed: ${err.message}`);
+    throw new Error(`Sync fetch from ${remote}/${branchToSync} failed: ${err.message}`, {
+      cause: error,
+    });
   }
 
   const previousHead = await readShortSha(workspacePath, 'HEAD');
@@ -430,9 +437,6 @@ export interface CloneRepositoryOptions {
   credentials?: CloneCredentials;
 }
 
-const ENV_CREDENTIAL_HELPER =
-  '!f() { test "$1" = get || exit 0; printf \'%s\\n\' "username=$ARCHON_GIT_USERNAME" "password=$ARCHON_GIT_PASSWORD"; }; f';
-
 function normalizeCloneSource(url: string): string {
   if (url.startsWith('/') || url.startsWith('~') || url.startsWith('.')) return url;
 
@@ -481,18 +485,6 @@ export function validateCloneUrl(
   return { ok: true, url: parsed.href, httpUrl: parsed };
 }
 
-function sanitizeCloneError(error: unknown, credentials?: CloneCredentials): string {
-  const err = error as Error & { stdout?: string; stderr?: string };
-  let message = [err.message, err.stderr, err.stdout].filter(Boolean).join('\n');
-  const credentialValues = credentials
-    ? [credentials.username, credentials.password]
-        .filter(value => value.length > 0)
-        .sort((left, right) => right.length - left.length)
-    : [];
-  for (const value of credentialValues) message = message.replaceAll(value, '***');
-  return message;
-}
-
 export async function cloneRepository(
   url: string,
   targetPath: RepoPath,
@@ -513,19 +505,8 @@ export async function cloneRepository(
 
   try {
     const args = ['clone', cloneUrl, targetPath];
-    const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
-    delete env.ARCHON_GIT_USERNAME;
-    delete env.ARCHON_GIT_PASSWORD;
-    if (options?.credentials && parsedUrl) {
-      args.unshift(
-        '-c',
-        'credential.helper=',
-        '-c',
-        `credential.${parsedUrl.origin}.helper=${ENV_CREDENTIAL_HELPER}`
-      );
-      env.ARCHON_GIT_USERNAME = options.credentials.username;
-      env.ARCHON_GIT_PASSWORD = options.credentials.password;
-    }
+    const { args: authArgs, env } = gitCredentialOptions(parsedUrl, options?.credentials);
+    args.unshift(...authArgs);
 
     // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
     // immediate, readable error instead of a hung stdin credential prompt.
@@ -535,7 +516,7 @@ export async function cloneRepository(
     });
     return { ok: true, value: undefined };
   } catch (error) {
-    const sanitizedMessage = sanitizeCloneError(error, options?.credentials);
+    const sanitizedMessage = sanitizeGitError(error, options?.credentials);
     const message = sanitizedMessage.toLowerCase();
 
     if (message.includes('not found') || message.includes('404')) {

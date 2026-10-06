@@ -4,6 +4,7 @@
  * Thin layer over @archon/workflows validator: discovers, validates, formats output.
  */
 
+import { providerRegistry } from '@archon/providers';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { writeStdout } from '../utils/stdout';
 import {
@@ -91,7 +92,8 @@ export async function validateWorkflowsCommand(
   const defaultProvider = mergedConfig.assistant;
   const { workflows: workflowEntries, errors: loadErrors } = await discoverWorkflowsWithConfig(
     cwd,
-    loadConfig
+    loadConfig,
+    providerRegistry
   );
 
   // Build results from load errors (Level 1-2 failures)
@@ -112,6 +114,7 @@ export async function validateWorkflowsCommand(
     const issues = await validateWorkflowResources(
       workflow,
       cwd,
+      providerRegistry,
       {
         ...workflowValidationConfig(mergedConfig, config),
         workflowSource: source,

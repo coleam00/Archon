@@ -31,6 +31,7 @@ function run(
   metadata: Record<string, unknown>
 ): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id,
     workflow_name: 'deliver',
     conversation_id: 'conv-1',

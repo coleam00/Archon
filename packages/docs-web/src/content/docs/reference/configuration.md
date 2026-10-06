@@ -75,7 +75,9 @@ assistants:
     # Accepts the native binary (~/.local/bin/claude from the curl installer),
     # the npm-installed cli.js, or the npm platform-package directory
     # (e.g. @anthropic-ai/claude-code-win32-x64 — auto-expanded to claude/claude.exe).
-    # Source/dev mode auto-resolves.
+    # In all modes: CLAUDE_BIN_PATH wins, then claudeBinaryPath.
+    # Source/dev mode uses SDK resolution only when neither pin is set.
+    # Invalid explicit pins fail instead of falling back.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.6-terra
@@ -357,7 +359,7 @@ worktree:
 
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on the resolved remote (no silent fallback).
-2. If omitted: Auto-detects the default branch via `git symbolic-ref` on the resolved remote. Works without any config for standard repos.
+2. If omitted: Uses the project's stored explicit branch, if present; otherwise resolves the default from the remote's live HEAD advertisement. Renames are followed even when local remote HEAD is stale. A reachable remote with a known symbolic HEAD is required; no branch name is guessed.
 3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
@@ -543,7 +545,7 @@ To connect once the vars are set: `archon auth github` (CLI), `/archon connect g
 
 Real per-user email/password login for the Web UI, mounted at `/api/auth/*` by [Better Auth](https://better-auth.com). **Opt-in and Postgres-only**: enabled only when **both** `DATABASE_URL` (Postgres) and `BETTER_AUTH_SECRET` are set. SQLite/solo installs can never enable it and behave exactly as before (no login UI). It supersedes the single-user `auth-service` sidecar; the `ARCHON_WEB_AUTH_HEADER` trust above remains a fallback for reverse-proxy deploys.
 
-A Better Auth session resolves to the **canonical** `remote_agent_users` row via the `web` platform identity, so chat/CLI/forge identities and the `role` column live on the one Archon user — Better Auth is only the login mechanism. Better Auth owns four tables prefixed `remote_agent_auth_*` (`user`/`session`/`account`/`verification`), applied automatically on startup. Every web request resolves a `{ userId, role }` auth context (session first, then the trusted header); `role` defaults to `admin` and visibility stays open. `GET /api/workflows/runs?mine=true` and `GET /api/conversations?mine=true` are non-enforcing "my" filters that prove the scoping seam — they are not a security boundary.
+A Better Auth session resolves to the **canonical** `remote_agent_users` row via the `web` platform identity, so chat/CLI/forge identities and the `role` column live on the one Archon user — Better Auth is only the login mechanism. Better Auth owns four tables prefixed `remote_agent_auth_*` (`user`/`session`/`account`/`verification`), applied automatically on startup. Every web request resolves a `{ userId, role }` auth context (session first, then the trusted header); `role` is explicitly written as `member` for new users, while existing roles are preserved and visibility stays open. The operator designates admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); role-based run-action enforcement ships separately. `GET /api/workflows/runs?mine=true` and `GET /api/conversations?mine=true` are non-enforcing "my" filters that prove the scoping seam — they are not a security boundary.
 
 | Variable | Description | Default |
 | --- | --- | --- |

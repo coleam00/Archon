@@ -1,6 +1,7 @@
 /**
  * Workflow loader - discovers and parses workflow YAML files
  */
+import type { ProviderRegistry } from '@archon/provider-contract';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
@@ -28,11 +29,7 @@ import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { createLogger } from '@archon/paths';
 import { compileOutputSchema } from './structured-output';
 import { outputSchemaExcludesStrings } from './output-schema-strings';
-import {
-  isRegisteredProvider,
-  getRegisteredProviders,
-  getProviderCapabilities,
-} from '@archon/providers';
+
 import {
   dagNodeSchema,
   ignoredFieldsForNode,
@@ -125,10 +122,12 @@ function parseOptionalField<S extends z.ZodType>(
 }
 
 /**
- * Parse YAML using Bun's native YAML parser
+ * Parse workflow YAML with Bun's parser. Every reader of a workflow file goes through here.
+ * CRLF is normalized first: Bun keeps the line break of a multi-line quoted scalar in a CRLF
+ * file where the YAML spec (and LF input) folds it to a space.
  */
-function parseYaml(content: string): unknown {
-  return Bun.YAML.parse(content);
+export function parseYaml(content: string): unknown {
+  return Bun.YAML.parse(content.replaceAll('\r\n', '\n'));
 }
 
 /**
@@ -1481,6 +1480,7 @@ export type ParseResult =
 export function parseWorkflow(
   content: string,
   filename: string,
+  providers: ProviderRegistry,
   configuredEnvNames?: ReadonlySet<string>
 ): ParseResult {
   try {
@@ -1642,12 +1642,13 @@ export function parseWorkflow(
     // per node. Model strings are NOT validated — they pass through to the SDK
     // at run time, which is the source of truth for what model names exist
     // (vendor SDKs ship new models faster than Archon can update).
-    if (provider && !isRegisteredProvider(provider)) {
+    if (provider && !providers.get(provider)) {
       return {
         workflow: null,
         error: {
           filename,
-          error: `Unknown provider '${provider}'. Registered: ${getRegisteredProviders()
+          error: `Unknown provider '${provider}'. Registered: ${providers
+            .list()
             .map(p => p.id)
             .join(', ')}`,
           errorType: 'validation_error',
@@ -1656,12 +1657,13 @@ export function parseWorkflow(
     }
     for (const node of dagNodes) {
       if (isIncludeDirective(node)) continue;
-      if (node.provider !== undefined && !isRegisteredProvider(node.provider)) {
+      if (node.provider !== undefined && !providers.get(node.provider)) {
         return {
           workflow: null,
           error: {
             filename,
-            error: `Node '${node.id}': unknown provider '${node.provider}'. Registered: ${getRegisteredProviders()
+            error: `Node '${node.id}': unknown provider '${node.provider}'. Registered: ${providers
+              .list()
               .map(p => p.id)
               .join(', ')}`,
             errorType: 'validation_error',
@@ -1695,8 +1697,10 @@ export function parseWorkflow(
       }
 
       const knownProvider = consumerProvider ?? sourceProvider;
-      if (knownProvider !== undefined && isRegisteredProvider(knownProvider)) {
-        const caps = getProviderCapabilities(knownProvider);
+      const knownDescriptor =
+        knownProvider === undefined ? undefined : providers.get(knownProvider);
+      if (knownDescriptor) {
+        const caps = knownDescriptor.capabilities;
         if (!caps.sessionResume || caps.sessionFork !== true) {
           return {
             workflow: null,
@@ -1727,8 +1731,9 @@ export function parseWorkflow(
       if (!nodeUsesPersistedScope(node, workflowPersistSessions)) continue;
 
       const explicitProvider = ('provider' in node ? node.provider : undefined) ?? provider;
-      if (!explicitProvider || !isRegisteredProvider(explicitProvider)) continue;
-      const handling = persistedSessionHandling(getProviderCapabilities(explicitProvider));
+      const descriptor = explicitProvider ? providers.get(explicitProvider) : undefined;
+      if (!descriptor) continue;
+      const handling = persistedSessionHandling(descriptor.capabilities);
       if (handling === 'unsupported') {
         return {
           workflow: null,

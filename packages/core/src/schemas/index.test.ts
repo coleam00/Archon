@@ -17,6 +17,7 @@ import {
 import type { DashboardWorkflowRun } from './index';
 
 const validDashboardWorkflowRun = {
+  origin: { conversationId: 'conv-1' },
   id: 'run-1',
   workflow_name: 'deploy',
   conversation_id: 'conv-1',

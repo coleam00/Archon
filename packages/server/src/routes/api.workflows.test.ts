@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
@@ -9,6 +10,7 @@ import * as archonPaths from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { validationErrorHook } from './openapi-defaults';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { parseYaml } from '@archon/workflows/loader';
 
 /** Test app factory: includes defaultHook to format validation errors as { error: string }. */
 function createTestApp(): OpenAPIHono {
@@ -25,7 +27,11 @@ const mockDiscoverWorkflows = mock(async (_cwd: string | null) => ({
 // Default: returns a valid workflow. Use mockReturnValueOnce in tests that need a parse failure.
 const mockParseWorkflow = mock<(typeof import('@archon/workflows/loader'))['parseWorkflow']>(
   (content: string, _filename: string) => {
-    const name = /^name:\s*['"]?([^'"\n]+)['"]?$/m.exec(content)?.[1] ?? 'test';
+    const raw = parseYaml(content);
+    const name =
+      raw !== null && typeof raw === 'object' && 'name' in raw && typeof raw.name === 'string'
+        ? raw.name
+        : 'test';
     return {
       workflow: makeTestWorkflow({ name, description: 'Test workflow' }),
       error: null,
@@ -46,6 +52,12 @@ mock.module('@archon/core', () => ({
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
   getBundledWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows'),
+  ProjectRegistrationError: class ProjectRegistrationError extends Error {},
+  inspectProjectBaseBranch: mock(async () => ({
+    kind: 'repo',
+    defaultBranch: 'dev',
+    reason: null,
+  })),
   cloneRepository: mock(async () => {}),
   registerRepository: mock(async () => ({ success: true })),
   removeWorktree: mock(async () => ({ success: true })),
@@ -144,7 +156,11 @@ describe('GET /api/workflows', () => {
     expect(body.workflows[0]?.workflow.name).toBe('deploy');
     expect(body.workflows[0]?.source).toBe('bundled');
     expect(body.workflows.workflows).toBeUndefined();
-    expect(mockDiscoverWorkflows).toHaveBeenCalledWith('/tmp/project', expect.any(Function));
+    expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
+      '/tmp/project',
+      expect.any(Function),
+      providerRegistry
+    );
     expect(body.errors).toBeDefined();
     expect(Array.isArray(body.errors)).toBe(true);
   });
@@ -195,7 +211,11 @@ describe('GET /api/workflows', () => {
     };
 
     // Discovery is invoked with null (not skipped), so bundled defaults can surface.
-    expect(mockDiscoverWorkflows).toHaveBeenLastCalledWith(null, expect.any(Function));
+    expect(mockDiscoverWorkflows).toHaveBeenLastCalledWith(
+      null,
+      expect.any(Function),
+      providerRegistry
+    );
     // The mocked discovery returns one bundled workflow regardless of cwd, so the
     // response is non-empty — proving the handler no longer short-circuits on no-cwd.
     expect(Array.isArray(body.workflows)).toBe(true);
@@ -497,7 +517,7 @@ describe('GET /api/workflows/:name', () => {
     await mkdir(workflowDir, { recursive: true });
     await writeFile(
       join(workflowDir, 'authored.yaml'),
-      'name: authored\ndescription: Raw\nnodes:\n  - id: plan\n    command: plan\n    settingSources: []\n'
+      'name: authored\r\ndescription: "Raw\r\n  workflow"\r\nnodes:\r\n  - id: plan\r\n    command: plan\r\n    settingSources: []\r\n'
     );
 
     try {
@@ -510,7 +530,7 @@ describe('GET /api/workflows/:name', () => {
       const body = (await response.json()) as { authored?: unknown };
       expect(body.authored).toEqual({
         name: 'authored',
-        description: 'Raw',
+        description: 'Raw workflow',
         nodes: [{ id: 'plan', command: 'plan', settingSources: [] }],
       });
     } finally {

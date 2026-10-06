@@ -227,9 +227,25 @@ export function seedAliasRows(map: Record<string, TierEntry> | undefined): Alias
 }
 
 /**
+ * The server's alias-name rule (`validateAliasName` in @archon/server), run in
+ * the form so a bad name never costs a round trip. `scripts/alias-name-parity.test.ts`
+ * keeps this copy identical — the web bundle cannot import the server's.
+ */
+export function aliasNameError(name: string): string | null {
+  if ((TIER_ORDER as readonly string[]).includes(name)) {
+    return `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`;
+  }
+  if (!name.startsWith('@')) {
+    return `Alias name '${name}' must start with '@' (e.g. '@${name}').`;
+  }
+  return null;
+}
+
+/**
  * Pure form → PATCH body. Baseline names that no longer appear in the rows are
  * sent as `null` (unset — covers both deletion and rename), complete rows are
  * sent as entries, and incomplete rows (blank name/provider/model) are dropped.
+ * Throws on a complete row whose name the server would reject.
  */
 export function buildAliasesUpdate(
   rows: AliasRowForm[],
@@ -245,6 +261,8 @@ export function buildAliasesUpdate(
     const provider = row.provider.trim();
     const model = row.model.trim();
     if (!name || !provider || !model) continue;
+    const nameError = aliasNameError(name);
+    if (nameError !== null) throw new Error(nameError);
     const entry: TierEntry = { provider, model };
     if (row.effort) entry.effort = row.effort;
     aliases[name] = entry;
