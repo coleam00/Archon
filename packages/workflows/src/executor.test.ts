@@ -1497,7 +1497,9 @@ describe('executeWorkflow', () => {
           }),
         });
         const platform = makePlatform();
-        platform.sendMessage = mock(async () => {
+        const messages: string[] = [];
+        platform.sendMessage = mock(async (_conversationId, message) => {
+          messages.push(message);
           order.push('notify');
           throw new Error('unauthorized');
         });
@@ -1519,6 +1521,18 @@ describe('executeWorkflow', () => {
           globalThis.setTimeout = realSetTimeout;
         }
         expect(result.success).toBe(false);
+        const deliveryLogs = (mockLogFn.mock.calls as unknown[][]).filter(
+          call => call[1] === 'critical_message_delivery_failed'
+        );
+        expect(deliveryLogs).toHaveLength(1);
+        expect(deliveryLogs[0]?.[0]).toMatchObject({
+          conversationId: 'conv-1',
+          messageLength: messages[0]?.length,
+        });
+        expect(deliveryLogs[0]?.[0]).not.toHaveProperty('messagePreview');
+        for (const message of messages) {
+          expect(JSON.stringify(deliveryLogs)).not.toContain(message.slice(0, 100));
+        }
         expect(order).toEqual(['notify', 'notify', 'notify', 'cancel']);
         expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
@@ -3657,6 +3671,61 @@ describe('executeWorkflow', () => {
       expect(deps.getUserGithubAuthor).toHaveBeenCalledTimes(1);
       expect(deps.getUserGithubAuthor).toHaveBeenCalledWith('u-1');
     });
+
+    for (const [repositoryUrl, expected] of [
+      ['ssh://git@github.com/acme/demo.git', 'token'],
+      ['https://x-access-token@github.com/acme/demo.git', 'token'],
+      ['github.com:acme/demo', 'token'],
+      ['https://github.com/acme/demo/tree/main', 'fail'],
+      ['git@github.com:acme', 'fail'],
+      ['https://gitlab.com/acme/demo', 'inherit'],
+    ] as const) {
+      it(`resolves the App token for ${repositoryUrl} as ${expected}`, async () => {
+        const resolveBotGitHubToken = mock(async () => 'bot-token');
+        const deps: WorkflowDeps = {
+          ...makeDeps(
+            makeStore({
+              getCodebase: mock(async () => ({
+                id: 'codebase-1',
+                name: 'demo',
+                repository_url: repositoryUrl,
+                default_cwd: '/tmp',
+                kind: 'repo' as const,
+              })),
+            })
+          ),
+          resolveBotGitHubToken,
+        };
+
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'msg',
+          { conversationId: 'db-c1' },
+          { codebaseId: 'codebase-1' }
+        );
+
+        if (expected === 'fail') {
+          // A github.com remote without a resolvable owner/repo must not run on
+          // whatever GitHub credential the host process happens to hold.
+          expect(result.success).toBe(false);
+          expect(resolveBotGitHubToken).not.toHaveBeenCalled();
+          expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+          return;
+        }
+        const envVars = mockExecuteDagWorkflow.mock.calls[0]?.[0].config.envVars;
+        if (expected === 'token') {
+          expect(resolveBotGitHubToken).toHaveBeenCalledWith('acme', 'demo');
+          expect(envVars).toMatchObject({ GH_TOKEN: 'bot-token', GITHUB_TOKEN: 'bot-token' });
+        } else {
+          expect(resolveBotGitHubToken).not.toHaveBeenCalled();
+          expect(envVars).not.toHaveProperty('GH_TOKEN');
+        }
+      });
+    }
 
     it('removes stale credential files before a credential refresh failure', async () => {
       const artifactsDir = wsPath('_cwd', 'tmp', 'artifacts', 'runs', 'run-123');

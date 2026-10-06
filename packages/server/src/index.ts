@@ -115,13 +115,10 @@ import {
   loadConfig,
   logConfig,
   getPort,
-  createGitHubAppAuthProvider,
-  loadAppPrivateKey,
-  registerGitHubAppAuthProvider,
+  initializeWorkflowGitHubAppAuth,
   isPerUserGitHubEnabled,
   isPerUserProviderKeysEnabled,
   getDatabaseType,
-  assertEncryptionKeyAtBoot,
   assertProviderKeysKeyAtBoot,
   getDecryptedAccessToken,
   type GitHubAuth,
@@ -477,35 +474,18 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     }
 
     if (ghAuthMode.kind === 'app') {
-      // Locals avoid `!` non-null assertions: hasGitHubApp already guarantees
-      // GITHUB_APP_ID and WEBHOOK_SECRET are set, but the linter can't infer that.
-      const appId = process.env.GITHUB_APP_ID;
       const webhookSecret = process.env.WEBHOOK_SECRET;
-      if (!appId || !webhookSecret) {
-        throw new Error('GitHub App mode misconfigured: GITHUB_APP_ID and WEBHOOK_SECRET required');
+      githubAppAuthProvider = initializeWorkflowGitHubAppAuth();
+      if (!githubAppAuthProvider || !webhookSecret) {
+        throw new Error(
+          'GitHub App mode misconfigured: App credentials and WEBHOOK_SECRET required'
+        );
       }
-      const privateKey = loadAppPrivateKey();
-      // Fail fast on a malformed TOKEN_ENCRYPTION_KEY when per-user is enabled,
-      // so we never store unencryptable tokens at runtime. If the key is absent,
-      // per-user GitHub is simply disabled (App-for-bot-only remains valid).
-      assertEncryptionKeyAtBoot();
       if (!isPerUserGitHubEnabled()) {
         getLog().warn(
           'github_app.per_user_disabled — set TOKEN_ENCRYPTION_KEY (and GITHUB_APP_CLIENT_ID) to enable per-user GitHub identity'
         );
       }
-      const defaultInstallationId = process.env.GITHUB_APP_INSTALLATION_ID
-        ? Number(process.env.GITHUB_APP_INSTALLATION_ID)
-        : undefined;
-      githubAppAuthProvider = createGitHubAppAuthProvider({
-        appId,
-        privateKey,
-        slug: process.env.GITHUB_APP_SLUG ?? 'archon',
-        defaultInstallationId,
-      });
-      // Register on the module-level singleton consumed by createWorkflowDeps()
-      // so bash/script subprocess env injection picks up the provider.
-      registerGitHubAppAuthProvider(githubAppAuthProvider);
       const botMention =
         process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
       const auth: GitHubAuth = { kind: 'app', provider: githubAppAuthProvider };
@@ -522,10 +502,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       await github.start();
       workflowPlatforms.set(github.getPlatformType(), github);
       activePlatforms.push('GitHub (App)');
-      getLog().info(
-        { slug: githubAppAuthProvider.slug, defaultInstallationId },
-        'github.adapter_mode_app'
-      );
+      getLog().info({ slug: githubAppAuthProvider.slug }, 'github.adapter_mode_app');
     } else if (ghAuthMode.kind === 'pat') {
       const patToken = process.env.GITHUB_TOKEN;
       const webhookSecret = process.env.WEBHOOK_SECRET;
@@ -637,7 +614,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
@@ -714,7 +691,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
@@ -1027,7 +1004,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           .acquireLock(conversationId, async () => {
             await handleMessage(telegramAdapter, conversationId, message, {
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));

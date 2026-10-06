@@ -1,3 +1,4 @@
+import { getUserById } from '../db/users';
 import type { IWorkflowHostStore } from './host-store';
 import { createIsolationStore } from '../db/isolation-environments';
 import { createWorkflowStore } from './store-adapter';
@@ -14,6 +15,7 @@ export function createWorkflowHostStore(): IWorkflowHostStore {
 
 export function createSqlWorkflowOperations(): WorkflowOperations {
   return createWorkflowOperations({
+    getUserRole: async userId => (await getUserById(userId))?.role,
     store: createWorkflowStore(),
     hostStore: createWorkflowHostStore(),
     requestDetachedRunStop,

@@ -74,6 +74,7 @@ export {
   createWorkflowStore,
   createWorkflowDeps,
   registerGitHubAppAuthProvider,
+  initializeWorkflowGitHubAppAuth,
 } from './workflows/store-adapter';
 
 // Per-child isolation resolver (#2121 slice 2, PR-A)
@@ -310,3 +311,5 @@ export { getPort } from './utils/port-allocation';
 
 // Worktree sync
 export { resolveWorkflowSourceRoot } from './utils/workflow-source-root';
+
+export type { RunActor } from './operations/run-authorization';

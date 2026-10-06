@@ -246,8 +246,8 @@ export interface TitleRequest {
 /**
  * Resolve provider + request options for conversation-title generation (#1855).
  *
- * Server entry points that fire title generation outside a full chat turn
- * (create-with-message, web workflow run) resolve the `small` tier here —
+ * Entry points that fire title generation outside a full chat turn
+ * (create-with-message, web workflow run, CLI workflow run) resolve the `small` tier here —
  * config tiers plus per-user prefs when a userId is available — instead of
  * letting the provider fall through to its raw config-default model, which
  * the active account may not support (e.g. `gpt-5.3-codex` on ChatGPT-plan
@@ -260,10 +260,11 @@ export interface TitleRequest {
  */
 export async function resolveTitleRequest(
   fallbackProvider: string,
-  userId?: string
+  userId?: string,
+  repoPath?: string
 ): Promise<TitleRequest> {
   try {
-    const config = await loadConfig();
+    const config = await loadConfig(repoPath);
     const userAiPrefs = userId ? await resolveUserAiPrefsForChat(userId) : {};
     let configuredProviderKey = userAiPrefs.defaultProvider ?? fallbackProvider;
     let aiProfile: ReturnType<typeof buildAiProfile>;
@@ -1939,7 +1940,7 @@ export async function handleMessage(
   platform: IPlatformAdapter,
   conversationId: string,
   message: string,
-  context?: HandleMessageContext
+  context: HandleMessageContext
 ): Promise<void> {
   const {
     issueContext,
@@ -1947,8 +1948,9 @@ export async function handleMessage(
     parentConversationId,
     isolationHints,
     attachedFiles,
-    userId,
-  } = context ?? {};
+    actor,
+  } = context;
+  const userId = actor.kind === 'user' ? actor.userId : undefined;
   // Anchor "is this a slash command" at the true start of the message —
   // leading whitespace (e.g. from a platform that doesn't pre-trim after
   // stripping a bot mention) must not let a command masquerade as a plain
@@ -2041,7 +2043,7 @@ export async function handleMessage(
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message, platform);
+        const result = await commandHandler.handleCommand(conversation, message, actor, platform);
         await platform.sendMessage(conversationId, result.message);
 
         if (result.workflow) {
@@ -2554,6 +2556,7 @@ export async function handleMessage(
       const scopedCodebaseId = conversation.codebase_id;
       requestOptions.nativeTools = [
         buildManageRunTool({
+          actor,
           operations: createSqlWorkflowOperations(),
           codebaseId: scopedCodebaseId,
           surface: platform,

@@ -24,6 +24,7 @@ import {
   loadConfig,
   loadRepoConfig,
   generateAndSetTitle,
+  resolveTitleRequest,
   createWorkflowStore,
   getUserAiPrefs,
   isPerUserGitHubEnabled,
@@ -83,7 +84,8 @@ import { applyWorkflowRunConfigLayer } from '@archon/workflows/run-config';
 import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { mkdir, open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { createCliWorkflowDeps } from '../utils/workflow-deps';
+import { initializeWorkflowGitHubAppAuth } from '@archon/core/workflows/store-adapter';
 import { toHydratedTimestamp } from '@archon/core/db/timestamps';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -1750,7 +1752,7 @@ async function runWorkflowWithOwnedSource(
 
   let continuation: ResolvedContinuation | undefined;
   if (continuationRun !== undefined) {
-    continuation = await resolveContinuationWorkflow(createWorkflowDeps(), continuationRun, cwd);
+    continuation = await resolveContinuationWorkflow(createCliWorkflowDeps(), continuationRun, cwd);
   }
 
   // A continuation never captures. With a record it reads that record (above); without
@@ -1832,7 +1834,7 @@ async function runWorkflowWithOwnedSource(
   let originalStagedRoot: string | undefined;
   if (!isContinuation && !options.dryRun && !options.stubsInitPath) {
     try {
-      preparedSource = await prepareWorkflowSource(createWorkflowDeps(), {
+      preparedSource = await prepareWorkflowSource(createCliWorkflowDeps(), {
         sourceRoot: effectiveDiscoveryCwd,
         // Keep the capture filed under the run it belongs to when the row already exists.
         ...(detachedPreCreatedRun ? { runId: detachedPreCreatedRun.id } : {}),
@@ -1888,7 +1890,7 @@ async function runWorkflowWithOwnedSource(
   // adoption changes only its execution target. The caller recaptures only the default.
   const recaptureForLane = async (sourceRoot: string): Promise<void> => {
     try {
-      const replacement = await prepareWorkflowSource(createWorkflowDeps(), {
+      const replacement = await prepareWorkflowSource(createCliWorkflowDeps(), {
         sourceRoot,
         ...(detachedPreCreatedRun ? { runId: detachedPreCreatedRun.id } : {}),
       });
@@ -2305,7 +2307,7 @@ async function runWorkflowWithOwnedSource(
     codebaseId?: string
   ): Promise<PreparedRunAiConfiguration> => {
     if (!workflow) throw new Error('Workflow disappeared before credential preflight');
-    const prepared = await prepareRunAiConfiguration(createWorkflowDeps(), workflow, configCwd, {
+    const prepared = await prepareRunAiConfiguration(createCliWorkflowDeps(), workflow, configCwd, {
       codebaseId,
       userId: detachedPreCreatedRun ? (detachedPreCreatedRun.user_id ?? undefined) : cliUserId,
       ...(isContinuation && continuationRun
@@ -2317,7 +2319,7 @@ async function runWorkflowWithOwnedSource(
               : {}),
           }),
     });
-    await assertRunCredentials(createWorkflowDeps(), prepared);
+    await assertRunCredentials(createCliWorkflowDeps(), prepared);
     return prepared;
   };
 
@@ -3008,7 +3010,7 @@ async function runWorkflowWithOwnedSource(
           // be at its final path. Move it there now; executeWorkflow recomputes the same
           // destination and skips its own move.
           if (preparedSource) {
-            preparedSource = await finalizeWorkflowSource(createWorkflowDeps(), preparedSource, {
+            preparedSource = await finalizeWorkflowSource(createCliWorkflowDeps(), preparedSource, {
               cwd: folderCodebase.defaultCwd,
               codebaseId: folderCodebase.id,
             });
@@ -3023,7 +3025,7 @@ async function runWorkflowWithOwnedSource(
           let mounts: { sourceMount: string; artifactsMount: string } | undefined;
           if (preparedSource) {
             const { artifactsDir } = await resolveProjectPaths(
-              createWorkflowDeps(),
+              createCliWorkflowDeps(),
               folderCodebase.defaultCwd,
               preparedSource.runId,
               folderCodebase.id
@@ -3255,13 +3257,15 @@ async function runWorkflowWithOwnedSource(
           conversation.ai_assistant_type
         );
         const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
+        const titleRequest = await resolveTitleRequest(titleAssistantType, cliUserId, cwd);
         await generateAndSetTitle(
           conversation.id,
           userMessage,
-          titleAssistantType,
+          titleRequest.provider,
           workingCwd,
           workflowName,
-          titleAssistantConfig
+          titleAssistantConfig,
+          titleRequest.options
         );
       } catch (error) {
         getLog().warn(
@@ -3358,7 +3362,7 @@ async function runWorkflowWithOwnedSource(
 
   // The lookup-by-(workflowName, cwd) was already done above for worktree-path
   // resolution; reuse that result rather than querying twice.
-  const deps = createWorkflowDeps();
+  const deps = createCliWorkflowDeps();
   const engine = new InProcessWorkflowEngine(deps);
   let result: Awaited<ReturnType<InProcessWorkflowEngine['submit']>> | undefined;
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
@@ -3847,6 +3851,7 @@ export async function workflowRunCommand(
       // Inside the try so a refused process-group claim still records the `pending` row
       // the launcher handed over (#2872) instead of stranding it.
       if (detachedProcessOwner) assertDetachedRunProcessOwner();
+      initializeWorkflowGitHubAppAuth();
       pending = await withCapturedSource(owner =>
         runWorkflowWithOwnedSource(
           owner,
@@ -5546,6 +5551,7 @@ async function runDetachedControlCommand(
   precheck: () => Promise<WorkflowRun>
 ): Promise<void> {
   try {
+    initializeWorkflowGitHubAppAuth();
     const run = await spelledForCli(precheck);
     // The caller's --cwd, already resolved by cli.ts — NOT process.cwd(). The
     // appended --cwd is last-wins on the child's argv, so discarding it here
@@ -5658,7 +5664,7 @@ export async function workflowResumeCommand(
   if (detach) {
     const resolvedId = await resolveRunIdArg(runId, cwd);
     await runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
-      const run = await resumeWorkflowOp(resolvedId);
+      const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
       // The inline path below refuses a run with no recorded working path. Check it
       // here too, on the run the precheck already holds (message copied verbatim):
       // otherwise the parent acks success and the child throws where nobody reads it.
@@ -5684,7 +5690,7 @@ export async function workflowResumeCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const run = await resumeWorkflowOp(resolvedId);
+      const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5701,7 +5707,7 @@ export async function workflowResumeCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const run = await resumeWorkflowOp(resolvedId);
+  const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
   if (!run.working_path) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +
@@ -5771,7 +5777,7 @@ export async function workflowAbandonCommand(
         releasedWorktrees,
         blockedParentRunId,
         owner,
-      } = await abandonWorkflow(resolvedId);
+      } = await abandonWorkflow(resolvedId, { kind: 'operator' });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5802,7 +5808,7 @@ export async function workflowAbandonCommand(
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
   const { run, cascadeFailures, cleanupWarnings, releasedWorktrees, blockedParentRunId, owner } =
-    await abandonWorkflow(resolvedId);
+    await abandonWorkflow(resolvedId, { kind: 'operator' });
   for (const line of describeAbandonOwner(owner)) console.log(line);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
@@ -5847,7 +5853,7 @@ export async function workflowCancelCommand(
   const cancel = async (): Promise<{ resolvedId: string; result: CancelWorkflowResult }> => {
     const resolvedId = await resolveRunIdArg(runId, cwd);
     try {
-      const result = await cancelWorkflow(resolvedId);
+      const result = await cancelWorkflow(resolvedId, { kind: 'operator' });
       if (result.kind === 'cooperative' && !result.cancelled) {
         throw new Error(`Workflow run ${resolvedId} already finished; nothing to cancel.`);
       }
@@ -5958,7 +5964,7 @@ export async function workflowApproveCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await approveWorkflow(resolvedId, comment);
+      const result = await approveWorkflow(resolvedId, comment, { kind: 'operator' });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5974,7 +5980,9 @@ export async function workflowApproveCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await spelledForCli(() => approveWorkflow(resolvedId, comment));
+  const result = await spelledForCli(() =>
+    approveWorkflow(resolvedId, comment, { kind: 'operator' })
+  );
 
   // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
   // above) is the one surface that records the decision without continuing.
@@ -6087,7 +6095,7 @@ export async function workflowRejectCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await rejectWorkflow(resolvedId, rejectText);
+      const result = await rejectWorkflow(resolvedId, rejectText, { kind: 'operator' });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6104,7 +6112,9 @@ export async function workflowRejectCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await spelledForCli(() => rejectWorkflow(resolvedId, rejectText));
+  const result = await spelledForCli(() =>
+    rejectWorkflow(resolvedId, rejectText, { kind: 'operator' })
+  );
 
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
@@ -6232,7 +6242,7 @@ export async function workflowRespondCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await respondToWorkflow(resolvedId, decision, text);
+      const result = await respondToWorkflow(resolvedId, decision, text, { kind: 'operator' });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6248,7 +6258,9 @@ export async function workflowRespondCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await spelledForCli(() => respondToWorkflow(resolvedId, decision, text));
+  const result = await spelledForCli(() =>
+    respondToWorkflow(resolvedId, decision, text, { kind: 'operator' })
+  );
 
   if (!result.workingPath) {
     throw new Error(

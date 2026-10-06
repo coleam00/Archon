@@ -10,6 +10,8 @@
  * SlackAdapter.start() so app.action handlers register before app.start()
  * fires the Socket Mode connection. Call detach() on shutdown.
  */
+import type { RunActor } from '@archon/core';
+import { findOrCreateUserByPlatformIdentity } from '@archon/core/db/users';
 import type { WorkflowOperations } from '@archon/core/operations/workflow-operations';
 import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import type { BlockButtonAction, ButtonAction } from '@slack/bolt';
@@ -538,6 +540,17 @@ export class SlackWorkflowBridge {
     this.actionHandlersRegistered = true;
   }
 
+  private async resolveRunActor(slackUserId: string | undefined): Promise<RunActor> {
+    if (!slackUserId) return { kind: 'unidentified' };
+    try {
+      const user = await findOrCreateUserByPlatformIdentity('slack', slackUserId);
+      return { kind: 'user', userId: user.id };
+    } catch (err) {
+      getLog().warn({ err }, 'slack.bridge_actor_resolve_failed');
+      return { kind: 'unidentified' };
+    }
+  }
+
   private async handleApprovalDecision(
     body: BlockButtonAction,
     action: ButtonAction
@@ -561,6 +574,7 @@ export class SlackWorkflowBridge {
           runId,
           decision,
           undefined,
+          await this.resolveRunActor(actorId),
           pauseId ? { nodeId, pauseId } : nodeId
         );
         if (!('cancelled' in result)) {
@@ -639,7 +653,10 @@ export class SlackWorkflowBridge {
 
     try {
       try {
-        const result = await this.operations.cancelWorkflow(runId);
+        const result = await this.operations.cancelWorkflow(
+          runId,
+          await this.resolveRunActor(actorId)
+        );
         getLog().info({ runId, actorId: maskUserId(actorId) }, 'slack.bridge_cancel_dispatched');
         // The eventual workflow_cancelled event repaints the status message. It carries
         // no cascade facts, so a stop that left sub-runs or a parent behind says so here.
