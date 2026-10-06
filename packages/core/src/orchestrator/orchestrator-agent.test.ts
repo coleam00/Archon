@@ -6553,6 +6553,27 @@ describe('resolveTitleRequest', () => {
     expect(mockGetUserAiPrefsDb).not.toHaveBeenCalled();
   });
 
+  test("a repo path loads that repo's tiers", async () => {
+    mockLoadConfig.mockImplementationOnce((path?: string) =>
+      Promise.resolve(
+        makeConfig(
+          path === '/repos/test-repo'
+            ? {
+                tiers: { small: { provider: 'claude', model: 'haiku' } },
+                assistants: { claude: {}, codex: {} },
+                envVars: {},
+              }
+            : {}
+        )
+      )
+    );
+
+    const req = await resolveTitleRequest('codex', undefined, '/repos/test-repo');
+
+    expect(req.provider).toBe('claude');
+    expect(req.options.model).toBe('haiku');
+  });
+
   test('per-user default provider rebases the built-in tier defaults', async () => {
     mockGetUserAiPrefsDb.mockResolvedValueOnce({ defaultProvider: 'claude' });
 

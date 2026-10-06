@@ -6,7 +6,8 @@ import { getArchonHome } from '@archon/paths';
 import { getConversationById } from '@archon/core/db/conversations';
 import { getWorkflowRun, signalWorkflowWait } from '@archon/core/db/workflows';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
-import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { createCliWorkflowDeps } from '../utils/workflow-deps';
+import { initializeWorkflowGitHubAppAuth } from '@archon/core/workflows/store-adapter';
 import {
   resumeWorkflowContinuation,
   wakeDueWorkflowContinuations,
@@ -54,7 +55,7 @@ async function admit(
   cursor: WorkflowResumeCursor
 ): Promise<ContinuationAdmission> {
   return resumeWorkflowContinuation(
-    new InProcessWorkflowEngine(createWorkflowDeps()),
+    new InProcessWorkflowEngine(createCliWorkflowDeps()),
     run.id,
     async freshRun => {
       const historyConversationId = freshRun.conversation_id ?? freshRun.parent_conversation_id;
@@ -200,6 +201,7 @@ export async function workflowContinuationCommand(
   const json = values.json === true;
   try {
     if (action === 'wake' && args[0] === 'schedule') return await wakeSchedule(args, values, json);
+    initializeWorkflowGitHubAppAuth();
     if (action === 'signal') return await signalEvent(args, values, json);
     return await wake(args, values, json);
   } catch (error) {

@@ -52,6 +52,7 @@ jobs:
   workflow-fixtures:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -89,6 +90,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # A hung test otherwise holds the runner for GitHub's 6-hour default while
+    # every other PR queues behind it. A healthy Windows leg takes about 11 minutes.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -150,6 +154,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run-tests == 'true'
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 

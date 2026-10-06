@@ -1,10 +1,14 @@
 // @archon-test-isolated
 import { afterEach, expect, test } from 'bun:test';
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdtemp, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 
+const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  .privateKey.export({ type: 'pkcs1', format: 'pem' })
+  .toString();
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await removeTempTree(root);
@@ -52,6 +56,13 @@ for (const [mode, connection] of [
           ARCHON_USER_ID: 'author-operator',
           ARCHON_TELEMETRY_DISABLED: '1',
           GITHUB_APP_ID: connection === 'disabled' ? '' : '123',
+          GITHUB_APP_PRIVATE_KEY: connection === 'disabled' ? '' : privateKey,
+          GITHUB_APP_PRIVATE_KEY_PATH: '',
+          GITHUB_APP_SLUG: 'archon',
+          GITHUB_APP_INSTALLATION_ID: '',
+          GITHUB_TOKEN: '',
+          GH_TOKEN: '',
+          ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK: '',
           TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32),
           GIT_AUTHOR_NAME: '',
           GIT_AUTHOR_EMAIL: '',
@@ -89,6 +100,7 @@ for (const [mode, connection] of [
         : ['Ambient Archon', 'ambient@example.test', 'Ambient Archon', 'ambient@example.test']
     );
     const logs = stdout + stderr + (await logContents(join(root, 'home')));
+    expect(logs.includes('fixture-installation-credential')).toBe(false);
     expect(logs).not.toContain('connected-author');
     expect(logs).not.toContain('42+connected-author@users.noreply.github.com');
     const config = Bun.spawn(['git', '-C', cwd, 'config', '--local', '--get-regexp', '^user\\.'], {

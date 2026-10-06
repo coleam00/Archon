@@ -27,7 +27,7 @@ describe('classifyTurnError', () => {
     ['unauthorized', 'auth'],
     ['usageLimitExceeded', 'quota_exhausted'],
     ['rateLimitExceeded', 'rate_limited'],
-    ['serverOverloaded', 'transient'],
+    ['serverOverloaded', 'overloaded'],
     ['internalServerError', 'transient'],
     ['flexUnavailable', 'transient'],
     ['sessionBudgetExceeded', 'budget_exceeded'],

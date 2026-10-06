@@ -134,6 +134,12 @@ Preserve the pull request template's structure and fill every applicable section
 with concrete information from the issue, diff, commits, and validation
 evidence. Lead with the problem and outcome, not an implementation inventory.
 
+### Changelog entries
+
+Writing a hand-written entry under `[Unreleased]` in `CHANGELOG.md` is optional.
+At release time, the release skill keeps their substance, drafts entries
+for merged PRs they do not cover, and removes duplicates.
+
 ## Code style
 
 - Follow [`AGENTS.md`](./AGENTS.md) and

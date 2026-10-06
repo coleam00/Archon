@@ -63,6 +63,20 @@ const record = (): NodeExecutionRecord => ({
 });
 
 describe('node record serializers', () => {
+  it('capacity failure survives a persisted JSON round trip', () => {
+    const failure = { class: 'overloaded', evidence: 'opaque vendor failure' } as const;
+    const failed = finishNodeExecution(record(), {
+      status: 'failed',
+      error: failure.evidence,
+      failureKind: 'overloaded',
+      providerFailure: failure,
+    });
+    const event = serializeNodeStateRecord(failed);
+    const restored = readNodeRecordEvent({ ...event, data: JSON.stringify(event.data) });
+    expect(restored?.data.failure_kind).toBe('overloaded');
+    expect(restored?.data.provider_failure).toEqual(failure);
+  });
+
   it('reads the cost scope the durable row marks, with or without its accounting', () => {
     for (const accounting of nodeExecutionMetadataSchema.shape.accounting.options) {
       const { data } = serializeNodeStateRecord({ ...record(), accounting });

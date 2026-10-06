@@ -337,6 +337,7 @@ mock.module('@archon/core', () => ({
     Promise.resolve({ defaults: {}, assistant: 'claude', assistants: { claude: {} }, commands: {} })
   ),
   generateAndSetTitle: mock(() => Promise.resolve()),
+  resolveTitleRequest: mock((provider: string) => Promise.resolve({ provider, options: {} })),
   loadRepoConfig: mock(() => Promise.resolve(null)),
   getUserAiPrefs: mock(() => Promise.resolve({})),
   createWorkflowStore: mock(() => ({
@@ -3264,7 +3265,60 @@ describe('workflowRunCommand', () => {
       'claude',
       '/test/path',
       'assist',
+      {},
       {}
+    );
+  });
+
+  it('passes the resolved small tier model and effort as title request options', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const core = await import('@archon/core');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+      ai_assistant_type: 'claude',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+    });
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+    const titleOptions = {
+      model: 'small-model',
+      assistantConfig: {},
+      nodeConfig: { effort: 'medium' },
+    };
+    (core.resolveTitleRequest as ReturnType<typeof mock>).mockClear();
+    (core.resolveTitleRequest as ReturnType<typeof mock>).mockResolvedValueOnce({
+      provider: 'claude',
+      options: titleOptions,
+    });
+    (core.generateAndSetTitle as ReturnType<typeof mock>).mockClear();
+
+    await workflowRunCommand('/test/path', 'assist', 'hello world');
+
+    const resolveCall = (core.resolveTitleRequest as ReturnType<typeof mock>).mock.calls[0];
+    expect(resolveCall?.[0]).toBe('claude');
+    expect(resolveCall?.[2]).toBe('/test/path');
+    expect(core.generateAndSetTitle).toHaveBeenCalledWith(
+      'conv-123',
+      'hello world',
+      'claude',
+      '/test/path',
+      'assist',
+      {},
+      titleOptions
     );
   });
 
@@ -3310,7 +3364,8 @@ describe('workflowRunCommand', () => {
       'codex',
       '/test/path',
       'figma-mcp-smoke',
-      { model: 'gpt-5.4' }
+      { model: 'gpt-5.4' },
+      {}
     );
   });
 

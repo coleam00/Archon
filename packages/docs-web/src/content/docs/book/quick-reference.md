@@ -261,8 +261,10 @@ Defined under `retry:` inside a node:
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `max_attempts` | Yes | — | Retry attempts after the initial failure (max: 5) |
-| `delay_ms` | No | 3000 | Initial delay in milliseconds; doubles each attempt (1000-60000) |
-| `on_error` | No | `transient` | `transient` retries transient and rate-limited failures and timeouts; `all` retries everything except fatal errors |
+| `delay_ms` | No | 3000 | Initial delay in milliseconds for ordinary retries; doubles each attempt (1000-60000). Rate limits and capacity use independent delays. |
+| `on_error` | No | `transient` | `transient` retries transient, rate-limited and capacity (`overloaded`) failures and timeouts; `all` retries everything except fatal errors |
+
+Capacity failures get at least five retries with delay centers of 45, 90, 180, 300 and 300 seconds, each with ±50% jitter (up to 450 seconds per wait). Node `delay_ms` does not change this schedule; the larger budget applies only while the current failure is capacity. Rate limits retain a five-retry minimum and flat 45-second delay with ±50% jitter. See [Retry Configuration](/guides/authoring-workflows/#retry-configuration) for the full policy and audit events.
 
 > **Fatal errors are never retried**: auth failures, exhausted credit balances, cancellation, and configuration errors (a missing command file, a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable MCP config file) fail immediately regardless of retry config. Retry follows the kind of failure Archon recorded, never the error message.
 

@@ -3217,14 +3217,14 @@ describe('typed failures (#1797, #3524)', () => {
     ['cloud_credential_error', 'auth'],
     ['billing_error', 'quota_exhausted'],
     ['rate_limit', 'rate_limited'],
-    ['overloaded', 'rate_limited'],
+    ['overloaded', 'overloaded'],
     ['server_error', 'transient'],
     ['invalid_request', 'unknown'],
     ['model_not_found', 'misconfigured'],
     ['max_output_tokens', 'unknown'],
     ['unknown', 'unknown'],
   ])('API error code %s reports a %s failure and keeps the evidence', async (code, expected) => {
-    const text = `API Error: vendor text for ${code}`;
+    const text = 'API Error: opaque vendor evidence';
     mockQuery.mockImplementation(async function* () {
       yield syntheticAssistantMessage(code, text);
       yield apiErrorResult(text);
@@ -3984,7 +3984,7 @@ describe('typed failures (#1797, #3524)', () => {
         },
         {
           name: 'overloaded API',
-          expected: 'rate_limited',
+          expected: 'overloaded',
           evidence: 'Overloaded',
           run: turn([
             syntheticAssistantMessage('overloaded', 'Overloaded'),
