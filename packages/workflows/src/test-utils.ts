@@ -225,11 +225,10 @@ export function inMemoryDagResumeSnapshot(
       Number.isFinite(eventTokens.output)
     ) {
       const normalized: TokenUsage = { input: eventTokens.input, output: eventTokens.output };
+      const optionalTokens: Record<string, unknown> = eventTokens;
       for (const axis of ['cacheRead', 'cacheWrite'] as const) {
-        if (axis in eventTokens) {
-          const value = eventTokens[axis];
-          if (typeof value === 'number' && Number.isFinite(value)) normalized[axis] = value;
-        }
+        const value = optionalTokens[axis];
+        if (typeof value === 'number' && Number.isFinite(value)) normalized[axis] = value;
       }
       if ('cachePartial' in eventTokens && eventTokens.cachePartial === true) {
         normalized.cachePartial = true;
