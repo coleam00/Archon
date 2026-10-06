@@ -197,12 +197,28 @@ export async function workflowContinuationCommand(
 ): Promise<number> {
   const json = values.json === true;
   try {
-    if (action === 'wake' && args[0] === 'schedule') return await wakeSchedule(args, values, json);
     if (action === 'signal') return await signalEvent(host, args, values, json);
     return await wake(host, args, values, json);
   } catch (error) {
     if (json)
       await writeJsonLine({ ok: false, action, signaled: false, error: errorMessage(error) });
+    else console.error(errorMessage(error));
+    return 1;
+  }
+}
+
+export async function workflowWakeScheduleCommand(args: string[], values: Values): Promise<number> {
+  const json = values.json === true;
+  try {
+    return await wakeSchedule(args, values, json);
+  } catch (error) {
+    if (json)
+      await writeJsonLine({
+        ok: false,
+        action: 'wake',
+        signaled: false,
+        error: errorMessage(error),
+      });
     else console.error(errorMessage(error));
     return 1;
   }

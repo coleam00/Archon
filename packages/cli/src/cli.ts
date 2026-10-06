@@ -435,14 +435,15 @@ async function main(): Promise<number> {
 
     if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
       const schedule = subcommand === 'wake' && positionals[2] === 'schedule';
-      const { workflowContinuationCommand } = await loadRoute(
+      const { workflowContinuationCommand, workflowWakeScheduleCommand } = await loadRoute(
         () => import('./commands/workflow-continuations'),
         schedule ? { providers: false } : { database: true }
       );
+      if (schedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
       const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
       const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
       return await workflowContinuationCommand(
-        createSqlWorkflowHost(schedule ? undefined : createCliWorkflowDeps()),
+        createSqlWorkflowHost(createCliWorkflowDeps()),
         subcommand,
         positionals.slice(2),
         values

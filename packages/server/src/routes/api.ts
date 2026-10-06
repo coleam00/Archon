@@ -3894,7 +3894,7 @@ export function registerApiRoutes(
     const runId = c.req.param('runId') ?? '';
     const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitRequestSchema);
     try {
-      const { store } = createSqlWorkflowHost().deps;
+      const store = createWorkflowStore();
       const run = await store.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
       const wait = isWorkflowWaitContext(run.metadata?.wait) ? run.metadata.wait : undefined;

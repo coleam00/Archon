@@ -53,7 +53,7 @@ mock.module('../triggers/native-schedule', () => ({
   installMacosNativeSchedule: install,
   removeMacosNativeSchedule: remove,
 }));
-import { workflowContinuationCommand } from './workflow-continuations';
+import { workflowContinuationCommand, workflowWakeScheduleCommand } from './workflow-continuations';
 
 beforeEach(() => {
   output.length = 0;
@@ -154,7 +154,7 @@ test('watch drains accepted segments on shutdown', async () => {
 test('schedule validates intervals and removes the exact installed identity', async () => {
   for (const interval of ['0', '-1', '1.5', 'no']) {
     expect(
-      await workflowContinuationCommand(host, 'wake', ['schedule', 'install'], {
+      await workflowWakeScheduleCommand(['schedule', 'install'], {
         json: true,
         interval,
       })
@@ -162,14 +162,12 @@ test('schedule validates intervals and removes the exact installed identity', as
   }
   expect(install).not.toHaveBeenCalled();
   expect(
-    await workflowContinuationCommand(host, 'wake', ['schedule', 'install'], {
+    await workflowWakeScheduleCommand(['schedule', 'install'], {
       json: true,
       interval: '10',
     })
   ).toBe(0);
-  expect(
-    await workflowContinuationCommand(host, 'wake', ['schedule', 'remove'], { json: true })
-  ).toBe(0);
+  expect(await workflowWakeScheduleCommand(['schedule', 'remove'], { json: true })).toBe(0);
   const config = install.mock.calls[0]?.[0];
   expect(remove.mock.calls[0]?.[0]).toBe(config?.id);
   expect(config).toMatchObject({
@@ -180,9 +178,7 @@ test('schedule validates intervals and removes the exact installed identity', as
 
 test('schedule installation failure is reported with a nonzero exit', async () => {
   install.mockRejectedValueOnce(new Error('service not registered'));
-  expect(
-    await workflowContinuationCommand(host, 'wake', ['schedule', 'install'], { json: true })
-  ).toBe(1);
+  expect(await workflowWakeScheduleCommand(['schedule', 'install'], { json: true })).toBe(1);
   expect(output[0]).toMatchObject({ ok: false, error: 'service not registered' });
 });
 
@@ -215,9 +211,7 @@ test('watch continues after a failed pass and returns failure on shutdown', asyn
 });
 
 test('schedule management uses no persistence or engine capability', async () => {
-  expect(
-    await workflowContinuationCommand(host, 'wake', ['schedule', 'remove'], { json: true })
-  ).toBe(0);
+  expect(await workflowWakeScheduleCommand(['schedule', 'remove'], { json: true })).toBe(0);
   expect(remove).toHaveBeenCalledTimes(1);
   expect(scan).not.toHaveBeenCalled();
   expect(getRun).not.toHaveBeenCalled();
