@@ -926,6 +926,30 @@ test.each([
   expect(JSON.stringify(response)).not.toContain('private body');
 });
 
+test.each(['pr.ready', 'pr.draft'] as const)(
+  '%s requires acknowledgement of the selected mutation before read-back',
+  async op => {
+    const github = fakeGitHub({ pull: pull({ draft: op === 'pr.ready' }) });
+    const otherMutation =
+      op === 'pr.ready' ? 'convertPullRequestToDraft' : 'markPullRequestReadyForReview';
+    let reads = 0;
+    const response = await handleGithubOperation(
+      { operationId: 'draft-state', op, ref },
+      {
+        token: 'token',
+        fetch: async (input, init) => {
+          if (init?.method === 'POST')
+            return json({ data: { [otherMutation]: { pullRequest: { id: 'PR_node' } } } });
+          reads++;
+          return github.fetch(input, init);
+        },
+      }
+    );
+    expect(response).toMatchObject({ ok: false, mutation: { op, outcome: 'outcome_unknown' } });
+    expect(reads).toBe(1);
+  }
+);
+
 describe('GitHub draft conversion', () => {
   const request = { operationId: 'draft', op: 'pr.draft', ref } satisfies ForgeMutationRequest;
 

@@ -54,6 +54,9 @@ const pullSchema = z.object({
   base: z.object({ ref: z.string().min(1), sha: z.string().min(1) }),
 });
 type Pull = z.infer<typeof pullSchema>;
+const draftStateResponseSchema = z.object({
+  data: z.record(z.string(), z.object({ pullRequest: z.object({ id: z.string().min(1) }) })),
+});
 const issueSchema = z.object({
   html_url: z.url(),
   title: z.string(),
@@ -321,11 +324,6 @@ async function setDraftState(
   const draft = request.op === 'pr.draft';
   const transition = draft ? 'converted to draft' : 'marked ready';
   const mutation = draft ? 'convertPullRequestToDraft' : 'markPullRequestReadyForReview';
-  const responseSchema = z.object({
-    data: z.object({
-      [mutation]: z.object({ pullRequest: z.object({ id: z.string().min(1) }) }),
-    }),
-  });
   const before = await readPull(fetchImpl, token, request.ref);
   const beforeRecord = prRecord(request.ref.repo, before);
   if (beforeRecord.state === 'merged') {
@@ -355,7 +353,7 @@ async function setDraftState(
       variables: { id: before.node_id },
     }),
   });
-  const acknowledged = responseSchema.safeParse(raw);
+  const acknowledged = draftStateResponseSchema.safeParse(raw);
   // GraphQL answers 200 with an errors document, so an unacknowledged mutation
   // is a submitted write whose effect this call never learned.
   if (
