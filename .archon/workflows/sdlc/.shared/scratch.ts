@@ -45,7 +45,8 @@ export function pruneScratch(scratch: string): string[] {
     }
     removed.push(path);
   }
-  rmSync(root, { recursive: true, force: true });
+  // The directory as named, never its resolved target: a symlink there loses only the link.
+  rmSync(scratch, { recursive: true, force: true });
   return removed;
 }
 
