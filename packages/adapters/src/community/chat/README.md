@@ -74,7 +74,9 @@ if (process.env.MY_PLATFORM_TOKEN) {
   const myAdapter = new MyAdapter(process.env.MY_PLATFORM_TOKEN);
   myAdapter.onMessage(async (ctx) => {
     lockManager.acquireLock(ctx.conversationId, async () => {
-      await handleMessage(myAdapter, ctx.conversationId, ctx.message);
+      await handleMessage(myAdapter, ctx.conversationId, ctx.message, {
+        actor: { kind: 'unidentified' },
+      });
     }).catch(createMessageErrorHandler('MyPlatform', myAdapter, ctx.conversationId));
   });
   await myAdapter.start();

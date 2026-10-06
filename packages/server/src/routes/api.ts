@@ -2,6 +2,7 @@
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
+import type { RunActor } from '@archon/core';
 import { providerRegistry } from '@archon/providers';
 
 import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
@@ -1741,6 +1742,12 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
   }
 }
 
+export async function resolveRunActor(c: Context): Promise<RunActor> {
+  const identity = await resolveAuthContext(c);
+  if (identity) return { kind: 'user', userId: identity.userId };
+  return { kind: isWebAuthEnabled() ? 'unidentified' : 'operator' };
+}
+
 export async function resolveWebUserId(c: Context): Promise<string | undefined> {
   return (await resolveAuthContext(c))?.userId;
 }
@@ -1800,6 +1807,7 @@ export function registerApiRoutes(
   activePlatforms?: readonly string[]
 ): void {
   const {
+    resumeWorkflow,
     abandonWorkflow,
     cancelWorkflow,
     approveWorkflow,
@@ -2463,7 +2471,7 @@ export function registerApiRoutes(
   async function dispatchToOrchestrator(
     conversationId: string,
     message: string,
-    extraContext?: Omit<HandleMessageContext, 'isolationHints'>,
+    extraContext: Omit<HandleMessageContext, 'isolationHints'>,
     filesToCleanup?: { files: AttachedFile[]; uploadDir: string }
   ): Promise<{ accepted: boolean; status: string }> {
     const result = await lockManager.acquireLock(conversationId, async () => {
@@ -2563,9 +2571,9 @@ export function registerApiRoutes(
     // Identity of the user who approved/rejected the gate. The resumed chat
     // turn executes as THIS user (sender-first, #1976/#1982) — without it the
     // dispatch would fall back to the conversation creator's prefs/credentials.
-    // Undefined on solo installs (no web identity) → creator fallback applies.
-    gateActorUserId?: string
+    actor: RunActor
   ): Promise<boolean> {
+    const gateActorUserId = actor.kind === 'user' ? actor.userId : undefined;
     // Literal event names per action — greppable for ops tooling. Keeping the
     // branch explicit rather than templating avoids the earlier 3-segment
     // `api.workflow_*.dispatched` shape that broke `{domain}.{action}_{state}`.
@@ -2649,7 +2657,7 @@ export function registerApiRoutes(
       // instead rely on implicit resume detection and collide with the
       // ambiguity guard for any non-paused resumable state (#2075).
       const resumeMessage = `/workflow resume ${run.id}`;
-      await dispatchToOrchestrator(platformConvId, resumeMessage, { userId: gateActorUserId });
+      await dispatchToOrchestrator(platformConvId, resumeMessage, { actor });
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
         events.dispatched
@@ -2801,7 +2809,8 @@ export function registerApiRoutes(
   registerOpenApiRoute(createConversationRoute, async c => {
     try {
       const { codebaseId, message } = getValidatedBody(c, createConversationBodySchema);
-      const userId = await resolveWebUserId(c);
+      const actor = await resolveRunActor(c);
+      const userId = actor.kind === 'user' ? actor.userId : undefined;
 
       // Validate codebase exists if provided
       if (codebaseId) {
@@ -2857,7 +2866,7 @@ export function registerApiRoutes(
         const result = await dispatchToOrchestrator(
           conversation.platform_conversation_id,
           message,
-          { userId }
+          { actor }
         );
 
         return c.json({
@@ -2937,7 +2946,8 @@ export function registerApiRoutes(
   // Manual body parsing: multipart uses parseBody(), JSON uses req.json().
   registerOpenApiRoute(sendMessageRoute, async c => {
     const conversationId = c.req.param('id') ?? '';
-    const userId = await resolveWebUserId(c);
+    const actor = await resolveRunActor(c);
+    const userId = actor.kind === 'user' ? actor.userId : undefined;
 
     // Reject conversation IDs that could be used for path traversal when building
     // the upload directory. Web conversation IDs are alphanumeric with hyphens only.
@@ -3040,8 +3050,10 @@ export function registerApiRoutes(
     // Pass savedFiles to dispatchToOrchestrator so cleanup happens inside the lock handler,
     // AFTER handleMessage completes — not in the HTTP handler's finally block where the
     // fire-and-forget lock callback may still be running and the AI has not yet read the files.
-    const extraContext: Omit<HandleMessageContext, 'isolationHints'> =
-      savedFiles.length > 0 ? { userId, attachedFiles: savedFiles } : { userId };
+    const extraContext: Omit<HandleMessageContext, 'isolationHints'> = {
+      actor,
+      ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
+    };
     let filesToCleanup: { files: AttachedFile[]; uploadDir: string } | undefined;
     if (savedFiles.length > 0) {
       filesToCleanup = { files: savedFiles, uploadDir };
@@ -3456,7 +3468,8 @@ export function registerApiRoutes(
   // way a freeform chat message can.
   registerOpenApiRoute(runWorkflowRoute, async c => {
     const workflowName = c.req.param('name') ?? '';
-    const userId = await resolveWebUserId(c);
+    const actor = await resolveRunActor(c);
+    const userId = actor.kind === 'user' ? actor.userId : undefined;
     if (!isValidWorkflowName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');
     }
@@ -3699,7 +3712,7 @@ export function registerApiRoutes(
       // and would amount to inventing a chat grammar as a side effect (#2554/#2555).
       const fullMessage = `/workflow run ${workflowName} ${message}`;
       const extraContext: Omit<HandleMessageContext, 'isolationHints'> = {
-        userId,
+        actor,
         ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
         ...(workflowInputs ? { workflowInputs } : {}),
         ...(workflowModelOverrides ? { workflowModelOverrides } : {}),
@@ -3770,7 +3783,7 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      const result = await cancelWorkflow(runId);
+      const result = await cancelWorkflow(runId, await resolveRunActor(c));
       if (result.kind === 'cooperative') {
         return c.json({
           success: true,
@@ -3808,6 +3821,8 @@ export function registerApiRoutes(
       if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
       }
+      const actor = await resolveRunActor(c);
+      await resumeWorkflow(runId, actor);
       // Dispatch resume by sending `/workflow resume <id>` to the parent web
       // conversation; the command handler validates the run and hands the
       // orchestrator a resume request carrying that run. Explicit targeting (not
@@ -3817,7 +3832,10 @@ export function registerApiRoutes(
       if (!run.parent_conversation_id) {
         // No parent conversation to dispatch a chat message through at all —
         // every CLI-launched run (#2008). Execute directly instead of 400ing.
-        const headlessResumed = await resumeWorkflowRunFromServer(run, await resolveWebUserId(c));
+        const headlessResumed = await resumeWorkflowRunFromServer(
+          run,
+          actor.kind === 'user' ? actor.userId : undefined
+        );
         if (!headlessResumed) {
           return apiError(
             c,
@@ -3846,7 +3864,7 @@ export function registerApiRoutes(
       // Resume executes as the user who clicked resume (sender-first, #1982),
       // not the conversation creator. Undefined on solo installs → fallback.
       await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage, {
-        userId: await resolveWebUserId(c),
+        actor,
       });
       getLog().info(
         {
@@ -3899,7 +3917,7 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Workflow run not found');
       }
       const { cascadeFailures, cleanupWarnings, releasedWorktrees, blockedParentRunId, owner } =
-        await abandonWorkflow(runId);
+        await abandonWorkflow(runId, await resolveRunActor(c));
       let message = [
         ...describeAbandonOwner(owner),
         `Abandoned workflow: ${run.workflow_name}`,
@@ -4042,7 +4060,8 @@ export function registerApiRoutes(
       // defaults the recorded comment internally, but "no feedback" must survive
       // so a signal-bearing interactive-loop gate finalizes instead of re-running
       // (#2074, loop_feedback_given).
-      await approveWorkflow(runId, body.comment);
+      const actor = await resolveRunActor(c);
+      await approveWorkflow(runId, body.comment, actor);
 
       // Auto-resume: dispatch to the orchestrator so the workflow continues
       // without requiring the user to re-run the workflow command. Mirrors
@@ -4050,7 +4069,7 @@ export function registerApiRoutes(
       // `parent_conversation_id` on the run (set by orchestrator-agent for any
       // web-dispatched workflow — foreground, interactive, and background via
       // the pre-created run) and a web-platform parent (guarded in the helper).
-      const autoResumed = await tryAutoResumeAfterGate(run, 'approve', await resolveWebUserId(c));
+      const autoResumed = await tryAutoResumeAfterGate(run, 'approve', actor);
 
       return c.json({
         success: true,
@@ -4103,7 +4122,8 @@ export function registerApiRoutes(
       // Shared gate logic (events, telemetry, staging/cancel decision). When an
       // on_reject rework is staged the run stays 'paused' with
       // metadata.approval.resolved = 'rejected' (#2075).
-      const result = await rejectWorkflow(runId, reason);
+      const actor = await resolveRunActor(c);
+      const result = await rejectWorkflow(runId, reason, actor);
 
       if (result.cancelled) {
         return c.json({
@@ -4119,7 +4139,7 @@ export function registerApiRoutes(
       // structured resolution) without requiring the user to re-run the
       // workflow command. Mirrors what `workflowRejectCommand` does in the
       // CLI. Same cross-adapter guard as approve — only web parents auto-resume.
-      const autoResumed = await tryAutoResumeAfterGate(run, 'reject', await resolveWebUserId(c));
+      const autoResumed = await tryAutoResumeAfterGate(run, 'reject', actor);
       const resumeHint = `run \`archon workflow resume ${runId}\` from the CLI to trigger it`;
 
       return c.json({
@@ -4182,7 +4202,8 @@ export function registerApiRoutes(
       // Only for decision === 'reject' — every other decision (including 'approve',
       // which stays optional/undefined) is unaffected.
       const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const result = await respondToWorkflow(runId, decision, text, body.expectedGate);
+      const actor = await resolveRunActor(c);
+      const result = await respondToWorkflow(runId, decision, text, actor, body.expectedGate);
 
       if ('cancelled' in result && result.cancelled) {
         return c.json({
@@ -4196,7 +4217,7 @@ export function registerApiRoutes(
       // Auto-resume: dispatch to the orchestrator so the resolution actually takes
       // effect, mirroring approve/reject. Same cross-adapter guard — only web
       // parents auto-resume.
-      const autoResumed = await tryAutoResumeAfterGate(run, 'respond', await resolveWebUserId(c));
+      const autoResumed = await tryAutoResumeAfterGate(run, 'respond', actor);
       const resumeHint = `run \`archon workflow resume ${runId}\` from the CLI to trigger it`;
 
       return c.json({
