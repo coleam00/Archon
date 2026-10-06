@@ -165,6 +165,7 @@ test('crash fails without settled and redacts split stderr in errors and logs', 
     expect(failure.exitCode).toBe(7);
     expect(failure.stderr).toContain('[REDACTED] crash evidence');
     expect(failure.message).not.toContain(secret);
+    expect(failure.message).not.toContain('private message');
     expect(output.map(chunk => chunk.type)).toEqual(['state_update']);
     expect(JSON.stringify(debug.mock.calls)).toContain('[REDACTED]');
     expect(JSON.stringify(debug.mock.calls)).not.toContain(secret);

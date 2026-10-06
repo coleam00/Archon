@@ -49,6 +49,7 @@ await serveProvider({
       }
       if (mode === 'crash') {
         yield { type: 'state_update', state: 'running' };
+        process.stderr.write(`${prompt}\n`);
         const secret = process.env.TEST_CREDENTIAL ?? '';
         process.stderr.write(secret.slice(0, 6));
         await Bun.sleep(30);
