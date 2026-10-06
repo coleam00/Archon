@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowStore } from '@archon/workflows/store';
+import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
 import { WorkflowNotResumableError } from '@archon/workflows/store';
 import type { getConversationById } from '@archon/core/db/conversations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
@@ -14,6 +15,17 @@ type ResumeConversation = Pick<
   'platform_type' | 'platform_conversation_id'
 >;
 const mockGetConversationById = mock(async (_id: string) => null as ResumeConversation | null);
+const mockAddMessage = mock<IWorkflowHostStore['messages']['addMessage']>(
+  async (conversationId, role, content, metadata) => ({
+    id: 'recorded-message',
+    conversation_id: conversationId,
+    role,
+    content,
+    metadata: JSON.stringify(metadata ?? {}),
+    user_id: null,
+    created_at: '2026-08-24T10:00:00.000Z',
+  })
+);
 const mockResumeWorkflow = mock<IWorkflowStore['getWorkflowRun']>(async (_runId: string) => {
   throw new Error('unused');
 });
@@ -92,6 +104,7 @@ const host = {
   records: {
     codebases: { getCodebase: async () => null },
     conversations: { getConversationById: async (id: string) => mockGetConversationById(id) },
+    messages: { addMessage: mockAddMessage },
   },
   engine: new (await import('@archon/workflows/in-process-engine')).InProcessWorkflowEngine(
     mockWorkflowDeps
@@ -132,6 +145,7 @@ describe('workflow continuation scanner', () => {
     mockDeferWorkflowContinuation.mockReset();
     mockDeferWorkflowContinuation.mockResolvedValue(undefined);
     mockGetConversationById.mockReset();
+    mockAddMessage.mockClear();
     mockGetConversationById.mockResolvedValue({
       platform_type: 'cli',
       platform_conversation_id: 'cli-thread',
@@ -158,6 +172,62 @@ describe('workflow continuation scanner', () => {
     mockStartRunLiveOwner.mockClear();
     mockCloseRunLiveOwner.mockClear();
   });
+
+  test.each(['cli', 'api', null] as const)(
+    'headless resume records executor messages only for a real %s origin',
+    async platformType => {
+      const paused = {
+        ...run('headless-history', 'paused', {}),
+        origin: platformType ? { conversationId: 'conv-1' } : null,
+        conversation_id: platformType ? 'conv-1' : null,
+      };
+      if (platformType) {
+        mockGetConversationById.mockResolvedValue({
+          platform_type: platformType,
+          platform_conversation_id: 'local-thread',
+        });
+      }
+      mockResumeWorkflow.mockResolvedValueOnce(paused);
+      mockResolveRunWorkflow.mockResolvedValueOnce({
+        ok: true,
+        workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
+      });
+      mockHydrateResumableRun.mockResolvedValueOnce({
+        preCreatedRun: { ...paused, status: 'running' },
+        priorCompletedNodes: new Map(),
+        priorUsage: { costUsd: 0 },
+        priorNodeSessions: [],
+      });
+      mockExecuteWorkflow.mockImplementationOnce(async (_deps, platform, conversationId) => {
+        await platform.sendMessage(conversationId, 'Continuation finished', {
+          category: 'workflow_result',
+          segment: 'new',
+          workflowResult: { workflowName: 'deliver', runId: paused.id },
+        });
+        return { success: true, workflowRunId: paused.id, summary: 'done' };
+      });
+
+      expect(await resumeWorkflowRunFromServer(host, paused)).toBe(true);
+      await Promise.resolve();
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      if (platformType) {
+        expect(mockAddMessage.mock.calls).toEqual([
+          [
+            'conv-1',
+            'assistant',
+            'Continuation finished',
+            {
+              category: 'workflow_result',
+              workflowResult: { workflowName: 'deliver', runId: paused.id },
+            },
+          ],
+        ]);
+      } else {
+        expect(mockAddMessage).not.toHaveBeenCalled();
+        expect(mockGetConversationById).not.toHaveBeenCalled();
+      }
+    }
+  );
 
   // #2910: the headless scanner is the unattended path — nothing revisits a row it
   // leaves at 'running' (listDueWorkflowContinuations selects paused/failed only).

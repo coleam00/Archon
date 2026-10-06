@@ -116,7 +116,8 @@ export function createWorkflowStore(): IWorkflowStore {
     getRunAncestry: workflowDb.getRunAncestry,
     getActiveWorkflowRunByPath: workflowDb.getActiveWorkflowRunByPath,
     findResumableRun: workflowDb.findResumableRun,
-    listDueWorkflowContinuations: workflowDb.listDueWorkflowContinuations,
+    listDueWorkflowContinuations: (now, limit = 25) =>
+      workflowDb.listDueWorkflowContinuations(now, limit),
     deferWorkflowContinuation: workflowDb.deferWorkflowContinuation,
     signalWorkflowWait: workflowDb.signalWorkflowWait,
     resumeWorkflowRun: workflowDb.resumeWorkflowRun,

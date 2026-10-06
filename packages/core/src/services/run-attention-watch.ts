@@ -184,9 +184,15 @@ export async function waitForRunAttention(
     if (wake) wake(source);
     else pendingWake = source;
   };
-  const unsubscribeDoorbell = await opts.doorbell?.(runId, () => {
-    queueWake('notify');
-  });
+  let unsubscribeDoorbell: (() => void) | null | undefined;
+  try {
+    unsubscribeDoorbell = await opts.doorbell?.(runId, () => {
+      queueWake('notify');
+    });
+  } catch (err) {
+    // Notifications only reduce latency; durable polling must survive subscription failure.
+    getLog().debug({ err, runId }, 'run_attention.doorbell_unavailable');
+  }
 
   const nextWake = (): Promise<WakeSource> => {
     if (pendingWake) {

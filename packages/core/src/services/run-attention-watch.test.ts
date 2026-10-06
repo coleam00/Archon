@@ -601,6 +601,25 @@ describe('waitForRunAttention', () => {
   });
 
   describe('the notification doorbell', () => {
+    test('polls a durable terminal row when the supplied doorbell rejects', async () => {
+      const error = new Error('notification transport unavailable');
+      doorbell = async () => {
+        throw error;
+      };
+      putRun('r1', { status: 'pending' });
+      const pending = wait('r1', {
+        onAttached: () => {
+          putRun('r1', { status: 'completed', completed_at: new Date() });
+        },
+      });
+      expect(await pending).toMatchObject({ attention: { kind: 'terminal', status: 'completed' } });
+      expect(mockGetWorkflowRun.mock.calls.length).toBeGreaterThan(1);
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        { err: error, runId: 'r1' },
+        'run_attention.doorbell_unavailable'
+      );
+    });
+
     test('polls correctly when no notification implementation is supplied', async () => {
       putRun('r1', { status: 'pending' });
       const pending = wait('r1');

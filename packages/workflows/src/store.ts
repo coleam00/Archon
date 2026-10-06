@@ -420,6 +420,7 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
   ): Promise<WorkflowRun | null>;
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
+  /** Return at most `limit` due continuations, defaulting to 25. */
   listDueWorkflowContinuations(now: Date, limit?: number): Promise<WorkflowRun[]>;
   /** Back off only the unchanged wait/quota occurrence; a stale cursor writes nothing. */
   deferWorkflowContinuation(
