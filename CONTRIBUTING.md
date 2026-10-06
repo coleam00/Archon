@@ -129,7 +129,7 @@ evidence. Lead with the problem and outcome, not an implementation inventory.
 ### Changelog entries
 
 Writing a hand-written entry under `[Unreleased]` in `CHANGELOG.md` is optional.
-At release time, the release skill preserves those entries verbatim, drafts entries
+At release time, the release skill keeps their substance, drafts entries
 for merged PRs they do not cover, and removes duplicates.
 
 ## Code style
