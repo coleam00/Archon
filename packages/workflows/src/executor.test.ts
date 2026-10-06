@@ -3690,7 +3690,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow(),
           'msg',
-          'db-c1',
+          { conversationId: 'db-c1' },
           { codebaseId: 'codebase-1' }
         );
 

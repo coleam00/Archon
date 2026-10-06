@@ -211,11 +211,11 @@ if (process.argv[2] === 'seed') {
   const conversation = await getOrCreateConversation('cli', 'app-fixture', codebase.id, undefined, user.id);
   const deps = createCliWorkflowDeps();
   const source = await prepareWorkflowSource(deps, { sourceRoot: cwd });
-  const discovery = await discoverWorkflowsWithConfig(cwd, loadConfig, source.roots);
+  const discovery = await discoverWorkflowsWithConfig(cwd, loadConfig, deps.providers, source.roots);
   const workflow = discovery.workflows.find(entry => entry.workflow.name === 'app')?.workflow;
   if (!workflow) throw new Error('Fixture discovery failed');
   await recordSelectedWorkflow(source.anchor.root, workflow.name);
-  const result = await new InProcessWorkflowEngine(deps).submit({ platform: new HeadlessPlatform(conversation.id), conversationId: conversation.id, conversationDbId: conversation.id, cwd, workflow, userMessage: 'verify', options: { codebaseId: codebase.id, preparedSource: source, userId: user.id } });
+  const result = await new InProcessWorkflowEngine(deps).submit({ platform: new HeadlessPlatform(), conversationId: conversation.id, origin: { conversationId: conversation.id, userId: user.id }, cwd, workflow, userMessage: 'verify', options: { codebaseId: codebase.id, preparedSource: source } });
   if (!('paused' in result)) throw new Error('Fixture did not pause');
   await closeDatabase();
 } else {
