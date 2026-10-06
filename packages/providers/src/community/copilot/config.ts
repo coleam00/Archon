@@ -1,6 +1,11 @@
 import type { SessionConfig } from '@github/copilot-sdk';
 import type { CopilotProviderDefaults } from '../../types';
-import { clampEffort, isEffortRung, type AssertNever } from '@archon/provider-contract';
+import {
+  clampEffort,
+  isEffortRung,
+  type AssertNever,
+  type ProviderConfigScope,
+} from '@archon/provider-contract';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,
@@ -85,7 +90,10 @@ export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProvide
 }
 
 /** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
-export function parseCopilotConfigStrict(raw: Record<string, unknown>): CopilotProviderDefaults {
+export function parseCopilotConfigStrict(
+  raw: Record<string, unknown>,
+  scope: ProviderConfigScope = 'install'
+): CopilotProviderDefaults {
   assertKnownRunConfigKeys(raw, [
     'model',
     'modelReasoningEffort',
@@ -114,6 +122,14 @@ export function parseCopilotConfigStrict(raw: Record<string, unknown>): CopilotP
     invalidRunConfigValue('logLevel', 'none, error, warning, info, debug, or all');
   }
   const parsed = parseCopilotConfig(raw);
+  if (scope === 'snapshot') {
+    return {
+      ...(model === undefined ? {} : { model }),
+      ...(parsed.modelReasoningEffort === undefined
+        ? {}
+        : { modelReasoningEffort: parsed.modelReasoningEffort }),
+    };
+  }
   return {
     ...parsed,
     ...(model === undefined ? {} : { model }),
