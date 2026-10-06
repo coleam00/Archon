@@ -1,4 +1,3 @@
-import { settlingProvider } from './test-settling-provider';
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
@@ -6,6 +5,8 @@ import { settlingProvider } from './test-settling-provider';
  * without actually running uv/bun, and are isolated from dag-executor.test.ts
  * to avoid mock.module() pollution.
  */
+import { providerRegistry } from '@archon/providers';
+import { settlingProvider } from './test-settling-provider';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdir, rm } from 'fs/promises';
@@ -79,6 +80,7 @@ function createMockStore(): IWorkflowStore {
     }),
     createWorkflowRun: mock(() =>
       Promise.resolve({
+        origin: { conversationId: 'conv-mock' },
         id: 'mock-run-id',
         workflow_name: 'mock',
         conversation_id: 'conv-mock',
@@ -110,6 +112,7 @@ function createMockStore(): IWorkflowStore {
     findResumableRun: mock(() => Promise.resolve(null)),
     resumeWorkflowRun: mock(() =>
       Promise.resolve({
+        origin: { conversationId: 'conv-mock' },
         id: 'mock-run-id',
         workflow_name: 'mock',
         conversation_id: 'conv-mock',
@@ -150,7 +153,7 @@ function createMockStore(): IWorkflowStore {
         },
       })
     ),
-    rewriteApprovalContext: mock(() => Promise.resolve({ resolved: true })),
+    failPausedApproval: mock(() => Promise.resolve({ failed: true })),
     claimWriteback: mock(() => Promise.resolve({ claimed: true })),
     releaseWritebackClaim: mock(() => Promise.resolve()),
     cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: false })),
@@ -213,6 +216,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
 
 function createMockDeps(): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store: createMockStore(),
     getAgentProvider: provider => settlingProvider(mockGetAgentProvider(provider)),
     loadConfig: mock(() =>
@@ -237,6 +241,7 @@ function createMockPlatform(): IWorkflowPlatform {
 
 function makeWorkflowRun(id: string): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-deps' },
     id,
     workflow_name: 'deps-test',
     conversation_id: 'conv-deps',

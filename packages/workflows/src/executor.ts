@@ -1,3 +1,4 @@
+import type { OwnedWorktree, WorkflowRunOrigin } from './schemas/workflow-run';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
@@ -95,7 +96,6 @@ import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
-import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import type { ExecutionContext } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
@@ -579,6 +579,7 @@ type ResumePayload =
  * its own; that decision belongs at the call site.
  */
 export type ExecuteWorkflowOptions = ResumePayload & {
+  ownedWorktree?: OwnedWorktree;
   preparedAiConfiguration?: PreparedRunAiConfiguration;
   /** Codebase ID for env vars + isolation context. */
   codebaseId?: string;
@@ -630,16 +631,6 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * doesn't thread it through simply records nothing.
    */
   parseWarnings?: readonly string[];
-  /** Parent conversation ID — enables approve/reject auto-resume from chat. */
-  parentConversationId?: string;
-  /**
-   * Archon user UUID for attribution on the workflow_run row. Resolved by
-   * chat/forge adapters via findOrCreateUserByPlatformIdentity. Web/CLI paths
-   * pass undefined until their own auth surfaces are wired.
-   * Ignored when `preCreatedRun` is set — the persisted creator remains both
-   * the run attribution and the credential/prefs execution identity on resume.
-   */
-  userId?: string;
   /**
    * Execution context resolved by the isolation seam: `{ kind: 'host' }` (default)
    * runs on the Archon host; `{ kind: 'container', … }` (folder-project container
@@ -898,7 +889,12 @@ export async function resolveContinuationWorkflow(
   if (!capture) return undefined; // predates capture — the caller keeps live behavior
   const roots = capturedSourceRoots(capture.anchor);
 
-  const { workflows, errors } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig, roots);
+  const { workflows, errors } = await discoverWorkflowsWithConfig(
+    cwd,
+    deps.loadConfig,
+    deps.providers,
+    roots
+  );
   const workflow = resolveWorkflowName(
     run.workflow_name,
     workflows.map(w => w.workflow)
@@ -1224,7 +1220,6 @@ async function runChildWorkflow(
     input,
     cwd,
     conversationId,
-    conversationDbId,
     userId,
     codebaseId,
     isolation,
@@ -1281,6 +1276,7 @@ async function runChildWorkflow(
       const { workflows } = await discoverWorkflowsWithConfig(
         cwd,
         deps.loadConfig,
+        deps.providers,
         childSource.roots
       );
       childWorkflow = resolveWorkflowName(
@@ -1489,15 +1485,11 @@ async function runChildWorkflow(
           // The id its capture is already filed under (see prepareWorkflowSource).
           id: childSource.runId,
           workflow_name: childWorkflow.name,
-          conversation_id: conversationDbId,
+          origin: parentRun.origin ?? undefined,
           codebase_id: codebaseId,
           user_message: input,
           working_path: childCwd,
           parent_run_id: parentRun.id,
-          // Share the parent's parent_conversation_id back-link so approve/reject
-          // auto-resume scoping keeps working for the child on chat platforms.
-          parent_conversation_id: parentRun.parent_conversation_id ?? undefined,
-          user_id: userId,
           metadata: {
             [SUBRUN_METADATA_KEYS.parentNodeId]: nodeId,
             // Fan-out instance index (slice 2, PR-C) — stamped only for a fan-out child so
@@ -1533,6 +1525,9 @@ async function runChildWorkflow(
             ...(childIsolationEnv
               ? {
                   isolation_env_id: childIsolationEnv.envId,
+                  ...(childIsolationEnv.ownedWorktree
+                    ? { owned_worktree: childIsolationEnv.ownedWorktree }
+                    : {}),
                   branch_name: childIsolationEnv.branchName,
                 }
               : {}),
@@ -1567,7 +1562,7 @@ async function runChildWorkflow(
         childCwd,
         childWorkflow,
         input,
-        conversationDbId,
+        parentRun.origin ?? undefined,
         {
           ...childOpts,
           ...(resumeChild ? {} : { preparedAiConfiguration: childPrepared }),
@@ -1642,7 +1637,6 @@ async function maybeResumeParentRun(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
-  conversationDbId: string,
   childRun: WorkflowRun,
   resolveChildIsolation?: ChildIsolationResolver
 ): Promise<void> {
@@ -1722,7 +1716,11 @@ async function maybeResumeParentRun(
       parentWorkflow = continuation.workflow;
     } else {
       // No recorded source: a parent predating capture, which resumes live as it always did.
-      const { workflows } = await discoverWorkflowsWithConfig(parentCwd, deps.loadConfig);
+      const { workflows } = await discoverWorkflowsWithConfig(
+        parentCwd,
+        deps.loadConfig,
+        deps.providers
+      );
       parentWorkflow = resolveWorkflowName(
         parent.workflow_name,
         workflows.map(w => w.workflow)
@@ -1782,7 +1780,7 @@ async function maybeResumeParentRun(
       parentCwd,
       parentWorkflow,
       parent.user_message ?? '',
-      conversationDbId,
+      parent.origin ?? undefined,
       {
         ...hydrated,
         codebaseId: parent.codebase_id ?? undefined,
@@ -1832,7 +1830,7 @@ export async function executeWorkflow(
   cwd: string,
   workflow: ResolvedWorkflow,
   userMessage: string,
-  conversationDbId: string,
+  origin?: WorkflowRunOrigin,
   opts: ExecuteWorkflowOptions = {}
 ): Promise<WorkflowExecutionResult> {
   const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(workflow);
@@ -1844,12 +1842,10 @@ export async function executeWorkflow(
     codebaseId,
     issueContext,
     isolationContext,
-    parentConversationId,
     preCreatedRun,
     priorCompletedNodes,
     priorUsage,
     priorNodeSessions,
-    userId,
     source,
     parseWarnings,
     baseBranch: callerBaseBranch,
@@ -1866,7 +1862,7 @@ export async function executeWorkflow(
     cutFromCommit,
   } = opts;
 
-  const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
+  const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : origin?.userId;
   const modelOverrides =
     modelOverrideLayer?.kind === 'raw' ? modelOverrideLayer.overrides : undefined;
   const isContinuation =
@@ -2111,10 +2107,11 @@ export async function executeWorkflow(
     }
   }
 
-  if (!isRegisteredProvider(resolvedProvider)) {
+  if (!deps.providers.get(resolvedProvider)) {
     throw new Error(
       `Workflow '${workflow.name}': unknown provider '${resolvedProvider}'. ` +
-        `Registered: ${getRegisteredProviders()
+        `Registered: ${deps.providers
+          .list()
           .map(p => p.id)
           .join(', ')}`
     );
@@ -2166,7 +2163,7 @@ export async function executeWorkflow(
         // capture share one id; absent for callers that prepared nothing.
         ...(preparedSource ? { id: preparedSource.runId } : {}),
         workflow_name: workflow.name,
-        conversation_id: conversationDbId,
+        origin,
         codebase_id: codebaseId,
         user_message: userMessage,
         working_path: cwd,
@@ -2178,6 +2175,7 @@ export async function executeWorkflow(
           ...(issueContext ? { github_context: issueContext } : {}),
           ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
           ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+          ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
           // Declared inputs supplied by a direct top-level invocation (#2554), already
           // validated by the invocation gate. Written here — inside `if (!workflowRun)` —
           // so a resume, which arrives with `preCreatedRun` set and never enters this
@@ -2195,8 +2193,6 @@ export async function executeWorkflow(
           ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
           [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
         },
-        parent_conversation_id: parentConversationId,
-        user_id: userId,
         ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
       });
     } catch (error) {
@@ -2227,7 +2223,7 @@ export async function executeWorkflow(
     const pendingRun = workflowRun;
     let claimed: WorkflowRun | null;
     try {
-      claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id);
+      claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
     } catch (error) {
       getLog().error(
         { err: error, workflowRunId: workflowRun.id },
@@ -2251,7 +2247,8 @@ export async function executeWorkflow(
       return {
         success: false,
         workflowRunId: workflowRun.id,
-        error: 'Workflow run is no longer pending or no longer owns its admitted resource',
+        error:
+          'Workflow run is no longer pending, no longer owns its admitted resource, or its worktree was released',
       };
     }
     pendingRun.status = claimed.status;
@@ -2281,6 +2278,7 @@ export async function executeWorkflow(
             ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
             ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
             ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+            ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
           }),
       [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
     };
@@ -2983,7 +2981,7 @@ export async function executeWorkflow(
       type: 'workflow_started',
       runId: workflowRun.id,
       workflowName: workflow.name,
-      conversationId: conversationDbId,
+      conversationId: workflowRun.conversation_id,
       transcriptPath: archonPaths.getRunLogPathForRoot(outputRoot, workflowRun.id),
     });
 
@@ -3015,7 +3013,7 @@ export async function executeWorkflow(
       interactive: workflow.interactive ?? false,
       usedIsolation: isolationContext !== undefined,
       isResume: isContinuation,
-      ...workflowTelemetryShape(workflow, runSource),
+      ...workflowTelemetryShape(deps.providers, workflow, runSource),
     });
 
     let isolationMode: 'container' | 'worktree' | 'in-place' = 'in-place';
@@ -3258,7 +3256,6 @@ export async function executeWorkflow(
         deps,
         platform,
         conversationId,
-        conversationDbId,
         finalStatus,
         // The parent resumes mid-DAG and may still have isolated sub-run nodes ahead
         // of it; without this it would fail them for a missing resolver the surface

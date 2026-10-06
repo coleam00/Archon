@@ -37,6 +37,7 @@
  *     and — unlike any regex over source text — it cannot be fooled by a
  *     commented-out copy either, because a comment does not execute.
  */
+import { providerRegistry } from '@archon/providers';
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -166,7 +167,8 @@ nodes:
   - id: use
     prompt: "${text}"
 `,
-      'output-input-parity.yaml'
+      'output-input-parity.yaml',
+      providerRegistry
     );
     expect(engine.error).toBeNull();
     expect(engine.workflow).not.toBeNull();

@@ -113,6 +113,7 @@ function run(
   metadata: Record<string, unknown>
 ): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id,
     workflow_name: 'deliver',
     conversation_id: 'conv-1',
@@ -140,7 +141,10 @@ describe('workflow continuation scanner', () => {
     mockDeferWorkflowContinuation.mockReset();
     mockDeferWorkflowContinuation.mockResolvedValue(undefined);
     mockGetConversationById.mockReset();
-    mockGetConversationById.mockResolvedValue(null);
+    mockGetConversationById.mockResolvedValue({
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-thread',
+    });
     mockResumeWorkflow.mockReset();
     mockResumeWorkflow.mockImplementation(async () => {
       throw new Error('unused');
@@ -409,6 +413,7 @@ describe('workflow continuation scanner', () => {
     const selected = run('wait-refreshed', 'paused', {});
     const refreshed = {
       ...selected,
+      origin: { conversationId: 'refreshed-conversation', userId: 'refreshed-user' },
       conversation_id: 'refreshed-conversation',
       user_message: 'refreshed request',
       working_path: '/tmp/refreshed-worktree',
@@ -439,7 +444,9 @@ describe('workflow continuation scanner', () => {
     expect(mockExecuteWorkflow.mock.calls[0]?.[3]).toBe('/tmp/refreshed-worktree');
     expect(mockExecuteWorkflow.mock.calls[0]?.[5]).toBe('refreshed request');
     expect(mockExecuteWorkflow.mock.calls[0]?.[7]).toEqual(
-      expect.objectContaining({ userId: 'refreshed-user' })
+      expect.objectContaining({
+        preCreatedRun: expect.objectContaining({ user_id: 'refreshed-user' }),
+      })
     );
   });
 
@@ -616,8 +623,12 @@ describe('workflow continuation scanner', () => {
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
   });
 
-  test('uses the explicit actor instead of the original run user', async () => {
-    const paused = { ...run('actor', 'paused', {}), user_id: 'original-user' };
+  test('keeps the originating user when another actor resumes', async () => {
+    const paused = {
+      ...run('actor', 'paused', {}),
+      origin: { conversationId: 'conv-1', userId: 'original-user' },
+      user_id: 'original-user',
+    };
     mockResumeWorkflow.mockResolvedValueOnce(paused);
     mockResolveRunWorkflow.mockResolvedValueOnce({
       ok: true,
@@ -630,6 +641,38 @@ describe('workflow continuation scanner', () => {
       priorNodeSessions: [],
     });
     expect(await resumeWorkflowRunFromServer(paused, 'clicking-user')).toBe(true);
-    expect(mockExecuteWorkflow.mock.calls[0]?.[7]).toMatchObject({ userId: 'clicking-user' });
+    expect(mockExecuteWorkflow.mock.calls[0]?.[6]).toEqual(paused.origin);
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.preCreatedRun?.user_id).toBe('original-user');
+  });
+});
+
+test('origin-free runs route headlessly without a conversation lookup', async () => {
+  mockGetConversationById.mockClear();
+  const originless = { ...run('local', 'paused', {}), origin: null, conversation_id: null };
+  expect(workflowResumeConversationId(originless)).toBeNull();
+  expect(await workflowResumeTargetForRun(originless, new Map())).toEqual({ kind: 'headless' });
+  expect(mockGetConversationById).not.toHaveBeenCalled();
+});
+
+test('a parent-only chat origin routes to its parent and fails if the parent is missing', async () => {
+  const parentOnly = {
+    ...run('parent-only', 'paused', {}),
+    origin: { parentConversationId: 'parent-db' },
+    conversation_id: null,
+    parent_conversation_id: 'parent-db',
+  };
+  mockGetConversationById.mockResolvedValueOnce({
+    platform_type: 'web',
+    platform_conversation_id: 'parent-platform',
+  });
+  const platform = { getPlatformType: () => 'web' } as IWorkflowPlatform;
+  expect(await workflowResumeTargetForRun(parentOnly, new Map([['web', platform]]))).toMatchObject({
+    kind: 'platform',
+    destination: { platform, conversationId: 'parent-platform' },
+  });
+  mockGetConversationById.mockResolvedValueOnce(null);
+  expect(await workflowResumeTargetForRun(parentOnly, new Map())).toEqual({
+    kind: 'unavailable',
+    reason: 'origin conversation no longer exists',
   });
 });

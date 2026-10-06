@@ -181,6 +181,7 @@ COMMENT ON TABLE remote_agent_isolation_environments IS
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
+  origin JSONB,
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workflow_name VARCHAR(255) NOT NULL,
   conversation_id UUID REFERENCES remote_agent_conversations(id) ON DELETE CASCADE,
@@ -483,8 +484,8 @@ ALTER TABLE remote_agent_user_ai_prefs
 -- Web auth (opt-in): role on the canonical user + Better Auth tables
 -- ============================================================================
 --
--- `role` is the durable identity seam: everyone defaults to 'admin' for now;
--- 'member' is reserved for future per-resource scoping. Visibility stays open.
+-- Keep 'admin' for older writers and existing rows. New writers explicitly
+-- insert 'member'; SQLite cannot change a column default without a table rebuild.
 ALTER TABLE remote_agent_users
   ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'admin';
 
@@ -665,6 +666,9 @@ CREATE TABLE IF NOT EXISTS remote_agent_auth_verification (
   "createdAt" timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
   "updatedAt" timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+
+-- Optional provenance leaves shipped conversation columns valid for older writers.
+ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS origin JSONB;
 
 -- ============================================================================
 -- Indexes and column comments

@@ -26,6 +26,7 @@
  * $USER/$USERNAME, resolved to a stable Archon user via the 'cli' platform
  * identity so a connected key attaches to the same user across invocations.
  */
+import { providerRegistry } from '@archon/providers';
 import { password, text, isCancel, cancel } from '@clack/prompts';
 import { writeJsonLine } from '../utils/stdout';
 import { createLogger } from '@archon/paths';
@@ -361,7 +362,7 @@ function validateEntryInputs(
     return false;
   }
   if (effort !== undefined) {
-    const validEfforts = validEffortsForProvider(provider);
+    const validEfforts = validEffortsForProvider(providerRegistry, provider);
     if (validEfforts === null) {
       console.error(`Provider '${provider}' does not support effort.`);
       return false;

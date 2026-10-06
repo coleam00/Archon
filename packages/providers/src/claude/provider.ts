@@ -60,6 +60,7 @@ import type {
 } from '../types';
 import {
   sessionPreview,
+  toolCallSchema,
   truncateToolOutput,
   type ProviderFailure,
   type ProviderFailureClass,
@@ -1195,7 +1196,9 @@ async function* streamClaudeMessages(
             type: 'tool_call',
             toolCallId: block.id,
             name: block.name,
-            rawInput: block.input ?? {},
+            rawInput: toolCallSchema.shape.rawInput.parse(
+              block.input === undefined ? {} : block.input
+            ),
           };
           openToolIds.add(block.id);
           yield call;

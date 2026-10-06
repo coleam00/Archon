@@ -4,11 +4,13 @@
  * both into a single timeline keyed by timestamp.
  */
 
+import type { ProviderEvent } from '../lib/provider-events';
+
 export type MessageRole = 'user' | 'assistant' | 'system';
 
 export interface InlineToolCall {
   name: string;
-  input: Record<string, unknown>;
+  input: Extract<ProviderEvent, { type: 'tool_call' }>['rawInput'];
   output?: string;
   /** The provider cut `output` at the contract's cap. */
   outputTruncated?: true;
@@ -81,7 +83,7 @@ interface ParsedMetadata {
   error?: { message: string; classification?: string };
   toolCalls?: {
     name: string;
-    input?: Record<string, unknown>;
+    input?: InlineToolCall['input'];
     output?: string;
     duration?: number;
     status?: string;
@@ -127,7 +129,7 @@ export function toMessage(raw: RawMessage): Message {
   const meta = parseMetadata(raw.metadata);
   const toolCalls: InlineToolCall[] = (meta.toolCalls ?? []).map(tc => ({
     name: tc.name,
-    input: tc.input ?? {},
+    input: tc.input === undefined ? {} : tc.input,
     output: tc.output,
     durationMs: tc.duration,
     status:

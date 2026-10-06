@@ -1,3 +1,5 @@
+import { providerRegistry } from '@archon/providers';
+import { isApprovalContext } from './schemas/workflow-run';
 import { settlingProvider } from './test-settling-provider';
 import { readNodeRecordEvent, nodeInvocationKey } from './node-record-reader';
 import { TerminalStatusWriteError } from './terminal-status-write';
@@ -155,7 +157,7 @@ import {
 import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore, PersistedNodeOutput, WorkflowNodeSessionKey } from './store';
-import { waitCompletionEvents } from './store';
+import { waitCompletionEvents, WorkflowRunPauseConflictError } from './store';
 import {
   buildInstanceSnapshots,
   composeFanOutScopeSegment,
@@ -203,6 +205,7 @@ type MockWorkflowStore = {
 
 function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-mock' },
     id,
     workflow_name: 'mock',
     conversation_id: 'conv-mock',
@@ -273,7 +276,9 @@ function createMockStore(): MockWorkflowStore {
     ),
     failWorkflowRun: mock<IWorkflowStore['failWorkflowRun']>(async (_id, _error) => {}),
     pauseWorkflowRun: mock<IWorkflowStore['pauseWorkflowRun']>(
-      async (_id, _approvalContext, _extraMetadata) => {}
+      async (_id, _approvalContext, _extraMetadata, suspension) => {
+        if (suspension) await createWorkflowEvent(suspension);
+      }
     ),
     pauseWorkflowRunForWait: mock<NonNullable<IWorkflowStore['pauseWorkflowRunForWait']>>(
       async (_id, _waitContext) => {}
@@ -287,8 +292,8 @@ function createMockStore(): MockWorkflowStore {
         nodeEvent: waitCompletionEvents(id, completion).node,
       })
     ),
-    rewriteApprovalContext: mock<IWorkflowStore['rewriteApprovalContext']>(
-      async (_id, _approvalContext) => ({ resolved: true })
+    failPausedApproval: mock<IWorkflowStore['failPausedApproval']>(
+      async (_id, _approvalContext, _error) => ({ failed: true })
     ),
     claimWriteback: mock<IWorkflowStore['claimWriteback']>(async _id => ({ claimed: true })),
     releaseWritebackClaim: mock<IWorkflowStore['releaseWritebackClaim']>(async _id => {}),
@@ -417,6 +422,7 @@ function createMockDeps<TStore extends IWorkflowStore = MockWorkflowStore>(
 ): MockWorkflowDeps<TStore> {
   const store = storeOverride ?? createMockStore();
   return {
+    providers: providerRegistry,
     store: store as TStore,
     // Mock providers settle like real ones; see settlingProvider.
     getAgentProvider: provider => settlingProvider(mockGetAgentProviderDag(provider)),
@@ -675,6 +681,7 @@ async function readAllArtifacts(artifactsDir: string) {
 
 function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-dag' },
     id,
     workflow_name: 'dag-test',
     conversation_id: 'conv-dag',
@@ -1178,7 +1185,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/cycle/i);
   });
@@ -1199,7 +1209,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/nonexistent/);
   });
@@ -1221,7 +1234,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/duplicate/i);
   });
@@ -1242,7 +1258,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/mutually exclusive/i);
   });
@@ -1262,7 +1281,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/must have either/i);
   });
@@ -1301,7 +1323,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(0);
     expect(result.workflows).toHaveLength(1);
 
@@ -1331,7 +1356,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(0);
     expect(result.workflows).toHaveLength(1);
 
@@ -1361,7 +1389,10 @@ prompt: "do something"
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(0);
     expect(result.workflows).toHaveLength(1);
     expect(result.workflows[0].workflow.name).toBe('extra-fields');
@@ -1386,7 +1417,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/trigger_rule/i);
   });
@@ -1413,7 +1447,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(0);
     const wf = result.workflows
       .map(ws => ws.workflow)
@@ -4945,7 +4982,8 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
       const pack = join(import.meta.dir, '../../../.archon/workflows/sdlc/pr');
       const parsed = parseWorkflow(
         await Bun.file(join(pack, 'archon-pr.yaml')).text(),
-        'archon-pr.yaml'
+        'archon-pr.yaml',
+        providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       const publish = parsed.workflow.nodes.find(node => node.id === 'publish');
@@ -5050,7 +5088,10 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
       );
       const publishNode: ExecNode = {
         ...publish,
-        timeout: 1000,
+        // The first attempt must reach the create before this fires. Getting there starts
+        // three Bun processes (the script, then the client for view and for create): about
+        // 0.5 s on a loaded Mac, and over 1 s on a Windows runner.
+        timeout: 3000,
         retry: publish.retry ? { ...publish.retry, delay_ms: 1 } : undefined,
         script: `process.env.ARCHON_SDLC_FORGE = ${JSON.stringify(source)};
           process.env.ARCHON_CLI_COMMAND = ${JSON.stringify(JSON.stringify([process.execPath, client]))};
@@ -6069,7 +6110,7 @@ nodes:
       - codebase-search
       - test-runner
 `;
-    const result = parseWorkflow(yaml, 'test.yaml');
+    const result = parseWorkflow(yaml, 'test.yaml', providerRegistry);
     expect(result.error).toBeNull();
     expect(result.workflow).not.toBeNull();
     const wf = result.workflow!;
@@ -6087,7 +6128,7 @@ nodes:
     skills:
       - 123
 `;
-    const result = parseWorkflow(yaml, 'bad.yaml');
+    const result = parseWorkflow(yaml, 'bad.yaml', providerRegistry);
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('skills');
   });
@@ -6101,7 +6142,7 @@ nodes:
     prompt: "Review"
     skills: []
 `;
-    const result = parseWorkflow(yaml, 'empty.yaml');
+    const result = parseWorkflow(yaml, 'empty.yaml', providerRegistry);
     expect(result.error).toBeNull();
     expect((result.workflow?.nodes[0] as DagNode | undefined)?.skills).toEqual([]);
   });
@@ -6116,7 +6157,7 @@ nodes:
     skills:
       - should-be-ignored
 `;
-    const result = parseWorkflow(yaml, 'bash-skills.yaml');
+    const result = parseWorkflow(yaml, 'bash-skills.yaml', providerRegistry);
     expect(result.error).toBeNull();
     expect(result.workflow).not.toBeNull();
     const wf = result.workflow!;
@@ -6133,7 +6174,7 @@ nodes:
   - id: basic
     prompt: "Do something"
 `;
-    const result = parseWorkflow(yaml, 'no-skills.yaml');
+    const result = parseWorkflow(yaml, 'no-skills.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const wf = result.workflow!;
     expect(wf.nodes).toBeDefined();
@@ -6163,7 +6204,7 @@ nodes:
         skills: [codebase-search]
         maxTurns: 5
 `;
-    const result = parseWorkflow(yaml, 'agents.yaml');
+    const result = parseWorkflow(yaml, 'agents.yaml', providerRegistry);
     expect(result.error).toBeNull();
     expect(result.workflow).not.toBeNull();
     const wf = result.workflow!;
@@ -6192,7 +6233,7 @@ nodes:
       brief-gen:
         prompt: "You are concise."
 `;
-    const result = parseWorkflow(yaml, 'missing-desc.yaml');
+    const result = parseWorkflow(yaml, 'missing-desc.yaml', providerRegistry);
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('agents');
   });
@@ -6208,7 +6249,7 @@ nodes:
       brief-gen:
         description: "A brief generator"
 `;
-    const result = parseWorkflow(yaml, 'missing-prompt.yaml');
+    const result = parseWorkflow(yaml, 'missing-prompt.yaml', providerRegistry);
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('agents');
   });
@@ -6222,7 +6263,7 @@ nodes:
     prompt: "p"
     agents: {}
 `;
-    const result = parseWorkflow(yaml, 'empty-agents.yaml');
+    const result = parseWorkflow(yaml, 'empty-agents.yaml', providerRegistry);
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('agents');
   });
@@ -6239,7 +6280,7 @@ nodes:
         description: "d"
         prompt: "p"
 `;
-    const result = parseWorkflow(yaml, 'bad-id.yaml');
+    const result = parseWorkflow(yaml, 'bad-id.yaml', providerRegistry);
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('kebab-case');
   });
@@ -6256,7 +6297,7 @@ nodes:
         description: "d"
         prompt: "p"
 `;
-    const result = parseWorkflow(yaml, 'bash-agents.yaml');
+    const result = parseWorkflow(yaml, 'bash-agents.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const wf = result.workflow!;
     expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
@@ -6275,7 +6316,7 @@ nodes:
         description: "d"
         prompt: "p"
 `;
-    const result = parseWorkflow(yaml, 'script-agents.yaml');
+    const result = parseWorkflow(yaml, 'script-agents.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const wf = result.workflow!;
     expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
@@ -6296,7 +6337,7 @@ nodes:
         description: "d"
         prompt: "p"
 `;
-    const result = parseWorkflow(yaml, 'loop-agents.yaml');
+    const result = parseWorkflow(yaml, 'loop-agents.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const wf = result.workflow!;
     expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
@@ -6310,7 +6351,7 @@ nodes:
   - id: basic
     prompt: "Do something"
 `;
-    const result = parseWorkflow(yaml, 'no-agents.yaml');
+    const result = parseWorkflow(yaml, 'no-agents.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const wf = result.workflow!;
     expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
@@ -12649,7 +12690,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         writeFile(join(workflowDir, 'materialized-parent.yaml'), JSON.stringify(parentWorkflow)),
         writeFile(commandPath, 'ORIGINAL materialized command. USER=<<$LOOP_USER_INPUT>>'),
       ]);
-      const firstDiscovery = await discoverWorkflows(testDir, { loadDefaults: false });
+      const firstDiscovery = await discoverWorkflows(testDir, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
       expect(firstDiscovery.errors).toHaveLength(0);
       const originalWorkflow = firstDiscovery.workflows.find(
         item => item.workflow.name === parentWorkflow.name
@@ -12681,7 +12725,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       // workflow. Its engine-private compilation error blocks a fresh run, while
       // this resumed run can reach and reuse the persisted snapshot.
       unlinkSync(commandPath);
-      const rediscovery = await discoverWorkflows(testDir, { loadDefaults: false });
+      const rediscovery = await discoverWorkflows(testDir, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
       expect(rediscovery.errors).toHaveLength(0);
       const rediscoveredWorkflow = rediscovery.workflows.find(
         item => item.workflow.name === parentWorkflow.name
@@ -12796,7 +12843,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         ),
         writeFile(join(testDir, '.archon', 'commands', 'empty-included-loop.md'), '  \n\t'),
       ]);
-      const discovery = await discoverWorkflows(testDir, { loadDefaults: false });
+      const discovery = await discoverWorkflows(testDir, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
       expect(discovery.errors).toHaveLength(0);
       const workflow = discovery.workflows.find(
         item => item.workflow.name === 'empty-loop-parent'
@@ -16775,7 +16825,7 @@ describe('executeDagWorkflow -- approval node', () => {
     });
   });
 
-  it('fails the approval node instead of pausing when its prompt cannot be delivered', async () => {
+  it('fails the persisted approval gate when its prompt cannot be delivered', async () => {
     const store = createMockStore();
     const platform = createMockPlatform();
     platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
@@ -16806,12 +16856,75 @@ describe('executeDagWorkflow -- approval node', () => {
     );
 
     // Nobody was told how to approve, so the run must not wait for an approval.
-    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    // The store fails the gate only on an exact match of the persisted context,
+    // so the caller must pass the paused context, minted pauseId included.
+    const paused = store.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(paused?.pauseId).toEqual(expect.any(String));
+    expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(paused);
     const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
     expect(failed?.data?.error).toBe(
       "Approval message failed to deliver for node 'review' — cannot pause safely"
     );
     expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      kind: 'loop',
+      node: {
+        id: 'refine',
+        kind: 'loop',
+        loop: {
+          fresh_context: false,
+          prompt: 'Refine.',
+          until: 'APPROVED',
+          max_iterations: 3,
+          interactive: true,
+          gate_message: 'Review.',
+        },
+      },
+    },
+    {
+      kind: 'loop_group',
+      node: {
+        id: 'refine',
+        kind: 'loop_group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          interactive: true,
+          gate_message: 'Review.',
+          nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'draft' } }],
+        },
+      },
+    },
+  ])('fails the persisted $kind gate when its prompt cannot be delivered', async ({ node }) => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Draft.' };
+      yield { type: 'result', sessionId: 'undelivered-loop' };
+    });
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
+      if (message.includes('Input required')) throw new Error('401 unauthorized');
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        conversationId: 'conv-loop',
+        cwd: testDir,
+        workflow: { name: 'loop-undelivered', nodes: [node] as DagNode[] },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    const paused = store.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(paused?.pauseId).toEqual(expect.any(String));
+    expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(paused);
   });
 
   it('delivers the nested proposal action at the approval gate, including legacy local resumes', async () => {
@@ -17474,6 +17587,56 @@ describe('executeDagWorkflow -- approval node', () => {
       expect(text).toContain('Approve: `/archon-workflow approve gate-run`');
       expect(text).toContain('Reject: `/archon-workflow reject gate-run`');
       expectSlackSpelling(text);
+    });
+
+    it('renders declared choices and emits the persisted vocabulary', async () => {
+      const platform = slackPlatform();
+      const deps = createMockDeps();
+      const decisions = [
+        { id: 'approve', label: 'Ship it' },
+        { id: 'revise', label: 'Try again' },
+        { id: 'cancel' },
+      ];
+      const emitted: WorkflowEmitterEvent[] = [];
+      const unsubscribe = getWorkflowEventEmitter().subscribe(event => emitted.push(event));
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps,
+            platform,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('gate-run'),
+            workflow: {
+              name: 'declared-choices',
+              nodes: [
+                {
+                  id: 'review',
+                  kind: 'gate',
+                  message: 'Choose',
+                  decisions,
+                  decisionsAuthored: true,
+                  captureResponse: false,
+                },
+              ],
+            },
+          })
+        );
+      } finally {
+        unsubscribe();
+      }
+      const text = sentText(platform);
+      expect(text).toContain('Ship it');
+      expect(text).toContain(
+        'Try again (revise): `/archon-workflow respond gate-run revise [text]`'
+      );
+      expect(text).toContain('cancel: `/archon-workflow respond gate-run cancel [text]`');
+      expect(text).not.toContain('reject gate-run');
+      const pause = deps.store.pauseWorkflowRun.mock.calls[0]?.[1];
+      expect(emitted.find(event => event.type === 'approval_pending')).toMatchObject({
+        decisions: pause?.decisions,
+        pauseId: pause?.pauseId,
+      });
+      expect(pause?.decisions).toEqual(decisions);
     });
 
     it('interactive loop gate prompt', async () => {
@@ -22969,7 +23132,9 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
   });
 
   afterEach(async () => {
-    await rm(testDir, { recursive: true, force: true });
+    // The bash-timeout case can leave its killed shell's `sleep` holding the directory on
+    // Windows; a raw rm fails that passing test with EBUSY.
+    await removeTempTree(testDir);
   });
 
   async function runDag(
@@ -29843,27 +30008,44 @@ describe('collectContainerIncompatibleProviders', () => {
   const bashNode = (id: string): DagNode =>
     ({ id, kind: 'exec', runtime: 'sh', script: 'echo hi' }) as unknown as DagNode;
 
+  it('capability preflight follows the supplied descriptor rather than host registrations', () => {
+    const claude = providerRegistry.get('claude');
+    if (!claude) throw new Error('test registry must contain Claude');
+    const blocked = { ...claude, capabilities: { ...claude.capabilities, containerExec: false } };
+    const providers = {
+      get: (id: string) => (id === blocked.id ? blocked : undefined),
+      list: () => [blocked],
+    };
+    const nodes = [promptNode('a', 'claude')];
+    expect([...collectContainerIncompatibleProviders(providers, nodes, 'claude')]).toEqual([
+      'claude',
+    ]);
+    expect([...collectContainerIncompatibleProviders(providerRegistry, nodes, 'claude')]).toEqual(
+      []
+    );
+  });
+
   it('is empty when all AI nodes resolve to claude (containerExec: true)', () => {
     const nodes = [promptNode('a'), promptNode('b', 'claude'), bashNode('c')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'claude');
     expect([...bad]).toEqual([]);
   });
 
   it('flags a node whose provider lacks containerExec (codex)', () => {
     const nodes = [promptNode('a'), promptNode('b', 'codex')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'claude');
     expect([...bad]).toEqual(['codex']);
   });
 
   it('flags the workflow-level provider when a node does not override it', () => {
     const nodes = [promptNode('a')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'codex');
     expect([...bad]).toEqual(['codex']);
   });
 
   it('ignores bash/script nodes (deterministic, no provider)', () => {
     const nodes = [bashNode('a'), bashNode('b')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'codex');
     expect([...bad]).toEqual([]);
   });
 
@@ -29873,7 +30055,7 @@ describe('collectContainerIncompatibleProviders', () => {
       kind: 'loop_group',
       loop_group: { max_iterations: 2, nodes: [promptNode('inner', 'codex')] },
     } as unknown as DagNode;
-    const bad = collectContainerIncompatibleProviders([group], 'claude');
+    const bad = collectContainerIncompatibleProviders(providerRegistry, [group], 'claude');
     expect([...bad]).toEqual(['codex']);
   });
 });
@@ -30044,9 +30226,9 @@ describe('container preflight provider equivalence with dispatch', () => {
       });
       expect([...new Set(preflightProviders)]).toEqual([...new Set(dispatched)]);
       const incompatible = dispatched.filter(p => !getProviderCapabilities(p).containerExec);
-      expect(collectContainerIncompatibleProviders([node], workflowProvider, aiProfile)).toEqual(
-        new Set(incompatible)
-      );
+      expect(
+        collectContainerIncompatibleProviders(providerRegistry, [node], workflowProvider, aiProfile)
+      ).toEqual(new Set(incompatible));
     } finally {
       await removeTempTree(cwd);
     }
@@ -30058,7 +30240,9 @@ describe('container preflight provider equivalence with dispatch', () => {
       gate({ provider: 'codex', decisions: [{ id: 'approve' }, { id: 'reject' }] }),
       agent({ provider: 'unknown-provider' }),
     ];
-    expect(collectContainerIncompatibleProviders(nodes, 'codex', aiProfile)).toEqual(new Set());
+    expect(
+      collectContainerIncompatibleProviders(providerRegistry, nodes, 'codex', aiProfile)
+    ).toEqual(new Set());
   });
 });
 
@@ -30079,6 +30263,7 @@ describe('collectStrictSchemaViolations', () => {
 
   it('flags an agent under Codex workflow-level provider with loose schema', () => {
     const violations = collectStrictSchemaViolations(
+      providerRegistry,
       [agentNode('a', { output_format: looseSchema })],
       'codex'
     );
@@ -30094,6 +30279,7 @@ describe('collectStrictSchemaViolations', () => {
 
   it('flags a nested bare object with its exact schema path', () => {
     const violations = collectStrictSchemaViolations(
+      providerRegistry,
       [
         agentNode('scope', {
           output_format: {
@@ -30118,6 +30304,7 @@ describe('collectStrictSchemaViolations', () => {
 
   it('is empty under Claude workflow-level provider', () => {
     const violations = collectStrictSchemaViolations(
+      providerRegistry,
       [agentNode('a', { output_format: looseSchema })],
       'claude'
     );
@@ -30126,6 +30313,7 @@ describe('collectStrictSchemaViolations', () => {
 
   it('is empty when node pins provider: claude under Codex workflow', () => {
     const violations = collectStrictSchemaViolations(
+      providerRegistry,
       [agentNode('a', { output_format: looseSchema, provider: 'claude' })],
       'codex'
     );
@@ -30141,7 +30329,7 @@ describe('collectStrictSchemaViolations', () => {
         nodes: [agentNode('inner', { output_format: looseSchema })],
       },
     } as unknown as DagNode;
-    const violations = collectStrictSchemaViolations([group], 'codex');
+    const violations = collectStrictSchemaViolations(providerRegistry, [group], 'codex');
     expect(violations).toHaveLength(1);
     expect(violations[0].nodeId).toBe('inner');
   });
@@ -30157,7 +30345,7 @@ describe('collectStrictSchemaViolations', () => {
       },
     } as unknown as DagNode;
 
-    const violations = collectStrictSchemaViolations([group], 'claude');
+    const violations = collectStrictSchemaViolations(providerRegistry, [group], 'claude');
 
     expect(violations).toHaveLength(1);
     expect(violations[0]).toMatchObject({ provider: 'codex', nodeId: 'inner' });
@@ -30179,7 +30367,7 @@ describe('collectStrictSchemaViolations', () => {
       },
     } as unknown as DagNode;
 
-    expect(collectStrictSchemaViolations([group], 'claude')).toEqual([]);
+    expect(collectStrictSchemaViolations(providerRegistry, [group], 'claude')).toEqual([]);
   });
 
   it('skips loop_group inert output_format', () => {
@@ -30189,7 +30377,7 @@ describe('collectStrictSchemaViolations', () => {
       output_format: looseSchema,
       loop_group: { max_iterations: 1, nodes: [] },
     } as unknown as DagNode;
-    const violations = collectStrictSchemaViolations([group], 'codex');
+    const violations = collectStrictSchemaViolations(providerRegistry, [group], 'codex');
     expect(violations).toEqual([]);
   });
 
@@ -30200,7 +30388,7 @@ describe('collectStrictSchemaViolations', () => {
       decisions: [{ rework: 'reassess' }],
       output_format: looseSchema,
     } as unknown as DagNode;
-    const violations = collectStrictSchemaViolations([gate], 'codex');
+    const violations = collectStrictSchemaViolations(providerRegistry, [gate], 'codex');
     expect(violations).toEqual([]);
   });
 
@@ -30209,11 +30397,13 @@ describe('collectStrictSchemaViolations', () => {
       output_format: looseSchema,
       provider: 'unknown-provider',
     });
-    expect(() => collectStrictSchemaViolations([node], 'unknown-provider')).not.toThrow();
+    expect(() =>
+      collectStrictSchemaViolations(providerRegistry, [node], 'unknown-provider')
+    ).not.toThrow();
   });
 
   it('skips node without output_format entirely', () => {
-    const violations = collectStrictSchemaViolations([agentNode('a')], 'codex');
+    const violations = collectStrictSchemaViolations(providerRegistry, [agentNode('a')], 'codex');
     expect(violations).toEqual([]);
   });
 });
@@ -30387,7 +30577,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(store),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30517,7 +30707,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(store),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30603,7 +30793,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30663,7 +30853,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30723,7 +30913,7 @@ describe('subprocess credential redaction', () => {
       dagOptions({
         deps: createMockDeps(store),
         platform,
-        conversationId: workflowRun.conversation_id,
+        conversationId: workflowRun.conversation_id ?? workflowRun.id,
         cwd: testDir,
         workflow: {
           name: workflowRun.workflow_name,
@@ -31547,75 +31737,393 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     }
   });
 
+  it('presents the admitted gate before a slow sibling settles and persists before sending', async () => {
+    const runId = 'prompt-before-layer-settles';
+    const store = createEscalationStore(runId);
+    const pause = store.pauseWorkflowRun;
+    let releaseSibling = () => {};
+    const siblingBlocked = new Promise<void>(resolve => {
+      releaseSibling = resolve;
+    });
+    let signalPrompt = () => {};
+    const prompted = new Promise<void>(resolve => {
+      signalPrompt = resolve;
+    });
+    store.pauseWorkflowRun = mock(async (id, context, extra, suspension) => {
+      if (context.nodeId === 'second') await siblingBlocked;
+      await pause(id, context, extra, suspension);
+    });
+    const platform = createMockPlatform();
+    platform.sendMessage.mockImplementation(async (_id, message) => {
+      if (message.includes('**Approval required**')) {
+        expect(store.getState().status).toBe('paused');
+        expect(store.getState().metadata.approval).toMatchObject({ nodeId: 'first' });
+        signalPrompt();
+      }
+    });
+    const execution = executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        cwd: testDir,
+        workflowRun: makeWorkflowRun(runId),
+        workflow: {
+          name: 'slow-sibling',
+          nodes: ['first', 'second'].map(id =>
+            dagNodeSchema.parse({ id, approval: { message: 'Review' } })
+          ),
+        },
+      })
+    );
+    try {
+      await prompted;
+      expect(
+        persistedEvents(store).filter(event => event.event_type === 'node_started')
+      ).toHaveLength(2);
+    } finally {
+      releaseSibling();
+      await execution;
+    }
+    expect(
+      platform.sendMessage.mock.calls.filter(([, message]) =>
+        message.includes('**Approval required**')
+      )
+    ).toHaveLength(1);
+  });
+
+  it('keeps a sibling deferred when the active gate is resolved before the losing CAS is inspected', async () => {
+    const runId = 'fast-decision';
+    const store = createEscalationStore(runId);
+    const readRun = store.getWorkflowRun;
+    store.getWorkflowRun = mock(async id => {
+      const run = await readRun(id);
+      const approval = run?.metadata.approval;
+      if (isApprovalContext(approval)) approval.resolved = 'approved';
+      return run;
+    });
+    const platform = createMockPlatform();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        cwd: testDir,
+        workflowRun: makeWorkflowRun(runId),
+        workflow: {
+          name: 'fast-decision',
+          nodes: ['first', 'second'].map(id =>
+            dagNodeSchema.parse({ id, approval: { message: 'Review' } })
+          ),
+        },
+      })
+    );
+    expect(
+      platform.sendMessage.mock.calls.filter(([, message]) =>
+        message.includes('**Approval required**')
+      )
+    ).toHaveLength(1);
+    expect(persistedEvents(store).filter(event => event.event_type === 'node_failed')).toHaveLength(
+      0
+    );
+  });
+
+  it('preserves a loop-group body failure when a sibling gate pauses before its terminal gate starts', async () => {
+    const runId = 'paused-sibling-body-failure';
+    const store = createEscalationStore(runId);
+    let workStarted = () => {};
+    const started = new Promise<void>(resolve => {
+      workStarted = resolve;
+    });
+    let gatePaused = () => {};
+    const paused = new Promise<void>(resolve => {
+      gatePaused = resolve;
+    });
+    const pause = store.pauseWorkflowRun;
+    store.pauseWorkflowRun = mock(async (id, context, extra, suspension) => {
+      await started;
+      await pause(id, context, extra, suspension);
+      gatePaused();
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      workStarted();
+      await paused;
+      yield { type: 'agent_message_chunk', text: '' };
+      throw new Error('Body provider unavailable');
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun(runId),
+        workflow: {
+          name: 'body-failure',
+          nodes: [
+            dagNodeSchema.parse({ id: 'review', approval: { message: 'Review' } }),
+            dagNodeSchema.parse({
+              id: 'group',
+              loop_group: {
+                until_bash: '[ $check.output.decision = "approve" ]',
+                max_iterations: 2,
+                nodes: [
+                  { id: 'work', prompt: 'Work' },
+                  { id: 'check', depends_on: ['work'], approval: { message: 'Review work' } },
+                ],
+              },
+            }),
+          ],
+        },
+      })
+    );
+    expect(
+      persistedEvents(store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'group'
+      )?.data?.error
+    ).toContain('Body provider unavailable');
+  });
+
+  for (const kind of ['loop', 'loop_group', 'body_gate'] as const) {
+    it(`defers the second same-run ${kind} gate without prompting or terminalizing`, async () => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'COMPLETE' };
+        yield { type: 'result', sessionId: 'loop-session', cost: 0.25 };
+      });
+      const workflow = {
+        name: 'concurrent-gates',
+        nodes: ['first', 'second'].map(id =>
+          dagNodeSchema.parse(
+            kind === 'loop'
+              ? {
+                  id,
+                  loop: {
+                    prompt: 'Review',
+                    until: 'COMPLETE',
+                    interactive: true,
+                    gate_message: 'Feedback?',
+                    max_iterations: 2,
+                  },
+                }
+              : kind === 'loop_group'
+                ? {
+                    id,
+                    loop_group: {
+                      until: 'COMPLETE',
+                      interactive: true,
+                      gate_message: 'Feedback?',
+                      max_iterations: 2,
+                      nodes: [{ id: 'work', prompt: 'Review' }],
+                    },
+                  }
+                : {
+                    id,
+                    loop_group: {
+                      until_bash: '[ $check.output.decision = "approve" ]',
+                      max_iterations: 2,
+                      nodes: [
+                        { id: 'work', prompt: 'Review' },
+                        {
+                          id: 'check',
+                          depends_on: ['work'],
+                          approval: {
+                            message: 'Review?',
+                            decisions: [{ id: 'approve' }, { id: 'reject' }],
+                          },
+                        },
+                      ],
+                    },
+                  }
+          )
+        ),
+      };
+      const runId = `concurrent-${kind}`;
+      const store = createEscalationStore(runId);
+      const platform = createMockPlatform();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun(runId),
+        })
+      );
+      const approval = store.getState().metadata.approval;
+      if (!isApprovalContext(approval)) throw new Error('Missing admitted gate');
+      const deferredId = approval.nodeId === 'first' ? 'second' : 'first';
+      const prompts = () =>
+        platform.sendMessage.mock.calls.filter(
+          ([, message]) =>
+            message.includes('**Input required**') || message.includes('**Approval required**')
+        );
+      expect(prompts()).toHaveLength(1);
+      const deferredEvents = persistedEvents(store).filter(
+        event => event.step_name === deferredId || event.step_name === `${deferredId}.check`
+      );
+      expect(deferredEvents.some(event => event.event_type === 'node_started')).toBe(true);
+      expect(
+        deferredEvents.some(event =>
+          ['node_completed', 'node_failed', 'node_suspended'].includes(event.event_type)
+        )
+      ).toBe(false);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      // The deferred node already paid for its iteration; the run total keeps it.
+      expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBe(0.5);
+      const resumedStore = createEscalationStore(runId);
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(resumedStore),
+          platform,
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun(runId, {
+            metadata: { approval: { ...approval, resolved: 'approved' } },
+          }),
+          priorCompletedNodes: new Map([[approval.nodeId, { output: 'COMPLETE' }]]),
+        })
+      );
+      expect(prompts()).toHaveLength(2);
+      expect(resumedStore.getState().metadata.approval).toMatchObject({ nodeId: deferredId });
+    });
+  }
+
+  it('defers a loop-group terminal wait that loses the paused slot to a sibling gate', async () => {
+    const runId = 'deferred-body-wait';
+    const store = createEscalationStore(runId);
+    let gatePaused = () => {};
+    const paused = new Promise<void>(resolve => {
+      gatePaused = resolve;
+    });
+    const pause = store.pauseWorkflowRun;
+    store.pauseWorkflowRun = mock(async (id, context, extra, suspension) => {
+      await pause(id, context, extra, suspension);
+      gatePaused();
+    });
+    // The real store only pauses a running run for a wait.
+    const pauseForWait = store.pauseWorkflowRunForWait;
+    store.pauseWorkflowRunForWait = mock(async (id, context, event) => {
+      if (store.getState().status !== 'running') {
+        throw new Error(`Workflow run not found or not in running state (id: ${id})`);
+      }
+      await pauseForWait(id, context, event);
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      await paused;
+      yield { type: 'agent_message_chunk', text: 'not yet' };
+      yield { type: 'result', sessionId: 'body-session' };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun(runId),
+        workflow: {
+          name: 'deferred-body-wait',
+          nodes: [
+            dagNodeSchema.parse({ id: 'review', approval: { message: 'Review' } }),
+            dagNodeSchema.parse({
+              id: 'group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                nodes: [
+                  { id: 'work', prompt: 'Work' },
+                  { id: 'hold', depends_on: ['work'], wait: { duration_ms: 60_000 } },
+                ],
+              },
+            }),
+          ],
+        },
+      })
+    );
+    // The group stops at its deferred wait instead of re-running the paid body.
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(store.getState().metadata.approval).toMatchObject({ nodeId: 'review' });
+    expect(
+      persistedEvents(store).some(
+        event =>
+          event.step_name === 'group' &&
+          ['node_completed', 'node_failed', 'node_suspended'].includes(event.event_type)
+      )
+    ).toBe(false);
+  });
+
   /** Store whose pauseWorkflowRun loses the CAS: the run was externally
    *  transitioned (e.g. a killed CLI's signal cleanup marked it failed) in the
    *  window between gate raise and pause commit. getWorkflowRunStatus reports
    *  'running' until the pause attempt, then the external 'failed'. */
-  function createExternallyFailedStore(): IWorkflowStore {
+  function createExternallyFailedStore(
+    externalStatus: 'failed' | 'cancelled' = 'failed'
+  ): IWorkflowStore {
     const store = createMockStore();
     let pauseAttempted = false;
     store.pauseWorkflowRun = mock(() => {
       pauseAttempted = true;
-      return Promise.reject(
-        new Error('Workflow run not found or not in running state (id: dag-test-run-id)')
-      );
+      return Promise.reject(new WorkflowRunPauseConflictError('dag-test-run-id'));
     });
     store.getWorkflowRunStatus = mock(() =>
-      Promise.resolve(pauseAttempted ? ('failed' as const) : ('running' as const))
+      Promise.resolve(pauseAttempted ? externalStatus : ('running' as const))
     );
     return store;
   }
 
-  it('approval gate that loses the pause CAS to an external transition halts cleanly', async () => {
-    const store = createExternallyFailedStore();
-    const mockDeps = createMockDeps(store);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
+  it.each(['failed', 'cancelled'] as const)(
+    'approval gate that loses the pause CAS to external %s halts cleanly',
+    async status => {
+      const store = createExternallyFailedStore(status);
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
 
-    const emitted: string[] = [];
-    const unsubscribe = getWorkflowEventEmitter().subscribe((event: WorkflowEmitterEvent) => {
-      if ('runId' in event && event.runId === workflowRun.id) emitted.push(event.type);
-    });
+      const emitted: string[] = [];
+      const unsubscribe = getWorkflowEventEmitter().subscribe((event: WorkflowEmitterEvent) => {
+        if ('runId' in event && event.runId === workflowRun.id) emitted.push(event.type);
+      });
 
-    try {
-      await executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          conversationId: 'conv-pause-race',
-          cwd: testDir,
-          workflow: {
-            name: 'pause-race-approval',
-            nodes: [
-              {
-                id: 'review',
-                kind: 'gate',
-                message: 'Approve this plan?',
-                decisions: [{ id: 'approve' }, { id: 'reject' }],
-                captureResponse: false,
-                decisionsAuthored: false,
-              },
-            ],
-          },
-          workflowRun,
-        })
-      );
-    } finally {
-      unsubscribe();
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform,
+            conversationId: 'conv-pause-race',
+            cwd: testDir,
+            workflow: {
+              name: 'pause-race-approval',
+              nodes: [
+                {
+                  id: 'review',
+                  kind: 'gate',
+                  message: 'Approve this plan?',
+                  decisions: [{ id: 'approve' }, { id: 'reject' }],
+                  captureResponse: false,
+                  decisionsAuthored: false,
+                },
+              ],
+            },
+            workflowRun,
+          })
+        );
+      } finally {
+        unsubscribe();
+      }
+
+      expect(
+        platform.sendMessage.mock.calls.some(([, message]) =>
+          message.includes('**Approval required**')
+        )
+      ).toBe(false);
+      // The gate never actually paused — no approval_pending signal to live UIs.
+      expect(emitted).not.toContain('approval_pending');
+
+      // The lost CAS must NOT cascade into a node failure or any terminal write —
+      // the external transition owns the run's final state.
+      const events = (
+        store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+      ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
+      expect(events).not.toContain('node_failed');
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
     }
-
-    // The gate never actually paused — no approval_pending signal to live UIs.
-    expect(emitted).not.toContain('approval_pending');
-
-    // The lost CAS must NOT cascade into a node failure or any terminal write —
-    // the external transition owns the run's final state.
-    const events = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
-    ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
-    expect(events).not.toContain('node_failed');
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-  });
+  );
 
   it('interactive loop gate that loses the pause CAS halts cleanly', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
@@ -31786,6 +32294,37 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('does not mistake a store failure for deferral when a sibling holds the paused slot', async () => {
+    const store = createMockStore();
+    let attempted = false;
+    store.pauseWorkflowRun = mock(async () => {
+      attempted = true;
+      throw new Error('database unavailable');
+    });
+    store.getWorkflowRunStatus = mock(async () => (attempted ? 'paused' : 'running'));
+    store.getWorkflowRun = mock(async () =>
+      makeWorkflowRun('store-failure', {
+        status: 'paused',
+        metadata: { approval: { nodeId: 'other', message: 'Other review', type: 'approval' } },
+      })
+    );
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('store-failure'),
+        workflow: {
+          name: 'store-failure',
+          nodes: [dagNodeSchema.parse({ id: 'review', approval: { message: 'Review' } })],
+        },
+      })
+    );
+    expect(
+      persistedEvents(store).find(event => event.event_type === 'node_failed')?.data?.error
+    ).toContain('database unavailable');
+  });
+
   it('gate pause failure with the run still running stays a genuine node failure', async () => {
     const store = createMockStore();
     // Pause fails but the run is still 'running' (default mock) — a real store
@@ -31935,6 +32474,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
 
     const seen: { provider: string; options: SendQueryOptions }[] = [];
     const deps: WorkflowDeps = {
+      providers: providerRegistry,
       store: createMockStore(),
       getAgentProvider: mock<WorkflowDeps['getAgentProvider']>(
         (provider): ReturnType<WorkflowDeps['getAgentProvider']> => ({
@@ -32577,6 +33117,7 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
     const store = createMockStore();
     const seen: string[] = [];
     const deps: WorkflowDeps = {
+      providers: providerRegistry,
       store,
       getAgentProvider: mock<WorkflowDeps['getAgentProvider']>(
         (provider): ReturnType<WorkflowDeps['getAgentProvider']> => {
@@ -34702,7 +35243,10 @@ nodes:
 
   /** The flattened parent, exactly as discovery hands it to the executor. */
   async function expandedParent(): Promise<ResolvedWorkflow> {
-    const discovered = await discoverWorkflows(testDir, { loadDefaults: false });
+    const discovered = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(discovered.errors).toEqual([]);
     const parent = discovered.workflows.find(w => w.workflow.name === 'composed-parent');
     if (!parent) throw new Error('composed-parent was not discovered');
@@ -34828,7 +35372,10 @@ nodes:
 `
     );
 
-    const discovered = await discoverWorkflows(testDir, { loadDefaults: false });
+    const discovered = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     // The error names the include alias the author wrote, not the flattened sink id.
     expect(discovered.errors.map(e => e.error)).toEqual([
       expect.stringContaining("'$plan.output.tasks' references field 'tasks'"),
@@ -34840,12 +35387,8 @@ nodes:
 // ─── #2707 step 3: gate-terminated loop_group pause escalation ─────────────
 
 /**
- * A stateful (not static) IWorkflowStore for exercising the pause-escalation /
- * resume-completion-recheck round trip: `pauseWorkflowRun`/`rewriteApprovalContext`
- * actually mutate an in-memory status/metadata pair that `getWorkflowRunStatus`/
- * `getWorkflowRun` subsequently observe — required because the escalation code
- * under test reads status/metadata BACK after the body gate's own generic pause,
- * which the file's default static mocks (always 'running') can never satisfy.
+ * Gate tests need the production running-to-paused CAS and subsequent reads of
+ * its owner; the default static mocks cannot exercise concurrent admission.
  */
 function createEscalationStore(
   runId: string,
@@ -34865,9 +35408,11 @@ function createEscalationStore(
       metadata,
     })),
     pauseWorkflowRun: mock<IWorkflowStore['pauseWorkflowRun']>(
-      async (_id, approvalContext, extraMetadata) => {
+      async (_id, approvalContext, extraMetadata, suspension) => {
+        if (status !== 'running') throw new WorkflowRunPauseConflictError(runId);
         status = 'paused';
         metadata = { ...metadata, ...(extraMetadata ?? {}), approval: { ...approvalContext } };
+        if (suspension) await base.persistWorkflowEvent(suspension);
       }
     ),
     pauseWorkflowRunForWait: mock<NonNullable<IWorkflowStore['pauseWorkflowRunForWait']>>(
@@ -34901,16 +35446,7 @@ function createEscalationStore(
         return { failed: true };
       }
     ),
-    rewriteApprovalContext: mock<IWorkflowStore['rewriteApprovalContext']>(
-      async (_id, approvalContext) => {
-        const currentApproval = metadata.approval as { resolved?: string } | undefined;
-        if (status !== 'paused' || currentApproval?.resolved != null) {
-          return { resolved: false };
-        }
-        metadata = { ...metadata, approval: { ...approvalContext } };
-        return { resolved: true };
-      }
-    ),
+    failPausedApproval: mock(async () => ({ failed: true })),
     getState: () => ({ status, metadata }),
   };
 }
@@ -35117,6 +35653,8 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     const store = createEscalationStore('run-escalation-1');
     const platform = createMockPlatform();
 
+    const emitted: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => emitted.push(event));
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),
@@ -35127,22 +35665,27 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       })
     );
 
+    unsubscribe();
     // Only 'work' ran once — proves the loop did NOT barrel through remaining
     // iterations re-running the body every time the gate re-paused.
     expect(mockSendQueryDag.mock.calls.length).toBe(1);
     expect(store.getState().status).toBe('paused');
 
-    // The escalation rewrote the pause to point at the enclosing group, carrying
-    // the body gate's own id.
-    const rewriteCalls = (
-      store.rewriteApprovalContext as Mock<IWorkflowStore['rewriteApprovalContext']>
-    ).mock.calls;
-    expect(rewriteCalls.length).toBe(1);
-    expect(rewriteCalls[0][1]).toMatchObject({
+    const pauseCalls = store.pauseWorkflowRun.mock.calls;
+    expect(pauseCalls).toHaveLength(1);
+    const approval = pauseCalls[0][1];
+    expect(store.getState().metadata.approval).toEqual(approval);
+    expect(approval).toMatchObject({
       nodeId: 'grp',
       bodyGateId: 'check',
       type: 'approval',
       iteration: 1,
+      pauseId: expect.any(String),
+    });
+    expect(emitted.find(event => event.type === 'approval_pending')).toMatchObject({
+      nodeId: 'grp',
+      pauseId: approval?.pauseId,
+      decisions: approval?.decisions,
     });
     const groupSuspension = (
       store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
@@ -35456,6 +35999,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     const greenMarkerPath = join(testDir, 'deliver-attention-green');
     const flipMarkerPath = join(testDir, 'deliver-flip-ready');
     const discovered = await discoverWorkflows(repoRoot, {
+      providers: providerRegistry,
       loadDefaults: false,
       loadDefaultCommands: false,
     });
@@ -36056,81 +36600,6 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(probeRows[0].stdout_tail).toBe('resume probe ran');
     expect(probeRows[0].stderr_tail).toBe('recheck note');
     expect(probeRows[0].exit_code).toBe(0);
-  });
-
-  it('falls through without erroring when a human resolves the original pause before the rewrite lands (CAS loss)', async () => {
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'work done' };
-      yield { type: 'result', sessionId: 'work-session' };
-    });
-
-    const store = createEscalationStore('run-escalation-4');
-    // Simulate an astronomically narrow race: a human resolved the ORIGINAL
-    // bare-gate-id pause in the window between its own write and the
-    // escalation's rewrite attempt — resolveApprovalGate's real CAS guard
-    // (unresolvedGateClause) would report exactly this outcome.
-    (
-      store.rewriteApprovalContext as Mock<IWorkflowStore['rewriteApprovalContext']>
-    ).mockResolvedValue({ resolved: false });
-    const platform = createMockPlatform();
-
-    // max_iterations: 1 makes the fallthrough's outcome deterministic and
-    // assertable: without the escalation applying, the group's own terminal-
-    // sink selection finds no non-empty output (a gate's own output is always
-    // ''), so it never detects completion and exhausts max_iterations — a
-    // clean, expected failure, not a hang, crash, or corrupted state.
-    const singleIterationWorkflow: WorkflowDefinition = {
-      ...gateTerminatedLoopGroupWorkflow(),
-      nodes: [
-        dagNodeSchema.parse({
-          id: 'grp',
-          loop_group: {
-            until_bash: '[ $check.output.decision = "approve" ]',
-            max_iterations: 1,
-            nodes: [
-              { id: 'work', prompt: 'do work' },
-              {
-                id: 'check',
-                depends_on: ['work'],
-                approval: {
-                  message: 'Continue?',
-                  decisions: [{ id: 'approve' }, { id: 'revise' }],
-                },
-              },
-            ],
-          },
-        }),
-      ],
-    };
-
-    // Must not throw — the fallthrough path is a normal, tolerated outcome.
-    await expect(
-      executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          platform,
-          cwd: testDir,
-          workflow: ready(singleIterationWorkflow),
-          workflowRun: makeWorkflowRun('run-escalation-4'),
-        })
-      )
-    ).resolves.toBeUndefined();
-
-    // The escalation was attempted and correctly observed the lost race.
-    expect(
-      (store.rewriteApprovalContext as Mock<IWorkflowStore['rewriteApprovalContext']>).mock.calls
-        .length
-    ).toBe(1);
-    // No corrupted state: the run stays exactly as the human's own resolution
-    // left it — 'paused' — never force-completed by the loop_group's own
-    // "max iterations exceeded" failure (the run being non-'running' by the
-    // time that failure is reported is what stops the top-level executor from
-    // clobbering the human's already-in-flight resolution with a 'failed'
-    // status).
-    expect(store.getState().status).toBe('paused');
-    expect(
-      (store.completeWorkflowRun as Mock<IWorkflowStore['completeWorkflowRun']>).mock.calls.length
-    ).toBe(0);
   });
 });
 
