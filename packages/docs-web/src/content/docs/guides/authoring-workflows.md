@@ -1041,7 +1041,7 @@ Sessions are keyed by `(workflow_name, node_id, scope_key, provider)`. The scope
 
 A run started without a conversation (for example, by code that calls the workflow engine or store with no origin) has no scope. Its `persist_session` nodes start fresh, save nothing for later runs, and get no scope artifacts. Resuming that run is unaffected: it continues from its own completed nodes like any other run.
 
-The **CLI is different**: each `archon workflow run` mints a fresh conversation UUID, so persisted sessions won't resume between separate invocations unless you pass the same `--conversation-id <id>` on each run.
+The **CLI is different**: `archon workflow run` starts a run without a conversation, so its `persist_session` nodes start fresh on every invocation, and `--conversation-id` does not change that. Resuming a run that a chat launched keeps that chat's scope.
 
 ### Concurrent runs
 
@@ -1130,7 +1130,7 @@ Notes:
 
 - **Opt-in only.** Workflows without `persist_session` get no scope directory, no mirroring, and no pointer — default behavior is unchanged. Persist nodes without `output_type` keep session continuity but leave nothing behind for recovery.
 - **Last writer wins.** Concurrent runs of the same workflow in the same scope write per-node files into the shared scope directory; the most recent run's output for a given node is what a later cold resume sees.
-- **CLI caveat.** Each `archon workflow run` mints a fresh conversation UUID (a fresh scope) unless you pass `--conversation-id <id>` — the same caveat as session persistence itself.
+- **CLI caveat.** `archon workflow run` starts a run without a conversation, so it gets no scope directory. This is the same caveat as session persistence itself.
 
 ---
 

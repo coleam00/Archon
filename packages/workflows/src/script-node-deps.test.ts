@@ -74,6 +74,21 @@ function createMockStore(): IWorkflowStore {
     deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
       throw new Error('Unexpected deleteWorkflowNodeSessions');
     }),
+    findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
     listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
       throw new Error('Unexpected listWorkflowRuns');

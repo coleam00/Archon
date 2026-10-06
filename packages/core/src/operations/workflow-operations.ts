@@ -36,7 +36,6 @@ import type {
 } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { IWorkflowStore, GateResolutionEvent } from '@archon/workflows/store';
-import type { IWorkflowHostStore } from '../workflows/host-store';
 import type { IIsolationStore } from '@archon/isolation';
 import {
   DetachedRunOwnerUnavailableError,
@@ -682,7 +681,7 @@ export interface WorkflowOperationsDeps {
     | 'listWorkflowRuns'
     | 'findWorkflowRunsByIdPrefix'
   >;
-  hostStore: IWorkflowHostStore;
+  hostStore: { isolation: IIsolationStore };
   requestDetachedRunStop: typeof requestDetachedRunStop;
   isRunOwnedByThisProcess: typeof isRunOwnedByThisProcess;
   isRunOwnerAnswering: typeof isRunOwnerAnswering;

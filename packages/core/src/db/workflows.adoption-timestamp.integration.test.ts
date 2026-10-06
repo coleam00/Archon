@@ -1,4 +1,6 @@
 // @archon-test-isolated
+import * as sqlIsolation from './isolation-environments';
+import * as sqlWorkflow from './workflows';
 /**
  * Integration test: workflow-run adoption cutoff against a REAL bun:sqlite
  * database (#2845).
@@ -151,6 +153,9 @@ describe('workflow-run adoption timestamp — real SQLite composition (#2845)', 
       codebasePath: '/tmp/ops-client',
       codebaseKind: 'repo',
       deps: {
+        getRun: sqlWorkflow.getWorkflowRun,
+        getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+        findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
         // Worktree gone; only the historical branch survives on disk.
         existsSync: () => false,
         branchExists: async (_repoPath, branch) => branch === 'impl-env-before',
@@ -179,6 +184,9 @@ describe('workflow-run adoption timestamp — real SQLite composition (#2845)', 
       codebasePath: '/tmp/ops-client',
       codebaseKind: 'repo',
       deps: {
+        getRun: sqlWorkflow.getWorkflowRun,
+        getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+        findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
         existsSync: p => p === '/tmp/ops-client/.worktrees/run-detached',
         branchExists: async (_repoPath, branch) => branch === 'impl-env-detached',
         currentBranch: async () => 'impl-env-detached',
@@ -199,6 +207,9 @@ describe('workflow-run adoption timestamp — real SQLite composition (#2845)', 
       codebasePath: '/tmp/ops-client',
       codebaseKind: 'repo',
       deps: {
+        getRun: sqlWorkflow.getWorkflowRun,
+        getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+        findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
         // Worktree gone, must checkout branch
         existsSync: () => false,
         branchExists: async (_repoPath, branch) => branch === 'impl-env-detached',

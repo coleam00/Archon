@@ -30,7 +30,8 @@ mock.module('../db/connection', () => ({
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
 }));
-const { registerRepository, registerFolder, inspectProjectBaseBranch } = await import('./clone');
+const { registerRepository, registerFolder, inspectProjectBaseBranch } =
+  await import('./sql-registration');
 const { getCodebase, updateCodebase, listCodebases } = await import('../db/codebases');
 // This test hosts a workflow run, so it registers providers the way CLI and server do.
 registerBuiltinProviders();

@@ -1,3 +1,4 @@
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { providerRegistry } from '@archon/providers';
 import {
   prepareRunAiConfiguration,
@@ -102,12 +103,12 @@ interface BindingIdentity {
 async function findOrRegisterCodebase(cwd: string): Promise<Codebase> {
   const repoRoot = await findRepoRoot(cwd);
   const found = repoRoot
-    ? await findCodebaseForCheckoutPath(repoRoot)
+    ? await findCodebaseForCheckoutPath(repoRoot, codebaseDb)
     : ((await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
       (await codebaseDb.findCodebaseByPathPrefix(cwd)));
   if (found) return found;
   const registered = repoRoot
-    ? await codebaseDb.getCodebase((await registerRepository(repoRoot)).codebaseId)
+    ? await codebaseDb.getCodebase((await registerRepository(codebaseDb, repoRoot)).codebaseId)
     : null;
   if (!registered) {
     throw new Error(`Cannot prepare a resource start from '${cwd}': register the project first.`);
@@ -538,11 +539,15 @@ export async function startAdmittedResourceStart(
         ...(lane.kind === 'worktree' && lane.baseOverride
           ? { baseOverride: lane.baseOverride }
           : {}),
-        resolveChildIsolation: createCodebaseChildResolver(codebase, {
-          baseBranch,
-          createdByPlatform: platform.getPlatformType(),
-          createdByUserId: run.user_id ?? undefined,
-        }),
+        resolveChildIsolation: createCodebaseChildResolver(
+          sqlIsolation.createIsolationStore(),
+          codebase,
+          {
+            baseBranch,
+            createdByPlatform: platform.getPlatformType(),
+            createdByUserId: run.user_id ?? undefined,
+          }
+        ),
         // A fresh claim reseals caller configuration, so restore the one sealed at intake.
         ...(sealed
           ? { runConfig: { layer: unsealWorkflowRunConfig(sealed), source: sealed.source } }

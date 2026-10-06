@@ -79,7 +79,7 @@ mock.module('../utils/commands', () => ({
   findCommandFiles: mock(async () => []),
 }));
 
-const { cloneRepository } = await import('./clone');
+const { cloneRepository } = await import('./sql-registration');
 const trackTempRoot = trackTempRoots();
 
 const savedEnv = {

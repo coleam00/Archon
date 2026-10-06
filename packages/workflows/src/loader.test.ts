@@ -9450,6 +9450,85 @@ nodes:
   });
 });
 
+describe('loop_group prose completion with structured terminal output (#2998)', () => {
+  function parseGroup(outputFormat?: Record<string, unknown>, untilBash?: string): ParseResult {
+    return parseWorkflow(
+      Bun.YAML.stringify({
+        name: 'structured-group',
+        description: 'test',
+        nodes: [
+          {
+            id: 'refine',
+            loop_group: {
+              until: 'DONE',
+              ...(untilBash === undefined ? {} : { until_bash: untilBash }),
+              max_iterations: 3,
+              nodes: [
+                { id: 'work', prompt: 'work' },
+                {
+                  id: 'review',
+                  depends_on: ['work'],
+                  prompt: 'review',
+                  ...(outputFormat === undefined ? {} : { output_format: outputFormat }),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      'structured-group.yaml'
+    );
+  }
+
+  it('rejects an object terminal schema when until is the sole completion channel', () => {
+    const result = parseGroup({ type: 'object', properties: { done: { type: 'boolean' } } });
+    expect(result.workflow).toBeNull();
+    expect(result.error?.errorType).toBe('validation_error');
+    expect(result.error?.error).toContain("'refine'");
+    expect(result.error?.error).toContain("'review'");
+    expect(result.error?.error).toContain('serialized structured output');
+    expect(result.error?.error).toContain('until_bash');
+    expect(result.error?.error).toContain('structured field');
+  });
+
+  it.each([
+    { type: 'array' },
+    { type: 'number' },
+    { type: 'integer' },
+    { type: 'boolean' },
+    { type: 'null' },
+    { type: ['object', 'null'] },
+  ])('rejects a non-string terminal schema: %j', schema => {
+    expect(parseGroup(schema).error?.errorType).toBe('validation_error');
+  });
+
+  it.each([{}, { type: ['string', 'object'] }])(
+    'accepts a schema that permits string output: %j',
+    schema => {
+      expect(parseGroup(schema).error).toBeNull();
+    }
+  );
+
+  it('accepts a terminal node without output_format', () => {
+    expect(parseGroup().error).toBeNull();
+  });
+
+  it('accepts a string terminal schema', () => {
+    expect(parseGroup({ type: 'string' }).error).toBeNull();
+  });
+
+  it('accepts an object terminal schema with until_bash and retains the deprecation warning', () => {
+    const result = parseGroup(
+      { type: 'object', properties: { done: { type: 'boolean' } } },
+      'exit 0'
+    );
+    expect(result.error).toBeNull();
+    expect(
+      result.warnings?.some(w => w.includes("'loop_group.until' completion signal is deprecated"))
+    ).toBe(true);
+  });
+});
+
 it('parsing uses only the supplied registry for provider identity', () => {
   const claude = providerRegistry.get('claude');
   if (!claude) throw new Error('test registry must contain Claude');

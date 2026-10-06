@@ -28,7 +28,7 @@ import {
 import { providerEventSchema, type ProviderEvent } from '@archon/provider-contract';
 import { toHydratedTimestamp } from './timestamps';
 import {
-  LEGACY_PROVIDER_EVENT_TYPES,
+  PROVIDER_EVENT_ROW_TYPES,
   NODE_LIFECYCLE_EVENT_TYPES,
   NODE_STATE_EVENT_TYPES,
   type NodeStateEventType,
@@ -212,7 +212,7 @@ export async function listWorkflowEvents(
 }
 
 /** Every row type `listProviderEvents` reads: the envelope and the rows it replaced. */
-export const PROVIDER_EVENT_ROW_TYPES = ['provider_event', ...LEGACY_PROVIDER_EVENT_TYPES] as const;
+export { PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
 
 function dataString(data: Record<string, unknown>, key: string): string | undefined {
   const value = data[key];
