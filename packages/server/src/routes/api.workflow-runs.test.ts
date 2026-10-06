@@ -82,9 +82,11 @@ const mockFindOrCreateUser = mock(
   async (_platform: string, platformUserId: string): Promise<User> =>
     makeUser(`user-from-${platformUserId}`)
 );
+const realGetUserById = (await import('@archon/core/db/users')).getUserById;
+const mockGetUserById = mock(async (id: string): Promise<User | null> => makeUser(id));
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUser,
-  getUserById: mock(async (id: string) => makeUser(id)),
+  getUserById: mockGetUserById,
 }));
 
 const mockGetWorkflowRun = mock(async (_id: string) => null as null | MockWorkflowRun);
@@ -4545,6 +4547,35 @@ describe('starter or admin authorization on every HTTP run action', () => {
     sessionUserId = undefined;
   });
 
+  test("a persisted admin can delete another user's terminal run through the SQL host", async () => {
+    const { SqliteAdapter } = await import('@archon/core/db/adapters/sqlite');
+    const { pool } = await import('@archon/core/db/connection');
+    const database = new SqliteAdapter(':memory:');
+    await database.query("INSERT INTO remote_agent_users (id, role) VALUES ($1, 'admin')", [
+      'admin-b',
+    ]);
+    const querySpy = spyOn(pool, 'query').mockImplementation(database.query.bind(database));
+    mockGetUserById.mockImplementation(realGetUserById);
+    mockFindOrCreateUser.mockResolvedValueOnce({ ...makeUser('admin-b'), role: 'member' });
+    sessionUserId = 'admin-session';
+    const run = { ...MOCK_COMPLETED_RUN, user_id: 'starter-a' };
+    mockGetWorkflowRun.mockResolvedValue(run);
+    mockDeleteWorkflowRun.mockClear();
+    try {
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${run.id}`, { method: 'DELETE' });
+      expect(response.status).toBe(200);
+      expect(querySpy).toHaveBeenCalledWith('SELECT * FROM remote_agent_users WHERE id = $1', [
+        'admin-b',
+      ]);
+      expect(mockDeleteWorkflowRun).toHaveBeenCalledWith(run.id);
+    } finally {
+      mockGetUserById.mockImplementation(async id => makeUser(id));
+      querySpy.mockRestore();
+      await database.close();
+    }
+  });
+
   test('auth enabled without a resolved identity refuses a run action', async () => {
     requireRunIdentity = true;
     sessionUserId = undefined;
@@ -4562,41 +4593,52 @@ describe('starter or admin authorization on every HTTP run action', () => {
       requireRunIdentity = false;
     }
   });
-  for (const action of RUN_ACTIONS) {
-    test(`${action} returns 403 and performs no mutation for another member`, async () => {
-      sessionUserId = 'member-b';
-      const run = { ...MOCK_COMPLETED_RUN, user_id: 'starter-a' };
-      mockGetWorkflowRun.mockResolvedValue(run);
-      mockCancelWorkflowRun.mockClear();
-      mockDeleteWorkflowRun.mockClear();
-      mockSignalWorkflowWait.mockClear();
-      mockResolveApprovalGate.mockClear();
-      mockResolveAndCancelApprovalGate.mockClear();
-      mockRequestDetachedRunStop.mockClear();
-      const { app } = makeApp();
-      const body =
-        action === 'signal'
-          ? { event: 'ready', resumeAt: new Date().toISOString(), payload: { secret: 'contents' } }
-          : action === 'respond'
-            ? { decision: 'custom', text: 'contents' }
-            : {};
-      const response = await app.request(
-        `/api/workflows/runs/${run.id}${action === 'delete' ? '' : `/${action}`}`,
-        {
-          method: action === 'delete' ? 'DELETE' : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          ...(action === 'delete' ? {} : { body: JSON.stringify(body) }),
-        }
-      );
-      expect(response.status).toBe(403);
-      expect(await response.text()).toContain('Only the user who started this run or an admin');
-      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
-      expect(mockDeleteWorkflowRun).not.toHaveBeenCalled();
-      expect(mockSignalWorkflowWait).not.toHaveBeenCalled();
-      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
-      expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
-      expect(run).toEqual({ ...MOCK_COMPLETED_RUN, user_id: 'starter-a' });
-    });
+  for (const identity of ['another member', 'failed proxy identity'] as const) {
+    for (const action of RUN_ACTIONS) {
+      test(`${action} returns 403 and performs no mutation for ${identity}`, async () => {
+        sessionUserId = identity === 'another member' ? 'member-b' : undefined;
+        if (identity === 'failed proxy identity')
+          mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity lookup unavailable'));
+        const run = { ...MOCK_COMPLETED_RUN, user_id: 'starter-a' };
+        mockGetWorkflowRun.mockResolvedValue(run);
+        mockCancelWorkflowRun.mockClear();
+        mockDeleteWorkflowRun.mockClear();
+        mockSignalWorkflowWait.mockClear();
+        mockResolveApprovalGate.mockClear();
+        mockResolveAndCancelApprovalGate.mockClear();
+        mockRequestDetachedRunStop.mockClear();
+        const { app } = makeApp();
+        const body =
+          action === 'signal'
+            ? {
+                event: 'ready',
+                resumeAt: new Date().toISOString(),
+                payload: { secret: 'contents' },
+              }
+            : action === 'respond'
+              ? { decision: 'custom', text: 'contents' }
+              : {};
+        const response = await app.request(
+          `/api/workflows/runs/${run.id}${action === 'delete' ? '' : `/${action}`}`,
+          {
+            method: action === 'delete' ? 'DELETE' : 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(identity === 'failed proxy identity' ? { 'X-Archon-User': 'proxy-member' } : {}),
+            },
+            ...(action === 'delete' ? {} : { body: JSON.stringify(body) }),
+          }
+        );
+        expect(response.status).toBe(403);
+        expect(await response.text()).toContain('Only the user who started this run or an admin');
+        expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+        expect(mockDeleteWorkflowRun).not.toHaveBeenCalled();
+        expect(mockSignalWorkflowWait).not.toHaveBeenCalled();
+        expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+        expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+        expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+        expect(run).toEqual({ ...MOCK_COMPLETED_RUN, user_id: 'starter-a' });
+      });
+    }
   }
 });

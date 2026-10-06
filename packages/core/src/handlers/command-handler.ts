@@ -1428,7 +1428,6 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       let cleanupWarnings: string[] | undefined;
       let releasedWorktrees: AbandonConversationRunsResult['releasedWorktrees'];
       let abandonBlockedParentRunId: string | null = null;
-      let abandonError: string | null = null;
       try {
         ({
           abandoned,
@@ -1441,7 +1440,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         if (error instanceof RunActionForbiddenError)
           return { success: false, message: error.message };
         getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_abandon_failed');
-        abandonError = err.message;
+        return { success: false, message: `Could not reset conversation: ${err.message}` };
       }
 
       let hadActiveSession = false;
@@ -1489,15 +1488,9 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
           `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`
         );
       }
-      if (abandonError !== null) {
-        parts.push(`⚠️ Could not look up resumable runs: ${abandonError}`);
-      }
 
       const resetComplete =
-        sessionError === null &&
-        bindingCleared &&
-        abandonError === null &&
-        abandonBlockedParentRunId === null;
+        sessionError === null && bindingCleared && abandonBlockedParentRunId === null;
       parts.push(
         resetComplete
           ? 'Project attachment preserved — next message starts fresh.'

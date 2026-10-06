@@ -1753,7 +1753,9 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
 export async function resolveRunActor(c: Context): Promise<RunActor> {
   const identity = await resolveAuthContext(c);
   if (identity) return { kind: 'user', userId: identity.userId };
-  return { kind: isWebAuthEnabled() ? 'unidentified' : 'operator' };
+  const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+  const suppliedIdentity = Boolean(c.req.header(headerName)?.trim());
+  return { kind: isWebAuthEnabled() || suppliedIdentity ? 'unidentified' : 'operator' };
 }
 
 export async function resolveWebUserId(c: Context): Promise<string | undefined> {

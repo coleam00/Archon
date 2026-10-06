@@ -1063,6 +1063,40 @@ describe('CommandHandler', () => {
         expect(result.message).not.toContain('Cleared workspace binding');
       });
 
+      for (const failure of ['role lookup', 'transactional snapshot'] as const) {
+        test(`reset preserves session and binding when ${failure} fails`, async () => {
+          const users = await import('../db/users');
+          const roleLookup = spyOn(users, 'getUserById');
+          if (failure === 'role lookup')
+            roleLookup.mockRejectedValueOnce(new Error('role lookup unavailable'));
+          else {
+            roleLookup.mockResolvedValueOnce({
+              id: 'member-b',
+              role: 'member',
+              display_name: null,
+              email: null,
+              created_at: new Date(),
+              updated_at: new Date(),
+            });
+            mockCancelResumableRunsForConversation.mockRejectedValueOnce(
+              new Error('snapshot unavailable')
+            );
+          }
+          try {
+            const result = await handleCommand(baseConversation, '/reset', {
+              kind: 'user',
+              userId: 'member-b',
+            });
+            expect(result.success).toBe(false);
+            expect(result.message).toContain('Could not reset conversation');
+            expect(mockDeactivateSession).not.toHaveBeenCalled();
+            expect(mockUpdateConversation).not.toHaveBeenCalled();
+          } finally {
+            roleLookup.mockRestore();
+          }
+        });
+      }
+
       test('reset refusal preserves session and workspace binding', async () => {
         mockCancelResumableRunsForConversation.mockImplementation(async (_id, authorize) => {
           authorize?.([makeWorkflowRun({ user_id: 'starter', status: 'paused' })]);
@@ -1183,8 +1217,9 @@ describe('CommandHandler', () => {
         const result = await handleCommand(baseConversation, '/reset', operator);
 
         expect(result.success).toBe(false);
-        expect(result.message).toContain('Could not look up resumable runs: database busy');
-        expect(result.message).toContain('Reset is incomplete — retry /reset');
+        expect(result.message).toContain('Could not reset conversation: database busy');
+        expect(mockDeactivateSession).not.toHaveBeenCalled();
+        expect(mockUpdateConversation).not.toHaveBeenCalled();
         expect(result.message).not.toContain('next message starts fresh');
       });
 

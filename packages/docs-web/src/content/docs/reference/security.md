@@ -28,7 +28,7 @@ docker compose exec -u appuser app bun run cli user role <id> admin
 
 Upgrading preserves existing roles, which defaulted to `admin`. The database default remains `admin` so older binaries can still insert users without a role. To prepare an existing multi-user install, keep intended admins and deliberately demote other users with `archon user role <id> member`.
 
-**Role-based run-action enforcement ships separately.** This release changes role creation and management only; it does not restrict run actions. Existing multi-user installs remain unprotected until enforcement ships and the operator demotes users who should not be admins. The CLI is the local operator with direct database access and can change roles even when no admins remain.
+Only a run's starter or an admin can act on it; see [Who can act on a run](#who-can-act-on-a-run). Existing multi-user installs remain unprotected until the operator demotes users who should not be admins. The CLI is the local operator with direct database access and can change roles even when no admins remain.
 
 ## Permission Model
 
