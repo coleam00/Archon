@@ -204,9 +204,22 @@ export class SqliteAdapter implements IDatabase {
     // good, so only rerunning the whole block can succeed.
     const execute = this.execute.bind(this);
     const runOnce = async (): Promise<T> => {
+      // A busy statement spoils this attempt however the block handles it: callers wrap
+      // errors in their own messages, which would hide the busy code from the retry. So
+      // the adapter remembers it, rolls back, and rethrows the busy error itself.
+      let busy: SQLiteError | undefined;
+      const blockQuery = async <U>(sql: string, params?: unknown[]): Promise<QueryResult<U>> => {
+        try {
+          return await execute<U>(sql, params);
+        } catch (error) {
+          if (isSqliteBusy(error)) busy = error;
+          throw error;
+        }
+      };
       await execute('BEGIN');
       try {
-        const result = await this.transactionScope.run(this, () => fn(execute));
+        const result = await this.transactionScope.run(this, () => fn(blockQuery));
+        if (busy) throw busy;
         await execute('COMMIT');
         return result;
       } catch (e) {
@@ -215,7 +228,7 @@ export class SqliteAdapter implements IDatabase {
         } catch (rollbackError) {
           getLog().error({ err: rollbackError as Error }, 'db.sqlite_transaction_rollback_failed');
         }
-        throw e;
+        throw busy ?? e;
       }
     };
     // A busy failure anywhere in the block, COMMIT included, has already rolled back,

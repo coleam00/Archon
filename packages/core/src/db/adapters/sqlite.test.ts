@@ -1218,6 +1218,28 @@ describe('SqliteAdapter busy locks', () => {
     expect(await codebaseCount()).toBe(1);
   });
 
+  test('a block that wraps the busy error in its own still reruns from BEGIN', async () => {
+    await lockedAdapter();
+    const released = Bun.sleep(150).then(() => holder.run('COMMIT'));
+    let attempts = 0;
+
+    await adapter.withTransaction(async query => {
+      attempts++;
+      try {
+        await query(
+          `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+          ['cb-wrapped', 'cb-wrapped', '/tmp/test-cwd']
+        );
+      } catch (error) {
+        throw new Error(`Failed to create codebase: ${(error as Error).message}`);
+      }
+    });
+    await released;
+
+    expect(attempts).toBeGreaterThan(1);
+    expect(await codebaseCount()).toBe(1);
+  });
+
   test('a stale snapshot reruns the transaction instead of retrying the statement', async () => {
     await lockedAdapter();
     holder.run(
