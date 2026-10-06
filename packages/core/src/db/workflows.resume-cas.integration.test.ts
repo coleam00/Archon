@@ -95,6 +95,7 @@ const { createIsolationStore } = await import('./isolation-environments');
 const { requestDetachedRunStop } = await import('../services/run-owner-stop');
 const { isRunOwnedByThisProcess, isRunOwnerAnswering } = await import('../services/run-live-owner');
 const operationDeps = {
+  getUserRole: async () => undefined,
   store: {
     ...workflowDb,
     listWorkflowRuns: workflowDb.listDashboardRuns,
@@ -418,7 +419,7 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
       resolved: null,
     });
 
-    await approveWorkflow('gate-1', 'ship it');
+    await approveWorkflow('gate-1', 'ship it', { kind: 'operator' });
 
     // Status is honest: still paused, not a fake failure; no completion stamp.
     const staged = await getWorkflowRun('gate-1');
@@ -429,7 +430,7 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
     expect(staged?.metadata.approval_response).toBe('approved');
 
     // Double-approve guard (the status check alone no longer blocks it).
-    await expect(approveWorkflow('gate-1', 'again')).rejects.toThrow(
+    await expect(approveWorkflow('gate-1', 'again', { kind: 'operator' })).rejects.toThrow(
       'already approved and is awaiting resume'
     );
 
@@ -466,7 +467,7 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
     expect(approval.resolved ?? null).toBeNull();
 
     // And the second gate is approvable again.
-    await approveWorkflow('gate-1', 'step 2 fine');
+    await approveWorkflow('gate-1', 'step 2 fine', { kind: 'operator' });
     const staged = await getWorkflowRun('gate-1');
     expect((staged?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
     expect(staged?.status).toBe('paused');
@@ -623,7 +624,7 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
       { rejection_count: 0 }
     );
 
-    const result = await rejectWorkflow('gate-reject', 'needs tests');
+    const result = await rejectWorkflow('gate-reject', 'needs tests', { kind: 'operator' });
     expect(result.cancelled).toBe(false);
 
     const staged = await getWorkflowRun('gate-reject');
@@ -635,7 +636,7 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
     expect(staged?.metadata.rejection_count).toBe(1);
 
     // Double-reject guard.
-    await expect(rejectWorkflow('gate-reject', 'again')).rejects.toThrow(
+    await expect(rejectWorkflow('gate-reject', 'again', { kind: 'operator' })).rejects.toThrow(
       'already rejected and is awaiting resume'
     );
 
@@ -653,7 +654,7 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
       resolved: null,
     });
 
-    const result = await rejectWorkflow('gate-cancel', 'no');
+    const result = await rejectWorkflow('gate-cancel', 'no', { kind: 'operator' });
     expect(result.cancelled).toBe(true);
     expect((await getWorkflowRun('gate-cancel'))?.status).toBe('cancelled');
 
@@ -1319,10 +1320,16 @@ describe('stale gate actions — real SQLite', () => {
       });
 
       await expect(
-        operations.respondToWorkflow(runId, decision, 'feedback', {
-          nodeId: 'earlier',
-          pauseId: 'pause-one',
-        })
+        operations.respondToWorkflow(
+          runId,
+          decision,
+          'feedback',
+          { kind: 'operator' },
+          {
+            nodeId: 'earlier',
+            pauseId: 'pause-one',
+          }
+        )
       ).rejects.toThrow('no longer paused at the expected gate');
       const current = await getWorkflowRun(runId);
       expect(current?.status).toBe('paused');

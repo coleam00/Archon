@@ -432,6 +432,37 @@ across dependency chains and includes. The skipped join retains the original fai
 node in its `upstream_failed` cause. Condition skips and optional timeout
 skips (`on_timeout: skip`) remain admissible when another dependency succeeds.
 
+A dependency skipped by its own `when:` provides neither a success nor a failure.
+When a `none_failed_min_one_success` node has a single dependency and that
+dependency has a `when:`, the node skips every time the condition is false. The
+loader warns about this shape, naming the node; both `archon validate workflows`
+and run loading report the warning. Joins over several conditional dependencies
+are not flagged, since they are usually branches where one always runs.
+
+To run after an optional gate, also depend on an unconditional node that runs before it.
+That node's success satisfies the success requirement when the gate is
+condition-skipped, while a failed gate still blocks the join:
+
+```yaml
+name: optional-gate
+description: Run the next step whether the optional gate ran or skipped
+interactive: true
+nodes:
+  - id: review
+    bash: echo ready
+  - id: gate
+    depends_on: [review]
+    when: "$review.output != 'ready'"
+    approval:
+      message: "Review found issues. Approve to continue."
+  - id: next
+    depends_on: [review, gate]
+    trigger_rule: none_failed_min_one_success
+    bash: echo continue
+```
+
+Use `all_done` instead only when the next step should run even after the gate fails.
+
 `all_success`, `one_success`, and `all_done` keep their existing behavior.
 `if_skipped` supplies a value for a skipped output binding; it does not make a
 blocked node eligible to run or permit binding a failed output.

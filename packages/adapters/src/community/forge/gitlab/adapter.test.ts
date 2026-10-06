@@ -714,7 +714,7 @@ describe('GitLabAdapter', () => {
         expect.anything(),
         expect.anything(),
         expect.anything(),
-        expect.objectContaining({ userId: 'user-test-uuid' })
+        expect.objectContaining({ actor: { kind: 'user', userId: 'user-test-uuid' } })
       );
     });
 
@@ -746,7 +746,7 @@ describe('GitLabAdapter', () => {
         expect.anything(),
         expect.anything(),
         expect.anything(),
-        expect.objectContaining({ userId: undefined })
+        expect.objectContaining({ actor: { kind: 'unidentified' } })
       );
     });
   });

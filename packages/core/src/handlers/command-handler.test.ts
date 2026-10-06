@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import type { RunActor } from '../operations/run-authorization';
 /**
  * Unit tests for command handler
  *
@@ -33,6 +34,8 @@ import type * as SessionDb from '../db/sessions';
 import type * as WorkflowDb from '../db/workflows';
 import type * as WorkflowEventDb from '../db/workflow-events';
 import type * as WorkflowNodeSessionDb from '../db/workflow-node-sessions';
+
+const operator: RunActor = { kind: 'operator' };
 
 function makeCodebase(overrides: Partial<Codebase> = {}): Codebase {
   return {
@@ -800,7 +803,7 @@ describe('CommandHandler', () => {
 
     describe('/help', () => {
       test('should return help message', async () => {
-        const result = await handleCommand(baseConversation, '/help');
+        const result = await handleCommand(baseConversation, '/help', operator);
         expect(result.success).toBe(true);
         expect(result.message).toContain('Archon Orchestrator');
         expect(result.message).toContain('/workflow list');
@@ -811,7 +814,7 @@ describe('CommandHandler', () => {
 
     describe('/status', () => {
       test('should show platform and assistant info', async () => {
-        const result = await handleCommand(baseConversation, '/status');
+        const result = await handleCommand(baseConversation, '/status', operator);
         expect(result.success).toBe(true);
         expect(result.message).toContain('telegram');
         expect(result.message).toContain('claude');
@@ -829,7 +832,7 @@ describe('CommandHandler', () => {
         );
         mockGetActiveSession.mockResolvedValue(null);
 
-        const result = await handleCommand(conversation, '/status');
+        const result = await handleCommand(conversation, '/status', operator);
         expect(result.success).toBe(true);
         expect(result.message).toContain('my-repo');
         // cwd is null → the working directory falls back to the project root
@@ -853,7 +856,7 @@ describe('CommandHandler', () => {
         );
         mockGetActiveSession.mockResolvedValue(null);
 
-        const result = await handleCommand(conversation, '/status');
+        const result = await handleCommand(conversation, '/status', operator);
         expect(result.success).toBe(true);
         expect(result.message).toContain('Working Directory: /explicit/worktree');
         expect(result.message).not.toContain('Working Directory: /workspace/my-repo');
@@ -877,7 +880,7 @@ describe('CommandHandler', () => {
         ]);
 
         try {
-          const result = await handleCommand(conversation, '/status');
+          const result = await handleCommand(conversation, '/status', operator);
           expect(result.success).toBe(true);
           expect(result.message).toContain('platform (folder — no git)');
           // Folder projects get the same cwd fallback as repos.
@@ -893,7 +896,7 @@ describe('CommandHandler', () => {
       test('should show project-less status when no codebase attached', async () => {
         mockGetActiveSession.mockResolvedValue(null);
 
-        const result = await handleCommand(baseConversation, '/status');
+        const result = await handleCommand(baseConversation, '/status', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Orchestrator Status');
@@ -906,7 +909,7 @@ describe('CommandHandler', () => {
         mockFindCodebaseByDefaultCwd.mockResolvedValue(null);
         mockGetActiveSession.mockResolvedValue(null);
 
-        const result = await handleCommand(conversation, '/status');
+        const result = await handleCommand(conversation, '/status', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('None — orchestrator will route as needed');
@@ -940,7 +943,7 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(conversation, '/status');
+        const result = await handleCommand(conversation, '/status', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('owner/repo @ issue-42 (worktree)');
@@ -967,7 +970,7 @@ describe('CommandHandler', () => {
         // Mock git branch detection fallback
         spyExecFileAsync.mockResolvedValue({ stdout: 'main\n', stderr: '' });
 
-        const result = await handleCommand(conversation, '/status');
+        const result = await handleCommand(conversation, '/status', operator);
 
         expect(result.success).toBe(true);
         // Should fallback to git branch detection (no worktree marker)
@@ -990,7 +993,7 @@ describe('CommandHandler', () => {
       test('clears the execution binding but preserves the project attachment', async () => {
         mockGetActiveSession.mockResolvedValue(null);
 
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
 
         expect(result.success).toBe(true);
         // cwd + isolation env go; codebase_id is deliberately absent from the
@@ -1013,7 +1016,7 @@ describe('CommandHandler', () => {
           ])
         );
 
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
 
         expect(mockCancelResumableRunsForConversation).toHaveBeenCalledWith(baseConversation.id);
         // "resumable", not "pending": pending is itself a status name and reads
@@ -1031,7 +1034,7 @@ describe('CommandHandler', () => {
           }),
         ]);
         mockReclaimContainerEnv.mockRejectedValueOnce(new Error('docker down'));
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
         expect(result.message).toContain('Abandoned 1 resumable run(s).');
         expect(result.message).toContain('Could not reclaim container environment env-a');
         expect(result.message).toContain('resources may remain allocated');
@@ -1048,7 +1051,7 @@ describe('CommandHandler', () => {
           Promise.reject(new Error('Conversation not found: conv-123'))
         );
 
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Abandoned 1 resumable run(s).');
@@ -1068,7 +1071,7 @@ describe('CommandHandler', () => {
         );
         mockDeactivateSession.mockResolvedValue(undefined);
 
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
         expect(result.success).toBe(true);
         expect(result.message).toContain('cleared');
         expect(mockDeactivateSession).toHaveBeenCalledWith('session-123', 'reset-requested');
@@ -1077,7 +1080,7 @@ describe('CommandHandler', () => {
       test('should handle no active session gracefully', async () => {
         mockGetActiveSession.mockResolvedValue(null);
 
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
         expect(result.success).toBe(true);
         expect(result.message).toContain('No active session');
       });
@@ -1088,7 +1091,7 @@ describe('CommandHandler', () => {
           makeWorkflowRun({ id: 'run-a', status: 'paused' }),
         ]);
 
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Could not clear the AI session: session DB unavailable');
@@ -1112,7 +1115,7 @@ describe('CommandHandler', () => {
         );
         mockDeactivateSession.mockRejectedValueOnce(new Error('deactivation failed'));
 
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Could not clear the AI session: deactivation failed');
@@ -1128,7 +1131,7 @@ describe('CommandHandler', () => {
         mockGetActiveSession.mockResolvedValue(null);
         mockCancelResumableRunsForConversation.mockRejectedValueOnce(new Error('database busy'));
 
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Could not look up resumable runs: database busy');
@@ -1166,7 +1169,7 @@ describe('CommandHandler', () => {
           return Promise.resolve(null);
         });
 
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Parent run parent-stuck was blocked');
@@ -1184,7 +1187,7 @@ describe('CommandHandler', () => {
         );
         mockGetWorkflowRun.mockResolvedValue(makeWorkflowRun({ id: 'run-b', status: 'running' }));
 
-        const result = await handleCommand(baseConversation, '/reset');
+        const result = await handleCommand(baseConversation, '/reset', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Abandoned 2 resumable run(s).');
@@ -1211,7 +1214,7 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(conversation, '/init');
+        const result = await handleCommand(conversation, '/init', operator);
 
         expect(result.success).toBe(true);
         expect(spyFsMkdir).toHaveBeenCalledWith(join('/workspace/my-repo', '.archon', 'commands'), {
@@ -1224,7 +1227,7 @@ describe('CommandHandler', () => {
       });
 
       test('returns clear error when no cwd or codebase context exists', async () => {
-        const result = await handleCommand(baseConversation, '/init');
+        const result = await handleCommand(baseConversation, '/init', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('No project selected');
@@ -1247,7 +1250,7 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(conversation, '/init');
+        const result = await handleCommand(conversation, '/init', operator);
 
         expect(result.success).toBe(true);
         expect(spyFsMkdir).toHaveBeenCalledWith(join('/explicit/worktree', '.archon', 'commands'), {
@@ -1262,7 +1265,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           baseConversation,
-          '/workflow reset-sessions feature-dev'
+          '/workflow reset-sessions feature-dev',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -1277,7 +1281,11 @@ describe('CommandHandler', () => {
       test('narrows to a single node when a node id is given', async () => {
         mockDeleteWorkflowNodeSessions.mockResolvedValueOnce({ deleted: 1 });
 
-        await handleCommand(baseConversation, '/workflow reset-sessions feature-dev planner');
+        await handleCommand(
+          baseConversation,
+          '/workflow reset-sessions feature-dev planner',
+          operator
+        );
 
         expect(mockDeleteWorkflowNodeSessions).toHaveBeenCalledWith({
           workflow_name: 'feature-dev',
@@ -1287,7 +1295,7 @@ describe('CommandHandler', () => {
       });
 
       test('returns a usage error when the workflow name is missing', async () => {
-        const result = await handleCommand(baseConversation, '/workflow reset-sessions');
+        const result = await handleCommand(baseConversation, '/workflow reset-sessions', operator);
         expect(result.success).toBe(false);
         expect(result.message).toContain('Usage');
         expect(mockDeleteWorkflowNodeSessions).not.toHaveBeenCalled();
@@ -1298,7 +1306,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           baseConversation,
-          '/workflow reset-sessions feature-dev'
+          '/workflow reset-sessions feature-dev',
+          operator
         );
 
         expect(result.success).toBe(false);
@@ -1308,7 +1317,7 @@ describe('CommandHandler', () => {
 
     describe('/commands', () => {
       test('should return error without codebase', async () => {
-        const result = await handleCommand(baseConversation, '/commands');
+        const result = await handleCommand(baseConversation, '/commands', operator);
         expect(result.success).toBe(false);
         expect(result.message).toContain('No codebase');
       });
@@ -1320,7 +1329,7 @@ describe('CommandHandler', () => {
           execute: { path: '.claude/commands/execute.md', description: 'Execute command' },
         });
 
-        const result = await handleCommand(conversation, '/commands');
+        const result = await handleCommand(conversation, '/commands', operator);
         expect(result.success).toBe(true);
         expect(result.message).toContain('plan');
         expect(result.message).toContain('execute');
@@ -1330,7 +1339,7 @@ describe('CommandHandler', () => {
         const conversation = { ...baseConversation, codebase_id: 'cb-123' };
         mockGetCodebaseCommands.mockResolvedValue({});
 
-        const result = await handleCommand(conversation, '/commands');
+        const result = await handleCommand(conversation, '/commands', operator);
         expect(result.success).toBe(true);
         expect(result.message).toContain('No commands registered');
       });
@@ -1341,7 +1350,7 @@ describe('CommandHandler', () => {
           plan: { path: '.claude/commands/plan.md', description: 'Plan command' },
         });
 
-        const result = await handleCommand(conversation, '/commands');
+        const result = await handleCommand(conversation, '/commands', operator);
         expect(result.success).toBe(true);
         expect(result.message).toContain('plan');
         expect(result.message).not.toContain('undefined');
@@ -1350,7 +1359,7 @@ describe('CommandHandler', () => {
 
     describe('unknown command', () => {
       test('should return error for unknown command', async () => {
-        const result = await handleCommand(baseConversation, '/unknown');
+        const result = await handleCommand(baseConversation, '/unknown', operator);
         expect(result.success).toBe(false);
         expect(result.message).toContain('Unknown command');
         expect(result.message).toContain('/help');
@@ -1387,7 +1396,11 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(conversationWithCodebase, '/worktree create feat-x');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/worktree create feat-x',
+          operator
+        );
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('not applicable to folder projects');
@@ -1395,13 +1408,17 @@ describe('CommandHandler', () => {
 
       describe('create', () => {
         test('should require codebase', async () => {
-          const result = await handleCommand(baseConversation, '/worktree create feat-x');
+          const result = await handleCommand(baseConversation, '/worktree create feat-x', operator);
           expect(result.success).toBe(false);
           expect(result.message).toContain('No codebase');
         });
 
         test('should require branch name', async () => {
-          const result = await handleCommand(conversationWithCodebase, '/worktree create');
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree create',
+            operator
+          );
           expect(result.success).toBe(false);
           expect(result.message).toContain('Usage');
         });
@@ -1409,7 +1426,8 @@ describe('CommandHandler', () => {
         test('should validate branch name format', async () => {
           const result = await handleCommand(
             conversationWithCodebase,
-            '/worktree create "bad name"'
+            '/worktree create "bad name"',
+            operator
           );
           expect(result.success).toBe(false);
           expect(result.message).toContain('letters, numbers');
@@ -1421,7 +1439,8 @@ describe('CommandHandler', () => {
 
           const result = await handleCommand(
             conversationWithCodebase,
-            '/worktree create feat-auth'
+            '/worktree create feat-auth',
+            operator
           );
 
           expect(result.success).toBe(true);
@@ -1444,7 +1463,8 @@ describe('CommandHandler', () => {
 
           const result = await handleCommand(
             conversationWithCodebase,
-            '/worktree create feat-auth'
+            '/worktree create feat-auth',
+            operator
           );
 
           expect(result.success).toBe(false);
@@ -1461,7 +1481,8 @@ describe('CommandHandler', () => {
 
           const result = await handleCommand(
             conversationWithCodebase,
-            '/worktree create feat-auth'
+            '/worktree create feat-auth',
+            operator
           );
 
           expect(result.success).toBe(false);
@@ -1490,7 +1511,11 @@ describe('CommandHandler', () => {
             })
           );
 
-          const result = await handleCommand(convWithWorktree, '/worktree create new-branch');
+          const result = await handleCommand(
+            convWithWorktree,
+            '/worktree create new-branch',
+            operator
+          );
 
           expect(result.success).toBe(false);
           expect(result.message).toContain('Already using worktree');
@@ -1508,7 +1533,11 @@ describe('CommandHandler', () => {
           // DB lookup returns null (orphaned reference)
           mockIsolationEnvDbGet.mockResolvedValueOnce(null);
 
-          const result = await handleCommand(convWithWorktree, '/worktree create new-branch');
+          const result = await handleCommand(
+            convWithWorktree,
+            '/worktree create new-branch',
+            operator
+          );
 
           expect(result.success).toBe(false);
           expect(result.message).toContain('Already using worktree');
@@ -1528,7 +1557,7 @@ describe('CommandHandler', () => {
             { path: '/workspace/my-repo/worktrees/feat-x', branch: 'feat-x' },
           ]);
 
-          const result = await handleCommand(conversationWithCodebase, '/worktree list');
+          const result = await handleCommand(conversationWithCodebase, '/worktree list', operator);
 
           expect(result.success).toBe(true);
           expect(result.message).toContain('Worktrees:');
@@ -1548,7 +1577,11 @@ describe('CommandHandler', () => {
         });
 
         test('should require active worktree', async () => {
-          const result = await handleCommand(conversationWithCodebase, '/worktree remove');
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree remove',
+            operator
+          );
           expect(result.success).toBe(false);
           expect(result.message).toContain('not using a worktree');
         });
@@ -1564,7 +1597,7 @@ describe('CommandHandler', () => {
           spyExecFileAsync.mockResolvedValue({ stdout: '', stderr: '' });
           mockGetActiveSession.mockResolvedValue(null);
 
-          const result = await handleCommand(convWithWorktree, '/worktree remove');
+          const result = await handleCommand(convWithWorktree, '/worktree remove', operator);
 
           expect(result.success).toBe(true);
           expect(result.message).toContain('removed');
@@ -1584,7 +1617,7 @@ describe('CommandHandler', () => {
           mockGetActiveSession.mockResolvedValue(makeSession({ id: 'session-789', active: true }));
           mockDeactivateSession.mockResolvedValue(undefined);
 
-          const result = await handleCommand(convWithWorktree, '/worktree remove');
+          const result = await handleCommand(convWithWorktree, '/worktree remove', operator);
 
           expect(result.success).toBe(true);
           expect(mockDeactivateSession).toHaveBeenCalledWith('session-789', 'worktree-removed');
@@ -1598,7 +1631,7 @@ describe('CommandHandler', () => {
           mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
           mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-live-1234', status: 'paused' });
 
-          const result = await handleCommand(convWithWorktree, '/worktree remove');
+          const result = await handleCommand(convWithWorktree, '/worktree remove', operator);
 
           expect(result.success).toBe(false);
           expect(result.message).toContain('run-live');
@@ -1617,7 +1650,11 @@ describe('CommandHandler', () => {
           mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
           mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-live-1234', status: 'paused' });
 
-          const result = await handleCommand(convWithWorktree, '/worktree remove --force');
+          const result = await handleCommand(
+            convWithWorktree,
+            '/worktree remove --force',
+            operator
+          );
 
           expect(result.success).toBe(false);
           expect(result.message).toContain('run-live');
@@ -1631,7 +1668,7 @@ describe('CommandHandler', () => {
 
       describe('default', () => {
         test('should show usage for unknown subcommand', async () => {
-          const result = await handleCommand(conversationWithCodebase, '/worktree foo');
+          const result = await handleCommand(conversationWithCodebase, '/worktree foo', operator);
           expect(result.success).toBe(false);
           expect(result.message).toContain('Usage');
         });
@@ -1639,7 +1676,11 @@ describe('CommandHandler', () => {
 
       describe('cleanup', () => {
         test('should return usage for missing cleanup type', async () => {
-          const result = await handleCommand(conversationWithCodebase, '/worktree cleanup');
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree cleanup',
+            operator
+          );
           expect(result.success).toBe(false);
           expect(result.message).toContain('Usage');
           expect(result.message).toContain('merged');
@@ -1647,7 +1688,11 @@ describe('CommandHandler', () => {
         });
 
         test('should return usage for invalid cleanup type', async () => {
-          const result = await handleCommand(conversationWithCodebase, '/worktree cleanup foo');
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree cleanup foo',
+            operator
+          );
           expect(result.success).toBe(false);
           expect(result.message).toContain('Usage');
         });
@@ -1659,7 +1704,11 @@ describe('CommandHandler', () => {
           });
           mockCountActiveByCodebase.mockResolvedValueOnce(3);
 
-          const result = await handleCommand(conversationWithCodebase, '/worktree cleanup merged');
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree cleanup merged',
+            operator
+          );
 
           expect(result.success).toBe(true);
           expect(result.message).toContain('Cleaned up 2 merged worktree(s)');
@@ -1677,7 +1726,11 @@ describe('CommandHandler', () => {
           });
           mockCountActiveByCodebase.mockResolvedValueOnce(1);
 
-          const result = await handleCommand(conversationWithCodebase, '/worktree cleanup stale');
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree cleanup stale',
+            operator
+          );
 
           expect(result.success).toBe(true);
           expect(result.message).toContain('No stale worktrees to clean up');
@@ -1707,7 +1760,7 @@ describe('CommandHandler', () => {
           ],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow list');
+        const result = await handleCommand(conversationWithCodebase, '/workflow list', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('assist');
@@ -1728,7 +1781,7 @@ describe('CommandHandler', () => {
           ],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow list');
+        const result = await handleCommand(conversationWithCodebase, '/workflow list', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('1 workflow(s) failed to load');
@@ -1747,7 +1800,7 @@ describe('CommandHandler', () => {
           errors,
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow list');
+        const result = await handleCommand(conversationWithCodebase, '/workflow list', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('15 workflow(s) failed to load');
@@ -1763,7 +1816,7 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        await handleCommand(conversationWithCodebase, '/workflow list');
+        await handleCommand(conversationWithCodebase, '/workflow list', operator);
 
         expect(spyDiscoverWorkflows).toHaveBeenCalledWith(
           expect.any(String),
@@ -1786,7 +1839,7 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow list');
+        const result = await handleCommand(conversationWithCodebase, '/workflow list', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain("unknown key 'interactive' will be ignored");
@@ -1828,7 +1881,7 @@ describe('CommandHandler', () => {
           ],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow reload');
+        const result = await handleCommand(conversationWithCodebase, '/workflow reload', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Discovered 1 workflow(s)');
@@ -1845,7 +1898,7 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow reload');
+        const result = await handleCommand(conversationWithCodebase, '/workflow reload', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Discovered 1 workflow(s)');
@@ -1875,7 +1928,11 @@ describe('CommandHandler', () => {
           ],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow run fix-issue');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run fix-issue',
+          operator
+        );
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('failed to load');
@@ -1890,7 +1947,11 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow run Assist');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run Assist',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(startRequest(result.workflow).definition.name).toBe('assist');
@@ -1910,7 +1971,11 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow run gated');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run gated',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(startRequest(result.workflow).definition.name).toBe('gated');
@@ -1929,7 +1994,11 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow run clean');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run clean',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(startRequest(result.workflow).parseWarnings).toBeUndefined();
@@ -1943,7 +2012,11 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow run assist');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run assist',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(startRequest(result.workflow).definition.name).toBe('acme-assist');
@@ -1960,7 +2033,11 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow run smart');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run smart',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(startRequest(result.workflow).definition.name).toBe('acme-smart-pr-review');
@@ -1975,7 +2052,11 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow run review');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run review',
+          operator
+        );
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Ambiguous workflow');
@@ -2014,7 +2095,11 @@ describe('CommandHandler', () => {
           mockGetWorkflowRun.mockResolvedValueOnce(runningRun(runId));
           mockRequestDetachedRunStop.mockClear();
 
-          const result = await handleCommand(conversationWithCodebase, '/workflow cancel');
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/workflow cancel',
+            operator
+          );
 
           expect(result.success).toBe(true);
           expect(result.message).toBe('Cancelled workflow: `test-workflow`');
@@ -2034,7 +2119,11 @@ describe('CommandHandler', () => {
           mockGetWorkflowRun.mockResolvedValueOnce(target);
           mockGetActiveWorkflowRun.mockClear();
 
-          const result = await handleCommand(conversationWithCodebase, '/workflow cancel abcd1234');
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/workflow cancel abcd1234',
+            operator
+          );
 
           expect(result.success).toBe(true);
           expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('abcd1234', 'codebase-123');
@@ -2056,7 +2145,11 @@ describe('CommandHandler', () => {
         mockGetWorkflowRun.mockClear();
         mockCancelWorkflowRun.mockClear();
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow cancel abcd1234');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow cancel abcd1234',
+          operator
+        );
 
         expect(result.success).toBe(false);
         expect(result.message).toContain("Run id 'abcd1234' matches more than one run");
@@ -2072,7 +2165,7 @@ describe('CommandHandler', () => {
           Promise.resolve({ pid: 4242, stop: () => Promise.resolve(), release: () => undefined })
         );
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow cancel');
+        const result = await handleCommand(conversationWithCodebase, '/workflow cancel', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain("Stopped the run's live owner process (pid 4242)");
@@ -2090,7 +2183,7 @@ describe('CommandHandler', () => {
         );
         mockCancelWorkflowRun.mockClear();
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow cancel');
+        const result = await handleCommand(conversationWithCodebase, '/workflow cancel', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Recorded owner: host build-box, pid 4242.');
@@ -2101,7 +2194,7 @@ describe('CommandHandler', () => {
       test('should return message when no active workflow exists', async () => {
         mockGetActiveWorkflowRun.mockResolvedValueOnce(null);
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow cancel');
+        const result = await handleCommand(conversationWithCodebase, '/workflow cancel', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toBe('No active workflow to cancel.');
@@ -2109,7 +2202,7 @@ describe('CommandHandler', () => {
       });
 
       test('should return no-active-workflow when no codebase is configured', async () => {
-        const result = await handleCommand(baseConversation, '/workflow cancel');
+        const result = await handleCommand(baseConversation, '/workflow cancel', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toBe('No active workflow to cancel.');
@@ -2137,7 +2230,7 @@ describe('CommandHandler', () => {
           counts: { ...EMPTY_DASHBOARD_COUNTS, all: 1, running: 1 },
         });
 
-        const result = await handleCommand(baseConversation, '/workflow status');
+        const result = await handleCommand(baseConversation, '/workflow status', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('implement');
@@ -2160,7 +2253,7 @@ describe('CommandHandler', () => {
           counts: { ...EMPTY_DASHBOARD_COUNTS, all: 1, paused: 1 },
         });
 
-        const result = await handleCommand(baseConversation, '/workflow status');
+        const result = await handleCommand(baseConversation, '/workflow status', operator);
 
         expect(result.message).toContain('review');
         expect(result.message).toContain('(paused)');
@@ -2189,7 +2282,7 @@ describe('CommandHandler', () => {
           counts: { ...EMPTY_DASHBOARD_COUNTS, all: 1, paused: 1 },
         });
 
-        const result = await handleCommand(baseConversation, '/workflow status');
+        const result = await handleCommand(baseConversation, '/workflow status', operator);
 
         expect(result.message).toContain('Re-run the failing check, then resume this run.');
         expect(result.message).toContain('/workflow resume run-attention');
@@ -2212,7 +2305,7 @@ describe('CommandHandler', () => {
           counts: { ...EMPTY_DASHBOARD_COUNTS, all: 1, paused: 1 },
         });
 
-        const result = await handleCommand(baseConversation, '/workflow status');
+        const result = await handleCommand(baseConversation, '/workflow status', operator);
 
         expect(result.message).toContain('/workflow approve run-approval');
         expect(result.message).toContain('/workflow reject run-approval <reason>');
@@ -2226,7 +2319,7 @@ describe('CommandHandler', () => {
           counts: EMPTY_DASHBOARD_COUNTS,
         });
 
-        const result = await handleCommand(baseConversation, '/workflow status');
+        const result = await handleCommand(baseConversation, '/workflow status', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toBe('No active workflows.');
@@ -2235,7 +2328,7 @@ describe('CommandHandler', () => {
       test('should handle database errors gracefully', async () => {
         mockListDashboardRuns.mockRejectedValueOnce(new Error('Database connection error'));
 
-        const result = await handleCommand(baseConversation, '/workflow status');
+        const result = await handleCommand(baseConversation, '/workflow status', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Failed to retrieve workflow status');
@@ -2259,7 +2352,7 @@ describe('CommandHandler', () => {
           counts: { ...EMPTY_DASHBOARD_COUNTS, all: 1, running: 1 },
         });
 
-        const result = await handleCommand(baseConversation, '/workflow status');
+        const result = await handleCommand(baseConversation, '/workflow status', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('(unknown)');
@@ -2285,7 +2378,7 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(baseConversation, '/workflow resume run-123');
+        const result = await handleCommand(baseConversation, '/workflow resume run-123', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toBe('Resume requested');
@@ -2307,7 +2400,7 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(baseConversation, '/workflow resume run-456');
+        const result = await handleCommand(baseConversation, '/workflow resume run-456', operator);
 
         expect(result.success).toBe(true);
         expect(resumeRequest(result.workflow).run.id).toBe('run-456');
@@ -2329,7 +2422,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           baseConversation,
-          '/workflow resume run-missing-workflow'
+          '/workflow resume run-missing-workflow',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -2360,7 +2454,11 @@ describe('CommandHandler', () => {
           ],
         });
 
-        const result = await handleCommand(baseConversation, '/workflow resume run-bad-workflow');
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow resume run-bad-workflow',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(resumeRequest(result.workflow).run).toBe(run);
@@ -2379,7 +2477,7 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(baseConversation, '/workflow resume run-789');
+        const result = await handleCommand(baseConversation, '/workflow resume run-789', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Cannot resume');
@@ -2389,14 +2487,18 @@ describe('CommandHandler', () => {
       test('should return error when run not found', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(null);
 
-        const result = await handleCommand(baseConversation, '/workflow resume nonexistent');
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow resume nonexistent',
+          operator
+        );
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('not found');
       });
 
       test('should return usage when no id provided', async () => {
-        const result = await handleCommand(baseConversation, '/workflow resume');
+        const result = await handleCommand(baseConversation, '/workflow resume', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Usage: /workflow resume <id>');
@@ -2406,7 +2508,7 @@ describe('CommandHandler', () => {
       test('should handle DB error on resume gracefully', async () => {
         mockGetWorkflowRun.mockRejectedValueOnce(new Error('DB down'));
 
-        const result = await handleCommand(baseConversation, '/workflow resume run-err');
+        const result = await handleCommand(baseConversation, '/workflow resume run-err', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Failed to resume');
@@ -2425,7 +2527,7 @@ describe('CommandHandler', () => {
         });
         mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-        const result = await handleCommand(baseConversation, '/workflow abandon run-123');
+        const result = await handleCommand(baseConversation, '/workflow abandon run-123', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Abandoned');
@@ -2455,7 +2557,11 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(baseConversation, '/workflow abandon run-done');
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow abandon run-done',
+          operator
+        );
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Cannot abandon');
@@ -2465,7 +2571,11 @@ describe('CommandHandler', () => {
       test('should return error when run not found', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(null);
 
-        const result = await handleCommand(baseConversation, '/workflow abandon nonexistent');
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow abandon nonexistent',
+          operator
+        );
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('not found');
@@ -2484,7 +2594,7 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(baseConversation, '/workflow abandon run-123');
+        const result = await handleCommand(baseConversation, '/workflow abandon run-123', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Recorded owner: host build-box, pid 4242.');
@@ -2513,7 +2623,11 @@ describe('CommandHandler', () => {
         );
         mockCancelWorkflowRun.mockClear();
 
-        const result = await handleCommand(baseConversation, '/workflow abandon run-live');
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow abandon run-live',
+          operator
+        );
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('cannot be stopped from here');
@@ -2522,7 +2636,7 @@ describe('CommandHandler', () => {
       });
 
       test('should return usage when no id provided', async () => {
-        const result = await handleCommand(baseConversation, '/workflow abandon');
+        const result = await handleCommand(baseConversation, '/workflow abandon', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Usage: /workflow abandon <id>');
@@ -2541,7 +2655,7 @@ describe('CommandHandler', () => {
         );
         mockCancelWorkflowRun.mockRejectedValueOnce(new Error('DB down'));
 
-        const result = await handleCommand(baseConversation, '/workflow abandon run-err');
+        const result = await handleCommand(baseConversation, '/workflow abandon run-err', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Failed to abandon');
@@ -2559,7 +2673,7 @@ describe('CommandHandler', () => {
       });
 
       test('should return error when no workflow name is provided', async () => {
-        const result = await handleCommand(conversationWithCodebase, '/workflow run');
+        const result = await handleCommand(conversationWithCodebase, '/workflow run', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Usage: /workflow run <name>');
@@ -2577,7 +2691,11 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow run nonexistent');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run nonexistent',
+          operator
+        );
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Workflow `nonexistent` not found');
@@ -2592,7 +2710,11 @@ describe('CommandHandler', () => {
           errors: [],
         });
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow run test-workflow');
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run test-workflow',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Starting workflow: `test-workflow`');
@@ -2611,7 +2733,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           conversationWithCodebase,
-          '/workflow run fix-issue #42 add dark mode'
+          '/workflow run fix-issue #42 add dark mode',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -2630,7 +2753,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           conversationWithCodebase,
-          '/workflow run test-workflow --force do it'
+          '/workflow run test-workflow --force do it',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -2648,7 +2772,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           conversationWithCodebase,
-          '/workflow run test-workflow do --force it'
+          '/workflow run test-workflow do --force it',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -2666,7 +2791,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           conversationWithCodebase,
-          '/workflow run test-workflow do it'
+          '/workflow run test-workflow do it',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -2675,7 +2801,11 @@ describe('CommandHandler', () => {
       });
 
       test('should return not-found when no codebase is configured', async () => {
-        const result = await handleCommand(baseConversation, '/workflow run test-workflow');
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow run test-workflow',
+          operator
+        );
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Workflow `test-workflow` not found');
@@ -2693,14 +2823,14 @@ describe('CommandHandler', () => {
       });
 
       test('should show run command in workflow usage help', async () => {
-        const result = await handleCommand(conversationWithCodebase, '/workflow invalid');
+        const result = await handleCommand(conversationWithCodebase, '/workflow invalid', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('/workflow run');
       });
 
       test('should show status in workflow usage help', async () => {
-        const result = await handleCommand(conversationWithCodebase, '/workflow invalid');
+        const result = await handleCommand(conversationWithCodebase, '/workflow invalid', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('/workflow status');
@@ -2738,14 +2868,19 @@ describe('CommandHandler', () => {
         '/workflow reset-sessions',
       ]) {
         test(`${command} reply`, async () => {
-          const result = await handleCommand(projectConversation, command, slack);
+          const result = await handleCommand(projectConversation, command, operator, slack);
           expectSlackSpelling(result.message);
         });
       }
 
       test('/workflow run with an unknown workflow', async () => {
         spyDiscoverWorkflows?.mockResolvedValue({ workflows: [], errors: [] });
-        const result = await handleCommand(projectConversation, '/workflow run nope', slack);
+        const result = await handleCommand(
+          projectConversation,
+          '/workflow run nope',
+          operator,
+          slack
+        );
         expectSlackSpelling(result.message);
       });
 
@@ -2753,7 +2888,7 @@ describe('CommandHandler', () => {
         mockGetActiveWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({ id: 'wf-active', workflow_name: 'investigate', user_message: 'x' })
         );
-        const result = await handleCommand(baseConversation, '/status', slack);
+        const result = await handleCommand(baseConversation, '/status', operator, slack);
         expectSlackSpelling(result.message);
       });
 
@@ -2783,7 +2918,7 @@ describe('CommandHandler', () => {
           total: 3,
           counts: { ...EMPTY_DASHBOARD_COUNTS, all: 3, running: 1, paused: 2 },
         });
-        const result = await handleCommand(baseConversation, '/workflow status', slack);
+        const result = await handleCommand(baseConversation, '/workflow status', operator, slack);
         expectSlackSpelling(result.message);
         expect(result.message).toContain('/archon-workflow resume run-attention');
         expect(result.message).toContain('/archon-workflow approve run-approval');
@@ -2799,7 +2934,12 @@ describe('CommandHandler', () => {
         });
         mockGetActiveWorkflowRun.mockResolvedValueOnce(orphan);
         mockGetWorkflowRun.mockResolvedValueOnce(orphan);
-        const result = await handleCommand(projectConversation, '/workflow cancel', slack);
+        const result = await handleCommand(
+          projectConversation,
+          '/workflow cancel',
+          operator,
+          slack
+        );
         expect(result.success).toBe(false);
         expect(result.message).toContain('Abandon it: `/archon-workflow abandon wf-orphan`');
         expectSlackSpelling(result.message);
@@ -2818,6 +2958,7 @@ describe('CommandHandler', () => {
         const result = await handleCommand(
           approveConversation,
           '/workflow approve run-gate',
+          operator,
           slack
         );
         expect(result.message).toContain('could not be continued');
@@ -2849,7 +2990,12 @@ describe('CommandHandler', () => {
               },
             })
           );
-          const result = await handleCommand(projectConversation, `/workflow ${args}`, slack);
+          const result = await handleCommand(
+            projectConversation,
+            `/workflow ${args}`,
+            operator,
+            slack
+          );
           expect(result.success).toBe(false);
           expect(result.message).toContain(`/archon-workflow ${redirect}`);
           expectSlackSpelling(result.message);
@@ -2857,7 +3003,7 @@ describe('CommandHandler', () => {
       }
 
       test('a surface without its own spelling keeps /workflow', async () => {
-        const result = await handleCommand(projectConversation, '/workflow invalid', {});
+        const result = await handleCommand(projectConversation, '/workflow invalid', operator, {});
         expect(result.message).toContain('/workflow status');
         expect(result.message).not.toContain('/archon-workflow');
       });
@@ -2877,7 +3023,7 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(baseConversation, '/status');
+        const result = await handleCommand(baseConversation, '/status', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Active Workflow: `investigate-issue`');
@@ -2887,7 +3033,7 @@ describe('CommandHandler', () => {
       test('should not show workflow section when no workflow running', async () => {
         mockGetActiveWorkflowRun.mockResolvedValueOnce(null);
 
-        const result = await handleCommand(baseConversation, '/status');
+        const result = await handleCommand(baseConversation, '/status', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).not.toContain('Active Workflow');
@@ -2906,7 +3052,7 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(baseConversation, '/status');
+        const result = await handleCommand(baseConversation, '/status', operator);
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Active Workflow');
@@ -2917,7 +3063,7 @@ describe('CommandHandler', () => {
       test('should gracefully handle workflow database errors in status', async () => {
         mockGetActiveWorkflowRun.mockRejectedValueOnce(new Error('Database connection error'));
 
-        const result = await handleCommand(baseConversation, '/status');
+        const result = await handleCommand(baseConversation, '/status', operator);
 
         // Status should still succeed, just without workflow info
         expect(result.success).toBe(true);
@@ -2935,7 +3081,7 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(baseConversation, '/status');
+        const result = await handleCommand(baseConversation, '/status', operator);
 
         expect(result.success).toBe(true);
         // Should still show workflow name
@@ -2968,7 +3114,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           approveConversation,
-          '/workflow approve run-123 Add error handling'
+          '/workflow approve run-123 Add error handling',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -3023,7 +3170,7 @@ describe('CommandHandler', () => {
           })
         );
 
-        await handleCommand(approveConversation, '/workflow approve run-456 LGTM');
+        await handleCommand(approveConversation, '/workflow approve run-456 LGTM', operator);
 
         // The audit events ride the CAS transaction now (#2146), not a separate
         // createWorkflowEvent write. node_completed should NOT be written by the
@@ -3060,7 +3207,11 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(approveConversation, '/workflow approve run-bare');
+        const result = await handleCommand(
+          approveConversation,
+          '/workflow approve run-bare',
+          operator
+        );
 
         expect(result.success).toBe(true);
         // The chat handler must NOT pre-default the comment to 'Approved' —
@@ -3093,7 +3244,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           approveConversation,
-          '/workflow approve run-789 feedback'
+          '/workflow approve run-789 feedback',
+          operator
         );
 
         expect(result.success).toBe(false);
@@ -3105,7 +3257,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           approveConversation,
-          '/workflow approve missing-run feedback'
+          '/workflow approve missing-run feedback',
+          operator
         );
 
         expect(result.success).toBe(false);
@@ -3149,7 +3302,11 @@ describe('CommandHandler', () => {
         stubRunReads(run);
         stubWorkflowDiscovery();
 
-        const result = await handleCommand(approveConversation, '/workflow approve run-gate LGTM');
+        const result = await handleCommand(
+          approveConversation,
+          '/workflow approve run-gate LGTM',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('approved');
@@ -3173,7 +3330,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           approveConversation,
-          '/workflow reject run-gate schema is wrong'
+          '/workflow reject run-gate schema is wrong',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -3189,7 +3347,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           approveConversation,
-          '/workflow reject run-gate no thanks'
+          '/workflow reject run-gate no thanks',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -3211,7 +3370,11 @@ describe('CommandHandler', () => {
         stubWorkflowDiscovery();
         mockGetWorkflowRun.mockClear();
 
-        const result = await handleCommand(projectConversation, '/workflow approve abcd1234 LGTM');
+        const result = await handleCommand(
+          projectConversation,
+          '/workflow approve abcd1234 LGTM',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('abcd1234', 'codebase-123');
@@ -3225,7 +3388,11 @@ describe('CommandHandler', () => {
         mockGetWorkflowRun.mockClear();
         mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-        const result = await handleCommand(projectConversation, '/workflow reject abcd1234 no');
+        const result = await handleCommand(
+          projectConversation,
+          '/workflow reject abcd1234 no',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('rejected and cancelled');
@@ -3241,7 +3408,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           projectConversation,
-          '/workflow respond abcd1234 approve LGTM'
+          '/workflow respond abcd1234 approve LGTM',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -3260,7 +3428,11 @@ describe('CommandHandler', () => {
         mockGetWorkflowRun.mockResolvedValueOnce(run);
         stubWorkflowDiscovery();
 
-        const result = await handleCommand(projectConversation, '/workflow resume abcd1234');
+        const result = await handleCommand(
+          projectConversation,
+          '/workflow resume abcd1234',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(result.message).toBe('Resume requested');
@@ -3281,7 +3453,7 @@ describe('CommandHandler', () => {
           ]);
           mockGetWorkflowRun.mockClear();
 
-          const result = await handleCommand(projectConversation, `/workflow ${command}`);
+          const result = await handleCommand(projectConversation, `/workflow ${command}`, operator);
 
           expect(result.success).toBe(false);
           expect(result.message).toContain("Run id 'abcd1234' matches more than one run");
@@ -3296,7 +3468,11 @@ describe('CommandHandler', () => {
         stubRunReads(run);
         stubWorkflowDiscovery();
 
-        const result = await handleCommand(approveConversation, '/workflow approve run-gate');
+        const result = await handleCommand(
+          approveConversation,
+          '/workflow approve run-gate',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('approved');
@@ -3311,7 +3487,11 @@ describe('CommandHandler', () => {
         stubRunReads(run);
         spyDiscoverWorkflows?.mockResolvedValue({ workflows: [], errors: [] });
 
-        const result = await handleCommand(approveConversation, '/workflow approve run-gate');
+        const result = await handleCommand(
+          approveConversation,
+          '/workflow approve run-gate',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('approved');
@@ -3344,7 +3524,11 @@ describe('CommandHandler', () => {
           })
         );
 
-        await handleCommand(approveConversation, '/workflow approve run-cap LGTM looks good');
+        await handleCommand(
+          approveConversation,
+          '/workflow approve run-cap LGTM looks good',
+          operator
+        );
 
         // node_completed rides the CAS transaction now (#2146), not a direct write.
         const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
@@ -3376,7 +3560,7 @@ describe('CommandHandler', () => {
           })
         );
 
-        await handleCommand(approveConversation, '/workflow approve run-nocap a comment');
+        await handleCommand(approveConversation, '/workflow approve run-nocap a comment', operator);
 
         // node_completed rides the CAS transaction now (#2146), not a direct write.
         const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
@@ -3410,7 +3594,11 @@ describe('CommandHandler', () => {
           })
         );
 
-        await handleCommand(approveConversation, '/workflow approve run-new-mode a comment');
+        await handleCommand(
+          approveConversation,
+          '/workflow approve run-new-mode a comment',
+          operator
+        );
 
         const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
         const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -3446,7 +3634,11 @@ describe('CommandHandler', () => {
           })
         );
 
-        await handleCommand(approveConversation, '/workflow respond run-respond revise needs work');
+        await handleCommand(
+          approveConversation,
+          '/workflow respond run-respond revise needs work',
+          operator
+        );
 
         const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
         const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -3484,7 +3676,8 @@ describe('CommandHandler', () => {
 
         await handleCommand(
           approveConversation,
-          '/workflow respond run-respond-approve approve lgtm'
+          '/workflow respond run-respond-approve approve lgtm',
+          operator
         );
 
         const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
@@ -3520,7 +3713,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           approveConversation,
-          '/workflow respond run-respond-invalid nonexistent'
+          '/workflow respond run-respond-invalid nonexistent',
+          operator
         );
 
         expect(result.success).toBe(false);
@@ -3553,7 +3747,8 @@ describe('CommandHandler', () => {
 
         await handleCommand(
           approveConversation,
-          '/workflow approve run-legacy-cap LGTM looks good'
+          '/workflow approve run-legacy-cap LGTM looks good',
+          operator
         );
 
         const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
@@ -3592,7 +3787,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           approveConversation,
-          '/workflow reject run-reject-1 needs work'
+          '/workflow reject run-reject-1 needs work',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -3651,7 +3847,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           approveConversation,
-          '/workflow reject run-reject-max bad'
+          '/workflow reject run-reject-max bad',
+          operator
         );
 
         expect(result.success).toBe(true);
@@ -3696,7 +3893,8 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(
           approveConversation,
-          '/workflow reject run-reject-plain reason'
+          '/workflow reject run-reject-plain reason',
+          operator
         );
 
         expect(result.success).toBe(true);

@@ -452,16 +452,9 @@ export async function resolveProjectPaths(
     // are distinguishable after the fact. See the persistence block in `executeWorkflow`
     // and `ResolvedProjectPaths.identityResolution`.
     //
-    // What the retry is worth, honestly, differs by dialect:
-    //   • Postgres — it earns its place. A stale or broken pooled connection is exactly
-    //     the fault an immediate retry clears by drawing a fresh one, and this is the
-    //     only app-level DB retry in the tree. Zero delay is CORRECT here; backoff would
-    //     add latency for nothing.
-    //   • SQLite (the default install) — weak. `PRAGMA busy_timeout = 5000` means
-    //     SQLITE_BUSY cannot surface as a throw until five seconds of sustained
-    //     contention have already elapsed, so what reaches us is by construction not
-    //     transient, and retrying at that instant retries the moment least likely to
-    //     have cleared. Kept because it costs one attempt and cannot make things worse.
+    // The retry is for Postgres: a stale or broken pooled connection is exactly the
+    // fault an immediate retry clears by drawing a fresh one, so zero delay is correct.
+    // SQLite never surfaces SQLITE_BUSY here: its adapter waits out busy locks itself.
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const codebase = await deps.store.getCodebase(codebaseId);

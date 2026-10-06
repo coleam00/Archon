@@ -789,6 +789,7 @@ const operationIsolationDb = await import('@archon/core/db/isolation-environment
 mock.module('@archon/core/workflows/sql-host', () => ({
   createSqlWorkflowOperations: () =>
     createWorkflowOperations({
+      getUserRole: async () => undefined,
       store: {
         getWorkflowRun: (...args) => operationWorkflowDb.getWorkflowRun(...args),
         findChildRuns: (...args) => operationWorkflowDb.findChildRuns(...args),
