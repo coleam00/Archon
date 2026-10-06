@@ -35,35 +35,47 @@ export interface GateInput {
   readonly stage: string;
 }
 
-export function greenGate({ green, cause, summary, stage }: GateInput): void {
+/** Why the gate refuses this verdict, or undefined when it passes. */
+export function gateRefusal({ green, cause, summary, stage }: GateInput): string | undefined {
   if (cause === 'incomplete') {
     // Decided before `green` is read: a green over checks that never ran is unsupported.
-    refuse(unfinishedValidation(stage, summary));
-  } else if (green === 'true') {
-    emit({ gate: 'green', red_cause: '', stage, summary: '', head: cleanStartCommit() });
-  } else if (cause === '') {
+    return unfinishedValidation(stage, summary);
+  }
+  if (green === 'true') return undefined;
+  if (cause === '') {
     // No cause and no check run: the declaring node stopped on a blocker and said why.
-    refuse(
-      summary === ''
-        ? `${stage} is red and declared no red_cause. Red that nobody explained is red this gate refuses.`
-        : `${stage} stopped on a blocker it declared: ${summary}`
-    );
-  } else if (!passesRed(cause)) {
-    refuse(
+    return summary === ''
+      ? `${stage} is red and declared no red_cause. Red that nobody explained is red this gate refuses.`
+      : `${stage} stopped on a blocker it declared: ${summary}`;
+  }
+  if (!passesRed(cause)) {
+    return (
       `${stage} is red (${cause}). ` +
-        (cause === 'interaction'
-          ? `The separately green changes fail when composed; hold this combination. ${summary} `
-          : 'The change has no accepted non-introduced-red evidence. ') +
-        'Refusing to open or advance a pull request on red work.'
+      (cause === 'interaction'
+        ? `The separately green changes fail when composed; hold this combination. ${summary} `
+        : 'The change has no accepted non-introduced-red evidence. ') +
+      'Refusing to open or advance a pull request on red work.'
     );
-  } else if (summary === '') {
+  }
+  if (summary === '') {
     // The label is not the claim. Emptiness is all this checks; whether the prose is
     // genuine evidence is the declaring agent's judgment and the reviewer's.
-    refuse(
+    return (
       `${stage} declared its red ${cause}, but recorded no evidence for the claim. ` +
-        'A pass on red the change did not cause is only as good as the failing check ' +
-        'it names — refusing without it.'
+      'A pass on red the change did not cause is only as good as the failing check ' +
+      'it names — refusing without it.'
     );
+  }
+  return undefined;
+}
+
+export function greenGate(input: GateInput): void {
+  const { green, cause, summary, stage } = input;
+  const refusal = gateRefusal(input);
+  if (refusal !== undefined) {
+    refuse(refusal);
+  } else if (green === 'true') {
+    emit({ gate: 'green', red_cause: '', stage, summary: '', head: cleanStartCommit() });
   } else {
     note(
       `${stage} is red, and declared that red ${cause} rather than introduced. ` +

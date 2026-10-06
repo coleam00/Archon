@@ -33,13 +33,31 @@ export interface CheckRead {
 }
 
 /**
- * Checks skipped before the pull request was marked ready. A project whose CI
- * skips drafts reports its draft-time jobs as skipped; they say nothing about the
- * ready pull request, whose own runs register only after the flip. `flippedAt` is
- * null when this run did not flip the pull request, and then nothing is stale.
+ * How long after the ready flip a skip is not yet the CI's answer. A project whose
+ * CI skips drafts registers its ready runs within seconds of the flip; one whose CI
+ * does not run again on the flip never will. Past this window a skip counts as
+ * green again, so the second shape costs one wait cycle, never the whole wait.
  */
-export function draftSkips(units: readonly ReadUnit[], flippedAt: number | null): ReadUnit[] {
-  if (flippedAt === null) return [];
+export const READY_RUN_GRACE_MS = 120_000;
+
+/** Whether `now` is within the grace window of this run's flip. */
+function awaitingReadyRuns(flippedAt: number | null, now: number): boolean {
+  return flippedAt !== null && now - flippedAt < READY_RUN_GRACE_MS;
+}
+
+/**
+ * Checks skipped before the pull request was marked ready, while the ready runs
+ * that replace them may still register. A project whose CI skips drafts reports its
+ * draft-time jobs as skipped; they say nothing about the ready pull request.
+ * `flippedAt` is null when this run did not flip the pull request, and then
+ * nothing is stale.
+ */
+export function draftSkips(
+  units: readonly ReadUnit[],
+  flippedAt: number | null,
+  now: number = Date.now()
+): ReadUnit[] {
+  if (flippedAt === null || !awaitingReadyRuns(flippedAt, now)) return [];
   return units.filter(
     unit => unit.result === 'skipped' && unit.completedAt !== null && unit.completedAt < flippedAt
   );
@@ -47,21 +65,28 @@ export function draftSkips(units: readonly ReadUnit[], flippedAt: number | null)
 
 /**
  * The pack's gate policy over one read. A running check wins, so a gate never
- * concludes while anything is still running, and a check skipped before the ready
- * flip counts as not yet run; red and unknown both block; gated is reported as a
- * maintainer's gate, never as green. A set in which every check was skipped is no
- * green either: nothing ran, which is what CI looks like between a draft's skipped
- * jobs and the ready runs that replace them, whatever the source can time.
+ * concludes while anything is still running; red and unknown both block; gated is
+ * reported as a maintainer's gate, never as green. Within the grace window after
+ * this run's flip, a check skipped before the flip counts as not yet run, and so
+ * does a set in which every check was skipped (the forge source reports no check
+ * times, so this is how it sees a draft's skips): the ready runs that replace them
+ * may still register.
  */
 export type GateState = 'none' | 'pending' | 'red' | 'gated' | 'green';
 
-export function gateState(units: readonly ReadUnit[], flippedAt: number | null): GateState {
+export function gateState(
+  units: readonly ReadUnit[],
+  flippedAt: number | null,
+  now: number = Date.now()
+): GateState {
   if (units.length === 0) return 'none';
   if (units.some(unit => unit.state === 'pending')) return 'pending';
-  if (draftSkips(units, flippedAt).length > 0) return 'pending';
+  if (draftSkips(units, flippedAt, now).length > 0) return 'pending';
   if (units.some(unit => unit.state === 'red' || unit.state === 'unknown')) return 'red';
   if (units.some(unit => unit.state === 'gated')) return 'gated';
-  if (units.every(unit => unit.result === 'skipped')) return 'pending';
+  if (awaitingReadyRuns(flippedAt, now) && units.every(unit => unit.result === 'skipped')) {
+    return 'pending';
+  }
   return 'green';
 }
 

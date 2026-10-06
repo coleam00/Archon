@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { forgeResponse, runDeliverScript, type ForgeFake } from './deliver-checks-harness';
+import {
+  forgeResponse,
+  runDeliverScript,
+  type ForgeFake,
+  type GhCheckRow,
+} from './deliver-checks-harness';
 
 const probe = runDeliverScript.bind(null, 'check-ci');
 
@@ -24,15 +29,16 @@ describe('check-ci on the default gh source', () => {
 
   // A project whose CI skips drafts: at the flip only the draft's skipped runs exist,
   // and the ready runs register seconds later (#3882's run 54793aad).
+  const at = (offsetMs: number): string => new Date(Date.now() + offsetMs).toISOString();
+  const draftSkipped = (flip: number): GhCheckRow[] => [
+    { name: 'changes', state: 'SKIPPED', bucket: 'skipping', completedAt: at(flip - 200_000) },
+    { name: 'test', state: 'SKIPPED', bucket: 'skipping', completedAt: at(flip - 199_000) },
+  ];
+
   it('waits on checks a draft skipped before the ready flip', () => {
     const result = probe({
-      gh: {
-        checks: [
-          { name: 'changes', state: 'SKIPPED', bucket: 'skipping', completedAt: '2026-10-06T07:20:02Z' },
-          { name: 'test', state: 'SKIPPED', bucket: 'skipping', completedAt: '2026-10-06T07:20:03Z' },
-        ],
-      },
-      inputs: { INPUTS_FLIPPED_AT: '2026-10-06T07:23:35.120Z' },
+      gh: { checks: draftSkipped(-1_000) },
+      inputs: { INPUTS_FLIPPED_AT: at(-1_000) },
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
@@ -41,15 +47,27 @@ describe('check-ci on the default gh source', () => {
     });
   });
 
+  // CI that never runs again on the flip: past the grace window the skip is its answer.
+  it('counts a draft skip as the answer once no ready run registered in the grace window', () => {
+    const result = probe({
+      gh: { checks: draftSkipped(-600_000) },
+      inputs: { INPUTS_FLIPPED_AT: at(-600_000) },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'concluded',
+      detail: 'all 2 observed check(s) green; skipped (non-blocking): changes, test',
+    });
+  });
+
   it('concludes on a check skipped after the flip beside one that ran', () => {
     const result = probe({
       gh: {
         checks: [
-          { name: 'build', state: 'SUCCESS', bucket: 'pass', completedAt: '2026-10-06T07:30:00Z' },
-          { name: 'docs', state: 'SKIPPED', bucket: 'skipping', completedAt: '2026-10-06T07:23:39Z' },
+          { name: 'build', state: 'SUCCESS', bucket: 'pass', completedAt: at(-1_000) },
+          { name: 'docs', state: 'SKIPPED', bucket: 'skipping', completedAt: at(-2_000) },
         ],
       },
-      inputs: { INPUTS_FLIPPED_AT: '2026-10-06T07:23:35.120Z' },
+      inputs: { INPUTS_FLIPPED_AT: at(-5_000) },
     });
     expect(JSON.parse(result.stdout)).toEqual({
       state: 'concluded',
@@ -57,15 +75,25 @@ describe('check-ci on the default gh source', () => {
     });
   });
 
-  // Nothing ran, so nothing is green, whether or not this run flipped the pull
-  // request or the source reports when the checks concluded.
-  it('keeps waiting when every check was skipped, even with no flip time', () => {
+  // Right after the flip, a set with nothing but skips has not run for review yet,
+  // whether or not the source reports when the checks concluded.
+  it('keeps waiting right after the flip when every check was skipped, untimed', () => {
     const result = probe({
       gh: { checks: [{ name: 'test', state: 'SKIPPED', bucket: 'skipping' }] },
+      inputs: { INPUTS_FLIPPED_AT: at(-1_000) },
     });
     expect(JSON.parse(result.stdout)).toEqual({
       state: 'pending',
-      detail: 'every check was skipped; waiting for one that runs',
+      detail: 'every check was skipped; waiting for the ready runs',
+    });
+  });
+
+  // No flip in this run: a change every job filters out is green, as before.
+  it('concludes on a set of skipped checks when this run did not flip', () => {
+    const result = probe({ gh: { checks: [{ name: 'test', state: 'SKIPPED', bucket: 'skipping' }] } });
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'concluded',
+      detail: 'all 1 observed check(s) green; skipped (non-blocking): test',
     });
   });
 

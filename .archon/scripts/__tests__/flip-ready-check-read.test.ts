@@ -84,8 +84,8 @@ describe('confirm-ready on the final head, default gh source', () => {
     ['an expected check that never ran', { checks: green }, { INPUTS_EXPECTED: '["build","e2e"]' }, 'expected check(s) never ran: e2e'],
     [
       'checks the draft skipped before the flip',
-      { checks: [...green, { name: 'test', state: 'SKIPPED', bucket: 'skipping', completedAt: '2026-10-06T07:20:03Z' }] },
-      { INPUTS_FLIPPED_AT: '2026-10-06T07:23:35.120Z' },
+      { checks: [...green, { name: 'test', state: 'SKIPPED', bucket: 'skipping', completedAt: new Date(Date.now() - 60_000).toISOString() }] },
+      { INPUTS_FLIPPED_AT: new Date(Date.now() - 1_000).toISOString() },
       'pending checks: test (skipped)',
     ],
   ];

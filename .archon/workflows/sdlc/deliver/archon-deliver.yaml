@@ -625,7 +625,8 @@ nodes:
 
   # A check can register after the probe that ended the wait concluded (a ready
   # run starting late, a workflow chained on another). Pending here goes back to
-  # the same wait instead of reaching the ready confirmation, which would read it
+  # the same wait (probe, wake-up, five-minute deadline and 13-iteration ceiling as
+  # await-checks) instead of reaching the ready confirmation, which would read it
   # as not green and put the pull request back in draft.
   - id: await-late-checks
     depends_on: [ci-settle]

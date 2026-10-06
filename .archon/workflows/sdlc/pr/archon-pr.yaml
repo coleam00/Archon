@@ -132,6 +132,7 @@ nodes:
     with:
       green: "$merge-fix.output.green"
       red_cause: "$merge-fix.output.red_cause"
+      summary: "$merge-fix.output.summary"
     output_format:
       type: object
       properties:

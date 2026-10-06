@@ -10,9 +10,9 @@
  * Which checks gate a merge is a project fact discover-ci recorded; this acts on
  * that record and never guesses from silence. States, declared through this node's
  * `output_format` so `when:` and `until_bash` branch on a certified field:
- *   pending    a check is running, an expected check has not registered yet, a
- *              check was skipped before the ready flip (a draft-time run the ready
- *              run replaces), or every check was skipped
+ *   pending    a check is running, an expected check has not registered yet, or,
+ *              shortly after the ready flip, a check was skipped before it or every
+ *              check was skipped (the ready runs may still register)
  *   concluded  green; no checks expected and none registered; or CI gated on a
  *              maintainer's approval, which the forge reports structurally (an
  *              `action_required` conclusion) — named, never blocked on, never green
@@ -48,16 +48,17 @@ function probe(): void {
   const at = atRevision(read);
   const units = read.units;
   const flippedAt = parseFlippedAt(text(process.env.INPUTS_FLIPPED_AT));
-  const state = gateState(units, flippedAt);
+  const now = Date.now();
+  const state = gateState(units, flippedAt, now);
   if (state === 'pending') {
     const running = units.filter(unit => unit.state === 'pending');
-    const stale = draftSkips(units, flippedAt);
+    const stale = draftSkips(units, flippedAt, now);
     const parts: string[] = [];
     if (running.length > 0) parts.push(`${running.length} check(s) running${at}`);
     if (stale.length > 0) {
       parts.push(`skipped before the ready flip, so not yet run for review${at}: ${describeUnits(stale)}`);
     }
-    if (parts.length === 0) parts.push(`every check was skipped${at}; waiting for one that runs`);
+    if (parts.length === 0) parts.push(`every check was skipped${at}; waiting for the ready runs`);
     emit({ state: 'pending', detail: parts.join('; ') });
     return;
   }
