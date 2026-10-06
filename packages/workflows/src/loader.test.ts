@@ -9359,6 +9359,24 @@ describe('loop_group prose completion with structured terminal output (#2998)', 
   });
 
   it.each([
+    { type: 'string', minLength: 1, maxLength: 0 },
+    { allOf: [{ type: 'string', minLength: 2 }, { maxLength: 1 }] },
+    { maxLength: 2, allOf: [{ allOf: [{ minLength: 3 }] }] },
+  ])('rejects contradictory string length bounds: %j', schema => {
+    expect(parseGroup(schema).error?.errorType).toBe('validation_error');
+    expect(parseGroup(schema, 'exit 0').error).toBeNull();
+  });
+
+  it.each([
+    { type: 'string', minLength: 0, maxLength: 0 },
+    { type: 'string', minLength: 1, maxLength: 2 },
+    { allOf: [{ minLength: 1 }, { maxLength: 1 }] },
+    { anyOf: [{ minLength: 2, maxLength: 1 }, { type: 'string' }] },
+  ])('preserves satisfiable string length bounds: %j', schema => {
+    expect(parseGroup(schema).error).toBeNull();
+  });
+
+  it.each([
     { enum: ['DONE', { done: true }] },
     { const: 'DONE' },
     { allOf: [{ type: 'string' }, { minLength: 1 }] },

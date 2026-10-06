@@ -2830,6 +2830,8 @@ describe('loop_group structured completion after include expansion (#2998)', () 
     { enum: [{ done: true }] },
     { const: { done: true } },
     { anyOf: [{ type: 'object' }, { type: 'boolean' }] },
+    { type: 'string', minLength: 1, maxLength: 0 },
+    { allOf: [{ minLength: 2 }, { maxLength: 1 }] },
   ])('checks an included terminal schema: %j', outputFormat => {
     for (const withBash of [false, true]) {
       const block = wf('structured-review', [

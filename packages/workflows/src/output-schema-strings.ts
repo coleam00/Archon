@@ -30,9 +30,34 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
+ * Effective string length bounds of a schema and its `allOf` conjuncts. Disjunctive
+ * keywords cannot narrow every valid string, so they are not traversed.
+ */
+function lengthBounds(
+  raw: unknown,
+  visiting: ReadonlySet<unknown> = new Set()
+): { min: number; max: number } {
+  const bounds = { min: 0, max: Infinity };
+  const schema = record(raw);
+  if (!schema || visiting.has(schema)) return bounds;
+  if (typeof schema.minLength === 'number') bounds.min = schema.minLength;
+  if (typeof schema.maxLength === 'number') bounds.max = schema.maxLength;
+  if (Array.isArray(schema.allOf)) {
+    const next = new Set([...visiting, schema]);
+    for (const branch of schema.allOf) {
+      const inner = lengthBounds(branch, next);
+      bounds.min = Math.max(bounds.min, inner.min);
+      bounds.max = Math.min(bounds.max, inner.max);
+    }
+  }
+  return bounds;
+}
+
+/**
  * Upper bound on the schema's strings. 'all' also proves every string is valid;
- * 'unknown' cannot be complemented. String constraints stay with AJV, which
- * checks finite candidates against the complete schema rather than sampled text.
+ * 'unknown' cannot be complemented. Contradictory length bounds prove no strings;
+ * other string constraints stay with AJV, which checks finite candidates against
+ * the complete schema rather than sampled text.
  */
 function stringDomain(
   raw: unknown,
@@ -120,6 +145,8 @@ function stringDomain(
       union(intersect(condition, thenDomain), intersect(complement(condition), elseDomain))
     );
   }
+  const { min, max } = lengthBounds(schema);
+  if (min > max) return noStrings;
   if (['minLength', 'maxLength', 'pattern', 'format'].some(key => key in schema)) {
     domain = intersect(domain, 'unknown');
   }
