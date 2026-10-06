@@ -14,8 +14,8 @@ import { expandWorkflowIncludes } from './include-expander';
 import { resolveWorkflow } from './graph-plan';
 import type { CapturedSourceOwner } from './executor';
 import { readNodeRecordEvent, nodeInvocationKey } from './node-record-reader';
-import { nodeCostScope } from './node-record-serialization';
-import { NODE_STATE_EVENT_TYPES } from './store';
+import { nodeCostScope, DEFERRED_NODE_USAGE_EVENT_TYPE } from './node-record-serialization';
+import { DURABLE_WORKFLOW_EVENT_TYPES } from './store';
 import type { DagResumeSnapshot, PersistedNodeOutput } from './store';
 
 const DEFAULT_NODE = { id: 'default', command: 'test-command' };
@@ -155,7 +155,7 @@ export function inMemoryDagResumeSnapshot(
   for (const e of events) {
     if (
       e.workflow_run_id !== workflowRunId ||
-      !NODE_STATE_EVENT_TYPES.some(type => type === e.event_type) ||
+      !DURABLE_WORKFLOW_EVENT_TYPES.some(type => type === e.event_type) ||
       typeof e.step_name !== 'string'
     )
       continue;
@@ -182,10 +182,17 @@ export function inMemoryDagResumeSnapshot(
       }
     }
     // Every later node state supersedes reusable success; only a success restores it.
-    completedNodeOutputs.delete(e.step_name);
-    if (e.event_type !== 'node_completed' && e.event_type !== 'node_skipped_prior_success')
+    if (e.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE) completedNodeOutputs.delete(e.step_name);
+    if (
+      e.event_type !== 'node_completed' &&
+      e.event_type !== 'node_skipped_prior_success' &&
+      e.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE
+    )
       continue;
-    if (typeof e.data?.node_output === 'string') {
+    if (
+      e.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE &&
+      typeof e.data?.node_output === 'string'
+    ) {
       // The logical value rides beside the text (#2637), and the field contract the
       // node completed under rides beside both (#2453), read through the real reader.
       const declaredOutputPaths = readNodeRecordEvent({ ...e, data: e.data })?.data
@@ -200,7 +207,11 @@ export function inMemoryDagResumeSnapshot(
     }
     // A derived row (loop_group roll-up) restates usage other rows already carry, so it
     // contributes output but never usage (#2469).
-    if (e.event_type !== 'node_completed' || nodeCostScope(e.data ?? {}) === 'total') continue;
+    if (
+      (e.event_type !== 'node_completed' && e.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE) ||
+      nodeCostScope(e.data ?? {}) === 'total'
+    )
+      continue;
     const eventTokens = e.data?.tokens;
     if (
       typeof eventTokens === 'object' &&

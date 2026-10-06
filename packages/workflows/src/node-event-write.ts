@@ -14,12 +14,12 @@ import { logWorkflowEvent } from './logger';
 import type { WorkflowEmitterEvent } from './event-emitter';
 import { getWorkflowEventEmitter } from './event-emitter';
 
-import type { NodeStateEventInput } from './store';
+import type { NodeStateEventInput, DurableNodeEventInput } from './store';
 import { readNodeRecordEvent, type ReadNodeRecordEvent } from './node-record-reader';
 
 /** Storage rejection must leave node retry policy and reach the run failure boundary. */
 export class NodeEventWriteError extends Error {
-  constructor(event: NodeStateEventInput, cause: unknown) {
+  constructor(event: DurableNodeEventInput, cause: unknown) {
     const originalFailure = event.event_type === 'node_failed' ? event.data?.error : undefined;
     super(
       `Could not persist ${event.event_type} for ${event.step_name ?? 'unknown node'}: ${cause instanceof Error ? cause.message : String(cause)}${typeof originalFailure === 'string' ? `; original node failure: ${originalFailure}` : ''}`,
@@ -31,7 +31,7 @@ export class NodeEventWriteError extends Error {
 
 export async function persistNodeEvent(
   store: Pick<WorkflowDeps['store'], 'persistWorkflowEvent'>,
-  event: NodeStateEventInput
+  event: DurableNodeEventInput
 ): Promise<void> {
   try {
     await store.persistWorkflowEvent(event);

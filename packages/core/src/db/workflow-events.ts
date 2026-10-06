@@ -15,8 +15,15 @@ import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { readFile } from 'node:fs/promises';
 import type { FanOutInstanceSnapshot } from '@archon/workflows/fan-out-identity';
-import { nodeInvocationKey, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
-import { nodeCostScope } from '@archon/workflows/node-record-serialization';
+import {
+  nodeInvocationKey,
+  readNodeRecordEvent,
+  readDeferredNodeUsageEvent,
+} from '@archon/workflows/node-record-reader';
+import {
+  nodeCostScope,
+  DEFERRED_NODE_USAGE_EVENT_TYPE,
+} from '@archon/workflows/node-record-serialization';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import {
   orderProviderEventRecords,
@@ -30,8 +37,9 @@ import { toHydratedTimestamp } from './timestamps';
 import {
   PROVIDER_EVENT_ROW_TYPES,
   NODE_LIFECYCLE_EVENT_TYPES,
-  NODE_STATE_EVENT_TYPES,
+  DURABLE_WORKFLOW_EVENT_TYPES,
   type NodeStateEventType,
+  type DurableWorkflowEventType,
   type NodeLifecycleEventType,
   type DagResumeSnapshot,
   type PersistedNodeOutput,
@@ -651,15 +659,15 @@ export async function listEventsForRuns(
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {
   const result = await pool.query<{
     step_name: string | null;
-    event_type: NodeStateEventType | 'fan_out_instances';
+    event_type: DurableWorkflowEventType | 'fan_out_instances';
     data: string | Record<string, unknown>;
   }>(
     `SELECT step_name, event_type, data FROM remote_agent_workflow_events
-     WHERE workflow_run_id = $1 AND event_type IN (${NODE_STATE_EVENT_TYPES.map(
+     WHERE workflow_run_id = $1 AND event_type IN (${DURABLE_WORKFLOW_EVENT_TYPES.map(
        (_, index) => `$${String(index + 2)}`
-     ).join(', ')}, $${String(NODE_STATE_EVENT_TYPES.length + 2)})
+     ).join(', ')}, $${String(DURABLE_WORKFLOW_EVENT_TYPES.length + 2)})
      ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-    [workflowRunId, ...NODE_STATE_EVENT_TYPES, 'fan_out_instances']
+    [workflowRunId, ...DURABLE_WORKFLOW_EVENT_TYPES, 'fan_out_instances']
   );
   const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
   const fanOutSnapshots = new Map<string, readonly FanOutInstanceSnapshot[]>();
@@ -672,8 +680,78 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
   // cannot tell "one of five contributions reported" from "one of two" (#2662).
   const usageContributions: { stepName: string; tokens?: TokenUsage; costUsd?: number }[] = [];
   const authoritativeInstanceScopes = new Set<string>();
+  function addUsage(stepName: string, rawUsage: { tokens?: unknown; costUsd?: unknown }): void {
+    const contribution: { stepName: string; tokens?: TokenUsage; costUsd?: number } = {
+      stepName,
+    };
+    if (rawUsage.tokens !== undefined) {
+      const eventTokens = rawUsage.tokens;
+      if (
+        typeof eventTokens === 'object' &&
+        eventTokens !== null &&
+        'input' in eventTokens &&
+        'output' in eventTokens &&
+        typeof eventTokens.input === 'number' &&
+        typeof eventTokens.output === 'number' &&
+        Number.isFinite(eventTokens.input) &&
+        Number.isFinite(eventTokens.output)
+      ) {
+        const normalized: TokenUsage = {
+          input: eventTokens.input,
+          output: eventTokens.output,
+        };
+        const optionalTokens = eventTokens as Record<string, unknown>;
+        for (const axis of ['cacheRead', 'cacheWrite'] as const) {
+          const value = optionalTokens[axis];
+          if (value === undefined) continue;
+          if (typeof value === 'number' && Number.isFinite(value)) {
+            normalized[axis] = value;
+          } else {
+            getLog().warn(
+              { runId: workflowRunId, stepName, axis, value },
+              'db.workflow_dag_node_optional_tokens_invalid_ignored'
+            );
+          }
+        }
+        // A node whose own usage was already a floor (a loop total, an OpenCode
+        // multi-agent node) keeps the resumed run a floor. Anything other than `true`
+        // is ignored without a warn: unlike the numeric axes it carries no total.
+        if (optionalTokens.cachePartial === true) {
+          normalized.cachePartial = true;
+        }
+        contribution.tokens = normalized;
+      } else {
+        getLog().warn(
+          { runId: workflowRunId, stepName, tokens: eventTokens },
+          'db.workflow_dag_node_tokens_invalid_ignored'
+        );
+      }
+    }
+    if (rawUsage.costUsd !== undefined) {
+      const eventCost = rawUsage.costUsd;
+      // Same guard shape as tokens: a non-finite value from a provider must not
+      // silently poison the total (NaN > 0 is false, which would drop the run's
+      // cost from the persisted metadata with no trace).
+      if (typeof eventCost === 'number' && Number.isFinite(eventCost)) {
+        contribution.costUsd = eventCost;
+      } else {
+        getLog().warn(
+          { runId: workflowRunId, stepName, costUsd: eventCost },
+          'db.workflow_dag_node_cost_invalid_ignored'
+        );
+      }
+    }
+    if (contribution.tokens !== undefined || contribution.costUsd !== undefined) {
+      usageContributions.push(contribution);
+    }
+  }
   for (const row of result.rows) {
     if (!row.step_name) continue;
+    if (row.event_type === DEFERRED_NODE_USAGE_EVENT_TYPE) {
+      const usage = readDeferredNodeUsageEvent({ workflow_run_id: workflowRunId, ...row });
+      if (usage && nodeCostScope(usage.data) !== 'total') addUsage(row.step_name, usage.rawUsage);
+      continue;
+    }
     if (row.event_type !== 'fan_out_instances') {
       foldActiveNodeIds(unresolvedNodeStarts, row.step_name, row.event_type);
       // Every later node state supersedes reusable success, even when that row
@@ -834,69 +912,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
     if (isAuthoritativeInstanceUsage) authoritativeInstanceScopes.add(row.step_name);
     // Other aggregate rows merely restate usage already carried by their leaves.
     if (nodeCostScope(data) === 'total' && !isAuthoritativeInstanceUsage) continue;
-    const contribution: { stepName: string; tokens?: TokenUsage; costUsd?: number } = {
-      stepName: row.step_name,
-    };
-    if (row.event_type !== 'node_skipped_prior_success' && record.rawUsage.tokens !== undefined) {
-      const eventTokens = record.rawUsage.tokens;
-      if (
-        typeof eventTokens === 'object' &&
-        eventTokens !== null &&
-        'input' in eventTokens &&
-        'output' in eventTokens &&
-        typeof eventTokens.input === 'number' &&
-        typeof eventTokens.output === 'number' &&
-        Number.isFinite(eventTokens.input) &&
-        Number.isFinite(eventTokens.output)
-      ) {
-        const normalized: TokenUsage = {
-          input: eventTokens.input,
-          output: eventTokens.output,
-        };
-        const optionalTokens = eventTokens as Record<string, unknown>;
-        for (const axis of ['cacheRead', 'cacheWrite'] as const) {
-          const value = optionalTokens[axis];
-          if (value === undefined) continue;
-          if (typeof value === 'number' && Number.isFinite(value)) {
-            normalized[axis] = value;
-          } else {
-            getLog().warn(
-              { runId: workflowRunId, stepName: row.step_name, axis, value },
-              'db.workflow_dag_node_optional_tokens_invalid_ignored'
-            );
-          }
-        }
-        // A node whose own usage was already a floor (a loop total, an OpenCode
-        // multi-agent node) keeps the resumed run a floor. Anything other than `true`
-        // is ignored without a warn: unlike the numeric axes it carries no total.
-        if (optionalTokens.cachePartial === true) {
-          normalized.cachePartial = true;
-        }
-        contribution.tokens = normalized;
-      } else {
-        getLog().warn(
-          { runId: workflowRunId, stepName: row.step_name, tokens: eventTokens },
-          'db.workflow_dag_node_tokens_invalid_ignored'
-        );
-      }
-    }
-    if (row.event_type !== 'node_skipped_prior_success' && record.rawUsage.costUsd !== undefined) {
-      const eventCost = record.rawUsage.costUsd;
-      // Same guard shape as tokens: a non-finite value from a provider must not
-      // silently poison the total (NaN > 0 is false, which would drop the run's
-      // cost from the persisted metadata with no trace).
-      if (typeof eventCost === 'number' && Number.isFinite(eventCost)) {
-        contribution.costUsd = eventCost;
-      } else {
-        getLog().warn(
-          { runId: workflowRunId, stepName: row.step_name, costUsd: eventCost },
-          'db.workflow_dag_node_cost_invalid_ignored'
-        );
-      }
-    }
-    if (contribution.tokens !== undefined || contribution.costUsd !== undefined) {
-      usageContributions.push(contribution);
-    }
+    if (row.event_type !== 'node_skipped_prior_success') addUsage(row.step_name, record.rawUsage);
   }
   const authoritativeInstancePrefixes = [...authoritativeInstanceScopes].map(scope => `${scope}__`);
   const countedUsage = usageContributions.filter(

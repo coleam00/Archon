@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { nodeInvocationKey, readNodeRecordEvent } from './node-record-reader';
+import {
+  nodeInvocationKey,
+  readNodeRecordEvent,
+  readDeferredNodeUsageEvent,
+} from './node-record-reader';
 
 const metadata = {
   node: { id: 'build', kind: 'exec' as const, runtime: 'sh' as const },
@@ -107,4 +111,28 @@ it('retains nested contracts and rejects malformed present authorization evidenc
   expect(readNodeRecordEvent({ ...envelope, data: {} })?.data).not.toHaveProperty(
     'declared_output_paths'
   );
+});
+
+it('reads deferred accounting separately and retains malformed usage for diagnostics', () => {
+  const envelope = {
+    workflow_run_id: 'run-1',
+    step_name: 'group.loop',
+    event_type: 'node_deferred_usage',
+    data: JSON.stringify({
+      invocation: metadata.invocation,
+      attempt: metadata.attempt,
+      accounting: 'node',
+      cost_usd: 'bad',
+      tokens: { input: 1, output: 2, cacheRead: 3 },
+      node_output: 'ignored',
+    }),
+  };
+  const usage = readDeferredNodeUsageEvent(envelope);
+  expect(usage?.path).toBe('group.loop');
+  expect(usage?.data.tokens).toEqual({ input: 1, output: 2, cacheRead: 3 });
+  expect(usage?.data.cost_usd).toBeUndefined();
+  expect(usage?.rawUsage.costUsd).toBe('bad');
+  expect(usage?.data).not.toHaveProperty('node_output');
+  expect(readNodeRecordEvent(envelope)).toBeUndefined();
+  expect(readDeferredNodeUsageEvent({ ...envelope, event_type: 'node_started' })).toBeUndefined();
 });
