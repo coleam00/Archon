@@ -2,10 +2,11 @@
  * The process contract every deterministic script in this pack shares.
  *
  * A node's `with:` bindings arrive as `INPUTS_<UPPER_SNAKE>` environment text and
- * are always strings: a bound boolean arrives as `"true"`/`"false"`, and a skipped
- * producer bound with `if_skipped: null` arrives as `"null"`. Nothing here
- * interprets those spellings — what a value means belongs to the script that knows
- * what it is for.
+ * are always strings: a bound boolean arrives as `"true"`/`"false"`, a skipped
+ * producer bound with `if_skipped: null` arrives as `"null"`, and a field its
+ * producer declared null arrives as empty text. `nullableJson` reads the last two
+ * alike; beyond that nothing here interprets those spellings — what a value means
+ * belongs to the script that knows what it is for.
  *
  * Read every binding as a literal `process.env.INPUTS_<NAME>` at its own call site
  * and pass the value in. The engine scans each script's source at workflow load and
