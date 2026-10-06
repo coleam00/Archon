@@ -37,8 +37,9 @@ const STOP_TEST_TIMEOUT_MS = 30_000;
 
 /**
  * The first `Get-CimInstance` on a fresh Windows runner pays WMI's one-time start-up. It
- * took 6-8 s under CPU burners and, under the full suite's load, enough to time out the
- * first stop test at `STOP_TEST_TIMEOUT_MS` while every later stop test passed in seconds.
+ * took 6-8 s under CPU burners and up to 19 s under the full suite's load, where it pushed
+ * the first stop test past `STOP_TEST_TIMEOUT_MS` while every later stop test passed in
+ * seconds.
  * The cost is per machine, not per query: each listing runs in a fresh PowerShell and the
  * second one is already fast. So it is paid once before the stop tests, not inside one.
  */
