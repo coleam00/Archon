@@ -65,7 +65,7 @@ nodes:
         unavailable checks, or an unreproduced symptom leave this target
         unestablished: declare rooted false and explain the gap. Preserve the
         original commands and failures. Do not repair source, change revision,
-        weaken checks, run factory or agent checks, or write to any tracker.
+        weaken checks, run agent-driven checks, or write to any tracker.
 
   # Record the final identity even if a producer fails. Failed producers still
   # fail the run; their missing output cannot become a healthy diagnosis.

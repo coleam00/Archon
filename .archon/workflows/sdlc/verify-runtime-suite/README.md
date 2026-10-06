@@ -86,7 +86,7 @@ holdout secrecy. `mutates_checkout: false` declares intent, not a sandbox.
 The `examples` directory contains a tiny Node calculator, two runtime scenarios,
 and a manifest. The negative calculator deliberately returns the wrong sum; it
 is a control, not a discovered application defect. No HTTP service, Python
-application, factory import, or external environment process is needed. Run from
+application, project import, or external environment process is needed. Run from
 this repository root (the scenario commands name paths relative to that root):
 
 ```bash

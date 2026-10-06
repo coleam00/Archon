@@ -1,6 +1,6 @@
 name: archon-lifecycle
 description: >-
-  Take one issue through shared ship, runtime and independent holdout verification,
+  Take one issue through shared ship, runtime and optional independent holdout verification,
   optional discovery publication and a shared merge queue. All agents are visible
   Archon command nodes. Scheduling belongs to the caller.
 model: medium
@@ -28,8 +28,11 @@ inputs:
     required: true
     description: Absolute path to a project runtime scenario JSON.
   holdout:
-    required: true
-    description: Absolute path to an independent runtime scenario JSON.
+    default: ''
+    description: >-
+      Optional absolute path to an independent runtime scenario JSON, verified
+      after the scenario passes. Empty skips the holdout pass; qualification then
+      rests on the scenario alone.
   merge_mode:
     default: approve
     description: preview, approve, or auto for the shared merge workflow.
@@ -121,7 +124,7 @@ nodes:
   - id: holdout
     include: archon-verify-runtime
     depends_on: [runtime]
-    when: "$runtime.output.verified == true"
+    when: "$runtime.output.verified == true && $INPUTS.holdout != ''"
     with:
       scenario: "$INPUTS.holdout"
 
@@ -135,6 +138,7 @@ nodes:
       candidate: "$candidate.output"
       runtime: { from: "$runtime.output", if_skipped: null }
       holdout: { from: "$holdout.output", if_skipped: null }
+      holdout_scenario: "$INPUTS.holdout"
     output_format:
       type: object
       properties:
@@ -182,7 +186,7 @@ nodes:
   - id: holdout-retry
     include: archon-verify-runtime
     depends_on: [runtime-retry]
-    when: "$runtime-retry.output.verified == true"
+    when: "$runtime-retry.output.verified == true && $INPUTS.holdout != ''"
     with:
       scenario: "$INPUTS.holdout"
 
@@ -197,6 +201,7 @@ nodes:
       candidate: "$repaired-candidate.output"
       runtime: { from: "$runtime-retry.output", if_skipped: null }
       holdout: { from: "$holdout-retry.output", if_skipped: null }
+      holdout_scenario: "$INPUTS.holdout"
     output_format:
       type: object
       properties:

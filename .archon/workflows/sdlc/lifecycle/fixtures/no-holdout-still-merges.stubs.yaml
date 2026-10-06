@@ -1,7 +1,6 @@
-# Dry-run fixture: discoveries in preview mode skip their publication sink, and
-# the merge stage must still run on the qualified candidate. Seen live on
-# 2026-09-09: a verified PR was left open while the run reported success because
-# the merge entry joined on the skipped sink with the default all-success rule.
+# Dry-run fixture: the holdout is optional. With no holdout input the holdout pass
+# is skipped, qualify is told no holdout was configured (so it qualifies on the
+# runtime scenario alone), and the verified candidate still reaches the merge.
 intake:
   target: "https://github.com/example/app/issues/1"
   found: true
@@ -74,11 +73,52 @@ ship__deliver__flip-ready: "https://github.com/example/app/pull/7"
 ship__deliver__outcome: "delivered"
 ship__outcome: "delivered https://github.com/example/app/pull/7"
 candidate:
-  delivered: false
+  delivered: true
   prs: ["https://github.com/example/app/pull/7"]
   head: "0123456789abcdef0123456789abcdef01234567"
-# Runtime is skipped here so this fixture isolates the discovery-to-merge join.
-# `qualify` and `selected` stand in for the independently tested evidence path.
+# The runtime scenario verifies; with no holdout input the holdout pass must skip on
+# its own `when`, and qualify must still be reached. `qualify` and `selected` stand
+# in for the independently tested evidence path.
+runtime__read-scenario:
+  setup: "true"
+  start: "true"
+  teardown: "true"
+  candidate_command: "echo 0123456789abcdef0123456789abcdef01234567"
+  assertion_ids: ["a1"]
+  assertions_json: []
+# The runtime loop body runs once and verifies (inner node ids are unprefixed).
+prepare-attempt:
+  attempt: 1
+  directory: "/artifacts/runtime"
+  report_path: "/artifacts/runtime/report.json"
+  checkout: "/checkout"
+  report_feedback: ""
+setup-run: { ok: true }
+start-run: { ok: true }
+capture-helper: { path: "/helper" }
+verify: "stub: assertions exercised"
+identity-run: { ok: true }
+check-evidence:
+  status: "verified"
+  reason: "stub: all assertions passed"
+  candidate: "0123456789abcdef0123456789abcdef01234567"
+teardown-run: { ok: true }
+finish-attempt:
+  status: "verified"
+  reason: "stub: all assertions passed"
+  candidate: "0123456789abcdef0123456789abcdef01234567"
+  done: true
+  checkout: "/checkout"
+  directory: "/artifacts/runtime"
+  report_path: "/artifacts/runtime/report.json"
+runtime__gate-verified:
+  verified: true
+  verdict: "verified"
+  candidate: "0123456789abcdef0123456789abcdef01234567"
+  checkout: "/checkout"
+  summary: "stub: verified"
+  directory: "/artifacts/runtime"
+  report_path: "/artifacts/runtime/report.json"
 qualify:
   ready: true
   repair: false
@@ -142,13 +182,12 @@ execute:
 ship__deliver__validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed
-  reached: [merge__assess, merge__publish-holds, execute]
+  reached: [runtime__gate-verified, qualify, merge__assess, merge__publish-holds, execute]
   resolved-text-contains:
-    qualify: 'Configured holdout scenario: "/private/holdout.json"'
+    qualify: 'Configured holdout scenario: ""'
   inputs:
     target: "https://github.com/example/app/issues/1"
     scenario: "/private/scenario.json"
-    holdout: "/private/holdout.json"
     merge_mode: "auto"
     merge_method: "squash"
     state_labels: '{"READY":"team-ready"}'

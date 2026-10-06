@@ -4,7 +4,7 @@ Revalidate findings, search related work, and prepare proposals. Use
 `discovery_artifact` with an explicit discoveries JSON file produced by review or
 implementation. This path works on existing Archon and needs no new engine API.
 Optional `run_id` lookup requires a CLI exposing `artifacts_dir`; it is not a
-factory dependency. Prefer an explicit artifact when using the base engine.
+requirement of this workflow. Prefer an explicit artifact when using the base engine.
 
 `publication=preview` is read-only (default). `publication=approve` uses a native
 approval node. `publication=auto` explicitly authorizes this run's publication,

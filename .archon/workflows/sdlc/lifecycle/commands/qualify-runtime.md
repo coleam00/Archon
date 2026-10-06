@@ -3,11 +3,16 @@
 Candidate: $INPUTS.candidate
 Runtime: $INPUTS.runtime
 Independent holdout: $INPUTS.holdout
-Read the returned directory and report_path references for both results, then read
-the referenced reports, assertions and target identity evidence in full.
-Require both actual verified=true results, independent fresh environments, and
-proof from each scenario's saved runtime metadata that the target ran the
-delivered candidate source revision. Existing adapters may provide
+Configured holdout scenario: "$INPUTS.holdout_scenario"
+When the configured holdout scenario is empty, the caller chose no holdout: qualify
+on the runtime result alone and say so in the report. Otherwise a holdout was
+required, and a missing or skipped holdout result holds merging like any other
+missing evidence.
+Read the returned directory and report_path references for every result present, then
+read the referenced reports, assertions and target identity evidence in full.
+Require an actual verified=true result for each required scenario, independent fresh
+environments, and proof from each scenario's saved runtime metadata that the target
+ran the delivered candidate source revision. Existing adapters may provide
 `source_revision` or equivalent genuine runtime build/source provenance. The
 runtime result's `candidate` remains the
 opaque target-probe identity and need not equal a Git SHA.
@@ -20,7 +25,7 @@ On an actual application failure at the unchanged PR head, record concrete repai
 findings, return ready=false and repair=true. Missing evidence, target mismatch,
 changed head, or infrastructure failure returns ready=false and repair=false.
 Success returns ready=true and repair=false. The graph owns one bounded repair
-through archon-deliver and fresh runtime/holdout repeats. Never launch agents or
+through archon-deliver and fresh runtime (and, when configured, holdout) repeats. Never launch agents or
 another workflow from a tool. Use a unique qualification report path each time
 so the first failure evidence survives a retry.
 If ready, ensure discoveries.json is the review-produced consolidation. When it

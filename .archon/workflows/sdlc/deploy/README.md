@@ -27,6 +27,6 @@ archon workflow run archon-deploy \
 
 The commands are fixed trusted project strings; never interpolate caller text
 into them. The workflow runs them where Archon runs the workflow, so it suits a
-service on the same host as the factory. Remote hosts are the project's concern
+service on the same host that runs Archon. Remote hosts are the project's concern
 (an ssh command is still one command). No rollback is attempted: a failed health
 or identity read-back reports `deployed: false` and leaves the operator to act.

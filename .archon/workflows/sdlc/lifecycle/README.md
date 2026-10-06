@@ -1,9 +1,9 @@
 # Issue-to-merge lifecycle
 
 `archon-lifecycle` composes the existing shared ship (including independent review,
-validation and delivery correction loops), runtime verification, a fresh holdout,
-discoveries, merge queue and, optionally, deployment. Inputs are `target`, absolute
-`scenario` and `holdout` paths, `merge_mode`, `discovery_publication`, `publish`,
+validation and delivery correction loops), runtime verification, an optional fresh holdout,
+discoveries, merge queue and, optionally, deployment. Inputs are `target`, an absolute
+`scenario` path, an optional absolute `holdout` path (empty skips the holdout pass), `merge_mode`, `discovery_publication`, `publish`,
 `state_labels`, `publish_holds`,
 and the optional `deploy`/`health`/`identity` commands forwarded to `archon-deploy`
 after a confirmed merge. Modes default to approval and preview; select auto
@@ -20,7 +20,7 @@ Runtime and holdout scenarios are caller-supplied project evidence; a project ma
 use its own runtime host or a source-provenance adapter. The workflow requires
 evidence that the system being verified is the delivered revision. An application
 failure at the unchanged PR head gets one shared archon-deliver
-repair, with independent review, then fresh runtime and holdout verification.
+repair, with independent review, then fresh runtime and (when configured) holdout verification.
 Missing evidence, identity drift, infrastructure failure or a second failed
 verification holds the handoff. The loop is bounded and visible in the graph.
 
