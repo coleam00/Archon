@@ -187,7 +187,7 @@ export class SqliteAdapter implements IDatabase {
       // A busy statement is retried by query() or withTransaction(), which log the wait.
       if (!isSqliteBusy(error)) {
         getLog().error(
-          { err: error as Error, sql: convertedSql, params },
+          { err: error as Error, sql, paramCount: params?.length ?? 0 },
           'db.sqlite_query_failed'
         );
       }

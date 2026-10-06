@@ -102,6 +102,9 @@
       "src/db/adapters/postgres.test.ts"
     ],
     [
+      "src/db/adapters/sqlite.test.ts"
+    ],
+    [
       "src/db/bundled-schema.test.ts"
     ],
     [
@@ -109,7 +112,6 @@
     ],
     [
       "src/db/migration-statement-order.test.ts",
-      "src/db/adapters/sqlite.test.ts",
       "src/db/adapters/sqlite-vintages.test.ts",
       "src/db/codebases.test.ts",
       "src/db/conversations.test.ts",

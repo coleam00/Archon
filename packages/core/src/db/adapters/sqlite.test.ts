@@ -1,8 +1,8 @@
-import { describe, test, expect, afterEach } from 'bun:test';
+import { describe, test, expect, afterEach, spyOn } from 'bun:test';
 import { SqliteAdapter } from './sqlite';
 import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION, readSchemaVersion } from '../schema-version';
-import { Database, type Statement } from 'bun:sqlite';
+import { Database, SQLiteError, type Statement } from 'bun:sqlite';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -75,6 +75,46 @@ function columnsOf(path: string, table: string): string[] {
     raw.close();
   }
 }
+
+describe('SqliteAdapter failure logging', () => {
+  test.each(['query', 'transaction'] as const)(
+    'keeps diagnostics without bound values for a failing %s insert',
+    async mode => {
+      const path = await upgradeFixturePath();
+      const db = new SqliteAdapter(path);
+      const sql =
+        'INSERT INTO remote_agent_messages (conversation_id, role, content) VALUES ($1, $2, $3)';
+      const secret = 'recognizable-private-message-3809';
+      const output = spyOn(process.stdout, 'write').mockImplementation(() => true);
+      let failure: unknown;
+      let lines: string[];
+      try {
+        const insert = (query: SqliteAdapter['query']) =>
+          query(sql, ['missing-conversation', 'user', secret]);
+        failure = await (
+          mode === 'query' ? insert(db.query.bind(db)) : db.withTransaction(insert)
+        ).catch((error: unknown) => error);
+        lines = output.mock.calls.map(call => String(call[0]));
+      } finally {
+        output.mockRestore();
+        await db.close();
+      }
+      expect(failure).toBeInstanceOf(SQLiteError);
+      if (!(failure instanceof SQLiteError)) throw new Error('Expected SQLite constraint failure');
+      const record = lines
+        .map(line => JSON.parse(line) as Record<string, unknown>)
+        .find(line => line.msg === 'db.sqlite_query_failed');
+      expect(record).toMatchObject({
+        sql,
+        paramCount: 3,
+        err: { code: failure.code, message: failure.message },
+      });
+      expect(lines.join('')).not.toContain(secret);
+      expect(lines.join('')).not.toContain('missing-conversation');
+      expect(record).not.toHaveProperty('params');
+    }
+  );
+});
 
 describe('SqliteAdapter upgrade path', () => {
   // Regression: the event_order index and trigger were briefly created inside
