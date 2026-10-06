@@ -414,6 +414,8 @@ export function registerBuiltinProviders(): void {
 }
 ```
 
+The host process (CLI or server) calls `registerBuiltinProviders()` and `registerCommunityProviders()` before loading config or workflows. Core does not register providers. The host supplies the read-only `ProviderRegistry` to workflow parsing, discovery and validation, and through `WorkflowDeps.providers` for execution. The port exposes provider metadata without factories; provider instances still pass through host admission.
+
 Community providers use `registerCommunityProviders()` (same file). See the [community provider guide](../contributing/adding-a-community-provider/) for that path.
 
 **4. Add environment variables:** `.env.example`

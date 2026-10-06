@@ -28,8 +28,10 @@ import {
   REACTION_SUCCESS,
   buildApprovalBlocks,
   buildApprovalResolutionBlocks,
+  slackApprovalActionSchema,
   buildClosedApprovalBlocks,
   buildStatusBlocks,
+  type SlackApprovalAction,
   type NodeSnapshot,
   type NodeState,
   type RunSnapshot,
@@ -97,7 +99,7 @@ export class SlackWorkflowBridge {
     private readonly resumeWorkflow: SlackWorkflowResume = async () => false,
     private readonly operations: Pick<
       WorkflowOperations,
-      'approveWorkflow' | 'rejectWorkflow' | 'cancelWorkflow'
+      'respondToWorkflow' | 'cancelWorkflow'
     > = createSqlWorkflowOperations()
   ) {
     this.adapter = adapter;
@@ -275,6 +277,8 @@ export class SlackWorkflowBridge {
       runId: event.runId,
       nodeId: event.nodeId,
       message: event.message,
+      decisions: event.decisions,
+      pauseId: event.pauseId,
     });
     const postResult = this.adapter
       .getApp()
@@ -282,7 +286,7 @@ export class SlackWorkflowBridge {
         channel: state.channel,
         thread_ts: state.threadTs,
         text: fallbackText,
-        blocks,
+        ...(blocks.length > 0 ? { blocks } : {}),
       })
       .then(result => result.ts ?? undefined)
       .catch(error => {
@@ -524,13 +528,9 @@ export class SlackWorkflowBridge {
     // Bolt's action() callback for a regex matches only block button clicks
     // in our case, so the body/action narrow to BlockButtonAction/ButtonAction.
     // Telling Bolt the generic shape gets us SDK-typed body.user.id etc.
-    app.action<BlockButtonAction>(/^approve:/, async ({ ack, body, action }) => {
+    app.action<BlockButtonAction>(/^(approve|reject|respond):/, async ({ ack, body, action }) => {
       await ack();
-      await this.handleApprovalDecision(body, action, 'approved');
-    });
-    app.action<BlockButtonAction>(/^reject:/, async ({ ack, body, action }) => {
-      await ack();
-      await this.handleApprovalDecision(body, action, 'rejected');
+      await this.handleApprovalDecision(body, action);
     });
     app.action<BlockButtonAction>(/^cancel:/, async ({ ack, body, action }) => {
       await ack();
@@ -553,15 +553,14 @@ export class SlackWorkflowBridge {
 
   private async handleApprovalDecision(
     body: BlockButtonAction,
-    action: ButtonAction,
-    decision: 'approved' | 'rejected'
+    action: ButtonAction
   ): Promise<void> {
     const actorId = body.user?.id;
-    if (!this.assertAuthorized(actorId, decision)) return;
+    if (!this.assertAuthorized(actorId, 'respond')) return;
 
-    const parsed = parseActionId(action.action_id ?? '', decision);
+    const parsed = parseApprovalAction(action);
     if (!parsed) return;
-    const { runId, nodeId } = parsed;
+    const { runId, nodeId, decision, pauseId } = parsed;
     const state = this.runs.get(runId);
     if (state && !state.approvals.has(nodeId)) return;
 
@@ -571,12 +570,14 @@ export class SlackWorkflowBridge {
     let outcomeNote: string | undefined;
     try {
       try {
-        if (decision === 'approved') {
-          const result = await this.operations.approveWorkflow(
-            runId,
-            undefined,
-            await this.resolveRunActor(actorId)
-          );
+        const result = await this.operations.respondToWorkflow(
+          runId,
+          decision,
+          undefined,
+          await this.resolveRunActor(actorId),
+          pauseId ? { nodeId, pauseId } : nodeId
+        );
+        if (!('cancelled' in result)) {
           const resumed = await this.tryResumeWorkflow(runId, actorId);
           // Interactive-loop approves are outcome-ambiguous from here: a gate that
           // paused after a completion condition was met finalizes on resume (no re-run, #2074);
@@ -588,11 +589,6 @@ export class SlackWorkflowBridge {
               : 'workflow resumed'
             : RESUME_NOT_ACCEPTED_NOTE;
         } else {
-          const result = await this.operations.rejectWorkflow(
-            runId,
-            'Rejected',
-            await this.resolveRunActor(actorId)
-          );
           outcomeNote = result.cancelled
             ? result.maxAttemptsReached
               ? 'cancelled — max reject attempts reached'
@@ -608,8 +604,12 @@ export class SlackWorkflowBridge {
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId, nodeId, decision }, 'slack.bridge_approval_action_failed');
-        // Keep the user-facing note generic — full error stays in logs.
-        outcomeNote = 'error: see server logs';
+        await this.postActionNote(
+          body,
+          runId,
+          ':warning: Could not record the gate response. Check the current run status and server logs.'
+        );
+        return;
       }
 
       await this.applyResolutionEdit({
@@ -669,9 +669,9 @@ export class SlackWorkflowBridge {
           if (result.blockedParentRunId) {
             note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
           }
-          await this.postCancelNote(body, runId, note);
+          await this.postActionNote(body, runId, note);
         } else if (!result.cancelled) {
-          await this.postCancelNote(
+          await this.postActionNote(
             body,
             runId,
             `:information_source: Run \`${runId}\` already finished — nothing to cancel.`
@@ -685,7 +685,7 @@ export class SlackWorkflowBridge {
         // is the exception: its message is written for the operator and says why the
         // run was left unchanged.
         getLog().warn({ err, runId }, 'slack.bridge_cancel_failed');
-        await this.postCancelNote(
+        await this.postActionNote(
           body,
           runId,
           error instanceof workflowOperations.CancelRefusedError
@@ -704,11 +704,11 @@ export class SlackWorkflowBridge {
   }
 
   /**
-   * Post a note about a cancel click. If we still have run state, the note goes in
+   * Post an action result. If we still have run state, the note goes in
    * the run's thread. Otherwise (run already terminated) it goes to the
    * channel/thread of the message the button was attached to.
    */
-  private async postCancelNote(
+  private async postActionNote(
     body: BlockButtonAction,
     runId: string,
     text: string
@@ -723,7 +723,7 @@ export class SlackWorkflowBridge {
         : undefined;
 
     if (!target) {
-      getLog().info({ runId }, 'slack.bridge_cancel_no_target');
+      getLog().info({ runId }, 'slack.bridge_action_no_target');
       return;
     }
 
@@ -734,14 +734,14 @@ export class SlackWorkflowBridge {
         text,
       });
     } catch (notifyError) {
-      getLog().debug({ err: notifyError as Error, runId }, 'slack.bridge_cancel_notify_failed');
+      getLog().debug({ err: notifyError as Error, runId }, 'slack.bridge_action_notify_failed');
     }
   }
 
   private async applyResolutionEdit(args: {
     runId: string;
     nodeId: string;
-    decision: 'approved' | 'rejected';
+    decision: string;
     actorId: string;
     messageTs?: string;
     channel?: string;
@@ -777,10 +777,7 @@ export class SlackWorkflowBridge {
     }
   }
 
-  private assertAuthorized(
-    userId: string | undefined,
-    surface: 'approved' | 'rejected' | 'cancel'
-  ): boolean {
+  private assertAuthorized(userId: string | undefined, surface: string): boolean {
     if (isSlackUserAuthorized(userId, this.adapter.getAllowedUserIds())) return true;
     getLog().info({ maskedUserId: maskUserId(userId), surface }, 'slack.bridge_unauthorized_click');
     return false;
@@ -797,17 +794,24 @@ function splitConversationId(conversationId: string): [string, string | undefine
   return [conversationId.slice(0, idx), conversationId.slice(idx + 1)];
 }
 
-function parseActionId(
-  actionId: string,
-  prefix: 'approved' | 'rejected'
-): { runId: string; nodeId: string } | null {
-  const expected = prefix === 'approved' ? 'approve' : 'reject';
-  const match = new RegExp(`^${expected}:([^:]+):(.+)$`).exec(actionId);
-  if (!match) return null;
-  const runId = match[1] ?? '';
-  const nodeId = match[2] ?? '';
-  if (!runId || !nodeId) return null;
-  return { runId, nodeId };
+function parseApprovalAction(action: ButtonAction): SlackApprovalAction | null {
+  if (action.value !== undefined) {
+    let value: unknown;
+    try {
+      value = JSON.parse(action.value);
+    } catch {
+      return null;
+    }
+    const parsed = slackApprovalActionSchema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+  }
+  const [prefix, runId, ...path] = action.action_id.split(':');
+  if (!runId) return null;
+  const decision = prefix === 'respond' ? path.pop() : prefix;
+  if (!decision || (prefix !== 'respond' && prefix !== 'approve' && prefix !== 'reject'))
+    return null;
+  const nodeId = path.join(':');
+  return nodeId ? { runId, nodeId, decision } : null;
 }
 
 function maskUserId(userId: string | undefined): string {

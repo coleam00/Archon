@@ -285,9 +285,8 @@ const UNCLAIMABLE_WORKFLOW_STATUSES = TERMINAL_WORKFLOW_STATUSES.filter(
  * "Owns" means the run can still act on the estate: it is running, pending or
  * paused, or it failed and remains resumable. See UNCLAIMABLE_WORKFLOW_STATUSES.
  *
- * A run attaches to an env through either route the code stamps:
- * - its own metadata.isolation_env_id (container runs, sub-run child worktrees)
- * - its worker conversation's isolation_env_id (top-level runs)
+ * Run metadata, conversation links, and same-codebase checkout paths all pin
+ * estate. Creation proof governs deletion, while any claimable user blocks it.
  */
 export async function getLiveRunOwningEnv(
   envId: string
@@ -296,21 +295,25 @@ export async function getLiveRunOwningEnv(
   const envIdExtract = postgres
     ? "r.metadata->>'isolation_env_id'"
     : "json_extract(r.metadata, '$.isolation_env_id')";
-  // Postgres types conversations.isolation_env_id as UUID; the cast keeps the
-  // shared $1 parameter text-typed across both OR branches — an untyped $1
-  // compared against text and UUID columns in one OR is rejected at parse time.
+  // UUID identifiers must compare as text so $1 has one type across metadata,
+  // conversation links, and environment associations.
   const conversationEnvMatch = postgres ? 'c.isolation_env_id::text' : 'c.isolation_env_id';
   // Placeholders follow the unclaimable statuses' length so a new status extends
   // the IN list without a hand-edited parameter position.
   const unclaimablePlaceholders = UNCLAIMABLE_WORKFLOW_STATUSES.map(
     (_, i) => `$${String(i + 2)}`
   ).join(', ');
+  const ownedEnvExtract = postgres
+    ? "r.metadata->'owned_worktree'->>'envId'"
+    : "json_extract(r.metadata, '$.owned_worktree.envId')";
   const result = await pool.query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r
      LEFT JOIN remote_agent_conversations c ON c.id = r.conversation_id
      WHERE (r.status NOT IN (${unclaimablePlaceholders}))
-       AND (${envIdExtract} = $1 OR ${conversationEnvMatch} = $1)
+       AND (${envIdExtract} = $1 OR ${ownedEnvExtract} = $1 OR ${conversationEnvMatch} = $1
+         OR EXISTS (SELECT 1 FROM remote_agent_isolation_environments e
+           WHERE ${postgres ? 'e.id::text' : 'e.id'} = $1 AND e.codebase_id = r.codebase_id AND e.working_path = r.working_path))
      ORDER BY r.started_at DESC
      LIMIT 1`,
     [envId, ...UNCLAIMABLE_WORKFLOW_STATUSES]

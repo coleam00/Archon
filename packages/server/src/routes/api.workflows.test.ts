@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
@@ -155,7 +156,11 @@ describe('GET /api/workflows', () => {
     expect(body.workflows[0]?.workflow.name).toBe('deploy');
     expect(body.workflows[0]?.source).toBe('bundled');
     expect(body.workflows.workflows).toBeUndefined();
-    expect(mockDiscoverWorkflows).toHaveBeenCalledWith('/tmp/project', expect.any(Function));
+    expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
+      '/tmp/project',
+      expect.any(Function),
+      providerRegistry
+    );
     expect(body.errors).toBeDefined();
     expect(Array.isArray(body.errors)).toBe(true);
   });
@@ -206,7 +211,11 @@ describe('GET /api/workflows', () => {
     };
 
     // Discovery is invoked with null (not skipped), so bundled defaults can surface.
-    expect(mockDiscoverWorkflows).toHaveBeenLastCalledWith(null, expect.any(Function));
+    expect(mockDiscoverWorkflows).toHaveBeenLastCalledWith(
+      null,
+      expect.any(Function),
+      providerRegistry
+    );
     // The mocked discovery returns one bundled workflow regardless of cwd, so the
     // response is non-empty — proving the handler no longer short-circuits on no-cwd.
     expect(Array.isArray(body.workflows)).toBe(true);

@@ -4,26 +4,15 @@ import {
   type WorkflowMessageMetadata,
   type WorkflowCommandSurface,
 } from '@archon/workflows/deps';
-import { createLogger } from '@archon/paths';
-import { toPersistedMessageMetadata } from '../types';
-import * as messageDb from '../db/messages';
 
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('adapter.headless');
-  return cachedLog;
-}
+export type WorkflowMessageRecorder = (
+  message: string,
+  metadata?: WorkflowMessageMetadata
+) => Promise<void>;
 
-/**
- * Minimal `IWorkflowPlatform` bound to a single run's own conversation DB id.
- * One instance per resume attempt — there is exactly one conversation to
- * persist into, so the id is fixed at construction rather than looked up
- * per call.
- */
 export class HeadlessPlatform implements IWorkflowPlatform {
   constructor(
-    private readonly conversationDbId: string,
+    private readonly recorder?: WorkflowMessageRecorder,
     private readonly surface: WorkflowCommandSurface = {}
   ) {}
 
@@ -36,19 +25,8 @@ export class HeadlessPlatform implements IWorkflowPlatform {
     message: string,
     metadata?: WorkflowMessageMetadata
   ): Promise<void> {
-    try {
-      await messageDb.addMessage(
-        this.conversationDbId,
-        'assistant',
-        message,
-        toPersistedMessageMetadata(metadata)
-      );
-    } catch (error) {
-      getLog().warn(
-        { err: error as Error, conversationDbId: this.conversationDbId },
-        'headless_message_persist_failed'
-      );
-    }
+    // A recorder failure propagates: the workflow's send boundary logs it with run context.
+    await this.recorder?.(message, metadata);
   }
 
   getStreamingMode(): 'stream' | 'batch' {

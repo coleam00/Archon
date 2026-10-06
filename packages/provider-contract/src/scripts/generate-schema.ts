@@ -46,7 +46,8 @@ function render(): string {
   const registry = z.registry<{ id: string }>();
   for (const [id, schema] of Object.entries(CONTRACT_SCHEMAS)) registry.add(schema, { id });
   const { schemas } = z.toJSONSchema(registry, {
-    uri: id => `#/$defs/${id}`,
+    // Zod appends a fragment to shared references; those definitions live in this document.
+    uri: id => (id === '__shared' ? '' : `#/$defs/${id}`),
     // Describes what a provider may emit: the engine's parse strips unknown keys, so the
     // published schema must not forbid them.
     io: 'input',
@@ -55,6 +56,9 @@ function render(): string {
   const defs = Object.fromEntries(
     Object.entries(schemas).map(([id, { $id: _id, $schema: _schema, ...schema }]) => [id, schema])
   );
+  const shared = defs.__shared;
+  delete defs.__shared;
+  Object.assign(defs, shared?.$defs);
   const document = {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     $comment:

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WebhookEvent } from './types';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 
 const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-forge-assistant-')));
 const originalArchonHome = process.env.ARCHON_HOME;
@@ -29,6 +30,9 @@ mock.module('@octokit/rest', () => ({
 
 const { setPlatformPolicies } = await import('@archon/core/platforms/registry');
 setPlatformPolicies([]);
+// The host registers providers before loading configuration.
+registerBuiltinProviders();
+registerCommunityProviders();
 const { registerRepository } = await import('@archon/core');
 const { closeDatabase, getDatabase } = await import('@archon/core/db/connection');
 const { getCodebase } = await import('@archon/core/db/codebases');

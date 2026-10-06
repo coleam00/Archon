@@ -31,6 +31,10 @@ mock.module('fs/promises', () => ({
   mkdir: mockFsMkdir,
 }));
 
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+registerBuiltinProviders();
+registerCommunityProviders();
+
 import {
   loadGlobalConfig,
   loadRepoConfig,

@@ -347,11 +347,21 @@ const GATED =
   'nodes:\n  - id: warmup\n    bash: "sleep 3; echo ready"\n' +
   '  - id: review\n    depends_on: [warmup]\n    approval:\n      message: Approve the plan?\n';
 
+/**
+ * Read-only handle for inspecting the database while the detached owner process may be
+ * writing. Without `busy_timeout` a read that lands mid-write throws SQLITE_BUSY at once.
+ */
+function openReadOnly(databasePath: string): Database {
+  const database = new Database(databasePath, { readonly: true });
+  database.run('PRAGMA busy_timeout = 5000');
+  return database;
+}
+
 /** The newest run of `workflowName`, read straight from the database file. */
 function readRunId(archonHome: string, workflowName: string): string | undefined {
   const databasePath = join(archonHome, 'archon.db');
   if (!existsSync(databasePath)) return undefined;
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
     return database
       .query<{ id: string }, [string]>(
@@ -368,7 +378,7 @@ function readRunId(archonHome: string, workflowName: string): string | undefined
 function readRunStatus(archonHome: string, runId: string): string | undefined {
   const databasePath = join(archonHome, 'archon.db');
   if (!existsSync(databasePath)) return undefined;
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
     return database
       .query<{ status: string }, [string]>(
@@ -397,7 +407,7 @@ function readEventWait(
   archonHome: string,
   runId: string
 ): Extract<WorkflowWaitContext, { kind: 'event' }> | undefined {
-  const database = new Database(join(archonHome, 'archon.db'), { readonly: true });
+  const database = openReadOnly(join(archonHome, 'archon.db'));
   try {
     const row = database
       .query<
@@ -415,7 +425,7 @@ function readEventWait(
 }
 
 function countNodeCompletions(archonHome: string, runId: string, nodeId: string): number {
-  const database = new Database(join(archonHome, 'archon.db'), { readonly: true });
+  const database = openReadOnly(join(archonHome, 'archon.db'));
   try {
     return (
       database
@@ -494,7 +504,7 @@ function readNodeCompletedOutput(
 ): Record<string, unknown> | undefined {
   const databasePath = join(archonHome, 'archon.db');
   if (!existsSync(databasePath)) return undefined;
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
     const row = database
       .query<{ data: string }, [string, string]>(
@@ -522,7 +532,7 @@ function readNodeFailure(
 ): SerializedNodeData | undefined {
   const databasePath = join(archonHome, 'archon.db');
   if (!existsSync(databasePath)) return undefined;
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
     const row = database
       .query<{ data: string }, [string, string]>(
@@ -555,9 +565,8 @@ function readNodeFailure(
 function readCliConversationPlatformIds(archonHome: string): string[] {
   const databasePath = join(archonHome, 'archon.db');
   if (!existsSync(databasePath)) return [];
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
-    database.run('PRAGMA busy_timeout = 5000');
     return database
       .query<{ platform_conversation_id: string }, []>(
         "SELECT platform_conversation_id FROM remote_agent_conversations WHERE platform_type = 'cli'"
