@@ -1167,6 +1167,21 @@ describe('SqliteAdapter busy locks', () => {
     await adapter.close();
   });
 
+  /**
+   * Settle `promise` and return its rejection message. On Windows, Bun's
+   * `expect(promise).rejects` on a promise still waiting on a timer started inside
+   * AsyncLocalStorage.run (the adapter's transaction scope) blocks the event loop, so
+   * the timer never fires and the test hangs past its own timeout.
+   */
+  async function rejectionMessage(promise: Promise<unknown>): Promise<string | undefined> {
+    try {
+      await promise;
+      return undefined;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }
+
   async function codebaseCount(): Promise<number> {
     const result = await adapter.query<{ cnt: number }>(
       'SELECT COUNT(*) AS cnt FROM remote_agent_codebases'
@@ -1243,7 +1258,7 @@ describe('SqliteAdapter busy locks', () => {
     });
 
     await statement;
-    await expect(transaction).rejects.toThrow('abort');
+    expect(await rejectionMessage(transaction)).toBe('abort');
     await released;
 
     expect(await codebaseCount()).toBe(1);
@@ -1262,7 +1277,7 @@ describe('SqliteAdapter busy locks', () => {
     await Bun.sleep(20);
     const statement = insertCodebase(adapter, 'cb-plain');
 
-    await expect(transaction).rejects.toThrow('abort');
+    expect(await rejectionMessage(transaction)).toBe('abort');
     await statement;
 
     expect(await codebaseCount()).toBe(1);
