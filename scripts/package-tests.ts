@@ -18,7 +18,6 @@ import { bunTestCommand, bunTestEnv } from './bun-test-command';
 const packageDir = process.cwd();
 const manifestPath = join(packageDir, 'package.json');
 const manifest: unknown = await Bun.file(manifestPath).json();
-const groups = resolvePackageTestGroups(packageDir, manifest);
 
 const run = async (args: string[]): Promise<number> => {
   const child = Bun.spawn(bunTestCommand(args), {
@@ -38,7 +37,7 @@ const requested = Bun.argv.slice(2);
 // from `bun run` appending the argument to a chain whose other selectors still matched.
 if (requested.length > 0) process.exit(await run(requested));
 
-for (const group of groups) {
+for (const group of resolvePackageTestGroups(packageDir, manifest)) {
   const code = await run(group);
   if (code !== 0) process.exit(code);
 }

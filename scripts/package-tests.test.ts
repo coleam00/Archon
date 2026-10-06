@@ -90,6 +90,8 @@ test(
       `test('wanted', () => appendFileSync('selected', 'yes')); test('excluded', () => { throw new Error('not selected'); });`
     );
     testFile(root, 'other', `test('wanted', () => { throw new Error('not selected'); });`);
+    // Fails default discovery, so the selected run must not resolve groups.
+    testFile(root, 'unmarked', `mock.module('./value', () => ({}));`);
     expect(await run(root, ['logger', '--test-name-pattern', 'wanted'])).toBe(0);
     expect(readFileSync(join(root, 'selected'), 'utf8')).toBe('yes');
     expect(await run(root, ['no-matching-selector'])).not.toBe(0);
