@@ -17,6 +17,8 @@ import {
   CONCLUDED_CHECK_STATES,
   type ChecksObservation as PackObservation,
   parseQualifiedPr,
+  parseCreatedWorkItem,
+  type WorkItemRecord,
   type PrRecord,
   type QualifiedPr,
 } from '../../workflows/sdlc/.shared/forge';
@@ -24,6 +26,7 @@ import type { PrRef } from '../../../packages/forge/src/identity';
 import {
   forgePrRecordSchema,
   type ForgePrRecord,
+  type ForgeWorkItemRecord,
 } from '../../../packages/forge/src/lifecycle';
 
 // The pack is standalone and cannot import runtime packages. These assignments
@@ -99,7 +102,9 @@ test('gh and the GitHub forge plugin classify every GitHub check result identica
       });
     }
     if (url.includes('/statuses')) {
-      return Response.json(statuses.map((state, id) => ({ id, context: `status-${state}`, state })));
+      return Response.json(
+        statuses.map((state, id) => ({ id, context: `status-${state}`, state }))
+      );
     }
     throw new Error(`unexpected URL: ${url}`);
   };
@@ -179,4 +184,40 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
   expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
   // Guard against a vacuous match: the parser must accept the qualified PR.
   expect(verdicts[0].parserAccepts).toBe(true);
+});
+
+const consumesWorkItem = (value: ForgeWorkItemRecord): WorkItemRecord => value;
+const producesWorkItem = (value: WorkItemRecord): ForgeWorkItemRecord => value;
+test('standalone work-item projection accepts the owning identity and rejects a foreign repository', () => {
+  const repo = { host: 'tracker.example', path: 'group/team/repo' };
+  const workitem: ForgeWorkItemRecord = {
+    ref: { repo, number: 1 },
+    kind: 'issue',
+    url: 'https://tracker.example/group/team/repo/items/1',
+    state: 'closed',
+  };
+  const value = { outcome: 'applied', changed: false, workitem };
+  expect(producesWorkItem(consumesWorkItem(parseCreatedWorkItem(value, repo)))).toEqual(workitem);
+  expect(() => parseCreatedWorkItem(value, { ...repo, path: 'other' })).toThrow();
+});
+
+test('triage producer declares qualified identities and its non-tracker sentinel', () => {
+  const file = join(import.meta.dir, '../../workflows/sdlc/triage/archon-triage.yaml');
+  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-triage.yaml', providerRegistry);
+  if (parsed.workflow === null) throw new Error(parsed.error.error);
+  const node = parsed.workflow.nodes.find(node => node.id === 'triage');
+  if (!node || !('output_format' in node) || !node.output_format)
+    throw new Error('missing triage schema');
+  const schema = (node.output_format.properties as Record<string, Record<string, unknown>>).item;
+  const qualified = { repo: { host: 'tracker.example', path: 'group/team/repo' }, number: 7 };
+  expect(validateStructuredOutput(qualified, schema).valid).toBe(true);
+  expect(validateStructuredOutput({ repo: { host: '', path: '' }, number: 0 }, schema).valid).toBe(
+    true
+  );
+  expect(validateStructuredOutput({ repository: 'owner/repo', number: 7 }, schema).valid).toBe(
+    false
+  );
+  expect(
+    validateStructuredOutput({ repo: { path: 'group/team/repo' }, number: 7 }, schema).valid
+  ).toBe(false);
 });

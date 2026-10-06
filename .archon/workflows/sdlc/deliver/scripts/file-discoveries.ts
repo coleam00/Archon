@@ -11,9 +11,8 @@
  * may describe different work, and reusing it would report this record filed
  * while its claim and evidence were never published.
  *
- * gh is the transport, as it is for triage's labels: the forge contract has no
- * issue-create operation yet. Each created issue is read back before the node
- * succeeds; a failed read-back refuses with the URL already recorded.
+ * Forge-selected runs recover an existing issue by a stable content marker.
+ * The default gh path persists the URL before its independent read-back.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
@@ -22,7 +21,13 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parsePrRecord } from '../../.shared/forge.ts';
+import { createHash } from 'node:crypto';
+import {
+  forgeSource,
+  invokeForge,
+  parseCreatedWorkItem,
+  parsePrRecord,
+} from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text } from '../../.shared/io.ts';
 
 interface Discovery {
@@ -69,6 +74,7 @@ function body(record: Discovery, prUrl: string): string {
 
 try {
   const pr = parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)));
+  const source = forgeSource();
   const repo = `${pr.repo.host}/${pr.repo.path}`;
   const path = join(artifactsDir(), 'discoveries.json');
   const records = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as unknown) : [];
@@ -85,16 +91,41 @@ try {
       const title = typeof record.title === 'string' ? record.title.trim() : '';
       if (title === '') throw new Error('a discovery has no title');
 
-      const bodyPath = join(scratch, 'body.md');
-      writeFileSync(bodyPath, body(record, pr.url));
-      const url = gh('issue', 'create', '--repo', repo, '--title', title, '--body-file', bodyPath);
-      // Persist before anything else can fail, so a resume never files it twice.
-      record.issue = url;
-      writeFileSync(path, `${JSON.stringify(records, null, 2)}\n`);
-      const readBack = JSON.parse(gh('issue', 'view', url, '--json', 'title')) as {
-        title: string;
-      };
-      if (readBack.title !== title) throw new Error(`issue read-back disagrees for ${url}`);
+      const marker = `<!-- archon-discovery:${createHash('sha256')
+        .update(
+          JSON.stringify({
+            title,
+            claim: asText(record.claim),
+            evidence: record.evidence ?? null,
+            relation: asText(record.relation),
+          })
+        )
+        .digest('hex')} -->`;
+      let url: string;
+      if (source === 'forge') {
+        url = parseCreatedWorkItem(
+          invokeForge('workitem.create', {
+            repo: pr.repo,
+            title,
+            marker,
+            body: `${marker}\n${body(record, pr.url)}`,
+          }),
+          pr.repo
+        ).url;
+        record.issue = url;
+        writeFileSync(path, `${JSON.stringify(records, null, 2)}\n`);
+      } else {
+        const bodyPath = join(scratch, 'body.md');
+        writeFileSync(bodyPath, body(record, pr.url));
+        url = gh('issue', 'create', '--repo', repo, '--title', title, '--body-file', bodyPath);
+        // Persist before read-back so a resumed gh run retains the created URL.
+        record.issue = url;
+        writeFileSync(path, `${JSON.stringify(records, null, 2)}\n`);
+        const readBack = JSON.parse(gh('issue', 'view', url, '--json', 'title')) as {
+          title: string;
+        };
+        if (readBack.title !== title) throw new Error(`issue read-back disagrees for ${url}`);
+      }
       filed.push(url);
     }
   } finally {

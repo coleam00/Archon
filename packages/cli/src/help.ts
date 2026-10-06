@@ -437,6 +437,10 @@ const scopedOnlyHelp: HelpEntry[] = [
   ...(
     [
       ['workitem.view', 'Read a qualified work item'],
+      ['workitem.create', 'Create an issue or recover its canonical marker'],
+      ['workitem.labels.set', 'Set and verify the complete issue label set'],
+      ['repo.labels.list', 'List repository label names'],
+      ['repo.label.ensure', 'Explicitly ensure one repository label exists'],
       ['pr.view', 'Read a pull request by number or by qualified head'],
       ['pr.create', 'Open a pull request and verify it by reading it back'],
       ['pr.edit-body', 'Replace a pull request body and verify the result'],

@@ -361,3 +361,16 @@ it('workflow run help distinguishes initial registration from the dispatch overr
   expect(text).toContain('Initial repository registration only');
   expect(text).toContain('--base <branch>');
 });
+
+it('forge work-item and repository-label help exposes file requests', () => {
+  for (const operation of [
+    'workitem.create',
+    'workitem.labels.set',
+    'repo.labels.list',
+    'repo.label.ensure',
+  ]) {
+    const text = renderHelp('forge', operation);
+    expect(text).toContain(operation);
+    expect(text).toContain('--data-file <path>');
+  }
+});

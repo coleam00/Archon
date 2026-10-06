@@ -236,3 +236,55 @@ test('a pull request that a head selector did not find audits as an absence', ()
     result: { op: 'pr.view', value: null },
   });
 });
+
+const issueCreate = {
+  operationId: 'issue',
+  op: 'workitem.create',
+  repo: ref.repo,
+  title: 'secret title',
+  body: `${marker}\nsecret body`,
+  marker,
+} satisfies ForgeRequest;
+const labelsSet = {
+  operationId: 'labels',
+  op: 'workitem.labels.set',
+  ref,
+  labels: ['a', 'b'],
+} satisfies ForgeRequest;
+const labelEnsure = {
+  operationId: 'ensure',
+  op: 'repo.label.ensure',
+  repo: ref.repo,
+  name: 'name',
+  color: 'abcdef',
+  description: 'secret description',
+} satisfies ForgeRequest;
+test.each([issueCreate, labelsSet, labelEnsure])(
+  'new mutation dispatch verifies proof and preserves unknown failures: $op',
+  async request => {
+    const result = await dispatch(request);
+    expect(result.response).toMatchObject({
+      ok: true,
+      result: { op: request.op, value: { outcome: 'applied' } },
+    });
+    expect(result.audit.target).toEqual(mutationTarget(request));
+    for (const mode of ['mismatch', 'no-evidence'])
+      expect((await dispatch(request, mode)).response).toMatchObject({
+        ok: false,
+        mutation: { outcome: 'outcome_unknown' },
+      });
+    expect((await dispatch(request, 'refused')).response).toMatchObject({
+      ok: false,
+      mutation: { outcome: 'refused' },
+    });
+    const audit = JSON.stringify(result.audit);
+    for (const secret of ['secret title', 'secret body', 'secret description', marker])
+      expect(audit).not.toContain(secret);
+  }
+);
+test('dispatch permits recovery of closed marked issues with edited content', async () => {
+  expect((await dispatch(issueCreate, 'recovery')).response).toMatchObject({
+    ok: true,
+    result: { value: { changed: false, workitem: { state: 'closed' } } },
+  });
+});

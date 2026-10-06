@@ -12,10 +12,17 @@
  * only when the run was launched with publish=true and the target is a tracker
  * issue does this verify the item's identity on the tracker, apply the labels, and
  * read them back. Area labels are never created: the prompt may only pick labels
- * the repository already has. gh is the interim transport; the forge contract's
- * work-item operation is the intended owner.
+ * the repository already has. Publishing uses the selected forge source.
  */
 
+import {
+  forgeSource,
+  invokeForge,
+  readWorkItemLabels,
+  readRepositoryLabels,
+  record,
+  type QualifiedPr,
+} from '../../.shared/forge.ts';
 import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 
 type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
@@ -64,10 +71,7 @@ const PACK_LABELS: Record<string, { color: string; description: string }> = {
   },
 };
 
-interface Item {
-  readonly repository: string;
-  readonly number: number;
-}
+type Item = QualifiedPr;
 interface Edits {
   readonly title: string;
   readonly body: string;
@@ -105,16 +109,19 @@ function existingLabels(repository: string): Set<string> {
 
 /** The item's current labels, after proving the number names the issue the prompt declared. */
 function readIssue(item: Item): Set<string> {
-  const issue = JSON.parse(gh('api', `repos/${item.repository}/issues/${String(item.number)}`)) as {
+  const issue = JSON.parse(
+    gh('api', '--hostname', item.repo.host, `repos/${item.repo.path}/issues/${String(item.number)}`)
+  ) as {
     number?: unknown;
     html_url?: unknown;
     pull_request?: unknown;
     labels?: { name: string }[];
   };
-  const url = `https://github.com/${item.repository}/issues/${String(item.number)}`;
+  const url = `https://${item.repo.host}/${item.repo.path}/issues/${String(item.number)}`;
   if (
     issue.number !== item.number ||
-    (typeof issue.html_url === 'string' ? issue.html_url : '').toLowerCase() !== url.toLowerCase() ||
+    (typeof issue.html_url === 'string' ? issue.html_url : '').toLowerCase() !==
+      url.toLowerCase() ||
     'pull_request' in issue
   ) {
     throw new Error(`tracker identity mismatch: ${url} is not the issue the verdict names`);
@@ -123,12 +130,45 @@ function readIssue(item: Item): Set<string> {
 }
 
 function apply(item: Item, wanted: string[], area: string[]): string[] {
+  if (forgeSource() === 'forge') {
+    const current = readWorkItemLabels(item);
+    const present = new Set(readRepositoryLabels(item.repo));
+    for (const name of wanted) {
+      if (!present.has(name))
+        invokeForge('repo.label.ensure', { repo: item.repo, name, ...PACK_LABELS[name] });
+    }
+    const intended = [...new Set([...wanted, ...area.filter(name => present.has(name))])].sort();
+    const labels = [
+      ...new Set([...current.filter(name => !(name in PACK_LABELS)), ...intended]),
+    ].sort();
+    const result = invokeForge('workitem.labels.set', { ref: item, labels });
+    const observedLabels = result?.labels;
+    if (
+      result?.outcome !== 'applied' ||
+      !Array.isArray(observedLabels) ||
+      observedLabels.length !== labels.length ||
+      !labels.every(name => observedLabels.includes(name))
+    )
+      throw new Error('forge label-set read-back disagrees');
+    return intended;
+  }
+  const repository = `${item.repo.host}/${item.repo.path}`;
   const current = readIssue(item);
-  const present = existingLabels(item.repository);
+  const present = existingLabels(repository);
   for (const name of wanted) {
     if (!present.has(name)) {
       const { color, description } = PACK_LABELS[name];
-      gh('label', 'create', name, '--repo', item.repository, '--color', color, '--description', description);
+      gh(
+        'label',
+        'create',
+        name,
+        '--repo',
+        repository,
+        '--color',
+        color,
+        '--description',
+        description
+      );
     }
   }
   const areaPresent = area.filter(name => present.has(name));
@@ -137,7 +177,7 @@ function apply(item: Item, wanted: string[], area: string[]): string[] {
   // Narrow add and remove operations, never a whole-set write, so labels an
   // operator adds concurrently survive.
   if (toAdd.length > 0 || stale.length > 0) {
-    const args = ['issue', 'edit', String(item.number), '--repo', item.repository];
+    const args = ['issue', 'edit', String(item.number), '--repo', repository];
     for (const name of toAdd) args.push('--add-label', name);
     for (const name of stale) args.push('--remove-label', name);
     gh(...args);
@@ -162,12 +202,30 @@ function main(): void {
   const summary = text(process.env.INPUTS_SUMMARY);
   const blockedReason = text(process.env.INPUTS_BLOCKED_REASON);
   const area = bound(process.env.INPUTS_AREA_LABELS) as string[];
-  const boundItem = bound(process.env.INPUTS_ITEM) as Item;
+  const boundItem = record(bound(process.env.INPUTS_ITEM));
+  const repo = record(boundItem?.repo);
+  if (
+    typeof repo?.host !== 'string' ||
+    typeof repo.path !== 'string' ||
+    typeof boundItem?.number !== 'number' ||
+    !Number.isInteger(boundItem.number) ||
+    !(
+      (repo.host === '' && repo.path === '' && boundItem.number === 0) ||
+      (repo.host.trim() !== '' && repo.path.trim() !== '' && boundItem.number > 0)
+    )
+  ) {
+    refuse(
+      'invalid triage verdict: item requires a qualified repo and positive number, or the empty repo and zero sentinel'
+    );
+    return;
+  }
+  const item: Item | undefined =
+    boundItem.number === 0
+      ? undefined
+      : { repo: { host: repo.host, path: repo.path }, number: boundItem.number };
   const edits = bound(process.env.INPUTS_PROPOSED_EDITS) as Edits;
   const blockedBy = bound(process.env.INPUTS_BLOCKED_BY) as string[];
   const report = bound(process.env.INPUTS_REPORT);
-  // An empty repository is the prompt's spelling for "not a tracker issue".
-  const item = boundItem.repository === '' ? undefined : boundItem;
 
   const invalid = (message: string): void => {
     refuse(`invalid triage verdict: ${message}`);
@@ -218,10 +276,6 @@ function main(): void {
     invalid('area_labels may not name a pack label; those derive from the verdict');
     return;
   }
-  if (item !== undefined && (!item.repository.includes('/') || item.number <= 0)) {
-    invalid('item must be {repository: owner/repo, number: N} or carry an empty repository');
-    return;
-  }
 
   let labels = [designFirst ? DESIGN_FIRST_LABEL : STATE_LABEL[contract]];
   // Size only matters on an item that can still be worked; a close verdict carries none.
@@ -251,4 +305,8 @@ function main(): void {
   });
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  refuse(`triage labels: ${error instanceof Error ? error.message : String(error)}`);
+}

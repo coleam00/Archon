@@ -9,6 +9,8 @@ import {
   mutationOperationSchema,
   mutationRequestSchemas,
   mutationResultSchemas,
+  repoLabelsListRequestSchema,
+  repoLabelsListSchema,
   prViewRequestSchema,
   prViewSchema,
   workItemViewRequestSchema,
@@ -199,6 +201,7 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
           .extend({ content: contentAuditSchema })
           .nullable(),
       }),
+      z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
       ...mutationResultSchemas,
     ]),
   }),

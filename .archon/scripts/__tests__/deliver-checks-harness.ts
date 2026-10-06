@@ -125,6 +125,9 @@ const pr = {
 let comments = (fake.comments ?? []).map(row => ({ ...row }));
 let exists = fake.noOpenPr !== true;
 let nextId = 900;
+const labels = new Set(['operator', 'archon-blocked', 'area']);
+let issueLabels = ['operator', 'archon-blocked'];
+let issueTitle = '';
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[0] !== 'gh') return original(argv, settings);
   const text = argv.slice(1).join(' ');
@@ -147,6 +150,22 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));
   };
+  if (text.startsWith('label list')) return result(0, JSON.stringify([...labels].map(name => ({ name }))));
+  if (text.startsWith('label create')) { if (fake.writeFail) return result(1, '', fake.writeFail); labels.add(argv[3]); return result(0); }
+  if (text.startsWith('issue edit')) {
+    if (fake.writeFail) return result(1, '', fake.writeFail);
+    if (!fake.writeLost) for (let index = 0; index < argv.length; index++) {
+      if (argv[index] === '--add-label') issueLabels.push(argv[index + 1]);
+      if (argv[index] === '--remove-label') issueLabels = issueLabels.filter(name => name !== argv[index + 1]);
+    }
+    return result(0);
+  }
+  if (text.startsWith('issue create')) {
+    if (fake.writeFail) return result(1, '', fake.writeFail);
+    issueTitle = fake.writeLost ? 'different' : argv[argv.indexOf('--title') + 1];
+    return result(0, 'https://' + host + '/' + path + '/issues/7');
+  }
+  if (text.startsWith('issue view')) return result(0, JSON.stringify({ title: issueTitle }));
   if (text.startsWith('pr checks')) {
     if (fake.checks === undefined || fake.checks === 'fail')
       return result(1, '', fake.checks === 'fail' ? 'HTTP 502' : 'no checks reported');
@@ -203,6 +222,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const apiHost = argv[argv.indexOf('--hostname') + 1];
     const apiPath = endpoint.split('/').slice(1, 3).join('/');
     const url = (id) => 'https://' + apiHost + '/' + apiPath + '/pull/' + String(pr.number) + '#issuecomment-' + String(id);
+    if (endpoint.endsWith('/issues/7')) return result(0, JSON.stringify({ number: 7, html_url: 'https://' + apiHost + '/' + apiPath + '/issues/7', labels: [...new Set(issueLabels)].map(name => ({ name })) }));
     const method = argv.includes('--method') ? argv[argv.indexOf('--method') + 1] : 'GET';
     if (method === 'GET') {
       const page = Number(new URLSearchParams(endpoint.split('?')[1] ?? '').get('page') ?? '1');
@@ -252,8 +272,7 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
   // separator is an invalid string escape. Forward slashes resolve on every
   // platform and survive JSON.parse.
   const artifactPath = artifacts.split(sep).join('/');
-  const resolveArtifacts = (value: string): string =>
-    value.split('{ARTIFACTS}').join(artifactPath);
+  const resolveArtifacts = (value: string): string => value.split('{ARTIFACTS}').join(artifactPath);
   for (const [name, content] of Object.entries(options.artifacts ?? {})) {
     mkdirSync(dirname(join(artifacts, name)), { recursive: true });
     writeFileSync(join(artifacts, name), resolveArtifacts(content));
