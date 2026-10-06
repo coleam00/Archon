@@ -48,9 +48,21 @@ describe('flip-ready preflight on the default gh source', () => {
 
   const refusals: [string, GhFake, string][] = [
     ['a failed check read', { checks: 'fail', rollup: 'fail' }, 'could not read check state'],
-    ['a red check', { checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }] }, 'red checks: build (failure)'],
-    ['a running check', { checks: [{ name: 'unit', state: 'IN_PROGRESS', bucket: 'pending' }] }, 'pending checks: unit'],
-    ['a cancelled check', { checks: [{ name: 'e2e', state: 'CANCELLED', bucket: 'cancel' }] }, 'red checks: e2e (cancelled)'],
+    [
+      'a red check',
+      { checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }] },
+      'red checks: build (failure)',
+    ],
+    [
+      'a running check',
+      { checks: [{ name: 'unit', state: 'IN_PROGRESS', bucket: 'pending' }] },
+      'pending checks: unit',
+    ],
+    [
+      'a cancelled check',
+      { checks: [{ name: 'e2e', state: 'CANCELLED', bucket: 'cancel' }] },
+      'red checks: e2e (cancelled)',
+    ],
   ];
   for (const [label, gh, reason] of refusals) {
     it(`refuses ${label} before the ready write`, () => {
@@ -200,3 +212,17 @@ describe('flip-ready terminal-state classification', () => {
     expect(result.stderr).toContain('still reports draft');
   });
 });
+
+it.each([[[]], [[{ name: 'green', state: 'green' as const }]]])(
+  'refuses workflow-level approval before any ready write: %j',
+  units => {
+    const result = flip({
+      source: 'forge',
+      forge: { kind: 'fake', response: forgeResponse(units, { approvalPending: true }) },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('gated');
+    expect(result.forge).toHaveLength(1);
+    expect(result.gh).toEqual([]);
+  }
+);

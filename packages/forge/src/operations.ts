@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { checkChangedEventSchema, type CheckResult } from './events';
 import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 import {
+  mergeConditionSchema,
+  prReviewsSchema,
   lifecycleReadRequestSchemas,
   lifecycleReadResultSchemas,
   mutationFailureSchema,
@@ -17,6 +19,8 @@ import {
 } from './lifecycle';
 
 export * from './lifecycle';
+export * from './checks';
+import { rerunGroupSchema } from './checks';
 
 export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
 export type ChecksState = z.infer<typeof checksStateSchema>;
@@ -47,7 +51,10 @@ export const checkObservationSchema = checkChangedEventSchema
     nativeResult: true,
     result: true,
   })
-  .extend({ state: checksStateSchema.exclude(['none']) });
+  .extend({
+    state: checksStateSchema.exclude(['none']),
+    rerun: rerunGroupSchema.nullable().optional(),
+  });
 export type CheckObservation = z.infer<typeof checkObservationSchema>;
 export const checksSummarySchema = z.object({
   state: checksStateSchema,
@@ -81,6 +88,7 @@ export const checksObservationSchema = checkSetSchema.safeExtend({
   ref: prRefSchema,
   revision: gitObjectIdSchema,
   required: checkSetSchema.nullable(),
+  approvalPending: z.boolean().nullable().optional(),
 });
 export type ChecksObservation = z.infer<typeof checksObservationSchema>;
 export const pluginIdentitySchema = z.object({
@@ -88,6 +96,7 @@ export const pluginIdentitySchema = z.object({
   version: z.string().min(1),
 });
 export const pluginMetadataSchema = pluginIdentitySchema.extend({
+  mutationConditions: z.object({ 'pr.merge': z.array(mergeConditionSchema).optional() }).optional(),
   protocol: z.literal(1),
   forge: z.string().min(1),
   hosts: z.array(z.string().min(1)),
@@ -199,6 +208,16 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
           .extend({ content: contentAuditSchema })
           .nullable(),
       }),
+      z.object({
+        op: z.literal('pr.reviews'),
+        value: prReviewsSchema.extend({
+          items: z.array(
+            prReviewsSchema.shape.items.element
+              .omit({ body: true })
+              .extend({ content: contentAuditSchema })
+          ),
+        }),
+      }),
       ...mutationResultSchemas,
     ]),
   }),
@@ -209,6 +228,20 @@ export type ForgeAuditResponse = z.infer<typeof auditResponseSchema>;
 export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse {
   if (!response.ok) return response;
   const result = response.result;
+  if (result.op === 'pr.reviews')
+    return {
+      ...response,
+      result: {
+        op: result.op,
+        value: {
+          ...result.value,
+          items: result.value.items.map(({ body, ...facts }) => ({
+            ...facts,
+            content: { digest: contentDigest(body), bytes: Buffer.byteLength(body) },
+          })),
+        },
+      },
+    };
   if (result.op !== 'workitem.view' && result.op !== 'pr.view') return { ...response, result };
   if (result.value === null) return { ...response, result: { op: 'pr.view', value: null } };
   const { title, body, ...facts } = result.value;

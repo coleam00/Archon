@@ -10,7 +10,13 @@
  * A pull request that is already merged needs no flip and is reported as such; one
  * that is closed without a merge has no delivery to report and refuses.
  */
-import { atRevision, describeUnits, gateState, readPrChecks } from '../../.shared/checks.ts';
+import {
+  approvalPending,
+  atRevision,
+  describeUnits,
+  gateState,
+  readPrChecks,
+} from '../../.shared/checks.ts';
 import { forgeSource, parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { markPrReady, viewPr } from '../../.shared/pr.ts';
 import { emit, note, refuse } from '../../.shared/io.ts';
@@ -21,7 +27,7 @@ function preflight(): QualifiedPr | undefined {
   try {
     const pr = parseQualifiedPr(boundPr);
     const read = readPrChecks(pr);
-    const state = gateState(read.units);
+    const state = gateState(read.units, approvalPending(read));
     if (state !== 'green' && state !== 'none') {
       const notGreen = read.units.filter(unit => unit.state !== 'green');
       throw new Error(

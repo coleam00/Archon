@@ -8,6 +8,7 @@ import {
   forgeRequestSchema,
   isMutationRequest,
   mutationTarget,
+  mutationAttempt,
   type ForgeRequest,
   type ForgeResponse,
 } from '@archon/forge/operations';
@@ -130,6 +131,7 @@ export async function forgeCommand(
             mutation: {
               op: request.op,
               target: mutationTarget(request),
+              ...mutationAttempt(request),
               outcome: dispatched ? ('outcome_unknown' as const) : ('refused' as const),
             },
           }
