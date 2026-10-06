@@ -6,6 +6,12 @@ import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { NODE_STATE_EVENT_TYPES, type NodeStateEventType } from '@archon/workflows/store';
+import {
+  startNodeExecution,
+  finishNodeExecution,
+  executionMetadata,
+} from '@archon/workflows/node-execution';
+import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
 import { inMemoryDagResumeSnapshot } from '@archon/workflows/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1354,7 +1360,7 @@ describe('workflow-events', () => {
       }
     );
 
-    test('selects the same reusable outputs and usage as the workflows in-memory store double', async () => {
+    test('selects the same reusable outputs, unfinished invocations, and usage as the workflows in-memory store double', async () => {
       // Typed rows carry the scope in `accounting`, not the legacy `aggregate` marker.
       const typedUsage = (accounting: 'node' | 'aggregate', input: number, cost_usd: number) => ({
         node: { id: 'worker', kind: 'exec', runtime: 'sh' },
@@ -1376,7 +1382,30 @@ describe('workflow-events', () => {
         tokens: { input, output: 1 },
         cost_usd,
       });
+      const failedFanOut = finishNodeExecution(
+        startNodeExecution({
+          runId: 'run-double',
+          path: 'work',
+          node: {
+            id: 'work',
+            kind: 'workflow',
+            workflow: 'child',
+            fan_out: { items: '[1,2,3]', join: 'all_done', max_parallel: 1 },
+          },
+          invocation: {
+            id: 'fan-out-invocation',
+            startedAt: '2026-09-22T10:00:00Z',
+            loopPath: [],
+          },
+        }),
+        {
+          status: 'failed',
+          failureKind: 'child_failed',
+          error: "fan_out node 'work' refused all 3 children at spawn: refused",
+        }
+      );
       const rows = [
+        serializeNodeStateRecord(failedFanOut),
         { step_name: 'text', event_type: 'node_completed', data: { node_output: 'kept' } },
         { step_name: 'number', event_type: 'node_completed', data: { node_output: 42 } },
         { step_name: 'object', event_type: 'node_completed', data: { node_output: { a: 1 } } },
@@ -1405,6 +1434,10 @@ describe('workflow-events', () => {
 
       expect(production.completedNodeOutputs).toEqual(new Map([['text', { output: 'kept' }]]));
       expect(double.completedNodeOutputs).toEqual(production.completedNodeOutputs);
+      expect([...production.unfinishedInvocations!.values()]).toEqual([
+        executionMetadata(failedFanOut),
+      ]);
+      expect(double.unfinishedInvocations).toEqual(production.unfinishedInvocations);
       expect(production.tokens).toEqual({ input: 3, output: 1 });
       expect(production.costUsd).toBe(0.5);
       expect(double.tokens).toEqual(production.tokens);

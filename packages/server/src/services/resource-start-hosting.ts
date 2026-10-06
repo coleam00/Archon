@@ -1,3 +1,5 @@
+import { addMessage } from '@archon/core/db/messages';
+import { toPersistedMessageMetadata } from '@archon/core/types';
 /**
  * The server as a resource-start host.
  *
@@ -37,7 +39,19 @@ export function createServerResourceStartHost(
       requestId,
       hostId,
       engine,
-      createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
+      createPlatform: ({ conversationDbId }) =>
+        new HeadlessPlatform(
+          conversationDbId
+            ? async (message, metadata): Promise<void> => {
+                await addMessage(
+                  conversationDbId,
+                  'assistant',
+                  message,
+                  toPersistedMessageMetadata(metadata)
+                );
+              }
+            : undefined
+        ),
     })
       .then(result => {
         if (!result.success) {

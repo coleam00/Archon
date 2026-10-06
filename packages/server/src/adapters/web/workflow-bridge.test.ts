@@ -80,19 +80,22 @@ test('persisted typed node rows retain public execution metadata through dashboa
   expect(JSON.stringify(payload)).not.toContain('sessionId');
 });
 
-test('workflow start projection does not expose the host transcript path', () => {
-  const event: WorkflowEmitterEvent = {
-    type: 'workflow_started',
-    runId: 'run-1',
-    workflowName: 'implement',
-    conversationId: 'conv-1',
-    transcriptPath: '/host/.archon/workspaces/acme/widget/logs/run-1.jsonl',
-  };
+test.each(['conv-1', null])(
+  'workflow start projection accepts optional provenance and hides the host transcript path',
+  conversationId => {
+    const event: WorkflowEmitterEvent = {
+      type: 'workflow_started',
+      runId: 'run-1',
+      workflowName: 'implement',
+      conversationId,
+      transcriptPath: '/host/.archon/workspaces/acme/widget/logs/run-1.jsonl',
+    };
 
-  const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
-  expect(payload).toMatchObject({ type: 'workflow_status', runId: 'run-1', status: 'running' });
-  expect(payload).not.toHaveProperty('transcriptPath');
-});
+    const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+    expect(payload).toMatchObject({ type: 'workflow_status', runId: 'run-1', status: 'running' });
+    expect(payload).not.toHaveProperty('transcriptPath');
+  }
+);
 
 test('node skip projection preserves the live skip cause', () => {
   const event: WorkflowEmitterEvent = {
@@ -248,5 +251,28 @@ describe('mapWorkflowEvent — container_lifecycle (Phase B)', () => {
     expect(payload.type).toBe('workflow_container_lifecycle');
     expect(payload.phase).toBe('destroyed');
     expect(payload).not.toHaveProperty('containerId');
+  });
+});
+
+test('live approval frames retain the exact declared vocabulary', () => {
+  const decisions = [
+    { id: 'approve', label: 'Ship it' },
+    { id: 'revise', label: 'Try again' },
+    { id: 'cancel' },
+  ];
+  const payload: unknown = JSON.parse(
+    mapWorkflowEvent({
+      type: 'approval_pending',
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Choose',
+      decisions,
+      pauseId: 'pause-one',
+    }) ?? '{}'
+  );
+  expect(payload).toMatchObject({
+    type: 'workflow_status',
+    status: 'paused',
+    approval: { nodeId: 'review', message: 'Choose', decisions, pauseId: 'pause-one' },
   });
 });

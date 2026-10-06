@@ -18,6 +18,7 @@ import {
 
 function runRow(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id: 'run-1',
     workflow_name: 'implement',
     conversation_id: 'conv-1',

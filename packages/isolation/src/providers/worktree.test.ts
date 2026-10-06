@@ -87,6 +87,7 @@ mock.module('node:fs/promises', () => ({
   readFile: mockReadFile,
   rm: mockRm,
   stat: mockStat,
+  writeFile: mock(async () => {}),
 }));
 
 import { WorktreeProvider } from './worktree';
@@ -103,9 +104,11 @@ describe('WorktreeProvider', () => {
   let findWorktreeByBranchSpy: Mock<typeof git.findWorktreeByBranch>;
   let getCurrentBranchStrictSpy: Mock<typeof git.getCurrentBranchStrict>;
   let getCanonicalRepoPathSpy: Mock<typeof git.getCanonicalRepoPath>;
+  let getGitCheckoutIdentitySpy: Mock<typeof git.getGitCheckoutIdentity>;
   let verifyWorktreeOwnershipSpy: Mock<typeof git.verifyWorktreeOwnership>;
   let unlockWorktreeSpy: Mock<typeof git.unlockWorktree>;
   let readWorktreeLockSpy: Mock<typeof git.readWorktreeLock>;
+  let readWorktreeRegistrationSpy: Mock<typeof git.readWorktreeRegistration>;
 
   beforeEach(() => {
     mockConfigLoader = async (): Promise<{ baseBranch: git.BranchName }> => ({
@@ -120,8 +123,15 @@ describe('WorktreeProvider', () => {
     getCurrentBranchStrictSpy = spyOn(git, 'getCurrentBranchStrict');
     getCanonicalRepoPathSpy = spyOn(git, 'getCanonicalRepoPath');
     verifyWorktreeOwnershipSpy = spyOn(git, 'verifyWorktreeOwnership');
+    getGitCheckoutIdentitySpy = spyOn(git, 'getGitCheckoutIdentity').mockResolvedValue({
+      gitDir: '/git/worktrees/test',
+      commonGitDir: '/git',
+      linkedWorktree: true,
+    });
     unlockWorktreeSpy = spyOn(git, 'unlockWorktree');
     readWorktreeLockSpy = spyOn(git, 'readWorktreeLock');
+    // Git lists no worktree at the target path unless a test says otherwise.
+    readWorktreeRegistrationSpy = spyOn(git, 'readWorktreeRegistration').mockResolvedValue(null);
     getDefaultBranchSpy = spyOn(git, 'getDefaultBranch');
     getDefaultRemoteSpy = spyOn(git, 'getDefaultRemote');
     syncWorkspaceSpy = spyOn(git, 'syncWorkspace');
@@ -180,8 +190,10 @@ describe('WorktreeProvider', () => {
     getCurrentBranchStrictSpy.mockRestore();
     getCanonicalRepoPathSpy.mockRestore();
     verifyWorktreeOwnershipSpy.mockRestore();
+    getGitCheckoutIdentitySpy.mockRestore();
     unlockWorktreeSpy.mockRestore();
     readWorktreeLockSpy.mockRestore();
+    readWorktreeRegistrationSpy.mockRestore();
     getDefaultBranchSpy.mockRestore();
     getDefaultRemoteSpy.mockRestore();
     syncWorkspaceSpy.mockRestore();
@@ -4020,7 +4032,7 @@ describe('WorktreeProvider', () => {
       expect(result!.provider).toBe('worktree');
       expect(result!.status).toBe('active');
       expect(result!.branchName).toBe(git.toBranchName('issue-55'));
-      expect(result!.metadata).toEqual({ adopted: false });
+      expect(result!.metadata).toEqual({ provenance: 'observed', adopted: false });
       expect(result!.createdAt).toBeInstanceOf(Date);
     });
 
@@ -4060,7 +4072,7 @@ describe('WorktreeProvider', () => {
       for (const env of results) {
         expect(env.provider).toBe('worktree');
         expect(env.status).toBe('active');
-        expect(env.metadata).toEqual({ adopted: false });
+        expect(env.metadata).toEqual({ provenance: 'observed', adopted: false });
         expect(env.createdAt).toBeInstanceOf(Date);
       }
     });
@@ -4133,7 +4145,7 @@ describe('WorktreeProvider', () => {
       expect(result).not.toBeNull();
       expect(result!.status).toBe('active');
       expect(result!.provider).toBe('worktree');
-      expect(result!.metadata).toEqual({ adopted: true });
+      expect(result!.metadata).toEqual({ provenance: 'adopted', adopted: true });
       expect(result!.createdAt).toBeInstanceOf(Date);
     });
 

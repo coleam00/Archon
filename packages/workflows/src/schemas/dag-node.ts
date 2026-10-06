@@ -592,6 +592,14 @@ export const approvalDecisionConfigSchema = z.object({
   label: z.string().min(1).optional(),
 });
 
+type ApprovalDecisionConfig = z.infer<typeof approvalDecisionConfigSchema>;
+
+export function getApprovalDecisions(approval: {
+  decisions?: ApprovalDecisionConfig[];
+}): ApprovalDecisionConfig[] {
+  return approval.decisions ?? [{ id: 'approve' }, { id: 'reject' }];
+}
+
 /**
  * Schema for the `approval:` config object. Named (rather than inlined at both
  * use sites) so its shape is reachable for the unknown-key check in the loader.
@@ -1859,7 +1867,7 @@ export const dagNodeSchema = z
                 },
               },
             ]
-          : (data.approval.decisions ?? [{ id: 'approve' }, { id: 'reject' }]);
+          : getApprovalDecisions(data.approval);
       return {
         ...base,
         ...shared,

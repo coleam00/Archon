@@ -65,12 +65,11 @@ export async function resumeWorkflowContinuation(
         cwd: run.working_path,
         legacyWorkflow: source.workflow,
         userMessage: run.user_message ?? '',
-        conversationDbId: run.conversation_id,
+        origin: run.origin ?? undefined,
         run,
         cursor,
         options: {
           codebaseId: run.codebase_id ?? undefined,
-          userId,
           baseBranch: codebase?.default_branch?.trim() || undefined,
           resolveChildIsolation: codebase
             ? createCodebaseChildResolver(codebase, {

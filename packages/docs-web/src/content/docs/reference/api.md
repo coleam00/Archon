@@ -265,13 +265,13 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 |--------|------|-------------|
 | POST | `/api/workflows/{name}/run` | Run a workflow (JSON or multipart) |
 | GET | `/api/workflows/runs` | List workflow runs |
-| GET | `/api/workflows/runs/{runId}` | Get run details with events (provider events are served by the route below). A node event with a `cost_usd` carries `cost_scope`: `own` for the node's own spend, `total` for a restatement of spend other rows carry |
+| GET | `/api/workflows/runs/{runId}` | Get run details with events (provider events are served by the route below). See [node execution records](/reference/node-execution/) for event fields, reporting availability, and cost scope |
 | GET | `/api/workflows/runs/{runId}/provider-events` | The run's provider events as `{events: ProviderEventRecord[]}`: each is `{runId, stepName, attemptId, seq, observedAt, event}`, grouped by node and in emission order within one. `?step=` limits it to one node. `?attemptId=&afterSeq=` (both, and with `step`) returns only the events after that one: the attempt's later events and every later attempt's. Rows written before the engine recorded envelopes come back translated, with `attemptId: null`. Returns **400** for a partial cursor |
 | GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow: a run this server executes stops at its next status check; a run another process owns has that owner stopped first. Returns **409** with the reason, and leaves the run unchanged, when no owner answers (abandon it once its process is gone) or the owner cannot be stopped; **400** for a run that is not running |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed or paused workflow |
-| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); stops a live detached owner first and cascade-cancels non-terminal `workflow:` sub-run descendants. Returns **409** with the reason, and leaves the run unchanged, when an owner answers but cannot be stopped |
+| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); stops a live detached owner first, cascade-cancels non-terminal `workflow:` sub-run descendants, and removes the worktrees those runs created, keeping their branches. A cancelled run with a worktree still to remove can be abandoned again to retry. Returns **409** with the reason, and leaves the run unchanged, when an owner answers but cannot be stopped or the run cannot be abandoned |
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |

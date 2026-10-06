@@ -2,6 +2,7 @@
  * Command handler for slash commands
  * Handles deterministic operations without AI
  */
+import { providerRegistry } from '@archon/providers';
 import type { WorkflowOperations } from '../operations/workflow-operations';
 import { writeFile, access } from 'fs/promises';
 import { join, relative } from 'path';
@@ -33,6 +34,8 @@ import {
   CancelRefusedError,
   workflowOperationErrorMessage,
   describeAbandonOwner,
+  describeReleasedWorktrees,
+  type AbandonConversationRunsResult,
 } from '../operations/workflow-operations';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { safeDeactivateSession } from '../state/session-transitions';
@@ -710,7 +713,7 @@ async function handleWorkflowCommand(
       let workflowEntries: readonly WorkflowWithSource[];
       let errors: readonly WorkflowLoadError[];
       try {
-        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         workflowEntries = result.workflows;
         errors = result.errors;
       } catch (error) {
@@ -763,7 +766,7 @@ async function handleWorkflowCommand(
     case 'reload': {
       try {
         const { workflows: reloadedWorkflows, errors: reloadErrors } =
-          await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+          await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         let msg = `Discovered ${String(reloadedWorkflows.length)} workflow(s).`;
         if (reloadErrors.length > 0) {
           msg += `\n\n**${String(reloadErrors.length)} failed to load:**\n`;
@@ -910,9 +913,19 @@ async function handleWorkflowCommand(
       }
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
-          await operations.abandonWorkflow(runId);
-        let message = `${describeAbandonOwner(owner).join('\n')}\nAbandoned workflow run \`${run.workflow_name}\` (${runId})`;
+        const {
+          run,
+          cascadeFailures,
+          cleanupWarnings,
+          releasedWorktrees,
+          blockedParentRunId,
+          owner,
+        } = await operations.abandonWorkflow(runId);
+        let message = [
+          ...describeAbandonOwner(owner),
+          `Abandoned workflow run \`${run.workflow_name}\` (${runId})`,
+          ...describeReleasedWorktrees(releasedWorktrees),
+        ].join('\n');
         for (const warning of cleanupWarnings ?? []) message += `\n⚠️ ${warning}`;
         if (cascadeFailures > 0) {
           message += `\n⚠️ ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
@@ -1114,7 +1127,7 @@ async function handleWorkflowCommand(
       let workflowEntries: readonly WorkflowWithSource[];
       let loadErrors: readonly WorkflowLoadError[];
       try {
-        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         workflowEntries = result.workflows;
         loadErrors = result.errors;
       } catch (error) {
@@ -1253,6 +1266,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`/update-project <name> <new-path>\` — Update a project's path
 - \`/remove-project <name>\` — Remove a registered project
 - \`/setproject <name>\` — Bind this conversation to a registered project
+- \`/detach-project "<current-project-name>"\` — Make this conversation neutral after resolving its runs and attached environment; keep the project registered
 
 **Session**
 - \`/status\` — Show current session and project info
@@ -1395,7 +1409,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       // `codebase_id` is deliberately PRESERVED. The resulting row —
       // {codebase_id: <kept>, cwd: null, isolation_env_id: null} — is byte-for-
       // byte what /setproject already writes, so this is a well-trodden state,
-      // not a novel one. Detaching the project is /setproject none's job.
+      // not a novel one. Detaching the project is /detach-project's job.
       let hadActiveSession = false;
       let sessionError: string | null = null;
       try {
@@ -1417,12 +1431,14 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       // user most needs to know that N runs were already cancelled.
       let abandoned = 0;
       let cleanupWarnings: string[] | undefined;
+      let releasedWorktrees: AbandonConversationRunsResult['releasedWorktrees'];
       let abandonBlockedParentRunId: string | null = null;
       let abandonError: string | null = null;
       try {
         ({
           abandoned,
           cleanupWarnings,
+          releasedWorktrees,
           blockedParentRunId: abandonBlockedParentRunId,
         } = await operations.abandonResumableRunsForConversation(conversation.id));
       } catch (error) {
@@ -1456,6 +1472,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       );
       for (const warning of cleanupWarnings ?? []) parts.push(`⚠️ ${warning}`);
       if (abandoned > 0) parts.push(`Abandoned ${String(abandoned)} resumable run(s).`);
+      parts.push(...describeReleasedWorktrees(releasedWorktrees));
       if (abandonBlockedParentRunId !== null) {
         parts.push(
           `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`

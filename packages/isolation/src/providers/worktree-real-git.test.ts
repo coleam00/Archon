@@ -7,7 +7,16 @@
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -211,6 +220,22 @@ describe('WorktreeProvider against real git', () => {
 
     expect(existsSync(repoPath)).toBe(true);
     expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
+  });
+
+  test('destroy does not report a removal git still tracks under a symlinked base', async () => {
+    // Git lists the symlink-resolved path; the worktree is detached and locked, so
+    // prune keeps its entry after the directory is gone.
+    await mkdir(join(root, 'real-base'));
+    await symlink(join(root, 'real-base'), join(root, 'link-base'));
+    const linked = join(root, 'link-base', 'wt');
+    await git(repoPath, 'worktree', 'add', '-q', '--detach', linked);
+    await git(repoPath, 'worktree', 'lock', linked);
+    await rm(linked, { recursive: true, force: true });
+
+    const result = await provider.destroy(linked, { canonicalRepoPath: toRepoPath(repoPath) });
+
+    expect(result.worktreeRemoved).toBe(false);
+    expect(result.warnings.join(' ')).toContain('still registered');
   });
 
   test('a failing post-checkout hook rolls back its clean checkout and preserves the error', async () => {
@@ -666,5 +691,60 @@ describe('WorktreeProvider against real git', () => {
 
     expect(adopted.workingPath).toBe(worktreePath);
     expect(adopted.metadata.adopted).toBe(true);
+  });
+  test('fresh creation stamps identity; adoption never grants it; recreation gets a new generation', async () => {
+    await git(repoPath, 'remote', 'add', 'origin', repoPath);
+    const freshRequest: IsolationRequest = {
+      ...request,
+      workflowType: 'task',
+      taskBranch: { kind: 'new', branch: toBranchName('fresh'), fromBranch: toBranchName('main') },
+    };
+    const fresh = await provider.create(freshRequest);
+    expect(fresh.metadata.adopted).toBe(false);
+    expect(fresh.metadata.provenance).toBe('created');
+    if (fresh.metadata.provenance !== 'created') throw new Error('expected fresh creation');
+    const admin = (await git(fresh.workingPath, 'rev-parse', '--absolute-git-dir')).trim();
+    expect(await readFile(join(admin, 'archon-creation-id'), 'utf8')).toBe(
+      fresh.metadata.creationId
+    );
+    expect((await git(fresh.workingPath, 'status', '--porcelain')).trim()).toBe('');
+    const observed = await provider.get(fresh.id);
+    expect(observed?.metadata).toEqual({ provenance: 'observed', adopted: false });
+    const listed = await provider.list(repoPath);
+    expect(listed.find(env => env.id === fresh.id)?.metadata).toEqual({
+      provenance: 'observed',
+      adopted: false,
+    });
+    const adopted = await provider.create(freshRequest);
+    expect(adopted.metadata.provenance).toBe('adopted');
+    expect(adopted.metadata.adopted).toBe(true);
+    expect(adopted.metadata).not.toHaveProperty('creationId');
+    await git(repoPath, 'worktree', 'remove', fresh.workingPath);
+    await git(repoPath, 'branch', '-D', fresh.branchName);
+    const recreated = await provider.create(freshRequest);
+    if (recreated.metadata.adopted) throw new Error('expected new generation');
+    expect(recreated.metadata.creationId).not.toBe(fresh.metadata.creationId);
+  });
+
+  test('marker write failure rolls back the locked setup', async () => {
+    await git(repoPath, 'remote', 'add', 'origin', repoPath);
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      '#!/bin/sh\nmkdir "$(git rev-parse --absolute-git-dir)/archon-creation-id"\n',
+      { mode: 0o755 }
+    );
+    const freshRequest: IsolationRequest = {
+      ...request,
+      workflowType: 'task',
+      taskBranch: {
+        kind: 'new',
+        branch: toBranchName('marker-failure'),
+        fromBranch: toBranchName('main'),
+      },
+    };
+    const path = provider.getWorktreePath(freshRequest, 'marker-failure');
+    await expect(provider.create(freshRequest)).rejects.toThrow();
+    expect(existsSync(path)).toBe(false);
+    expect(await registeredWorktrees()).not.toContain(resolve(path));
   });
 });

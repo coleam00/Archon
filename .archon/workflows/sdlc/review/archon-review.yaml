@@ -126,9 +126,6 @@ nodes:
     mutates_checkout: false
     depends_on: [scope]
     when: "$mode.output.continuation == false"
-    retry:
-      max_attempts: 2
-      delay_ms: 20000
 
   - id: code
     output_type: review-lens
@@ -138,9 +135,6 @@ nodes:
     mutates_checkout: false
     depends_on: [coverage]
     when: "$mode.output.continuation == false && $coverage.output.full == true"
-    retry:
-      max_attempts: 2
-      delay_ms: 20000
 
   - id: tests
     output_type: review-lens
@@ -149,9 +143,6 @@ nodes:
     mutates_checkout: false
     depends_on: [coverage]
     when: "$mode.output.continuation == false && $coverage.output.full == true"
-    retry:
-      max_attempts: 2
-      delay_ms: 20000
 
   # A focused reviewer can require full coverage before this round concludes.
   - id: focused
@@ -161,9 +152,6 @@ nodes:
     mutates_checkout: false
     depends_on: [scope]
     when: "$mode.output.continuation == false && $INPUTS.tier == 'focused'"
-    retry:
-      max_attempts: 2
-      delay_ms: 20000
     output_format:
       type: object
       properties:
@@ -206,9 +194,6 @@ nodes:
     mutates_checkout: false
     depends_on: [scope]
     when: "$mode.output.continuation == false && $INPUTS.errors == 'true'"
-    retry:
-      max_attempts: 2
-      delay_ms: 20000
 
   - id: docs
     output_type: review-lens
@@ -217,9 +202,6 @@ nodes:
     mutates_checkout: false
     depends_on: [scope]
     when: "$mode.output.continuation == false && $INPUTS.docs == 'true' || $mode.output.continuation == false && $INPUTS.docs == 'auto' && $scope.output.docs == true"
-    retry:
-      max_attempts: 2
-      delay_ms: 20000
 
   # all_done lets this barrier settle after input-disabled lenses, every skipped
   # continuation lens, or a lens whose retries were exhausted. The deciding

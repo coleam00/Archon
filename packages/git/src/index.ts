@@ -31,6 +31,10 @@ export {
   getGitCheckoutIdentity,
   CanonicalRepoPathUnavailableError,
   verifyWorktreeOwnership,
+  isWorktreeRegistered,
+  readWorktreeRegistration,
+  isSameWorktreePath,
+  toNativeWorktreePath,
 } from './worktree';
 export type {
   WorktreeLayout,
