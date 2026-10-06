@@ -513,27 +513,31 @@ export function describeWorkflowStoreConformance(
         attention: () => store.failPausedAttentionWait(run.id, attention, 'lost'),
         approval: () => store.failPausedApproval(run.id, approval, 'lost'),
       };
-      const pending = writers[mode]();
+      let settled = false;
+      const pending = writers[mode]().finally(() => {
+        settled = true;
+      });
       try {
-        const observed = await store.getWorkflowRun(run.id);
-        const events = await store.listWorkflowEvents(run.id);
-        if (observed && isTerminalRunStatus(observed.status)) {
-          const terminal = events.find(event => event.event_type === `workflow_${observed.status}`);
-          expect(terminal).toBeDefined();
-          expect(terminalRecordSchema.parse(terminal?.data.terminal_record).status).toBe(
-            observed.status
-          );
-        }
-        if (mode === 'fail') {
-          const resumed = await Promise.allSettled([store.resumeWorkflowRun(run.id)]);
-          if (resumed[0]?.status === 'fulfilled') {
-            const ordered = await types(store, run.id);
-            expect(ordered.indexOf('workflow_failed')).toBeGreaterThanOrEqual(0);
-            expect(ordered.indexOf('workflow_resumed')).toBeGreaterThan(
-              ordered.indexOf('workflow_failed')
+        do {
+          // Bracket the row read so a commit between port reads cannot look non-atomic.
+          const priorEvents = await store.listWorkflowEvents(run.id);
+          const observed = await store.getWorkflowRun(run.id);
+          const events = await store.listWorkflowEvents(run.id);
+          for (const status of TERMINAL_WORKFLOW_STATUSES) {
+            if (priorEvents.some(event => event.event_type === `workflow_${status}`))
+              expect(observed?.status).toBe(status);
+          }
+          if (observed && isTerminalRunStatus(observed.status)) {
+            const terminal = events.find(
+              event => event.event_type === `workflow_${observed.status}`
+            );
+            expect(terminal).toBeDefined();
+            expect(terminalRecordSchema.parse(terminal?.data.terminal_record).status).toBe(
+              observed.status
             );
           }
-        }
+          if (!settled) await new Promise<void>(resolve => setImmediate(resolve));
+        } while (!settled);
       } finally {
         await pending;
       }
@@ -542,6 +546,24 @@ export function describeWorkflowStoreConformance(
           TERMINAL_WORKFLOW_STATUSES.some(status => type === `workflow_${status}`)
         )
       ).toHaveLength(1);
+    });
+    test('a racing resume follows the failure event when it succeeds', async () => {
+      const run = await running(store);
+      const pending = store.failWorkflowRun(run.id, 'failed', { scheduledResume: schedule });
+      try {
+        await store.getWorkflowRun(run.id);
+        await store.listWorkflowEvents(run.id);
+        const resumed = await Promise.allSettled([store.resumeWorkflowRun(run.id)]);
+        if (resumed[0]?.status === 'fulfilled') {
+          const ordered = await types(store, run.id);
+          expect(ordered.indexOf('workflow_failed')).toBeGreaterThanOrEqual(0);
+          expect(ordered.indexOf('workflow_resumed')).toBeGreaterThan(
+            ordered.indexOf('workflow_failed')
+          );
+        }
+      } finally {
+        await pending;
+      }
     });
     test('terminal writer start-state predicates preserve losers', async () => {
       const pending = await create(store);
