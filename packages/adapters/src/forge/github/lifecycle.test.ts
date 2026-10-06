@@ -70,10 +70,16 @@ function fakeGitHub(
     const status = options.status?.(url, method);
     if (status !== undefined) return json({ message: 'refused' }, status);
     if (url.includes('/graphql')) {
-      if (!options.lose) state.draft = false;
-      return json({
-        data: { markPullRequestReadyForReview: { pullRequest: { id: state.node_id } } },
-      });
+      const payload = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { id: string };
+      };
+      expect(payload.variables.id).toBe(state.node_id);
+      const mutation = payload.query.includes('convertPullRequestToDraft')
+        ? 'convertPullRequestToDraft'
+        : 'markPullRequestReadyForReview';
+      if (!options.lose) state.draft = mutation === 'convertPullRequestToDraft';
+      return json({ data: { [mutation]: { pullRequest: { id: state.node_id } } } });
     }
     if (url.endsWith('/repos/archon/test')) return json({ full_name: 'archon/test' });
     if (url.includes('/issues/comments/')) {
@@ -918,4 +924,66 @@ test.each([
   expect(forgeResponseSchema.safeParse(response).success).toBe(true);
   expect(JSON.stringify(response)).not.toContain('token must never escape');
   expect(JSON.stringify(response)).not.toContain('private body');
+});
+
+describe('GitHub draft conversion', () => {
+  const request = { operationId: 'draft', op: 'pr.draft', ref } satisfies ForgeMutationRequest;
+
+  test.each([false, true])('verifies draft state from initial draft=%s', async draft => {
+    const github = fakeGitHub({ pull: pull({ draft }) });
+    expect(await run(request, github)).toMatchObject({
+      ok: true,
+      result: {
+        op: 'pr.draft',
+        value: { outcome: 'applied', changed: !draft, pr: { state: 'open', is_draft: true } },
+      },
+    });
+    expect(github.calls.filter(call => call.method === 'POST')).toHaveLength(draft ? 0 : 1);
+  });
+
+  test.each([false, true])('refuses closed PRs (merged=%s) without writing', async merged => {
+    const github = fakeGitHub({ pull: pull({ state: 'closed', merged, draft: false }) });
+    expect(await run(request, github)).toMatchObject({
+      ok: false,
+      mutation: {
+        op: 'pr.draft',
+        outcome: 'refused',
+        observed: { state: merged ? 'merged' : 'closed' },
+      },
+    });
+    expect(github.calls.every(call => call.method === 'GET')).toBe(true);
+  });
+
+  test.each([
+    ['mismatch', 'verification_failed'],
+    ['read failure', 'verification_failed'],
+    ['lost response', 'outcome_unknown'],
+    ['authorization', 'refused'],
+    ['GraphQL errors', 'outcome_unknown'],
+    ['wrong acknowledgement', 'outcome_unknown'],
+    ['closed read-back', 'verification_failed'],
+  ] as const)('reports %s truthfully', async (mode, outcome) => {
+    let posted = false;
+    const github = fakeGitHub({ pull: pull({ draft: false }), lose: mode === 'mismatch' });
+    const response = await handleGithubOperation(request, {
+      token: 'secret-token',
+      fetch: async (input, init) => {
+        if (init?.method === 'POST') {
+          posted = true;
+          if (mode === 'lost response') throw new Error('secret-token');
+          if (mode === 'authorization') return json({}, 403);
+          if (mode === 'GraphQL errors') return json({ errors: [{ message: 'secret-token' }] });
+          if (mode === 'wrong acknowledgement')
+            return json({ data: { convertPullRequestToDraft: { pullRequest: { id: 'wrong' } } } });
+        } else if (posted) {
+          if (mode === 'read failure') return json({}, 500);
+          if (mode === 'closed read-back') return json(pull({ state: 'closed' }));
+        }
+        return github.fetch(input, init);
+      },
+    });
+    expect(response).toMatchObject({ ok: false, mutation: { op: 'pr.draft', outcome } });
+    expect(forgeResponseSchema.safeParse(response).success).toBe(true);
+    expect(JSON.stringify(response)).not.toContain('secret-token');
+  });
 });
