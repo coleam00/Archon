@@ -22,6 +22,7 @@ const baseRun: Omit<Run, 'id' | 'workflow' | 'status'> = {
   workerPlatformId: null,
   origin: 'cli',
   outcome: null,
+  terminalRecord: null,
   startedAt: new Date(Date.now() - 4 * 60 * 1000 - 12 * 1000).toISOString(),
   finishedAt: null,
   workingPath: null,

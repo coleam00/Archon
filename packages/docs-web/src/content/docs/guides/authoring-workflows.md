@@ -311,8 +311,8 @@ Most of these fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `
 The ladder is the union of every provider's vocabulary. Codex accepts all eight
 rungs. Other providers clamp an unsupported rung to the nearest weaker value;
 only when no weaker value exists do they use the shallowest stronger value.
-For example, `persistent` and `ultra` become `max` on Claude and Pi or `xhigh`
-on Copilot, while `minimal` becomes `low` on Claude and Copilot.
+For example, `persistent` and `ultra` become `max` on Claude, Pi,
+and Copilot, while `minimal` becomes `low` on Claude and Copilot.
 
 `thinking:` has been removed. A workflow, node, tier, or alias that still uses
 it fails validation with an error directing the author to `effort:`.
@@ -838,7 +838,7 @@ nodes:
 |-------|------|--------------------|-------------|-------------|
 | `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts). No default on `bash:`/`script:` — omitting `retry:` means a single attempt |
 | `delay_ms` | number | `3000` | 1000–60000 | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
-| `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. `'transient'` = transient and rate-limited failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
+| `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
 
 ### Error Classification
 
@@ -847,15 +847,21 @@ Archon sorts a failed attempt into one of three buckets before deciding whether 
 | Bucket | Provider failure classes | Retried by default? |
 |--------|--------------------------|---------------------|
 | **FATAL** | `auth`, `quota_exhausted`, `budget_exceeded`, `misconfigured` | Never (even with `on_error: all`) |
-| **TRANSIENT** | `transient`, `rate_limited` (rate limits get a longer retry budget and backoff) | Yes |
+| **TRANSIENT** | `transient`, `rate_limited`, `overloaded` (rate limits and capacity get longer retry budgets) | Yes |
 | **UNKNOWN** | `unknown` | No (unless `on_error: all`) |
 
 `misconfigured` means the setup must change before the node can succeed: a bad proxy URL, a missing or too-old CLI, an unknown model, an unreadable MCP config file. Fix the configuration and run again.
 
+Capacity failures (`overloaded`) get at least five retries: six provider attempts with delay centers of 45, 90, 180, 300 and 300 seconds. Each delay has ±50% jitter; the 300-second cap applies before jitter, so a wait can reach 450 seconds. The nominal total wait is 15 minutes 15 seconds, excluding provider execution time. Node `delay_ms` does not change this schedule. The larger budget applies only while the current failure is capacity; ordinary transient failures keep their own budget. Rate limits keep their existing five-retry minimum and flat 45-second delay with ±50% jitter.
+
+Each retry wait is logged and recorded as `node_retry_scheduled`, with the node path, class, one-based retry attempt, effective budget and delay; loop retries also record the iteration. Exhaustion preserves the provider failure and message. These are retry delays, not a deadline that ends a run.
+
+Claude's typed `overloaded` code and Codex's `serverOverloaded` map to `overloaded`. Generic server errors and HTTP 503 do not establish capacity. Pi and OpenCode expose no dedicated capacity discriminator on their current failure paths; capacity-looking prose remains `unknown`.
+
 Every built-in provider reports a typed class:
 
 - **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`.
-- **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `transient` for overload, a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
+- **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
 - **Pi** reports `misconfigured` when a node has no model, the model ref is malformed, or the model is not in Pi's catalog, and `auth` when it has no credentials for the model's provider. A failed Pi turn reaches Archon only as a stop reason and message text, so those failures are `unknown`.
 - **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
 - **Copilot** reports `misconfigured` when its MCP config file cannot be read. Its SDK exposes every other failure only as a message string, so those are `unknown`.
@@ -1002,6 +1008,8 @@ Run it once with `"add OAuth login"`, again with `"now add MFA"` — each role c
 
 Sessions are keyed by `(workflow_name, node_id, scope_key, provider)`. The scope is the conversation that launched the run, so each chat thread has its own per-node memory. A run the Web UI or REST API starts in the background still belongs to the chat it was launched from, so runs from one chat continue each other's sessions.
 
+A run started without a conversation (for example, by code that calls the workflow engine or store with no origin) has no scope. Its `persist_session` nodes start fresh, save nothing for later runs, and get no scope artifacts. Resuming that run is unaffected: it continues from its own completed nodes like any other run.
+
 The **CLI is different**: each `archon workflow run` mints a fresh conversation UUID, so persisted sessions won't resume between separate invocations unless you pass the same `--conversation-id <id>` on each run.
 
 ### Concurrent runs
@@ -1070,7 +1078,7 @@ Codex does not fall back: a thread it cannot resume or fork fails the node as `u
 
 #### By-reference recovery via scope artifacts
 
-A lost session doesn't have to mean lost context. Workflows that use `persist_session` also get a **stable cross-invocation artifact scope** at `scopes/<workflow>/<scope>/` (a sibling of the per-run `runs/<id>/` directory, under the same artifacts root; the scope is the launching conversation's UUID — the same key sessions use). Whenever a persistence-participating node also declares an `output_type`, the engine mirrors its typed output sidecar (`nodes/<id>.md` + `nodes/<id>.meta.json`) into that scope directory in addition to the run directory.
+A lost session doesn't have to mean lost context. Workflows that use `persist_session` in a run launched from a conversation also get a **stable cross-invocation artifact scope** at `scopes/<workflow>/<scope>/` (a sibling of the per-run `runs/<id>/` directory, under the same artifacts root; the scope is the launching conversation's UUID — the same key sessions use). Whenever a persistence-participating node also declares an `output_type`, the engine mirrors its typed output sidecar (`nodes/<id>.md` + `nodes/<id>.meta.json`) into that scope directory in addition to the run directory.
 
 On a cold resume, the warning then goes further: if the scope directory holds typed artifacts from an *earlier* invocation, the message lists them **by reference** (file paths — never pasted content), so the recovered context can be read on demand:
 
@@ -2141,11 +2149,10 @@ statement about the children:
 | write to the repo | `isolation: worktree` on each **`workflow:` node** |
 | must not overlap at all | sequence them with `depends_on` |
 
-One constraint applies however the checkouts are arranged: **one blocking child gate at a
-time.** Two children in the same layer that both pause for approval contend for the parent
-run's single approval slot — the second pause is silently dropped, and that child stays
-unmentioned until a later resume re-pauses on it. Sequence gated sub-runs with `depends_on`
-until a later slice adds real concurrent gating.
+Each 1:1 child run presents its own approval gate independently, addressed by its own run
+ID. Concurrent children can both pause for approval; the parent stays blocked until its
+children finish. Within a single run, gates are presented one at a time, and deferred gates
+re-run when that run resumes.
 
 ### Fanning out over a list with `fan_out:`
 
@@ -2209,7 +2216,7 @@ consequences worth planning for:
 
 | `join` | The node succeeds when… | `$<id>.output` |
 |--------|------------------------|----------------|
-| `all_done` (default) | every child reached a terminal state | JSON array in item order — each element is the child's **result value** (a structured child's terminal payload lands as the object itself, single-encoded; a text child's output stays the raw string), with each failed/cancelled child represented as `{ archon_failed: true, error, status }` in its slot |
+| `all_done` (default) | every child reached a terminal state and at least one child run was created (or the item list was empty) | JSON array in item order — each element is the child's **result value** (a structured child's terminal payload lands as the object itself, single-encoded; a text child's output stays the raw string), with each failed/cancelled child represented as `{ archon_failed: true, error, status }` in its slot |
 | `all_success` | every child completed | same array; any failed or cancelled child fails the node instead |
 | `first_success` | — | Racing: **rejected**, not deferred — see below. Rejected at load rather than silently treated as another join |
 
@@ -2218,6 +2225,20 @@ child that fails does not stop its siblings, does not stop later items from bein
 and does not change any other child's outcome. `all_success` still fails the node if any
 child failed — it just reaches that verdict after everyone has finished rather than by
 ending the others early. The failure message names the child that failed.
+
+A non-empty `workflow:` fan-out fails if **no child run row was created**, even with
+`all_done`. The error names the node, the number of refused children, and the first
+refusal reason. Resume re-dispatches this failed node. If at least one child run was
+created, `all_done` still completes with the same failure markers for failed and refused
+children, even if every child that started failed. An empty item list still completes
+with `[]`.
+
+Resume skips a completed fan-out and reports how many children were previously refused.
+It does not repeat children that ran, including failed children in an `all_done` batch.
+Resume uses the captured parent source, so correcting a binding in that source requires
+a fresh launch. Project child workflows still resolve from the live authoring directory
+when spawned; installed packs remain captured. A transient refusal may also clear before
+resume.
 
 ##### Why `all_done` is the default
 

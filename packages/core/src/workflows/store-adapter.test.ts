@@ -27,11 +27,7 @@ const mockPauseWorkflowRun = mock(() => Promise.resolve());
 const mockPauseWorkflowRunForWait = mock(() => Promise.resolve());
 const mockFailPausedAttentionWait = mock(() => Promise.resolve({ failed: true }));
 const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true }));
-// Backs createWorkflowStore()'s rewriteApprovalContext (#2707 step 3 pause
-// escalation) — per AGENTS.md's mock.module rule, an export the factory omits
-// keeps its REAL implementation, so this must be listed even though no test
-// here calls rewriteApprovalContext yet.
-const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
+const mockFailPausedApproval = mock(() => Promise.resolve({ failed: true }));
 
 mock.module('../db/workflows', () => ({
   findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
@@ -63,7 +59,8 @@ mock.module('../db/workflows', () => ({
   pauseWorkflowRunForWait: mockPauseWorkflowRunForWait,
   failPausedAttentionWait: mockFailPausedAttentionWait,
   clearWorkflowWaitContext: mockClearWorkflowWaitContext,
-  resolveApprovalGate: mockResolveApprovalGate,
+  resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
+  failPausedApproval: mockFailPausedApproval,
   claimWriteback: mock(() => Promise.resolve({ claimed: true })),
   releaseWritebackClaim: mock(() => Promise.resolve()),
 }));
@@ -99,6 +96,7 @@ mock.module('@archon/providers', () => ({
   normalizeCredentialVendor: credentialCatalog.normalizeCredentialVendor,
   getAgentProvider: mock(() => ({})),
   getRegisteredProviders: mock(() => []),
+  providerRegistry: { get: () => undefined, list: () => [] },
   getRegistration: mock(
     (): { parseConfig: (raw: Record<string, unknown>) => Record<string, unknown> } => ({
       parseConfig: (raw: Record<string, unknown>): Record<string, unknown> => raw,
@@ -170,6 +168,7 @@ mock.module('../db/user-provider-key-store', () => ({
 
 // github-auth mocks (required by store-adapter imports)
 mock.module('../github-auth/config', () => ({
+  loadGitHubAppConfig: () => null,
   isPerUserGitHubEnabled: mock(() => false),
 }));
 const mockGetUserGithubAuthor = mock(async (_userId: string) => ({
@@ -243,7 +242,7 @@ describe('createWorkflowStore', () => {
       'pauseWorkflowRunForWait',
       'failPausedAttentionWait',
       'clearWorkflowWaitContext',
-      'rewriteApprovalContext',
+      'failPausedApproval',
       'claimWriteback',
       'releaseWritebackClaim',
       'cancelWorkflowRun',

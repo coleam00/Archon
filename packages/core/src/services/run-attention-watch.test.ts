@@ -69,6 +69,7 @@ const { DETACHED_RUN_STOP_HANDOFF_GRACE_MS, DETACHED_RUN_TERMINATION_MAX_MS } =
 
 function putRun(id: string, over: Partial<WorkflowRun> = {}): WorkflowRun {
   const run = {
+    origin: { conversationId: 'conv-1' },
     id,
     workflow_name: 'demo',
     conversation_id: 'conv-1',

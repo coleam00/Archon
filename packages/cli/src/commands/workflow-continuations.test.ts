@@ -7,6 +7,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { NativeScheduleConfig } from '../triggers/native-schedule';
 function makeTestWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv' },
     id: 'run',
     workflow_name: 'test',
     conversation_id: 'conv',
@@ -198,5 +199,26 @@ test('watch continues after a failed pass and returns failure on shutdown', asyn
     ]);
   } finally {
     timer.mockRestore();
+  }
+});
+
+test('schedule management bypasses invalid App config while execution refuses before mutation', async () => {
+  const savedEnv = { ...process.env };
+  try {
+    process.env.GITHUB_APP_ID = '123';
+    process.env.GITHUB_APP_PRIVATE_KEY = 'invalid';
+    process.env.GITHUB_APP_PRIVATE_KEY_PATH = '';
+    process.env.GITHUB_TOKEN = '';
+    expect(await workflowContinuationCommand('wake', ['schedule', 'remove'], { json: true })).toBe(
+      0
+    );
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(await workflowContinuationCommand('wake', [], { json: true })).toBe(1);
+    expect(await workflowContinuationCommand('signal', ['id'], { json: true })).toBe(1);
+    expect(scan).not.toHaveBeenCalled();
+    expect(getRun).not.toHaveBeenCalled();
+    expect(signal).not.toHaveBeenCalled();
+  } finally {
+    process.env = savedEnv;
   }
 });

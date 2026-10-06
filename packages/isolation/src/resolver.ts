@@ -30,6 +30,7 @@ import type {
   WorktreeStatusBreakdown,
   ResolveRequest,
 } from './types';
+import { worktreeRegistrationMetadata } from './types';
 import type { IIsolationStore } from './store';
 import { classifyIsolationError, isKnownIsolationError } from './errors';
 import { resolveFolderBackend } from './backend-router';
@@ -551,6 +552,7 @@ export class IsolationResolver {
         created_by_platform: platformType,
         created_by_user_id: userId,
         metadata: {
+          ...worktreeRegistrationMetadata(isolatedEnv.metadata),
           related_issues: hints?.linkedIssues ?? [],
           related_prs: hints?.linkedPRs ?? [],
         },
@@ -600,12 +602,16 @@ export class IsolationResolver {
       status: 'resolved',
       env,
       cwd: env.working_path,
-      method: {
-        type: 'created',
-        ...(!isolatedEnv.metadata.adopted && isolatedEnv.metadata.cutFromCommit !== undefined
-          ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
-          : {}),
-      },
+      method:
+        isolatedEnv.metadata.provenance === 'created'
+          ? {
+              type: 'created',
+              creationId: isolatedEnv.metadata.creationId,
+              ...(isolatedEnv.metadata.cutFromCommit !== undefined
+                ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
+                : {}),
+            }
+          : { type: 'provider_adoption' },
       ...(isolatedEnv.warnings?.length ? { warnings: isolatedEnv.warnings } : {}),
     };
   }

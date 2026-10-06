@@ -12,6 +12,7 @@ import type { WorkflowResumeTarget } from './services/workflow-resume-service';
 type SlackWorkflowResume = (runId: string, slackUserId: string) => Promise<boolean>;
 
 const persistedRun: WorkflowRun = {
+  origin: { conversationId: 'conversation-1' },
   id: 'run-1',
   workflow_name: 'deliver',
   conversation_id: 'conversation-1',
@@ -115,10 +116,12 @@ mock.module('@archon/paths/env-loader', () => ({ loadArchonEnv: (): void => unde
 mock.module('@archon/paths/cli-command', () => ({
   publishArchonCliCommand: (): void => undefined,
 }));
+const mockRegisterBuiltinProviders = mock((): void => undefined);
+const mockRegisterCommunityProviders = mock((): void => undefined);
 mock.module('@archon/providers', () => ({
   claimPiExtensionProcessError: (): boolean => false,
-  registerBuiltinProviders: (): void => undefined,
-  registerCommunityProviders: (): void => undefined,
+  registerBuiltinProviders: mockRegisterBuiltinProviders,
+  registerCommunityProviders: mockRegisterCommunityProviders,
 }));
 
 interface TestLogger {
@@ -197,15 +200,12 @@ mock.module('@archon/core', () => ({
   },
   logConfig: (): void => undefined,
   getPort: async (): Promise<number> => 12345,
-  createGitHubAppAuthProvider: (): never => {
-    throw new Error('unexpected GitHub App initialization');
+  initializeWorkflowGitHubAppAuth: (): never => {
+    throw new Error('Unexpected App bootstrap');
   },
-  loadAppPrivateKey: (): string => 'unused',
-  registerGitHubAppAuthProvider: (): void => undefined,
   isPerUserGitHubEnabled: (): boolean => false,
   isPerUserProviderKeysEnabled: (): boolean => false,
   getDatabaseType: (): string => 'sqlite',
-  assertEncryptionKeyAtBoot: (): void => undefined,
   assertProviderKeysKeyAtBoot: (): void => undefined,
   getDecryptedAccessToken: async (): Promise<undefined> => undefined,
 }));
@@ -380,6 +380,8 @@ describe('Slack workflow resume composition', () => {
     try {
       const { startServer } = await import('./index');
       await startServer({ port: 12345, skipPlatformAdapters: true });
+      expect(mockRegisterBuiltinProviders).toHaveBeenCalledTimes(1);
+      expect(mockRegisterCommunityProviders).toHaveBeenCalledTimes(1);
       expect(retainsWorkspace('telegram')).toBe(true);
     } finally {
       serveSpy.mockRestore();

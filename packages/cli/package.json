@@ -125,6 +125,12 @@
     ],
     [
       "src/commands/workflow-codebase-resolution.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-github-app.integration.spec.ts"
+    ],
+    [
+      "src/commands/user.test.ts"
     ]
   ]
 }

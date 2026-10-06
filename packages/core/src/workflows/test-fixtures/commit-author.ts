@@ -111,23 +111,38 @@ const platform: IPlatformAdapter = {
 try {
   if (mode === 'cli') {
     await closeDatabase();
+    const cliEntry = join(root, 'cli.ts');
+    await writeFile(
+      cliEntry,
+      `
+import { mock } from 'bun:test';
+if (process.env.GITHUB_APP_INSTALLATION_ID === '') delete process.env.GITHUB_APP_INSTALLATION_ID;
+globalThis.fetch = async () => { throw new Error('Network forbidden in commit-author fixture'); };
+mock.module(${JSON.stringify(Bun.resolveSync('@octokit/rest', import.meta.dir))}, () => ({
+  Octokit: class {
+    async request(route) {
+      if (route === 'GET /repos/{owner}/{repo}/installation') return { data: { id: 42 } };
+      if (route !== 'POST /app/installations/{installation_id}/access_tokens') throw new Error('Unexpected GitHub request');
+      return { data: { token: 'fixture-installation-credential', expires_at: new Date(Date.now() + 3600000).toISOString() } };
+    }
+  }
+}));
+await import(${JSON.stringify(resolve(import.meta.dir, '../../../../cli/src/cli.ts'))});
+`
+    );
     const child = Bun.spawn(
-      [
-        process.execPath,
-        resolve(import.meta.dir, '../../../../cli/src/cli.ts'),
-        'workflow',
-        'run',
-        'author',
-        '--cwd',
-        project,
-        '--no-worktree',
-      ],
+      [process.execPath, cliEntry, 'workflow', 'run', 'author', '--cwd', project, '--no-worktree'],
       { cwd: root, env: process.env, stdout: 'inherit', stderr: 'inherit' }
     );
     if (await child.exited) throw new Error('CLI workflow failed');
   } else {
     const source = await prepareWorkflowSource(deps, { sourceRoot: project });
-    const discovery = await discoverWorkflowsWithConfig(project, loadConfig, source.roots);
+    const discovery = await discoverWorkflowsWithConfig(
+      project,
+      loadConfig,
+      deps.providers,
+      source.roots
+    );
     const workflow = discovery.workflows.find(entry => entry.workflow.name === 'author')?.workflow;
     if (!workflow) throw new Error(JSON.stringify(discovery.errors));
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
@@ -138,13 +153,12 @@ try {
         hostId: 'author-host',
         overlap: 'queue',
         launch: {
-          version: 1,
+          version: 2,
           run: {
             id: source.runId,
             workflow_name: workflow.name,
-            conversation_id: conversation.id,
+            origin: { conversationId: conversation.id, userId: user.id },
             codebase_id: codebase.id,
-            user_id: user.id,
             user_message: '',
             working_path: project,
             metadata: { workflow_source: preparedWorkflowSourceRecord(source) },

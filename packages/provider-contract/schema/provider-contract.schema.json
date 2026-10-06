@@ -13,6 +13,7 @@
             "budget_exceeded",
             "misconfigured",
             "rate_limited",
+            "overloaded",
             "transient",
             "unknown"
           ]
@@ -333,11 +334,16 @@
               "type": "string"
             },
             "rawInput": {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {}
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "object",
+                "array",
+                "null"
+              ],
+              "additionalProperties": true,
+              "$ref": "#/$defs/schema0"
             }
           },
           "required": [
@@ -762,6 +768,37 @@
             "state",
             "source"
           ]
+        }
+      ]
+    },
+    "schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema0"
+          }
         }
       ]
     }

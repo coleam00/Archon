@@ -60,6 +60,7 @@ import type {
 } from '../types';
 import {
   sessionPreview,
+  toolCallSchema,
   truncateToolOutput,
   type ProviderFailure,
   type ProviderFailureClass,
@@ -351,7 +352,7 @@ export function classifyClaudeApiError(
       return failure;
     }
     case 'overloaded':
-      return failureOf('rate_limited', evidence);
+      return failureOf('overloaded', evidence);
     case 'server_error':
       return failureOf('transient', evidence);
     case 'invalid_request':
@@ -1195,7 +1196,9 @@ async function* streamClaudeMessages(
             type: 'tool_call',
             toolCallId: block.id,
             name: block.name,
-            rawInput: block.input ?? {},
+            rawInput: toolCallSchema.shape.rawInput.parse(
+              block.input === undefined ? {} : block.input
+            ),
           };
           openToolIds.add(block.id);
           yield call;

@@ -31,6 +31,8 @@ export function describeExecutionNode(node: DagNode): NodeDescriptor {
       return { id, kind, runtime: node.runtime };
     case 'loop':
       return { id, kind, ...(node.loop.command ? { command: node.loop.command } : {}) };
+    case 'workflow':
+      return { id, kind, ...(node.fan_out !== undefined ? { fanOut: true } : {}) };
     default:
       return { id, kind };
   }

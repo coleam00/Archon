@@ -21,7 +21,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 import { WebAdapter } from './web';
-import type { SSETransport } from './web/transport';
+import { SSETransport, type SSEWriter } from './web/transport';
 import type { MessagePersistence } from './web/persistence';
 import type { WorkflowEventBridge } from './web/workflow-bridge';
 
@@ -74,6 +74,10 @@ beforeEach(() => {
   mockLogger.error.mockClear();
 });
 
+test('WebAdapter supports durable conversation project detachment', () => {
+  expect(makeAdapter().adapter.capabilities.canDetachProject).toBe(true);
+});
+
 describe('WebAdapter.sendStructuredEvent — provider results', () => {
   test('does not emit a provider session id on SSE', async () => {
     const { adapter, emitted } = makeAdapter();
@@ -87,6 +91,20 @@ describe('WebAdapter.sendStructuredEvent — provider results', () => {
 });
 
 describe('WebAdapter.sendStructuredEvent — tool results', () => {
+  test.each(['patch text', 0, false, null, ['a', 1]].map(input => [input] as const))(
+    'streams non-object tool input %j unchanged',
+    async input => {
+      const { adapter, emitted } = makeAdapter();
+      await adapter.sendStructuredEvent('conv-1', {
+        type: 'tool_call',
+        toolCallId: 'patch',
+        name: 'apply_patch',
+        rawInput: input,
+      });
+      expect(JSON.parse(emitted[0]!)).toMatchObject({ type: 'tool_call', input });
+    }
+  );
+
   test('pairs results by id when two tools with the same name run concurrently', async () => {
     const { adapter, emitted, appendToolResultCalls } = makeAdapter();
 
@@ -208,4 +226,56 @@ test('background preparation maps persistence and releases the bridge before awa
   release();
   await finished;
   expect(calls).toEqual(['mapping', 'unsubscribe', 'lock']);
+});
+
+describe('WebAdapter.removeStream — tool tracking', () => {
+  test('a stale writer disconnecting after a replacement registers keeps tool tracking', async () => {
+    const transport = new SSETransport();
+    const emitted: string[] = [];
+    const makeWriter = (): SSEWriter => ({
+      writeSSE: mock(async ({ data }: { data: string }) => {
+        emitted.push(data);
+      }),
+      close: mock(async () => {}),
+      closed: false,
+    });
+    const persistence = {
+      appendToolResult: mock(() => {}),
+      appendToolCall: mock(() => {}),
+      appendText: mock(() => {}),
+      flush: mock(async () => {}),
+      finalizeRunningTools: mock(() => {}),
+    } as unknown as MessagePersistence;
+    const bridge = {
+      setStepTransitionCallback: mock(() => {}),
+      start: mock(() => {}),
+      stop: mock(() => {}),
+      bridgeWorkerEvents: mock(() => () => {}),
+    } as unknown as WorkflowEventBridge;
+    const adapter = new WebAdapter(transport, persistence, bridge);
+
+    const stale = makeWriter();
+    const replacement = makeWriter();
+    adapter.registerStream('conv-1', stale);
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'tool_call',
+      toolCallId: 'a',
+      name: 'Bash',
+      rawInput: {},
+    });
+    adapter.registerStream('conv-1', replacement);
+    adapter.removeStream('conv-1', stale);
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'tool_call_update',
+      toolCallId: 'a',
+      status: 'completed',
+      output: 'done',
+    });
+
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+    const result = emitted
+      .map(e => JSON.parse(e) as { type: string; name?: string })
+      .find(e => e.type === 'tool_result');
+    expect(result?.name).toBe('Bash');
+  });
 });

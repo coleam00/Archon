@@ -59,7 +59,7 @@ export const nodeDescriptorSchema = z.discriminatedUnion('kind', [
   gateNodeSchema.pick({ id: true, kind: true }),
   haltNodeSchema.pick({ id: true, kind: true }),
   waitNodeSchema.pick({ id: true, kind: true }),
-  workflowNodeSchema.pick({ id: true, kind: true }),
+  workflowNodeSchema.pick({ id: true, kind: true }).extend({ fanOut: z.literal(true).optional() }),
   composeFanOutNodeSchema.pick({ id: true, kind: true }),
   z.object({ kind: z.literal('compose_fan_out_instance'), id: z.string() }),
 ]);
@@ -95,7 +95,7 @@ export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
 
 /**
  * Why a node failed, recorded where the failure is known rather than re-read from
- * `error` prose later. `fatal`/`transient`/`rate_limited`/`unknown` classify a provider
+ * `error` prose later. `fatal`/`transient`/`rate_limited`/`overloaded`/`unknown` classify a provider
  * error; the rest name engine-detected causes. Every kind maps to a retry class in
  * `executor-shared.ts`. Absent on records written before this field existed; retry
  * treats an absent kind as `unknown`.
@@ -105,6 +105,7 @@ export const nodeFailureKindSchema = z.enum([
   'transient',
   'unknown',
   'rate_limited',
+  'overloaded',
   'timeout',
   'exec_failed',
   'output_contract',

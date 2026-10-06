@@ -243,7 +243,7 @@ By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`)
 
 ### How Archon runs Codex
 
-Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, hooks and `AGENTS.md` guidance load as they do for `codex` itself. In direct chat your plugins and MCP servers load too. A workflow node loads only the MCP servers its `mcp:` file declares and the plugins its `plugins:` list names, with ChatGPT apps off (see [Plugins](/guides/authoring-workflows/#plugins)). A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so `autoResumeOnQuotaReset` can resume the run), `rate_limited`, `transient` for overload, network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
+Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, hooks and `AGENTS.md` guidance load as they do for `codex` itself. In direct chat your plugins and MCP servers load too. A workflow node loads only the MCP servers its `mcp:` file declares and the plugins its `plugins:` list names, with ChatGPT apps off (see [Plugins](/guides/authoring-workflows/#plugins)). A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so `autoResumeOnQuotaReset` can resume the run), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
 
 Title generation preserves your native guidance and provider settings but starts with no ambient skills catalog, plugins, apps or MCP servers in a read-only sandbox, and falls back to a truncated message title on failure.
 
@@ -371,6 +371,12 @@ nodes:
 
 Pi is registered as `builtIn: false` — it validates the community-provider seam rather than being a core-team-maintained option. If it proves stable and valuable it may be promoted to `builtIn: true` later.
 
+### Azure models
+
+Pi uses `azure/<model-id>` for Azure models, including Foundry Chat Completions deployments. The `AZURE_OPENAI_*` environment variables remain unchanged. Archon credentials previously connected as `azure-openai-responses` still deliver to `azure`.
+
+When upgrading from Pi 1.0.2 or earlier, change `azure-openai-responses` to `azure` in your Archon model references and in Pi's provider keys in `auth.json` and `models.json`, plus `defaultProvider`, `enabledModels`, and `modelThinkingLevels` in `settings.json`. The API id `azure-openai-responses` is unchanged. Archon does not rewrite native Pi configuration. Existing Pi sessions using the old provider may select another model on resume and lose their prompt cache; see the [Pi 1.0.3 release notes](https://github.com/earendil-works/pi/releases/tag/v1.0.3).
+
 ### Install
 
 Pi is included as a dependency of `@archon/providers` — no separate install needed. It's available immediately.
@@ -418,6 +424,14 @@ assistants:
 ```
 
 Archon logs an info-level `pi.auth_missing` event when no credentials are found and continues — Pi's SDK then connects directly to the local endpoint defined in `models.json`. If the provider does require auth (a less-common cloud backend not in the env-var table) the SDK call fails downstream; the `pi.auth_missing` breadcrumb in the log lets you trace it back to a missing env-var mapping.
+
+### Stored key-command caching (Pi 1.0.2)
+
+In the pinned Pi **1.0.2**, an API key stored as `!command` in `~/.pi/agent/auth.json` uses Pi's process-wide command-result cache, keyed by command text. Fresh Pi runtimes for different Archon nodes share that cache in one server process. If the command returns a short-lived token, the server can keep sending the cached value after it expires. Restart the Archon server to resolve the command again, or use a suitable longer-lived credential.
+
+A separately invoked `archon doctor` runs in a fresh process and can resolve a usable key while the server retains an expired cached value. "Usable" means the key resolved; only a model request proves the vendor accepts it. Launch and execution checks within one process can reuse the stored command result.
+
+This limitation concerns stored `auth.json` key commands, not `models.json` commands. Pi's request-time `models.json` key/header resolution uses uncached commands. For catalogued models (and Anthropic), Archon pins a resolved models-command key for the node; a short-lived token can still expire during a long node. Extension-provider models can retain Pi's per-request resolution. [Pi issue #1835](https://github.com/earendil-works/pi/issues/1835) is closed and describes that `models.json` change, not a fix for the stored-auth cache. This is a version-specific limitation and can go away if Pi changes stored-key resolution.
 
 ### Pi settings (baseline behavior)
 
@@ -762,7 +776,7 @@ You can configure Copilot's behavior in `.archon/config.yaml`:
 assistants:
   copilot:
     model: gpt-5-mini             # 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5', 'auto', etc.
-    modelReasoningEffort: medium  # 'minimal'..'ultra' — clamped to the SDK's 'low'..'xhigh'
+    modelReasoningEffort: medium  # 'minimal'..'persistent' — clamped to the SDK's 'low'..'max'
     # configDir: /absolute/path/to/copilot-config
     # enableConfigDiscovery: false  # only enable for trusted repos — bypasses Archon's workflow MCP/skill validation
     # useLoggedInUser: false        # opt into env-token auth (GH_TOKEN / GITHUB_TOKEN); default uses `copilot login`
@@ -776,7 +790,7 @@ Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`clau
 | Feature | Support | Notes |
 |---|---|---|
 | Session resume | ✅ | Returns `sessionId`; reused on resume. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/guides/authoring-workflows/#concurrent-runs)) |
-| Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max`, `ultra`, and `persistent` map to SDK `xhigh`, while `minimal` maps to `low` |
+| Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max` passes through; `ultra` and `persistent` map to SDK `max`, while `minimal` maps to `low` |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars | ✅ | merged into the spawned Copilot CLI environment |
 | Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` |
@@ -807,7 +821,7 @@ Everything above configures the **install-wide** assistant credentials (env vars
 
 Runs check the credentials required by their AI nodes before creating isolation and again when execution starts or resumes. An unreadable or rejected connected credential blocks the run instead of falling back to another account. An inconclusive check also blocks, reported as "could not verify" rather than rejected. Credentials for vendors the run does not use are not checked. Child workflows check their own graph when they start.
 
-Without a connected credential, the provider checks its native login. Providers that cannot check without a model session, including Claude, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime during each native check. Launch and execution checks are separate, so a key command can run or prompt more than once.
+Without a connected credential, the provider checks its native login. Providers that cannot check without a model session, including Claude, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime, subject to the [Pi 1.0.2 stored-key cache](#stored-key-command-caching-pi-102). Launch and execution checks are separate: `models.json` commands can run or prompt more than once, while stored `auth.json` commands can reuse a process-cached result.
 
 ### When you need this
 

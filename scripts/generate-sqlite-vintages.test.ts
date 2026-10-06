@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { extractSchemaSql } from './generate-sqlite-vintages';
+import { extractSchemaSql, releaseTags } from './generate-sqlite-vintages';
 
 function adapterSource(schemaBody: string, helper = ''): string {
   return `${helper}
@@ -80,5 +80,21 @@ function holdersTable(name: string): string {
     const sql = extractSchemaSql('current', source);
     expect(sql).not.toContain('${');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS remote_agent_resource_slot_holders (');
+  });
+});
+
+describe('releaseTags', () => {
+  test('keeps release tags and drops tags of any other shape', () => {
+    expect(releaseTags('v0.9.0\narchive/fork-0.5.0\nv0.10.0\nnightly\n')).toEqual([
+      'v0.9.0',
+      'v0.10.0',
+    ]);
+  });
+
+  test('fails when no release tag is left, so write mode cannot delete every fixture', () => {
+    expect(() => releaseTags('archive/fork-0.5.0\nnightly\n')).toThrow(
+      'git tag listed no release tags'
+    );
+    expect(() => releaseTags('')).toThrow('git tag listed no release tags');
   });
 });

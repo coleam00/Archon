@@ -386,7 +386,8 @@ export class SqliteAdapter implements IDatabase {
     // database missing a failed migration must NOT be stamped as fully applied
     // by this build, or the vintage becomes a wrong answer that gets believed.
     let allApplied = true;
-    // Users columns. `role` is the web-auth identity seam (default 'admin').
+    // Keep 'admin' for older writers and existing rows; new writers insert 'member'.
+    // Changing a SQLite column default would require a table rebuild.
     // Better Auth's own tables are PostgreSQL-only — web auth is never enabled
     // on SQLite — so only the role column is backfilled here.
     try {
@@ -480,6 +481,10 @@ export class SqliteAdapter implements IDatabase {
         this.db.run(
           'ALTER TABLE remote_agent_workflow_runs ADD COLUMN parent_conversation_id TEXT'
         );
+      }
+
+      if (!wfColNames.has('origin')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN origin TEXT');
       }
 
       if (!wfColNames.has('working_path')) {
@@ -900,6 +905,7 @@ export class SqliteAdapter implements IDatabase {
       -- the COMMENT ON COLUMN in migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        origin TEXT,
         conversation_id TEXT NOT NULL REFERENCES remote_agent_conversations(id) ON DELETE CASCADE,
         codebase_id TEXT REFERENCES remote_agent_codebases(id) ON DELETE SET NULL,
         workflow_name TEXT NOT NULL,

@@ -1,4 +1,3 @@
-import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * Workflow dependency injection types.
  *
@@ -7,6 +6,7 @@ import type { CredentialStatus } from '@archon/provider-contract';
  *
  * Provider types are imported directly from @archon/provider-contract.
  */
+import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
 import type { IWorkflowStore } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type {
@@ -165,6 +165,7 @@ export type AgentProviderFactory = (provider: string) => IAgentProvider;
 // ---------------------------------------------------------------------------
 
 export interface WorkflowDeps {
+  providers: ProviderRegistry;
   store: IWorkflowStore;
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
@@ -181,16 +182,16 @@ export interface WorkflowDeps {
    * AI-driven `gh` and `git push` operations inside worktrees authenticate
    * correctly.
    *
-   *  - App mode (server bootstrap registered a provider): returns a fresh
+   *  - App mode (host registered a provider): returns a fresh
    *    installation access token, refreshed transparently from the cache.
-   *  - PAT mode / not configured: returns undefined. The subprocess inherits
+   *  - PAT mode / not configured: this resolver is absent. The subprocess inherits
    *    whatever GITHUB_TOKEN already lives on `process.env` (the legacy
    *    behaviour), so solo installs see zero functional change.
    *
-   * Implementations must not throw — return undefined on any failure so the
-   * workflow execution falls back to env inheritance rather than aborting.
+   * A registered App provider must throw on resolution failure so execution
+   * fails before a node can use another credential.
    */
-  resolveBotGitHubToken?: (owner: string, repo: string) => Promise<string | undefined>;
+  resolveBotGitHubToken?: (owner: string, repo: string) => Promise<string>;
   /**
    * Optional: resolve the originating user's personal GitHub token (decrypted,
    * refreshed on read). Used by the per-user token policy to route a run's
