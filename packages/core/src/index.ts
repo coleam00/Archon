@@ -74,6 +74,7 @@ export {
   createWorkflowStore,
   createWorkflowDeps,
   registerGitHubAppAuthProvider,
+  initializeWorkflowGitHubAppAuth,
 } from './workflows/store-adapter';
 
 // Per-child isolation resolver (#2121 slice 2, PR-A)
