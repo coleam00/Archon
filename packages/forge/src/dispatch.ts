@@ -7,6 +7,9 @@ import {
   forgeResponseSchema,
   isMutationRequest,
   mutationTarget,
+  mutationAttempt,
+  mergeConditionSchema,
+  type SelectedCheck,
   type ForgeError,
   type ForgeMutationTarget,
   type ForgeRequest,
@@ -47,7 +50,14 @@ function errorResponse(
     ok: false,
     error,
     ...(isMutationRequest(request)
-      ? { mutation: { op: request.op, target: mutationTarget(request), outcome } }
+      ? {
+          mutation: {
+            op: request.op,
+            target: mutationTarget(request),
+            outcome,
+            ...mutationAttempt(request),
+          },
+        }
       : {}),
   };
 }
@@ -72,6 +82,23 @@ function sameTarget(left: ForgeMutationTarget, right: ForgeMutationTarget): bool
   return 'repo' in left
     ? 'repo' in right && sameRef(left, right)
     : !('repo' in right) && sameRepo(left, right);
+}
+
+function sameCheck(left: SelectedCheck, right: SelectedCheck): boolean {
+  return (
+    left.unit.kind === right.unit.kind &&
+    left.unit.id === right.unit.id &&
+    left.unit.name === right.unit.name
+  );
+}
+function newerAttempt(observed: SelectedCheck, selected: SelectedCheck): boolean {
+  return (
+    sameCheck(observed, selected) &&
+    observed.rerun !== null &&
+    selected.rerun !== null &&
+    observed.rerun.id === selected.rerun.id &&
+    observed.rerun.attempt > selected.rerun.attempt
+  );
 }
 
 function requestRepo(request: Exclude<ForgeRequest, { op: 'resolve' }>): RepoRef {
@@ -132,6 +159,29 @@ export function matchesForgeOperationResponse(
     const evidence = response.mutation;
     if (evidence?.op !== request.op) return false;
     if (!sameTarget(evidence.target, mutationTarget(request))) return false;
+    if (
+      request.op === 'pr.merge' &&
+      (evidence.merge?.method !== request.method ||
+        !mergeConditionSchema.options.every(
+          key => evidence.merge?.conditions[key] === request.conditions[key]
+        ))
+    )
+      return false;
+    if (
+      request.op === 'checks.rerun' &&
+      (evidence.rerun?.revision !== request.revision ||
+        evidence.rerun.requested.length !== request.units.length ||
+        !evidence.rerun.requested.every(
+          (selected, index) =>
+            sameCheck(selected, request.units[index]) &&
+            selected.rerun?.id === request.units[index].rerun?.id &&
+            selected.rerun?.attempt === request.units[index].rerun?.attempt
+        ) ||
+        !evidence.rerun.observed.every(observed =>
+          request.units.some(selected => newerAttempt(observed, selected))
+        ))
+    )
+      return false;
     return (
       !('observed' in evidence) ||
       !evidence.observed ||
@@ -153,6 +203,7 @@ export function matchesForgeOperationResponse(
           value.plugin.version === metadata.version)
       );
     }
+    case 'pr.reviews':
     case 'checks.state':
       return request.op === result.op && sameRef(result.value.ref, request.ref);
     case 'workitem.view':
@@ -172,6 +223,39 @@ export function matchesForgeOperationResponse(
             value.pr.head_repo !== null &&
             sameRepo(value.pr.head_repo, selector.headRepo) &&
             (selector.base === undefined || value.pr.base === selector.base);
+    }
+    case 'pr.merge': {
+      if (request.op !== result.op) return false;
+      const value = result.value;
+      const supported = metadata.mutationConditions?.['pr.merge'] ?? [];
+      return (
+        sameTarget(value.target, request.ref) &&
+        sameRef(value.pr, request.ref) &&
+        value.pr.state === 'merged' &&
+        request.conditions.head !== undefined &&
+        value.pr.head_revision === request.conditions.head &&
+        value.method === request.method &&
+        mergeConditionSchema.options.every(
+          key => value.conditions[key] === request.conditions[key]
+        ) &&
+        Object.keys(request.conditions).every(key =>
+          value.enforcedConditions.some(condition => condition === key)
+        ) &&
+        value.enforcedConditions.every(key => supported.includes(key))
+      );
+    }
+    case 'checks.rerun': {
+      if (request.op !== result.op) return false;
+      const value = result.value;
+      return (
+        sameTarget(value.target, request.ref) &&
+        sameRef(value.ref, request.ref) &&
+        value.revision === request.revision &&
+        value.units.length === request.units.length &&
+        request.units.every(selected =>
+          value.units.some(observed => newerAttempt(observed, selected))
+        )
+      );
     }
     case 'comment.upsert':
       return (
@@ -305,6 +389,22 @@ export async function dispatchForge(
         response = errorResponse(request, {
           kind: 'unsupported_op',
           message: `plugin ${plugin.metadata.name} does not support ${request.op}`,
+        });
+      } else if (request.op === 'pr.merge' && !request.conditions.head) {
+        response = errorResponse(request, {
+          kind: 'invalid_request',
+          message: 'A merge requires the approved head condition',
+        });
+      } else if (
+        request.op === 'pr.merge' &&
+        Object.keys(request.conditions).some(
+          key =>
+            !plugin.metadata.mutationConditions?.['pr.merge']?.some(condition => condition === key)
+        )
+      ) {
+        response = errorResponse(request, {
+          kind: 'unsupported_op',
+          message: 'Plugin does not enforce the requested merge conditions',
         });
       } else {
         const env = options.env ?? process.env;

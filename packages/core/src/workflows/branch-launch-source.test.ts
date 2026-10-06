@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdtemp, readFile, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';

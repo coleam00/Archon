@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterAll, expect, mock, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { mkdtemp, mkdir, readFile, realpath, writeFile } from 'fs/promises';

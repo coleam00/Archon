@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: getLiveRunOwningEnv against a REAL Postgres server.
  *

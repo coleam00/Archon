@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Direct coverage for installCredentialHelper.
  *

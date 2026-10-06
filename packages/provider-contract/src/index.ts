@@ -69,6 +69,9 @@ export {
 } from './output-schema';
 export {
   agentDefinitionSchema,
+  executionContextSchema,
+  systemPromptInputSchema,
+  systemPromptPresetSchema,
   type AgentDefinition,
   CONTAINER_ENV_DENYLIST,
   defineNativeToolInputSchema,
@@ -89,6 +92,7 @@ export {
 } from './agent-provider';
 export {
   CREDENTIAL_KINDS,
+  credentialSpecSchema,
   UnknownProviderError,
   InvalidProviderRunConfigError,
   type ProviderDefaults,

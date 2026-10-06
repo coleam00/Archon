@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { setPlatformPolicies } from '../platforms/registry';
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';

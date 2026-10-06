@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { platformStreamingSchema } from './config-types';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import type { PlatformPolicy } from '../platforms/types';

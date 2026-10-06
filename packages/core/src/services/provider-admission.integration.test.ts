@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Provider admission against a real SQLite database: the capped wrapper, the
  * attempt-holder liveness rule, and cross-process exclusion.

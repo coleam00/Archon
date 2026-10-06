@@ -11,7 +11,15 @@
  */
 
 import { z } from 'zod';
-import { gitObjectIdSchema, prRefSchema, repoRefSchema, workItemRefSchema } from './identity';
+import {
+  gitObjectIdSchema,
+  prRefSchema,
+  repoRefSchema,
+  workItemRefSchema,
+  sourceActorSchema,
+} from './identity';
+
+import { checkSelectionSchema, selectedChecksSchema } from './checks';
 
 const text = z.string().min(1);
 
@@ -83,11 +91,63 @@ export const commentUpsertRequestSchema = requestBase.extend({
   body: text,
 });
 
+export const mergeConditionsSchema = z.strictObject({
+  head: gitObjectIdSchema.optional(),
+  base: gitObjectIdSchema.optional(),
+  tree: gitObjectIdSchema.optional(),
+});
+export const mergeConditionSchema = mergeConditionsSchema.keyof();
+export const prMergeRequestSchema = requestBase.extend({
+  op: z.literal('pr.merge'),
+  ref: prRefSchema,
+  method: z.enum(['merge', 'squash']),
+  conditions: mergeConditionsSchema,
+});
+export const checksRerunRequestSchema = requestBase.extend({
+  op: z.literal('checks.rerun'),
+  ref: prRefSchema,
+  revision: gitObjectIdSchema,
+  units: selectedChecksSchema,
+});
+export const prReviewsRequestSchema = requestBase.extend({
+  op: z.literal('pr.reviews'),
+  ref: prRefSchema,
+});
+export const reviewItemSchema = z.object({
+  kind: z.enum(['review', 'review_comment']),
+  id: text,
+  author: sourceActorSchema.nullable(),
+  commit: gitObjectIdSchema.nullable(),
+  state: text.nullable(),
+  createdAt: z.iso.datetime({ offset: true }).nullable(),
+  url: z.url(),
+  body: z.string(),
+});
+export const prReviewsSchema = z.object({ ref: prRefSchema, items: z.array(reviewItemSchema) });
+export const landedSchema = z.object({
+  commit: gitObjectIdSchema.nullable(),
+  tree: gitObjectIdSchema.nullable(),
+  parents: z.array(gitObjectIdSchema).nullable(),
+});
+export const rerunEvidenceSchema = z.object({
+  revision: gitObjectIdSchema,
+  requested: selectedChecksSchema,
+  observed: checkSelectionSchema,
+});
+export const mergeEvidenceSchema = z.object({
+  method: prMergeRequestSchema.shape.method,
+  conditions: mergeConditionsSchema,
+  landed: landedSchema.optional(),
+});
+
 export const lifecycleReadRequestSchemas = [
   workItemViewRequestSchema,
   prViewRequestSchema,
+  prReviewsRequestSchema,
 ] as const;
 export const mutationRequestSchemas = [
+  prMergeRequestSchema,
+  checksRerunRequestSchema,
   prCreateRequestSchema,
   prEditBodyRequestSchema,
   prReadyRequestSchema,
@@ -124,20 +184,33 @@ export type ForgeCommentRecord = z.infer<typeof commentRecordSchema>;
 export const mutationTargetSchema = z.union([prRefSchema, repoRefSchema]);
 export type ForgeMutationTarget = z.infer<typeof mutationTargetSchema>;
 
-const failureBase = z.object({ op: mutationOperationSchema, target: mutationTargetSchema });
-export const mutationFailureSchema = z.discriminatedUnion('outcome', [
-  failureBase.extend({ outcome: z.literal('refused'), observed: forgePrRecordSchema.optional() }),
-  failureBase.extend({
-    outcome: z.literal('verification_failed'),
-    observed: forgePrRecordSchema.optional(),
-    comment: commentRecordSchema.optional(),
-    // What may remain on the forge, in the operator's terms, so reconciliation
-    // starts from evidence rather than from a retry.
-    leaveBehind: text,
-  }),
-  // Nothing was read back, so an unknown outcome carries no observation.
-  failureBase.extend({ outcome: z.literal('outcome_unknown') }),
-]);
+const failureBase = z.object({
+  op: mutationOperationSchema,
+  target: mutationTargetSchema,
+  merge: mergeEvidenceSchema.optional(),
+  rerun: rerunEvidenceSchema.optional(),
+});
+export const mutationFailureSchema = z
+  .discriminatedUnion('outcome', [
+    failureBase.extend({ outcome: z.literal('refused'), observed: forgePrRecordSchema.optional() }),
+    failureBase.extend({
+      outcome: z.literal('verification_failed'),
+      observed: forgePrRecordSchema.optional(),
+      comment: commentRecordSchema.optional(),
+      // What may remain on the forge, in the operator's terms, so reconciliation
+      // starts from evidence rather than from a retry.
+      leaveBehind: text,
+    }),
+    failureBase.extend({ outcome: z.literal('outcome_unknown') }),
+  ])
+  .superRefine((value, ctx) => {
+    if (
+      (value.merge && value.op !== 'pr.merge') ||
+      (value.rerun && value.op !== 'checks.rerun') ||
+      (value.outcome === 'refused' && value.rerun && value.rerun.observed.length > 0)
+    )
+      ctx.addIssue({ code: 'custom', message: 'Mutation evidence belongs to its operation' });
+  });
 export type ForgeMutationFailure = z.infer<typeof mutationFailureSchema>;
 
 const appliedSchema = z.object({
@@ -147,10 +220,33 @@ const appliedSchema = z.object({
 });
 
 export const lifecycleReadResultSchemas = [
+  z.object({ op: prReviewsRequestSchema.shape.op, value: prReviewsSchema }),
   z.object({ op: workItemViewRequestSchema.shape.op, value: workItemViewSchema }),
   z.object({ op: prViewRequestSchema.shape.op, value: prViewSchema.nullable() }),
 ] as const;
 export const mutationResultSchemas = [
+  z.object({
+    op: prMergeRequestSchema.shape.op,
+    value: appliedSchema.extend({
+      target: prRefSchema,
+      changed: z.literal(true),
+      pr: forgePrRecordSchema,
+      method: prMergeRequestSchema.shape.method,
+      conditions: mergeConditionsSchema,
+      enforcedConditions: z.array(mergeConditionSchema),
+      landed: landedSchema,
+    }),
+  }),
+  z.object({
+    op: checksRerunRequestSchema.shape.op,
+    value: appliedSchema.extend({
+      target: prRefSchema,
+      changed: z.literal(true),
+      ref: prRefSchema,
+      revision: gitObjectIdSchema,
+      units: selectedChecksSchema,
+    }),
+  }),
   z.object({
     op: prCreateRequestSchema.shape.op,
     value: appliedSchema.extend({ pr: forgePrRecordSchema }),
@@ -171,4 +267,14 @@ export const mutationResultSchemas = [
 
 export function mutationTarget(request: ForgeMutationRequest): ForgeMutationTarget {
   return request.op === 'pr.create' ? request.repo : request.ref;
+}
+
+export function mutationAttempt(
+  request: ForgeMutationRequest
+): Pick<ForgeMutationFailure, 'merge' | 'rerun'> {
+  if (request.op === 'pr.merge')
+    return { merge: { method: request.method, conditions: request.conditions } };
+  if (request.op === 'checks.rerun')
+    return { rerun: { revision: request.revision, requested: request.units, observed: [] } };
+  return {};
 }

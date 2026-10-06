@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: resource-slot holder release against a REAL Postgres server.
  *

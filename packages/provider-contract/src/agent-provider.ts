@@ -50,14 +50,19 @@ export type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
  * preset-with-append shape so callers can opt into cacheable prefix behavior.
  * Kept SDK-free so external providers need no Claude SDK dependency.
  */
-export interface SystemPromptPreset {
-  type: 'preset';
-  preset: 'claude_code';
-  append?: string;
-  excludeDynamicSections?: boolean;
-}
-
-export type SystemPromptInput = string | string[] | SystemPromptPreset;
+export const systemPromptPresetSchema = z.object({
+  type: z.literal('preset'),
+  preset: z.literal('claude_code'),
+  append: z.string().optional(),
+  excludeDynamicSections: z.boolean().optional(),
+});
+export type SystemPromptPreset = z.infer<typeof systemPromptPresetSchema>;
+export const systemPromptInputSchema = z.union([
+  z.string(),
+  z.array(z.string()),
+  systemPromptPresetSchema,
+]);
+export type SystemPromptInput = z.infer<typeof systemPromptInputSchema>;
 
 /**
  * Where a provider turn (or a deterministic bash/script subprocess) runs.
@@ -72,9 +77,15 @@ export type SystemPromptInput = string | string[] | SystemPromptPreset;
  * The engine checks the provider's container capability before dispatch, so
  * providers must not silently downgrade a container turn to the host.
  */
-export type ExecutionContext =
-  | { kind: 'host' }
-  | { kind: 'container'; containerId: string; execUser?: string };
+export const executionContextSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('host') }),
+  z.object({
+    kind: z.literal('container'),
+    containerId: z.string(),
+    execUser: z.string().optional(),
+  }),
+]);
+export type ExecutionContext = z.infer<typeof executionContextSchema>;
 
 /**
  * Env keys NEVER forwarded into a container via `docker exec -e` — the runner

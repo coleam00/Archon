@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import * as sqlIsolation from './isolation-environments';
 import * as sqlWorkflow from './workflows';
 /**
@@ -13,7 +14,7 @@ import * as sqlWorkflow from './workflows';
  * boundary fabricate `Date` values throughout, so only a REAL adapter composing
  * getWorkflowRun → isolation lookup can catch it.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter.
  */
 import { describe, test, expect, mock } from 'bun:test';

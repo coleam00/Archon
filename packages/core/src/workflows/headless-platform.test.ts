@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect, mock } from 'bun:test';
 import { HeadlessPlatform } from './headless-platform';
 import type { WorkflowMessageMetadata } from '@archon/workflows/deps';

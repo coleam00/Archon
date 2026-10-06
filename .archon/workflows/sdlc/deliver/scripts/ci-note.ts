@@ -6,7 +6,7 @@
  * check source that cannot answer is visible here before `check-ci` refuses on it.
  */
 
-import { atRevision, describeUnits, readPrChecks } from '../../.shared/checks.ts';
+import { approvalPending, atRevision, describeUnits, readPrChecks } from '../../.shared/checks.ts';
 import { parseQualifiedPr } from '../../.shared/forge.ts';
 import { note, report } from '../../.shared/io.ts';
 
@@ -14,7 +14,9 @@ const boundPr = process.env.INPUTS_PR;
 
 try {
   const read = readPrChecks(parseQualifiedPr(boundPr));
-  if (read.units.length === 0) {
+  if (read.units.length === 0 && approvalPending(read)) {
+    report(`CI needs a maintainer's approval${atRevision(read)}.`);
+  } else if (read.units.length === 0) {
     report(
       'No CI evidence is available for this round (no checks reported). Proceed on the review findings alone.'
     );
@@ -30,6 +32,8 @@ try {
     ];
     if (pending.length > 0)
       lines.push(`${pending.length} check(s) still running — never wait on them.`);
+    if (read.approvalPending === true)
+      lines.push(`CI needs a maintainer's approval${atRevision(read)}.`);
     if (gated.length > 0) lines.push(`Gated on a maintainer: ${describeUnits(gated)}.`);
     report(lines.join('\n'));
   }

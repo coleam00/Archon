@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import type { RunActor } from '../operations/run-authorization';
 /**
  * Unit tests for command handler
@@ -325,7 +326,7 @@ mock.module('../db/workflow-events', () => ({
 // Mock the node-session DB layer so /workflow reset-sessions exercises the real
 // operation (resetWorkflowNodeSessions) without touching a database. Safe from
 // mock.module pollution because command-handler.test.ts runs as its own isolated
-// `bun test` invocation (see packages/core/package.json).
+// `bun test` invocation (declared by @archon-test-isolated).
 const mockDeleteWorkflowNodeSessions = mock<
   typeof WorkflowNodeSessionDb.deleteWorkflowNodeSessions
 >(() => Promise.resolve({ deleted: 0 }));
