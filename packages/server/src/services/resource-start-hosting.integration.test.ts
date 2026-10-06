@@ -1,3 +1,4 @@
+import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { execFileSync } from 'node:child_process';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 import { saveUserProviderKey } from '@archon/core/db/user-provider-key-store';
@@ -379,7 +380,11 @@ describe('server resource-start host', () => {
       [firstRun]
     );
     // The scheduler's first tick runs immediately; no receipt or CLI drain happens here.
-    startWorkflowContinuationScheduler(undefined, () => void host.requestDrain());
+    startWorkflowContinuationScheduler(
+      createSqlWorkflowHost(),
+      undefined,
+      () => void host.requestDrain()
+    );
     const second = await until(() => engine.submitted[1]);
     expect(second.options?.preCreatedRun?.id).toBe(queued.disposition?.requestId);
     expect((await bindingOf('second')).disposition).toMatchObject({ status: 'admitted' });

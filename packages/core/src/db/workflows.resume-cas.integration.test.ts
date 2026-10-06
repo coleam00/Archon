@@ -27,7 +27,9 @@ import type { GateResolutionEvent } from './workflows';
 
 const workflowWarnings = mock((_context: unknown, _message: string) => {});
 
+const actualPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...actualPaths,
   createLogger: () => ({
     info() {},
     warn: workflowWarnings,
@@ -72,10 +74,7 @@ const {
   pauseWorkflowRunForWait,
   failPausedAttentionWait,
   clearWorkflowWaitContext,
-  signalWorkflowWait,
-  listDueWorkflowContinuations,
   listWorkflowEventSignalCandidates,
-  deferWorkflowContinuation,
   getWorkflowRun,
   findResumableRun,
   findResumableRunByParentConversation,
@@ -88,6 +87,9 @@ const {
   failWorkflowRun,
   WorkflowNotResumableError,
 } = await import('./workflows');
+const { createWorkflowStore } = await import('../workflows/store-adapter');
+const { signalWorkflowWait, deferWorkflowContinuation, listDueWorkflowContinuations } =
+  createWorkflowStore();
 const workflowDb = await import('./workflows');
 const { createWorkflowOperations } = await import('../operations/workflow-operations');
 const { createIsolationStore } = await import('./isolation-environments');
@@ -1179,7 +1181,13 @@ describe('durable wait continuation races — real SQLite', () => {
       signalWorkflowWait('wait-signal-cursor', waitA, { conclusion: 'stale' })
     ).resolves.toEqual({ signaled: false });
 
+    await deferWorkflowContinuation('wait-signal-cursor', '2099-08-25T10:02:00.000Z', {
+      kind: 'wait',
+      nodeId: waitA.nodeId,
+      resumeAt: waitA.resumeAt,
+    });
     const run = await getWorkflowRun('wait-signal-cursor');
+    expect(run?.metadata.continuation_retry_at).toBeUndefined();
     expect(run?.status).toBe('paused');
     expect(run?.metadata.wait).toEqual(waitB);
     expect(await countEvents('wait-signal-cursor', 'wait_signaled')).toBe(0);

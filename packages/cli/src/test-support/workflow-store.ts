@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  waitCompletionEvents,
   WorkflowNotResumableError,
   WorkflowRunPauseConflictError,
   type IWorkflowStore,
@@ -7,6 +8,9 @@ import {
 } from '@archon/workflows/store';
 import {
   isApprovalContext,
+  isWorkflowWaitContext,
+  isScheduledWorkflowResume,
+  pendingWorkflowWaitDeadline,
   workflowRunStatusSchema,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -108,6 +112,82 @@ export function createInMemoryWorkflowStore(records: IWorkflowHostStore): IWorkf
   const listEvents = (id: string): WorkflowEventRow[] =>
     structuredClone(events.filter(event => event.workflow_run_id === id));
   return {
+    listDueWorkflowContinuations: async (
+      now,
+      limit = 25
+    ): ReturnType<IWorkflowStore['listDueWorkflowContinuations']> =>
+      structuredClone(
+        [...runs.values()]
+          .filter(run => {
+            const retry = run.metadata.continuation_retry_at;
+            if (typeof retry === 'string' && Date.parse(retry) > now.getTime()) return false;
+            const wait = pendingWorkflowWaitDeadline(run);
+            if (wait)
+              return (
+                Date.parse(wait.resumeAt) <= now.getTime() ||
+                (wait.kind === 'event' && wait.signaledAt !== undefined)
+              );
+            const scheduled = run.metadata.scheduled_resume;
+            return (
+              run.status === 'failed' &&
+              isScheduledWorkflowResume(scheduled) &&
+              !scheduled.triggeredAt &&
+              Date.parse(scheduled.resumeAt) <= now.getTime()
+            );
+          })
+          .slice(0, limit)
+      ),
+    deferWorkflowContinuation: async (
+      id,
+      retryAt,
+      cursor
+    ): ReturnType<IWorkflowStore['deferWorkflowContinuation']> => {
+      const run = row(id);
+      const wait = pendingWorkflowWaitDeadline(run);
+      const scheduled = run.metadata.scheduled_resume;
+      if (
+        cursor.kind === 'wait'
+          ? wait?.nodeId === cursor.nodeId && wait.resumeAt === cursor.resumeAt
+          : run.status === 'failed' &&
+            isScheduledWorkflowResume(scheduled) &&
+            !scheduled.triggeredAt &&
+            scheduled.attempt === cursor.attempt &&
+            scheduled.resumeAt === cursor.resumeAt
+      ) {
+        run.metadata.continuation_retry_at = retryAt;
+      }
+    },
+    signalWorkflowWait: async (
+      id,
+      expected,
+      payload
+    ): ReturnType<IWorkflowStore['signalWorkflowWait']> => {
+      const run = row(id);
+      const wait = run.metadata.wait;
+      if (
+        run.status !== 'paused' ||
+        !isWorkflowWaitContext(wait) ||
+        wait.kind !== 'event' ||
+        wait.signaledAt ||
+        wait.event !== expected.event ||
+        wait.nodeId !== expected.nodeId ||
+        wait.resumeAt !== expected.resumeAt ||
+        Date.parse(wait.resumeAt) <= Date.now()
+      )
+        return { signaled: false };
+      run.metadata.wait = {
+        ...wait,
+        signaledAt: new Date().toISOString(),
+        ...(payload === undefined ? {} : { payload: structuredClone(payload) }),
+      };
+      record({
+        workflow_run_id: id,
+        event_type: 'wait_signaled',
+        step_name: wait.nodeId,
+        data: { event: wait.event, payload },
+      });
+      return { signaled: true };
+    },
     createWorkflowRun: async (input): ReturnType<IWorkflowStore['createWorkflowRun']> => {
       const origin =
         input.origin && Object.values(input.origin).some(value => value !== undefined)
@@ -209,10 +289,24 @@ export function createInMemoryWorkflowStore(records: IWorkflowHostStore): IWorkf
       for (const event of gateEvents) record({ ...event, workflow_run_id: id });
       return { resolved: true };
     },
-    resumeWorkflowRun: async (id): ReturnType<IWorkflowStore['resumeWorkflowRun']> => {
+    resumeWorkflowRun: async (id, cursor): ReturnType<IWorkflowStore['resumeWorkflowRun']> => {
       const run = row(id);
       if (run.status !== 'paused' && run.status !== 'failed')
         throw new WorkflowNotResumableError(id, run.status);
+      if (cursor) {
+        const wait = pendingWorkflowWaitDeadline(run);
+        const scheduled = run.metadata.scheduled_resume;
+        const matches =
+          cursor.kind === 'wait'
+            ? wait?.nodeId === cursor.nodeId && wait.resumeAt === cursor.resumeAt
+            : run.status === 'failed' &&
+              isScheduledWorkflowResume(scheduled) &&
+              !scheduled.triggeredAt &&
+              scheduled.attempt === cursor.attempt &&
+              scheduled.resumeAt === cursor.resumeAt;
+        if (!matches) throw new WorkflowNotResumableError(id, run.status);
+      }
+      delete run.metadata.continuation_retry_at;
       run.status = 'running';
       run.completed_at = null;
       return structuredClone(run);
@@ -354,9 +448,38 @@ export function createInMemoryWorkflowStore(records: IWorkflowHostStore): IWorkf
     cancelWorkflowRun: unsupported,
     cancelFanOutRun: unsupported,
     recoverCancelledFanOutRun: unsupported,
-    pauseWorkflowRunForWait: unsupported,
+    pauseWorkflowRunForWait: async (
+      id,
+      wait,
+      pause
+    ): ReturnType<IWorkflowStore['pauseWorkflowRunForWait']> => {
+      const run = row(id);
+      if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
+      run.status = 'paused';
+      run.metadata.wait = structuredClone(wait);
+      if (pause.kind === 'started')
+        record({
+          workflow_run_id: id,
+          event_type: 'wait_started',
+          step_name: pause.stepName,
+          data: { wait },
+        });
+    },
     failPausedAttentionWait: unsupported,
-    clearWorkflowWaitContext: unsupported,
+    clearWorkflowWaitContext: async (
+      id,
+      wait,
+      completion
+    ): ReturnType<IWorkflowStore['clearWorkflowWaitContext']> => {
+      const run = row(id);
+      if (run.status !== 'running' || JSON.stringify(run.metadata.wait) !== JSON.stringify(wait))
+        return { cleared: false };
+      delete run.metadata.wait;
+      const rows = waitCompletionEvents(id, completion);
+      record(rows.outcome);
+      record(rows.node);
+      return { cleared: true, nodeEvent: rows.node };
+    },
     failPausedApproval: unsupported,
     claimWriteback: unsupported,
     releaseWritebackClaim: unsupported,

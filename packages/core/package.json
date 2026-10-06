@@ -290,6 +290,9 @@
       "src/workflows/continuation-host.test.ts"
     ],
     [
+      "src/workflows/sql-host-doorbell.test.ts"
+    ],
+    [
       "src/platforms/registry.test.ts"
     ],
     [

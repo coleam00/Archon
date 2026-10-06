@@ -4383,7 +4383,8 @@ export async function workflowWaitCommand(
   let resolvedId: string;
   try {
     resolvedId = await resolveRunIdArg(host, runId, cwd);
-    result = await waitForRunAttention(resolvedId, {
+    result = await waitForRunAttention(host.deps.store, resolvedId, {
+      doorbell: host.doorbell,
       // No timeout by default: a wait that ends on its own clock would answer a
       // question only the run can answer.
       ...(timeoutSeconds === undefined ? {} : { deadlineMs: timeoutSeconds * 1000 }),

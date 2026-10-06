@@ -439,7 +439,14 @@ async function main(): Promise<number> {
         () => import('./commands/workflow-continuations'),
         schedule ? { providers: false } : { database: true }
       );
-      return await workflowContinuationCommand(subcommand, positionals.slice(2), values);
+      const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+      const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+      return await workflowContinuationCommand(
+        createSqlWorkflowHost(schedule ? undefined : createCliWorkflowDeps()),
+        subcommand,
+        positionals.slice(2),
+        values
+      );
     }
 
     const configOutsideRun = rejectConfigOutsideRun(command, subcommand, values.config);

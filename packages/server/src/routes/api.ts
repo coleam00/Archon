@@ -2,6 +2,7 @@
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
+import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import type { RunActor } from '@archon/core';
 import { providerRegistry } from '@archon/providers';
 
@@ -2612,7 +2613,11 @@ export function registerApiRoutes(
     if (!run.parent_conversation_id) {
       // No parent conversation to dispatch a chat message through at all —
       // every CLI-launched run (#2008). Execute directly instead of skipping.
-      const headlessResumed = await resumeWorkflowRunFromServer(run, gateActorUserId);
+      const headlessResumed = await resumeWorkflowRunFromServer(
+        createSqlWorkflowHost(),
+        run,
+        gateActorUserId
+      );
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name },
         headlessResumed ? events.headlessDispatched : events.headlessSkipped
@@ -3833,6 +3838,7 @@ export function registerApiRoutes(
         // No parent conversation to dispatch a chat message through at all —
         // every CLI-launched run (#2008). Execute directly instead of 400ing.
         const headlessResumed = await resumeWorkflowRunFromServer(
+          createSqlWorkflowHost(),
           run,
           actor.kind === 'user' ? actor.userId : undefined
         );
@@ -3888,13 +3894,14 @@ export function registerApiRoutes(
     const runId = c.req.param('runId') ?? '';
     const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitRequestSchema);
     try {
-      const run = await workflowDb.getWorkflowRun(runId);
+      const { store } = createSqlWorkflowHost().deps;
+      const run = await store.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
       const wait = isWorkflowWaitContext(run.metadata?.wait) ? run.metadata.wait : undefined;
       if (wait?.kind !== 'event' || wait.event !== event || wait.resumeAt !== resumeAt) {
         return apiError(c, 400, `Run is not waiting on event '${event}'`);
       }
-      const { signaled } = await workflowDb.signalWorkflowWait(runId, wait, payload);
+      const { signaled } = await store.signalWorkflowWait(runId, wait, payload);
       if (!signaled) {
         return apiError(c, 400, `Run is not waiting on event '${event}'`);
       }

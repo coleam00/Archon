@@ -764,7 +764,7 @@ async function dispatchOrchestratorWorkflowOwned(
       );
       return;
     }
-    const resolved = await resolveRunWorkflow(request.run, runCwd, platform);
+    const resolved = await resolveRunWorkflow(createWorkflowDeps(), request.run, runCwd, platform);
     if (!resolved.ok) {
       await platform.sendMessage(
         conversationId,
@@ -902,7 +902,7 @@ async function dispatchOrchestratorWorkflowOwned(
     | undefined;
 
   if (request.kind === 'start' && willContinueExistingRun && resumableRun) {
-    const resolved = await resolveRunWorkflow(resumableRun, runCwd, platform);
+    const resolved = await resolveRunWorkflow(createWorkflowDeps(), resumableRun, runCwd, platform);
     if (!resolved.ok) {
       await platform.sendMessage(
         conversationId,

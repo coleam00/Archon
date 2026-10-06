@@ -1,13 +1,14 @@
-import { providerRegistry } from '@archon/providers';
-import { loadConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import { resolveContinuationWorkflow } from '@archon/workflows/executor';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow, WorkflowLoadError } from '@archon/workflows/schemas/workflow';
-import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
+import {
+  spellWorkflowCommand,
+  type WorkflowDeps,
+  type WorkflowCommandSurface,
+} from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { createWorkflowDeps } from './store-adapter';
 import { toError } from '../utils/error';
 
 const log = createLogger('resolve-run-workflow');
@@ -20,6 +21,7 @@ function findWorkflowLoadError(
 }
 
 export async function resolveRunWorkflow(
+  deps: WorkflowDeps,
   run: WorkflowRun,
   workflowCwd: string,
   surface: WorkflowCommandSurface
@@ -27,7 +29,7 @@ export async function resolveRunWorkflow(
   { ok: true; workflow: ResolvedWorkflow } | { ok: false; message: string; resumeHint?: string }
 > {
   try {
-    const continuation = await resolveContinuationWorkflow(createWorkflowDeps(), run, workflowCwd);
+    const continuation = await resolveContinuationWorkflow(deps, run, workflowCwd);
     if (continuation) return { ok: true, workflow: continuation.workflow };
   } catch (error) {
     const err = toError(error);
@@ -41,7 +43,7 @@ export async function resolveRunWorkflow(
 
   let discovery: Awaited<ReturnType<typeof discoverWorkflowsWithConfig>>;
   try {
-    discovery = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
+    discovery = await discoverWorkflowsWithConfig(workflowCwd, deps.loadConfig, deps.providers);
   } catch (error) {
     const err = toError(error);
     log.error({ err, cwd: workflowCwd, runId: run.id }, 'workflow.resume_discovery_failed');

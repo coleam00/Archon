@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowStore } from '@archon/workflows/store';
-import type { getWorkflowRun } from '@archon/core/db/workflows';
+import { WorkflowNotResumableError } from '@archon/workflows/store';
 import type { getConversationById } from '@archon/core/db/conversations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
@@ -14,7 +14,7 @@ type ResumeConversation = Pick<
   'platform_type' | 'platform_conversation_id'
 >;
 const mockGetConversationById = mock(async (_id: string) => null as ResumeConversation | null);
-const mockResumeWorkflow = mock<typeof getWorkflowRun>(async (_runId: string) => {
+const mockResumeWorkflow = mock<IWorkflowStore['getWorkflowRun']>(async (_runId: string) => {
   throw new Error('unused');
 });
 const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
@@ -47,24 +47,11 @@ const mockGetWorkflowRunStatus = mock<IWorkflowStore['getWorkflowRunStatus']>(
 );
 const mockWorkflowDeps = {
   store: {
+    getWorkflowRun: mockResumeWorkflow,
     failWorkflowRun: mockStoreFailWorkflowRun,
     getWorkflowRunStatus: mockGetWorkflowRunStatus,
   },
 } as unknown as WorkflowDeps;
-class MockWorkflowNotResumableError extends Error {
-  constructor(
-    readonly runId: string,
-    readonly currentStatus: string
-  ) {
-    super('Workflow run is not resumable');
-  }
-}
-
-mock.module('@archon/core', () => ({
-  createCodebaseChildResolver: mock(() => undefined),
-  createWorkflowDeps: mock(() => mockWorkflowDeps),
-}));
-
 mock.module('@archon/core/workflows/resolve-run-workflow', () => ({
   resolveRunWorkflow: mockResolveRunWorkflow,
 }));
@@ -72,15 +59,8 @@ mock.module('@archon/core/services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,
   RunLiveOwnerAlreadyOwnedError: class extends Error {},
 }));
-mock.module('@archon/core/db/codebases', () => ({ getCodebase: mock(async () => null) }));
 mock.module('@archon/core/db/conversations', () => ({
   getConversationById: mockGetConversationById,
-}));
-mock.module('@archon/core/db/workflows', () => ({
-  getWorkflowRun: mockResumeWorkflow,
-  listDueWorkflowContinuations: mockListDueWorkflowContinuations,
-  deferWorkflowContinuation: mockDeferWorkflowContinuation,
-  WorkflowNotResumableError: MockWorkflowNotResumableError,
 }));
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
@@ -106,6 +86,17 @@ import {
   workflowResumeTargetForConversation,
   workflowResumeTargetForRun,
 } from './workflow-resume-service';
+
+const host = {
+  deps: mockWorkflowDeps,
+  records: {
+    codebases: { getCodebase: async () => null },
+    conversations: { getConversationById: async (id: string) => mockGetConversationById(id) },
+  },
+  engine: new (await import('@archon/workflows/in-process-engine')).InProcessWorkflowEngine(
+    mockWorkflowDeps
+  ),
+} as unknown as import('@archon/core/workflows/host-store').WorkflowHost;
 
 function run(
   id: string,
@@ -189,7 +180,7 @@ describe('workflow continuation scanner', () => {
       });
       mockExecuteWorkflow.mockRejectedValueOnce(rejection);
 
-      await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(true);
+      await expect(resumeWorkflowRunFromServer(host, paused)).resolves.toBe(true);
       // The rejection handler runs off the voided promise.
       await Promise.resolve();
       await Promise.resolve();
@@ -235,7 +226,7 @@ describe('workflow continuation scanner', () => {
       } satisfies IWorkflowPlatform;
 
       await expect(
-        resumeWorkflowRunFromServer(paused, undefined, {
+        resumeWorkflowRunFromServer(host, paused, undefined, {
           kind: 'platform',
           destination: {
             platform,
@@ -393,6 +384,7 @@ describe('workflow continuation scanner', () => {
 
     await expect(
       resumeWorkflowRunFromServer(
+        host,
         paused,
         undefined,
         {
@@ -431,10 +423,11 @@ describe('workflow continuation scanner', () => {
       priorNodeSessions: [],
     });
 
-    await expect(resumeWorkflowRunFromServer(selected)).resolves.toBe(true);
+    await expect(resumeWorkflowRunFromServer(host, selected)).resolves.toBe(true);
 
     expect(mockResumeWorkflow).toHaveBeenCalledWith(selected.id);
     expect(mockResolveRunWorkflow).toHaveBeenCalledWith(
+      host.deps,
       refreshed,
       '/tmp/workspaces',
       expect.any(HeadlessPlatform)
@@ -458,9 +451,10 @@ describe('workflow continuation scanner', () => {
       message: 'recorded workflow source is unavailable',
     });
 
-    await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(false);
+    await expect(resumeWorkflowRunFromServer(host, paused)).resolves.toBe(false);
 
     expect(mockResolveRunWorkflow).toHaveBeenCalledWith(
+      host.deps,
       paused,
       '/tmp/workspaces',
       expect.any(HeadlessPlatform)
@@ -503,7 +497,7 @@ describe('workflow continuation scanner', () => {
       return execution;
     });
 
-    await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(true);
+    await expect(resumeWorkflowRunFromServer(host, paused)).resolves.toBe(true);
     expect(runLiveOwnerCalls).toEqual(['start:wait-owned', 'hydrate', 'execute']);
 
     resolveExecution({ success: true, workflowRunId: paused.id, summary: 'done' });
@@ -520,7 +514,7 @@ describe('workflow continuation scanner', () => {
       workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
     });
 
-    await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(false);
+    await expect(resumeWorkflowRunFromServer(host, paused)).resolves.toBe(false);
 
     expect(mockStartRunLiveOwner).toHaveBeenCalledWith('wait-empty');
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
@@ -535,10 +529,10 @@ describe('workflow continuation scanner', () => {
       workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
     });
     mockHydrateResumableRun.mockRejectedValueOnce(
-      new MockWorkflowNotResumableError(paused.id, 'running')
+      new WorkflowNotResumableError(paused.id, 'running')
     );
 
-    await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(false);
+    await expect(resumeWorkflowRunFromServer(host, paused)).resolves.toBe(false);
 
     expect(mockStartRunLiveOwner).toHaveBeenCalledWith(paused.id);
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
@@ -570,7 +564,7 @@ describe('workflow continuation scanner', () => {
     });
 
     await expect(
-      resumeWorkflowRunFromServer(paused, undefined, {
+      resumeWorkflowRunFromServer(host, paused, undefined, {
         kind: 'platform',
         destination: {
           platform,
@@ -595,7 +589,7 @@ describe('workflow continuation scanner', () => {
     mockResumeWorkflow.mockResolvedValueOnce(paused);
 
     await expect(
-      resumeWorkflowRunFromServer(paused, undefined, {
+      resumeWorkflowRunFromServer(host, paused, undefined, {
         kind: 'unavailable',
         reason: "origin adapter 'telegram' is unavailable",
       })
@@ -609,7 +603,7 @@ describe('workflow continuation scanner', () => {
     const paused = run('wait-container', 'paused', { isolation: 'container' });
     mockResumeWorkflow.mockResolvedValueOnce(paused);
 
-    await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(false);
+    await expect(resumeWorkflowRunFromServer(host, paused)).resolves.toBe(false);
 
     expect(mockResolveRunWorkflow).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
@@ -617,7 +611,7 @@ describe('workflow continuation scanner', () => {
   test('does not prepare or claim a row another host already moved', async () => {
     const paused = run('moved', 'paused', {});
     mockResumeWorkflow.mockResolvedValueOnce({ ...paused, status: 'running' });
-    expect(await resumeWorkflowRunFromServer(paused)).toBe(false);
+    expect(await resumeWorkflowRunFromServer(host, paused)).toBe(false);
     expect(mockResolveRunWorkflow).not.toHaveBeenCalled();
     expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
@@ -640,7 +634,7 @@ describe('workflow continuation scanner', () => {
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });
-    expect(await resumeWorkflowRunFromServer(paused, 'clicking-user')).toBe(true);
+    expect(await resumeWorkflowRunFromServer(host, paused, 'clicking-user')).toBe(true);
     expect(mockExecuteWorkflow.mock.calls[0]?.[6]).toEqual(paused.origin);
     expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.preCreatedRun?.user_id).toBe('original-user');
   });
@@ -675,4 +669,22 @@ test('a parent-only chat origin routes to its parent and fails if the parent is 
     kind: 'unavailable',
     reason: 'origin conversation no longer exists',
   });
+});
+
+test('headless admission refuses a chat destination and a missing origin before claiming', async () => {
+  mockResolveRunWorkflow.mockClear();
+  mockStartRunLiveOwner.mockClear();
+  mockHydrateResumableRun.mockClear();
+  const paused = run('chat-headless', 'paused', {});
+  mockResumeWorkflow.mockResolvedValue(paused);
+  mockGetConversationById.mockResolvedValueOnce({
+    platform_type: 'slack',
+    platform_conversation_id: 'thread',
+  });
+  expect(await resumeWorkflowRunFromServer(host, paused)).toBe(false);
+  mockGetConversationById.mockResolvedValueOnce(null);
+  expect(await resumeWorkflowRunFromServer(host, paused)).toBe(false);
+  expect(mockResolveRunWorkflow).not.toHaveBeenCalled();
+  expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+  expect(mockHydrateResumableRun).not.toHaveBeenCalled();
 });

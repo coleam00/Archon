@@ -1,3 +1,6 @@
+import { createLogger } from '@archon/paths';
+import { WORKFLOW_EVENT_NOTIFY_CHANNEL } from '../db/adapters/types';
+import * as connection from '../db/connection';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import * as isolationDb from '../db/isolation-environments';
 import * as codebases from '../db/codebases';
@@ -55,7 +58,30 @@ export function createSqlWorkflowHost(deps = createWorkflowDeps()): WorkflowHost
   return {
     deps,
     records,
+    doorbell: subscribeToSqlRunDoorbell,
     engine: new InProcessWorkflowEngine(deps),
     operations: createSqlWorkflowOperations(deps.store, records),
   };
+}
+
+export async function subscribeToSqlRunDoorbell(
+  runId: string,
+  onDoorbell: () => void
+): Promise<(() => void) | null> {
+  const listener = connection.getDbNotificationListener();
+  if (!listener) return null;
+  try {
+    return await listener.listen(
+      WORKFLOW_EVENT_NOTIFY_CHANNEL,
+      payload => {
+        if (payload === runId) onDoorbell();
+      },
+      err => {
+        createLogger('run-attention').debug({ err, runId }, 'run_attention.doorbell_dropped');
+      }
+    );
+  } catch (err) {
+    createLogger('run-attention').debug({ err, runId }, 'run_attention.doorbell_unavailable');
+    return null;
+  }
 }

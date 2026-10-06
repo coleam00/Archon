@@ -1,3 +1,4 @@
+import { createWorkflowDeps } from './store-adapter';
 import { describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -69,6 +70,7 @@ describe('resolveRunWorkflow', () => {
     await writeWorkflow(source, 'Conflicting live graph');
 
     const result = await resolveRunWorkflow(
+      createWorkflowDeps(),
       makeRun({
         metadata: capturedMetadata(capture),
       }),
@@ -91,6 +93,7 @@ describe('resolveRunWorkflow', () => {
     await rm(capture.anchor.root, { recursive: true });
 
     const result = await resolveRunWorkflow(
+      createWorkflowDeps(),
       makeRun({ metadata: capturedMetadata(capture) }),
       source,
       {}
@@ -107,7 +110,7 @@ describe('resolveRunWorkflow', () => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-resolve-legacy-run-')));
     await writeWorkflow(root, 'Legacy live graph');
 
-    const result = await resolveRunWorkflow(makeRun(), root, {});
+    const result = await resolveRunWorkflow(createWorkflowDeps(), makeRun(), root, {});
 
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.workflow.description).toBe('Legacy live graph');
@@ -118,7 +121,7 @@ describe('resolveRunWorkflow', () => {
     await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
     await writeFile(join(root, '.archon', 'workflows', 'continued.yaml'), 'name: [invalid');
 
-    const result = await resolveRunWorkflow(makeRun(), root, {});
+    const result = await resolveRunWorkflow(createWorkflowDeps(), makeRun(), root, {});
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -130,7 +133,7 @@ describe('resolveRunWorkflow', () => {
   test('reports a missing legacy workflow', async () => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-missing-legacy-run-')));
 
-    const result = await resolveRunWorkflow(makeRun(), root, {});
+    const result = await resolveRunWorkflow(createWorkflowDeps(), makeRun(), root, {});
 
     expect(result).toEqual({
       ok: false,
@@ -143,7 +146,7 @@ describe('resolveRunWorkflow', () => {
   test('spells the list command for the surface', async () => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-missing-legacy-run-')));
 
-    const result = await resolveRunWorkflow(makeRun(), root, {
+    const result = await resolveRunWorkflow(createWorkflowDeps(), makeRun(), root, {
       formatWorkflowCommand: command => `/archon-workflow ${command}`,
     });
 

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { testTimeout } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { linkSync, renameSync, rmSync } from 'node:fs';
@@ -6,10 +6,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { RUN_LIVE_OWNER_IPC_TIMEOUT_MS, runLiveOwnerPath } from './run-live-owner';
 
 const rows = new Map<string, WorkflowRun>();
-mock.module('../db/workflows', () => ({
-  getWorkflowRun: async (id: string) => rows.get(id) ?? null,
-}));
-mock.module('../db/connection', () => ({ getDbNotificationListener: () => null }));
+const store = { getWorkflowRun: async (id: string) => rows.get(id) ?? null };
 const { waitForRunAttention } = await import('./run-attention-watch');
 
 function runningRun(): WorkflowRun {
@@ -79,7 +76,7 @@ describe('attention wait with a real owner endpoint', () => {
       });
       await listen(server, path);
       try {
-        const result = await waitForRunAttention(run.id, {
+        const result = await waitForRunAttention(store, run.id, {
           pollIntervalMs: 5,
           deadlineMs: 10_000,
           onAttached: () => {
@@ -122,7 +119,12 @@ describe('attention wait with a real owner endpoint', () => {
       });
       await listen(server, path);
       try {
-        expect(await waitForRunAttention(run.id, { pollIntervalMs: 5, deadlineMs: 250 })).toEqual({
+        expect(
+          await waitForRunAttention(store, run.id, {
+            pollIntervalMs: 5,
+            deadlineMs: 250,
+          })
+        ).toEqual({
           kind: 'deadline',
           runId: run.id,
           observedStatus: 'running',
@@ -152,7 +154,7 @@ describe('attention wait with a real owner endpoint', () => {
       renameSync(residue, path);
     }
     try {
-      expect(await waitForRunAttention(run.id, { deadlineMs: 1000 })).toEqual({
+      expect(await waitForRunAttention(store, run.id, { deadlineMs: 1000 })).toEqual({
         kind: 'owner_lost',
         runId: run.id,
         observedStatus: 'running',
