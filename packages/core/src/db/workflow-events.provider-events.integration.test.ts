@@ -1,9 +1,10 @@
+// @archon-test-isolated
 /**
  * Integration test: the provider-event reader against a REAL bun:sqlite database.
  * The Postgres half runs the same contract in
  * `workflow-events.provider-events.postgres.integration.test.ts`.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with other db tests' fakes.
  */
 import { describe, mock } from 'bun:test';

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { setPlatformPolicies } from '../platforms/registry';
 import { afterAll, afterEach, expect, mock, test } from 'bun:test';
 import { Database } from 'bun:sqlite';

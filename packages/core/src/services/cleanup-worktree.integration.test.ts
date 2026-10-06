@@ -1,7 +1,8 @@
+// @archon-test-isolated
 /**
  * Real Git and a real SQLite database: abandonment removes the worktree a run
  * created, with force, and keeps its branch. Runs in its own `bun test`
- * invocation (see package.json) because it mock.module's the DB connection.
+ * invocation (declared by @archon-test-isolated) because it mock.module's the DB connection.
  */
 import * as gitModule from '@archon/git';
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';

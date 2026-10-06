@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Unit tests for clone.ts (cloneRepository, registerRepository)
  *

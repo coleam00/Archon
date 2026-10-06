@@ -14,6 +14,13 @@ Thank you for your interest in contributing to Archon!
 
 ### Code Quality
 
+Core tests under `packages/core/src` are discovered automatically (`*.test.ts`,
+`*.spec.ts`, and their `.tsx` equivalents). A test that uses `mock.module()`, directly
+or through a helper, must start with the exact line `// @archon-test-isolated`.
+Use the same directive for any other test requiring a fresh process. Unmarked tests
+share one process. Run package test scripts to preserve isolation; requested selectors
+are forwarded to Bun verbatim and bypass default grouping.
+
 `bun run validate` is the gate. Run it before opening a pull request: it runs every
 check that gates a pull request except the five listed below. A green run means CI's `test`
 and `workflow-fixtures` jobs will pass on your OS. CI runs the `static` job on Linux only; a

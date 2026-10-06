@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { Pool } from 'pg';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';

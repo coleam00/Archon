@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import {
   startNodeExecution,
   finishNodeExecution,

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: workflow-run adoption cutoff against a REAL bun:sqlite
  * database (#2845).
@@ -11,7 +12,7 @@
  * boundary fabricate `Date` values throughout, so only a REAL adapter composing
  * getWorkflowRun → isolation lookup can catch it.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter.
  */
 import { describe, test, expect, mock } from 'bun:test';

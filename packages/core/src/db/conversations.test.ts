@@ -1,8 +1,6 @@
+// @archon-test-isolated
 import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
-// spyOn (NOT mock.module) for config-loader: this file shares a `bun test`
-// invocation with the real config-loader.test.ts, and `mock.module` is
-// process-global and irreversible — mocking the loader here would poison it.
 import * as configLoader from '../config/config-loader';
 
 const mockQuery = createMockQuery();

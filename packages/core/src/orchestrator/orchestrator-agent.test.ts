@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
   withBranchLaunchSource: async (

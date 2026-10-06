@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: `registerRepository` never repoints a same-named managed
  * codebase row onto a separate local clone (#3403) — against a REAL bun:sqlite
@@ -9,7 +10,7 @@
  * too. Whatever exists at that path here, it is not proof that this host owns the
  * row, so registration must refuse rather than rewrite it.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ../db/connection with a real adapter, which conflicts with the fakes other
  * files in this package install.
  */

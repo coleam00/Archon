@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { toBranchName } from '@archon/git';
 import { afterAll, beforeEach, expect, mock, test } from 'bun:test';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';

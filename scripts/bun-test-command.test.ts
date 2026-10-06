@@ -54,9 +54,11 @@ describe('every bun test entry point preloads the telemetry opt-out', () => {
       const dir = join(repoRoot, 'packages', name);
       const manifest = join(dir, 'package.json');
       if (!existsSync(manifest)) continue;
-      if (!('testGroups' in JSON.parse(await readFile(manifest, 'utf8')))) continue;
+      const declaration = JSON.parse(await readFile(manifest, 'utf8'));
+      if (!('testGroups' in declaration) && !('testDiscovery' in declaration)) continue;
       configs.push({ dir, preload: '../../scripts/test-telemetry-off.ts' });
     }
+    expect(configs.some(({ dir }) => dir === join(repoRoot, 'packages', 'core'))).toBe(true);
     const missing: string[] = [];
     for (const { dir, preload } of configs) {
       const bunfig = join(dir, 'bunfig.toml');

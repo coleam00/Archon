@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import {
