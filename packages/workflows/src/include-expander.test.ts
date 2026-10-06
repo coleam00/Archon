@@ -2827,11 +2827,7 @@ test('include aliases and prior-iteration namespaces retain complete nested suff
 describe('loop_group structured completion after include expansion (#2998)', () => {
   test.each([
     { type: 'object', properties: { done: { type: 'boolean' } } },
-    { enum: [{ done: true }] },
-    { const: { done: true } },
-    { anyOf: [{ type: 'object' }, { type: 'boolean' }] },
-    { type: 'string', minLength: 1, maxLength: 0 },
-    { allOf: [{ minLength: 2 }, { maxLength: 1 }] },
+    { type: ['object', 'null'] },
   ])('checks an included terminal schema: %j', outputFormat => {
     for (const withBash of [false, true]) {
       const block = wf('structured-review', [
@@ -2865,26 +2861,25 @@ describe('loop_group structured completion after include expansion (#2998)', () 
     }
   });
 
-  test.each([
-    { enum: ['DONE', { done: true }] },
-    { const: 'DONE' },
-    { anyOf: [{ type: 'object' }, { type: 'string' }] },
-  ])('preserves included schemas that permit strings: %j', outputFormat => {
-    const block = wf('string-review', [
-      { id: 'review', prompt: 'Review', output_format: outputFormat },
-    ]);
-    const parent = wf('parent', [
-      {
-        id: 'refine',
-        loop_group: {
-          until: 'DONE',
-          max_iterations: 3,
-          nodes: [{ id: 'check', include: 'string-review' }],
+  test.each([{ type: 'string' }, { type: ['string', 'object'] }])(
+    'preserves included schemas that permit strings: %j',
+    outputFormat => {
+      const block = wf('string-review', [
+        { id: 'review', prompt: 'Review', output_format: outputFormat },
+      ]);
+      const parent = wf('parent', [
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            nodes: [{ id: 'check', include: 'string-review' }],
+          },
         },
-      },
-    ]);
-    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
-    expect(errors).toEqual([]);
-    expect(workflows.has('parent')).toBe(true);
-  });
+      ]);
+      const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+      expect(errors).toEqual([]);
+      expect(workflows.has('parent')).toBe(true);
+    }
+  );
 });

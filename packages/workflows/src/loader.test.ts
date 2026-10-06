@@ -9327,12 +9327,16 @@ describe('loop_group prose completion with structured terminal output (#2998)', 
     expect(result.error?.error).toContain('structured field');
   });
 
-  it.each(['array', 'number', 'integer', 'boolean', 'null'])(
-    'rejects a %s terminal schema',
-    type => {
-      expect(parseGroup({ type }).error?.errorType).toBe('validation_error');
-    }
-  );
+  it.each([
+    { type: 'array' },
+    { type: 'number' },
+    { type: 'integer' },
+    { type: 'boolean' },
+    { type: 'null' },
+    { type: ['object', 'null'] },
+  ])('rejects a non-string terminal schema: %j', schema => {
+    expect(parseGroup(schema).error?.errorType).toBe('validation_error');
+  });
 
   it.each([{}, { type: ['string', 'object'] }])(
     'accepts a schema that permits string output: %j',
@@ -9340,59 +9344,6 @@ describe('loop_group prose completion with structured terminal output (#2998)', 
       expect(parseGroup(schema).error).toBeNull();
     }
   );
-
-  it.each([
-    { enum: [{ done: true }] },
-    { const: { done: true } },
-    { allOf: [{ enum: [{ done: true }] }] },
-    { anyOf: [{ type: 'object' }, { const: false }] },
-    { oneOf: [{ type: 'object' }, { type: 'number' }] },
-    { not: { type: 'string' } },
-    { oneOf: [{ type: 'string' }, { type: ['string', 'object'] }] },
-    { $ref: '#/definitions/result', definitions: { result: { enum: [{}] } } },
-    { if: { type: 'string' }, then: { type: 'object' } },
-    { enum: ['DONE', {}], pattern: '^other$' },
-    { allOf: [{ enum: ['DONE', {}] }, { not: { const: 'DONE' } }] },
-  ])('rejects a schema that excludes strings without a root type: %j', schema => {
-    expect(parseGroup(schema).error?.errorType).toBe('validation_error');
-    expect(parseGroup(schema, 'exit 0').error).toBeNull();
-  });
-
-  it.each([
-    { type: 'string', minLength: 1, maxLength: 0 },
-    { allOf: [{ type: 'string', minLength: 2 }, { maxLength: 1 }] },
-    { maxLength: 2, allOf: [{ allOf: [{ minLength: 3 }] }] },
-  ])('rejects contradictory string length bounds: %j', schema => {
-    expect(parseGroup(schema).error?.errorType).toBe('validation_error');
-    expect(parseGroup(schema, 'exit 0').error).toBeNull();
-  });
-
-  it.each([
-    { type: 'string', minLength: 0, maxLength: 0 },
-    { type: 'string', minLength: 1, maxLength: 2 },
-    { allOf: [{ minLength: 1 }, { maxLength: 1 }] },
-    { anyOf: [{ minLength: 2, maxLength: 1 }, { type: 'string' }] },
-  ])('preserves satisfiable string length bounds: %j', schema => {
-    expect(parseGroup(schema).error).toBeNull();
-  });
-
-  it.each([
-    { enum: ['DONE', { done: true }] },
-    { const: 'DONE' },
-    { allOf: [{ type: 'string' }, { minLength: 1 }] },
-    { anyOf: [{ type: 'object' }, { type: 'string' }] },
-    { oneOf: [{ type: 'object' }, { enum: ['DONE'] }] },
-    { not: { type: 'object' } },
-    { properties: { done: { type: 'boolean' } } },
-    { $ref: '#/definitions/result', definitions: { result: { enum: ['DONE', {}] } } },
-    { not: { pattern: '^other$' } },
-    { oneOf: [false, { type: 'string' }] },
-    { if: { type: 'object' }, then: false, else: { type: 'string' } },
-    { type: 'string', pattern: '^DONE$' },
-    { not: { oneOf: [{ type: 'string' }, { type: 'string' }] } },
-  ])('preserves string-permitting schema constraints: %j', schema => {
-    expect(parseGroup(schema).error).toBeNull();
-  });
 
   it('accepts a terminal node without output_format', () => {
     expect(parseGroup().error).toBeNull();

@@ -28,7 +28,6 @@ import {
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { createLogger } from '@archon/paths';
 import { compileOutputSchema } from './structured-output';
-import { outputSchemaExcludesStrings } from './output-schema-strings';
 
 import {
   dagNodeSchema,
@@ -1445,6 +1444,13 @@ export function validateNodeOutputFormats(
     }
   }
   return null;
+}
+
+/** A root `type` without "string" means the node's output is serialized JSON, never prose. */
+function outputSchemaExcludesStrings(schema: Record<string, unknown>): boolean {
+  const { type } = schema;
+  if (type === undefined) return false;
+  return Array.isArray(type) ? !type.includes('string') : type !== 'string';
 }
 
 export function validateLoopGroupProseCompletion(
