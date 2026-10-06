@@ -11,9 +11,10 @@
  * one group and behaves exactly as a single ordered chain.
  *
  * The status is read from exit statuses alone:
- * - `red`: a check ran and exited non-zero, or was killed by a signal it did not
- *   get from this script. `classify` judges why.
- * - `incomplete`: no check failed, but one could not be started.
+ * - `red`: every check that should run did, and one exited non-zero or was killed by
+ *   a signal it did not get from this script. `classify` judges why.
+ * - `incomplete`: a check could not be started, so part of the gate never ran; any
+ *   check that did fail is named in the summary.
  * - `green`: every declared check ran and exited 0. No declared checks is green only
  *   because `discover` judged that the project defines none; its notes say so.
  *

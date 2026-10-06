@@ -20,9 +20,9 @@ checkout. Its `scope` input narrows that ordinary path, which has three steps:
    record names. It decides whether the change caused it (`introduced`), the base already had it (`inherited`) or the machine
    did (`environment`).
 
-Green comes from exit statuses alone: every declared check exited 0. When no check
-failed but not every check ran, the result is `green: false` with
-`red_cause: incomplete`. That happens when a check cannot start, or when the `run`
+Green comes from exit statuses alone: every declared check exited 0. When not every
+check ran, the result is `green: false` with `red_cause: incomplete`, even if a check
+that did run failed; its failure is named in the summary. That happens when a check cannot start, or when the `run`
 node's timeout stops the gate. On that timeout the runner kills the running check's
 whole process tree, restores anything it moved aside, and records the stop in
 `validation.md`. On Windows, or after SIGKILL, the script gets no signal it can

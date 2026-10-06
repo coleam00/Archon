@@ -27,8 +27,7 @@ export function urlRepo(url: string): Repo | undefined {
     } catch {
       return undefined;
     }
-    // GitHub's SSH endpoint on port 443 serves the same repositories as github.com.
-    host = parsed.hostname === 'ssh.github.com' ? 'github.com' : parsed.hostname;
+    host = parsed.hostname;
     path = parsed.pathname;
   } else {
     // scp-like `[user@]host:path`; a Windows drive path (`C:\...`) is not a remote.
@@ -37,6 +36,8 @@ export function urlRepo(url: string): Repo | undefined {
     host = scp[1];
     path = scp[2];
   }
+  // GitHub's SSH endpoint on port 443 serves the same repositories as github.com.
+  if (host === 'ssh.github.com') host = 'github.com';
   path = path.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/, '');
   if (host === '' || path === '' || !path.includes('/')) return undefined;
   return { host, path };

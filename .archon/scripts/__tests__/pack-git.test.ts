@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -27,6 +27,7 @@ describe('remote identity', () => {
       'https://token@github.com/owner/repo',
       'git@github.com:owner/repo.git',
       'ssh://git@ssh.github.com:443/owner/repo.git',
+      'git@ssh.github.com:owner/repo.git',
     ]) {
       expect(urlRepo(url)).toEqual({ host: 'github.com', path: 'owner/repo' });
     }
@@ -119,6 +120,24 @@ describe('verify-sync', () => {
 });
 
 describe('prune-scratch', () => {
+  it('removes a symlinked scratch directory as a link, leaving its target', () => {
+    const cwd = gitCheckout();
+    const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
+    const target = track(mkdtempSync(join(tmpdir(), 'archon-scratch-target-')));
+    writeFileSync(join(target, 'keep.txt'), 'kept');
+    // A junction needs no privilege on Windows; elsewhere the type is ignored.
+    symlinkSync(target, join(artifacts, 'scratch'), 'junction');
+
+    const run = spawnSync(process.execPath, [join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
+      cwd,
+      env: { ...process.env, ARTIFACTS_DIR: artifacts, INPUTS_LENS: '' },
+      encoding: 'utf8',
+    });
+    expect(run.status).toBe(0);
+    expect(existsSync(join(artifacts, 'scratch'))).toBe(false);
+    expect(existsSync(join(target, 'keep.txt'))).toBe(true);
+  });
+
   it("removes the run's scratch worktrees and nothing else", () => {
     const cwd = gitCheckout();
     const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
