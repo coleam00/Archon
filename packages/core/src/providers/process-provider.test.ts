@@ -213,3 +213,24 @@ test(
   },
   testTimeout(18_000)
 );
+
+test('abort while a settled child is closing does not deliver settled', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'archon-provider-closing-'));
+  const file = join(directory, 'closing');
+  const abort = new AbortController();
+  const turn = provider('slow-exit', file).sendQuery('turn', tmpdir(), undefined, {
+    abortSignal: abort.signal,
+  });
+  try {
+    for (let i = 0; i < chunks.length - 1; i++)
+      expect((await turn.next()).value).toEqual(chunks[i]);
+    const terminal = turn.next();
+    for (let i = 0; i < 100 && !existsSync(file); i++) await Bun.sleep(5);
+    expect(existsSync(file)).toBe(true);
+    abort.abort();
+    expect((await terminal).done).toBe(true);
+  } finally {
+    await turn.return(undefined);
+    await removeTempTree(directory);
+  }
+});

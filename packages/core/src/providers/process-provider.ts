@@ -222,6 +222,7 @@ export class ProcessAgentProvider implements IAgentProvider {
         if (chunk.type === 'settled') {
           settled = true;
           await process.dispose(true);
+          if (options.abortSignal?.aborted) return;
         }
         yield chunk;
       }

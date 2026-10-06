@@ -78,3 +78,7 @@ await serveProvider({
     },
   }),
 });
+if (mode === 'slow-exit') {
+  writeFileSync(process.argv[3], 'closing');
+  await Bun.sleep(500);
+}
