@@ -27,6 +27,11 @@ export interface ValidateCheck {
 
 export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
   {
+    id: 'workflow-import-boundary',
+    label: 'Workflow persistence import boundaries',
+    command: ['bun', 'run', 'check:workflow-import-boundary'],
+  },
+  {
     id: 'cli-import-boundary',
     label: 'CLI import boundaries',
     command: ['bun', 'run', 'check:cli-import-boundary'],

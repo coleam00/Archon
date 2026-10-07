@@ -1,9 +1,19 @@
+import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+import type {
+  StartBindingInspection,
+  StartReceiptInspection,
+  ResourceStartRequestInspection,
+} from '@archon/workflows/resource-start-store';
+export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+export type {
+  StartBindingInspection,
+  StartReceiptInspection,
+  ResourceStartRequestInspection,
+} from '@archon/workflows/resource-start-store';
 import type {
   PreparedWorkflowLaunch,
-  ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
-  SourceReceiptInput,
   SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import {
@@ -11,7 +21,6 @@ import {
   preparedWorkflowLaunchSchema,
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
-import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect } from './connection';
 import {
@@ -28,10 +37,10 @@ interface RequestRow {
   id: string;
   resource_key: string;
   host_id: string;
-  overlap_policy: 'skip' | 'queue';
-  status: 'queued' | 'admitted' | 'skipped' | 'withdrawn';
+  overlap_policy: ResourceStartRequestInspection['overlap'];
+  status: ResourceStartRequestInspection['status'];
   blocker_run_id: string | null;
-  blocker_kind: 'run' | 'request' | null;
+  blocker_kind: NonNullable<ResourceStartRequestInspection['blocker']>['kind'] | null;
   launch: unknown;
 }
 
@@ -94,7 +103,7 @@ async function admitResourceStartWithQuery(
   // An older waiter keeps FIFO even when a slot is free, so a new arrival cannot pass it.
   const older = await oldestQueuedRequest(query, intent.resource);
   const holders = await liveResourceSlotHolders(query, intent.resource);
-  const blocker: { kind: 'run' | 'request'; id: string } | null = older
+  const blocker: ResourceStartRequestInspection['blocker'] = older
     ? { kind: 'request', id: older.id }
     : holders.length >= capacity && holders[0]
       ? { kind: 'run', id: holders[0].id }
@@ -157,8 +166,6 @@ export async function drainResourceStarts(options: {
     return admitted;
   });
 }
-
-export class SourceReceiptDigestConflictError extends Error {}
 
 export async function acceptStartReceipt(
   input: SourceReceiptAcceptance
@@ -227,32 +234,6 @@ export async function acceptStartReceipt(
     }
     return { receiptId: input.receipt.id, replay: false };
   });
-}
-
-export interface StartBindingInspection {
-  receiptId: string;
-  bindingId: string;
-  bindingRevision: string | null;
-  hostId: string | null;
-  status: 'pending' | 'preparing' | 'failed' | 'rejected' | 'unmatched' | 'complete';
-  ownerId: string | null;
-  error: string | null;
-  intent: ResourceStartBindingIntent | null;
-  requestStatus: ResourceStartRequestInspection['status'] | null;
-  disposition: ResourceStartDisposition | null;
-}
-
-export interface StartReceiptInspection {
-  id: string;
-  sourceInstanceId: string;
-  deliveryId: string | null;
-  contentDigest: string;
-  receivedAt: string;
-  occurredAt: string | null;
-  sourceActor: SourceReceiptInput['sourceActor'];
-  outcome: 'matched' | 'unmatched' | 'unsupported' | 'malformed';
-  reason: string | null;
-  bindings: StartBindingInspection[];
 }
 
 function parseStoredJson(value: unknown): unknown {
@@ -383,18 +364,6 @@ export async function listPendingStartBindings(options: {
   return result.rows.map(inspectBinding);
 }
 
-export interface ResourceStartRequestInspection {
-  id: string;
-  resource: string;
-  hostId: string;
-  overlap: 'skip' | 'queue';
-  status: 'queued' | 'admitted' | 'skipped' | 'withdrawn';
-  runStatus: WorkflowRunStatus | null;
-  blocker: { kind: 'run' | 'request'; id: string } | null;
-  blockerRunStatus: WorkflowRunStatus | null;
-  launch: PreparedWorkflowLaunch;
-}
-
 function inspectRequest(row: Record<string, unknown>): ResourceStartRequestInspection {
   const runStatus = workflowRunStatusSchema.safeParse(row.run_status);
   const blockerRunStatus = workflowRunStatusSchema.safeParse(row.blocker_run_status);
@@ -402,7 +371,7 @@ function inspectRequest(row: Record<string, unknown>): ResourceStartRequestInspe
     id: String(row.id),
     resource: String(row.resource_key),
     hostId: String(row.host_id),
-    overlap: row.overlap_policy as 'skip' | 'queue',
+    overlap: row.overlap_policy as ResourceStartRequestInspection['overlap'],
     status: row.status as ResourceStartRequestInspection['status'],
     runStatus: runStatus.success ? runStatus.data : null,
     blocker:

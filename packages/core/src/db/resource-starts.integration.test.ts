@@ -6,16 +6,17 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
-import {
+import { createWorkflowStore } from '../workflows/store-adapter';
+import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+const {
   acceptStartReceipt,
   admitResourceStart,
   completeStartBindingPreparation,
   drainResourceStarts,
   getResourceStartRequest,
   getStartReceipt,
-  SourceReceiptDigestConflictError,
   withdrawQueuedResourceStart,
-} from './resource-starts';
+} = createWorkflowStore();
 import {
   addResourceSlotHolder,
   liveResourceSlotHolders,
@@ -325,6 +326,70 @@ describe('durable resource starts', () => {
     });
   });
 
+  test('preparation, request, run and holder roll back together when run insertion fails', async () => {
+    const store = createWorkflowStore();
+    const receiptId = crypto.randomUUID();
+    const prepared = launch(crypto.randomUUID());
+    const identity = { receiptId, bindingId: 'binding', ownerId: 'owner' };
+    await store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: 'rollback',
+        deliveryId: null,
+        contentDigest: 'local',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'binding',
+          bindingRevision: null,
+          hostId: 'host',
+          runAsUserId: '22222222-2222-4222-8222-222222222222',
+          resource: 'rollback',
+          capacity: 1,
+          overlap: 'queue',
+          launch: {
+            cwd: '/tmp/test',
+            workflowName: 'test',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+      ],
+    });
+    expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+    await getDatabase().query(
+      `CREATE TRIGGER refuse_prepared_run BEFORE INSERT ON remote_agent_workflow_runs BEGIN SELECT RAISE(ABORT, 'run refused'); END`
+    );
+    await expect(
+      store.completeStartBindingPreparation({ ...identity, launch: prepared })
+    ).rejects.toThrow();
+    expect((await store.getStartReceipt(receiptId))?.bindings[0]).toMatchObject({
+      status: 'preparing',
+      ownerId: 'owner',
+      requestStatus: null,
+    });
+    expect(await store.getResourceStartRequest(prepared.run.id)).toBeNull();
+    expect(await store.getWorkflowRun(prepared.run.id)).toBeNull();
+    expect(
+      (
+        await getDatabase().query(
+          'SELECT * FROM remote_agent_resource_slots WHERE resource_key = $1',
+          ['rollback']
+        )
+      ).rows
+    ).toEqual([]);
+    await getDatabase().query('DROP TRIGGER refuse_prepared_run');
+    expect(await store.completeStartBindingPreparation({ ...identity, launch: prepared })).toEqual({
+      status: 'admitted',
+      requestId: prepared.run.id,
+      runId: prepared.run.id,
+    });
+  });
+
   test('deduplicates trusted delivery identity and rejects digest conflicts', async () => {
     const receipt = {
       id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
@@ -396,7 +461,7 @@ describe('durable resource starts', () => {
         },
       ],
     });
-    const { claimStartBindingPreparation } = await import('./resource-starts');
+    const { claimStartBindingPreparation } = createWorkflowStore();
     expect(
       await claimStartBindingPreparation({ receiptId, bindingId: 'binding', ownerId: 'owner' })
     ).toBe(true);
@@ -491,7 +556,7 @@ describe('durable resource starts', () => {
         },
       ],
     });
-    const { claimStartBindingPreparation } = await import('./resource-starts');
+    const { claimStartBindingPreparation } = createWorkflowStore();
     expect(
       await claimStartBindingPreparation({ receiptId, bindingId: 'binding', ownerId: 'owner' })
     ).toBe(true);
@@ -514,7 +579,8 @@ describe('durable resource starts', () => {
   test('serializes same-resource admission across independent SQLite processes', async () => {
     await closeDatabase();
     const script = `
-      import { admitResourceStart } from './packages/core/src/db/resource-starts.ts';
+      import { createWorkflowStore } from './packages/core/src/workflows/store-adapter.ts';
+      const { admitResourceStart } = createWorkflowStore();
       import { closeDatabase } from './packages/core/src/db/connection.ts';
       const disposition = await admitResourceStart(JSON.parse(process.env.TEST_START_INTENT));
       console.log(JSON.stringify(disposition));

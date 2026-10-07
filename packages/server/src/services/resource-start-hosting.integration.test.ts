@@ -15,7 +15,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
-import { getConversationById } from '@archon/core/db/conversations';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { registerFolder, registerRepository } from '@archon/core';
 import { updateCodebase, findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
@@ -190,11 +189,15 @@ async function fixture(
   );
 
   const engine = recordingEngine();
-  const host = createServerResourceStartHost(HOST_ID, engine);
+  const workflowHost = { ...createSqlWorkflowHost(), engine };
+  const host = createServerResourceStartHost(HOST_ID, workflowHost);
   const app = new OpenAPIHono();
   registerWebhookSourceRoutes(
     app,
-    await loadWebhookSourcePlugins(configPath),
+    await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt: input => workflowHost.deps.store.acceptStartReceipt(input),
+      isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
+    }),
     autoDrain ? (): void => void host.requestDrain() : undefined
   );
   return {
@@ -264,11 +267,8 @@ describe('server resource-start host', () => {
     expect(submitted.options?.preCreatedRun?.id).toBe(runId);
     expect(submitted.options?.preCreatedRun?.status).toBe('pending');
     const run = submitted.options?.preCreatedRun;
-    if (!run?.conversation_id) throw new Error('Missing prepared run conversation');
-    expect(await getConversationById(run.conversation_id)).toMatchObject({
-      codebase_id: run.codebase_id,
-      ai_assistant_type: 'codex',
-    });
+    expect(run?.conversation_id).toBeNull();
+    expect(run?.origin).toEqual({ userId: USER_ID });
     expect(submitted.workflow.name).toBe('hosted');
     // Provenance is data on the run, not prose in the user message.
     expect(submitted.userMessage).toBe('');
@@ -447,6 +447,7 @@ describe('server resource-start host', () => {
     expect((await deliver('dead', 'queue')).status).toBe(200);
     const admitted: string[] = [];
     await drainResourceStartHost({
+      ...createSqlWorkflowHost(),
       hostId: HOST_ID,
       startAdmitted: async id => {
         admitted.push(id);
@@ -455,7 +456,7 @@ describe('server resource-start host', () => {
     const result = await startAdmittedResourceStart({
       requestId: admitted[0],
       hostId: HOST_ID,
-      engine,
+      host: { ...createSqlWorkflowHost(), engine },
       createPlatform: () => new HeadlessPlatform(),
     });
     expect(result.success).toBe(false);
@@ -471,6 +472,7 @@ describe('server resource-start host', () => {
     ).toBe(before);
     expect((await deliver('next', 'queue')).status).toBe(200);
     await drainResourceStartHost({
+      ...createSqlWorkflowHost(),
       hostId: HOST_ID,
       startAdmitted: async id => {
         admitted.push(id);
@@ -485,6 +487,7 @@ describe('server resource-start host', () => {
     // Admit without starting, so both starters race for the same pending run.
     const admitted: string[] = [];
     await drainResourceStartHost({
+      ...createSqlWorkflowHost(),
       hostId: HOST_ID,
       startAdmitted: async requestId => {
         admitted.push(requestId);
@@ -496,7 +499,7 @@ describe('server resource-start host', () => {
       startAdmittedResourceStart({
         requestId,
         hostId: HOST_ID,
-        engine,
+        host: { ...createSqlWorkflowHost(), engine },
         createPlatform: () => new HeadlessPlatform(),
       });
 
@@ -522,7 +525,7 @@ describe('server resource-start host', () => {
       startAdmittedResourceStart({
         requestId,
         hostId: HOST_ID,
-        engine: target,
+        host: { ...createSqlWorkflowHost(), engine: target },
         createPlatform: () => new HeadlessPlatform(),
       });
 
@@ -538,11 +541,14 @@ describe('server resource-start host', () => {
     const { deliver } = await fixture(false);
     expect((await deliver('first', 'queue')).status).toBe(200);
     const host = createServerResourceStartHost(HOST_ID, {
-      async submit() {
-        throw new Error('engine unavailable');
-      },
-      async resume() {
-        throw new Error('not used');
+      ...createSqlWorkflowHost(),
+      engine: {
+        async submit() {
+          throw new Error('engine unavailable');
+        },
+        async resume() {
+          throw new Error('not used');
+        },
       },
     });
 
@@ -567,6 +573,7 @@ describe('server resource-start host', () => {
 async function admitWithoutStarting(): Promise<string> {
   const admitted: string[] = [];
   await drainResourceStartHost({
+    ...createSqlWorkflowHost(),
     hostId: HOST_ID,
     startAdmitted: async requestId => {
       admitted.push(requestId);

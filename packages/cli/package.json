@@ -134,6 +134,9 @@
       "src/commands/user.test.ts"
     ],
     [
+      "src/commands/trigger-store.integration.spec.ts"
+    ],
+    [
       "src/commands/workflow-store.integration.spec.ts"
     ],
     [

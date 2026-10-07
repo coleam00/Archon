@@ -575,13 +575,20 @@ async function main(): Promise<number> {
         const { triggerCommand } = await loadRoute(() => import('./commands/trigger'), {
           database: true,
         });
-        await triggerCommand(subcommand, positionals.slice(2), {
-          config: typeof values.config === 'string' ? values.config : undefined,
-          host: typeof values.host === 'string' ? values.host : undefined,
-          owner: typeof values.owner === 'string' ? values.owner : undefined,
-          limit: typeof values.limit === 'string' ? values.limit : undefined,
-          yes: values.yes === true,
-        });
+        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+        await triggerCommand(
+          createSqlWorkflowHost(createCliWorkflowDeps()),
+          subcommand,
+          positionals.slice(2),
+          {
+            config: typeof values.config === 'string' ? values.config : undefined,
+            host: typeof values.host === 'string' ? values.host : undefined,
+            owner: typeof values.owner === 'string' ? values.owner : undefined,
+            limit: typeof values.limit === 'string' ? values.limit : undefined,
+            yes: values.yes === true,
+          }
+        );
         break;
       }
 
