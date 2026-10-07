@@ -1,31 +1,32 @@
 import { z } from 'zod';
-import { PROVIDER_PLUGIN_MAX_MESSAGE_BYTES } from './wire';
+export const PLUGIN_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 
-export interface ProviderPluginIO {
+export interface PluginIO {
   readable: ReadableStream<Uint8Array>;
   writable: WritableStream<Uint8Array>;
 }
 
-export class ProviderPluginProtocolError extends Error {
+export class PluginProtocolError extends Error {
   constructor(
-    public readonly provider: string,
+    public readonly plugin: string,
     public readonly line: number,
     detail: string,
     options?: ErrorOptions,
     public readonly reason: 'invalid_message' | 'closed' = 'invalid_message'
   ) {
-    super(`Provider plugin ${provider}, line ${String(line)}: ${detail}`, options);
-    this.name = 'ProviderPluginProtocolError';
+    super(`Plugin ${plugin}, line ${String(line)}: ${detail}`, options);
+    this.name = 'PluginProtocolError';
   }
 }
 
-export class ProviderPluginRemoteError extends Error {
+export class PluginRemoteError extends Error {
   constructor(
     public readonly code: number,
-    message: string
+    message: string,
+    public readonly data?: z.infer<ReturnType<typeof z.json>>
   ) {
     super(message);
-    this.name = 'ProviderPluginRemoteError';
+    this.name = 'PluginRemoteError';
   }
 }
 
@@ -53,7 +54,7 @@ interface PendingRequest {
   reject(error: unknown): void;
 }
 
-export class ProviderRpc {
+export class PluginRpc {
   readonly done: Promise<void>;
   private readonly reader;
   private readonly writer;
@@ -67,9 +68,9 @@ export class ProviderRpc {
   private line = 0;
   private closing: Promise<void> | undefined;
   private writes: Promise<void> = Promise.resolve();
-  provider = 'uninitialized';
+  plugin = 'uninitialized';
 
-  constructor(io: ProviderPluginIO) {
+  constructor(io: PluginIO) {
     this.reader = io.readable.getReader();
     this.writer = io.writable.getWriter();
     this.done = this.read();
@@ -84,8 +85,8 @@ export class ProviderRpc {
   on(method: string, handler: (params: unknown) => void): void {
     this.notifications.set(method, handler);
   }
-  error(detail: string, cause?: unknown): ProviderPluginProtocolError {
-    return new ProviderPluginProtocolError(this.provider, this.line, detail, { cause });
+  error(detail: string, cause?: unknown): PluginProtocolError {
+    return new PluginProtocolError(this.plugin, this.line, detail, { cause });
   }
   parse<T>(schema: z.ZodType<T>, value: unknown): T {
     const parsed = schema.safeParse(value);
@@ -109,15 +110,15 @@ export class ProviderRpc {
   }
   private async send(message: unknown): Promise<void> {
     const encoded = new TextEncoder().encode(`${JSON.stringify(message)}\n`);
-    if (encoded.byteLength - 1 > PROVIDER_PLUGIN_MAX_MESSAGE_BYTES) {
+    if (encoded.byteLength - 1 > PLUGIN_MAX_MESSAGE_BYTES) {
       throw this.error('message exceeds maximum byte length');
     }
     const write = this.writes.then(async () => {
       try {
         await this.writer.write(encoded);
       } catch (cause) {
-        throw new ProviderPluginProtocolError(
-          this.provider,
+        throw new PluginProtocolError(
+          this.plugin,
           this.line,
           'stream write failed',
           { cause },
@@ -162,14 +163,22 @@ export class ProviderRpc {
             jsonrpc: '2.0',
             id: message.id,
             error: {
-              code: error instanceof z.ZodError ? -32602 : -32603,
-              message: error instanceof Error ? error.message : 'Provider request failed',
+              code:
+                error instanceof PluginRemoteError
+                  ? error.code
+                  : error instanceof z.ZodError
+                    ? -32602
+                    : -32603,
+              ...(error instanceof PluginRemoteError && error.data !== undefined
+                ? { data: error.data }
+                : {}),
+              message: error instanceof Error ? error.message : 'Plugin request failed',
             },
           };
         }
         await this.send(response);
       };
-      // Prompt requests must not block reading session/cancel notifications.
+      // Requests must not block reading notifications or requests in the other direction.
       const task = respond().catch(error => {
         this.fail(error);
         void this.reader.cancel(error).catch(() => undefined);
@@ -184,7 +193,9 @@ export class ProviderRpc {
     if (!pending) throw this.error('response has no matching request');
     if (message.id !== null) this.pending.delete(message.id);
     if ('error' in message)
-      pending.reject(new ProviderPluginRemoteError(message.error.code, message.error.message));
+      pending.reject(
+        new PluginRemoteError(message.error.code, message.error.message, message.error.data)
+      );
     else pending.resolve(message.result);
   }
   private async read(): Promise<void> {
@@ -201,9 +212,9 @@ export class ProviderRpc {
           if (!newline && index < value.length) continue;
           const part = value.subarray(start, index);
           bytes += part.byteLength;
-          if (bytes > PROVIDER_PLUGIN_MAX_MESSAGE_BYTES)
-            throw new ProviderPluginProtocolError(
-              this.provider,
+          if (bytes > PLUGIN_MAX_MESSAGE_BYTES)
+            throw new PluginProtocolError(
+              this.plugin,
               this.line + 1,
               'message exceeds maximum byte length'
             );
@@ -229,12 +240,11 @@ export class ProviderRpc {
           start = index + 1;
         }
       }
-      if (bytes)
-        throw new ProviderPluginProtocolError(this.provider, this.line + 1, 'unterminated message');
+      if (bytes) throw new PluginProtocolError(this.plugin, this.line + 1, 'unterminated message');
       if (this.failure) throw this.failure;
       if (this.pending.size)
-        throw new ProviderPluginProtocolError(
-          this.provider,
+        throw new PluginProtocolError(
+          this.plugin,
           this.line,
           'connection ended with pending requests',
           undefined,
@@ -243,10 +253,10 @@ export class ProviderRpc {
       this.ended = true;
     } catch (cause) {
       const error =
-        cause instanceof ProviderPluginProtocolError
+        cause instanceof PluginProtocolError
           ? cause
-          : new ProviderPluginProtocolError(
-              this.provider,
+          : new PluginProtocolError(
+              this.plugin,
               this.line,
               'stream read failed',
               { cause },

@@ -23,6 +23,14 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
   switch (event.type) {
+    case 'run_attention_changed':
+      return JSON.stringify({
+        type: 'workflow_status',
+        runId: event.runId,
+        workflowName: '',
+        status: 'running',
+        timestamp: Date.now(),
+      });
     case 'workflow_started':
     case 'workflow_completed':
     case 'workflow_failed':
@@ -203,6 +211,7 @@ function dataSkipCause(data: Record<string, unknown>): SkipCause | undefined {
 /** DB event_type → run-level status, emitted as a `workflow_status` SSE event. */
 const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'cancelled'> = {
   workflow_started: 'running',
+  run_attention_changed: 'running',
   workflow_completed: 'completed',
   workflow_failed: 'failed',
   workflow_cancelled: 'cancelled',

@@ -1,0 +1,1168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "AUTO-GENERATED from packages/chat-contract/src by packages/chat-contract/src/scripts/generate-schema.ts. Do not edit.",
+  "$defs": {
+    "PluginRpcMessage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "minLength": 1
+            },
+            "params": {
+              "$ref": "#/$defs/schema0"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "method": {
+              "type": "string",
+              "minLength": 1
+            },
+            "params": {
+              "$ref": "#/$defs/schema1"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "result": {
+              "$ref": "#/$defs/schema2"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "message": {
+                  "type": "string"
+                },
+                "data": {
+                  "$ref": "#/$defs/schema3"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "IdentityPlatform": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "ChatActor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "user"
+            },
+            "userId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "userId"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unidentified"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "ChatPluginDescriptor": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "const": "archon-chat/1"
+        },
+        "id": {
+          "$ref": "#/$defs/IdentityPlatform"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "canDetachProject": {
+              "type": "boolean",
+              "const": true
+            },
+            "defaultWorkflowDispatch": {
+              "type": "string",
+              "enum": [
+                "foreground",
+                "background"
+              ]
+            },
+            "resultFooter": {
+              "type": "boolean",
+              "const": true
+            },
+            "runEvents": {
+              "type": "boolean",
+              "const": true
+            }
+          },
+          "required": [
+            "defaultWorkflowDispatch"
+          ]
+        },
+        "workflowCommand": {
+          "type": "object",
+          "properties": {
+            "prefix": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "prefix"
+          ]
+        },
+        "policy": {
+          "type": "object",
+          "properties": {
+            "workspaceRetention": {
+              "type": "string",
+              "enum": [
+                "age-based",
+                "retain"
+              ]
+            },
+            "streaming": {
+              "type": "object",
+              "properties": {
+                "defaultMode": {
+                  "type": "string",
+                  "enum": [
+                    "stream",
+                    "batch"
+                  ]
+                },
+                "envVar": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                }
+              },
+              "required": [
+                "defaultMode",
+                "envVar"
+              ]
+            }
+          },
+          "required": [
+            "workspaceRetention"
+          ]
+        },
+        "allowlist": {
+          "type": "object",
+          "properties": {
+            "envVar": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          },
+          "required": [
+            "envVar"
+          ]
+        }
+      },
+      "required": [
+        "protocol",
+        "id",
+        "displayName",
+        "version",
+        "capabilities",
+        "policy"
+      ]
+    },
+    "ChatEmpty": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ChatStartFailure": {
+      "type": "object",
+      "properties": {
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "retryable"
+      ]
+    },
+    "ChatInbound": {
+      "type": "object",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parentConversationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        },
+        "threadContext": {
+          "type": "string"
+        },
+        "sender": {
+          "type": "object",
+          "properties": {
+            "platformUserId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "displayName": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "platformUserId"
+          ]
+        }
+      },
+      "required": [
+        "conversationId",
+        "text",
+        "sender"
+      ]
+    },
+    "ChatInboundResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "accepted"
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "rejected"
+            },
+            "reason": {
+              "type": "string",
+              "const": "not_allowed"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "ChatSend": {
+      "type": "object",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema4"
+          }
+        }
+      },
+      "required": [
+        "conversationId",
+        "text"
+      ]
+    },
+    "ChatResultFooter": {
+      "type": "object",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cost": {
+          "type": "number"
+        },
+        "tokens": {
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "number"
+            },
+            "output": {
+              "type": "number"
+            },
+            "cacheRead": {
+              "type": "number"
+            },
+            "cacheWrite": {
+              "type": "number"
+            },
+            "cachePartial": {
+              "type": "boolean",
+              "const": true
+            },
+            "total": {
+              "type": "number"
+            },
+            "cost": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "input",
+            "output"
+          ]
+        },
+        "stopReason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "conversationId"
+      ]
+    },
+    "ChatApprovalDecision": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "ChatRunEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "workflow_started"
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "conversationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "workflowName": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "conversationId",
+            "workflowName"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "node_state"
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nodeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nodeName": {
+              "type": "string",
+              "minLength": 1
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "running",
+                "completed",
+                "failed",
+                "skipped"
+              ]
+            },
+            "durationMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "nodeId",
+            "nodeName",
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "approval_pending"
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nodeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string"
+            },
+            "decisions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ChatApprovalDecision"
+              }
+            },
+            "pauseId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "nodeId",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "terminal"
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "error": {
+              "type": "string"
+            },
+            "authoredOutcome": {
+              "type": "string",
+              "enum": [
+                "succeeded",
+                "failed",
+                "unavailable"
+              ]
+            },
+            "totalCostUsd": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "status"
+          ]
+        }
+      ]
+    },
+    "ChatRunAction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sender": {
+              "type": "object",
+              "properties": {
+                "platformUserId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "displayName": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "platformUserId"
+              ]
+            },
+            "action": {
+              "type": "string",
+              "const": "approve"
+            },
+            "response": {
+              "type": "object",
+              "properties": {
+                "nodeId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "pauseId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": [
+            "runId",
+            "sender",
+            "action"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sender": {
+              "type": "object",
+              "properties": {
+                "platformUserId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "displayName": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "platformUserId"
+              ]
+            },
+            "action": {
+              "type": "string",
+              "const": "reject"
+            },
+            "response": {
+              "type": "object",
+              "properties": {
+                "nodeId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "pauseId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": [
+            "runId",
+            "sender",
+            "action"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sender": {
+              "type": "object",
+              "properties": {
+                "platformUserId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "displayName": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "platformUserId"
+              ]
+            },
+            "action": {
+              "type": "string",
+              "const": "respond"
+            },
+            "response": {
+              "type": "object",
+              "properties": {
+                "nodeId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "pauseId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "text": {
+                  "type": "string"
+                },
+                "decision": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "decision"
+              ]
+            }
+          },
+          "required": [
+            "runId",
+            "sender",
+            "action",
+            "response"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sender": {
+              "type": "object",
+              "properties": {
+                "platformUserId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "displayName": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "platformUserId"
+              ]
+            },
+            "action": {
+              "type": "string",
+              "const": "cancel"
+            }
+          },
+          "required": [
+            "runId",
+            "sender",
+            "action"
+          ]
+        }
+      ]
+    },
+    "ChatRunActionResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "done"
+            },
+            "result": {
+              "$ref": "#/$defs/RunActionResult"
+            }
+          },
+          "required": [
+            "status",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "rejected"
+            },
+            "reason": {
+              "type": "string",
+              "const": "not_allowed"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "forbidden"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "refused"
+            },
+            "message": {
+              "type": "string"
+            },
+            "abandonHint": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "message"
+          ]
+        }
+      ]
+    },
+    "RunActionResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "approved"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "interactive_loop",
+                "approval_gate"
+              ]
+            },
+            "resumed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "type",
+            "resumed"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "rejected"
+            },
+            "cancelled": {
+              "type": "boolean"
+            },
+            "maxAttemptsReached": {
+              "type": "boolean"
+            },
+            "writeBack": {
+              "type": "boolean"
+            },
+            "newMode": {
+              "type": "boolean"
+            },
+            "resumed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "cancelled",
+            "maxAttemptsReached",
+            "writeBack",
+            "newMode",
+            "resumed"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "cooperative"
+            },
+            "cancelled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "cancelled"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "stopped"
+            },
+            "pid": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cleanupWarnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cascadeFailures": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "blockedParentRunId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "pid",
+            "cascadeFailures",
+            "blockedParentRunId"
+          ]
+        }
+      ]
+    },
+    "schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema0"
+          }
+        }
+      ]
+    },
+    "schema1": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema1"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema1"
+          }
+        }
+      ]
+    },
+    "schema2": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema2"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema2"
+          }
+        }
+      ]
+    },
+    "schema3": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema3"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema3"
+          }
+        }
+      ]
+    },
+    "schema4": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema4"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema4"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -10,6 +10,7 @@
  * needs the schemas does not load filesystem code.
  */
 import { z } from 'zod';
+import { releaseAsset } from '@archon/paths/release-asset';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
 
 export const PLUGIN_MANIFEST_FILE = 'archon-plugin.json';
@@ -200,7 +201,5 @@ export function describeIssues(error: z.ZodError): string {
  * two cannot drift.
  */
 export function pluginReleaseAsset(executable: string, bunTarget: string): string {
-  const match = /^bun-(darwin|linux|windows)-(x64|arm64)$/.exec(bunTarget);
-  if (!match) throw new Error(`No plugin release asset is built for ${bunTarget}`);
-  return `${executable}-${match[1]}-${match[2]}${match[1] === 'windows' ? '.exe' : ''}`;
+  return releaseAsset(executable, bunTarget);
 }

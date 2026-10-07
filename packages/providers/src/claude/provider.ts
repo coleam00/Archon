@@ -1161,6 +1161,13 @@ async function* streamClaudeMessages(
             type: 'tool_call',
             toolCallId: block.id,
             name: block.name,
+            ...(block.name === 'Bash' &&
+            typeof block.input === 'object' &&
+            block.input !== null &&
+            'command' in block.input &&
+            typeof block.input.command === 'string'
+              ? { title: block.input.command }
+              : {}),
             rawInput: toolCallSchema.shape.rawInput.parse(
               block.input === undefined ? {} : block.input
             ),

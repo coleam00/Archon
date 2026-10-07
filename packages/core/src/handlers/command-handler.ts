@@ -874,7 +874,11 @@ async function handleWorkflowCommand(
           }
           msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
           const attention = runAttention(run);
-          if (attention?.kind === 'action_required') {
+          if (attention?.kind === 'stalled_tool_calls') {
+            msg += '  Tool calls need attention; work remains running.\n';
+            for (const call of attention.calls)
+              msg += `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)\n`;
+          } else if (attention?.kind === 'action_required') {
             msg += `  Action required: ${attention.message}\n`;
             msg += `  Resume: \`${cmd(`resume ${run.id}`)}\`\n`;
             msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;

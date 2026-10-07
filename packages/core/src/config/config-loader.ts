@@ -1,3 +1,4 @@
+import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '@archon/workflows/schemas/run-config';
 /**
  * Configuration loader for Archon YAML config files
  *
@@ -527,6 +528,7 @@ function getDefaults(): MergedConfig {
       maxConversations: 10,
     },
     workflows: {
+      toolCallAttentionMs: DEFAULT_TOOL_CALL_ATTENTION_MS,
       autoResumeOnQuotaReset: false,
       quotaMaxAttempts: 1,
       quotaDeadlineMs: 24 * 60 * 60 * 1000,

@@ -240,6 +240,7 @@ describe('ClaudeProvider', () => {
           type: 'tool_call',
           toolCallId: 'toolu_1',
           name: 'Bash',
+          title: 'npm test',
           rawInput: { command: 'npm test' },
         },
         { type: 'tool_call_update', toolCallId: 'toolu_1', status: 'cancelled' },
@@ -748,7 +749,13 @@ describe('ClaudeProvider', () => {
 
       expect(chunks.slice(0, 3)).toEqual([
         { type: 'agent_message_chunk', text: 'I will run a command.' },
-        { type: 'tool_call', toolCallId: 'toolu_ls', name: 'Bash', rawInput: { command: 'ls' } },
+        {
+          type: 'tool_call',
+          toolCallId: 'toolu_ls',
+          name: 'Bash',
+          title: 'ls',
+          rawInput: { command: 'ls' },
+        },
         { type: 'agent_message_chunk', text: 'Command completed.' },
       ]);
     });

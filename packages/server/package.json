@@ -34,6 +34,12 @@
   },
   "testGroups": [
     [
+      "src/bin.test.ts"
+    ],
+    [
+      "src/host-command.binary.test.ts"
+    ],
+    [
       "src/scripts/generate-api-types.test.ts"
     ],
     [

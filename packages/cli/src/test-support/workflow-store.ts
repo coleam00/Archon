@@ -519,6 +519,7 @@ export function createInMemoryWorkflowStore(
       run.last_activity_at = new Date();
       return structuredClone(run);
     }),
+    setToolCallAttention: async () => true,
     createWorkflowEvent: serialize(
       async (input): ReturnType<IWorkflowStore['createWorkflowEvent']> => {
         record(input);

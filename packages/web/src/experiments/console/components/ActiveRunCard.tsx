@@ -1,3 +1,4 @@
+import { ToolCallAttentionSection } from './ToolCallAttentionSection';
 import { useState, type ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { StatusStrip } from './StatusStrip';
@@ -167,6 +168,8 @@ export function ActiveRunCard({
             ) : null}
           </div>
         </div>
+
+        <ToolCallAttentionSection run={run} />
 
         {/* Provenance + activity detail: the triggering input (when present, truncated —
             full text on hover), plus live node/tool rows while running. */}
