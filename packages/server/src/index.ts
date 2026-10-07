@@ -729,14 +729,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
 
+  const resourceStartWorkflowHost = createSqlWorkflowHost();
   const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
   const webhookSources = webhookSourcesConfigPath
-    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath)
+    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath, {
+        acceptReceipt: input => resourceStartWorkflowHost.deps.store.acceptStartReceipt(input),
+        isKnownUser: async id =>
+          (await resourceStartWorkflowHost.records.users.getUserById(id)) !== null,
+      })
     : undefined;
   // Explicit only: bindings choose their execution host, so the server never guesses one.
   const resourceStartHostId = process.env.ARCHON_TRIGGER_HOST?.trim();
   const resourceStartHost = resourceStartHostId
-    ? createServerResourceStartHost(resourceStartHostId)
+    ? createServerResourceStartHost(resourceStartHostId, resourceStartWorkflowHost)
     : undefined;
   const requestResourceStartDrain = resourceStartHost
     ? (): void => void resourceStartHost.requestDrain()

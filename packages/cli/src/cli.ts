@@ -572,16 +572,28 @@ async function main(): Promise<number> {
 
     switch (command) {
       case 'trigger': {
-        const { triggerCommand } = await loadRoute(() => import('./commands/trigger'), {
-          database: true,
-        });
-        await triggerCommand(subcommand, positionals.slice(2), {
-          config: typeof values.config === 'string' ? values.config : undefined,
-          host: typeof values.host === 'string' ? values.host : undefined,
-          owner: typeof values.owner === 'string' ? values.owner : undefined,
-          limit: typeof values.limit === 'string' ? values.limit : undefined,
-          yes: values.yes === true,
-        });
+        const { triggerCommand, spawnAdmitted } = await loadRoute(
+          () => import('./commands/trigger'),
+          {
+            database: true,
+          }
+        );
+        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+        const host = createSqlWorkflowHost(createCliWorkflowDeps());
+        await triggerCommand(
+          host,
+          subcommand,
+          positionals.slice(2),
+          {
+            config: typeof values.config === 'string' ? values.config : undefined,
+            host: typeof values.host === 'string' ? values.host : undefined,
+            owner: typeof values.owner === 'string' ? values.owner : undefined,
+            limit: typeof values.limit === 'string' ? values.limit : undefined,
+            yes: values.yes === true,
+          },
+          (requestId, hostId) => spawnAdmitted(host, requestId, hostId)
+        );
         break;
       }
 
