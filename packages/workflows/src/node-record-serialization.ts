@@ -106,6 +106,31 @@ export interface SerializedNodeEvent {
   data: SerializedNodeData;
 }
 
+export const DEFERRED_NODE_USAGE_EVENT_TYPE = 'node_deferred_usage';
+export const serializedDeferredNodeUsageDataSchema = serializedNodeDataSchema.pick({
+  accounting: true,
+  aggregate: true,
+  tokens: true,
+  cost_usd: true,
+});
+export type SerializedDeferredNodeUsageEvent = Omit<SerializedNodeEvent, 'event_type' | 'data'> & {
+  event_type: typeof DEFERRED_NODE_USAGE_EVENT_TYPE;
+  data: z.infer<typeof serializedDeferredNodeUsageDataSchema>;
+};
+
+export function serializeDeferredNodeUsage(
+  record: NodeExecutionRecord
+): SerializedDeferredNodeUsageEvent {
+  const serialized = serializeNodeStateRecord(record);
+  const data = serializedDeferredNodeUsageDataSchema.parse(serialized.data);
+  return {
+    workflow_run_id: serialized.workflow_run_id,
+    step_name: serialized.step_name,
+    event_type: DEFERRED_NODE_USAGE_EVENT_TYPE,
+    data,
+  };
+}
+
 function outputFields(
   output: ExecutionOutput
 ): Pick<

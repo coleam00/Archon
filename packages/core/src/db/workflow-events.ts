@@ -25,8 +25,9 @@ import { toHydratedTimestamp } from './timestamps';
 import {
   PROVIDER_EVENT_ROW_TYPES,
   NODE_LIFECYCLE_EVENT_TYPES,
-  NODE_STATE_EVENT_TYPES,
+  DURABLE_WORKFLOW_EVENT_TYPES,
   type NodeStateEventType,
+  type DurableWorkflowEventType,
   type NodeLifecycleEventType,
   type DagResumeSnapshot,
   type WorkflowEventInput,
@@ -549,15 +550,15 @@ export async function listEventsForRuns(
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {
   const result = await pool.query<{
     step_name: string | null;
-    event_type: NodeStateEventType | 'fan_out_instances';
+    event_type: DurableWorkflowEventType | 'fan_out_instances';
     data: string | Record<string, unknown>;
   }>(
     `SELECT step_name, event_type, data FROM remote_agent_workflow_events
-     WHERE workflow_run_id = $1 AND event_type IN (${NODE_STATE_EVENT_TYPES.map(
+     WHERE workflow_run_id = $1 AND event_type IN (${DURABLE_WORKFLOW_EVENT_TYPES.map(
        (_, index) => `$${String(index + 2)}`
-     ).join(', ')}, $${String(NODE_STATE_EVENT_TYPES.length + 2)})
+     ).join(', ')}, $${String(DURABLE_WORKFLOW_EVENT_TYPES.length + 2)})
      ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-    [workflowRunId, ...NODE_STATE_EVENT_TYPES, 'fan_out_instances']
+    [workflowRunId, ...DURABLE_WORKFLOW_EVENT_TYPES, 'fan_out_instances']
   );
   return foldDagResumeSnapshot(result.rows, workflowRunId);
 }

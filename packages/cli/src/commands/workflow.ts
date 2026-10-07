@@ -39,7 +39,7 @@ import {
 import {
   NODE_STATE_EVENT_TYPES,
   WORKFLOW_EVENT_TYPES,
-  isNodeStateEventType,
+  isDurableWorkflowEventType,
   type WorkflowEventType,
 } from '@archon/workflows/store';
 import {
@@ -6413,7 +6413,7 @@ export async function workflowEventEmitCommand(
 ): Promise<void> {
   const resolvedId = await resolveRunIdArg(host, runId, cwd, true);
   const store = host.deps.store;
-  if (isNodeStateEventType(eventType)) {
+  if (isDurableWorkflowEventType(eventType)) {
     await store.persistWorkflowEvent({
       workflow_run_id: resolvedId,
       event_type: eventType,
