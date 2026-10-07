@@ -1,3 +1,4 @@
+import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,7 +6,7 @@ import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry, registerBuiltinProviders } from '@archon/providers';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
-import { runAttention } from '@archon/workflows/schemas/workflow-run';
+import { isWorkflowWaitContext, runAttention } from '@archon/workflows/schemas/workflow-run';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { loadConfig } from '@archon/core/config/config-loader';
@@ -23,6 +24,46 @@ const priorEnv = { ...process.env };
 afterEach(async () => {
   process.env = { ...priorEnv };
 });
+
+function createTestHost(): WorkflowHost {
+  const records = createInMemoryWorkflowHostStore();
+  const store = createInMemoryWorkflowStore(records);
+  const deps = {
+    store,
+    providers: providerRegistry,
+    loadConfig,
+    getAgentProvider: (): never => {
+      throw new Error('No AI provider needed');
+    },
+  };
+  const host: WorkflowHost = {
+    deps,
+    records,
+    engine: new InProcessWorkflowEngine(deps),
+    operations: createWorkflowOperations({
+      getUserRole: async userId => (await records.users.getUserById(userId))?.role,
+      store: {
+        ...store,
+        deleteWorkflowRun: async () => {
+          throw new Error('No run deletion');
+        },
+      },
+      hostStore: records,
+      requestDetachedRunStop: async () => {
+        throw new Error('No detached run');
+      },
+      isRunOwnedByThisProcess: () => false,
+      isRunOwnerAnswering: async () => false,
+      reclaimRunWorktree: async () => {
+        throw new Error('No worktree');
+      },
+      reclaimContainerEnv: async () => {
+        throw new Error('No container');
+      },
+    }),
+  };
+  return host;
+}
 
 test('real CLI commands pause, approve, resume and query one run without SQL', async () => {
   const root = tempRoots(mkdtempSync(join(tmpdir(), 'archon-cli-store-')));
@@ -59,45 +100,10 @@ nodes:
     bash: echo finished > "$ARTIFACTS_DIR/result.txt"; printf '%s' "$ARTIFACTS_DIR" > artifact-dir; echo finished
 `
   );
-  const records = createInMemoryWorkflowHostStore();
-  const store = createInMemoryWorkflowStore(records);
-  const deps = {
-    store,
-    providers: providerRegistry,
-    loadConfig,
-    getAgentProvider: (): never => {
-      throw new Error('No AI provider needed');
-    },
-  };
-  const host: WorkflowHost = {
-    deps,
-    records,
-    engine: new InProcessWorkflowEngine(deps),
-    operations: createWorkflowOperations({
-      getUserRole: async userId => (await records.users.getUserById(userId))?.role,
-      store: {
-        ...store,
-        signalWorkflowWait: async () => {
-          throw new Error('No event wait');
-        },
-        deleteWorkflowRun: async () => {
-          throw new Error('No run deletion');
-        },
-      },
-      hostStore: records,
-      requestDetachedRunStop: async () => {
-        throw new Error('No detached run');
-      },
-      isRunOwnedByThisProcess: () => false,
-      isRunOwnerAnswering: async () => false,
-      reclaimRunWorktree: async () => {
-        throw new Error('No worktree');
-      },
-      reclaimContainerEnv: async () => {
-        throw new Error('No container');
-      },
-    }),
-  };
+  const host = createTestHost();
+  const {
+    deps: { store },
+  } = host;
   let sqlAccesses = 0;
   const failSql = (): never => {
     sqlAccesses++;
@@ -220,5 +226,118 @@ test('CLI run commands and reusable persistence helpers have no SQL imports or r
       expect(dependency.path, file).not.toBe('@archon/core');
       expect(dependency.path, file).not.toBe('@archon/core/workflows');
     }
+  }
+});
+
+test('origin-free event waits signal and wake through the supplied host without SQL', async () => {
+  const root = tempRoots(mkdtempSync(join(tmpdir(), 'archon-continuation-store-')));
+  const project = join(root, 'project');
+  process.env.ARCHON_HOME = join(root, 'home');
+  process.env.ARCHON_TELEMETRY_DISABLED = '1';
+  delete process.env.DATABASE_URL;
+  setPlatformPolicies([]);
+  registerBuiltinProviders();
+  mkdirSync(join(project, '.archon', 'workflows'), { recursive: true });
+  writeFileSync(
+    join(project, '.archon', 'workflows', 'portable-wait.yaml'),
+    `name: portable-wait
+description: exercise portable event continuation
+interactive: true
+worktree:
+  enabled: false
+nodes:
+  - id: before
+    bash: echo executed >> before-count
+  - id: review
+    depends_on: [before]
+    approval:
+      message: Approve the wait?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: hold
+    depends_on: [review]
+    wait:
+      event: ready
+      deadline_ms: 3600000
+  - id: after
+    depends_on: [hold]
+    bash: echo finished > result.txt
+`
+  );
+  const host = createTestHost();
+  const store = host.deps.store;
+  let sqlAccesses = 0;
+  const failSql = (): never => {
+    sqlAccesses++;
+    throw new Error('Continuation reached SQL');
+  };
+  const traps = [
+    spyOn(connection, 'getDatabase').mockImplementation(failSql),
+    spyOn(connection.pool, 'query').mockImplementation(failSql),
+    spyOn(connection, 'getDbNotificationListener').mockImplementation(failSql),
+  ];
+  const log = spyOn(console, 'log').mockImplementation(() => undefined);
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(
+    (
+      _chunk: string | Uint8Array,
+      encodingOrCallback?: BufferEncoding | ((err?: Error | null) => void),
+      callback?: (err?: Error | null) => void
+    ): boolean => {
+      if (typeof encodingOrCallback === 'function') encodingOrCallback();
+      else callback?.();
+      return true;
+    }
+  );
+  try {
+    const { workflowRunCommand, workflowWaitCommand, workflowApproveCommand } =
+      await import('./workflow');
+    const { workflowContinuationCommand } = await import('./workflow-continuations');
+    await workflowRunCommand(host, project, 'portable-wait', 'Wait for ready', {
+      folder: true,
+      noWorktree: true,
+      quiet: true,
+    });
+    const paused = (await store.listWorkflowRuns()).runs[0];
+    if (!paused) throw new Error('Run not recorded');
+    expect(paused.origin).toBeNull();
+    expect(await workflowWaitCommand(host, paused.id, true, project)).toBe(0);
+    await workflowApproveCommand(host, paused.id, 'Proceed', true, project);
+    const { resumeWorkflowContinuation } = await import('@archon/core/workflows/continuation-host');
+    const admission = await resumeWorkflowContinuation(host, paused.id, async () => ({
+      kind: 'ready',
+      platform: new HeadlessPlatform(),
+      conversationId: paused.id,
+    }));
+    if (admission.kind !== 'accepted') throw new Error('Resume refused');
+    expect(await admission.settled).toMatchObject({ paused: true });
+    const waiting = await store.getWorkflowRun(paused.id);
+    const wait = waiting?.metadata.wait;
+    if (!isWorkflowWaitContext(wait) || wait.kind !== 'event')
+      throw new Error('Event wait not recorded');
+    expect(await workflowWaitCommand(host, paused.id, true, project, 0)).toBe(3);
+    expect(
+      await workflowContinuationCommand(host, 'signal', [paused.id], {
+        json: true,
+        event: 'ready',
+        'resume-at': new Date(Date.parse(wait.resumeAt) + 1000).toISOString(),
+      })
+    ).toBe(1);
+    expect((await store.getWorkflowRun(paused.id))?.metadata.wait).toEqual(wait);
+    expect(await store.signalWorkflowWait(paused.id, wait, { ready: true })).toEqual({
+      signaled: true,
+    });
+    expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(0);
+    expect((await store.getWorkflowRun(paused.id))?.status).toBe('completed');
+    expect(readFileSync(join(project, 'before-count'), 'utf8')).toBe('executed\n');
+    expect(readFileSync(join(project, 'result.txt'), 'utf8')).toBe('finished\n');
+    expect(await store.listWorkflowEvents(paused.id)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event_type: 'workflow_completed' })])
+    );
+    expect(sqlAccesses).toBe(0);
+  } finally {
+    stdout.mockRestore();
+    log.mockRestore();
+    for (const trap of traps) trap.mockRestore();
   }
 });

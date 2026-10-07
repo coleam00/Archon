@@ -1,6 +1,5 @@
-import { addMessage } from '@archon/core/db/messages';
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
-import { createWorkflowDeps } from '@archon/core';
 import * as conversationDb from '@archon/core/db/conversations';
 import {
   resumeWorkflowContinuation,
@@ -9,7 +8,6 @@ import {
 } from '@archon/core/workflows/continuation-host';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { createLogger } from '@archon/paths';
-import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { spellWorkflowCommand, type IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -100,13 +98,14 @@ export async function workflowResumeTargetForRun(
 }
 
 export async function resumeWorkflowRunFromServer(
+  host: WorkflowHost,
   run: WorkflowRun,
   actorUserId?: string,
   target: WorkflowResumeTarget = { kind: 'headless' },
   cursor?: WorkflowResumeCursor
 ): Promise<boolean> {
   try {
-    const admission = await admitFromServer(run, async () => target, cursor, actorUserId);
+    const admission = await admitFromServer(host, run, async () => target, cursor, actorUserId);
     return admission.kind === 'accepted';
   } catch (error) {
     log.warn({ err: error, runId: run.id }, 'workflow_resume_headless_unexpected_error');
@@ -115,6 +114,7 @@ export async function resumeWorkflowRunFromServer(
 }
 
 async function admitFromServer(
+  host: WorkflowHost,
   run: WorkflowRun,
   resolveTarget: WorkflowResumeDestinationResolver,
   cursor?: WorkflowResumeCursor,
@@ -122,18 +122,23 @@ async function admitFromServer(
 ): Promise<ContinuationAdmission> {
   let destination: WorkflowResumeDestination | undefined;
   const admission = await resumeWorkflowContinuation(
-    new InProcessWorkflowEngine(createWorkflowDeps()),
+    host,
     run.id,
     async freshRun => {
       const historyConversationId = workflowResumeConversationId(freshRun);
       const target = await resolveTarget(freshRun);
       if (target.kind === 'unavailable') return target;
-      if (
-        target.kind === 'headless' &&
-        historyConversationId &&
-        !(await conversationDb.getConversationById(historyConversationId))
-      ) {
-        return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
+      if (target.kind === 'headless' && historyConversationId) {
+        const conversation =
+          await host.records.conversations.getConversationById(historyConversationId);
+        if (!conversation)
+          return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
+        if (conversation.platform_type !== 'cli' && conversation.platform_type !== 'api') {
+          return {
+            kind: 'unavailable',
+            reason: `origin adapter '${conversation.platform_type}' is unavailable`,
+          };
+        }
       }
       destination = target.kind === 'platform' ? target.destination : undefined;
       return {
@@ -143,7 +148,7 @@ async function admitFromServer(
           new HeadlessPlatform(
             historyConversationId
               ? async (message, metadata): Promise<void> => {
-                  await addMessage(
+                  await host.records.messages.addMessage(
                     historyConversationId,
                     'assistant',
                     message,
@@ -247,6 +252,7 @@ async function admitFromServer(
 
 /** The server owns cadence and overlap; independent hosts compete through the engine CAS. */
 export function startWorkflowContinuationScheduler(
+  host: WorkflowHost,
   resolveDestination: WorkflowResumeDestinationResolver = async () => ({ kind: 'headless' }),
   onTick?: () => void
 ): void {
@@ -254,8 +260,8 @@ export function startWorkflowContinuationScheduler(
   const tick = (): void => {
     if (!scanInProgress) {
       scanInProgress = true;
-      void wakeDueWorkflowContinuations(new Date(), (run, cursor) =>
-        admitFromServer(run, resolveDestination, cursor)
+      void wakeDueWorkflowContinuations(host.deps.store, new Date(), (run, cursor) =>
+        admitFromServer(host, run, resolveDestination, cursor)
       )
         .catch((error: unknown) => {
           log.error({ err: error }, 'workflow_continuation_scan_failed');

@@ -55,6 +55,8 @@ export interface GhPr {
 }
 
 export interface GhFake {
+  readonly issueLabels?: readonly string[];
+  readonly repositoryLabels?: readonly string[];
   /**
    * What `gh pr checks --json` knows about each check; the fake prints only the
    * fields the reader requests. 'fail' prints no document and exits 1.
@@ -142,6 +144,8 @@ let comments = (fake.comments ?? []).map(row => ({ ...row }));
 const issues = (fake.issues ?? []).map(row => ({ ...row }));
 let exists = fake.noOpenPr !== true;
 let nextId = 900;
+const labels = new Set(fake.repositoryLabels ?? ['operator', 'archon-blocked', 'area']);
+let issueLabels = [...(fake.issueLabels ?? ['operator', 'archon-blocked'])];
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[0] !== 'gh') return original(argv, settings);
   const text = argv.slice(1).join(' ');
@@ -164,6 +168,16 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));
   };
+  if (text.startsWith('label list')) return result(0, JSON.stringify([...labels].map(name => ({ name }))));
+  if (text.startsWith('label create')) { if (fake.writeFail) return result(1, '', fake.writeFail); labels.add(argv[3]); return result(0); }
+  if (text.startsWith('issue edit')) {
+    if (fake.writeFail) return result(1, '', fake.writeFail);
+    if (!fake.writeLost) for (let index = 0; index < argv.length; index++) {
+      if (argv[index] === '--add-label') issueLabels.push(argv[index + 1]);
+      if (argv[index] === '--remove-label') issueLabels = issueLabels.filter(name => name !== argv[index + 1]);
+    }
+    return result(0);
+  }
   if (text.startsWith('issue ')) {
     const issueUrl = (n) => 'https://' + host + '/' + path + '/issues/' + String(n);
     if (text.startsWith('issue view')) {
@@ -174,10 +188,11 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       return result(0, JSON.stringify({ title: row.title, state: row.state, url }));
     }
     if (text.startsWith('issue create')) {
+      if (fake.writeFail) return result(1, '', fake.writeFail);
       const number = 100 + issues.length;
       issues.push({
         number,
-        title: argv[argv.indexOf('--title') + 1],
+        title: fake.writeLost ? 'different' : argv[argv.indexOf('--title') + 1],
         body: readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8'),
         state: 'OPEN',
       });
@@ -239,6 +254,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const apiHost = argv[argv.indexOf('--hostname') + 1];
     const apiPath = endpoint.split('/').slice(1, 3).join('/');
     const url = (id) => 'https://' + apiHost + '/' + apiPath + '/pull/' + String(pr.number) + '#issuecomment-' + String(id);
+    if (endpoint.endsWith('/issues/7')) return result(0, JSON.stringify({ number: 7, html_url: 'https://' + apiHost + '/' + apiPath + '/issues/7', labels: [...new Set(issueLabels)].map(name => ({ name })) }));
     const method = argv.includes('--method') ? argv[argv.indexOf('--method') + 1] : 'GET';
     if (method === 'GET') {
       const page = Number(new URLSearchParams(endpoint.split('?')[1] ?? '').get('page') ?? '1');
@@ -288,8 +304,7 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
   // separator is an invalid string escape. Forward slashes resolve on every
   // platform and survive JSON.parse.
   const artifactPath = artifacts.split(sep).join('/');
-  const resolveArtifacts = (value: string): string =>
-    value.split('{ARTIFACTS}').join(artifactPath);
+  const resolveArtifacts = (value: string): string => value.split('{ARTIFACTS}').join(artifactPath);
   for (const [name, content] of Object.entries(options.artifacts ?? {})) {
     mkdirSync(dirname(join(artifacts, name)), { recursive: true });
     writeFileSync(join(artifacts, name), resolveArtifacts(content));

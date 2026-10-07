@@ -9,7 +9,7 @@ triage__triage:
     route: continue
     pull_request: 4
   complexity: small
-  item: { repository: "", number: 0 }
+  item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
   summary: "stub: an open pull request already carries this outcome; continue it"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }

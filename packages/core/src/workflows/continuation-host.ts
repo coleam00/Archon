@@ -1,11 +1,10 @@
-import * as sqlIsolation from '@archon/core/db/isolation-environments';
-import * as workflowDb from '../db/workflows';
-import { getCodebase } from '../db/codebases';
+import type { WorkflowHost } from './host-store';
+import { WorkflowNotResumableError, type IWorkflowStore } from '@archon/workflows/store';
 import { startRunLiveOwner, RunLiveOwnerAlreadyOwnedError } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { resolveRunWorkflow } from './resolve-run-workflow';
 import { createLogger, getArchonWorkspacesPath } from '@archon/paths';
-import type { IWorkflowEngine, WorkflowResumeAdmission } from '@archon/workflows/engine-port';
+import type { WorkflowResumeAdmission } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 import {
@@ -26,13 +25,13 @@ export type ContinuationContext =
   | { kind: 'unavailable'; reason: string };
 
 export async function resumeWorkflowContinuation(
-  engine: IWorkflowEngine,
+  host: Pick<WorkflowHost, 'deps' | 'records' | 'engine'>,
   runId: string,
   resolveContext: (run: WorkflowRun) => Promise<ContinuationContext>,
   cursor?: WorkflowResumeCursor,
   actorUserId?: string
 ): Promise<ContinuationAdmission> {
-  const run = await workflowDb.getWorkflowRun(runId);
+  const run = await host.deps.store.getWorkflowRun(runId);
   if (!run) return { kind: 'unavailable', reason: 'run no longer exists' };
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) return { kind: 'not-accepted' };
   if (!run.working_path) return { kind: 'unavailable', reason: 'run has no recorded working path' };
@@ -41,8 +40,11 @@ export async function resumeWorkflowContinuation(
   }
   const context = await resolveContext(run);
   if (context.kind === 'unavailable') return context;
-  const codebase = run.codebase_id ? await getCodebase(run.codebase_id) : null;
+  const codebase = run.codebase_id
+    ? await host.records.codebases.getCodebase(run.codebase_id)
+    : null;
   const source = await resolveRunWorkflow(
+    host.deps,
     run,
     codebase?.default_cwd ?? getArchonWorkspacesPath(),
     context.platform
@@ -60,7 +62,7 @@ export async function resumeWorkflowContinuation(
     let accepted = false;
     try {
       const userId = actorUserId ?? run.user_id ?? undefined;
-      const admission = await engine.resume({
+      const admission = await host.engine.resume({
         platform: context.platform,
         conversationId: context.conversationId,
         cwd: run.working_path,
@@ -73,7 +75,7 @@ export async function resumeWorkflowContinuation(
           codebaseId: run.codebase_id ?? undefined,
           baseBranch: codebase?.default_branch?.trim() || undefined,
           resolveChildIsolation: codebase
-            ? createCodebaseChildResolver(sqlIsolation.createIsolationStore(), codebase, {
+            ? createCodebaseChildResolver(host.records.isolation, codebase, {
                 baseBranch: codebase.default_branch?.trim() || undefined,
                 createdByPlatform: context.platform.getPlatformType(),
                 createdByUserId: userId,
@@ -92,7 +94,7 @@ export async function resumeWorkflowContinuation(
     }
   } catch (error) {
     if (
-      error instanceof workflowDb.WorkflowNotResumableError ||
+      error instanceof WorkflowNotResumableError ||
       error instanceof RunLiveOwnerAlreadyOwnedError
     )
       return { kind: 'not-accepted' };
@@ -119,10 +121,11 @@ export type ContinuationWakeOutcome = { runId: string; deferError?: unknown } & 
 );
 
 export async function wakeDueWorkflowContinuations(
+  store: Pick<IWorkflowStore, 'listDueWorkflowContinuations' | 'deferWorkflowContinuation'>,
   now: Date,
   resume: (run: WorkflowRun, cursor: WorkflowResumeCursor) => Promise<ContinuationAdmission>
 ): Promise<ContinuationWakeOutcome[]> {
-  const due = await workflowDb.listDueWorkflowContinuations(now, 25);
+  const due = await store.listDueWorkflowContinuations(now, 25);
   return Promise.all(
     due.map(async (run): Promise<ContinuationWakeOutcome> => {
       const cursor = continuationCursor(run);
@@ -143,7 +146,7 @@ export async function wakeDueWorkflowContinuations(
       }
       if (outcome.kind !== 'accepted') {
         try {
-          await workflowDb.deferWorkflowContinuation(
+          await store.deferWorkflowContinuation(
             run.id,
             new Date(now.getTime() + 60_000).toISOString(),
             cursor

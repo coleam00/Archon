@@ -426,6 +426,20 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
   ): Promise<WorkflowRun | null>;
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
+  /** Return at most `limit` due continuations, defaulting to 25. */
+  listDueWorkflowContinuations(now: Date, limit?: number): Promise<WorkflowRun[]>;
+  /** Back off only the unchanged wait/quota occurrence; a stale cursor writes nothing. */
+  deferWorkflowContinuation(
+    id: string,
+    retryAt: string,
+    cursor: WorkflowResumeCursor
+  ): Promise<void>;
+  /** Atomically record an unexpired event signal and its audit event without changing lifecycle. */
+  signalWorkflowWait(
+    id: string,
+    wait: Extract<WorkflowWaitContext, { kind: 'event' }>,
+    payload?: unknown
+  ): Promise<{ signaled: boolean }>;
   resumeWorkflowRun(id: string, cursor?: WorkflowResumeCursor): Promise<WorkflowRun>;
   /** Claim an engine-cancelled fan-out child for immediate in-process recovery. */
   recoverCancelledFanOutRun(id: string): Promise<WorkflowRun>;

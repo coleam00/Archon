@@ -4,7 +4,7 @@
 triage:
   decision: { contract: NEEDS_CONTRACT_WORK, route: plan, proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" } }
   complexity: small
-  item: { repository: "", number: 0 }
+  item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
   summary: "stub: an illegal pair the boundary must catch"

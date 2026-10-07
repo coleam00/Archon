@@ -10,7 +10,7 @@
 triage__triage:
   decision: { contract: READY, route: plan, design_first: false }
   complexity: large
-  item: { repository: "", number: 0 }
+  item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
   summary: "stub: desired outcome is current; implementation shape needs a decision"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }

@@ -69,9 +69,9 @@ Never route from labels or issue type alone. A bug can need planning; a feature 
 
 ## Labels
 
-The workflow derives the pack's own labels from your declared fields, exactly one state label per item and a size label while the item can still be worked; you do not choose those. You choose only area labels, and only from labels the repository already has (`gh label list`): declare the ones that name the areas this item touches, or none. Never invent a label. Nothing is written unless the run was launched with `publish` true; either way the run records what it would apply.
+The workflow derives the pack's own labels from your declared fields, exactly one state label per item and a size label while the item can still be worked; you do not choose those. You choose only area labels, and only from labels the repository already has (use `archon forge repo.labels.list` with the qualified repository when `ARCHON_SDLC_FORGE=forge`, otherwise `gh label list`): declare the ones that name the areas this item touches, or none. Never invent a label. Nothing is written unless the run was launched with `publish` true; either way the run records what it would apply.
 
-When the target is a tracker issue, declare `item` as its repository (`owner/repo`) and number so the workflow can address it; the workflow verifies that identity against the tracker before it writes. Otherwise declare `item: null`.
+When the target is a tracker issue, declare `item` as its qualified repository (`repo: {host, path}`) and number so the workflow can address it; the workflow verifies that identity against the tracker before it writes. Otherwise declare `item: {repo: {host: "", path: ""}, number: 0}`.
 
 ## Write the assessment
 
@@ -100,7 +100,7 @@ Do not investigate the full causal chain, choose the implementation design, impl
   - `BLOCKED` with `blocked_reason` — what it waits on — and `blocked_by` — fully qualified URLs of the items it waits on, possibly empty;
   - `NO_ACTION` alone.
 - `complexity` — exactly one of `small`, `risky`, or `large`.
-- `item` — `{ "repository": "owner/repo", "number": N }` when the target is a tracker issue, otherwise `{ "repository": "", "number": 0 }`: the empty repository is how you say the target is not a tracker item, and the fields are always present.
+- `item` — `{ "repo": { "host": "tracker.example", "path": "owner/repo" }, "number": N }` when the target is a tracker issue, otherwise `{ "repo": { "host": "", "path": "" }, "number": 0 }`: the empty repository is how you say the target is not a tracker item, and the fields are always present.
 - `area_labels` — the repository's existing area labels this item touches, possibly empty.
 - `summary` — a few sentences naming the verdict, the current truth that decided the route, and pointing to `$ARTIFACTS_DIR/triage.md`.
 - `report` — a pointer to the report you just wrote, copied exactly:

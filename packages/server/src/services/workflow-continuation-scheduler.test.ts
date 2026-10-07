@@ -1,3 +1,4 @@
+import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import type {
   wakeDueWorkflowContinuations,
@@ -91,14 +92,14 @@ test('routes a scheduled continuation to its execution destination and delivers 
       }),
     };
   });
-  scan.mockImplementationOnce(async (_now, admit) => [
+  scan.mockImplementationOnce(async (_store, _now, admit) => [
     { runId: due.id, ...(await admit(due, cursor)) },
   ]);
   spyOn(globalThis, 'setInterval').mockImplementation(
     () => ({ unref: () => undefined }) as unknown as ReturnType<typeof setInterval>
   );
   spyOn(globalThis, 'clearInterval').mockImplementation(() => undefined);
-  startWorkflowContinuationScheduler(resolver);
+  startWorkflowContinuationScheduler(createSqlWorkflowHost(), resolver);
   await delivery;
   expect(scan).toHaveBeenCalledTimes(1);
   expect(resume).toHaveBeenCalledTimes(1);
@@ -125,7 +126,7 @@ test('delegates immediately, guards overlap, ticks other host work and stops the
   });
   const clear = spyOn(globalThis, 'clearInterval').mockImplementation(() => undefined);
   const otherHostWork = mock(() => undefined);
-  startWorkflowContinuationScheduler(undefined, otherHostWork);
+  startWorkflowContinuationScheduler(createSqlWorkflowHost(), undefined, otherHostWork);
   expect(scan).toHaveBeenCalledTimes(1);
   expect(interval.mock.calls[0]?.[1]).toBe(5000);
   tick?.();

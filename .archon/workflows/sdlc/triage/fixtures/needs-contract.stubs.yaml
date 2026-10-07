@@ -4,7 +4,7 @@
 triage:
   decision: { contract: NEEDS_CONTRACT_WORK, proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" } }
   complexity: risky
-  item: { repository: "", number: 0 }
+  item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
   summary: "stub: no acceptance stated; proposed contract in triage.md"

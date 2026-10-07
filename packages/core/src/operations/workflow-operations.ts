@@ -35,7 +35,6 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type {
   WorkflowRun,
-  WorkflowWaitContext,
   ApprovalContext,
   ExpectedApprovalGate,
   ExecutionOwnerRecord,
@@ -675,11 +674,6 @@ export function assertRespondable(run: WorkflowRun, decision: string): ApprovalC
 }
 
 export interface RunActionStore {
-  signalWorkflowWait: (
-    id: string,
-    wait: Extract<WorkflowWaitContext, { kind: 'event' }>,
-    payload?: unknown
-  ) => Promise<{ signaled: boolean }>;
   deleteWorkflowRun: (id: string) => Promise<void>;
 }
 
@@ -697,6 +691,7 @@ export interface WorkflowOperationsDeps {
     | 'deleteWorkflowNodeSessions'
     | 'listWorkflowRuns'
     | 'findWorkflowRunsByIdPrefix'
+    | 'signalWorkflowWait'
   > &
     RunActionStore;
   hostStore: { isolation: IIsolationStore };

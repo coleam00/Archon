@@ -361,6 +361,67 @@ test('an invalid mutation request is refused before dispatch begins', async () =
   expect(output[0]).not.toHaveProperty('mutation');
 });
 
+test('new work-item mutations use file requests and record content-free verified audits', async () => {
+  const repo = { host: 'forge.example', path: 'a/b' };
+  const ref = { repo, number: 4 };
+  const marker = '<!-- private marker -->';
+  const requests = [
+    {
+      op: 'workitem.create',
+      repo,
+      title: 'Private title',
+      body: `${marker}\nPrivate body`,
+      marker,
+    },
+    { op: 'workitem.labels.set', ref, labels: ['a', 'b'] },
+    {
+      op: 'repo.label.ensure',
+      repo,
+      name: 'label',
+      color: 'ABCDEF',
+      description: 'Private description',
+    },
+  ];
+  const directory = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-forge-workitem-cli-')));
+  for (const request of requests) {
+    const path = join(directory, 'request.json');
+    writeFileSync(path, JSON.stringify(request));
+    const output: unknown[] = [];
+    const audits: unknown[] = [];
+    const code = await forgeCommand(
+      request.op,
+      { dataFile: path },
+      {
+        readConfig: async () => ({
+          scanPath: false,
+          plugins: [
+            {
+              plugin: 'mutator',
+              command: process.execPath,
+              args: [join(import.meta.dir, '../../../forge/src/fixtures/mutation-plugin.ts')],
+            },
+          ],
+        }),
+        env: { WORKFLOW_ID: 'workitems-run' },
+        write: async value => {
+          output.push(value);
+        },
+        audit: async value => {
+          audits.push(value);
+        },
+      }
+    );
+    expect(code).toBe(0);
+    expect(output[0]).toMatchObject({
+      ok: true,
+      result: { op: request.op, value: { outcome: 'applied' } },
+    });
+    expect(audits[0]).toMatchObject({ operation: request.op, target: request.ref ?? repo });
+    for (const secret of ['Private title', 'Private body', 'Private description', marker])
+      expect(JSON.stringify(audits)).not.toContain(secret);
+  }
+});
+
 test('reviews retain bodies in stdout and digest them through the CLI audit boundary', async () => {
   const ref = { repo: { host: 'forge.example', path: 'group/repo' }, number: 42 };
   const auditRecords: unknown[] = [];

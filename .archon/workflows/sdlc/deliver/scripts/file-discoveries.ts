@@ -16,11 +16,13 @@
  *   files a duplicate; it never blocks.
  * - Within a run, a resume must not file the same record twice. Each filed issue is
  *   recorded in the run's artifacts, keyed by the repository, title and claim, the
- *   moment it is created, and a resume reuses it. Only a process killed between the
- *   create and that write can file one twice.
+ *   moment it is created, and a resume reuses it. On the gh source, only a process
+ *   killed between the create and that write can file one twice; the forge source
+ *   also carries the key as a body marker, by which the plugin recovers an issue it
+ *   already created.
  *
- * gh is the transport: the forge contract has no issue operations yet. Each created
- * issue is read back before the node succeeds.
+ * Reads and writes go through the source the run selected. Each created issue is
+ * read back before the node succeeds.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
@@ -33,7 +35,15 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parsePrRecord } from '../../.shared/forge.ts';
+import {
+  forgeSource,
+  invokeForge,
+  parseCreatedWorkItem,
+  parsePrRecord,
+  record as asRecord,
+  type ForgeSource,
+  type QualifiedPr,
+} from '../../.shared/forge.ts';
 import { artifactsDir, emit, note, refuse, text } from '../../.shared/io.ts';
 import type { Discovery } from '../../.shared/report.ts';
 
@@ -65,8 +75,15 @@ function body(record: Discovery, prUrl: string): string {
  * whatever reason, is not reused, and the record is filed as new rather than
  * blocking the run.
  */
-function openIssue(repo: string, number: number): string | undefined {
+function openIssue(source: ForgeSource, target: QualifiedPr['repo'], number: number): string | undefined {
+  const repo = `${target.host}/${target.path}`;
   try {
+    if (source === 'forge') {
+      const view = asRecord(invokeForge('workitem.view', { ref: { repo: target, number } }));
+      return view?.kind === 'issue' && view.state === 'open' && typeof view.url === 'string'
+        ? view.url
+        : undefined;
+    }
     const view = JSON.parse(gh('issue', 'view', String(number), '--repo', repo, '--json', 'state,url')) as {
       state: string;
       url: string;
@@ -79,6 +96,7 @@ function openIssue(repo: string, number: number): string | undefined {
 
 try {
   const pr = parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)));
+  const source = forgeSource();
   const repo = `${pr.repo.host}/${pr.repo.path}`;
   const final = JSON.parse(text(process.env.INPUTS_FINAL)) as Discovery[] | null;
   const records = final ?? (JSON.parse(text(process.env.INPUTS_INITIAL)) as Discovery[]);
@@ -95,7 +113,7 @@ try {
     for (const [index, record] of records.entries()) {
       const match = matches.find(candidate => candidate.index === index)?.issue;
       if (match !== undefined) {
-        const url = openIssue(repo, match);
+        const url = openIssue(source, pr.repo, match);
         if (url !== undefined) {
           filed.push({ title: record.title, issue: url });
           continue;
@@ -104,7 +122,21 @@ try {
       }
       const key = createHash('sha256').update(`${repo}\n${record.title}\n${record.claim}`).digest('hex');
       let url = ledger[key];
-      if (url === undefined) {
+      if (url === undefined && source === 'forge') {
+        // The plugin creates, recovers a prior create by the marker, and reads back.
+        const marker = `<!-- archon-discovery:${key} -->`;
+        url = parseCreatedWorkItem(
+          invokeForge('workitem.create', {
+            repo: pr.repo,
+            title: record.title,
+            marker,
+            body: `${marker}\n${body(record, pr.url)}`,
+          }),
+          pr.repo
+        );
+        ledger[key] = url;
+        writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
+      } else if (url === undefined) {
         const bodyPath = join(scratch, `body-${String(index)}.md`);
         writeFileSync(bodyPath, body(record, pr.url));
         url = gh('issue', 'create', '--repo', repo, '--title', record.title, '--body-file', bodyPath);

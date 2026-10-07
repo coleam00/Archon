@@ -99,11 +99,16 @@ nodes:
         item:
           type: object
           properties:
-            repository:
-              type: string
+            repo:
+              type: object
+              properties:
+                host: { type: string }
+                path: { type: string }
+              required: [host, path]
+              additionalProperties: false
             number:
               type: integer
-          required: [repository, number]
+          required: [repo, number]
         area_labels:
           type: array
           items:

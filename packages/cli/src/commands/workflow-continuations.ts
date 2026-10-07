@@ -1,14 +1,9 @@
-import { addMessage } from '@archon/core/db/messages';
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { getArchonHome } from '@archon/paths';
-import { getConversationById } from '@archon/core/db/conversations';
-import { getWorkflowRun } from '@archon/core/db/workflows';
-import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
-import { createCliWorkflowDeps } from '../utils/workflow-deps';
-import { initializeWorkflowGitHubAppAuth } from '@archon/core/workflows/store-adapter';
 import {
   resumeWorkflowContinuation,
   wakeDueWorkflowContinuations,
@@ -16,7 +11,6 @@ import {
   type ContinuationAdmission,
 } from '@archon/core/workflows/continuation-host';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
-import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
@@ -52,16 +46,17 @@ export function workflowWakeScheduleConfig(intervalSeconds = 5): NativeScheduleC
 }
 
 async function admit(
+  host: WorkflowHost,
   run: WorkflowRun,
   cursor: WorkflowResumeCursor
 ): Promise<ContinuationAdmission> {
   return resumeWorkflowContinuation(
-    new InProcessWorkflowEngine(createCliWorkflowDeps()),
+    host,
     run.id,
     async freshRun => {
       const historyConversationId = freshRun.conversation_id ?? freshRun.parent_conversation_id;
       const conversation = historyConversationId
-        ? await getConversationById(historyConversationId)
+        ? await host.records.conversations.getConversationById(historyConversationId)
         : null;
       if (historyConversationId && !conversation)
         return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
@@ -90,7 +85,7 @@ async function admit(
         platform: new HeadlessPlatform(
           historyConversationId
             ? async (message, metadata): Promise<void> => {
-                await addMessage(
+                await host.records.messages.addMessage(
                   historyConversationId,
                   'assistant',
                   message,
@@ -195,19 +190,35 @@ function validateFlags(values: Values, allowed: string[]): void {
 }
 
 export async function workflowContinuationCommand(
+  host: WorkflowHost,
   action: 'wake' | 'signal',
   args: string[],
   values: Values
 ): Promise<number> {
   const json = values.json === true;
   try {
-    if (action === 'wake' && args[0] === 'schedule') return await wakeSchedule(args, values, json);
-    initializeWorkflowGitHubAppAuth();
-    if (action === 'signal') return await signalEvent(args, values, json);
-    return await wake(args, values, json);
+    if (action === 'signal') return await signalEvent(host, args, values, json);
+    return await wake(host, args, values, json);
   } catch (error) {
     if (json)
       await writeJsonLine({ ok: false, action, signaled: false, error: errorMessage(error) });
+    else console.error(errorMessage(error));
+    return 1;
+  }
+}
+
+export async function workflowWakeScheduleCommand(args: string[], values: Values): Promise<number> {
+  const json = values.json === true;
+  try {
+    return await wakeSchedule(args, values, json);
+  } catch (error) {
+    if (json)
+      await writeJsonLine({
+        ok: false,
+        action: 'wake',
+        signaled: false,
+        error: errorMessage(error),
+      });
     else console.error(errorMessage(error));
     return 1;
   }
@@ -234,7 +245,12 @@ async function wakeSchedule(args: string[], values: Values, json: boolean): Prom
   return 0;
 }
 
-async function signalEvent(args: string[], values: Values, json: boolean): Promise<number> {
+async function signalEvent(
+  host: WorkflowHost,
+  args: string[],
+  values: Values,
+  json: boolean
+): Promise<number> {
   validateFlags(values, ['event', 'resume-at', 'data']);
   const runId = args[0];
   if (
@@ -260,32 +276,36 @@ async function signalEvent(args: string[], values: Values, json: boolean): Promi
     resumeAt: values['resume-at'],
     payload: data,
   });
-  const run = await getWorkflowRun(runId);
+  const run = await host.deps.store.getWorkflowRun(runId);
   const wait = run && isWorkflowWaitContext(run.metadata.wait) ? run.metadata.wait : undefined;
   if (!run || wait?.kind !== 'event' || wait.event !== event || wait.resumeAt !== resumeAt) {
     throw new Error(
       'Run is not waiting on that event occurrence; use its full run id and current resumeAt'
     );
   }
-  const { signaled } = await createSqlWorkflowOperations().signalWorkflowWait(
-    runId,
-    event,
-    resumeAt,
-    payload,
-    { kind: 'operator' }
-  );
+  const { signaled } = await host.operations.signalWorkflowWait(runId, event, resumeAt, payload, {
+    kind: 'operator',
+  });
   if (!signaled)
     throw new Error('Event occurrence is stale, expired, already signaled, or no longer paused');
   let outcome: ContinuationWakeOutcome;
   try {
-    outcome = { runId, ...(await admit(run, { kind: 'wait', nodeId: wait.nodeId, resumeAt })) };
+    outcome = {
+      runId,
+      ...(await admit(host, run, { kind: 'wait', nodeId: wait.nodeId, resumeAt })),
+    };
   } catch (error) {
     outcome = { runId, kind: 'failed', error };
   }
   return (await report('signal', [await settle(outcome)], json, true)) ? 0 : 1;
 }
 
-async function wake(args: string[], values: Values, json: boolean): Promise<number> {
+async function wake(
+  host: WorkflowHost,
+  args: string[],
+  values: Values,
+  json: boolean
+): Promise<number> {
   validateFlags(values, ['watch']);
   if (args.length) throw new Error('Usage: archon workflow wake [--watch] [--json]');
   let stopped = false;
@@ -300,7 +320,11 @@ async function wake(args: string[], values: Values, json: boolean): Promise<numb
   try {
     do {
       try {
-        const outcomes = await wakeDueWorkflowContinuations(new Date(), admit);
+        const outcomes = await wakeDueWorkflowContinuations(
+          host.deps.store,
+          new Date(),
+          (run, cursor) => admit(host, run, cursor)
+        );
         const passOk = await report('wake', await Promise.all(outcomes.map(settle)), json);
         ok = passOk && ok;
       } catch (error) {

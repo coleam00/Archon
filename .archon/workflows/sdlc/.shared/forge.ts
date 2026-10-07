@@ -496,3 +496,44 @@ export function readChecks(ref: QualifiedPr): ChecksObservation {
 export function preferredChecks(observation: ChecksObservation): CheckSet {
   return observation.required ?? observation;
 }
+
+export function parseCreatedWorkItem(value: unknown, repo: QualifiedPr['repo']): string {
+  const result = record(value);
+  const item = record(result?.workitem);
+  const ref = parseQualifiedPr(JSON.stringify(item?.ref));
+  if (
+    result?.outcome !== 'applied' ||
+    typeof result.changed !== 'boolean' ||
+    item?.kind !== 'issue' ||
+    !sameRepo(ref.repo, repo) ||
+    typeof item.url !== 'string' ||
+    !URL.canParse(item.url) ||
+    (item.state !== 'open' && item.state !== 'closed')
+  )
+    throw new Error('forge returned an invalid created work item');
+  return item.url;
+}
+export function readWorkItemLabels(ref: QualifiedPr): string[] {
+  const value = invokeForge('workitem.view', { ref });
+  const observed = parseQualifiedPr(JSON.stringify(value?.ref));
+  if (!samePr(ref, observed) || value?.kind !== 'issue' || !Array.isArray(value.labels))
+    throw new Error('forge work item has no verified issue identity and label facts');
+  const labels: unknown[] = value.labels;
+  return labels.map(name => {
+    if (typeof name !== 'string' || name === '')
+      throw new Error('forge returned an invalid issue label');
+    return name;
+  });
+}
+export function readRepositoryLabels(repo: QualifiedPr['repo']): string[] {
+  const value = invokeForge('repo.labels.list', { repo });
+  const observed = qualifiedRepo(value?.repo);
+  if (!observed || !sameRepo(repo, observed) || !Array.isArray(value?.labels))
+    throw new Error('forge returned invalid repository labels');
+  return value.labels.map(row => {
+    const label = record(row);
+    if (typeof label?.name !== 'string' || label.name === '')
+      throw new Error('forge returned invalid repository label');
+    return label.name;
+  });
+}
