@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { RunActionForbiddenError } from '../operations/run-authorization';
 import type { RunActor } from '../operations/run-authorization';
 /**
  * Unit tests for command handler
@@ -1018,7 +1019,10 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(baseConversation, '/reset', operator);
 
-        expect(mockCancelResumableRunsForConversation).toHaveBeenCalledWith(baseConversation.id);
+        expect(mockCancelResumableRunsForConversation).toHaveBeenCalledWith(
+          baseConversation.id,
+          expect.any(Function)
+        );
         // "resumable", not "pending": pending is itself a status name and reads
         // as "waiting" to a user.
         expect(result.message).toContain('Abandoned 2 resumable run(s).');
@@ -1060,6 +1064,80 @@ describe('CommandHandler', () => {
         expect(result.message).not.toContain('Cleared workspace binding');
       });
 
+      for (const failure of ['role lookup', 'transactional snapshot'] as const) {
+        test(`reset preserves session and binding when ${failure} fails`, async () => {
+          const users = await import('../db/users');
+          const roleLookup = spyOn(users, 'getUserById');
+          if (failure === 'role lookup')
+            roleLookup.mockRejectedValueOnce(new Error('role lookup unavailable'));
+          else {
+            roleLookup.mockResolvedValueOnce({
+              id: 'member-b',
+              role: 'member',
+              display_name: null,
+              email: null,
+              created_at: new Date(),
+              updated_at: new Date(),
+            });
+            mockCancelResumableRunsForConversation.mockRejectedValueOnce(
+              new Error('snapshot unavailable')
+            );
+          }
+          try {
+            const result = await handleCommand(baseConversation, '/reset', {
+              kind: 'user',
+              userId: 'member-b',
+            });
+            expect(result.success).toBe(false);
+            expect(result.message).toContain('Could not reset conversation');
+            expect(mockDeactivateSession).not.toHaveBeenCalled();
+            expect(mockUpdateConversation).not.toHaveBeenCalled();
+          } finally {
+            roleLookup.mockRestore();
+          }
+        });
+      }
+
+      test('reset refusal preserves session and workspace binding', async () => {
+        mockCancelResumableRunsForConversation.mockImplementation(async (_id, authorize) => {
+          authorize?.([makeWorkflowRun({ user_id: 'starter', status: 'paused' })]);
+          return [];
+        });
+        const result = await handleCommand(baseConversation, '/reset', { kind: 'unidentified' });
+        expect(result.success).toBe(false);
+        expect(result.message).toContain(new RunActionForbiddenError('abandon', 'starter').message);
+        expect(mockDeactivateSession).not.toHaveBeenCalled();
+        expect(mockUpdateConversation).not.toHaveBeenCalled();
+      });
+
+      for (const action of ['approve', 'reject', 'respond', 'cancel', 'abandon', 'resume']) {
+        test(`chat ${action} refuses another member without writes`, async () => {
+          const users = await import('../db/users');
+          const roleLookup = spyOn(users, 'getUserById').mockResolvedValue({
+            id: 'other',
+            display_name: null,
+            email: null,
+            role: 'member',
+            created_at: new Date(),
+            updated_at: new Date(),
+          });
+          mockGetWorkflowRun.mockResolvedValue(
+            makeWorkflowRun({ id: 'run-auth', user_id: 'starter', status: 'paused' })
+          );
+          try {
+            const result = await handleCommand(
+              baseConversation,
+              `/workflow ${action} run-auth custom`,
+              { kind: 'user', userId: 'other' }
+            );
+            expect(result.success).toBe(false);
+            expect(result.message).toContain('Only the user who started this run or an admin');
+            expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+          } finally {
+            roleLookup.mockRestore();
+          }
+        });
+      }
       test('should deactivate active session', async () => {
         mockGetActiveSession.mockResolvedValue(
           makeSession({
@@ -1097,7 +1175,10 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('Could not clear the AI session: session DB unavailable');
         expect(result.message).toContain('Reset is incomplete — retry /reset');
         expect(result.message).not.toContain('next message starts fresh');
-        expect(mockCancelResumableRunsForConversation).toHaveBeenCalledWith(baseConversation.id);
+        expect(mockCancelResumableRunsForConversation).toHaveBeenCalledWith(
+          baseConversation.id,
+          expect.any(Function)
+        );
         expect(mockUpdateConversation).toHaveBeenCalledWith(baseConversation.id, {
           cwd: null,
           isolation_env_id: null,
@@ -1120,7 +1201,10 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(false);
         expect(result.message).toContain('Could not clear the AI session: deactivation failed');
         expect(result.message).toContain('Reset is incomplete — retry /reset');
-        expect(mockCancelResumableRunsForConversation).toHaveBeenCalledWith(baseConversation.id);
+        expect(mockCancelResumableRunsForConversation).toHaveBeenCalledWith(
+          baseConversation.id,
+          expect.any(Function)
+        );
         expect(mockUpdateConversation).toHaveBeenCalledWith(baseConversation.id, {
           cwd: null,
           isolation_env_id: null,
@@ -1134,8 +1218,9 @@ describe('CommandHandler', () => {
         const result = await handleCommand(baseConversation, '/reset', operator);
 
         expect(result.success).toBe(false);
-        expect(result.message).toContain('Could not look up resumable runs: database busy');
-        expect(result.message).toContain('Reset is incomplete — retry /reset');
+        expect(result.message).toContain('Could not reset conversation: database busy');
+        expect(mockDeactivateSession).not.toHaveBeenCalled();
+        expect(mockUpdateConversation).not.toHaveBeenCalled();
         expect(result.message).not.toContain('next message starts fresh');
       });
 

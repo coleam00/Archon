@@ -1,3 +1,4 @@
+import { signalWorkflowWait, deleteWorkflowRun } from '../db/workflows';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import * as isolationDb from '../db/isolation-environments';
 import * as codebases from '../db/codebases';
@@ -34,7 +35,7 @@ export function createSqlWorkflowOperations(
 ): WorkflowOperations {
   return createWorkflowOperations({
     getUserRole: async userId => (await hostStore.users.getUserById(userId))?.role,
-    store,
+    store: { ...store, signalWorkflowWait, deleteWorkflowRun },
     hostStore,
     requestDetachedRunStop,
     isRunOwnedByThisProcess,

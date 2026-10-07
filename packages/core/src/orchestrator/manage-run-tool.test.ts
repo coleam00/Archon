@@ -1061,3 +1061,53 @@ for (const actor of [
     expect(mockResume).toHaveBeenCalledWith('r1abcdef-1234', actor);
   });
 }
+
+describe('manage_run authorization refusal', () => {
+  for (const action of ['approve', 'reject', 'respond', 'cancel', 'abandon', 'resume'] as const) {
+    test(`${action} relays the core refusal for another member`, async () => {
+      const { createWorkflowOperations } = await import('../operations/workflow-operations');
+      const run = makeRun({ id: 'auth-run', user_id: 'starter', status: 'paused' });
+      const unexpected = async (): Promise<never> => {
+        throw new Error('Unexpected side effect');
+      };
+      const governed = createWorkflowOperations({
+        getUserRole: async () => 'member',
+        store: {
+          getWorkflowRun: async () => run,
+          findChildRuns: async () => [],
+          getRunAncestry: async () => [],
+          listWorkflowRuns: async () => ({ runs: [], total: 0, counts }),
+          findWorkflowRunsByIdPrefix: async () => [run],
+          cancelWorkflowRun: unexpected,
+          resolveApprovalGate: unexpected,
+          resolveAndCancelApprovalGate: unexpected,
+          cancelResumableRunsForConversation: unexpected,
+          deleteWorkflowNodeSessions: unexpected,
+          signalWorkflowWait: unexpected,
+          deleteWorkflowRun: unexpected,
+        },
+        hostStore: {
+          isolation: {
+            getById: async () => null,
+            findActiveByWorkflow: unexpected,
+            create: unexpected,
+            updateStatus: unexpected,
+            countActiveByCodebase: unexpected,
+          },
+        },
+        requestDetachedRunStop: unexpected,
+        isRunOwnedByThisProcess: () => false,
+        isRunOwnerAnswering: async () => false,
+        reclaimRunWorktree: unexpected,
+        reclaimContainerEnv: unexpected,
+      });
+      const tool = buildManageRunTool({
+        actor: { kind: 'user', userId: 'other' },
+        operations: governed,
+        codebaseId: CODEBASE_ID,
+      });
+      const out = await tool.handler({ action, runId: run.id, decision: 'custom', confirm: true });
+      expect(out).toContain('Only the user who started this run or an admin');
+    });
+  }
+});

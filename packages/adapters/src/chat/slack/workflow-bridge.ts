@@ -1,3 +1,4 @@
+import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 /**
  * Slack workflow bridge: translates WorkflowEventEmitter events into Slack
  * side-effects (reactions on the triggering message, in-thread status
@@ -602,6 +603,10 @@ export class SlackWorkflowBridge {
               : RESUME_NOT_ACCEPTED_NOTE;
         }
       } catch (error) {
+        if (error instanceof RunActionForbiddenError) {
+          await this.postForbiddenAction(body, error.message);
+          return;
+        }
         const err = error as Error;
         getLog().error({ err, runId, nodeId, decision }, 'slack.bridge_approval_action_failed');
         await this.postActionNote(
@@ -627,6 +632,15 @@ export class SlackWorkflowBridge {
         'slack.bridge_approval_handler_failed'
       );
     }
+  }
+
+  private async postForbiddenAction(body: BlockButtonAction, text: string): Promise<void> {
+    if (!body.channel?.id || !body.user.id) return;
+    await this.adapter.getApp().client.chat.postEphemeral({
+      channel: body.channel.id,
+      user: body.user.id,
+      text,
+    });
   }
 
   private async tryResumeWorkflow(
@@ -679,6 +693,10 @@ export class SlackWorkflowBridge {
         }
         return;
       } catch (error) {
+        if (error instanceof RunActionForbiddenError) {
+          await this.postForbiddenAction(body, error.message);
+          return;
+        }
         const err = error as Error;
         // Full error stays in logs; the user-facing message is intentionally
         // generic so internal DB / library errors don't leak into a channel. A refusal
