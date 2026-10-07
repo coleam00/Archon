@@ -1,6 +1,6 @@
 ---
 title: Publish a plugin
-description: Publish Archon workflow packs and forge plugins on GitHub and list them on archon.diy.
+description: Publish Archon workflow packs, forge plugins, and provider plugins on GitHub and list them on archon.diy.
 ---
 
 GitHub is the registry. Publish in your own public repository, then add the `archon-plugin` repository topic to appear in the [plugin index](/plugins/). No Archon pull request, Archon account, or publication service is required. Listing is optional: `archon plugin install owner/repo[/path][@tag]` works independently of the index.
@@ -45,6 +45,57 @@ A forge plugin declares an executable instead of workflow entrypoints:
 ```
 
 Publish a GitHub release with `<executable>-<os>-<arch>` assets (`.exe` on Windows), and `checksums.txt` in `sha256sum` format covering the asset names. Supported platform names are `linux`, `darwin`, and `windows`; architectures are `x64` and `arm64`. Build assets for the platforms you support. An untagged forge install uses the latest GitHub release. A tag without the required platform asset cannot install on that platform. Checksums detect damaged downloads; they do not establish publisher trust.
+
+## Provider plugins
+
+A provider plugin runs agent sessions in a separate process. Publish the implementation
+in your own repository with this manifest at its root or an installable subdirectory:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "provider",
+  "name": "example-provider",
+  "description": "Example agent provider",
+  "executable": "archon-provider-example",
+  "compatibility": { "archon": ">=0.11.1" }
+}
+```
+
+The executable suffix is the provider id: `archon-provider-example` must return
+`id: "example"` in its descriptor. Publish release assets and `checksums.txt` with
+the same naming rules as forge plugins, for example `archon-provider-example-linux-x64`
+and `archon-provider-example-windows-x64.exe`. Without `@tag`, install and update
+select the latest GitHub release.
+
+```sh
+archon plugin install owner/repo
+archon plugin list
+archon plugin update owner/repo
+archon plugin remove owner/repo
+```
+
+Install verifies the checksum, starts the staged executable, validates its descriptor,
+and records that descriptor in the receipt. An invalid handshake, id collision,
+unsupported capability, or undeliverable API-key vendor leaves the previous install
+unchanged. Hosts register receipts without starting the executables at boot; each
+session checks the live descriptor against the installed one. Restart a running server
+after installing, updating, or removing a provider. A new CLI process sees it immediately.
+A workflow can then name the descriptor id in `provider:`.
+
+Provider plugins execute code as your operating-system user. On the host they receive
+the ambient environment plus Archon's per-request environment, just like an in-process
+provider. For container execution they receive the minimal container environment plus
+the request environment. Credentials use that process environment, not protocol fields.
+The process boundary supplies packaging, crash isolation, and cancellation; it is not a
+security sandbox. Archon withholds plugin stderr contents from its logs and errors because
+they may contain credentials or user messages.
+
+See [building a community provider](/contributing/adding-a-community-provider/) for
+`serveProvider`, descriptors, wire schemas, and conformance tests.
+
+Provider receipts are additive, but older Archon binaries reject their unknown kind.
+Remove provider plugins before downgrading to a release without provider-plugin support.
 
 ## Listing and refresh
 

@@ -29,7 +29,17 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
     test: ['providers'],
   },
   // Core assembles execution and persistence services.
-  core: { runtime: ['git', 'isolation', 'paths', 'provider-contract', 'providers', 'workflows'] },
+  core: {
+    runtime: [
+      'git',
+      'isolation',
+      'paths',
+      'plugin-manifest',
+      'provider-contract',
+      'providers',
+      'workflows',
+    ],
+  },
   // Transport adapters normalize platform input for core.
   adapters: { runtime: ['core', 'forge', 'git', 'isolation', 'paths', 'providers', 'workflows'] },
   // Server hosts the engine and platform adapters.

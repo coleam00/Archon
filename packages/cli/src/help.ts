@@ -292,7 +292,7 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'install',
     spec: 'plugin install <owner/repo[/path][@tag]>',
     description:
-      'Install a plugin from GitHub (default: forge plugins the latest release, workflow packs the default branch)',
+      'Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)',
   },
   {
     command: 'plugin',

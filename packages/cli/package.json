@@ -33,6 +33,9 @@
   },
   "testGroups": [
     [
+      "src/commands/workflow-provider-plugin.integration.spec.ts"
+    ],
+    [
       "src/commands/version.test.ts",
       "src/commands/setup.test.ts",
       "src/commands/skill.test.ts",

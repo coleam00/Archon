@@ -1,188 +1,128 @@
 ---
-title: Adding a Community Provider
-description: Step-by-step guide to adding a new AI agent provider under packages/providers/src/community/.
+title: Build a community provider
+description: Publish an agent provider as an independently installed process plugin.
 ---
 
-import { Code } from '@astrojs/starlight/components';
-import capabilitiesTemplate from '../../../../../providers/src/community/_template/capabilities.ts?raw';
+Community providers ship from their authors' repositories as optional plugins. They
+attach through the provider contract without an import in Archon's registry. Claude,
+Codex, and Pi remain maintained in this repository. The bundled OpenCode and Copilot
+providers remain deprecated until community owners publish replacements.
 
-Archon's provider registry (Phase 2, [#1195](https://github.com/coleam00/Archon/pull/1195)) is designed so community providers can be added with changes localized to a single directory. This guide walks through the pattern using the Pi provider as the reference implementation (`packages/providers/src/community/pi/`).
+## Implement the provider contract
 
-## The contract
+Implement `IAgentProvider` from `@archon/provider-contract`. Its source and
+[contract README](https://github.com/coleam00/Archon/blob/dev/packages/provider-contract/README.md)
+own the interface and stream rules. A provider supplies its id, capabilities, a
+`sendQuery` stream, and `checkCredential`; `resolveCredentialModel` is optional.
+Preserve the runtime's native user settings, authentication, and project guidance.
 
-Every provider implements `IAgentProvider`, from `@archon/provider-contract`, defined in [`packages/provider-contract/src/agent-provider.ts`](https://github.com/coleam00/Archon/blob/dev/packages/provider-contract/src/agent-provider.ts); read the interface there rather than a copy. A provider answers `getType()` and `getCapabilities()`, streams a turn from `sendQuery`, and checks its native login in `checkCredential`. The `checkCredential` request carries the configured `model`, the assistant's merged config (`assistantConfig`, where Pi and Codex read their model and env), the caller's `env`, and an abort `signal`.
+A successful stream yields provider events, a `result`, then `settled` only after all
+observed work ends. Report usage once. Include the native session id when declaring
+session resume. Carry failures through the typed failure class; do not classify free
+prose with keyword matching. Cancellation must stop the provider's own work and must
+not manufacture `settled`.
 
+Capabilities are promises. Declare only what the implementation enforces. A node
+naming unsupported skills, plugins, or MCP servers fails before spend. A provider that
+supports those capabilities must suppress ambient capabilities and load exactly the
+ones the node names, while preserving unrelated native configuration and guidance.
+`backgroundWork: 'reported'` requires observable task lifecycles; `none` means verified
+absence, and `unobserved` means work may exist without lifecycle visibility.
 
-`checkCredential` checks the native credential used when Archon delivers none, through the provider's runtime. Return `not_checked` when the runtime cannot check without a model session. Derive failure states from structured fields or typed errors; carry vendor text only as evidence and never expose credential values. Test it with `checkCredentialStatuses` from `@archon/provider-contract/conformance`.
+## Serve it over stdio
 
-The provider yields a stream of `MessageChunk`s, which is `ProviderChunk` from `@archon/provider-contract`: its events, then a `result`, then `settled`. Archon normalizes every backend to this shape so platform adapters, the DAG executor, and the orchestrator don't need to know whether they're talking to Claude, Codex, Pi, or your provider. The [contract README](https://github.com/coleam00/Archon/blob/dev/packages/provider-contract/README.md) lists the rules a stream must follow, and `@archon/provider-contract/conformance` checks them against fixtures your provider supplies.
+Wrap the implementation with the contract's plugin entrypoint:
 
-## Directory layout
+```ts
+import { serveProvider, type ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
+import { ExampleProvider } from './provider';
+import { capabilities } from './capabilities';
 
-A community provider lives entirely under `packages/providers/src/community/<your-provider-id>/`. The Pi provider uses this layout:
+const descriptor: ProviderPluginDescriptor = {
+  protocol: 1,
+  id: 'example',
+  displayName: 'Example provider',
+  version: '1.0.0',
+  capabilities,
+  credentials: { kind: 'static', specs: [] },
+  configSchema: {
+    type: 'object',
+    properties: { model: { type: 'string' } },
+    additionalProperties: false,
+  },
+};
 
-```
-packages/providers/src/community/pi/
-├── provider.ts          # PiProvider class (IAgentProvider impl)
-├── capabilities.ts      # PI_CAPABILITIES constant
-├── config.ts            # parsePiConfig, PiProviderDefaults
-├── model-ref.ts         # model-string parsing + compat check
-├── event-bridge.ts      # SDK-event → MessageChunk conversion
-├── session-resolver.ts  # optional: session lifecycle helpers
-├── options-translator.ts  # optional: nodeConfig → SDK-options translation
-├── registration.ts      # registerPiProvider()
-├── resource-loader.ts   # optional: SDK-specific helpers
-├── index.ts             # public exports
-└── *.test.ts            # co-located tests
-```
-
-Each file has one job. Optional files only exist when the translation surface is non-trivial — a minimal provider could fit `provider.ts` + `capabilities.ts` + `registration.ts` + `index.ts` + one test file.
-
-## Step-by-step
-
-### 1. Capabilities (start honest)
-
-Declare only what you've actually wired. The dag-executor emits a warning to the user when a workflow node uses a feature your provider doesn't support — under-declaration is self-correcting via those warnings; over-declaration means Archon silently drops configuration.
-
-`capabilities.ts` (rendered from `packages/providers/src/community/_template/capabilities.ts`, which `bun run type-check` keeps complete):
-
-<Code code={capabilitiesTemplate} lang="typescript" />
-
-Declare [`backgroundWork`](/reference/provider-capabilities/) as `reported` when the runtime exposes task lifecycles, `none` only when background work is verified absent, or `unobserved` when it may exist without lifecycle visibility. A `reported` provider must supply `backgroundCases` to `runProviderConformance` that prove runtime-reported endings before settlement.
-
-Start every boolean axis at `false` and flip it to `true` one at a time as you wire each translation, adding a test per flip. `structuredOutput` is not a boolean: leave it `false`, or set it to `'enforced'` or `'best-effort'` once you support structured output.
-
-### 2. Provider class
-
-Implement `IAgentProvider`. Pattern:
-
-```typescript
-// provider.ts
-import { createLogger } from '@archon/paths';
-import type {
-  CredentialStatus,
-  IAgentProvider,
-  MessageChunk,
-  ProviderCapabilities,
-  SendQueryOptions,
-} from '@archon/provider-contract';
-import { YOUR_CAPABILITIES } from './capabilities';
-
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog() {
-  if (!cachedLog) cachedLog = createLogger('provider.your-id');
-  return cachedLog;
-}
-
-export class YourProvider implements IAgentProvider {
-  async checkCredential(): Promise<CredentialStatus> {
-    return { state: 'not_checked', source: 'native' };
-  }
-
-  async *sendQuery(prompt, cwd, resumeSessionId, options): AsyncGenerator<MessageChunk> {
-    // 1. Parse assistantConfig (user-level defaults from .archon/config.yaml)
-    // 2. Resolve model (options.model || config default)
-    // 3. Resolve auth (options.env → process.env → config)
-    // 4. Translate nodeConfig to SDK options (only for capabilities you declared)
-    // 5. Invoke SDK, yield normalized MessageChunks
-    // 6. If you declare sessionResume, include sessionId in every non-failing
-    //    `result` chunk. Archon records it on the node record so users can resume
-    //    the session; log only sessionPreview(id)
-    // 7. If you support resume, wrap the stream with `withResumedOutcome`
-    //    (../../shared/resumed) so a cold resume is stamped resumed:false and
-    //    surfaced by the executor instead of silently starting fresh.
-    // 8. End every turn with `yield { type: 'settled' }` once nothing more observed runs
-    //    for it, after the final `result`. The executor finishes the node on
-    //    `settled`; a stream that produced output and ends without it fails the
-    //    node. Check it with `runProviderConformance` from
-    //    `@archon/provider-contract/conformance`. The suite requires
-    //    `capabilities: provider.getCapabilities()`; it checks session ids
-    //    (step 6) only when that declares sessionResume: true, and needs a
-    //    `forkTurn` that forks into a new session when it declares
-    //    sessionFork: true.
-  }
-
-  getType() { return 'your-id'; }
-  getCapabilities() { return YOUR_CAPABILITIES; }
-}
+await serveProvider({ descriptor, create: () => new ExampleProvider() });
 ```
 
-See `packages/providers/src/community/pi/provider.ts` for a full reference with a typed failure result, fail-fast auth validation, and resume fallback.
+`capabilities` must provide the full `ProviderCapabilities` shape. The descriptor's
+JSON Schema validates provider defaults and run configuration. Credentials are a static
+list of vendor specs; declare only vendors the provider consumes. API-key vendors must
+have an existing Archon delivery rule. With one vendor, all models use it; with several,
+the model's `vendor/` prefix selects a declared vendor. An empty list uses native auth.
+`checkCredential` returns `CredentialStatus` for doctor and run preflight, and receives
+its environment and abort signal from Archon. Return `not_checked` when the runtime
+cannot check without spending on a session.
 
-### 3. Registration
+The wire uses ACP v1's `initialize`, `session/new`, `session/prompt`, and
+`session/cancel` lifecycle, with unchanged `ProviderChunk` values in `_archon/chunk`
+notifications. Stdout is exclusively newline-delimited JSON-RPC. Native tools with
+in-process handlers, dynamic credential catalogs, and mid-run permission requests are
+unsupported. A descriptor claiming native tools or a dynamic catalog is rejected.
+This is an Archon provider protocol, not a generic plain-ACP adapter.
 
-Each community provider exports a `register*Provider()` function. Idempotent — guard with `isRegisteredProvider(id)` so it's safe to call from multiple bootstrap sites.
+The language-neutral definitions are in
+[`packages/provider-contract/schema/provider-contract.schema.json`](https://github.com/coleam00/Archon/blob/dev/packages/provider-contract/schema/provider-contract.schema.json).
+They include the descriptor, lifecycle, request, and chunk schemas. Non-TypeScript
+authors can implement that wire directly. npm publication waits for the versioned SDK;
+until then, vendor the contract package or implement the generated schema.
 
-```typescript
-// registration.ts
-import { isRegisteredProvider, registerProvider } from '../../registry';
-import { singleVendorCatalog } from '../../credential-catalog';
-import { parseYourConfigStrict } from './config';
-import { YOUR_CAPABILITIES } from './capabilities';
-import { YourProvider } from './provider';
+## Prove conformance
 
-export function registerYourProvider(): void {
-  if (isRegisteredProvider('your-id')) return;
-  registerProvider({
-    id: 'your-id',
-    displayName: 'Your Provider (community)',
-    factory: () => new YourProvider(),
-    capabilities: YOUR_CAPABILITIES,
-    builtIn: false, // ← important: community providers are NOT built-in
-    parseConfig: parseYourConfigStrict,
-    credentials: singleVendorCatalog({
-      vendor: 'anthropic', displayName: 'Anthropic', kinds: ['api_key'],
-    }),
+Use `runProviderConformance` from `@archon/provider-contract/conformance` with fixture
+turns and the declared capabilities. Include typed failure cases, structured output,
+session handoff, and observable background cases for every capability claimed. Use
+`checkCredentialStatuses` to exercise native credential states.
+
+Run the same suite in process and against the executable. A binary connection uses
+`connectProvider` with the child's stdio streams:
+
+```ts
+import { spawn } from 'node:child_process';
+import { Readable, Writable } from 'node:stream';
+import { connectProvider } from '@archon/provider-contract/plugin';
+import { runProviderConformance } from '@archon/provider-contract/conformance';
+
+const child = spawn('/absolute/path/archon-provider-example', [], {
+  stdio: ['pipe', 'pipe', 'inherit'],
+});
+const closed = new Promise(resolve => child.once('close', resolve));
+const client = await connectProvider({
+  readable: Readable.toWeb(child.stdout),
+  writable: Writable.toWeb(child.stdin),
+});
+try {
+  const failures = await runProviderConformance({
+    capabilities: client.getCapabilities(),
+    turns: [{ name: 'turn', run: () => client.sendQuery('hello', process.cwd()) }],
   });
+  if (failures.length) throw new Error(failures.join('\n'));
+} finally {
+  await client.close();
+  await closed;
 }
 ```
 
-Use `singleVendorCatalog` for one stored-credential vendor. A multi-vendor static catalog supplies `specs` and `vendorFor(model)`, returning only vendors it lists. A provider without a stored-credential mapping declares `{ kind: 'dynamic', vendorFor: () => undefined }`.
+Add the capability-specific fixtures your implementation needs. Compare the chunks
+with in-process output, and test cancellation with real descendants. Keep credentials
+and user-message contents out of diagnostics. See the deterministic test provider in
+`packages/provider-contract/src/fixtures/test-provider/` for the basic transport proof.
 
-Then add one line to the aggregator at `packages/providers/src/registry.ts`:
+## Publish and install
 
-```typescript
-export function registerCommunityProviders(): void {
-  registerPiProvider();
-  registerYourProvider(); // ← add your provider here
-}
-```
-
-**That is the entire cross-cutting change.** No entrypoint edits, no config-type edits. The aggregator is already called from the CLI and server host bootstraps. Other hosts must register providers before loading configuration or workflows.
-
-### 4. Tests
-
-Co-locate tests next to your code. The Pi tests use this isolation pattern:
-
-- Mock the SDK (`mock.module` at the top of the file, before importing your provider).
-- Tests that touch `mock.module` are split into separate `bun test` invocations in `packages/providers/package.json` (see existing entries for the Pi files). Bun's `mock.module` is process-global and irreversible — splitting prevents cross-file pollution.
-- Registry test (`packages/providers/src/registry.test.ts`): add a `describe` block asserting `builtIn: false` and idempotent registration.
-
-### 5. Capability discipline
-
-When you're ready to wire additional capabilities, each translation gets its own small module. Pi uses:
-
-- `options-translator.ts` for effort, tool filters, skills resolution
-- `session-resolver.ts` for session create/open/list
-- `event-bridge.ts` for SDK-event → MessageChunk mapping
-
-This keeps the provider class readable — `provider.ts` orchestrates; the translators are unit-testable without the SDK.
-
-## What NOT to do
-
-- **Don't edit `AssistantDefaultsConfig` or `AssistantDefaults` in `packages/core/src/config/config-types.ts`.** Community provider defaults live behind the generic `[string]` index signature that was designed for this case. Adding a typed slot defeats the Phase 2 contract and forces future providers to follow suit.
-- **Don't call `registerProvider()` from CLI or server entrypoints directly.** Use the `registerCommunityProviders()` aggregator. Entrypoints should never grow per-community-provider calls.
-- **Don't overclaim capabilities.** If a workflow node uses `hooks: [...]` and your provider silently ignores it, the user has no feedback. The dag-executor warns honestly if you declare `hooks: false`.
-- **Don't write session state or credentials outside your provider's SDK-managed directory.** Archon's config, workspaces, and sessions are managed elsewhere — your provider should stay within its own SDK's storage conventions (mirror how Claude writes to `~/.claude/` and Codex uses its thread store).
-
-## Reference implementation
-
-The Pi provider at `packages/providers/src/community/pi/` is the canonical example. It covers:
-
-- Multi-backend model selection via `<pi-provider>/<model-id>` refs (parse once, validate syntactically)
-- OAuth + API-key passthrough (reads `~/.pi/agent/auth.json`, overrides per-request)
-- Async-queue bridge from callback-based SDK events to `AsyncGenerator<MessageChunk>`
-- Session resume via `SessionManager.list(cwd)` + `SessionManager.open(path)`
-- Capability translations: `effort`, `allowed_tools/denied_tools`, `skills`, `systemPrompt`
-
-Read `packages/providers/src/community/pi/provider.ts` top-to-bottom — the comments call out every design decision and link to the upstream Pi SDK behavior.
+Follow [Publish a plugin](/guides/publishing-plugins/#provider-plugins) for the manifest,
+release assets, checksums, environment policy, and install commands. The manifest
+executable must be `archon-provider-<descriptor id>`. Installation is the trust boundary:
+the plugin runs as the operator's user with the same environment policy as in-process
+providers. After installation, set `provider: <id>` in the workflow. Restart a running
+server to load changed receipts; hot registration is outside this contract.
