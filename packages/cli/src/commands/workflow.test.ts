@@ -655,6 +655,9 @@ const mockCancelWorkflowRunCommand = mock<
 >(async () => ({ cancelled: true }));
 
 mock.module('@archon/core/db/workflows', () => ({
+  insertWorkflowRun: async (): Promise<never> => {
+    throw new Error('Unexpected admission run insert');
+  },
   createWorkflowRun: mockCreateWorkflowRun,
   getActiveWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRunStatus: mock(() => Promise.resolve(null)),
@@ -7426,28 +7429,34 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     );
   });
 
-  it('persists node-state events before reporting success', async () => {
-    const data = { node_output: 'done' };
-    await workflowEventEmitCommand(createTestWorkflowHost(), FULL_ID, 'node_completed', data);
-    expect(mockPersistWorkflowEvent).toHaveBeenCalledWith({
-      workflow_run_id: FULL_ID,
-      event_type: 'node_completed',
-      data,
-    });
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
-    expect(consoleSpy).toHaveBeenCalledWith(`Event persisted: node_completed for run ${FULL_ID}`);
-  });
+  it.each(['node_completed', 'node_deferred_usage'] as const)(
+    'persists %s before reporting success',
+    async eventType => {
+      const data = { node_output: 'done' };
+      await workflowEventEmitCommand(createTestWorkflowHost(), FULL_ID, eventType, data);
+      expect(mockPersistWorkflowEvent).toHaveBeenCalledWith({
+        workflow_run_id: FULL_ID,
+        event_type: eventType,
+        data,
+      });
+      expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalledWith(`Event persisted: ${eventType} for run ${FULL_ID}`);
+    }
+  );
 
-  it('propagates a node-state persistence failure without reporting success', async () => {
-    mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('database unavailable'));
-    await expect(
-      workflowEventEmitCommand(createTestWorkflowHost(), FULL_ID, 'node_failed', {
-        error: 'producer failed',
-      })
-    ).rejects.toThrow('database unavailable');
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
-    expect(consoleSpy).not.toHaveBeenCalled();
-  });
+  it.each(['node_failed', 'node_deferred_usage'] as const)(
+    'propagates %s persistence failure without reporting success',
+    async eventType => {
+      mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('database unavailable'));
+      await expect(
+        workflowEventEmitCommand(createTestWorkflowHost(), FULL_ID, eventType, {
+          error: 'producer failed',
+        })
+      ).rejects.toThrow('database unavailable');
+      expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+      expect(consoleSpy).not.toHaveBeenCalled();
+    }
+  );
 
   it('resolves an event prefix from a workspace-scoped worktree', async () => {
     const git = await import('@archon/git');

@@ -232,6 +232,9 @@ test('CLI run commands and reusable persistence helpers have no SQL imports or r
 test('origin-free event waits signal and wake through the supplied host without SQL', async () => {
   const root = tempRoots(mkdtempSync(join(tmpdir(), 'archon-continuation-store-')));
   const project = join(root, 'project');
+  delete process.env.ARCHON_USER_ID;
+  delete process.env.USER;
+  delete process.env.USERNAME;
   process.env.ARCHON_HOME = join(root, 'home');
   process.env.ARCHON_TELEMETRY_DISABLED = '1';
   delete process.env.DATABASE_URL;

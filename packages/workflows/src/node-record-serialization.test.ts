@@ -6,6 +6,7 @@ import {
   serializeNodeEmitter,
   serializeNodeOutput,
   serializeNodeStateRecord,
+  serializeDeferredNodeUsage,
   serializeNodeTranscript,
 } from './node-record-serialization';
 import { nodeExecutionMetadataSchema, type NodeExecutionRecord } from './schemas/node-execution';
@@ -63,6 +64,27 @@ const record = (): NodeExecutionRecord => ({
 });
 
 describe('node record serializers', () => {
+  it('projects deferred usage without lifecycle, output or provider binding', () => {
+    const source = {
+      ...record(),
+      accounting: 'node' as const,
+      lifecycle: { status: 'suspended' as const, point: 'interactive_loop' as const },
+    };
+    const event = serializeDeferredNodeUsage(source);
+    expect(event).toMatchObject({
+      workflow_run_id: 'run-1',
+      step_name: 'group.review',
+      event_type: 'node_deferred_usage',
+      data: {
+        accounting: 'node',
+        tokens: { input: 0, output: 0 },
+        cost_usd: 0,
+      },
+    });
+    expect(Object.keys(event.data).sort()).toEqual(['accounting', 'tokens', 'cost_usd'].sort());
+    expect(readNodeRecordEvent(event)).toBeUndefined();
+  });
+
   it('capacity failure survives a persisted JSON round trip', () => {
     const failure = { class: 'overloaded', evidence: 'opaque vendor failure' } as const;
     const failed = finishNodeExecution(record(), {

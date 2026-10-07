@@ -3,8 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from '@hono/zod-openapi';
-import { acceptStartReceipt } from '@archon/core/db/resource-starts';
-import { getUserById } from '@archon/core/db/users';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import type {
@@ -40,14 +39,9 @@ export interface WebhookSourcePluginHost {
 }
 
 export interface WebhookSourceHostDependencies {
-  acceptReceipt: typeof acceptStartReceipt;
+  acceptReceipt: IWorkflowStore['acceptStartReceipt'];
   isKnownUser: (id: string) => Promise<boolean>;
 }
-
-const defaultDependencies: WebhookSourceHostDependencies = {
-  acceptReceipt: acceptStartReceipt,
-  isKnownUser: async id => (await getUserById(id)) !== null,
-};
 
 const log = createLogger('server.webhook-sources');
 
@@ -62,7 +56,7 @@ function isWebhookSourcePlugin(value: unknown): value is WebhookSourcePlugin {
 
 export async function loadWebhookSourcePlugins(
   configPath: string,
-  dependencies: WebhookSourceHostDependencies = defaultDependencies
+  dependencies: WebhookSourceHostDependencies
 ): Promise<WebhookSourcePluginHost> {
   let parsed: z.infer<typeof sourceConfigSchema>;
   try {

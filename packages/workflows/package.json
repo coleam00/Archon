@@ -10,6 +10,7 @@
     "./loader": "./src/loader.ts",
     "./deprecation": "./src/deprecation.ts",
     "./router": "./src/router.ts",
+    "./resource-start-store": "./src/resource-start-store.ts",
     "./store": "./src/store.ts",
     "./terminal-record": "./src/terminal-record.ts",
     "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",

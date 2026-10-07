@@ -11,6 +11,7 @@ import {
 import {
   serializeNodeEmitter,
   serializeNodeStateRecord,
+  serializeDeferredNodeUsage,
   serializeNodeTranscript,
   serializeNodeOutput,
   persistedOutputContract,
@@ -681,7 +682,7 @@ function sumTokenUsage(
 
 /**
  * Usage a resumed run already consumed in earlier passes, rebuilt from its persisted
- * node completion and failure events by `getDagResumeSnapshot`. Both axes travel
+ * node completion, failure and deferred-usage events by `getDagResumeSnapshot`. Both axes travel
  * together because they are one concept — what this run has spent so far — and seeding
  * only one of them is how cost came to under-report every resumed run while tokens did
  * not (#2469).
@@ -6693,20 +6694,23 @@ async function executeLoopNode(
         // snapshotting both forms preserves resume determinism after source deletion.
         commandSnapshot: loopPromptTemplate,
       };
-      // A deferred gate leaves the node running, but its iterations were paid for:
-      // carry the spend so the run totals keep it.
-      const deferredLoopOutput = (): NodeExecutionResult => ({
+      const deferredLoopOutput: NodeExecutionResult = {
         ...serializeNodeOutput(execution),
         ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-      });
+      };
       const paused = await pauseGateRespectingExternalTransition(
         deps,
         workflowRun.id,
         approvalContext,
         { suspension: serializeNodeStateRecord(suspended) }
       );
-      if (!paused) return deferredLoopOutput();
+      if (!paused) {
+        if (loopTotalCostUsd !== undefined || loopTotalTokens !== undefined) {
+          await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
+        }
+        return deferredLoopOutput;
+      }
       await recordDerivedExecution({ logDir }, suspended);
       const gateMsg =
         `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
@@ -6726,7 +6730,7 @@ async function executeLoopNode(
           ),
           { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
         );
-        if (!failed) return deferredLoopOutput();
+        if (!failed) return deferredLoopOutput;
         getLog().error(
           { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
           'loop_node.gate_message_send_failed'

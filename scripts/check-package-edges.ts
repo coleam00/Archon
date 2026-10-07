@@ -13,7 +13,7 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   // Forge contracts; fixtures use paths' test cleanup helpers.
   forge: { runtime: ['paths'] },
   // Plugin manifest vocabulary.
-  'plugin-manifest': { runtime: ['paths'] },
+  'plugin-manifest': { runtime: ['paths', 'provider-contract'] },
   // External providers can depend on the contract without pulling in implementations.
   'provider-contract': { runtime: [] },
   // Git operations use the shared paths and process helpers.
@@ -29,7 +29,17 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
     test: ['providers'],
   },
   // Core assembles execution and persistence services.
-  core: { runtime: ['git', 'isolation', 'paths', 'provider-contract', 'providers', 'workflows'] },
+  core: {
+    runtime: [
+      'git',
+      'isolation',
+      'paths',
+      'plugin-manifest',
+      'provider-contract',
+      'providers',
+      'workflows',
+    ],
+  },
   // Transport adapters normalize platform input for core.
   adapters: { runtime: ['core', 'forge', 'git', 'isolation', 'paths', 'providers', 'workflows'] },
   // Server hosts the engine and platform adapters.

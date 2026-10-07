@@ -9,6 +9,7 @@ import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
+import * as resourceStarts from '../db/resource-starts';
 import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
@@ -84,6 +85,19 @@ function collectOAuthCredentialValues(
 
 export function createWorkflowStore(): IWorkflowStore {
   return {
+    admitResourceStart: resourceStarts.admitResourceStart,
+    drainResourceStarts: resourceStarts.drainResourceStarts,
+    acceptStartReceipt: resourceStarts.acceptStartReceipt,
+    getStartReceipt: resourceStarts.getStartReceipt,
+    listStartReceipts: resourceStarts.listStartReceipts,
+    listPendingStartBindings: resourceStarts.listPendingStartBindings,
+    getResourceStartRequest: resourceStarts.getResourceStartRequest,
+    listQueuedResourceStartsForHost: resourceStarts.listQueuedResourceStartsForHost,
+    withdrawQueuedResourceStart: resourceStarts.withdrawQueuedResourceStart,
+    claimStartBindingPreparation: resourceStarts.claimStartBindingPreparation,
+    completeStartBindingPreparation: resourceStarts.completeStartBindingPreparation,
+    failStartBindingPreparation: resourceStarts.failStartBindingPreparation,
+    resetStartBindingPreparation: resourceStarts.resetStartBindingPreparation,
     resolveApprovalGate: workflowDb.resolveApprovalGate,
     resolveAndCancelApprovalGate: workflowDb.resolveAndCancelApprovalGate,
     cancelResumableRunsForConversation: workflowDb.cancelResumableRunsForConversation,

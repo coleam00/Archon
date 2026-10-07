@@ -6,6 +6,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./providers/load-provider-plugins": "./src/providers/load-provider-plugins.ts",
+    "./providers/inspect-provider-plugin": "./src/providers/inspect-provider-plugin.ts",
+    "./providers/process-registration": "./src/providers/process-registration.ts",
     "./effort": "./src/effort.ts",
     "./types": "./src/types/index.ts",
     "./db": "./src/db/index.ts",
@@ -35,6 +38,7 @@
     "build": "echo 'No build needed - Bun runs TypeScript directly'"
   },
   "dependencies": {
+    "@archon/plugin-manifest": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",

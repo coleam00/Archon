@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@archon/paths": "workspace:*",
+    "@archon/provider-contract": "workspace:*",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
