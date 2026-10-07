@@ -1,9 +1,13 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+
+// These tests spawn the real scripts and a compiled fake gh, several per case; under
+// parallel load that exceeds bun's 5 s per-test default. Applies to this file.
+setDefaultTimeout(60_000);
 
 const workflowRoot = resolve(import.meta.dir, '../../../../.archon/workflows/sdlc');
 const mergeScript = join(workflowRoot, 'merge-queue', 'scripts', 'merge-action.ts');

@@ -40344,6 +40344,7 @@ describe('executeDagWorkflow -- packaged validation evidence across an approval 
     gitIn(testDir, 'commit', '-qm', 'fixture');
 
     const discovered = await discoverWorkflows(repoRoot, {
+      providers: providerRegistry,
       loadDefaults: false,
       loadDefaultCommands: false,
     });

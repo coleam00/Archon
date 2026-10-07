@@ -693,7 +693,7 @@ describe('pull request publication from a synthetic review branch', () => {
     test(`refuses to open a substitute pull request from ${head}`, async () => {
       const { result, calls } = await publishFrom(head);
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr.toString()).toContain('synthetic review branch');
+      expect(result.stderr?.toString()).toContain('synthetic review branch');
       // Refused before any forge read or write.
       expect(calls).toBe('');
     });
@@ -709,7 +709,7 @@ describe('pull request publication from a synthetic review branch', () => {
 
   test('an ordinary branch still reaches the forge lookup', async () => {
     const { result, calls } = await publishFrom('feature/pr-12-review-notes');
-    expect(result.stderr.toString()).not.toContain('synthetic review branch');
+    expect(result.stderr?.toString()).not.toContain('synthetic review branch');
     expect(calls).toContain('"list"');
   });
 });
