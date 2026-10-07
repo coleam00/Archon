@@ -43,7 +43,7 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
   },
   {
     id: 'bundled-skill',
-    label: 'Bundled CLI skill is regenerated',
+    label: 'Bundled CLI skill matches files on disk',
     command: ['bun', 'run', 'check:bundled-skill'],
   },
   {
