@@ -1,0 +1,11 @@
+# A reuse decision skips the whole gate: discover is an agent with no stub here,
+# so reaching it would fail this fixture at discover. The real result then refuses
+# the reuse, because no recorded evidence backs it: a reuse is never a verdict
+# nobody reached. The applicable path is covered by the unit tests in
+# scripts/sdlc-validation-evidence.test.ts.
+applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: "applicable evidence", nonce: fixture, reuse: true }
+fixture:
+  expect: failed
+  fail-node: result
+  reached: [mode, applicability]
+exec-code: true

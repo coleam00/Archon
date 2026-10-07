@@ -1,0 +1,12 @@
+# A project that defines no checks: discovery declares none, the real runner
+# reports green, and the real result reports `checks_performed: false`, which a
+# caller that must not read "nothing to run" as health depends on (the unit tests
+# in scripts/sdlc-validation-evidence.test.ts pin the value). The real
+# applicability decision runs first and, on a first pass, validates fresh.
+discover:
+  checks: []
+  notes: "stub: the repository defines no checks"
+fixture:
+  expect: completed
+  reached: [mode, applicability, discover, run, result]
+exec-code: true

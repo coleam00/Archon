@@ -1,0 +1,10 @@
+# An ordinary check runs and passes: the real result reports green with
+# `checks_performed: true` and records it as evidence a later pass may reuse.
+discover:
+  checks:
+    - { name: "tests", argv: ["bun", "-e", "console.log('tests passed')"] }
+  notes: "stub: the project's ordinary check"
+fixture:
+  expect: completed
+  reached: [mode, applicability, discover, run, result]
+exec-code: true
