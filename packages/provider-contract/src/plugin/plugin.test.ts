@@ -6,7 +6,7 @@ import { connectProvider, type ConnectedProvider } from './connect';
 import { checkAcp } from './fixtures/acp';
 import { chunks, credentialStatuses, descriptor, fixtureProvider } from './fixtures/provider';
 import { streamPair } from './fixtures/streams';
-import { rpcMessageSchema } from './rpc';
+import { PluginRemoteError, rpcMessageSchema } from './rpc';
 import { serveProvider } from './serve';
 
 async function withProvider(
@@ -490,5 +490,48 @@ test('config normalization still refuses values that cannot cross the JSON wire'
         )
       ).rejects.toThrow();
     }
+  });
+});
+
+test('information hooks return all diagnostic states and optional model labels', async () => {
+  const checks = (['ok', 'warn', 'fail', 'skip'] as const).map(status => ({
+    id: status,
+    label: status,
+    status,
+    message: 'Provider information',
+  }));
+  await withProvider(
+    fixtureProvider({
+      async diagnose(request) {
+        expect(request.assistantConfig).toEqual({ nested: { enabled: true } });
+        return { checks };
+      },
+      async listModels() {
+        return { models: [{ id: 'one', label: 'One' }, { id: 'two' }] };
+      },
+    }),
+    async client => {
+      expect(
+        await client.diagnose({ assistantConfig: { nested: { enabled: true, unset: undefined } } })
+      ).toEqual({ checks });
+      expect(await client.listModels()).toEqual({
+        models: [{ id: 'one', label: 'One' }, { id: 'two' }],
+      });
+    }
+  );
+});
+
+test('absent information hooks report unsupported rather than successful empty results', async () => {
+  await withProvider(fixtureProvider(), async client => {
+    for (const call of [() => client.diagnose({}), () => client.listModels()]) {
+      try {
+        await call();
+        throw new Error('accepted absent hook');
+      } catch (error) {
+        expect(error).toBeInstanceOf(PluginRemoteError);
+        if (error instanceof PluginRemoteError) expect(error.code).toBe(-32601);
+      }
+    }
+    expect(await collect(client.sendQuery('turn', '/'))).toEqual(chunks);
   });
 });

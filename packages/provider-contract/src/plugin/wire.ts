@@ -4,6 +4,7 @@ import {
   systemPromptInputSchema,
   type SendQueryOptions,
 } from '../agent-provider';
+import { providerDiagnosticsSchema, providerModelListSchema } from '../information';
 import { providerCapabilitiesSchema } from '../capabilities';
 import { credentialStatusSchema } from '../credential-status';
 import type { AssertNever } from '../effort';
@@ -22,6 +23,14 @@ export const providerPluginDescriptorSchema = z.object({
   capabilities: providerCapabilitiesSchema.extend({ nativeTools: z.literal(false) }),
   credentials: z.object({ kind: z.literal('static'), specs: z.array(credentialSpecSchema) }),
   configSchema: z.record(z.string(), z.json()),
+  config: z
+    .object({
+      install: z.record(z.string(), z.json()),
+      run: z.record(z.string(), z.json()),
+      snapshot: z.record(z.string(), z.json()),
+      snapshotKeys: z.array(z.string()),
+    })
+    .optional(),
   ownsUnprefixedModelRefs: z.literal(true).optional(),
 });
 export type ProviderPluginDescriptor = z.infer<typeof providerPluginDescriptorSchema>;
@@ -113,6 +122,11 @@ export const resolveCredentialModelRequestSchema = checkCredentialRequestSchema.
 });
 export const resolveCredentialModelResponseSchema = z.object({ model: z.string().optional() });
 
+export const diagnoseRequestSchema = z.object({
+  assistantConfig: configSchema.optional(),
+});
+export const listModelsRequestSchema = z.object({});
+
 // ACP requires a stopReason even when the provider cannot report one. This response
 // is lifecycle acknowledgement only; the host's result comes from the unchanged chunk.
 export function acpStopReason(
@@ -137,4 +151,8 @@ export const providerPluginWireSchemas = {
   ProviderCheckCredentialResponse: credentialStatusSchema,
   ProviderResolveCredentialModelRequest: resolveCredentialModelRequestSchema,
   ProviderResolveCredentialModelResponse: resolveCredentialModelResponseSchema,
+  ProviderDiagnoseRequest: diagnoseRequestSchema,
+  ProviderDiagnoseResponse: providerDiagnosticsSchema,
+  ProviderListModelsRequest: listModelsRequestSchema,
+  ProviderListModelsResponse: providerModelListSchema,
 };

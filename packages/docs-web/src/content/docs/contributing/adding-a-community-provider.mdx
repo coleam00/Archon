@@ -56,13 +56,29 @@ await serveProvider({ descriptor, create: () => new ExampleProvider() });
 ```
 
 `capabilities` must provide the full `ProviderCapabilities` shape. The descriptor's
-JSON Schema validates provider defaults and run configuration. Credentials are a static
+`configSchema` validates all configuration scopes for existing v1 plugins. A provider can
+add `config: { install, run, snapshot, snapshotKeys }` to use separate JSON Schemas
+for install defaults, per-run settings, and persisted snapshots. Keep `configSchema`
+for older hosts; newer hosts prefer `config`. Generate these schemas from the same
+schemas used by the in-process parser. `snapshotKeys` lists the fields retained before
+snapshot validation, because JSON Schema conversion preserves unknown keys when
+`additionalProperties` is omitted. Derive that list from the snapshot schema rather
+than maintaining it separately. Credentials are a static
 list of vendor specs; declare only vendors the provider consumes. API-key vendors must
 have an existing Archon delivery rule. With one vendor, all models use it; with several,
-the model's `vendor/` prefix selects a declared vendor. An empty list uses native auth.
+the model's `vendor/` prefix selects a declared vendor after credential alias normalization. An empty list uses native auth.
 `checkCredential` returns `CredentialStatus` for doctor and run preflight, and receives
 its environment and abort signal from Archon. Return `not_checked` when the runtime
 cannot check without spending on a session.
+
+Optional `IAgentProvider.diagnose({ assistantConfig })` and `listModels()` hooks
+serve information to hosts through `_archon/diagnose` and `_archon/list_models`.
+Diagnostics return `{ checks: [{ id, label, status, message, remedy? }] }`, with
+`status` one of `ok`, `warn`, `fail`, or `skip`. Model lists return
+`{ models: [{ id, label? }] }`. These hooks do not prompt or change configuration.
+An unsupported hook returns JSON-RPC `-32601`; it does not report an empty successful
+result. Diagnostic messages and remedies must never include credentials, tokens, or
+user message text. The host withholds plugin stderr and plugin-controlled errors.
 
 The wire uses ACP v1's `initialize`, `session/new`, `session/prompt`, and
 `session/cancel` lifecycle, with unchanged `ProviderChunk` values in `_archon/chunk`

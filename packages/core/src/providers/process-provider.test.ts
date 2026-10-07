@@ -256,7 +256,7 @@ test('abort while a settled child is closing does not deliver settled', async ()
   }
 });
 
-test.each(['turn', 'credential', 'model'] as const)(
+test.each(['turn', 'credential', 'model', 'diagnose', 'models'] as const)(
   'live transport EOF terminates the %s process',
   async operation => {
     const directory = mkdtempSync(join(tmpdir(), 'archon-provider-eof-'));
@@ -273,7 +273,11 @@ test.each(['turn', 'credential', 'model'] as const)(
           ? collect(runtime.sendQuery('turn', tmpdir()))
           : operation === 'credential'
             ? runtime.checkCredential({ env: {}, signal: new AbortController().signal })
-            : runtime.resolveCredentialModel?.({ cwd: tmpdir() });
+            : operation === 'model'
+              ? runtime.resolveCredentialModel?.({ cwd: tmpdir() })
+              : operation === 'diagnose'
+                ? runtime.diagnose?.({})
+                : runtime.listModels?.();
       await expect(request).rejects.toBeInstanceOf(ProviderPluginExitedError);
       expect(watchdogFired).toBe(false);
       expect(alive(Number(readFileSync(file, 'utf8')))).toBe(false);
@@ -312,6 +316,49 @@ test('credential crash diagnostics withhold short custom credential values', asy
     expect(failure.exitCode).toBe(7);
     expect(failure.message).not.toContain('§');
     expect(JSON.stringify(debug.mock.calls)).not.toContain('§');
+  } finally {
+    debug.mockRestore();
+  }
+});
+
+test('information hooks round-trip through fresh processes and close them', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'archon-provider-information-'));
+  try {
+    const file = join(directory, 'pid');
+    const runtime = provider('record-pid', file);
+    expect(
+      await runtime.diagnose?.({ assistantConfig: { model: 'fixture/model', omitted: undefined } })
+    ).toEqual({
+      checks: [
+        {
+          id: 'config',
+          label: 'Configuration',
+          status: 'ok',
+          message: 'Configuration inspected',
+          remedy: 'Select a model',
+        },
+      ],
+    });
+    const firstPid = Number(readFileSync(file, 'utf8'));
+    expect(alive(firstPid)).toBe(false);
+    expect(await runtime.listModels?.()).toEqual({
+      models: [{ id: 'fixture/model', label: 'Fixture model' }, { id: 'fixture/other' }],
+    });
+    const secondPid = Number(readFileSync(file, 'utf8'));
+    expect(secondPid).not.toBe(firstPid);
+    expect(alive(secondPid)).toBe(false);
+  } finally {
+    await removeTempTree(directory);
+  }
+});
+
+test('diagnostic hook errors withhold plugin prose and stderr', async () => {
+  const debug = spyOn(processLog, 'debug').mockImplementation(() => {});
+  try {
+    await expect(provider('information-crash').diagnose?.({})).rejects.toThrow(
+      'request failed (RPC -32603)'
+    );
+    expect(JSON.stringify(debug.mock.calls)).not.toContain('private message and token');
   } finally {
     debug.mockRestore();
   }

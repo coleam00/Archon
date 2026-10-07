@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { InvalidProviderRunConfigError } from '@archon/provider-contract';
 import { processProviderRegistration } from './process-registration';
-import { descriptor } from './fixtures/process-provider-data';
+import { descriptor, parseConfig } from './fixtures/process-provider-data';
 const argv = [process.execPath, 'fixture.ts'] as const;
 
 test('strict config parser applies equally to install and run', () => {
@@ -39,6 +39,8 @@ test('credential vendor selection follows single-vendor and declared prefix rule
   );
   expect(registration.credentials.vendorFor('anthropic/sonnet')).toBe('anthropic');
   expect(registration.credentials.vendorFor('openai/gpt')).toBe('openai');
+  expect(registration.credentials.vendorFor('claude/sonnet')).toBe('anthropic');
+  expect(registration.credentials.vendorFor('codex/gpt')).toBe('openai');
   expect(registration.credentials.vendorFor('unknown/model')).toBeUndefined();
   expect(registration.credentials.vendorFor(undefined)).toBeUndefined();
 });
@@ -56,4 +58,43 @@ test('undeliverable api-key vendors are rejected at registration', () => {
       argv
     )
   ).toThrow('process-fixture: no credential delivery rule for unknown');
+});
+
+test('scoped wire config agrees with the in-process parser', () => {
+  const registration = processProviderRegistration(descriptor, argv);
+  for (const scope of ['install', 'run', 'snapshot'] as const) {
+    for (const raw of [
+      {},
+      { model: 'model' },
+      { model: 'model', env: { TOKEN: 'private' } },
+      { model: 42 },
+      { model: '' },
+      { env: { TOKEN: 42 } },
+      { unknown: true },
+      { model: 'model', env: 42 },
+    ]) {
+      const expected = (() => {
+        try {
+          return { value: parseConfig(raw, scope) };
+        } catch {
+          return undefined;
+        }
+      })();
+      if (expected) expect(registration.parseConfig(raw, scope)).toEqual(expected.value);
+      else
+        expect(() => registration.parseConfig(raw, scope)).toThrow(InvalidProviderRunConfigError);
+    }
+  }
+  expect(
+    registration.parseConfig({ model: 'model', env: { TOKEN: 'private' } }, 'snapshot')
+  ).toEqual({ model: 'model' });
+});
+
+test('legacy v1 descriptors still validate all scopes with configSchema', () => {
+  const { config: _config, ...legacy } = descriptor;
+  const registration = processProviderRegistration(legacy, argv);
+  for (const scope of ['install', 'run', 'snapshot'] as const) {
+    expect(registration.parseConfig({ model: 'model' }, scope)).toEqual({ model: 'model' });
+    expect(() => registration.parseConfig({ unknown: true }, scope)).toThrow();
+  }
 });

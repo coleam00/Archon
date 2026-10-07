@@ -65,6 +65,10 @@ test('test provider conforms and carries identical chunks in process, over strea
     for (const provider of [createProvider(stateFile), client, external])
       expect(await suite(provider, stateFile)).toEqual([]);
     for (const provider of [create(), client, external]) {
+      expect(await provider.diagnose?.({ assistantConfig: { model: 'fixture/model' } })).toEqual(
+        await create().diagnose?.({ assistantConfig: { model: 'fixture/model' } })
+      );
+      expect(await provider.listModels?.()).toEqual(await create().listModels?.());
       expect(
         await Array.fromAsync(
           provider.sendQuery('structured', import.meta.dir, 'previous-session', {

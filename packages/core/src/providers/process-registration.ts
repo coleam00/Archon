@@ -1,3 +1,4 @@
+import { normalizeCredentialVendor } from '@archon/providers';
 import { z } from 'zod';
 import {
   InvalidProviderRunConfigError,
@@ -26,7 +27,15 @@ export function processProviderRegistration(
       );
     }
   }
-  const schema = z.fromJSONSchema(descriptor.configSchema);
+  const config = descriptor.config;
+  const legacySchema = z.fromJSONSchema(descriptor.configSchema);
+  const schemas = config
+    ? {
+        install: z.fromJSONSchema(config.install),
+        run: z.fromJSONSchema(config.run),
+        snapshot: z.fromJSONSchema(config.snapshot),
+      }
+    : { install: legacySchema, run: legacySchema, snapshot: legacySchema };
   const specs = descriptor.credentials.specs;
   return {
     id: descriptor.id,
@@ -38,12 +47,19 @@ export function processProviderRegistration(
       ...descriptor.credentials,
       vendorFor(model): string | undefined {
         if (specs.length === 1) return specs[0].vendor;
-        const prefix = model?.split('/')[0];
+        const prefix =
+          model === undefined ? undefined : normalizeCredentialVendor(model.split('/')[0]);
         return specs.find(spec => spec.vendor === prefix)?.vendor;
       },
     },
-    parseConfig(raw): ProviderDefaults {
-      const parsed = schema.safeParse(raw);
+    parseConfig(raw, scope): ProviderDefaults {
+      const input =
+        scope === 'snapshot' && config
+          ? Object.fromEntries(
+              Object.entries(raw).filter(([key]) => config.snapshotKeys.includes(key))
+            )
+          : raw;
+      const parsed = schemas[scope].safeParse(input);
       if (!parsed.success) {
         const issue = parsed.error.issues[0];
         throw new InvalidProviderRunConfigError(
