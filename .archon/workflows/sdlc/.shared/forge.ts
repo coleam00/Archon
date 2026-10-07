@@ -497,6 +497,12 @@ export function preferredChecks(observation: ChecksObservation): CheckSet {
   return observation.required ?? observation;
 }
 
+/**
+ * The URL of the issue a `workitem.create` filed or recovered. A recovered issue
+ * (`changed: false`, found by its marker) counts only while it is open: a closed one
+ * was settled by a maintainer, and reporting it as filed would leave this record
+ * unpublished.
+ */
 export function parseCreatedWorkItem(value: unknown, repo: QualifiedPr['repo']): string {
   const result = record(value);
   const item = record(result?.workitem);
@@ -511,6 +517,9 @@ export function parseCreatedWorkItem(value: unknown, repo: QualifiedPr['repo']):
     (item.state !== 'open' && item.state !== 'closed')
   )
     throw new Error('forge returned an invalid created work item');
+  if (item.state !== 'open') {
+    throw new Error(`forge recovered ${item.url}, which is closed, instead of filing an open issue`);
+  }
   return item.url;
 }
 export function readWorkItemLabels(ref: QualifiedPr): string[] {

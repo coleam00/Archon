@@ -201,11 +201,26 @@ test('standalone work-item projection accepts the owning identity and rejects a 
     ref: { repo, number: 1 },
     kind: 'issue',
     url: 'https://tracker.example/group/team/repo/items/1',
-    state: 'closed',
+    state: 'open',
   };
   const value = { outcome: 'applied', changed: false, workitem };
   expect(parseCreatedWorkItem(value, repo)).toBe(workitem.url);
   expect(() => parseCreatedWorkItem(value, { ...repo, path: 'other' })).toThrow();
+});
+
+// A marker can recover an issue a maintainer has since closed; reporting it as filed
+// would leave the discovery unpublished.
+test('a recovered work item that is closed is never reported as filed', () => {
+  const repo = { host: 'tracker.example', path: 'group/team/repo' };
+  const workitem: ForgeWorkItemRecord = {
+    ref: { repo, number: 1 },
+    kind: 'issue',
+    url: 'https://tracker.example/group/team/repo/items/1',
+    state: 'closed',
+  };
+  expect(() => parseCreatedWorkItem({ outcome: 'applied', changed: false, workitem }, repo)).toThrow(
+    'which is closed'
+  );
 });
 
 test('triage producer declares qualified identities and its non-tracker sentinel', () => {
@@ -227,6 +242,15 @@ test('triage producer declares qualified identities and its non-tracker sentinel
   expect(
     validateStructuredOutput({ repo: { path: 'group/team/repo' }, number: 7 }, schema).valid
   ).toBe(false);
+  // Half-qualified or mismatched pairings are re-asked at the node, never refused later.
+  for (const illegal of [
+    { repo: { host: '', path: 'group/team/repo' }, number: 7 },
+    { repo: { host: 'tracker.example', path: 'group/team/repo' }, number: 0 },
+    { repo: { host: '', path: '' }, number: 7 },
+    { repo: { host: ' ', path: 'group/team/repo' }, number: 7 },
+  ]) {
+    expect(validateStructuredOutput(illegal, schema).valid).toBe(false);
+  }
 });
 
 type ContractResult = Extract<ForgeResponse, { ok: true }>['result'];

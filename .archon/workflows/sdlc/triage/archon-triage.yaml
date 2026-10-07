@@ -94,21 +94,35 @@ nodes:
         complexity:
           type: string
           enum: [small, risky, large]
-        # The tracker item the labels address. An empty repository means the
-        # target was not a tracker issue.
+        # The tracker item the labels address: a qualified repository and a
+        # positive number, or the empty repository with number 0 when the target
+        # was not a tracker issue. Any other pairing is re-asked at this node.
         item:
-          type: object
-          properties:
-            repo:
-              type: object
-              properties:
-                host: { type: string }
-                path: { type: string }
-              required: [host, path]
+          anyOf:
+            - type: object
               additionalProperties: false
-            number:
-              type: integer
-          required: [repo, number]
+              properties:
+                repo:
+                  type: object
+                  properties:
+                    host: { type: string, pattern: '\S' }
+                    path: { type: string, pattern: '\S' }
+                  required: [host, path]
+                  additionalProperties: false
+                number: { type: integer, minimum: 1 }
+              required: [repo, number]
+            - type: object
+              additionalProperties: false
+              properties:
+                repo:
+                  type: object
+                  properties:
+                    host: { type: string, enum: [''] }
+                    path: { type: string, enum: [''] }
+                  required: [host, path]
+                  additionalProperties: false
+                number: { type: integer, enum: [0] }
+              required: [repo, number]
         area_labels:
           type: array
           items:

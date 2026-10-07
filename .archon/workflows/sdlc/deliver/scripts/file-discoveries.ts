@@ -18,8 +18,8 @@
  *   recorded in the run's artifacts, keyed by the repository, title and claim, the
  *   moment it is created, and a resume reuses it. On the gh source, only a process
  *   killed between the create and that write can file one twice; the forge source
- *   also carries the key as a body marker, by which the plugin recovers an issue it
- *   already created.
+ *   also carries a body marker scoped to this pull request, by which the plugin
+ *   recovers an issue it already created. A recovered issue that is closed refuses.
  *
  * Reads and writes go through the source the run selected. Each created issue is
  * read back before the node succeeds.
@@ -124,7 +124,11 @@ try {
       let url = ledger[key];
       if (url === undefined && source === 'forge') {
         // The plugin creates, recovers a prior create by the marker, and reads back.
-        const marker = `<!-- archon-discovery:${key} -->`;
+        // The marker is scoped to this pull request: another delivery that finds the
+        // same defect files its own issue rather than recovering one a maintainer
+        // may have settled for a different change.
+        const scope = createHash('sha256').update(`${pr.url}\n${key}`).digest('hex');
+        const marker = `<!-- archon-discovery:${scope} -->`;
         url = parseCreatedWorkItem(
           invokeForge('workitem.create', {
             repo: pr.repo,
