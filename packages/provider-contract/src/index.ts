@@ -108,3 +108,5 @@ export {
   requireProvider,
   parseProviderRunModel,
 } from './registration';
+
+export { buildProviderSubprocessEnv } from './agent-provider';
