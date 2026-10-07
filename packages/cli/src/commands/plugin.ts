@@ -48,6 +48,7 @@ import {
   type ProviderPluginDescriptor,
 } from '@archon/provider-contract/plugin';
 import {
+  assertProviderRegistrationAllowed,
   registerBuiltinProviders,
   registerCommunityProviders,
   getRegisteredProviders,
@@ -293,13 +294,7 @@ async function inspectInstallableProvider(
       ])
     ),
   ];
-  if (registrations.some(provider => provider.id === registration.id)) {
-    throw new Error(`Provider '${registration.id}' is already registered`);
-  }
-  const owner = registrations.find(provider => provider.ownsUnprefixedModelRefs);
-  if (registration.ownsUnprefixedModelRefs && owner) {
-    throw new Error(`Provider '${owner.id}' already owns unprefixed model refs`);
-  }
+  assertProviderRegistrationAllowed(registration, registrations);
   return descriptor;
 }
 

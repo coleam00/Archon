@@ -55,18 +55,26 @@ function assertValidCapabilities(entry: ProviderRegistration): void {
   }
 }
 
-/**
- * Register a provider. Throws on duplicate registration.
- */
-export function registerProvider(entry: ProviderRegistration): void {
-  if (registry.has(entry.id)) {
+export function assertProviderRegistrationAllowed(
+  entry: ProviderRegistration,
+  existing: Iterable<ProviderRegistration>
+): void {
+  const registrations = [...existing];
+  if (registrations.some(provider => provider.id === entry.id)) {
     throw new Error(`Provider '${entry.id}' is already registered`);
   }
-  const owner = [...registry.values()].find(provider => provider.ownsUnprefixedModelRefs);
+  const owner = registrations.find(provider => provider.ownsUnprefixedModelRefs);
   if (entry.ownsUnprefixedModelRefs && owner) {
     throw new Error(`Provider '${owner.id}' already owns unprefixed model refs`);
   }
   assertValidCapabilities(entry);
+}
+
+/**
+ * Register a provider. Throws on duplicate registration.
+ */
+export function registerProvider(entry: ProviderRegistration): void {
+  assertProviderRegistrationAllowed(entry, registry.values());
   registry.set(entry.id, entry);
   getLog().debug({ provider: entry.id, builtIn: entry.builtIn }, 'provider.registered');
 }
