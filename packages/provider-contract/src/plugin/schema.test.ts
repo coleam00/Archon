@@ -72,3 +72,11 @@ test('published native tool enum values enforce the same non-empty list as the o
     );
   }
 });
+
+test('JSON Schema conversion preserves unknown keys without additionalProperties: false', () => {
+  const schema = z.fromJSONSchema({ type: 'object', properties: { model: { type: 'string' } } });
+  expect(schema.parse({ model: 'model', secret: 'private' })).toEqual({
+    model: 'model',
+    secret: 'private',
+  });
+});

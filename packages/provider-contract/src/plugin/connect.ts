@@ -1,10 +1,18 @@
 import { z } from 'zod';
+import {
+  providerDiagnosticsSchema,
+  providerModelListSchema,
+  type ProviderDiagnostics,
+  type ProviderModelList,
+} from '../information';
 import type { IAgentProvider, SendQueryOptions } from '../agent-provider';
 import { credentialStatusSchema, type CredentialStatus } from '../credential-status';
 import type { ProviderChunk } from '../events';
 import type { ProviderSettled } from '../settled';
 import { PluginProtocolError, PluginRpc, type PluginIO } from './rpc';
 import {
+  diagnoseRequestSchema,
+  listModelsRequestSchema,
   chunkNotificationSchema,
   toolCallRequestSchema,
   logNotificationSchema,
@@ -25,6 +33,8 @@ export interface ConnectedProvider extends IAgentProvider {
   resolveCredentialModel(
     request: Parameters<NonNullable<IAgentProvider['resolveCredentialModel']>>[0]
   ): Promise<string | undefined>;
+  diagnose: NonNullable<IAgentProvider['diagnose']>;
+  listModels: NonNullable<IAgentProvider['listModels']>;
   close(): Promise<void>;
 }
 
@@ -128,6 +138,23 @@ export async function connectProvider(
     getType: () => descriptor.id,
     getCapabilities: () => descriptor.capabilities,
     close: () => rpc.close(),
+    async diagnose(request): Promise<ProviderDiagnostics> {
+      return rpc.parse(
+        providerDiagnosticsSchema,
+        await rpc.request(
+          '_archon/diagnose',
+          diagnoseRequestSchema.parse({
+            assistantConfig: omitUndefinedFields(request.assistantConfig),
+          })
+        )
+      );
+    },
+    async listModels(): Promise<ProviderModelList> {
+      return rpc.parse(
+        providerModelListSchema,
+        await rpc.request('_archon/list_models', listModelsRequestSchema.parse({}))
+      );
+    },
     async checkCredential(request): Promise<CredentialStatus> {
       request.signal.throwIfAborted();
       // The connection is shared with running turns, so an abort fails only this call.

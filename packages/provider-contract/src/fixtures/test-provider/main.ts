@@ -1,13 +1,20 @@
+import { z } from 'zod';
 import { existsSync, writeFileSync } from 'node:fs';
 import {
   serveProvider,
-  type ProviderPluginDescriptor,
+  providerPluginDescriptorSchema,
   type ProviderLogSink,
 } from '@archon/provider-contract/plugin';
 
 type TestProvider = ReturnType<Parameters<typeof serveProvider>[0]['create']>;
 
-export const descriptor: ProviderPluginDescriptor = {
+const modelFields = { model: z.string().min(1).optional() };
+const configSchemas = {
+  install: z.strictObject({ ...modelFields, env: z.record(z.string(), z.string()).optional() }),
+  run: z.strictObject(modelFields),
+  snapshot: z.object(modelFields),
+};
+export const descriptor = providerPluginDescriptorSchema.parse({
   protocol: 1,
   id: 'test-provider',
   displayName: 'Test provider',
@@ -17,6 +24,12 @@ export const descriptor: ProviderPluginDescriptor = {
     type: 'object',
     properties: { model: { type: 'string', minLength: 1 } },
     additionalProperties: false,
+  },
+  config: {
+    install: z.toJSONSchema(configSchemas.install, { io: 'input' }),
+    run: z.toJSONSchema(configSchemas.run, { io: 'input' }),
+    snapshot: z.toJSONSchema(configSchemas.snapshot, { io: 'input' }),
+    stripUnknownKeys: true,
   },
   capabilities: {
     backgroundWork: 'reported',
@@ -39,12 +52,26 @@ export const descriptor: ProviderPluginDescriptor = {
     nativeTools: true,
     containerExec: true,
   },
-};
+});
 
 export function createProvider(stateFile?: string, log?: ProviderLogSink): TestProvider {
   return {
     getType: () => descriptor.id,
     getCapabilities: () => descriptor.capabilities,
+    diagnose: async ({ assistantConfig }) => ({
+      checks: [
+        {
+          id: 'configuration',
+          label: 'Configuration',
+          status: assistantConfig?.model ? 'ok' : 'skip',
+          message: 'Configuration inspected',
+          remedy: 'Select a model',
+        },
+      ],
+    }),
+    listModels: async () => ({
+      models: [{ id: 'fixture/model', label: 'Fixture model' }, { id: 'fixture/other' }],
+    }),
     checkCredential: async () => ({ state: 'usable', source: 'native' }),
     async *sendQuery(prompt, _cwd, resume, options): ReturnType<TestProvider['sendQuery']> {
       if (prompt === 'parity') {

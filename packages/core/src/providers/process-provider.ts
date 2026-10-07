@@ -267,6 +267,30 @@ export class ProcessAgentProvider implements IAgentProvider {
     }
   }
 
+  async diagnose(
+    request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
+  ): ReturnType<NonNullable<IAgentProvider['diagnose']>> {
+    const process = startProcess(this.descriptor, this.argv, {});
+    try {
+      return await (await process.connect()).diagnose(request);
+    } catch (error) {
+      throw await process.failure(error);
+    } finally {
+      await process.dispose(true);
+    }
+  }
+
+  async listModels(): ReturnType<NonNullable<IAgentProvider['listModels']>> {
+    const process = startProcess(this.descriptor, this.argv, {});
+    try {
+      return await (await process.connect()).listModels();
+    } catch (error) {
+      throw await process.failure(error);
+    } finally {
+      await process.dispose(true);
+    }
+  }
+
   async resolveCredentialModel(
     request: Parameters<NonNullable<IAgentProvider['resolveCredentialModel']>>[0]
   ): Promise<string | undefined> {
