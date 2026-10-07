@@ -12,6 +12,7 @@ import type { IPlatformAdapter } from '@archon/core';
 interface MyMessageContext {
   conversationId: string;
   message: string;
+  platformUserId: string; // the authenticated sender's platform ID
 }
 
 export class MyChatAdapter implements IPlatformAdapter {
@@ -73,15 +74,19 @@ import { MyAdapter } from '@archon/adapters/community/chat/my-adapter';
 if (process.env.MY_PLATFORM_TOKEN) {
   const myAdapter = new MyAdapter(process.env.MY_PLATFORM_TOKEN);
   myAdapter.onMessage(async (ctx) => {
+    // resolveUserId (defined in this file) returns undefined when resolution fails.
+    const userId = await resolveUserId('myplatform', ctx.platformUserId, undefined);
     lockManager.acquireLock(ctx.conversationId, async () => {
       await handleMessage(myAdapter, ctx.conversationId, ctx.message, {
-        actor: { kind: 'unidentified' },
+        actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
       });
     }).catch(createMessageErrorHandler('MyPlatform', myAdapter, ctx.conversationId));
   });
   await myAdapter.start();
 }
 ```
+
+The adapter must supply `ctx.platformUserId` from its authenticated sender. Resolve it with `resolveUserId(platform, platformUserId, displayName)` before dispatch. That helper wraps `findOrCreateUserByPlatformIdentity` and returns `undefined` when resolution fails; pass `{ kind: 'unidentified' }` then, so run actions are refused. Chat adapters never pass `operator`.
 
 Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds non-interactive fresh runs. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
 

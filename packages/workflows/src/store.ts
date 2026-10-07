@@ -330,8 +330,14 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     cancellation: WorkflowCancellationEventDetails,
     expectedGate?: ExpectedApprovalGate
   ): Promise<{ resolved: boolean }>;
-  /** Atomically cancel resumable runs matching conversation_id or parent_conversation_id; return their pre-cancellation rows. */
-  cancelResumableRunsForConversation(conversationId: string): Promise<WorkflowRun[]>;
+  /**
+   * Atomically cancel resumable runs matching conversation_id or parent_conversation_id; return their pre-cancellation rows.
+   * Invoke assertMayCancel on the locked snapshot before any write; a thrown refusal aborts the transaction.
+   */
+  cancelResumableRunsForConversation(
+    conversationId: string,
+    assertMayCancel?: (runs: WorkflowRun[]) => void
+  ): Promise<WorkflowRun[]>;
   deleteWorkflowNodeSessions(filter: {
     workflow_name: string;
     scope_key?: string;

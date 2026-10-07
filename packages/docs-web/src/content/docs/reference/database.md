@@ -134,7 +134,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - One row per human (or bot) across all platforms
   - Created lazily on first sight by any chat/forge adapter
   - `display_name` and `email` are nullable until enrichment succeeds
-  - `role` (`VARCHAR`, default `'admin'`) stores `admin` or `member`. Archon explicitly writes `member` when creating a user. The database default stays `admin` for older binaries; upgrading preserves every existing user's role. Operators manage roles with [`archon user`](/reference/cli/#users-and-roles). Role-based run-action enforcement ships separately; this policy does not yet restrict actions
+  - `role` (`VARCHAR`, default `'admin'`) stores `admin` or `member`. Archon explicitly writes `member` when creating a user. The database default stays `admin` for older binaries; upgrading preserves every existing user's role. Operators manage roles with [`archon user`](/reference/cli/#users-and-roles). Only a run's starter or an admin can act on it; see [Who can act on a run](/reference/security/#who-can-act-on-a-run). Existing multi-user installs remain unprotected until the operator demotes users who should not be admins
 
 - **`remote_agent_user_identities`** - Platform-to-Archon user mapping
   - One row per `(platform, platform_user_id)` pair — Slack U-id, Telegram chat id, Discord snowflake, GitHub login, the `web` Better Auth user id, etc.

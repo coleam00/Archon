@@ -655,7 +655,7 @@ export function createInMemoryWorkflowStore(
       );
       return { resolved: true };
     }),
-    cancelResumableRunsForConversation: serialize(async id => {
+    cancelResumableRunsForConversation: serialize(async (id, assertMayCancel) => {
       const targets = newest(
         [...runs.values()].filter(
           run =>
@@ -664,6 +664,7 @@ export function createInMemoryWorkflowStore(
         )
       );
       const prior = structuredClone(targets);
+      assertMayCancel?.(structuredClone(prior));
       await terminalBatch(
         targets.map(target => ({
           run: { ...structuredClone(target), status: 'cancelled' },

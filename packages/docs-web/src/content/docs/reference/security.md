@@ -28,7 +28,7 @@ docker compose exec -u appuser app bun run cli user role <id> admin
 
 Upgrading preserves existing roles, which defaulted to `admin`. The database default remains `admin` so older binaries can still insert users without a role. To prepare an existing multi-user install, keep intended admins and deliberately demote other users with `archon user role <id> member`.
 
-**Role-based run-action enforcement ships separately.** This release changes role creation and management only; it does not restrict run actions. Existing multi-user installs remain unprotected until enforcement ships and the operator demotes users who should not be admins. The CLI is the local operator with direct database access and can change roles even when no admins remain.
+Only a run's starter or an admin can act on it; see [Who can act on a run](#who-can-act-on-a-run). Existing multi-user installs remain unprotected until the operator demotes users who should not be admins. The CLI is the local operator with direct database access and can change roles even when no admins remain.
 
 ## Permission Model
 
@@ -180,3 +180,20 @@ Put install credentials such as `GH_TOKEN` in `~/.archon/.env`. Archon's own env
 **Docker deployments:**
 - `CLAUDE_USE_GLOBAL_AUTH=true` does not work in Docker (no local `claude` CLI). Provide `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY` explicitly.
 - For Caddy Basic Auth, follow the [Docker authentication recipe](/deployment/docker/#authentication-optional-basic-auth). Its single-quoted multiline `.env` value preserves literal `$` characters in the hash.
+
+## Who can act on a run
+
+Approve, reject, respond, resume, cancel, abandon, signal and delete are authorized in core operations. `/reset` authorizes every resumable run in the conversation atomically before cancelling any of them. A refusal records no decision, changes no run, and stops no owner. HTTP returns 403; chat, forge comments, tools and Slack buttons report the refusal. Reads remain open.
+
+| Actor | Run with a starter | Run with no recorded starter |
+| --- | --- | --- |
+| Local operator | Allowed | Allowed |
+| Admin | Allowed | Allowed |
+| Member or unknown user ID | Allowed only for the starter | Refused |
+| Unidentified | Refused | Refused |
+
+The CLI is always the local operator. The console with web auth off and no resolved identity is also the operator, so a single-user install cannot be locked out. Chat and forge identities never become the operator. With web auth on, an unresolved identity is refused even when anonymous requests are admitted by the API configuration.
+
+Roles are read on each action. An operator can grant admin with `archon user role <user-id> admin`. Users are identified per platform: a member who starts a run on Slack cannot approve it from the web with a separate identity. Named gate approvers are not supported.
+
+Existing users keep their admin role on upgrade. Existing multi-user installs stay unprotected until the operator demotes users with `archon user role <user-id> member`.

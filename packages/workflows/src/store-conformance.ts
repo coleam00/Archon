@@ -962,6 +962,24 @@ export function describeWorkflowStoreConformance(
         []
       );
     });
+    test('a conversation-cancellation refusal sees the resumable snapshot and writes nothing', async () => {
+      const paused = await running(store, {
+        origin: { conversationId: CONFORMANCE_CONVERSATION_ID },
+      });
+      await store.pauseWorkflowRun(paused.id, approval);
+      const refusal = new Error('not permitted');
+      let seen: string[] = [];
+      const outcome = await store
+        .cancelResumableRunsForConversation(CONFORMANCE_CONVERSATION_ID, runs => {
+          seen = runs.map(run => run.id);
+          throw refusal;
+        })
+        .catch((error: unknown) => error);
+      expect(outcome).toBe(refusal);
+      expect(seen).toEqual([paused.id]);
+      expect(await store.getWorkflowRunStatus(paused.id)).toBe('paused');
+      expect(await types(store, paused.id)).not.toContain('workflow_cancelled');
+    });
     test('listing filters, counts, pagination and UUID prefixes agree', async () => {
       const first = await create(store, {
         id: 'abcdef00-0000-4000-8000-000000000001',

@@ -285,12 +285,13 @@ export function matchesForgeOperationResponse(
         result.value.bodyDigest === contentDigest(request.body)
       );
     case 'pr.ready':
+    case 'pr.draft':
       return (
         request.op === result.op &&
         sameTarget(result.value.target, mutationTarget(request)) &&
         sameRef(result.value.pr, request.ref) &&
         result.value.pr.state === 'open' &&
-        !result.value.pr.is_draft
+        result.value.pr.is_draft === (request.op === 'pr.draft')
       );
   }
 }
