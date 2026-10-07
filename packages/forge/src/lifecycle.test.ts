@@ -30,6 +30,7 @@ const create = {
   body: 'A body',
   draft: true,
 } satisfies ForgeRequest;
+const draft = { operationId: 'draft-1', op: 'pr.draft', ref } satisfies ForgeRequest;
 const ready = { operationId: 'ready-1', op: 'pr.ready', ref } satisfies ForgeRequest;
 const marker = '<!-- archon-review-report -->';
 const upsert = {
@@ -81,11 +82,12 @@ describe('mutation evidence at the dispatch boundary', () => {
   });
 
   // Verification is not pr.edit-body's alone: a plugin's answer to a create, a
-  // ready flip or a comment upsert is the only claim dispatch has that the write
+  // ready/draft flip or a comment upsert is the only claim dispatch has that the write
   // did what it was asked, so each op's branch is exercised both ways.
   test.each([
     ['pr.create', create],
     ['pr.ready', ready],
+    ['pr.draft', draft],
     ['comment.upsert', upsert],
   ] as const)('accepts a %s result that answers the request', async (op, request) => {
     const result = await dispatch(request);
@@ -98,6 +100,7 @@ describe('mutation evidence at the dispatch boundary', () => {
   test.each([
     ['pr.create', 'a revision it was not asked for', create],
     ['pr.ready', 'a pull request still in draft', ready],
+    ['pr.draft', 'a pull request still ready', draft],
     ['comment.upsert', 'a body it did not write', upsert],
   ] as const)('refuses a %s result naming %s', async (op, _label, request) => {
     const result = await dispatch(request, 'mismatch');
@@ -327,6 +330,36 @@ test('a partial rerun result cannot certify complete success', async () => {
     ],
   };
   expect((await dispatch(request, 'subset')).response).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response' },
+    mutation: { outcome: 'outcome_unknown' },
+  });
+});
+
+test('a plugin without draft conversion refuses without executing the operation', async () => {
+  const discovery = await discoverPlugins({
+    config: {
+      plugins: [{ plugin: 'mutator', command: process.execPath, args: [fixture] }],
+      scanPath: false,
+    },
+  });
+  for (const plugin of discovery.byHost.values()) {
+    plugin.metadata.capabilities = plugin.metadata.capabilities.filter(op => op !== 'pr.draft');
+    plugin.command = '/missing-operation-executable';
+  }
+  expect((await dispatchForge(draft, { discovery })).response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    mutation: { op: 'pr.draft', outcome: 'refused' },
+  });
+});
+
+test('draft conversion accepts unchanged evidence and rejects a non-open read-back', async () => {
+  expect((await dispatch(draft, 'unchanged')).response).toMatchObject({
+    ok: true,
+    result: { op: 'pr.draft', value: { changed: false, pr: { is_draft: true } } },
+  });
+  expect((await dispatch(draft, 'not-open')).response).toMatchObject({
     ok: false,
     error: { kind: 'invalid_response' },
     mutation: { outcome: 'outcome_unknown' },

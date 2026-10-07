@@ -675,10 +675,12 @@ export async function getPausedWorkflowRun(conversationId: string): Promise<Work
  * than reporting a false all-clear.
  */
 export async function cancelResumableRunsForConversation(
-  conversationId: string
+  conversationId: string,
+  assertMayCancel?: (runs: WorkflowRun[]) => void
 ): Promise<WorkflowRun[]> {
   const dialect = getDialect();
   let cancelledRuns: WorkflowRun[];
+  let authorizationRefused = false;
   try {
     cancelledRuns = await getDatabase().withTransaction(async query => {
       const snapshot = await query<WorkflowRunRow>(
@@ -690,6 +692,12 @@ export async function cancelResumableRunsForConversation(
       const resumable = snapshot.rows.filter(
         run => run.status === 'paused' || run.status === 'failed'
       );
+      try {
+        assertMayCancel?.(resumable.map(run => normalizeWorkflowRun(run)));
+      } catch (error) {
+        authorizationRefused = true;
+        throw error;
+      }
       if (resumable.length === 0) return [];
 
       const result = await query(
@@ -715,6 +723,7 @@ export async function cancelResumableRunsForConversation(
     });
   } catch (error) {
     const err = error as Error;
+    if (authorizationRefused) throw error;
     getLog().error({ err, conversationId }, 'db.workflow_run_cancel_resumable_for_conv_failed');
     throw new Error(`Failed to cancel resumable runs for conversation: ${err.message}`);
   }

@@ -2277,8 +2277,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     };
   }
 
+  const resumableRuns = new Map<string, WorkflowRun>();
+
   function makeResumableRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
-    return makeRun({
+    const run = makeRun({
       id: 'resumable-run-1',
       origin: { conversationId: 'conv-1', parentConversationId: 'conv-1' },
       parent_conversation_id: 'conv-1',
@@ -2287,9 +2289,14 @@ describe('workflow dispatch routing — interactive flag', () => {
       working_path: '/repos/test-repo/worktrees/feature',
       ...overrides,
     });
+    resumableRuns.set(run.id, run);
+    return run;
   }
 
   beforeEach(() => {
+    resumableRuns.clear();
+    mockGetWorkflowRunDb.mockReset();
+    mockGetWorkflowRunDb.mockImplementation(async id => resumableRuns.get(id) ?? null);
     capturedSourceOwnerCalls.length = 0;
     mockExecuteWorkflow.mockClear();
     mockDispatchBackgroundWorkflow.mockClear();
@@ -2899,6 +2906,82 @@ describe('workflow dispatch routing — interactive flag', () => {
       'Cannot resume old-run-missing-path: missing working path.'
     );
   });
+
+  for (const entry of ['slash command', 'batch invocation', 'stream invocation'] as const) {
+    for (const [label, actor, starter, role, allowed] of [
+      ['other member', { kind: 'user', userId: 'member-b' }, 'starter-a', 'member', false],
+      ['unidentified', { kind: 'unidentified' }, 'starter-a', undefined, false],
+      ['null starter', { kind: 'user', userId: 'member-b' }, null, 'member', false],
+      ['starter', { kind: 'user', userId: 'starter-a' }, 'starter-a', 'member', true],
+      ['admin', { kind: 'user', userId: 'admin-b' }, 'starter-a', 'admin', true],
+      ['operator', { kind: 'operator' }, null, undefined, true],
+    ] as const) {
+      test(`implicit continuation authorization: ${entry}, ${label}`, async () => {
+        const users = await import('../db/users');
+        const lookup = spyOn(users, 'getUserById').mockResolvedValue(
+          role
+            ? {
+                id: actor.kind === 'user' ? actor.userId : 'unused',
+                role,
+                display_name: null,
+                email: null,
+                created_at: new Date(),
+                updated_at: new Date(),
+              }
+            : null
+        );
+        const run = makeResumableRun({ status: 'paused', user_id: starter });
+        mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+        mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+        mockFindResumableRunByParentConversation.mockResolvedValueOnce(run);
+        mockValidateAndResolveIsolation.mockClear();
+        const platform = makePlatform();
+        if (entry === 'slash command')
+          mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult(true));
+        else {
+          mockListCodebases.mockResolvedValueOnce([makeCodebase()]);
+          platform.getStreamingMode.mockReturnValue(
+            entry === 'stream invocation' ? 'stream' : 'batch'
+          );
+          mockSendQuery.mockImplementationOnce(async function* () {
+            yield {
+              type: 'agent_message_chunk',
+              text: '/invoke-workflow test-workflow --project test-repo',
+            };
+            yield { type: 'result', sessionId: 'session-1' };
+          });
+        }
+        try {
+          await handleMessage(
+            platform,
+            'conv-1',
+            entry === 'slash command' ? '/workflow run test-workflow' : 'Continue the workflow',
+            { actor }
+          );
+          if (allowed) {
+            expect(mockStartRunLiveOwner).toHaveBeenCalledWith(run.id);
+            expect(mockHydrateResumableRun).toHaveBeenCalled();
+            expect(mockExecuteWorkflow).toHaveBeenCalled();
+          } else {
+            expect(platform.sendMessage).toHaveBeenCalledWith(
+              'conv-1',
+              expect.stringContaining(
+                starter
+                  ? 'Only the user who started this run or an admin'
+                  : 'This run has no recorded starter'
+              )
+            );
+            expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+            expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+            expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+            expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+          }
+        } finally {
+          lookup.mockRestore();
+        }
+      });
+    }
+  }
 
   test('foreground_resume_detected: preserves origin when a paused run exists', async () => {
     // Regression for the foreground-resume branch: when
@@ -6714,6 +6797,7 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
   }
 
   beforeEach(async () => {
+    mockGetWorkflowRunDb.mockResolvedValue(makeGateRun());
     mockExecuteWorkflow.mockClear();
     mockHydrateResumableRun.mockClear();
     mockValidateAndResolveIsolation.mockClear();
@@ -6740,7 +6824,8 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
       makeConversation({ codebase_id: 'codebase-1' }),
       makeCodebase(),
       makeGateRun(),
-      'approve'
+      'approve',
+      operator
     );
 
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
@@ -6788,7 +6873,8 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
       makeConversation({ codebase_id: 'codebase-1' }),
       makeCodebase({ default_cwd: source }),
       run,
-      'approve'
+      'approve',
+      operator
     );
 
     expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
@@ -6817,7 +6903,8 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
       makeConversation({ codebase_id: 'codebase-1' }),
       makeCodebase(),
       makeGateRun(),
-      'approve'
+      'approve',
+      operator
     );
 
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
@@ -6840,7 +6927,8 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
       makeConversation({ codebase_id: 'codebase-1' }),
       makeCodebase(),
       makeGateRun(),
-      'approve'
+      'approve',
+      operator
     );
 
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
@@ -6862,7 +6950,8 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
       makeConversation({ codebase_id: 'codebase-1' }),
       makeCodebase(),
       makeGateRun(),
-      'approve'
+      'approve',
+      operator
     );
 
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -6893,7 +6982,8 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
       makeConversation({ codebase_id: 'codebase-1' }),
       makeCodebase(),
       makeGateRun(),
-      'approve'
+      'approve',
+      operator
     );
     return (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
       c => (c as unknown[])[1] as string
@@ -6955,7 +7045,8 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
         makeConversation(),
         null,
         makeGateRun(),
-        'approve'
+        'approve',
+        operator
       );
       const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
         c => (c as unknown[])[1] as string

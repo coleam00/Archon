@@ -1,4 +1,4 @@
-import { beforeEach, expect, mock, test } from 'bun:test';
+import { beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import type {
   ContinuationWakeOutcome,
   ContinuationAdmission,
@@ -220,5 +220,38 @@ test('schedule management bypasses invalid App config while execution refuses be
     expect(signal).not.toHaveBeenCalled();
   } finally {
     process.env = savedEnv;
+  }
+});
+
+test('CLI signal uses the core operation as the local operator', async () => {
+  const sqlHost = await import('@archon/core/workflows/sql-host');
+  const operations = sqlHost.createSqlWorkflowOperations();
+  const action = spyOn(operations, 'signalWorkflowWait').mockResolvedValue({ signaled: true });
+  const factory = spyOn(sqlHost, 'createSqlWorkflowOperations').mockReturnValue(operations);
+  const resumeAt = '2026-10-06T00:00:00.000Z';
+  getRun.mockResolvedValue(
+    makeTestWorkflowRun({
+      metadata: {
+        wait: {
+          owner: 'node',
+          kind: 'event',
+          nodeId: 'wait',
+          event: 'ready',
+          resumeAt,
+          waitingSince: '2026-10-05T00:00:00.000Z',
+        },
+      },
+    })
+  );
+  try {
+    await workflowContinuationCommand('signal', ['run'], {
+      json: true,
+      event: 'ready',
+      'resume-at': resumeAt,
+    });
+    expect(action).toHaveBeenCalledWith('run', 'ready', resumeAt, undefined, { kind: 'operator' });
+  } finally {
+    factory.mockRestore();
+    action.mockRestore();
   }
 });

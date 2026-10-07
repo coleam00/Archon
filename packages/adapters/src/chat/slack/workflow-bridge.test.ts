@@ -1,3 +1,4 @@
+import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 /**
  * Unit tests for SlackWorkflowBridge.
  *
@@ -158,6 +159,9 @@ function makeFakeAdapter(allowedUserIds: string[] = []) {
   const fakeApp = {
     client: {
       chat: {
+        postEphemeral: mock(async (_args: { channel: string; user: string; text: string }) => ({
+          ok: true,
+        })),
         postMessage: mock(async (args: PostedMessage) => {
           posted.push(args);
           return { ts: `${nextTs++}.000` };
@@ -867,6 +871,32 @@ describe('SlackWorkflowBridge', () => {
     expect(mockCancelWorkflow).toHaveBeenCalledWith('r1', { kind: 'user', userId: 'archon-U123' });
   });
 
+  for (const decision of ['approve', 'reject', 'cancel'] as const) {
+    test(`${decision} refusal is ephemeral and leaves controls unchanged`, async () => {
+      const { adapter, fakeApp, updated, dispatchAction } = makeFakeAdapter();
+      const error = new RunActionForbiddenError(decision, 'starter');
+      if (decision === 'cancel') mockCancelWorkflow.mockRejectedValueOnce(error);
+      else mockRespondToWorkflow.mockRejectedValueOnce(error);
+      new SlackWorkflowBridge(adapter as never).attach();
+      await dispatchAction(
+        decision === 'cancel' ? 'cancel:r1' : `${decision}:r1:review`,
+        {
+          user: { id: 'U123' },
+          channel: { id: 'C1' },
+          message: { ts: '1.000' },
+        },
+        decision === 'cancel'
+          ? undefined
+          : JSON.stringify({ runId: 'r1', nodeId: 'review', decision })
+      );
+      expect(fakeApp.client.chat.postEphemeral).toHaveBeenCalledWith({
+        channel: 'C1',
+        user: 'U123',
+        text: error.message,
+      });
+      expect(updated).toHaveLength(0);
+    });
+  }
   describe('cancel button owner outcomes (#2325)', () => {
     async function clickCancel(): Promise<ReturnType<typeof makeFakeAdapter>['posted']> {
       const { adapter, posted, triggerMap, dispatchAction } = makeFakeAdapter();

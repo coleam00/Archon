@@ -1,7 +1,6 @@
 /**
- * The ready flip: the one irreversible step, so it re-verifies CI itself instead of
- * trusting the loop above. It reads through the pack's check reader (`gh` by
- * default, `archon forge checks` with `ARCHON_SDLC_FORGE=forge`) and refuses any
+ * The ready flip re-verifies CI itself instead of trusting the loop above. It reads
+ * through the pack's check reader (`gh` by default, `archon forge checks` with `ARCHON_SDLC_FORGE=forge`) and refuses any
  * pending, red, gated or unknown check, and any failed read: a failed observation
  * is not evidence that no CI exists. Both the read and the flip target the recorded
  * qualified pull request, never the checkout's remote, and both go through the
