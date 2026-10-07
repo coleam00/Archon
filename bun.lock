@@ -90,6 +90,7 @@
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",
+        "@archon/plugin-manifest": "workspace:*",
         "@archon/provider-contract": "workspace:*",
         "@archon/providers": "workspace:*",
         "@archon/workflows": "workspace:*",
@@ -170,6 +171,8 @@
       "name": "@archon/plugin-manifest",
       "version": "0.11.1",
       "dependencies": {
+        "@archon/paths": "workspace:*",
+        "@archon/provider-contract": "workspace:*",
         "zod": "^4.4.3",
       },
       "peerDependencies": {
