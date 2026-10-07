@@ -82,6 +82,12 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
       'Proves the provider-event reader and its legacy-row translation on jsonb, against a live PostgreSQL service.',
   },
   {
+    command:
+      'bun test packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts',
+    reason:
+      'Runs the store contract in scratch databases on a PostgreSQL service with database creation permission.',
+  },
+  {
     command: 'bun run build:docs',
     reason:
       "Astro's CLI runs under Node, not Bun, so a checkout with only Bun cannot build the docs " +
