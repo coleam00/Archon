@@ -8,8 +8,8 @@
  * limit. Git's own credential setup applies to its calls; the raw manifest read
  * is unauthenticated, so a private repository cannot be installed.
  *
- * - `kind: forge`: the executable comes from the release assets and lands in
- *   the directory forge discovery scans. No `@tag` means the latest release.
+ * - `kind: forge` or `provider`: the executable comes from the release assets and lands in
+ *   the plugins directory. No `@tag` means the latest release.
  * - `kind: workflow-pack`: the tag, or the default branch head, is fetched with
  *   git at depth 1 and the plugin directory of that commit becomes one installed
  *   tree that workflow discovery reads.
@@ -20,13 +20,15 @@ import { dirname, join } from 'node:path';
 import { execFileAsync, findRepoRoot } from '@archon/git';
 import {
   describeIssues,
-  forgeReleaseAsset,
-  isForgeReceipt,
+  pluginReleaseAsset,
+  isBinaryReceipt,
+  isProviderReceipt,
   isPluginPathSegment,
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
   pluginReceiptSchema,
   type ForgeManifest,
+  type ProviderManifest,
   type PluginManifest,
   type PluginReceipt,
   type WorkflowPackReceipt,
@@ -39,6 +41,16 @@ import {
   receiptPath,
   RECEIPT_FILE,
 } from '@archon/plugin-manifest/store';
+import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-plugin';
+import { processProviderRegistration } from '@archon/core/providers/process-registration';
+import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
+import { withPluginMutationLock } from './plugin-mutation-lock';
+import {
+  assertProviderRegistrationAllowed,
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  getRegisteredProviders,
+} from '@archon/providers';
 
 export interface PluginEnvironment {
   /** `ARCHON_HOME/plugins`, the directory forge discovery scans. */
@@ -63,12 +75,17 @@ interface PluginRef {
 }
 
 /**
- * What a ref resolved to: the commit and the manifest at that commit. A forge plugin's
+ * What a ref resolved to: the commit and the manifest at that commit. A binary plugin's
  * files are release assets, so it always resolves to a tag; a pack may resolve to the
  * default branch head.
  */
 type ResolvedSource =
-  | { kind: 'forge'; tag: string; commit: string; manifest: ForgeManifest }
+  | {
+      kind: 'forge' | 'provider';
+      tag: string;
+      commit: string;
+      manifest: ForgeManifest | ProviderManifest;
+    }
   | { kind: 'workflow-pack'; tag?: string; commit: string; manifest: WorkflowPackManifest };
 
 function resolved(
@@ -79,7 +96,8 @@ function resolved(
   if (manifest.kind === 'workflow-pack') {
     return { kind: manifest.kind, ...(tag !== undefined ? { tag } : {}), commit, manifest };
   }
-  if (tag === undefined) throw new Error(`forge plugin ${manifest.name} resolved without a tag`);
+  if (tag === undefined)
+    throw new Error(`${manifest.kind} plugin ${manifest.name} resolved without a tag`);
   return { kind: manifest.kind, tag, commit, manifest };
 }
 
@@ -106,7 +124,7 @@ export function parsePluginRef(input: string): PluginRef {
  * `archon-forge-`, so a half-written binary is never executed by a concurrent scan.
  */
 export function stagingName(fileName: string): string {
-  return `.${fileName}.${randomBytes(6).toString('hex')}.partial`;
+  return `.${fileName}.${randomBytes(6).toString('hex')}.partial${fileName.endsWith('.exe') ? '.exe' : ''}`;
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -207,7 +225,7 @@ async function fetchManifest(
  * Resolve a ref to one commit and its manifest. A named tag is used as given.
  * Without one, the manifest at the default branch head decides: a workflow
  * pack goes on to fetch that ref, and the commit the fetch returns is the one
- * installed; a forge plugin's binaries exist only as release assets, so it moves
+ * installed; a binary plugin's binaries exist only as release assets, so it moves
  * on to the latest release. `update` already knows the kind from its receipt.
  */
 async function resolveSource(
@@ -222,10 +240,10 @@ async function resolveSource(
     return resolved(tag, commit, await fetchManifest(ref, commit, rawUrl));
   };
   if (ref.tag) return atTag(ref.tag);
-  if (kind === 'forge') return atTag(await latestReleaseTag(ref, githubUrl));
+  if (kind === 'forge' || kind === 'provider') return atTag(await latestReleaseTag(ref, githubUrl));
   const commit = await resolveHeadCommit(ref, githubUrl);
   const manifest = await fetchManifest(ref, commit, rawUrl);
-  if (manifest.kind === 'forge') return atTag(await latestReleaseTag(ref, githubUrl));
+  if (manifest.kind !== 'workflow-pack') return atTag(await latestReleaseTag(ref, githubUrl));
   return resolved(undefined, commit, manifest);
 }
 
@@ -252,9 +270,31 @@ function expectedDigest(checksums: string, asset: string): string | undefined {
   return undefined;
 }
 
-async function installForge(
+async function inspectInstallableProvider(
+  stagedBinary: string,
+  manifest: ProviderManifest,
+  receipts: readonly PluginReceipt[],
+  id: string
+): Promise<ProviderPluginDescriptor> {
+  const descriptor = await inspectProviderPlugin(stagedBinary);
+  if (manifest.executable !== `archon-provider-${descriptor.id}`) {
+    throw new Error(`Provider plugin ${id}: descriptor id must match ${manifest.executable}`);
+  }
+  const registration = processProviderRegistration(descriptor, [stagedBinary]);
+  registerBuiltinProviders();
+  registerCommunityProviders();
+  const installed = receipts.filter(isProviderReceipt).filter(receipt => receipt.id !== id);
+  const registrations = [
+    ...getRegisteredProviders(),
+    ...installed.map(receipt => processProviderRegistration(receipt.descriptor, [stagedBinary])),
+  ];
+  assertProviderRegistrationAllowed(registration, registrations);
+  return descriptor;
+}
+
+async function installBinaryPlugin(
   ref: PluginRef,
-  source: Extract<ResolvedSource, { kind: 'forge' }>,
+  source: Extract<ResolvedSource, { kind: 'forge' | 'provider' }>,
   receipts: PluginReceipt[],
   previous: PluginReceipt | undefined,
   env: PluginEnvironment
@@ -265,7 +305,7 @@ async function installForge(
   const fileName = `${manifest.executable}${platform === 'win32' ? '.exe' : ''}`;
   const target = join(env.pluginsDir, fileName);
   const owner = receipts.find(
-    receipt => isForgeReceipt(receipt) && receipt.files.some(f => f.path === fileName)
+    receipt => isBinaryReceipt(receipt) && receipt.files.some(f => f.path === fileName)
   );
   if (owner && owner.id !== ref.id) {
     throw new Error(
@@ -279,7 +319,7 @@ async function installForge(
   }
 
   const bunTarget = `bun-${platform === 'win32' ? 'windows' : platform}-${env.arch ?? process.arch}`;
-  const asset = forgeReleaseAsset(manifest.executable, bunTarget);
+  const asset = pluginReleaseAsset(manifest.executable, bunTarget);
   const releaseUrl = `${githubUrl}/${ref.owner}/${ref.repo}/releases/download/${encodeURIComponent(tag)}`;
   const bytes = await download(`${releaseUrl}/${asset}`);
   if (!bytes) {
@@ -297,15 +337,6 @@ async function installForge(
     );
   }
 
-  const receipt: PluginReceipt = pluginReceiptSchema.parse({
-    schemaVersion: 1,
-    id: ref.id,
-    manifest,
-    tag,
-    commit,
-    installedAt: new Date().toISOString(),
-    files: [{ path: fileName, sha256: digest }],
-  });
   const receiptFile = receiptPath(env.pluginsDir, ref.id);
   const stagedBinary = join(env.pluginsDir, stagingName(fileName));
   const stagedReceipt = join(dirname(receiptFile), stagingName(RECEIPT_FILE));
@@ -313,6 +344,20 @@ async function installForge(
   try {
     await writeFile(stagedBinary, bytes);
     await chmod(stagedBinary, 0o755);
+    const descriptor =
+      manifest.kind === 'provider'
+        ? await inspectInstallableProvider(stagedBinary, manifest, receipts, ref.id)
+        : undefined;
+    const receipt = pluginReceiptSchema.parse({
+      schemaVersion: 1,
+      id: ref.id,
+      manifest,
+      tag,
+      commit,
+      installedAt: new Date().toISOString(),
+      files: [{ path: fileName, sha256: digest }],
+      ...(descriptor ? { descriptor } : {}),
+    });
     await writeFile(stagedReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
     // Receipt first: if the binary rename then fails, the receipt still owns the
     // name and `update` or `remove` can recover. The other order could strand a
@@ -323,7 +368,7 @@ async function installForge(
     await rm(stagedBinary, { force: true });
     await rm(stagedReceipt, { force: true });
   }
-  if (previous && isForgeReceipt(previous)) {
+  if (previous && isBinaryReceipt(previous)) {
     for (const file of previous.files) {
       if (file.path !== fileName) await rm(join(env.pluginsDir, file.path), { force: true });
     }
@@ -642,12 +687,12 @@ async function installPlugin(
       `${ref.id} is now a ${source.kind} plugin, not ${previous.manifest.kind}. Remove it, then install it again.`
     );
   }
-  if (source.kind === 'forge') {
+  if (source.kind !== 'workflow-pack') {
     assertCompatible(`${ref.id}@${source.tag}`, source.manifest, env.archonVersion);
-    await installForge(ref, source, receipts, previous, env);
+    await installBinaryPlugin(ref, source, receipts, previous, env);
   } else {
     // The kind check above means an existing receipt here is a pack receipt.
-    const packReceipt = previous && !isForgeReceipt(previous) ? previous : undefined;
+    const packReceipt = previous && !isBinaryReceipt(previous) ? previous : undefined;
     await installPack(ref, source, receipts, packReceipt, env);
   }
 }
@@ -656,7 +701,7 @@ async function removePlugin(ref: PluginRef, env: PluginEnvironment): Promise<voi
   const receipt = (await readReceipts(env.pluginsDir)).find(candidate => candidate.id === ref.id);
   if (!receipt) throw new Error(`${ref.id} is not installed`);
   let removed: string;
-  if (isForgeReceipt(receipt)) {
+  if (isBinaryReceipt(receipt)) {
     for (const file of receipt.files) await rm(join(env.pluginsDir, file.path), { force: true });
     removed = receipt.files.map(file => file.path).join(', ');
   } else {
@@ -730,9 +775,13 @@ export async function pluginCommand(
     const ref = parsePluginRef(target);
     if (subcommand === 'remove' || subcommand === 'copy') {
       if (ref.tag) throw new Error(`${subcommand} takes a plugin id without @tag: ${ref.id}`);
-      await (subcommand === 'remove' ? removePlugin(ref, env) : copyPlugin(ref, env));
+      await withPluginMutationLock(env.pluginsDir, () =>
+        subcommand === 'remove' ? removePlugin(ref, env) : copyPlugin(ref, env)
+      );
     } else {
-      await installPlugin(ref, subcommand === 'install' ? 'install' : 'update', env);
+      await withPluginMutationLock(env.pluginsDir, () =>
+        installPlugin(ref, subcommand === 'install' ? 'install' : 'update', env)
+      );
     }
     return 0;
   } catch (error) {

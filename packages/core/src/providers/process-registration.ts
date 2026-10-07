@@ -16,6 +16,9 @@ export function processProviderRegistration(
   argv: readonly [string, ...string[]]
 ): ProviderRegistration {
   const descriptor = providerPluginDescriptorSchema.parse(input);
+  if (descriptor.capabilities.sessionFork && !descriptor.capabilities.sessionResume) {
+    throw new Error(`Provider plugin ${descriptor.id}: sessionFork requires sessionResume`);
+  }
   for (const spec of descriptor.credentials.specs) {
     if (spec.kinds.includes('api_key') && !KNOWN_VENDORS.has(spec.vendor)) {
       throw new Error(

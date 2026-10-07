@@ -136,7 +136,7 @@ Also runs automatically at the end of `archon setup` (optional).
 
 ### `plugin`
 
-Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Two kinds install: forge plugins and workflow packs.
+Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Forge plugins, provider plugins, and workflow packs install through this command.
 
 ```bash
 archon plugin install coleam00/Archon/plugins/forge-github         # forge: latest release
@@ -149,7 +149,9 @@ archon plugin copy <id>                                             # workflow p
 archon plugin list
 ```
 
-`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the manifest's `compatibility.archon` range, runs before anything is written. Without `@<tag>`, the manifest at the default branch head decides the kind: a workflow pack installs that commit, and a forge plugin installs its latest release, because its executables exist only as release assets. See [Forge operations](/reference/forge/#install-the-github-plugin) for what a forge install downloads and where it writes.
+`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the manifest's `compatibility.archon` range and a provider's staged handshake, runs before installed files or receipts are replaced. Without `@<tag>`, the manifest at the default branch head decides the kind: a workflow pack installs that commit, and a forge or provider plugin installs its latest release, because its executables exist only as release assets. See [Forge operations](/reference/forge/#install-the-github-plugin) for what a forge install downloads and where it writes.
+
+A provider plugin records its descriptor in the receipt and registers on the next CLI invocation or server restart. A workflow names its descriptor id in `provider:`. See [Provider plugins](/guides/publishing-plugins/#provider-plugins) for executable naming, capabilities, credentials, and the process environment.
 
 A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. Nothing updates in the background. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
 

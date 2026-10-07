@@ -6,7 +6,8 @@ import type { Conversation, UpdateConversationInput } from '../schemas/conversat
 import type { MessageRow } from '../schemas/message';
 import type { IWorkflowEngine } from '@archon/workflows/engine-port';
 import type { WorkflowOperations } from '../operations/workflow-operations';
-import type { createWorkflowDeps } from './store-adapter';
+import type { MergedConfig } from '../config/config-types';
+import type { WorkflowDeps } from '@archon/workflows/deps';
 
 export interface IWorkflowHostStore {
   codebases: {
@@ -54,7 +55,7 @@ export interface IWorkflowHostStore {
 
 /** One workflow host: the engine, operations, queries and termination share `deps.store`. */
 export interface WorkflowHost {
-  deps: ReturnType<typeof createWorkflowDeps>;
+  deps: Omit<WorkflowDeps, 'loadConfig'> & { loadConfig: (cwd: string) => Promise<MergedConfig> };
   records: IWorkflowHostStore;
   engine: IWorkflowEngine;
   operations: WorkflowOperations;

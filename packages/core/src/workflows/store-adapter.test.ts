@@ -32,6 +32,9 @@ const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true 
 const mockFailPausedApproval = mock(() => Promise.resolve({ failed: true }));
 
 mock.module('../db/workflows', () => ({
+  insertWorkflowRun: async (): Promise<never> => {
+    throw new Error('Unexpected admission run insert');
+  },
   findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
   resolveAndCancelApprovalGate: mock(() => Promise.resolve({ resolved: true })),
   cancelResumableRunsForConversation: mock(() => Promise.resolve([])),
