@@ -136,8 +136,8 @@ test('expired legacy enterprise credential keeps the GitHub token and extension 
     });
   });
   const result = await mintOAuthApiKey(githubCopilotOAuthProvider, legacy);
-  expect(result.apiKey).toBe('enterprise-bearer');
-  expect(result.newCredentials).toMatchObject({
+  expect(result?.apiKey).toBe('enterprise-bearer');
+  expect(result?.newCredentials).toMatchObject({
     refresh: 'github-refresh',
     enterpriseUrl: 'company.ghe.com',
     extra: 'kept',

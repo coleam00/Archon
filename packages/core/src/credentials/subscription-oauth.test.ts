@@ -40,10 +40,10 @@ describe('mintOAuthApiKey', () => {
     const result = await mintOAuthApiKey(provider, creds);
 
     expect(refreshToken).not.toHaveBeenCalled();
-    expect(result.apiKey).toBe('stored-access');
+    expect(result?.apiKey).toBe('stored-access');
     // Echoing the input lets the key-store's field comparison see "not
     // rotated" and skip the resave.
-    expect(result.newCredentials).toBe(creds);
+    expect(result?.newCredentials).toBe(creds);
   });
 
   test('expired credential refreshes BEFORE minting and returns the rotated blob', async () => {
@@ -53,8 +53,8 @@ describe('mintOAuthApiKey', () => {
     const result = await mintOAuthApiKey(provider, creds);
 
     expect(refreshToken).toHaveBeenCalledTimes(1);
-    expect(result.apiKey).toBe('refreshed-access');
-    expect(result.newCredentials.access).toBe('refreshed-access');
+    expect(result?.apiKey).toBe('refreshed-access');
+    expect(result?.newCredentials.access).toBe('refreshed-access');
   });
 
   test('refresh failure propagates so the caller can log oauth_refresh_failed', async () => {
@@ -66,5 +66,13 @@ describe('mintOAuthApiKey', () => {
     const creds = makeCreds(Date.now() - 1000);
 
     await expect(mintOAuthApiKey(provider, creds)).rejects.toThrow('invalid_grant');
+  });
+
+  test('unexpired credential with no access token yields null so the key store marks it unusable', async () => {
+    const { provider, refreshToken } = makeProvider();
+    const creds = { type: 'oauth', refresh: 'stored-refresh', expires: Date.now() + 3_600_000 };
+
+    expect(await mintOAuthApiKey(provider, creds)).toBeNull();
+    expect(refreshToken).not.toHaveBeenCalled();
   });
 });

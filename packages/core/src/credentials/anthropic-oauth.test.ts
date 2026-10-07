@@ -178,8 +178,8 @@ describe('Anthropic subscription OAuth', () => {
       )
     );
     const minted = await mintOAuthApiKey(anthropicOAuthProvider, legacy);
-    expect(minted.apiKey).toBe('new-access');
-    expect(minted.newCredentials).toMatchObject({ refresh: 'new-refresh', extra: 'kept' });
+    expect(minted?.apiKey).toBe('new-access');
+    expect(minted?.newCredentials).toMatchObject({ refresh: 'new-refresh', extra: 'kept' });
   });
 
   test('refresh preserves the stored refresh token when the endpoint omits it', async () => {

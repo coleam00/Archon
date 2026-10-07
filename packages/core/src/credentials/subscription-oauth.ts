@@ -123,7 +123,7 @@ export async function mintOAuthApiKey(
   provider: OAuthProviderInterface,
   credentials: OAuthCredentials,
   signal?: AbortSignal
-): Promise<{ newCredentials: OAuthCredentials; apiKey: string }> {
+): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
   if (typeof credentials.expires !== 'number' || !Number.isFinite(credentials.expires)) {
     throw new SubscriptionOAuthError('Stored subscription credential has no valid expiry.');
   }
@@ -131,5 +131,9 @@ export async function mintOAuthApiKey(
     Date.now() >= credentials.expires
       ? await provider.refreshToken(credentials, { signal })
       : credentials;
-  return { newCredentials: current, apiKey: credentialString(current, 'access') };
+  // A credential with no access token is unusable, not a failed check; null
+  // tells the key store so, as the OpenAI mint does.
+  const access = current.access;
+  if (typeof access !== 'string' || !access) return null;
+  return { newCredentials: current, apiKey: access };
 }
