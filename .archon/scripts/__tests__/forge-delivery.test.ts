@@ -182,8 +182,9 @@ describe('the forge opt-in delivers through plugin operations', () => {
 
     // 5. The ready flip, then the CI probe reads the plugin's checks.
     const flipped = through('deliver/scripts/flip-ready', { inputs: { INPUTS_PR: created.stdout } });
-    const flip = JSON.parse(flipped.stdout) as { pr_url: string; flipped_at: string };
-    expect(flip).toEqual({ pr_url: record.url, flipped_at: expect.any(String) });
+    const flip = JSON.parse(flipped.stdout) as { pr_url: unknown; flipped_at: string };
+    expect(flip.pr_url).toEqual(record.url);
+    expect(Number.isNaN(Date.parse(flip.flipped_at))).toBe(false);
     const probed = through('deliver/scripts/check-ci', {
       inputs: { INPUTS_PR: created.stdout, INPUTS_FLIPPED_AT: flip.flipped_at },
     });

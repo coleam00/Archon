@@ -1,0 +1,99 @@
+# Dry-run fixture: a correction that leaves red the base already had (inherited)
+# passes the correction gate, so its commit is pushed before the recheck reviews
+# it. A fix round that commits and does not push would hand the recheck a head the
+# pull request does not have.
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
+pr__synced: { recorded: true }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
+review-policy: { risks: "fixture-owned-policy" }
+classify:
+  tier: full
+  errors: false
+  docs: false
+  reasons:
+    tier: "stub: touches persisted state"
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false"}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
+review__coverage: { full: true, errors: false, docs: false, lenses: [seams, code, tests, simplify] }
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+review__code: "1 blocking finding"
+review__simplify__simplify: { findings: false }
+review__simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__seams: "0 findings"
+shape__simplify: { findings: false }
+shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__tests: "0 findings"
+review__lens-status: { required: [seams, code, tests, simplify], completed: [seams, code, tests, simplify], missing: [] }
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: one blocking finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+review__publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: one blocking finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+fix__implement:
+  done: true
+  green: false
+  red_cause: inherited
+  summary: "stub: the blocking finding is fixed and committed; the one remaining red, the e2e smoke check, fails the same way on the base revision"
+fix__assert-changed: "1 file changed"
+# gate-green and gate-correction-green are deliberately unstubbed: the real script
+# takes the green route at the first and the passed-red route at the second.
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy"}'
+recheck__coverage: { full: false, errors: false, docs: false, lenses: [] }
+recheck__scope:
+  # light mode; delta since cursor
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+recheck__lens-status: { required: [], completed: [], missing: [] }
+recheck__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+recheck__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: the correction closed the finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: the correction closed the finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/7" }
+publish-pr-body: {}
+sync-pr-body: { body: null, summary: "stub: the body is still accurate" }
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
+validate__run: { status: green, summary: "stub: the contention cleared; full gate green" }
+gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":"","head":null}'
+ci-probe: '{"state":"concluded","detail":"all checks green"}'
+ci-settle: '{"state":"concluded","detail":"all checks green"}'
+ci-verdict: '{"state":"concluded","detail":"all checks green"}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/7", flipped_at: null }
+confirm-ready: { pr_url: "https://github.com/example/repo/pull/7" }
+outcome: { pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
+file-discoveries: '{"records":[]}'
+match-discoveries: { matches: [] }
+fork: '{"fork":true}'
+push-fix: "push-head: fixture-branch is at fixturehead"
+fixture:
+  expect: completed
+  reached: [fix__implement, gate-correction-green, push-fix, recheck__publish, flip-ready, confirm-ready]
+exec-code: true
