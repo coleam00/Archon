@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { serverReleaseAsset } from '../packages/paths/src/server-launch';
 
 // `* text=auto` checks this workflow out with CRLF on Windows CI. Normalizing here lets every
 // pattern below anchor on LF, so a stray `\r` can never reach a capture.
@@ -10,17 +11,22 @@ const workflow = readFileSync(
 ).replace(/\r\n/g, '\n');
 
 test('release checksums include each release artifact once', () => {
-  // The release uploads one binary per build-matrix entry plus the packaged web dist.
+  const targets = [...workflow.matchAll(/^ +target: (\S+)$/gm)].map(match => match[1]);
   const binaries = [...workflow.matchAll(/^ +binary: (\S+)$/gm)].map(match => match[1]);
   const webDist = workflow.match(/^ *-czf dist\/(\S+) /m)?.[1];
   const checksumOperands = workflow.match(/^ *sha256sum (.+) > checksums\.txt$/m)?.[1];
 
   // A missed derivation would leave nothing to compare and pass vacuously.
-  if (binaries.length === 0 || webDist === undefined || checksumOperands === undefined) {
+  if (
+    targets.length === 0 ||
+    binaries.length !== targets.length ||
+    webDist === undefined ||
+    checksumOperands === undefined
+  ) {
     throw new Error('release.yml no longer declares the artifacts or checksum command read here');
   }
 
-  const releaseArtifacts = [...binaries, webDist];
+  const releaseArtifacts = [...binaries, ...targets.map(serverReleaseAsset), webDist];
   const operands = checksumOperands.split(/\s+/).map(operand => new Bun.Glob(operand));
 
   // `sha256sum` writes one row per operand that names a file, so an artifact covered by two
@@ -35,4 +41,11 @@ test('release checksums include each release artifact once', () => {
   expect(rowsPerArtifact).toEqual(
     Object.fromEntries(releaseArtifacts.map(artifact => [artifact, 1]))
   );
+});
+
+test('every target builds and uploads the server asset derived by the shared contract', () => {
+  expect(workflow).toContain('serverReleaseAsset(process.env.TARGET)');
+  expect(workflow).toContain('SERVER_OUTFILE: dist/${{ steps.server-asset.outputs.asset }}');
+  expect(workflow).toContain('SERVER_OUTFILE="$SERVER_OUTFILE" bash scripts/build-binaries.sh');
+  expect(workflow).toContain('            dist/${{ steps.server-asset.outputs.asset }}');
 });

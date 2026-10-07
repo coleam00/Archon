@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./bundled-build": "./src/bundled-build.ts",
     "./cli-command": "./src/cli-command.ts",
+    "./server-launch": "./src/server-launch.ts",
     "./archon-paths": "./src/archon-paths.ts",
     "./credential-redaction": "./src/credential-redaction.ts",
     "./logger": "./src/logger.ts",

@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # scripts/build-binaries.sh
-# Build standalone CLI binaries for all supported platforms.
+# Build standalone server and CLI binaries for all supported platforms.
 #
 # Modes:
 #   - Multi-target (local dev): no env vars → builds all 4 local targets into dist/binaries/
-#   - Single-target (CI):       TARGET + OUTFILE both set → builds only that target
+#   - Single-target (CI):       TARGET + OUTFILE + SERVER_OUTFILE set → builds only that target
 #
 # Env vars:
 #   VERSION    - version string (default: from package.json)
 #   GIT_COMMIT - short git commit (default: from `git rev-parse --short HEAD`)
 #   TARGET     - bun target triple (e.g. bun-darwin-arm64); CI mode
-#   OUTFILE    - output path for the built binary; CI mode
+#   OUTFILE    - output path for the CLI binary; CI mode
+#   SERVER_OUTFILE - output path for the server binary; CI mode
 
 set -euo pipefail
 
@@ -18,8 +19,9 @@ VERSION="${VERSION:-$(grep '"version"' package.json | head -1 | cut -d'"' -f4)}"
 GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')}"
 TARGET="${TARGET:-}"
 OUTFILE="${OUTFILE:-}"
+SERVER_OUTFILE="${SERVER_OUTFILE:-}"
 
-echo "Building Archon CLI v${VERSION} (commit: ${GIT_COMMIT})"
+echo "Building Archon server and CLI v${VERSION} (commit: ${GIT_COMMIT})"
 
 # Regenerate the bundled packs named in bundle-index.json so the
 # compiled binary always embeds the current on-disk contents. CI also runs
@@ -87,11 +89,11 @@ export const BUNDLED_WEB_DIST_SHA256 = '${WEB_DIST_SHA256}';
 EOF
 
 # Determine which targets to build
-if [ -n "$TARGET" ] && [ -n "$OUTFILE" ]; then
+if [ -n "$TARGET" ] && [ -n "$OUTFILE" ] && [ -n "$SERVER_OUTFILE" ]; then
   # Single-target mode (CI): one target, caller-supplied output path
-  TARGETS=("$TARGET:$OUTFILE")
-elif [ -n "$TARGET" ] || [ -n "$OUTFILE" ]; then
-  echo "ERROR: TARGET and OUTFILE must be set together (CI mode) or both unset (local mode)" >&2
+  TARGETS=("$TARGET:$OUTFILE:$SERVER_OUTFILE")
+elif [ -n "$TARGET" ] || [ -n "$OUTFILE" ] || [ -n "$SERVER_OUTFILE" ]; then
+  echo "ERROR: TARGET, OUTFILE and SERVER_OUTFILE must be set together (CI mode) or all unset (local mode)" >&2
   exit 1
 else
   # Multi-target mode (local dev)
@@ -110,41 +112,48 @@ MIN_BINARY_SIZE=1000000
 
 # Build each target
 for target_pair in "${TARGETS[@]}"; do
-  IFS=':' read -r target outfile <<< "$target_pair"
-  echo "Building $target → $outfile"
-
-  # --bytecode disabled: Bun 1.3.11 produces broken bytecode for our module graph
-  # (likely triggered by @earendil-works/pi-coding-agent's CJS/ESM interop shape) —
-  # "TypeError: Expected CommonJS module to have a function wrapper" at runtime.
-  # Always --minify to match release parity.
-  bun build \
-    --compile \
-    --minify \
-    --target="$target" \
-    --outfile="$outfile" \
-    packages/cli/src/cli.ts
-
-  # Verify build output exists
-  if [ ! -f "$outfile" ]; then
-    echo "ERROR: Build failed - $outfile not created" >&2
-    exit 1
+  IFS=':' read -r target outfile server_outfile <<< "$target_pair"
+  if [ -z "$server_outfile" ]; then
+    server_asset=$(TARGET="$target" bun -e 'import { serverReleaseAsset } from "./packages/paths/src/server-launch.ts"; console.log(serverReleaseAsset(process.env.TARGET));')
+    server_outfile="$(dirname "$outfile")/$server_asset"
   fi
+  for entry_output in "packages/server/src/bin.ts:$server_outfile" "packages/cli/src/cli.ts:$outfile"; do
+    IFS=':' read -r entry output <<< "$entry_output"
+    echo "Building $target → $output"
 
-  # Verify minimum reasonable size (Bun binaries are typically 50MB+)
-  # Use portable stat command (works on both macOS and Linux)
-  if stat -f%z "$outfile" >/dev/null 2>&1; then
-    size=$(stat -f%z "$outfile")
-  else
-    size=$(stat --printf="%s" "$outfile")
-  fi
+    # --bytecode disabled: Bun 1.3.11 produces broken bytecode for our module graph
+    # (likely triggered by @earendil-works/pi-coding-agent's CJS/ESM interop shape) —
+    # "TypeError: Expected CommonJS module to have a function wrapper" at runtime.
+    # Always --minify to match release parity.
+    bun build \
+      --compile \
+      --minify \
+      --target="$target" \
+      --outfile="$output" \
+      "$entry"
 
-  if [ "$size" -lt "$MIN_BINARY_SIZE" ]; then
-    echo "ERROR: Build output suspiciously small ($size bytes): $outfile" >&2
-    echo "Expected at least $MIN_BINARY_SIZE bytes for a Bun-compiled binary" >&2
-    exit 1
-  fi
+    # Verify build output exists
+    if [ ! -f "$output" ]; then
+      echo "ERROR: Build failed - $output not created" >&2
+      exit 1
+    fi
 
-  echo "  -> $outfile ($size bytes)"
+    # Verify minimum reasonable size (Bun binaries are typically 50MB+)
+    # Use portable stat command (works on both macOS and Linux)
+    if stat -f%z "$output" >/dev/null 2>&1; then
+      size=$(stat -f%z "$output")
+    else
+      size=$(stat --printf="%s" "$output")
+    fi
+
+    if [ "$size" -lt "$MIN_BINARY_SIZE" ]; then
+      echo "ERROR: Build output suspiciously small ($size bytes): $output" >&2
+      echo "Expected at least $MIN_BINARY_SIZE bytes for a Bun-compiled binary" >&2
+      exit 1
+    fi
+
+    echo "  -> $output ($size bytes)"
+  done
 done
 
 echo ""

@@ -44,7 +44,7 @@ loadArchonEnv(process.cwd());
 // Workflow scripts started by this server call back into the CLI through the
 // same host command the CLI publishes for its own runs.
 import { publishArchonCliCommand } from '@archon/paths/cli-command';
-publishArchonCliCommand();
+if (!BUNDLED_IS_BINARY) publishArchonCliCommand();
 
 // Smart default: fall back to Claude Code's built-in OAuth (`claude /login`)
 // ONLY for solo installs with no explicit credentials. Per-user installs
