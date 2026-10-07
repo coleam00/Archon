@@ -36,7 +36,10 @@ function runGh(args: string[]): unknown {
 
 function comments(value: unknown): JsonObject[] {
   if (!Array.isArray(value)) throw new Error('publish-holds: comment readback is malformed');
-  const flattened = value.flatMap(page => (Array.isArray(page) ? page : [page]));
+  const pages = value as unknown[];
+  const flattened = pages.flatMap((page): unknown[] =>
+    Array.isArray(page) ? (page as unknown[]) : [page]
+  );
   return flattened.map(object);
 }
 
@@ -131,3 +134,6 @@ for (const hold of holds) {
 }
 
 console.log(JSON.stringify({ published: updated.length > 0, updated, summary: `updated ${updated.length} hold comment(s)` }));
+
+// A module, so its declarations stay private to this script.
+export {};

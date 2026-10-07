@@ -7,7 +7,7 @@
 type JsonObject = Record<string, unknown>;
 type CheckState = 'passing' | 'failing' | 'pending' | 'missing';
 
-interface Response {
+interface ApiResponse {
   status: number;
   body: unknown;
 }
@@ -36,6 +36,10 @@ function object(value: unknown): JsonObject {
     : {};
 }
 
+function text(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
 function array(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
@@ -48,7 +52,7 @@ function gh(args: string[]): { exitCode: number; stdout: string } {
 // `gh api --include` prints the status line and headers on stdout even when it
 // exits non-zero for a 4xx, so the decision rests on the HTTP status, not on
 // GitHub's error wording.
-function api(path: string): Response {
+function api(path: string): ApiResponse {
   const { stdout } = gh(['api', '--include', path]);
   const status = /^HTTP\/[\d.]+ (\d{3})/.exec(stdout);
   if (status === null) return { status: 0, body: null };
@@ -84,7 +88,7 @@ function declared(raw: string): string[] | undefined | 'invalid' {
   const names = value.split(',').map(name => name.trim());
   if (
     names.some(
-      name => name === '' || name.toLowerCase() === 'none' || /[\u0000-\u001f]/.test(name)
+      name => name === '' || name.toLowerCase() === 'none' || /\p{Cc}/u.test(name)
     )
   ) {
     return 'invalid';
@@ -145,14 +149,14 @@ function fromRollup(rollup: unknown[]): { runs: JsonObject[]; statuses: JsonObje
   const statuses: JsonObject[] = [];
   for (const [index, item] of rollup.map(object).entries()) {
     if (item.__typename === 'StatusContext') {
-      statuses.push({ context: item.context, state: String(item.state ?? '').toLowerCase() });
+      statuses.push({ context: item.context, state: text(item.state).toLowerCase() });
     } else if (item.__typename === 'CheckRun') {
-      const started = Date.parse(String(item.startedAt ?? ''));
+      const started = Date.parse(text(item.startedAt));
       runs.push({
         id: Number.isNaN(started) ? index : started,
         name: item.name,
-        status: String(item.status ?? '').toLowerCase(),
-        conclusion: String(item.conclusion ?? '').toLowerCase(),
+        status: text(item.status).toLowerCase(),
+        conclusion: text(item.conclusion).toLowerCase(),
       });
     }
   }
@@ -184,7 +188,7 @@ function main(): void {
     unknown('the requested pull requests span more than one repository');
     return;
   }
-  const repository = [...repositories][0] as string;
+  const [repository = ''] = repositories;
 
   const heads: { url: string; head: string; rollup: unknown[] | null }[] = [];
   const bases = new Set<string>();
@@ -202,7 +206,7 @@ function main(): void {
     }
     bases.add(pr.baseRefName);
     heads.push({
-      url: urls[index] as string,
+      url: urls[index],
       head: pr.headRefOid,
       rollup: Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : null,
     });
@@ -211,7 +215,7 @@ function main(): void {
     unknown('the requested pull requests target more than one base branch');
     return;
   }
-  const base = [...bases][0] as string;
+  const base = [...bases][0];
 
   const declaration = declared(process.env.INPUTS_REQUIRED_CHECKS ?? '');
   if (declaration === 'invalid') {
@@ -291,3 +295,6 @@ function main(): void {
 }
 
 main();
+
+// A module, so its declarations stay private to this script.
+export {};

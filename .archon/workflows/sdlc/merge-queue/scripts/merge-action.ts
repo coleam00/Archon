@@ -149,7 +149,7 @@ function gate(): void {
   console.log(
     JSON.stringify({
       ready: reasons.length === 0,
-      summary: reasons.length > 0 ? reasons.join('; ') : String(assessment.summary ?? ''),
+      summary: reasons.length > 0 ? reasons.join('; ') : (typeof assessment.summary === 'string' ? assessment.summary : ''),
       method: isMethod(method) ? method : '',
       plan_digest: current.digest,
     })
