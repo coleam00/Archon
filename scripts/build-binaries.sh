@@ -4,14 +4,13 @@
 #
 # Modes:
 #   - Multi-target (local dev): no env vars → builds all 4 local targets into dist/binaries/
-#   - Single-target (CI):       TARGET + OUTFILE + SERVER_OUTFILE set → builds only that target
+#   - Single-target (CI):       TARGET + OUTFILE set → builds only that target
 #
 # Env vars:
 #   VERSION    - version string (default: from package.json)
 #   GIT_COMMIT - short git commit (default: from `git rev-parse --short HEAD`)
 #   TARGET     - bun target triple (e.g. bun-darwin-arm64); CI mode
 #   OUTFILE    - output path for the CLI binary; CI mode
-#   SERVER_OUTFILE - output path for the server binary; CI mode
 
 set -euo pipefail
 
@@ -19,7 +18,6 @@ VERSION="${VERSION:-$(grep '"version"' package.json | head -1 | cut -d'"' -f4)}"
 GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')}"
 TARGET="${TARGET:-}"
 OUTFILE="${OUTFILE:-}"
-SERVER_OUTFILE="${SERVER_OUTFILE:-}"
 
 echo "Building Archon server and CLI v${VERSION} (commit: ${GIT_COMMIT})"
 
@@ -89,11 +87,11 @@ export const BUNDLED_WEB_DIST_SHA256 = '${WEB_DIST_SHA256}';
 EOF
 
 # Determine which targets to build
-if [ -n "$TARGET" ] && [ -n "$OUTFILE" ] && [ -n "$SERVER_OUTFILE" ]; then
+if [ -n "$TARGET" ] && [ -n "$OUTFILE" ]; then
   # Single-target mode (CI): one target, caller-supplied output path
-  TARGETS=("$TARGET:$OUTFILE:$SERVER_OUTFILE")
-elif [ -n "$TARGET" ] || [ -n "$OUTFILE" ] || [ -n "$SERVER_OUTFILE" ]; then
-  echo "ERROR: TARGET, OUTFILE and SERVER_OUTFILE must be set together (CI mode) or all unset (local mode)" >&2
+  TARGETS=("$TARGET:$OUTFILE")
+elif [ -n "$TARGET" ] || [ -n "$OUTFILE" ]; then
+  echo "ERROR: TARGET and OUTFILE must be set together (CI mode) or both unset (local mode)" >&2
   exit 1
 else
   # Multi-target mode (local dev)
@@ -112,11 +110,9 @@ MIN_BINARY_SIZE=1000000
 
 # Build each target
 for target_pair in "${TARGETS[@]}"; do
-  IFS=':' read -r target outfile server_outfile <<< "$target_pair"
-  if [ -z "$server_outfile" ]; then
-    server_asset=$(TARGET="$target" bun -e 'import { serverReleaseAsset } from "./packages/paths/src/server-launch.ts"; console.log(serverReleaseAsset(process.env.TARGET));')
-    server_outfile="$(dirname "$outfile")/$server_asset"
-  fi
+  IFS=':' read -r target outfile <<< "$target_pair"
+  server_asset=$(TARGET="$target" bun -e 'import { serverReleaseAsset } from "./packages/paths/src/server-launch.ts"; console.log(serverReleaseAsset(process.env.TARGET));')
+  server_outfile="$(dirname "$outfile")/$server_asset"
   for entry_output in "packages/server/src/bin.ts:$server_outfile" "packages/cli/src/cli.ts:$outfile"; do
     IFS=':' read -r entry output <<< "$entry_output"
     echo "Building $target → $output"

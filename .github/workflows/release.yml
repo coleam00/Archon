@@ -96,14 +96,6 @@ jobs:
       - name: Stage packaged web dist for binary build
         run: cp web-dist-artifact/archon-web.tar.gz ./archon-web.tar.gz
 
-      - name: Resolve server asset
-        id: server-asset
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          ASSET=$(bun -e 'import { serverReleaseAsset } from "./packages/paths/src/server-launch.ts"; console.log(serverReleaseAsset(process.env.TARGET));')
-          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
-
       - name: Build binary
         env:
           # On workflow_dispatch, github.ref_name is the branch name (e.g. 'main'),
@@ -112,14 +104,13 @@ jobs:
           GIT_COMMIT: ${{ github.sha }}
           TARGET: ${{ matrix.target }}
           OUTFILE: dist/${{ matrix.binary }}
-          SERVER_OUTFILE: dist/${{ steps.server-asset.outputs.asset }}
         run: |
           # Strip 'v' prefix from tag (e.g. v0.3.1 → 0.3.1)
           VERSION="${VERSION#v}"
           # Short commit (first 8 chars of SHA)
           GIT_COMMIT="${GIT_COMMIT::8}"
           mkdir -p dist
-          VERSION="$VERSION" GIT_COMMIT="$GIT_COMMIT" TARGET="$TARGET" OUTFILE="$OUTFILE" SERVER_OUTFILE="$SERVER_OUTFILE" bash scripts/build-binaries.sh
+          VERSION="$VERSION" GIT_COMMIT="$GIT_COMMIT" TARGET="$TARGET" OUTFILE="$OUTFILE" bash scripts/build-binaries.sh
 
       - name: Build GitHub forge plugin
         id: forge-plugin
@@ -159,8 +150,9 @@ jobs:
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
         env:
           RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
-          ASSET: ${{ steps.server-asset.outputs.asset }}
+          TARGET: ${{ matrix.target }}
         run: |
+          ASSET=$(bun -e 'import { serverReleaseAsset } from "./packages/paths/src/server-launch.ts"; console.log(serverReleaseAsset(process.env.TARGET));')
           chmod +x "dist/$ASSET"
           EXPECTED_VERSION="${RAW_VERSION#v}"
           if OUTPUT=$(ARCHON_CLI_COMMAND='["archon"]' "dist/$ASSET" --cli-version 0.0.0 2>&1); then
@@ -324,7 +316,7 @@ jobs:
           name: ${{ matrix.binary }}
           path: |
             dist/${{ matrix.binary }}
-            dist/${{ steps.server-asset.outputs.asset }}
+            dist/archon-server-*
             dist/${{ steps.forge-plugin.outputs.asset }}
           retention-days: 1
 

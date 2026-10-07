@@ -42,10 +42,3 @@ test('release checksums include each release artifact once', () => {
     Object.fromEntries(releaseArtifacts.map(artifact => [artifact, 1]))
   );
 });
-
-test('every target builds and uploads the server asset derived by the shared contract', () => {
-  expect(workflow).toContain('serverReleaseAsset(process.env.TARGET)');
-  expect(workflow).toContain('SERVER_OUTFILE: dist/${{ steps.server-asset.outputs.asset }}');
-  expect(workflow).toContain('SERVER_OUTFILE="$SERVER_OUTFILE" bash scripts/build-binaries.sh');
-  expect(workflow).toContain('            dist/${{ steps.server-asset.outputs.asset }}');
-});

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -7,9 +7,18 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 const trackTempRoot = trackTempRoots();
 const script = resolve(import.meta.dir, 'build-binaries.sh');
 
-function runBuild(failServer = false): { exitCode: number; output: string; builds: string[] } {
+function runBuild(
+  failServer = false,
+  target = 'bun-linux-x64',
+  outfile = 'dist/archon-linux-x64'
+): { exitCode: number; output: string; builds: string[] } {
   const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-binary-build-')));
   mkdirSync(join(root, 'packages/paths/src'), { recursive: true });
+  mkdirSync(join(root, 'dist'));
+  copyFileSync(
+    resolve(import.meta.dir, '../packages/paths/src/server-launch.ts'),
+    join(root, 'packages/paths/src/server-launch.ts')
+  );
   writeFileSync(join(root, 'archon-web.tar.gz'), 'web fixture');
   // Shell functions intercept compilation; this test never invokes the Bun compiler.
   const result = Bun.spawnSync(
@@ -19,6 +28,7 @@ function runBuild(failServer = false): { exitCode: number; output: string; build
       `
       bun() {
         if [ "$1" = 'run' ]; then return 0; fi
+        if [ "$1" = '-e' ]; then "$BUILD_TEST_BUN" "$@"; return $?; fi
         [ "$1" = 'build' ] || return 90
         printf '%s\\n' "$*" >> builds.txt
         cat packages/paths/src/bundled-build.ts >> constants.txt
@@ -39,9 +49,9 @@ function runBuild(failServer = false): { exitCode: number; output: string; build
         ...process.env,
         VERSION: '1.2.3',
         GIT_COMMIT: 'abcdef12',
-        TARGET: 'bun-linux-x64',
-        OUTFILE: 'archon-linux-x64',
-        SERVER_OUTFILE: 'archon-server-linux-x64',
+        TARGET: target,
+        OUTFILE: outfile,
+        BUILD_TEST_BUN: process.execPath,
         BUILD_SCRIPT: script,
         FAIL_SERVER: String(failServer),
       },
@@ -64,8 +74,17 @@ test('binary script builds server before CLI with the same constants, target and
   const result = runBuild();
   expect(result.exitCode).toBe(0);
   expect(result.builds).toEqual([
-    'build --compile --minify --target=bun-linux-x64 --outfile=archon-server-linux-x64 packages/server/src/bin.ts',
-    'build --compile --minify --target=bun-linux-x64 --outfile=archon-linux-x64 packages/cli/src/cli.ts',
+    'build --compile --minify --target=bun-linux-x64 --outfile=dist/archon-server-linux-x64 packages/server/src/bin.ts',
+    'build --compile --minify --target=bun-linux-x64 --outfile=dist/archon-linux-x64 packages/cli/src/cli.ts',
+  ]);
+});
+
+test('Windows server output is derived beside the CLI output with its executable suffix', () => {
+  const result = runBuild(false, 'bun-windows-x64', 'dist/archon-windows-x64.exe');
+  expect(result.exitCode).toBe(0);
+  expect(result.builds).toEqual([
+    'build --compile --minify --target=bun-windows-x64 --outfile=dist/archon-server-windows-x64.exe packages/server/src/bin.ts',
+    'build --compile --minify --target=bun-windows-x64 --outfile=dist/archon-windows-x64.exe packages/cli/src/cli.ts',
   ]);
 });
 
