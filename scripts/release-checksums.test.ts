@@ -42,3 +42,23 @@ test('release checksums include each release artifact once', () => {
     Object.fromEntries(releaseArtifacts.map(artifact => [artifact, 1]))
   );
 });
+
+test('build job uploads the server asset for every release target', () => {
+  const buildJob = workflow.match(/^  build:\n([\s\S]*?)(?=^  \S)/m)?.[1];
+  if (buildJob === undefined) throw new Error('Missing release build job');
+  const targets = [...buildJob.matchAll(/^ +target: (\S+)$/gm)].map(match => match[1]);
+  const uploadPaths = buildJob.match(
+    /uses: actions\/upload-artifact@[^\n]+\n\s+with:\n\s+name: [^\n]+\n\s+path: \|\n((?: {12}[^\n]+\n)+)/
+  )?.[1];
+  if (targets.length === 0 || uploadPaths === undefined) {
+    throw new Error('Missing release build matrix or upload paths');
+  }
+  const paths = uploadPaths
+    .trim()
+    .split(/\s*\n\s*/)
+    .map(pattern => new Bun.Glob(pattern));
+  for (const target of targets) {
+    const asset = `dist/${serverReleaseAsset(target)}`;
+    expect(paths.some(pattern => pattern.match(asset))).toBe(true);
+  }
+});

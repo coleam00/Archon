@@ -19,6 +19,10 @@ function runBuild(
     resolve(import.meta.dir, '../packages/paths/src/server-launch.ts'),
     join(root, 'packages/paths/src/server-launch.ts')
   );
+  copyFileSync(
+    resolve(import.meta.dir, '../packages/paths/src/release-asset.ts'),
+    join(root, 'packages/paths/src/release-asset.ts')
+  );
   writeFileSync(join(root, 'archon-web.tar.gz'), 'web fixture');
   // Shell functions intercept compilation; this test never invokes the Bun compiler.
   const result = Bun.spawnSync(

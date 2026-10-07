@@ -13,7 +13,7 @@ test.each([
 });
 
 test('unsupported targets fail clearly', () => {
-  expect(() => serverReleaseAsset('bun-freebsd-x64')).toThrow('Unsupported server target');
+  expect(() => serverReleaseAsset('bun-freebsd-x64')).toThrow('Unsupported release target');
 });
 
 test('launch arguments round-trip paths with spaces and optional overrides', () => {
@@ -38,4 +38,16 @@ test.each(
   }))
 )('rejects missing contracts and unsupported arguments: %j', ({ args }) => {
   expect(() => parseServerLaunchArgv(args)).toThrow();
+});
+
+test.each(['cli-version', 'port', 'web-dist'])('rejects repeated --%s flags', option => {
+  const value = option === 'port' ? '8080' : 'dev';
+  expect(() =>
+    parseServerLaunchArgv([
+      '--cli-version',
+      'dev',
+      ...(option === 'cli-version' ? [] : [`--${option}`, value]),
+      `--${option}=${value}`,
+    ])
+  ).toThrow(`--${option} may only be supplied once`);
 });

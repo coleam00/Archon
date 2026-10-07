@@ -13,7 +13,7 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   // Forge contracts; fixtures use paths' test cleanup helpers.
   forge: { runtime: ['paths'] },
   // Plugin manifest vocabulary.
-  'plugin-manifest': { runtime: [] },
+  'plugin-manifest': { runtime: ['paths'] },
   // External providers can depend on the contract without pulling in implementations.
   'provider-contract': { runtime: [] },
   // Git operations use the shared paths and process helpers.

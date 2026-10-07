@@ -75,3 +75,18 @@ test.each([
   expect(stderr).toContain(input.message);
   expect(stdout).toBe('');
 });
+
+test.each([
+  { option: 'cli-version', argv: ['--cli-version', '0.0.0', '--cli-version=dev'] },
+  { option: 'port', argv: ['--cli-version', 'dev', '--port', '8080', '--port=8081'] },
+  {
+    option: 'web-dist',
+    argv: ['--cli-version', 'dev', '--web-dist', '/first', '--web-dist=/second'],
+  },
+])('repeated --$option refuses before importing application code', async ({ option, argv }) => {
+  const loadServer = mock(async () => ({ startServer: async () => {} }));
+  await expect(runServerEntry(argv, env, loadServer)).rejects.toThrow(
+    `--${option} may only be supplied once`
+  );
+  expect(loadServer).not.toHaveBeenCalled();
+});

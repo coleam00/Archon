@@ -1,25 +1,55 @@
-import { afterAll, expect, mock, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { expect, test } from 'bun:test';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { join, resolve } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 
-const home = mkdtempSync(join(tmpdir(), 'archon-server-binary-host-'));
-process.env.ARCHON_HOME = home;
-const command = JSON.stringify(['/installed/archon']);
-process.env.ARCHON_CLI_COMMAND = command;
-mock.module('@archon/paths/bundled-build', () => ({
-  BUNDLED_IS_BINARY: true,
-  BUNDLED_VERSION: '1.2.3',
-  BUNDLED_GIT_COMMIT: 'test',
-  BUNDLED_WEB_DIST_SHA256: '',
-}));
+const trackTempRoot = trackTempRoots();
 
-afterAll(async () => {
-  await removeTempTree(home);
-});
-
-test('compiled server preserves the launching CLI host command', async () => {
-  await import('./index');
-  expect(process.env.ARCHON_CLI_COMMAND).toBe(command);
-});
+test.each(['user', 'repository'])(
+  'in-process binary CLI server import republishes its host command after %s env loading',
+  async scope => {
+    const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-server-binary-host-')));
+    const home = join(root, 'home');
+    const repo = join(root, 'repo');
+    mkdirSync(home);
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    const envPath = scope === 'user' ? join(home, '.env') : join(repo, '.archon', '.env');
+    writeFileSync(envPath, 'ARCHON_CLI_COMMAND=malformed-command\n');
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        '--no-env-file',
+        '-e',
+        `
+        import { mock } from 'bun:test';
+        mock.module(${JSON.stringify(resolve(import.meta.dir, '../../paths/src/bundled-build.ts'))}, () => ({
+          BUNDLED_IS_BINARY: true,
+          BUNDLED_VERSION: '1.2.3',
+          BUNDLED_GIT_COMMIT: 'test',
+          BUNDLED_WEB_DIST_SHA256: '',
+        }));
+        const { publishArchonCliCommand } = await import(${JSON.stringify(resolve(import.meta.dir, '../../paths/src/cli-command.ts'))});
+        publishArchonCliCommand();
+        await import(${JSON.stringify(join(import.meta.dir, 'index.ts'))});
+        if (process.env.ARCHON_CLI_COMMAND !== JSON.stringify([process.execPath])) {
+          throw new Error('Server import lost the binary CLI host command');
+        }
+        `,
+      ],
+      {
+        cwd: repo,
+        env: { ...process.env, ARCHON_HOME: home },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const [exitCode, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stderr).text(),
+      new Response(child.stdout).text(),
+    ]);
+    expect(stderr).not.toContain('Server import lost the binary CLI host command');
+    expect(exitCode).toBe(0);
+  }
+);

@@ -4,11 +4,12 @@
  *
  * The CLI installer, workflow discovery, the docs-site index and the release
  * workflow all need these shapes and names, and none of those can import
- * another, so they live in this leaf package with no dependency beyond zod.
+ * another, so they live in this package.
  * Reading receipts from disk lives in `./store`, so a consumer that only
  * needs the schemas does not load filesystem code.
  */
 import { z } from 'zod';
+import { releaseAsset } from '@archon/paths/release-asset';
 
 export const PLUGIN_MANIFEST_FILE = 'archon-plugin.json';
 
@@ -168,7 +169,5 @@ export function describeIssues(error: z.ZodError): string {
  * two cannot drift.
  */
 export function forgeReleaseAsset(executable: string, bunTarget: string): string {
-  const match = /^bun-(darwin|linux|windows)-(x64|arm64)$/.exec(bunTarget);
-  if (!match) throw new Error(`No forge plugin release asset is built for ${bunTarget}`);
-  return `${executable}-${match[1]}-${match[2]}${match[1] === 'windows' ? '.exe' : ''}`;
+  return releaseAsset(executable, bunTarget);
 }

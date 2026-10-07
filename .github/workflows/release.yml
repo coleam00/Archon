@@ -443,7 +443,7 @@ jobs:
           | Asset | Purpose |
           | --- | --- |
           | `archon-<os>-<arch>[.exe]` | CLI |
-          | `archon-server-<os>-<arch>[.exe]` | Server executable, launched by a matching CLI |
+          | `archon-server-<os>-<arch>[.exe]` | Server executable reserved for the forthcoming CLI launcher |
           | `archon-forge-github-<os>-<arch>[.exe]` | GitHub forge plugin |
           | `archon-web.tar.gz` | Web UI |
           | `checksums.txt` | SHA-256 checksums for every asset |

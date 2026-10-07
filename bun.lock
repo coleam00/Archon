@@ -111,10 +111,8 @@
       "name": "@archon/forge",
       "version": "0.11.1",
       "dependencies": {
-        "zod": "^4.4.3",
-      },
-      "devDependencies": {
         "@archon/paths": "workspace:*",
+        "zod": "^4.4.3",
       },
       "peerDependencies": {
         "typescript": "^5.0.0",
@@ -160,6 +158,7 @@
       "name": "@archon/plugin-manifest",
       "version": "0.11.1",
       "dependencies": {
+        "@archon/paths": "workspace:*",
         "zod": "^4.4.3",
       },
       "peerDependencies": {
