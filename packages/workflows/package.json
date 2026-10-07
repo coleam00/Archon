@@ -109,6 +109,9 @@
       "src/provider-events.test.ts"
     ],
     [
+      "src/tool-call-attention.test.ts"
+    ],
+    [
       "src/load-command-prompt.test.ts"
     ],
     [

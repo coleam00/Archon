@@ -1,4 +1,8 @@
 import {
+  toolCallAttentionArraySchema,
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+} from '@archon/workflows/schemas/workflow-run';
+import {
   runNodeStateSchema,
   terminalRecordSchema,
 } from '@archon/workflows/schemas/terminal-record';
@@ -141,11 +145,12 @@ export const workflowWaitContextSchema =
 export const runStopReasonSchema = engineRunStopReasonSchema.openapi('RunStopReason');
 
 /**
- * Run metadata stays open-ended, but its approval, durable-wait and stop-reason contracts are
+ * Run metadata stays open-ended, but approval, waits, tool advisories and stop reasons are
  * engine-owned and typed.
  */
 export const workflowRunMetadataSchema = z
   .object({
+    [TOOL_CALL_ATTENTION_METADATA_KEY]: toolCallAttentionArraySchema.optional(),
     approval: approvalContextSchema.optional(),
     wait: workflowWaitContextSchema.optional(),
     [RUN_STOP_REASON_METADATA_KEY]: runStopReasonSchema.optional(),

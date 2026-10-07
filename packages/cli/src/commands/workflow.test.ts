@@ -4882,6 +4882,48 @@ describe('workflowStatusCommand', () => {
     stdoutSpy.mockRestore();
   });
 
+  it.each([false, true])('shows tool attention without verbose mode (json=%s)', async json => {
+    mockListDashboardRuns.mockResolvedValueOnce(
+      statusRuns([
+        {
+          id: 'live',
+          workflow_name: 'implement',
+          working_path: '/repo',
+          status: 'running',
+          started_at: new Date(),
+          active_nodes: ['implement'],
+          metadata: {
+            tool_call_attention: [
+              {
+                streamId: 's',
+                nodeId: 'implement',
+                provider: 'codex',
+                toolCallId: 'tool',
+                name: 'bash',
+                title: 'bun test',
+                startedAt: '2026-10-01T00:00:00.000Z',
+                lastProgressAt: '2026-10-01T00:00:00.000Z',
+                raisedAt: '2026-10-01T00:30:00.000Z',
+                thresholdMs: 1800000,
+              },
+            ],
+          },
+        },
+      ])
+    );
+    await workflowStatusCommand(createTestWorkflowHost(), '/repo', { json, all: true });
+    if (json)
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+        runs: [{ attention: { kind: 'stalled_tool_calls', status: 'running' } }],
+      });
+    else {
+      const printed = consoleSpy.mock.calls.flat().join(' ');
+      expect(printed).toContain('live is still running');
+      expect(printed).toContain('bun test');
+      expect(printed).not.toContain('resume');
+    }
+  });
+
   it('scopes active runs to the cwd-resolved codebase', async () => {
     const codebaseDb = await import('@archon/core/db/codebases');
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -14392,6 +14434,48 @@ describe('workflowWaitCommand', () => {
     kind: 'attention',
     attention: { kind: 'terminal', runId: FULL_ID, status, at: new Date('2026-08-28T12:00:00Z') },
   });
+
+  it.each([false, true])(
+    'returns live tool attention with exit 0 and no resume advice (json=%s)',
+    async json => {
+      const attention = {
+        kind: 'stalled_tool_calls',
+        runId: 'child-run',
+        status: 'running',
+        calls: [
+          {
+            streamId: 's',
+            nodeId: 'implement',
+            provider: 'codex',
+            toolCallId: 'call',
+            name: 'bash',
+            title: 'bun test',
+            startedAt: '2026-10-01T00:00:00Z',
+            lastProgressAt: '2026-10-01T00:00:00Z',
+            raisedAt: '2026-10-01T00:30:00Z',
+            thresholdMs: 1800000,
+            elapsedMs: 1800000,
+            stalledForMs: 1800000,
+          },
+        ],
+      };
+      mockWaitForRunAttention.mockResolvedValueOnce({ kind: 'attention', attention });
+      expect(await workflowWaitCommand(createTestWorkflowHost(), FULL_ID, json, '/repo')).toBe(0);
+      if (json)
+        expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+          result: 'attention',
+          attention,
+        });
+      else {
+        const printed = consoleSpy.mock.calls.flat().join(' ');
+        expect(printed).toContain('child-run is still running');
+        expect(printed).toContain('implement');
+        expect(printed).toContain('bun test');
+        expect(printed).toContain('1800s');
+        expect(printed).not.toContain('resume');
+      }
+    }
+  );
 
   it('exits 0 and names the terminal status', async () => {
     mockWaitForRunAttention.mockResolvedValueOnce(terminal('failed'));

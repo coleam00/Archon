@@ -577,6 +577,8 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
+  setToolCallAttention: IWorkflowStore['setToolCallAttention'] = async () => true;
+
   createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data =>
     this.recordWorkflowEvent(data);
 

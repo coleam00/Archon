@@ -189,6 +189,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     failWorkflowRun: mock(async () => {}),
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
     getWorkflowRunStatus: mock(async () => 'completed' as const),
+    setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
     createWorkflowEvent: mock(async () => {}),
     persistWorkflowEvent: mock(async () => {}),
     persistWorkflowEventIfRunning: mock(async () => ({ persisted: true })),

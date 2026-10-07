@@ -133,6 +133,7 @@ export type DurableWorkflowEventType = (typeof DURABLE_WORKFLOW_EVENT_TYPES)[num
 export type DurableNodeEventInput = NodeStateEventInput | SerializedDeferredNodeUsageEvent;
 
 export const WORKFLOW_EVENT_TYPES = [
+  'run_attention_changed',
   'workflow_started',
   'workflow_completed',
   'workflow_failed',
@@ -332,6 +333,11 @@ export class WorkflowRunPauseConflictError extends Error {
 
 export interface IWorkflowStore
   extends IRunTreeStore, IWorkflowRunNodeSessionStore, IResourceStartStore {
+  setToolCallAttention(
+    runId: string,
+    streamId: string,
+    calls: import('./schemas/workflow-run').ToolCallAttention[]
+  ): Promise<boolean>;
   /** Resolve an open paused gate and commit its audit events atomically; a CAS loser writes nothing. */
   resolveApprovalGate(
     id: string,

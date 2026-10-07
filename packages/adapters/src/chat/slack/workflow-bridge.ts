@@ -196,6 +196,7 @@ export class SlackWorkflowBridge {
         // Loop / provider / artifact / container-lifecycle events would surface as
         // noise in-thread and aren't tied to a button or actionable state; the
         // status message already conveys run health via the DAG node states.
+        case 'run_attention_changed':
         case 'loop_iteration_started':
         case 'loop_iteration_completed':
         case 'loop_iteration_failed':
