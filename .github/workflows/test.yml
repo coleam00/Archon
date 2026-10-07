@@ -377,6 +377,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         include:
           - os: ubuntu-latest
             target: bun-linux-x64
@@ -410,8 +411,7 @@ jobs:
       - name: Smoke-test archon serve
         shell: bash
         run: |
-          VERSION=$(bun -p 'require("./package.json").version')
-          bun scripts/smoke-serve.ts dist/${{ matrix.binary }} dist/${{ matrix.server }} "$VERSION" archon-web.tar.gz
+          bun scripts/smoke-serve.ts dist/${{ matrix.binary }} dist/${{ matrix.server }} archon-web.tar.gz
 
   test-suite:
     name: Test Suite

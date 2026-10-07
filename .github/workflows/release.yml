@@ -171,7 +171,7 @@ jobs:
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
         env:
           RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
-        run: bun scripts/smoke-serve.ts dist/archon-linux-x64 dist/archon-server-linux-x64 "${RAW_VERSION#v}" archon-web.tar.gz
+        run: bun scripts/smoke-serve.ts dist/archon-linux-x64 dist/archon-server-linux-x64 archon-web.tar.gz "${RAW_VERSION#v}"
 
       - name: Smoke-test built binary
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'

@@ -3,10 +3,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { serverReleaseAsset } from '@archon/paths/server-launch';
+import packageJson from '../package.json';
 
-const [cliFile, serverFile, version, webTarball] = Bun.argv.slice(2);
-if (!cliFile || !serverFile || !version || !webTarball) {
-  throw new Error('Usage: smoke-serve.ts <cli> <server> <version> <web-tarball>');
+const [cliFile, serverFile, webTarball, versionArg] = Bun.argv.slice(2);
+const version = versionArg ?? packageJson.version;
+if (!cliFile || !serverFile || !webTarball) {
+  throw new Error('Usage: smoke-serve.ts <cli> <server> <web-tarball> [version]');
 }
 const root = mkdtempSync(join(tmpdir(), 'archon-serve-smoke-'));
 const stdoutPath = join(root, 'stdout.log');
