@@ -44,6 +44,30 @@ inputs:
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
+  # The final local project gate. `auto` runs it where it is the only check before
+  # the flip: a fork pull request, whose CI waits for a maintainer. `always` runs it
+  # on every delivery, for a caller that needs this run's own validation evidence
+  # (validation.md and validation-evidence.json) rather than CI's word alone, such
+  # as an unattended caller that merges what it delivers.
+  final_validation:
+    default: "auto"
+    description: >-
+      auto (fork pull requests only) or always (every delivery) for the final
+      local project validation before the ready flip.
+  # Forwarded to archon-validate's `scope` and `context`. A composing caller (a
+  # repair delivery, a ship) passes its own so the final gate measures what the
+  # caller needs, and a changed context forces a fresh verdict instead of reuse.
+  validation_scope:
+    default: ""
+    description: >-
+      Optional package, directory, or named-check scope for the final project
+      validation. Empty keeps the project's full applicable gate.
+  validation_context:
+    default: ""
+    description: >-
+      Optional nonsecret identity for external validation state (a database
+      snapshot, a service version). Changing it requires a fresh final project
+      validation. Never a secret.
 
 # The returns node is what a composed dependency on this workflow resolves to,
 # and what a caller's binding of this workflow's output reads. Both must mean
@@ -168,8 +192,10 @@ nodes:
   - id: classify
     command: classify-review-scope
     # This workflow declares no top-level model, so every AI node here names its
-    # own tier. Choosing between two booleans off a diff is small-tier work.
-    model: small
+    # own tier. The classifier picks the review depth from the change's risk as
+    # well as the two conditional lenses, and an under-read risk skips reviewers,
+    # so it gets the medium tier.
+    model: medium
     depends_on: [review-policy]
     mutates_checkout: false
     output_type: review-scope
@@ -462,13 +488,33 @@ nodes:
     depends_on: [sync-pr-body]
     output_format: { type: object }
 
-  # Final local gate, fork pull requests only: the project's own checks via the
-  # validate package, the one validation before the flip when CI is
-  # maintainer-gated.
+  # Final local gate: the project's own checks via the validate package. By default
+  # fork pull requests only, the one validation before the flip when CI is
+  # maintainer-gated; a caller that needs this run's own evidence asks for it on
+  # every delivery with `final_validation: always`.
+  # The policy is decided by a script, not in `when:`: an included block's
+  # `$INPUTS` reference is substituted as text, and a bare value cannot be the
+  # left-hand side of a condition.
+  - id: final-gate
+    script: final-gate
+    runtime: bun
+    depends_on: [fork]
+    with:
+      fork: "$fork.output.fork"
+      policy: "$INPUTS.final_validation"
+    output_format:
+      type: object
+      properties:
+        validate: { type: boolean }
+      required: [validate]
+
   - id: validate
     include: archon-validate
-    depends_on: [fork]
-    when: "$fork.output.fork == true"
+    depends_on: [final-gate]
+    when: "$final-gate.output.validate == true"
+    with:
+      scope: "$INPUTS.validation_scope"
+      context: "$INPUTS.validation_context"
 
   # The third gate on the same script, for the same reason: a local gate that
   # refuses every red refuses red the change did not cause, and the base break

@@ -52,6 +52,7 @@ classify:
 resolve-scope: '{"errors":"false"}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":false}'
+final-gate: '{"validate":false}'
 fixture:
   expect: completed
   # The review round is handed the verified PR record, not a bare number: the

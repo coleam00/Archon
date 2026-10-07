@@ -17,6 +17,10 @@ checkout. Its `scope` input narrows that ordinary path, which has three steps:
    caused it (`introduced`), the base already had it (`inherited`) or the machine
    did (`environment`).
 
+Before those steps, `applicability` (script) decides whether this run already
+reached a verdict that still applies; see "Reusing a verdict" below. When it does,
+none of the three steps runs.
+
 Green comes from exit statuses alone: every declared check exited 0. When no check
 failed but not every check ran, the result is `green: false` with
 `red_cause: incomplete`. That happens when a check cannot start, or when the `run`
@@ -29,6 +33,34 @@ it starts. Restoring never overwrites a path the checkout has again; that moved
 copy stays in the artifacts, and `validation.md` names where. SDLC delivery refuses an incomplete result as unfinished rather
 than red; the action is to resume the run. The comparison path never declares
 `incomplete`.
+
+`checks_performed` is true only when at least one declared check ran to an exit
+status the verdict rests on. A project that defines no checks is green with
+`checks_performed: false`; an incomplete gate performed none. Callers that must not
+treat "nothing to run" as health (a regression probe, a release gate) read it.
+
+## Reusing a verdict
+
+A run reaches its validation again whenever it resumes past it: after an approval,
+a CI wait or an operator's resume. Every fresh ordinary verdict is recorded in
+`$ARTIFACTS_DIR/validation-evidence.json` with what it was a verdict about: a
+fingerprint of the tracked tree (`HEAD` and the binary diff of tracked files), the
+`scope`, the `context`, the validator's own sources (this workflow, its commands
+and scripts) and the exact `validation.md` it came with. `applicability` runs on
+every pass and reuses that verdict only when it was green with performed checks
+and every one of those still matches; `result` re-checks the match before
+returning it. Anything else validates again, and `applicability` names why
+(`tracked tree changed`, `validation scope changed`, `validation context changed`,
+`validator changed`, `prior validation was not green`, and so on). A verdict whose
+tree moved while the gate ran, or that came without a report, is not recorded.
+
+The tracked-tree fingerprint cannot observe an external database or service, and
+untracked files are deliberately outside it. A caller whose gate depends on such
+state binds it to the verdict through `context`: a nonsecret identity such as a
+snapshot name or a service version. Secrets never belong in it; the context is
+written to the run's artifacts.
+
+## Comparing compositions
 
 For an existing workflow that must test a composition, pass `comparison` as the path
 to an explicitly authored JSON request. This selects a deterministic script path;

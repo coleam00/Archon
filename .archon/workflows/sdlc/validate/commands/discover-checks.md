@@ -15,7 +15,11 @@ $ARGUMENTS
 1. Read the checks from the repository itself: package scripts, task runners, CI workflow definitions, contributor docs. Never invent a generic command the project does not define; never substitute your own idea of a check for the project's.
 2. Honor a documented aggregate gate (a `validate`/`check` script) over reassembling its pieces by hand. Declare it as one check. Declare separate checks only when the project has no aggregate gate, and then in the project's own order where one is documented: type checks, lint, tests, build.
 3. If dependencies are missing, declare the project's own install command in locked mode as the first check (for example a frozen lockfile flag). A gate that fails on a broken environment is reporting the environment, not the code.
-4. Apply the narrowing above when it is not empty: the checks that cover that package, directory or named check.
+4. Apply the narrowing above when it is not empty: the checks that cover that package, directory or named check. The narrowing and the trigger message may exclude expensive project-specific stages; never silently drop a check that stays inside the declared scope.
+5. Declare every applicable check the project defines, including bounded AI integration tests when the project genuinely has them.
+6. Never declare a check that re-enters this validation, the delivery workflow around it, or any other command whose purpose is to run the same validation or delivery orchestration again. Read an aggregate script and what it delegates to before declaring it. When an aggregate would re-enter that orchestration, declare its separable project checks directly instead. When no applicable check can be separated from it, the gate is unavailable, not healthy: declare one check that says so and exits non-zero, such as `["bash", "-c", "echo 'validation gate unavailable: <why>' >&2; exit 1"]`.
+
+The workflow records the verdict, together with the scope, the context and a fingerprint of the tracked tree, in `$ARTIFACTS_DIR/validation-evidence.json`. Never create or edit that file, or `validation.md`.
 
 You may read files and run read-only commands to find these out — list scripts, check whether dependencies are installed, inspect `git status`. Do not run the checks themselves, and do not modify anything.
 

@@ -160,15 +160,58 @@ describe('run-checks', () => {
   );
 });
 
-function result(bindings: { comparison?: unknown; run?: unknown; classification?: unknown }): {
+// A fresh ordinary decision. Its fingerprint matches no tree, so the result records
+// no evidence here; recording and reuse are covered in sdlc-validation-evidence.test.ts.
+const FRESH = {
+  fingerprint: 'unrelated',
+  scope: '',
+  context: '',
+  validator: 'test',
+  generation: 1,
+  reason: 'first validation for this run',
+  nonce: 'n',
+  reuse: false,
+};
+
+function result(bindings: {
+  comparison?: unknown;
+  run?: unknown;
+  classification?: unknown;
+  discovery?: unknown;
+}): {
   exitCode: number;
   output: unknown;
 } {
   const f = checkout();
+  Bun.spawnSync(['git', 'init', '-q'], { cwd: f.cwd });
+  Bun.spawnSync(
+    [
+      'git',
+      '-c',
+      'user.email=t@example.com',
+      '-c',
+      'user.name=t',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'x',
+    ],
+    { cwd: f.cwd }
+  );
+  const ordinary = bindings.comparison === undefined;
   const out = Bun.spawnSync([process.execPath, join(PACK, 'result.ts')], {
     cwd: f.cwd,
     env: env(f.artifacts, {
+      INPUTS_SCOPE: '',
+      INPUTS_CONTEXT: '',
       INPUTS_COMPARISON: JSON.stringify(bindings.comparison ?? null),
+      INPUTS_APPLICABILITY: JSON.stringify(ordinary ? FRESH : null),
+      INPUTS_DISCOVERY: JSON.stringify(
+        ordinary
+          ? (bindings.discovery ?? { checks: [{ name: 'gate', argv: ['gate'] }], notes: '' })
+          : null
+      ),
       INPUTS_RUN: JSON.stringify(bindings.run ?? null),
       INPUTS_CLASSIFICATION: JSON.stringify(bindings.classification ?? null),
     }),
@@ -222,18 +265,25 @@ describe("the gate's environment", () => {
 describe('validation result', () => {
   it('reports a gate the timeout stopped as incomplete, never green or red', () => {
     const { output } = result({});
-    expect(output).toMatchObject({ green: false, red_cause: 'incomplete', evidence: null });
+    expect(output).toMatchObject({
+      green: false,
+      checks_performed: false,
+      red_cause: 'incomplete',
+      evidence: null,
+    });
   });
 
   it('derives green and incomplete from the run, and takes red causes from classify', () => {
     expect(result({ run: { status: 'green', summary: 'all passed' } }).output).toEqual({
       green: true,
+      checks_performed: true,
       red_cause: '',
       summary: 'all passed',
       evidence: null,
     });
     expect(result({ run: { status: 'incomplete', summary: 'x could not start' } }).output).toEqual({
       green: false,
+      checks_performed: false,
       red_cause: 'incomplete',
       summary: 'x could not start',
       evidence: null,
@@ -245,6 +295,7 @@ describe('validation result', () => {
       }).output
     ).toEqual({
       green: false,
+      checks_performed: true,
       red_cause: 'inherited',
       summary: 'fails on the base too',
       evidence: null,
@@ -257,8 +308,22 @@ describe('validation result', () => {
     expect(output).toBeNull();
   });
 
-  it('passes the comparison verdict through unchanged', () => {
+  it('reports a project with no declared checks as green with no checks performed', () => {
+    expect(
+      result({
+        run: { status: 'green', summary: 'No checks defined by this project.' },
+        discovery: { checks: [], notes: 'nothing defined' },
+      }).output
+    ).toMatchObject({ green: true, checks_performed: false, red_cause: '' });
+  });
+
+  it('passes the comparison verdict through, adding whether a gate verdict was reached', () => {
     const comparison = { green: false, red_cause: 'interaction', summary: 's', evidence: null };
-    expect(result({ comparison }).output).toEqual(comparison);
+    expect(result({ comparison }).output).toEqual({ ...comparison, checks_performed: true });
+    const conflicted = { green: false, red_cause: '', summary: 'did not compose', evidence: null };
+    expect(result({ comparison: conflicted }).output).toEqual({
+      ...conflicted,
+      checks_performed: false,
+    });
   });
 });
