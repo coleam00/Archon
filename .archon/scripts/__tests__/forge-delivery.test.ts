@@ -5,7 +5,7 @@
  *
  * The other pack tests fake the CLI's answers. This one proves the pieces agree:
  * a delivery creates a draft pull request, updates its body, upserts the same
- * review comment across rounds, reads checks and flips ready, and none of
+ * review comment across rounds, reads checks, flips ready and restores draft, and none of
  * those steps calls `gh`.
  */
 import { describe, expect, it } from 'bun:test';
@@ -103,7 +103,7 @@ process.exitCode = await forgeCommand(
 }
 
 describe('the forge opt-in delivers through plugin operations', () => {
-  it('creates a draft, resyncs its body, upserts one review comment, reads checks and flips ready', () => {
+  it('creates a draft, resyncs its body, upserts one review comment, reads checks, flips ready and restores draft', () => {
     const host = forgeHost();
     const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {
       const run = runPackScript(relative, {
@@ -184,9 +184,14 @@ describe('the forge opt-in delivers through plugin operations', () => {
     const flipped = through('deliver/scripts/flip-ready', { inputs: { INPUTS_PR: created.stdout } });
     expect(JSON.parse(flipped.stdout)).toEqual({ pr_url: record.url, flipped_at: expect.any(String) });
 
+    const drafted = through('../../scripts/__tests__/mark-pr-draft');
+    expect(JSON.parse(drafted.stdout)).toMatchObject({ is_draft: true, state: 'open' });
+    const unchanged = through('../../scripts/__tests__/mark-pr-draft');
+    expect(JSON.parse(unchanged.stdout)).toMatchObject({ is_draft: true });
+
     const state = github();
     expect(state.pulls).toHaveLength(1);
-    expect(state.pulls[0]).toMatchObject({ draft: false, body: RESYNCED_BODY });
+    expect(state.pulls[0]).toMatchObject({ draft: true, body: RESYNCED_BODY });
     expect(state.comments).toEqual([
       { id: 900, body: `${MARKER}\nReviewed commit: \`${HEAD_SHA}\`\n\n${ROUND_TWO}` },
     ]);
@@ -196,6 +201,7 @@ describe('the forge opt-in delivers through plugin operations', () => {
       `POST https://${FAKE_HOST}/api/v3/repos/example/repo/issues/42/comments`,
       `PATCH https://${FAKE_HOST}/api/v3/repos/example/repo/pulls/42`,
       `PATCH https://${FAKE_HOST}/api/v3/repos/example/repo/issues/comments/900`,
+      `POST https://${FAKE_HOST}/api/graphql`,
       `POST https://${FAKE_HOST}/api/graphql`,
     ]);
   }, 120_000);

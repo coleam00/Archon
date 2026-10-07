@@ -825,6 +825,8 @@ mock.module('@archon/core/workflows/sql-host', () => ({
     createWorkflowOperations({
       getUserRole: async () => undefined,
       store: {
+        signalWorkflowWait: (...args) => operationWorkflowDb.signalWorkflowWait(...args),
+        deleteWorkflowRun: (...args) => operationWorkflowDb.deleteWorkflowRun(...args),
         getWorkflowRun: (...args) => operationWorkflowDb.getWorkflowRun(...args),
         findChildRuns: (...args) => operationWorkflowDb.findChildRuns(...args),
         getRunAncestry: (...args) => operationWorkflowDb.getRunAncestry(...args),

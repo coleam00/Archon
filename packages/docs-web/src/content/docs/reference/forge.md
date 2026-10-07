@@ -50,6 +50,7 @@ archon forge pr.view --data '{"selector":{"kind":"number","ref":{"repo":{"host":
 archon forge pr.create --data-file ./create.json
 archon forge pr.edit-body --data-file ./body.json
 archon forge pr.ready --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
+archon forge pr.draft --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
 archon forge comment.upsert --data-file ./comment.json
 archon forge pr.merge --data-file ./merge.json
 archon forge checks.rerun --data-file ./rerun.json
@@ -66,7 +67,7 @@ Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the o
 
 ## What a write reports
 
-`pr.create`, `pr.edit-body`, `pr.ready` and `comment.upsert` each perform at most one write and then read the result back. A valid write request reports exactly one outcome, so a caller never has to guess which happened. A request that fails validation before dispatch is answered with `invalid_request` and no `mutation`; nothing was written.
+`pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft` and `comment.upsert` each perform at most one write and then read the result back. A valid write request reports exactly one outcome, so a caller never has to guess which happened. A request that fails validation before dispatch is answered with `invalid_request` and no `mutation`; nothing was written.
 
 | Outcome | Shape | What it means |
 | --- | --- | --- |
@@ -76,6 +77,8 @@ Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the o
 | outcome unknown | `ok: false`, `mutation.outcome: "outcome_unknown"` | The request was submitted and its answer was lost, or the plugin's answer cannot show whether the write was applied (see the executable protocol below). Reconcile before retrying. |
 
 A read-back never claims to have *prevented* a wrong write; it only reports what it could and could not confirm. A vendor that accepts a write and silently does not apply it is reported as a verification failure, never as success.
+
+`pr.draft` converts an open pull request to draft and returns its verified PR record. An already-draft PR returns `applied` with `changed: false`; closed or merged PRs are refused with the observed record. A plugin that does not advertise `pr.draft` returns `unsupported_op` before execution. The forge source never falls back to `gh`. The GitHub plugin uses [the GraphQL draft mutation](https://docs.github.com/en/graphql/reference/pulls#convertpullrequesttodraft) and reads the PR back before reporting success.
 
 `comment.upsert` writes the one comment whose first line is the exact `marker`, creating it when absent and replacing it in place when present. A body that does not begin with that marker is refused, and more than one marked comment is a conflict.
 
@@ -115,7 +118,7 @@ GitHub tokens need repository pull-request and check/status read permissions, pl
 
 The bundled SDLC pack reads checks and performs its pull-request writes through `gh` by default. The forge path is an explicit opt-in until the GitHub plugin installs through the marketplace. To opt in, install a plugin for the pull request's host and set `ARCHON_SDLC_FORGE=forge` in the environment Archon runs with, for example `~/.archon/.env`. One switch covers both reads and writes on the pull request and its checks; a value other than `gh` or `forge` fails the steps that use it. The forge contract has no issue operation, so the issues `file-discoveries` files go through `gh` whichever source is selected.
 
-The pack's pull-request writes are the draft pull request, the body resync, the canonical review comment, the ready mark, and the conversion back to draft when CI stays red. Each happens in a deterministic node — `publish-pr`, `publish-pr-body`, `publish-review`, `flip-ready` and `confirm-ready`, and `mark-draft` — that fails unless the result reads back. All but the draft conversion publish through the selected source; the forge contract has no draft operation, so `mark-draft` and `confirm-ready` convert to draft through `gh` whichever source is selected. The agents around them establish the target, author the body and decide the verdict; they never write to the forge themselves. Whether a branch already has a pull request is decided by an open-head lookup, so a second one is never opened for it.
+The pack's pull-request writes are the draft pull request, the body resync, the canonical review comment, the ready mark, and the conversion back to draft when CI stays red. Each happens in a deterministic node — `publish-pr`, `publish-pr-body`, `publish-review`, `flip-ready` and `confirm-ready`, and `mark-draft` — that publishes through the selected source and fails unless the result reads back. The agents around them establish the target, author the body and decide the verdict; they never write to the forge themselves. Whether a branch already has a pull request is decided by an open-head lookup, so a second one is never opened for it.
 
 Initial PR publication has a 30-second attempt budget and up to two transient retries, starting with a 20-second backoff. A retry repeats the push, which changes nothing when the remote already has the head, then publishes. Before creating a PR, publish records a durable `pr-create-started` file in the run's artifacts. After a timeout, the next attempt looks for the PR again. If it finds one, it reuses it; if a create was started but no PR is visible, it fails with an unresolved-write message instead of submitting a competing create. Resume can reconcile the PR once it becomes visible. Keep the record while the write is unresolved: stopping a local client does not cancel a request already submitted to the forge.
 
@@ -152,7 +155,7 @@ It also exports `runForgeMutationConformance` for write fixtures. Pass the plugi
 
 The host invokes `PLUGIN metadata` before any operation. Metadata declares integer protocol version 1, plugin name/version, forge family, static hosts, operation capabilities, enforced mutation conditions and credential environment names. Protocol incompatibility and unsupported operations fail before operation execution.
 
-For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
+For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
 
 A plugin that fails a write must state which outcome it was under `mutation`, and an applied result must answer the request that asked for it — the same pull request, the same head and draft state for a create, the digest of the body it was given for an edit or comment. The host checks both rather than trusting the claim. A failed write with no stated outcome, or an applied result that does not answer the request, becomes `outcome_unknown`: the plugin ran, so what it did to the forge is no longer knowable from here. A write whose plugin process never started, or whose operation the plugin does not declare, is a refusal.
 

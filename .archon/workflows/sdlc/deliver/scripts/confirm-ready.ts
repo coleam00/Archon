@@ -13,9 +13,8 @@
  * failed node could have produced: whether the CI fix's review converged is read
  * from the run's typed records (`ci-cause`, `ci-fix-delta`, `ci-fix-review`), which
  * exist only for nodes that succeeded. A draft it marks ready again, after the
- * operator's re-run, passes the same merge check as the first flip. Reads go through
- * the source the run selected; the draft conversion goes through gh (see
- * ../../.shared/pr.ts).
+ * operator's re-run, passes the same merge check as the first flip. Reads and the
+ * draft conversion go through the source the run selected (see ../../.shared/pr.ts).
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
@@ -98,7 +97,7 @@ function confirm(): void {
     parseFlippedAt(text(process.env.INPUTS_FLIPPED_AT))
   );
   if (reason !== undefined) {
-    markPrDraft(pr);
+    markPrDraft(pr, source);
     throw new Error(`the pull request is back in draft: ${reason}`);
   }
   if (observed.is_draft) {

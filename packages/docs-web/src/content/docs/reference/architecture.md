@@ -142,9 +142,11 @@ if (yourPlatformToken) {
   const adapter = new YourPlatformAdapter(yourPlatformToken, yourPlatformMode);
 
   // Set up message handler
-  adapter.onMessage(async (conversationId, message) => {
+  adapter.onMessage(async (conversationId, message, platformUserId) => {
+    // resolveUserId (defined in this file) returns undefined when resolution fails.
+    const userId = await resolveUserId(adapter.getPlatformType(), platformUserId, undefined);
     await handleMessage(adapter, conversationId, message, {
-      actor: { kind: 'unidentified' },
+      actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
     });
   });
 
@@ -266,14 +268,23 @@ async handleWebhook(payload: any, signature: string): Promise<void> {
   if (!this.verifySignature(payload, signature)) return;
 
   // Parse event, extract conversationId and message
-  const { conversationId, message } = this.parseEvent(payload);
+  const { conversationId, message, platformUserId } = this.parseEvent(payload);
+  let userId: string | undefined;
+  try {
+    const user = await findOrCreateUserByPlatformIdentity(this.getPlatformType(), platformUserId);
+    userId = user.id;
+  } catch (err) {
+    getLog().warn({ err }, 'your_platform.user_resolve_failed');
+  }
 
   // Route to orchestrator
   await handleMessage(this, conversationId, message, {
-    actor: { kind: 'unidentified' },
+    actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
   });
 }
 ```
+
+Resolve the authenticated sender to an Archon user before dispatch. If resolution fails, pass `{ kind: 'unidentified' }`; this refuses run actions. Chat and forge adapters never pass `operator`.
 
 **Reference:** `packages/adapters/src/forge/github/adapter.ts`
 

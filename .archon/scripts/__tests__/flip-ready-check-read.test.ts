@@ -151,7 +151,7 @@ describe('confirm-ready on the final head, default gh source', () => {
       gh: { checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }], pr: { isDraft: false }, writeLost: true },
     });
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('still reports ready after converting it to draft');
+    expect(result.stderr).toContain('does not report an open draft after conversion');
   });
 
   it('reports a merged pull request as delivered without writing', () => {
@@ -176,14 +176,20 @@ describe('confirm-ready on the opt-in forge source', () => {
     expect(JSON.parse(result.stdout)).toEqual({ pr_url: PR_URL });
   });
 
-  it('converts a red pull request back to draft through gh, which owns that write', () => {
+  it('converts a red pull request back to draft through the plugin, never gh', () => {
+    const drafted = forgeOperation('pr.draft', {
+      target: { repo: { host: 'ghe.example.com', path: 'example/repo' }, number: 42 },
+      outcome: 'applied',
+      changed: true,
+      pr: forgePrRecord(),
+    });
     const result = confirm({
       source: 'forge',
-      gh: { pr: { isDraft: false } },
-      forge: { kind: 'fake', response: [view, forgeResponse([{ name: 'build', state: 'red' }])] },
+      forge: { kind: 'fake', response: [view, forgeResponse([{ name: 'build', state: 'red' }]), drafted] },
     });
     expect(result.code).not.toBe(0);
-    expect(undoCalled(result.gh)).toBe(true);
+    expect(result.forge.some(call => call.includes('forge pr.draft'))).toBe(true);
+    expect(result.gh).toEqual([]);
     expect(result.stderr).toContain('the pull request is back in draft');
   });
 

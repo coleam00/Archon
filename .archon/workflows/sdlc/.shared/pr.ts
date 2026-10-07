@@ -294,21 +294,23 @@ export function markPrReady(ref: QualifiedPr, source: ForgeSource): PrRecord {
   return after.pr;
 }
 
-/**
- * Convert a ready pull request back to draft, and read it back.
- *
- * The forge contract has no draft operation yet, so this goes through `gh` whichever
- * source the run selected, as issue writes and triage's labels do. A pull request
- * that is not open is left alone: there is nothing to convert.
- */
-export function markPrDraft(ref: QualifiedPr): PrRecord {
-  const before = viewPr(ref, 'gh').pr;
-  if (before.state !== 'open' || before.is_draft) return before;
-  const undo = gh('pr', 'ready', String(ref.number), '--repo', ghRepo(ref.repo), '--undo');
-  if (!undo.ok) throw new Error(`converting the pull request back to draft failed: ${undo.stderr}`);
-  const after = viewPr(ref, 'gh');
-  if (!after.pr.is_draft) throw new Error(`${after.pr.url} still reports ready after converting it to draft`);
-  return after.pr;
+export function markPrDraft(ref: QualifiedPr, source: ForgeSource): PrRecord {
+  if (source === 'forge') {
+    const value = forgeResult('pr.draft', { ref: { repo: ref.repo, number: ref.number } });
+    return parsePrRecord(value.pr);
+  }
+  const before = viewPr(ref, source).pr;
+  if (before.state !== 'open') {
+    throw new Error(`${before.url} is ${before.state} and cannot be converted to draft`);
+  }
+  if (before.is_draft) return before;
+  const draft = gh('pr', 'ready', String(ref.number), '--repo', ghRepo(ref.repo), '--undo');
+  if (!draft.ok) throw new Error(`the draft conversion failed: ${draft.stderr}`);
+  const after = viewPr(ref, source).pr;
+  if (!after.is_draft || after.state !== 'open') {
+    throw new Error(`${after.url} does not report an open draft after conversion`);
+  }
+  return after;
 }
 
 interface GhComment {
