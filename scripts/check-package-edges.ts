@@ -13,7 +13,7 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   // Forge contracts; fixtures use paths' test cleanup helpers.
   forge: { runtime: ['paths'] },
   // Plugin manifest vocabulary.
-  'plugin-manifest': { runtime: ['provider-contract'] },
+  'plugin-manifest': { runtime: ['chat-contract', 'provider-contract'] },
   // External providers can depend on the contract without pulling in implementations.
   'provider-contract': { runtime: [] },
   'chat-contract': { runtime: ['provider-contract'] },
@@ -52,6 +52,7 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   cli: {
     runtime: [
       'adapters',
+      'chat-contract',
       'core',
       'forge',
       'git',
