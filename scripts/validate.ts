@@ -72,6 +72,11 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     command: ['bun', 'run', 'check:provider-contract-schema'],
   },
   {
+    id: 'chat-contract-schema',
+    label: 'Chat contract JSON Schema is regenerated',
+    command: ['bun', 'run', 'check:chat-contract-schema'],
+  },
+  {
     id: 'api-types',
     label: 'Generated API types match the schemas',
     command: ['bun', 'run', 'check:api-types'],

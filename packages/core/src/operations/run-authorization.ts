@@ -1,9 +1,7 @@
+import type { ChatActor } from '@archon/chat-contract';
 import type { UserRole } from '../schemas/user';
 
-export type RunActor =
-  | { kind: 'operator' }
-  | { kind: 'user'; userId: string }
-  | { kind: 'unidentified' };
+export type RunActor = { kind: 'operator' } | ChatActor;
 
 export const RUN_ACTIONS = [
   'approve',

@@ -2,7 +2,7 @@ import type { IAgentProvider, SendQueryOptions } from '../agent-provider';
 import { credentialStatusSchema, type CredentialStatus } from '../credential-status';
 import type { ProviderChunk } from '../events';
 import type { ProviderSettled } from '../settled';
-import { ProviderPluginProtocolError, ProviderRpc, type ProviderPluginIO } from './rpc';
+import { PluginProtocolError, PluginRpc, type PluginIO } from './rpc';
 import {
   chunkNotificationSchema,
   checkCredentialRequestSchema,
@@ -37,8 +37,8 @@ function finish(turn: Turn, error?: unknown): void {
   else turn.controller.close();
 }
 
-export async function connectProvider(io: ProviderPluginIO): Promise<ConnectedProvider> {
-  const rpc = new ProviderRpc(io);
+export async function connectProvider(io: PluginIO): Promise<ConnectedProvider> {
+  const rpc = new PluginRpc(io);
   const turns = new Map<string, Turn>();
   rpc.on('_archon/chunk', raw => {
     const { sessionId, chunk } = rpc.parse(chunkNotificationSchema, raw);
@@ -68,7 +68,7 @@ export async function connectProvider(io: ProviderPluginIO): Promise<ConnectedPr
       })
     );
     descriptor = response.agentCapabilities._meta.archon;
-    rpc.provider = descriptor.id;
+    rpc.plugin = descriptor.id;
   } catch (error) {
     await rpc.close();
     throw error;
@@ -179,11 +179,7 @@ export async function connectProvider(io: ProviderPluginIO): Promise<ConnectedPr
           finish(turn);
         })
         .catch(error => {
-          if (
-            turn.cancelled &&
-            error instanceof ProviderPluginProtocolError &&
-            error.reason === 'closed'
-          )
+          if (turn.cancelled && error instanceof PluginProtocolError && error.reason === 'closed')
             finish(turn);
           else finish(turn, error);
         })

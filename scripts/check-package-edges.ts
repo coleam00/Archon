@@ -16,6 +16,7 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   'plugin-manifest': { runtime: [] },
   // External providers can depend on the contract without pulling in implementations.
   'provider-contract': { runtime: [] },
+  'chat-contract': { runtime: ['provider-contract'] },
   // Git operations use the shared paths and process helpers.
   git: { runtime: ['paths'] },
   // SDK implementations adapt the provider contract.
@@ -29,7 +30,17 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
     test: ['providers'],
   },
   // Core assembles execution and persistence services.
-  core: { runtime: ['git', 'isolation', 'paths', 'provider-contract', 'providers', 'workflows'] },
+  core: {
+    runtime: [
+      'chat-contract',
+      'git',
+      'isolation',
+      'paths',
+      'provider-contract',
+      'providers',
+      'workflows',
+    ],
+  },
   // Transport adapters normalize platform input for core.
   adapters: { runtime: ['core', 'forge', 'git', 'isolation', 'paths', 'providers', 'workflows'] },
   // Server hosts the engine and platform adapters.

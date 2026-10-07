@@ -16,8 +16,8 @@ import {
 } from '@archon/provider-contract';
 import {
   connectProvider,
-  ProviderPluginProtocolError,
-  ProviderPluginRemoteError,
+  PluginProtocolError,
+  PluginRemoteError,
   type ConnectedProvider,
   type ProviderPluginDescriptor,
 } from '@archon/provider-contract/plugin';
@@ -169,7 +169,7 @@ function startProcess(
     async failure(error: unknown): Promise<Error> {
       // EOF does not imply process exit: a provider can close stdout and stay alive.
       if (
-        (error instanceof ProviderPluginProtocolError && error.reason === 'closed') ||
+        (error instanceof PluginProtocolError && error.reason === 'closed') ||
         child.exitCode !== null ||
         child.signalCode !== null ||
         spawnError
@@ -186,11 +186,11 @@ function startProcess(
           child.signalCode,
           evidence()
         );
-      if (error instanceof ProviderPluginRemoteError)
+      if (error instanceof PluginRemoteError)
         return new Error(
           `Provider plugin ${descriptor.id} request failed (RPC ${String(error.code)})`
         );
-      if (error instanceof ProviderPluginProtocolError)
+      if (error instanceof PluginProtocolError)
         return new Error(
           `Provider plugin ${descriptor.id} protocol failed at line ${String(error.line)} (${error.reason})`
         );

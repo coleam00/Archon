@@ -51,7 +51,9 @@
     "prepare": "husky",
     "setup-auth": "bun --filter @archon/server setup-auth",
     "check:cli-import-boundary": "bun run scripts/check-cli-import-boundary.ts",
-    "check:package-edges": "bun run scripts/check-package-edges.ts"
+    "check:package-edges": "bun run scripts/check-package-edges.ts",
+    "generate:chat-contract-schema": "bun run --cwd=packages/chat-contract generate:schema",
+    "check:chat-contract-schema": "bun run --cwd=packages/chat-contract check:schema"
   },
   "devDependencies": {
     "@archon/core": "workspace:*",

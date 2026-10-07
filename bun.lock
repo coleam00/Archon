@@ -45,6 +45,17 @@
         "typescript": "^5.0.0",
       },
     },
+    "packages/chat-contract": {
+      "name": "@archon/chat-contract",
+      "version": "0.11.1",
+      "dependencies": {
+        "@archon/provider-contract": "workspace:*",
+        "zod": "^4.4.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
     "packages/cli": {
       "name": "@archon/cli",
       "version": "0.11.1",
@@ -75,6 +86,7 @@
       "name": "@archon/core",
       "version": "0.11.1",
       "dependencies": {
+        "@archon/chat-contract": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",
@@ -111,10 +123,8 @@
       "name": "@archon/forge",
       "version": "0.11.1",
       "dependencies": {
-        "zod": "^4.4.3",
-      },
-      "devDependencies": {
         "@archon/paths": "workspace:*",
+        "zod": "^4.4.3",
       },
       "peerDependencies": {
         "typescript": "^5.0.0",
@@ -324,6 +334,8 @@
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.129.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1", "standardwebhooks": "^1.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-MH7LB20kNpGLUpPTe2OG5XvL/KhX8HUO9XyBaFjgFk6TLS4Xjt0VPIuMKywe7POKKPslX+QxSlVok9e+8kG5Nw=="],
 
     "@archon/adapters": ["@archon/adapters@workspace:packages/adapters"],
+
+    "@archon/chat-contract": ["@archon/chat-contract@workspace:packages/chat-contract"],
 
     "@archon/cli": ["@archon/cli@workspace:packages/cli"],
 

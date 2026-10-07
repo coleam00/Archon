@@ -12,7 +12,7 @@ import { credentialSpecSchema } from '../registration';
 import { providerStopReasonSchema, type ProviderStopReason } from '../result';
 
 export const PROVIDER_PLUGIN_PROTOCOL = 1;
-export const PROVIDER_PLUGIN_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
+export { PLUGIN_MAX_MESSAGE_BYTES as PROVIDER_PLUGIN_MAX_MESSAGE_BYTES } from './rpc';
 
 export const providerPluginDescriptorSchema = z.object({
   protocol: z.literal(PROVIDER_PLUGIN_PROTOCOL),
