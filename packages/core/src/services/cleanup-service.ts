@@ -334,8 +334,15 @@ export interface RemoveEnvironmentResult {
   worktreeRemoved: boolean;
   /** Whether the branch was deleted (null if branch cleanup was not attempted) */
   branchDeleted: boolean | null;
-  /** If the operation was a no-op, why it was skipped */
-  skippedReason?: string;
+  /**
+   * Why the environment was left in place. A closed set so callers that branch
+   * on a reason fail type-check when it changes, instead of silently diverging.
+   */
+  skippedReason?:
+    | 'environment not found'
+    | 'already destroyed'
+    | 'has uncommitted changes'
+    | 'filesystem removal incomplete; environment remains active';
   /** Warnings from partial cleanup (e.g., branch couldn't be deleted) */
   warnings: string[];
 }

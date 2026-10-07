@@ -304,6 +304,7 @@ import {
   cleanupContainerEnvironments,
   reclaimContainerEnv,
   SESSION_RETENTION_DAYS,
+  type RemoveEnvironmentResult,
 } from './cleanup-service';
 
 describe('reclaimContainerEnv', () => {
@@ -694,6 +695,14 @@ describe('cleanup-service', () => {
       expect(result.worktreeRemoved).toBe(false);
       expect(result.branchDeleted).toBe(false);
       expect(result.skippedReason).toBe('has uncommitted changes');
+    });
+
+    test('skippedReason is a closed vocabulary callers can branch on', () => {
+      // Callers decide cleanup outcomes by comparing reasons, so an unlisted
+      // reason must fail type-check instead of silently missing those branches.
+      // @ts-expect-error -- not a reason removeEnvironment produces
+      const unknown: RemoveEnvironmentResult['skippedReason'] = 'already removed';
+      expect(unknown).toBeDefined();
     });
 
     test.each(['worktreeRemoved', 'directoryClean'] as const)(
