@@ -82,6 +82,10 @@ export const prReadyRequestSchema = requestBase.extend({
   op: z.literal('pr.ready'),
   ref: prRefSchema,
 });
+export const prDraftRequestSchema = requestBase.extend({
+  op: z.literal('pr.draft'),
+  ref: prRefSchema,
+});
 export const commentUpsertRequestSchema = requestBase.extend({
   op: z.literal('comment.upsert'),
   ref: prRefSchema,
@@ -199,6 +203,7 @@ export const mutationRequestSchemas = [
   prCreateRequestSchema,
   prEditBodyRequestSchema,
   prReadyRequestSchema,
+  prDraftRequestSchema,
   commentUpsertRequestSchema,
   workItemCreateRequestSchema,
   workItemLabelsSetRequestSchema,
@@ -330,6 +335,10 @@ export const mutationResultSchemas = [
   }),
   z.object({
     op: prReadyRequestSchema.shape.op,
+    value: appliedSchema.extend({ pr: forgePrRecordSchema }),
+  }),
+  z.object({
+    op: prDraftRequestSchema.shape.op,
     value: appliedSchema.extend({ pr: forgePrRecordSchema }),
   }),
   z.object({

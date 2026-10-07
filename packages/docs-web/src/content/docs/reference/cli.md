@@ -36,7 +36,7 @@ Run AI-powered workflows from your terminal.
 
 ## Forge operations
 
-Use `archon forge resolve --data <json>` for an explicit remote, `archon forge checks --data <json>` for a qualified PR, and `workitem.view`, `workitem.create`, `workitem.labels.set`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` for the rest. Reads return structured observations; writes report whether they were applied and verified, refused, applied but unverified, or left with an unknown outcome. Pass a request carrying authored text with `--data-file <path>` so it stays out of argv. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack still uses `gh` by default; set `ARCHON_SDLC_FORGE=forge` to read and write through the plugin instead.
+Use `archon forge resolve --data <json>` for an explicit remote, `archon forge checks --data <json>` for a qualified PR, and `workitem.view`, `workitem.create`, `workitem.labels.set`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` for the rest. Reads return structured observations; writes report whether they were applied and verified, refused, applied but unverified, or left with an unknown outcome. Pass a request carrying authored text with `--data-file <path>` so it stays out of argv. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack still uses `gh` by default; set `ARCHON_SDLC_FORGE=forge` to read and write through the plugin instead.
 
 ## Users and roles
 
@@ -48,7 +48,7 @@ archon user role <id> admin         # Designate an admin using a full Archon use
 archon user role <id> member        # Demote a user
 ```
 
-Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non-zero exit code. New users are members, while upgrades preserve existing roles. There is no last-admin restriction because the CLI is the operator. Role-based run-action enforcement ships separately; see [Users and roles](/reference/security/#users-and-roles) for the upgrade policy and Docker commands.
+Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non-zero exit code. New users are members, while upgrades preserve existing roles. There is no last-admin restriction because the CLI is the operator. Only a run's starter or an admin can act on it; the local operator can always act through the CLI. See [Who can act on a run](/reference/security/#who-can-act-on-a-run) for the action policy and [Users and roles](/reference/security/#users-and-roles) for the upgrade policy and Docker commands.
 
 ## Quick Start
 

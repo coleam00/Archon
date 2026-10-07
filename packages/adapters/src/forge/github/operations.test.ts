@@ -33,6 +33,7 @@ describe('GitHub outbound producer', () => {
         'pr.create',
         'pr.edit-body',
         'pr.ready',
+        'pr.draft',
         'comment.upsert',
         'pr.merge',
         'checks.rerun',

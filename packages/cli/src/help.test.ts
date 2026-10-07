@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { forgeRequestSchema } from '@archon/forge/operations';
 import { renderHelp } from './help';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
@@ -155,6 +156,23 @@ describe('CLI help output', () => {
     expect(scoped).toContain('--type <event-type>');
     expect(scoped).toContain('--data <json>');
   });
+
+  it('documents converting a pull request back to draft with structured input', () => {
+    const scoped = renderHelp('forge', 'pr.draft');
+    expect(scoped).toContain('forge pr.draft');
+    expect(scoped).toContain('Convert a pull request to draft and verify the result');
+    const options = scopedHelpOptions(['forge', 'pr.draft']);
+    expect(options).toContain('--data <json>');
+    expect(options).toContain('--data-file <path>');
+  });
+
+  for (const request of forgeRequestSchema.options) {
+    const op = request.shape.op.value;
+    it(`renders scoped help for the admitted forge operation ${op}`, () => {
+      expect(renderHelp('forge', op)).toContain(`forge ${op}`);
+      expect(scopedHelpOptions(['forge', op])).toContain('--data <json>');
+    });
+  }
 
   // Frozen pre-refactor template literal (557788e0d:packages/cli/src/cli.ts:140-260).
   // The byte-identical guarantee on global help is a load-bearing contract: shell

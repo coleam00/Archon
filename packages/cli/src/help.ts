@@ -15,6 +15,7 @@
  */
 
 import { userRoleSchema } from '@archon/core/schemas/user';
+import type { ForgeRequest } from '@archon/forge/operations';
 
 interface FlagOwner {
   command: string;
@@ -53,6 +54,25 @@ interface HelpEntry {
   scopedFlags?: FlagHelp[];
 }
 
+const forgeOperationDescriptions = {
+  resolve: 'Resolve an explicit remote through optional forge plugins',
+  'checks.state': 'Observe checks for an explicit qualified pull request',
+  'workitem.view': 'Read a qualified work item',
+  'workitem.create': 'Create an issue or recover its canonical marker',
+  'workitem.labels.set': 'Set and verify the complete issue label set',
+  'repo.labels.list': 'List repository label names',
+  'repo.label.ensure': 'Explicitly ensure one repository label exists',
+  'pr.view': 'Read a pull request by number or by qualified head',
+  'pr.create': 'Open a pull request and verify it by reading it back',
+  'pr.edit-body': 'Replace a pull request body and verify the result',
+  'pr.ready': 'Take a pull request out of draft and verify the result',
+  'pr.draft': 'Convert a pull request to draft and verify the result',
+  'pr.merge': 'Merge a pull request pinned to its approved head',
+  'checks.rerun': 'Rerun selected failed checks at a revision',
+  'pr.reviews': 'Read submitted reviews and root review comments',
+  'comment.upsert': 'Write the one marked comment on a pull request',
+} satisfies Record<ForgeRequest['op'], string>;
+
 // One entry per Commands-block line, in global-help order. `renderHelp()`
 // returns the global index with no selection; `renderHelp(...)`
 // filters this list by the (command, subcommand) tuple for scoped slices.
@@ -66,7 +86,7 @@ const commandHelp: HelpEntry[] = [
     command: 'forge',
     subcommand: 'resolve',
     spec: 'forge resolve',
-    description: 'Resolve an explicit remote through optional forge plugins',
+    description: forgeOperationDescriptions.resolve,
     scopedFlags: [
       {
         spec: '--data <json>',
@@ -78,7 +98,7 @@ const commandHelp: HelpEntry[] = [
     command: 'forge',
     subcommand: 'checks',
     spec: 'forge checks',
-    description: 'Observe checks for an explicit qualified pull request',
+    description: forgeOperationDescriptions['checks.state'],
     scopedFlags: [
       {
         spec: '--data <json>',
@@ -434,38 +454,24 @@ const commandHelp: HelpEntry[] = [
 // "no flag documentation is lost" invariant honest — nothing here ships in
 // global help that was not in the original.
 const scopedOnlyHelp: HelpEntry[] = [
-  ...(
-    [
-      ['workitem.view', 'Read a qualified work item'],
-      ['workitem.create', 'Create an issue or recover its canonical marker'],
-      ['workitem.labels.set', 'Set and verify the complete issue label set'],
-      ['repo.labels.list', 'List repository label names'],
-      ['repo.label.ensure', 'Explicitly ensure one repository label exists'],
-      ['pr.view', 'Read a pull request by number or by qualified head'],
-      ['pr.create', 'Open a pull request and verify it by reading it back'],
-      ['pr.edit-body', 'Replace a pull request body and verify the result'],
-      ['pr.ready', 'Take a pull request out of draft and verify the result'],
-      ['pr.merge', 'Merge a pull request pinned to its approved head'],
-      ['checks.rerun', 'Rerun selected failed checks at a revision'],
-      ['pr.reviews', 'Read submitted reviews and root review comments'],
-      ['comment.upsert', 'Write the one marked comment on a pull request'],
-    ] as const
-  ).map(([subcommand, description]) => ({
-    command: 'forge',
-    subcommand,
-    spec: `forge ${subcommand}`,
-    description,
-    scopedFlags: [
-      {
-        spec: '--data <json>',
-        description: 'Structured request without operationId or op',
-      },
-      {
-        spec: '--data-file <path>',
-        description: 'Read that request from a file, keeping authored content out of argv',
-      },
-    ],
-  })),
+  ...Object.entries(forgeOperationDescriptions)
+    .filter(([op]) => op !== 'resolve')
+    .map(([subcommand, description]) => ({
+      command: 'forge',
+      subcommand,
+      spec: `forge ${subcommand}`,
+      description,
+      scopedFlags: [
+        {
+          spec: '--data <json>',
+          description: 'Structured request without operationId or op',
+        },
+        {
+          spec: '--data-file <path>',
+          description: 'Read that request from a file, keeping authored content out of argv',
+        },
+      ],
+    })),
   {
     command: 'user',
     subcommand: 'list',

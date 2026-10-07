@@ -1783,3 +1783,24 @@ describe('terminal records retain durable run evidence', () => {
     expect(await countEvents(runId, 'workflow_cancelled')).toBe(1);
   });
 });
+
+test('reset authorization rolls back the whole SQLite snapshot and preserves the typed refusal', async () => {
+  const { RunActionForbiddenError } = await import('../operations/run-authorization');
+  await seed('reset-auth-a', 'paused', "datetime('now')");
+  await seed('reset-auth-b', 'failed', "datetime('now')");
+  const error = new RunActionForbiddenError('abandon', 'starter');
+  await expect(
+    cancelResumableRunsForConversation('conv-1', runs => {
+      expect(runs.some(run => run.id === 'reset-auth-a')).toBe(true);
+      expect(runs.some(run => run.id === 'reset-auth-b')).toBe(true);
+      throw error;
+    })
+  ).rejects.toBe(error);
+  expect((await getWorkflowRun('reset-auth-a'))?.status).toBe('paused');
+  expect((await getWorkflowRun('reset-auth-b'))?.status).toBe('failed');
+  const events = await db.query<{ count: number }>(
+    "SELECT COUNT(*) AS count FROM remote_agent_workflow_events WHERE workflow_run_id IN ('reset-auth-a', 'reset-auth-b')",
+    []
+  );
+  expect(events.rows[0].count).toBe(0);
+});

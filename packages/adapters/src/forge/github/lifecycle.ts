@@ -61,6 +61,9 @@ const labelSchema = z.object({
   color: z.string(),
   description: z.string().nullable(),
 });
+const draftStateResponseSchema = z.object({
+  data: z.record(z.string(), z.object({ pullRequest: z.object({ id: z.string().min(1) }) })),
+});
 const issueSchema = z.object({
   number: z.number().int().positive(),
   repository_url: z.url(),
@@ -326,57 +329,54 @@ async function editPullRequestBody(
     : unverified(request, 'Pull request body read-back did not match', leaveBehind, { pr });
 }
 
-const readyMutationSchema = z.object({
-  data: z.object({
-    markPullRequestReadyForReview: z.object({ pullRequest: z.object({ id: z.string().min(1) }) }),
-  }),
-});
-
-async function markReady(
-  request: Extract<ForgeMutationRequest, { op: 'pr.ready' }>,
+async function setDraftState(
+  request: Extract<ForgeMutationRequest, { op: 'pr.ready' | 'pr.draft' }>,
   fetchImpl: Fetch,
   token: string,
   submit: (phase: 'submitted' | 'acknowledged') => void
 ): Promise<ForgeResponse> {
+  const draft = request.op === 'pr.draft';
+  const transition = draft ? 'converted to draft' : 'marked ready';
+  const mutation = draft ? 'convertPullRequestToDraft' : 'markPullRequestReadyForReview';
   const before = await readPull(fetchImpl, token, request.ref);
   const beforeRecord = prRecord(request.ref.repo, before);
   if (beforeRecord.state === 'merged') {
     return refused(
       request,
-      { kind: 'conflict', message: 'A merged pull request cannot be marked ready' },
+      { kind: 'conflict', message: `A merged pull request cannot be ${transition}` },
       beforeRecord
     );
   }
   if (beforeRecord.state === 'closed') {
     return refused(
       request,
-      { kind: 'conflict', message: 'A closed pull request cannot be marked ready' },
+      { kind: 'conflict', message: `A closed pull request cannot be ${transition}` },
       beforeRecord
     );
   }
-  if (!beforeRecord.is_draft) return applied(request, { changed: false, pr: beforeRecord });
+  if (beforeRecord.is_draft === draft)
+    return applied(request, { changed: false, pr: beforeRecord });
 
   const { root } = location(request.ref.repo);
   submit('submitted');
-  // REST cannot clear draft state; this is the only supported transition.
+  // GitHub exposes these draft transitions through GraphQL, not REST.
   const raw = await githubRequest(fetchImpl, token, graphqlEndpoint(root), {
     method: 'POST',
     body: JSON.stringify({
-      query:
-        'mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{id}}}',
+      query: `mutation($id:ID!){${mutation}(input:{pullRequestId:$id}){pullRequest{id}}}`,
       variables: { id: before.node_id },
     }),
   });
-  const acknowledged = readyMutationSchema.safeParse(raw);
+  const acknowledged = draftStateResponseSchema.safeParse(raw);
   // GraphQL answers 200 with an errors document, so an unacknowledged mutation
   // is a submitted write whose effect this call never learned.
   if (
     !acknowledged.success ||
-    acknowledged.data.data.markPullRequestReadyForReview.pullRequest.id !== before.node_id
+    acknowledged.data.data[mutation]?.pullRequest.id !== before.node_id
   ) {
     return unknown(request, {
       kind: 'invalid_response',
-      message: 'GitHub did not acknowledge the ready mutation',
+      message: `GitHub did not acknowledge ${request.op}`,
     });
   }
   submit('acknowledged');
@@ -385,12 +385,12 @@ async function markReady(
   try {
     after = await readPull(fetchImpl, token, request.ref);
   } catch {
-    return unverified(request, 'Ready pull request could not be read back', leaveBehind);
+    return unverified(request, `${request.op} pull request could not be read back`, leaveBehind);
   }
   const pr = prRecord(request.ref.repo, after);
-  return pr.state === 'open' && !pr.is_draft
+  return pr.state === 'open' && pr.is_draft === draft
     ? applied(request, { changed: true, pr })
-    : unverified(request, 'Ready read-back did not match', leaveBehind, { pr });
+    : unverified(request, `${request.op} read-back did not match`, leaveBehind, { pr });
 }
 
 function commentRecord(ref: PrRef, comment: Comment): ForgeCommentRecord {
@@ -732,7 +732,8 @@ export async function handleGithubMutation(
       case 'pr.edit-body':
         return await editPullRequestBody(request, fetchImpl, token, submit);
       case 'pr.ready':
-        return await markReady(request, fetchImpl, token, submit);
+      case 'pr.draft':
+        return await setDraftState(request, fetchImpl, token, submit);
       case 'comment.upsert':
         return await upsertComment(request, fetchImpl, token, submit);
     }

@@ -185,7 +185,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     return result(1, '', 'the \`--slurp\` option is not supported with \`--jq\` or \`--template\`');
   if (text.startsWith('pr ready')) {
     if (fake.readyFail !== undefined) return result(1, '', fake.readyFail);
-    if (!fake.writeLost) pr.isDraft = false;
+    if (!fake.writeLost) pr.isDraft = argv.includes('--undo');
     return result(0, 'ready');
   }
   if (text.startsWith('pr create')) {

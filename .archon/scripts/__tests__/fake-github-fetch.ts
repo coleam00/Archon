@@ -137,10 +137,11 @@ function route(
     return Response.json(issue);
   }
   if (path === GRAPHQL && method === 'POST' && pull) {
-    pull.draft = false;
-    return Response.json({
-      data: { markPullRequestReadyForReview: { pullRequest: { id: pull.node_id } } },
-    });
+    const mutation = String(body?.query).includes('convertPullRequestToDraft')
+      ? 'convertPullRequestToDraft'
+      : 'markPullRequestReadyForReview';
+    pull.draft = mutation === 'convertPullRequestToDraft';
+    return Response.json({ data: { [mutation]: { pullRequest: { id: pull.node_id } } } });
   }
   if (path === `${ROOT}/pulls` && method === 'GET') {
     const head = url.searchParams.get('head') ?? '';
