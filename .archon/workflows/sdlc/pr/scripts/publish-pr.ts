@@ -26,6 +26,9 @@ import {
 } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
 
+/** The branch Archon checks a fork pull request out on: `[archon/]pr-<number>-review`. */
+const SYNTHETIC_REVIEW_BRANCH = /^(?:archon\/)?pr-\d+-review$/;
+
 function repo(value: unknown, field: string): QualifiedPr['repo'] {
   const parsed = record(value);
   if (
@@ -69,6 +72,15 @@ function publish(): PrRecord {
       );
     }
     return view.pr;
+  }
+
+  // A fork pull request's run sits on a synthetic review branch. With no existing
+  // pull request named, publishing would push that branch as its own and open a
+  // substitute for the pull request it stands in for, so refuse before any write.
+  if (SYNTHETIC_REVIEW_BRANCH.test(head)) {
+    throw new Error(
+      `${head} is a synthetic review branch for another pull request; name that pull request as the intent's existing number instead of opening a new one`
+    );
   }
 
   const existing = findOpenPrByHead(base, headRepo, head, source);
