@@ -17,13 +17,6 @@ const COPY_CODE_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback'
 const SCOPE =
   'org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload';
 
-export class AnthropicCallbackPortBusyError extends Error {
-  constructor() {
-    super('Anthropic OAuth callback port is in use.');
-    this.name = 'AnthropicCallbackPortBusyError';
-  }
-}
-
 async function tokenRequest(
   body: Record<string, string>,
   signal?: AbortSignal,
@@ -129,13 +122,13 @@ async function login(callbacks: OAuthLoginCallbacks): Promise<SubscriptionOAuthC
       : undefined;
   try {
     if (server)
-      await new Promise<void>((resolve, reject) => {
-        server.once('error', (error: NodeJS.ErrnoException) => {
-          reject(
-            error.code === 'EADDRINUSE'
-              ? new AnthropicCallbackPortBusyError()
-              : new SubscriptionOAuthError('Anthropic callback server could not start.')
+      await new Promise<void>(resolve => {
+        // The registered redirect remains valid for pasted codes when no listener can bind.
+        server.once('error', () => {
+          callbacks.onProgress?.(
+            'Anthropic callback listener unavailable. Paste the authorization code or redirect URL to complete login.'
           );
+          resolve();
         });
         server.listen(53692, process.env.PI_OAUTH_CALLBACK_HOST || '127.0.0.1', resolve);
       });

@@ -1,5 +1,4 @@
 /** Holds abortable subscription logins across start/poll requests. */
-import { AnthropicCallbackPortBusyError } from './anthropic-oauth';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '@archon/paths';
 import type { OAuthAuthInfo, OAuthDeviceCodeInfo } from './subscription-oauth';
@@ -31,18 +30,6 @@ const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
 /** How long `start` waits for the first onAuth/onDeviceCode callback before returning. */
 const START_FIRST_SIGNAL_MS = 8000;
 const ABORT_SETTLE_MS = 1500;
-
-/**
- * A subscription-login start failed because the OAuth callback port is still
- * held (a previous attempt's callback server has not released it yet). Mapped
- * to a 503 by the API route — retryable, unlike an opaque 500.
- */
-export class OAuthCallbackPortBusyError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'OAuthCallbackPortBusyError';
-  }
-}
 
 const ABORT_MESSAGES = {
   'superseded-same-user': 'Login superseded by a newer attempt.',
@@ -103,8 +90,6 @@ interface OAuthSession {
    * `.catch()` swallows every failure into session state.
    */
   settled: Promise<void>;
-  /** Set when `login()` failed because the callback port was already bound. */
-  portBusy?: boolean;
 }
 
 const sessions = new Map<string, OAuthSession>();
@@ -271,8 +256,8 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
         },
         // No interactive account picker on the web bridge — take the first option.
         onSelect: async prompt => prompt.options[0]?.id,
-        onProgress: () => {
-          getLog().debug({ provider }, 'oauth_bridge.progress');
+        onProgress: message => {
+          getLog().warn({ provider, message }, 'oauth_bridge.progress');
         },
         signal: session.abort.signal,
       })
@@ -294,10 +279,6 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
       const rawMessage = err instanceof Error ? err.message : 'OAuth login failed.';
       if (session.status !== 'connected') {
         session.status = 'error';
-        // A leaked callback server from a previous attempt (EADDRINUSE on the
-        // fixed port) is retryable — classify it so start() can surface an
-        // actionable error instead of an opaque failure (#1963).
-        session.portBusy = err instanceof AnthropicCallbackPortBusyError;
         // Persistence errors also cross this boundary; redact before exposing them.
         session.detail = sanitizeCredentials(rawMessage).slice(0, 200);
       }
@@ -317,12 +298,6 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   // rather than returning a misleading { mode:'manual', url:undefined } (I1).
   if (session.status === 'error') {
     sessions.delete(sessionId);
-    if (session.portBusy) {
-      throw new OAuthCallbackPortBusyError(
-        `A previous '${provider}' login attempt is still holding the OAuth callback port. ` +
-          'Wait a few seconds and retry; if it persists, restart the Archon server.'
-      );
-    }
     throw new Error(session.detail ?? 'Subscription login failed to start.');
   }
 

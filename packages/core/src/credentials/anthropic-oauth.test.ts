@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { anthropicOAuthProvider, AnthropicCallbackPortBusyError } from './anthropic-oauth';
+import { anthropicOAuthProvider } from './anthropic-oauth';
 import {
   mintOAuthApiKey,
   SubscriptionOAuthError,
@@ -134,13 +134,30 @@ describe('Anthropic subscription OAuth', () => {
     });
   });
 
-  test('port collision is typed rather than classified from error prose', async () => {
+  test('an occupied callback port still allows manual browser login', async () => {
     const server = createServer();
     await new Promise<void>(resolve => server.listen(53692, '127.0.0.1', resolve));
+    let authorize!: URL;
+    const progress: string[] = [];
+    stub(Object.assign(async () => Response.json(token), { preconnect: realFetch.preconnect }));
     try {
-      await expect(anthropicOAuthProvider.login(callbacks())).rejects.toBeInstanceOf(
-        AnthropicCallbackPortBusyError
+      const credentials = await anthropicOAuthProvider.login(
+        callbacks({
+          onAuth: info => {
+            authorize = new URL(info.url);
+          },
+          onManualCodeInput: async () => `CODE#${authorize.searchParams.get('state')}`,
+          onProgress: message => {
+            progress.push(message);
+          },
+        })
       );
+      expect(progress).toEqual([
+        'Anthropic callback listener unavailable. Paste the authorization code or redirect URL to complete login.',
+      ]);
+      expect(authorize.searchParams.get('redirect_uri')).toBe('http://localhost:53692/callback');
+      expect(credentials.access).toBe('new-access');
+      expect(server.listening).toBe(true);
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()));
     }

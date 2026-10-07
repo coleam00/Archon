@@ -18,7 +18,6 @@ mock.module('../db/connection', () => ({
 }));
 
 import type { OAuthLoginCallbacks as Callbacks } from './subscription-oauth';
-import { AnthropicCallbackPortBusyError } from './anthropic-oauth';
 let loginImpl: (cb: Callbacks) => Promise<Record<string, unknown>>;
 const anthropic = {
   usesCallbackServer: true,
@@ -61,13 +60,8 @@ mock.module('./openai-oauth', () => ({
   refreshOpenAiOAuthCredentials: async (creds: Record<string, unknown>) => creds,
 }));
 
-const {
-  startOAuth,
-  pollOAuth,
-  cancelOAuth,
-  resetOAuthSessionsForTest,
-  OAuthCallbackPortBusyError,
-} = await import('./oauth-bridge');
+const { startOAuth, pollOAuth, cancelOAuth, resetOAuthSessionsForTest } =
+  await import('./oauth-bridge');
 
 function tick(ms = 15): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
@@ -476,30 +470,6 @@ describe('oauth-bridge', () => {
     },
     testTimeout(10000)
   );
-
-  test('EADDRINUSE at start surfaces an actionable retryable error, not an opaque failure (#1963)', async () => {
-    loginImpl = async () => {
-      throw new AnthropicCallbackPortBusyError();
-    };
-    let thrown: unknown;
-    try {
-      await startOAuth('u1', 'claude');
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toBeInstanceOf(OAuthCallbackPortBusyError);
-    expect((thrown as Error).message).toMatch(/callback port/i);
-    expect((thrown as Error).message).toMatch(/retry/i);
-  });
-
-  test('vendor text mentioning a busy port does not classify a callback collision', async () => {
-    loginImpl = async () => {
-      throw new Error('address already in use');
-    };
-    const error: unknown = await startOAuth('u1', 'claude').catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(Error);
-    expect(error).not.toBeInstanceOf(OAuthCallbackPortBusyError);
-  });
 
   // ---- #1924: openai (ChatGPT/Codex) runs the Archon-owned PKCE flow ----
 

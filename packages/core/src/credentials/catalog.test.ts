@@ -1,12 +1,22 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeAll, afterEach } from 'bun:test';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  getRegisteredProviders,
+} from '@archon/providers';
 import {
   getVendorCatalog,
   listConnectableVendors,
   isConnectableVendor,
   buildAgentCredentialMatrix,
 } from './catalog';
+
+import {
+  SUBSCRIPTION_PROVIDERS,
+  OPENAI_SUBSCRIPTION_VENDOR,
+  subscriptionOAuthProviderFor,
+} from './oauth-providers';
 
 beforeAll(() => {
   // The catalog derives from the provider registry — bootstrap like entrypoints do.
@@ -24,6 +34,24 @@ afterEach(() => {
 });
 
 describe('credentials/catalog', () => {
+  test('every static subscription spec has a core login flow and every flow is advertised', () => {
+    const vendors = new Set(
+      getRegisteredProviders().flatMap(reg =>
+        reg.credentials.kind === 'static'
+          ? reg.credentials.specs
+              .filter(spec => spec.kinds.includes('subscription'))
+              .map(spec => spec.vendor)
+          : []
+      )
+    );
+    expect([...vendors].sort()).toEqual([...SUBSCRIPTION_PROVIDERS].sort());
+    for (const vendor of vendors) {
+      if (vendor === OPENAI_SUBSCRIPTION_VENDOR) continue;
+      const provider = subscriptionOAuthProviderFor(vendor);
+      expect(provider?.login).toBeFunction();
+      expect(provider?.refreshToken).toBeFunction();
+    }
+  });
   test('union catalog merges vendors across agents with agent attribution', () => {
     const catalog = getVendorCatalog();
     // anthropic is consumed by both Claude Code and Pi.
