@@ -143,11 +143,18 @@ async function acquire(root: string, timeoutMs: number): Promise<() => Promise<v
   await writeOwner(candidate);
   const deadline = Date.now() + timeoutMs;
   let reported = false;
+  let lastOwner: ProcessOwner | null = null;
   try {
     for (;;) {
       if (await tryLink(candidate, path)) return () => remove(path);
       const owner = await readOwner(path);
-      if (!owner) continue;
+      if (!owner) {
+        // The holder released between our link and read. Retry at once, but a
+        // lock that keeps changing hands must not outlast the deadline.
+        if (lastOwner && Date.now() >= deadline) throw new FileStoreLockHeldError(path, lastOwner);
+        continue;
+      }
+      lastOwner = owner;
       if (!reported) {
         log.info({ path, owner }, 'file_store.lock_wait');
         reported = true;
