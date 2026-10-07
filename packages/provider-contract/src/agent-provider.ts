@@ -317,3 +317,13 @@ export interface IAgentProvider {
    */
   getCapabilities(): ProviderCapabilities;
 }
+
+/** Host providers inherit native configuration; container children receive only the request bag. */
+export function buildProviderSubprocessEnv(
+  requestOptions?: Pick<SendQueryOptions, 'env' | 'execContext'>
+): NodeJS.ProcessEnv {
+  return {
+    ...(requestOptions?.execContext?.kind === 'container' ? { TERM: 'dumb' } : process.env),
+    ...requestOptions?.env,
+  };
+}
