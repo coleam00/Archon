@@ -153,7 +153,6 @@ describe('PiProvider with a substituted custom provider and a provider-registeri
         model: 'mycustom/m1',
         env: { MY_KEY: 'sk-per-call' },
         purpose: 'title-generation',
-        ephemeralSession: true,
         nodeConfig: { allowed_tools: [] },
       }
     )) {

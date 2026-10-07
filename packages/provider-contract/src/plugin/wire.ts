@@ -44,7 +44,6 @@ export const providerSessionRequestSchema = z.strictObject({
   maxBudgetUsd: z.number().optional(),
   fallbackModel: z.string().optional(),
   forkSession: z.boolean().optional(),
-  ephemeralSession: z.boolean().optional(),
   purpose: z.literal('title-generation').optional(),
   nodeConfig: configSchema.optional(),
   assistantConfig: configSchema.optional(),

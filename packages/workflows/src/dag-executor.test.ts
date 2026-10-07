@@ -22781,7 +22781,7 @@ describe('executeDagWorkflow -- persist_session', () => {
     );
 
     expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
-    expect(mockSendQueryDag.mock.calls[0][3]?.ephemeralSession).toBeUndefined();
+    expect(mockSendQueryDag.mock.calls[0][3]?.purpose).toBeUndefined();
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
   });
 

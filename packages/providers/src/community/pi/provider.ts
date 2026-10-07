@@ -935,7 +935,7 @@ export class PiProvider implements IAgentProvider {
         cwd,
         resumeSessionId,
         requestOptions?.forkSession,
-        requestOptions?.ephemeralSession
+        requestOptions?.purpose === 'title-generation'
       );
       if (resumeFailed) {
         yield {

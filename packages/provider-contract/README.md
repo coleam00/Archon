@@ -17,7 +17,7 @@ Every normally completed turn, successful or failed, ends with one `{ type: 'set
 
 A provider that declares `sessionResume` names the session each turn ran in with the result's `sessionId`; a provider that cannot resume leaves it out rather than inventing one. A persistent session id can resume the conversation, so the engine stores the full id only on the node record, which is where a user finds it to continue a node outside Archon. Streams and logs carry `sessionPreview(id)`, its first `SESSION_PREVIEW_LENGTH` characters; a provider logs that preview, never the full id.
 
-`SendQueryOptions.ephemeralSession` requests an in-memory session when no resume id is supplied. Pi honors it; other providers may ignore it. Title generation requests it to avoid saving throwaway transcripts. Ordinary turns and workflow nodes, including `context: fresh`, remain persistent by default. Resume and fork requests retain persistent state, including a fresh session after a missing resume id. An ephemeral session's result id cannot be resumed from disk.
+Pi honors `SendQueryOptions.purpose: 'title-generation'` by using an in-memory session when no resume id is supplied. Ordinary turns and workflow nodes, including `context: fresh`, remain persistent. Resume, fork, and missing-resume fallbacks retain persistent state. A title session's result id cannot be resumed from disk.
 
 `schema/provider-contract.schema.json` is generated from `src/` by `src/scripts/generate-schema.ts`. Run `bun run generate:provider-contract-schema` from the repository root after changing a schema; `bun run validate` fails while the file is stale.
 
