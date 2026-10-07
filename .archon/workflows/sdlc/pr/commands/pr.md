@@ -16,6 +16,8 @@ Determine the base branch from evidence, in order: the repository's documented d
 
 When this run was launched onto an existing pull request — the run's context names its number, and for a pull request from a fork the run sits on a review branch at that pull request's head — record that number and the qualified head repository it belongs to. Confirm `HEAD` descends from the recorded head revision. If the head lives in a fork and the author did not allow maintainer edits, this run cannot publish to it: stop and report, and do not prepare a replacement.
 
+A current branch named `pr-<number>-review`, optionally prefixed `archon/`, is such a synthetic review branch even when the run's context does not name the pull request: its number is the pull request this run sits on. Record it as above and follow the same rules. Never push that branch to `origin` under its own name and never open a pull request from it; the publishing node refuses one.
+
 You do not look up whether this branch already has a pull request. The publishing node does that deterministically and never opens a second one.
 
 ## 2. Verify the work is ready

@@ -8,6 +8,7 @@ const workflowRoot = resolve(import.meta.dir, '../../../../.archon/workflows/sdl
 const triageScript = join(workflowRoot, 'triage', 'scripts', 'validate-contract.py');
 const intakeScript = join(workflowRoot, 'lifecycle', 'scripts', 'select-target.py');
 const holdsScript = join(workflowRoot, 'merge-queue', 'scripts', 'publish-holds.ts');
+const publishPrScript = join(workflowRoot, 'pr', 'scripts', 'publish-pr.ts');
 
 let root: string;
 let fakeBin: string;
@@ -571,5 +572,90 @@ describe('hold-comment write boundary', () => {
     });
     expect(duplicate.exitCode).toBe(1);
     expect(duplicate.stderr.toString()).toContain('holds must not contain duplicate PRs');
+  });
+});
+
+describe('merge hold is a claim the shared review settles', () => {
+  test('review scope reads the exact marker the merge queue publishes', async () => {
+    const holds = await readFile(holdsScript, 'utf8');
+    const marker = /const marker = '([^']+)';/.exec(holds)?.[1];
+    expect(marker).toBe('<!-- archon-merge-hold -->');
+    const scope = await readFile(
+      join(workflowRoot, 'review', 'commands', 'review-scope.md'),
+      'utf8'
+    );
+    expect(scope).toContain(`first line is \`${String(marker)}\``);
+    expect(scope).toContain('**Merge hold**');
+    // The queue writes `Held at <sha>:` and reasons as bullets; a cleared hold says so.
+    expect(holds).toContain('Held at');
+    expect(holds).toContain('Hold cleared at');
+    expect(scope).toContain('Held at <sha>:');
+    expect(scope).toContain('cleared carries no claim');
+  });
+
+  test('review synthesis settles each held reason as a merge-queue finding', async () => {
+    const synthesize = await readFile(
+      join(workflowRoot, 'review', 'commands', 'review-synthesize.md'),
+      'utf8'
+    );
+    expect(synthesize).toContain('A **Merge hold** section in scope.md');
+    expect(synthesize).toContain('`sources: [merge-queue]`');
+    expect(synthesize).toContain('a merge-hold finding, which carries `merge-queue`');
+  });
+});
+
+describe('pull request publication from a synthetic review branch', () => {
+  async function publishFrom(head: string): Promise<{
+    result: ReturnType<typeof Bun.spawnSync>;
+    calls: string;
+  }> {
+    const artifacts = await mkdtemp(join(root, 'publish-pr-'));
+    const intent = join(artifacts, 'pr-intent.json');
+    const body = join(artifacts, 'pr-body.md');
+    const log = join(artifacts, 'gh.jsonl');
+    await writeFile(body, 'A body\n');
+    await writeFile(
+      intent,
+      JSON.stringify({
+        repo: { host: 'github.com', path: 'owner/repo' },
+        head,
+        headRevision: 'deadbeef',
+        base: 'dev',
+        title: 'A title',
+        bodyPath: body,
+        draft: true,
+      })
+    );
+    const result = Bun.spawnSync([process.execPath, publishPrScript], {
+      env: env({ INPUTS_INTENT: intent, ARCHON_SDLC_FORGE: 'gh', GH_LOG: log }),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const calls = (await Bun.file(log).exists()) ? await readFile(log, 'utf8') : '';
+    return { result, calls };
+  }
+
+  for (const head of ['pr-12-review', 'archon/pr-12-review']) {
+    test(`refuses to open a substitute pull request from ${head}`, async () => {
+      const { result, calls } = await publishFrom(head);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain('synthetic review branch');
+      // Refused before any forge read or write.
+      expect(calls).toBe('');
+    });
+  }
+
+  test('the preparing prompt treats the branch name as the pull request it stands in for', async () => {
+    const prompt = await readFile(join(workflowRoot, 'pr', 'commands', 'pr.md'), 'utf8');
+    expect(prompt).toContain(
+      'A current branch named `pr-<number>-review`, optionally prefixed `archon/`'
+    );
+    expect(prompt).toContain('never open a pull request from it');
+  });
+
+  test('an ordinary branch still reaches the forge lookup', async () => {
+    const { result, calls } = await publishFrom('feature/pr-12-review-notes');
+    expect(result.stderr.toString()).not.toContain('synthetic review branch');
+    expect(calls).toContain('"list"');
   });
 });
