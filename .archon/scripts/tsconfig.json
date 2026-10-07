@@ -3,6 +3,7 @@
   "include": [
     "*.ts",
     "__tests__/*.ts",
+    "__tests__/fixtures/*.ts",
     "**/*.test.ts",
     "**/*.spec.ts",
     "**/*.test.tsx",

@@ -13,7 +13,6 @@ import {
   executionMetadata,
 } from '@archon/workflows/node-execution';
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
-import { inMemoryDagResumeSnapshot } from '@archon/workflows/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1361,7 +1360,7 @@ describe('workflow-events', () => {
       }
     );
 
-    test('selects the same reusable outputs, unfinished invocations, and usage as the workflows in-memory store double', async () => {
+    test('selects reusable text outputs, unfinished invocations, and own usage', async () => {
       // Typed rows carry the scope in `accounting`, not the legacy `aggregate` marker.
       const typedUsage = (accounting: 'node' | 'aggregate', input: number, cost_usd: number) => ({
         node: { id: 'worker', kind: 'exec', runtime: 'sh' },
@@ -1420,6 +1419,14 @@ describe('workflow-events', () => {
         { step_name: 'failed', event_type: 'node_failed', data: { error: 'boom' } },
         { step_name: 'own', event_type: 'node_completed', data: typedUsage('node', 3, 0.5) },
         {
+          step_name: 'text',
+          event_type: 'node_deferred_usage',
+          data: {
+            cost_usd: 0.25,
+            tokens: { input: 2, output: 1, cacheRead: 4, cacheWrite: 2, cachePartial: true },
+          },
+        },
+        {
           step_name: 'rollup',
           event_type: 'node_completed',
           data: typedUsage('aggregate', 30, 5),
@@ -1428,21 +1435,162 @@ describe('workflow-events', () => {
       mockQuery.mockResolvedValueOnce(createQueryResult(rows));
 
       const production = await getDagResumeSnapshot('run-double');
-      const double = inMemoryDagResumeSnapshot(
-        rows.map(row => ({ workflow_run_id: 'run-double', ...row })),
-        'run-double'
-      );
 
       expect(production.completedNodeOutputs).toEqual(new Map([['text', { output: 'kept' }]]));
-      expect(double.completedNodeOutputs).toEqual(production.completedNodeOutputs);
       expect([...production.unfinishedInvocations!.values()]).toEqual([
         executionMetadata(failedFanOut),
       ]);
-      expect(double.unfinishedInvocations).toEqual(production.unfinishedInvocations);
-      expect(production.tokens).toEqual({ input: 3, output: 1 });
-      expect(production.costUsd).toBe(0.5);
-      expect(double.tokens).toEqual(production.tokens);
-      expect(double.costUsd).toBe(production.costUsd);
+      expect(production.tokens).toEqual({
+        input: 5,
+        output: 2,
+        cacheRead: 4,
+        cacheWrite: 2,
+        cachePartial: true,
+      });
+      expect(production.costUsd).toBe(0.75);
+    });
+
+    test('deferred segments add usage without changing unfinished invocation or reusable output', async () => {
+      const execution = startNodeExecution({
+        runId: 'run-deferred',
+        path: 'group.review',
+        node: {
+          id: 'review',
+          kind: 'loop',
+          loop: { prompt: 'Review', until: 'DONE', max_iterations: 3, fresh_context: false },
+        },
+        invocation: { id: 'inv', startedAt: '2026-09-22T10:00:00Z', loopPath: [] },
+      });
+      const started = serializeNodeStateRecord(execution);
+      const suspendedExecution = finishNodeExecution(
+        execution,
+        { status: 'suspended', point: 'interactive_loop' },
+        { tokens: { input: 10, output: 5 }, costUsd: 0.25 }
+      );
+      const suspended = serializeNodeStateRecord(suspendedExecution);
+      const deferred = {
+        step_name: 'group.review',
+        event_type: 'node_deferred_usage',
+        data: {
+          accounting: 'node',
+          cost_usd: 0.5,
+          tokens: {
+            input: 20,
+            output: 10,
+            cacheRead: 4,
+            cacheWrite: 2,
+            cachePartial: true as const,
+          },
+        },
+      };
+      mockQuery.mockResolvedValueOnce(createQueryResult([started, suspended, deferred]));
+      const running = await getDagResumeSnapshot('run-deferred');
+      expect(running.completedNodeOutputs.size).toBe(0);
+      expect(running.unresolvedNodeStarts.has('group.review')).toBe(true);
+      expect([...running.unfinishedInvocations!.values()]).toEqual([
+        executionMetadata(suspendedExecution),
+      ]);
+      expect(running.costUsd).toBe(0.5);
+      expect(running.tokens).toEqual(deferred.data.tokens);
+      const rows = [
+        started,
+        suspended,
+        deferred,
+        {
+          ...deferred,
+          data: { cost_usd: 0.25, tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 } },
+        },
+        {
+          step_name: 'group.review',
+          event_type: 'node_failed',
+          data: {
+            cost_usd: 0.25,
+            tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 },
+            error: 'failed',
+          },
+        },
+        {
+          step_name: 'group.review',
+          event_type: 'node_completed',
+          data: {
+            cost_usd: 0.25,
+            tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1 },
+            node_output: 'done',
+          },
+        },
+        {
+          step_name: 'group',
+          event_type: 'node_deferred_usage',
+          data: { accounting: 'aggregate', cost_usd: 99 },
+        },
+        {
+          step_name: 'group',
+          event_type: 'node_completed',
+          data: { aggregate: true, cost_usd: 99 },
+        },
+      ];
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+      const completed = await getDagResumeSnapshot('run-deferred');
+      expect(completed.costUsd).toBe(1.25);
+      expect(completed.tokens).toEqual({
+        input: 50,
+        output: 25,
+        cacheRead: 10,
+        cacheWrite: 5,
+        cachePartial: true,
+      });
+      expect(completed.completedNodeOutputs.get('group.review')?.output).toBe('done');
+      expect(completed.unresolvedNodeStarts.has('group.review')).toBe(false);
+    });
+
+    test('authoritative composed instance totals suppress deferred leaf usage', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'fan__item__review',
+            event_type: 'node_deferred_usage',
+            data: { cost_usd: 0.25, tokens: { input: 10, output: 5 } },
+          },
+          {
+            step_name: 'fan__item',
+            event_type: 'node_completed',
+            data: {
+              type: 'compose_fan_out_instance',
+              aggregate: true,
+              cost_usd: 0.75,
+              tokens: { input: 30, output: 15 },
+            },
+          },
+        ])
+      );
+      const snapshot = await getDagResumeSnapshot('run-scope');
+      expect(snapshot.costUsd).toBe(0.75);
+      expect(snapshot.tokens).toEqual({ input: 30, output: 15 });
+    });
+
+    test('deferred usage preserves reusable success and ignores malformed numeric usage', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'review', event_type: 'node_completed', data: { node_output: 'kept' } },
+          {
+            step_name: 'review',
+            event_type: 'node_deferred_usage',
+            data: { cost_usd: Infinity, tokens: { input: NaN, output: 5 } },
+          },
+        ])
+      );
+      const snapshot = await getDagResumeSnapshot('run-invalid-deferred');
+      expect(snapshot.completedNodeOutputs.get('review')?.output).toBe('kept');
+      expect(snapshot.costUsd).toBe(0);
+      expect(snapshot.tokens).toBeUndefined();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.anything(),
+        'db.workflow_dag_node_tokens_invalid_ignored'
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.anything(),
+        'db.workflow_dag_node_cost_invalid_ignored'
+      );
     });
 
     test('returns an empty snapshot when no events exist', async () => {
@@ -1469,6 +1617,17 @@ describe('workflow-events', () => {
       );
       await expect(getDagResumeSnapshot('run-corrupt')).rejects.toThrow(
         "Invalid node execution record for 'publish'"
+      );
+    });
+
+    test('names the step and run when a deferred usage record is corrupt', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'review', event_type: 'node_deferred_usage', data: '{not json' },
+        ])
+      );
+      await expect(getDagResumeSnapshot('run-corrupt-deferred')).rejects.toThrow(
+        "Invalid deferred usage record for 'review' in run run-corrupt-deferred"
       );
     });
 

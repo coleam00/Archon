@@ -1,4 +1,4 @@
-import { beforeEach, expect, mock, spyOn, test } from 'bun:test';
+import { beforeEach, expect, mock, test } from 'bun:test';
 import type {
   ContinuationWakeOutcome,
   ContinuationAdmission,
@@ -41,10 +41,10 @@ mock.module('@archon/core/workflows/continuation-host', () => ({
   wakeDueWorkflowContinuations: scan,
   resumeWorkflowContinuation: resume,
 }));
-mock.module('@archon/core/db/workflows', () => ({
-  getWorkflowRun: getRun,
-  signalWorkflowWait: signal,
-}));
+const host = {
+  deps: { store: { getWorkflowRun: getRun } },
+  operations: { signalWorkflowWait: signal },
+} as unknown as import('@archon/core/workflows/host-store').WorkflowHost;
 mock.module('../utils/stdout', () => ({
   writeStdout: async (value: string) => {
     output.push(JSON.parse(value));
@@ -54,7 +54,7 @@ mock.module('../triggers/native-schedule', () => ({
   installMacosNativeSchedule: install,
   removeMacosNativeSchedule: remove,
 }));
-import { workflowContinuationCommand } from './workflow-continuations';
+import { workflowContinuationCommand, workflowWakeScheduleCommand } from './workflow-continuations';
 
 beforeEach(() => {
   output.length = 0;
@@ -69,7 +69,7 @@ beforeEach(() => {
 });
 
 test('empty wake succeeds and rejects fresh execution flags before scanning', async () => {
-  expect(await workflowContinuationCommand('wake', [], { json: true })).toBe(0);
+  expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(0);
   expect(output[0]).toMatchObject({ ok: true, accepted: 0 });
   for (const flags of [
     { model: ['fast=x'] },
@@ -77,23 +77,29 @@ test('empty wake succeeds and rejects fresh execution flags before scanning', as
     { container: true },
     { config: 'file' },
   ]) {
-    expect(await workflowContinuationCommand('wake', [], { json: true, ...flags })).toBe(1);
+    expect(await workflowContinuationCommand(host, 'wake', [], { json: true, ...flags })).toBe(1);
   }
   expect(scan).toHaveBeenCalledTimes(1);
 });
 
 test('invalid payload, timestamp, extra positionals and stale event never mutate', async () => {
   const values = { json: true, event: 'ready', 'resume-at': '2026-08-24T11:00:00.000Z' };
-  expect(await workflowContinuationCommand('signal', ['id'], { ...values, data: '{' })).toBe(1);
+  expect(await workflowContinuationCommand(host, 'signal', ['id'], { ...values, data: '{' })).toBe(
+    1
+  );
   expect(
-    await workflowContinuationCommand('signal', ['id'], { ...values, 'resume-at': 'today' })
+    await workflowContinuationCommand(host, 'signal', ['id'], { ...values, 'resume-at': 'today' })
   ).toBe(1);
-  expect(await workflowContinuationCommand('signal', ['id', 'extra'], values)).toBe(1);
-  expect(await workflowContinuationCommand('signal', ['id'], { ...values, event: '' })).toBe(1);
-  expect(await workflowContinuationCommand('signal', ['id'], { ...values, event: 123 })).toBe(1);
+  expect(await workflowContinuationCommand(host, 'signal', ['id', 'extra'], values)).toBe(1);
+  expect(await workflowContinuationCommand(host, 'signal', ['id'], { ...values, event: '' })).toBe(
+    1
+  );
+  expect(await workflowContinuationCommand(host, 'signal', ['id'], { ...values, event: 123 })).toBe(
+    1
+  );
   expect(getRun).not.toHaveBeenCalled();
   getRun.mockResolvedValue(makeTestWorkflowRun({ status: 'paused', metadata: {} }));
-  expect(await workflowContinuationCommand('signal', ['id'], values)).toBe(1);
+  expect(await workflowContinuationCommand(host, 'signal', ['id'], values)).toBe(1);
   expect(signal).not.toHaveBeenCalled();
   expect(resume).not.toHaveBeenCalled();
 });
@@ -109,7 +115,7 @@ test('reports refusal, deferral and settlement failures instead of admission-onl
       settled: Promise.resolve({ success: false, error: 'bash failed' }),
     },
   ]);
-  expect(await workflowContinuationCommand('wake', [], { json: true })).toBe(1);
+  expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(1);
   expect(output[0]).toMatchObject({
     ok: false,
     accepted: 1,
@@ -131,7 +137,7 @@ test('watch drains accepted segments on shutdown', async () => {
     return [{ runId: 'running', kind: 'accepted', run: makeTestWorkflowRun(), settled }];
   });
   let done = false;
-  const command = workflowContinuationCommand('wake', [], { json: true, watch: true }).then(
+  const command = workflowContinuationCommand(host, 'wake', [], { json: true, watch: true }).then(
     result => {
       done = true;
       return result;
@@ -149,17 +155,20 @@ test('watch drains accepted segments on shutdown', async () => {
 test('schedule validates intervals and removes the exact installed identity', async () => {
   for (const interval of ['0', '-1', '1.5', 'no']) {
     expect(
-      await workflowContinuationCommand('wake', ['schedule', 'install'], { json: true, interval })
+      await workflowWakeScheduleCommand(['schedule', 'install'], {
+        json: true,
+        interval,
+      })
     ).toBe(1);
   }
   expect(install).not.toHaveBeenCalled();
   expect(
-    await workflowContinuationCommand('wake', ['schedule', 'install'], {
+    await workflowWakeScheduleCommand(['schedule', 'install'], {
       json: true,
       interval: '10',
     })
   ).toBe(0);
-  expect(await workflowContinuationCommand('wake', ['schedule', 'remove'], { json: true })).toBe(0);
+  expect(await workflowWakeScheduleCommand(['schedule', 'remove'], { json: true })).toBe(0);
   const config = install.mock.calls[0]?.[0];
   expect(remove.mock.calls[0]?.[0]).toBe(config?.id);
   expect(config).toMatchObject({
@@ -170,9 +179,7 @@ test('schedule validates intervals and removes the exact installed identity', as
 
 test('schedule installation failure is reported with a nonzero exit', async () => {
   install.mockRejectedValueOnce(new Error('service not registered'));
-  expect(await workflowContinuationCommand('wake', ['schedule', 'install'], { json: true })).toBe(
-    1
-  );
+  expect(await workflowWakeScheduleCommand(['schedule', 'install'], { json: true })).toBe(1);
   expect(output[0]).toMatchObject({ ok: false, error: 'service not registered' });
 });
 
@@ -191,7 +198,9 @@ test('watch continues after a failed pass and returns failure on shutdown', asyn
     return [];
   });
   try {
-    expect(await workflowContinuationCommand('wake', [], { json: true, watch: true })).toBe(1);
+    expect(await workflowContinuationCommand(host, 'wake', [], { json: true, watch: true })).toBe(
+      1
+    );
     expect(scan).toHaveBeenCalledTimes(2);
     expect(output).toEqual([
       { ok: false, action: 'wake', error: 'database unavailable' },
@@ -202,56 +211,48 @@ test('watch continues after a failed pass and returns failure on shutdown', asyn
   }
 });
 
-test('schedule management bypasses invalid App config while execution refuses before mutation', async () => {
-  const savedEnv = { ...process.env };
-  try {
-    process.env.GITHUB_APP_ID = '123';
-    process.env.GITHUB_APP_PRIVATE_KEY = 'invalid';
-    process.env.GITHUB_APP_PRIVATE_KEY_PATH = '';
-    process.env.GITHUB_TOKEN = '';
-    expect(await workflowContinuationCommand('wake', ['schedule', 'remove'], { json: true })).toBe(
-      0
-    );
-    expect(remove).toHaveBeenCalledTimes(1);
-    expect(await workflowContinuationCommand('wake', [], { json: true })).toBe(1);
-    expect(await workflowContinuationCommand('signal', ['id'], { json: true })).toBe(1);
-    expect(scan).not.toHaveBeenCalled();
-    expect(getRun).not.toHaveBeenCalled();
-    expect(signal).not.toHaveBeenCalled();
-  } finally {
-    process.env = savedEnv;
-  }
+test('schedule management uses no persistence or engine capability', async () => {
+  expect(await workflowWakeScheduleCommand(['schedule', 'remove'], { json: true })).toBe(0);
+  expect(remove).toHaveBeenCalledTimes(1);
+  expect(scan).not.toHaveBeenCalled();
+  expect(getRun).not.toHaveBeenCalled();
+  expect(signal).not.toHaveBeenCalled();
+  expect(resume).not.toHaveBeenCalled();
 });
 
-test('CLI signal uses the core operation as the local operator', async () => {
-  const sqlHost = await import('@archon/core/workflows/sql-host');
-  const operations = sqlHost.createSqlWorkflowOperations();
-  const action = spyOn(operations, 'signalWorkflowWait').mockResolvedValue({ signaled: true });
-  const factory = spyOn(sqlHost, 'createSqlWorkflowOperations').mockReturnValue(operations);
-  const resumeAt = '2026-10-06T00:00:00.000Z';
-  getRun.mockResolvedValue(
-    makeTestWorkflowRun({
-      metadata: {
-        wait: {
-          owner: 'node',
-          kind: 'event',
-          nodeId: 'wait',
-          event: 'ready',
-          resumeAt,
-          waitingSince: '2026-10-05T00:00:00.000Z',
-        },
-      },
-    })
+test('signal passes the exact event cursor to the host operation as the local operator and rejects a CAS loser', async () => {
+  const wait = {
+    owner: 'node' as const,
+    nodeId: 'hold',
+    kind: 'event' as const,
+    event: 'ready',
+    waitingSince: '2026-08-24T10:00:00.000Z',
+    resumeAt: '2099-08-24T11:00:00.000Z',
+  };
+  getRun.mockResolvedValue(makeTestWorkflowRun({ metadata: { wait } }));
+  signal.mockResolvedValueOnce({ signaled: false });
+  const values = {
+    json: true,
+    event: wait.event,
+    'resume-at': wait.resumeAt,
+    data: '{"ready":true}',
+  };
+  expect(await workflowContinuationCommand(host, 'signal', ['run'], values)).toBe(1);
+  expect(signal).toHaveBeenCalledWith(
+    'run',
+    wait.event,
+    wait.resumeAt,
+    { ready: true },
+    {
+      kind: 'operator',
+    }
   );
-  try {
-    await workflowContinuationCommand('signal', ['run'], {
-      json: true,
-      event: 'ready',
-      'resume-at': resumeAt,
-    });
-    expect(action).toHaveBeenCalledWith('run', 'ready', resumeAt, undefined, { kind: 'operator' });
-  } finally {
-    factory.mockRestore();
-    action.mockRestore();
-  }
+  expect(resume).not.toHaveBeenCalled();
+  signal.mockResolvedValueOnce({ signaled: true });
+  expect(await workflowContinuationCommand(host, 'signal', ['run'], values)).toBe(0);
+  expect(resume).toHaveBeenCalledWith(host, 'run', expect.any(Function), {
+    kind: 'wait',
+    nodeId: wait.nodeId,
+    resumeAt: wait.resumeAt,
+  });
 });

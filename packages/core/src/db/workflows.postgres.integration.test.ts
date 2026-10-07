@@ -90,12 +90,21 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
       watchRunLiveOwner: async () => ({ kind: 'attached', handle: { unsubscribe() {} } }),
     }));
     const { waitForRunAttention } = await import('../services/run-attention-watch');
+    const { WORKFLOW_EVENT_NOTIFY_CHANNEL } = await import('./adapters/types');
     const id = await seed('running', {});
     let attached: (() => void) | undefined;
     const ready = new Promise<void>(resolve => {
       attached = resolve;
     });
-    const waiting = waitForRunAttention(id, {
+    const waiting = waitForRunAttention(workflows, id, {
+      doorbell: (runId, onDoorbell) =>
+        db.listen(
+          WORKFLOW_EVENT_NOTIFY_CHANNEL,
+          payload => {
+            if (payload === runId) onDoorbell();
+          },
+          () => undefined
+        ),
       deadlineMs: 3000,
       pollIntervalMs: 60000,
       onAttached: () => {

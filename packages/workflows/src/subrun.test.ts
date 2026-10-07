@@ -1,7 +1,8 @@
 import { providerRegistry } from '@archon/providers';
 import { InProcessWorkflowEngine } from './in-process-engine';
 import { isApprovalContext, type WorkflowRunOrigin } from './schemas/workflow-run';
-import { inMemoryDagResumeSnapshot, type InMemoryStoreEvent } from './test-utils';
+import type { InMemoryStoreEvent } from './test-utils';
+import { foldDagResumeSnapshot } from './dag-resume-snapshot';
 import { settlingProvider } from './test-settling-provider';
 /**
  * End-to-end tests for the `workflow:` sub-run primitive (#2121 Phase 2).
@@ -214,6 +215,16 @@ const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 // ---------------------------------------------------------------------------
 
 class InMemoryStore implements IWorkflowStore {
+  listDueWorkflowContinuations: IWorkflowStore['listDueWorkflowContinuations'] = () => {
+    throw new Error('Unexpected listDueWorkflowContinuations');
+  };
+  deferWorkflowContinuation: IWorkflowStore['deferWorkflowContinuation'] = () => {
+    throw new Error('Unexpected deferWorkflowContinuation');
+  };
+  signalWorkflowWait: IWorkflowStore['signalWorkflowWait'] = () => {
+    throw new Error('Unexpected signalWorkflowWait');
+  };
+
   resolveApprovalGate: IWorkflowStore['resolveApprovalGate'] = () => {
     throw new Error('Unexpected resolveApprovalGate');
   };
@@ -544,7 +555,10 @@ class InMemoryStore implements IWorkflowStore {
   listProviderEvents: IWorkflowStore['listProviderEvents'] = () => Promise.resolve([]);
 
   getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId =>
-    Promise.resolve(inMemoryDagResumeSnapshot(this.events, workflowRunId));
+    foldDagResumeSnapshot(
+      this.events.filter(event => event.workflow_run_id === workflowRunId),
+      workflowRunId
+    );
 
   getCodebase = (): Promise<null> => Promise.resolve(null);
   getCodebaseEnvVars = (): Promise<Record<string, string>> => Promise.resolve({});

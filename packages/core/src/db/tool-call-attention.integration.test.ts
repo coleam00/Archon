@@ -67,7 +67,7 @@ test('a separate executor process publishes durable attention for an already att
     attached = resolve;
   });
   const controller = new AbortController();
-  const waiting = waitForRunAttention(runId, {
+  const waiting = waitForRunAttention(workflows, runId, {
     pollIntervalMs: 5,
     deadlineMs: 3000,
     signal: controller.signal,

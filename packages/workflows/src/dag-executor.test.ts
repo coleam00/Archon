@@ -231,6 +231,15 @@ function createMockStore(): MockWorkflowStore {
   const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(async _data => {});
   return {
     setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
+    listDueWorkflowContinuations: mock<IWorkflowStore['listDueWorkflowContinuations']>(() => {
+      throw new Error('Unexpected listDueWorkflowContinuations');
+    }),
+    deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
+      throw new Error('Unexpected deferWorkflowContinuation');
+    }),
+    signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
+      throw new Error('Unexpected signalWorkflowWait');
+    }),
     resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
       throw new Error('Unexpected resolveApprovalGate');
     }),
@@ -23002,7 +23011,7 @@ describe('executeDagWorkflow -- persist_session', () => {
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
   });
 
-  it("node.context: 'fresh' bypasses persistence even when persist_session: true", async () => {
+  it("node.context: 'fresh' bypasses cross-run session reuse even when persist_session: true", async () => {
     const store = createMockStore();
     store.listWorkflowNodeSessions.mockResolvedValue([
       {
@@ -23039,6 +23048,7 @@ describe('executeDagWorkflow -- persist_session', () => {
     );
 
     expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    expect(mockSendQueryDag.mock.calls[0][3]?.purpose).toBeUndefined();
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
   });
 
@@ -32290,6 +32300,11 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
           ['node_completed', 'node_failed', 'node_suspended'].includes(event.event_type)
         )
       ).toBe(false);
+      const usageEvents = deferredEvents.filter(
+        event => event.event_type === 'node_deferred_usage'
+      );
+      expect(usageEvents).toHaveLength(kind === 'loop' ? 1 : 0);
+      if (kind === 'loop') expect(usageEvents[0]?.data?.cost_usd).toBe(0.25);
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       // The deferred node already paid for its iteration; the run total keeps it.
       expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBe(0.5);
@@ -32310,6 +32325,91 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
       expect(resumedStore.getState().metadata.approval).toMatchObject({ nodeId: deferredId });
     });
   }
+
+  it.each([false, true])(
+    'durably records a qualified deferred loop (storage rejection=%s)',
+    async rejectWrite => {
+      const runId = 'nested-deferred-loop';
+      const store = createEscalationStore(runId);
+      let releaseGate = () => {};
+      const gatePaused = new Promise<void>(resolve => {
+        releaseGate = resolve;
+      });
+      const pause = store.pauseWorkflowRun;
+      store.pauseWorkflowRun = mock(async (...args) => {
+        if (args[1].nodeId === 'review') await gatePaused;
+        const result = await pause(...args);
+        if (args[1].nodeId === 'first') releaseGate();
+        return result;
+      });
+      const persist = store.persistWorkflowEvent;
+      store.persistWorkflowEvent = mock(async event => {
+        if (rejectWrite && event.event_type === 'node_deferred_usage')
+          throw new Error('usage storage offline');
+        await persist(event);
+      });
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'COMPLETE' };
+        yield { type: 'result', sessionId: 'loop-session', cost: 0.25 };
+      });
+      const execute = executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun(runId),
+          workflow: {
+            name: 'nested-gates',
+            nodes: [
+              dagNodeSchema.parse({ id: 'first', approval: { message: 'Review' } }),
+              dagNodeSchema.parse({
+                id: 'group',
+                loop_group: {
+                  until: 'COMPLETE',
+                  max_iterations: 1,
+                  nodes: [
+                    {
+                      id: 'review',
+                      loop: {
+                        prompt: 'Review',
+                        until: 'COMPLETE',
+                        interactive: true,
+                        gate_message: 'Feedback?',
+                        max_iterations: 2,
+                      },
+                    },
+                  ],
+                },
+              }),
+            ],
+          },
+        })
+      );
+      if (rejectWrite) {
+        await expect(execute).rejects.toThrow(
+          'Could not persist node_deferred_usage for group.review: usage storage offline'
+        );
+      } else {
+        await execute;
+        const usage = persistedEvents(store).filter(
+          event => event.event_type === 'node_deferred_usage'
+        );
+        expect(usage).toHaveLength(1);
+        expect(usage[0]).toMatchObject({
+          step_name: 'group.review',
+          data: { accounting: 'node', cost_usd: 0.25 },
+        });
+        expect(
+          persistedEvents(store).some(
+            event =>
+              event.step_name === 'group.review' &&
+              ['node_completed', 'node_failed', 'node_suspended'].includes(event.event_type)
+          )
+        ).toBe(false);
+      }
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it('defers a loop-group terminal wait that loses the paused slot to a sibling gate', async () => {
     const runId = 'deferred-body-wait';

@@ -589,7 +589,7 @@ export async function findWorkflowRunsByIdPrefix(
   try {
     const result = await pool.query<WorkflowRunRow>(
       'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND CAST(id AS TEXT) LIKE $2 LIMIT 2',
-      [codebaseId, `${idPrefix}%`]
+      [codebaseId, `${idPrefix.toLowerCase()}%`]
     );
     return result.rows.map(normalizeWorkflowRun);
   } catch (error) {

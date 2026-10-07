@@ -256,8 +256,8 @@ export interface ProviderAdmissionEvent {
  */
 export interface SendQueryOptions extends AgentRequestOptions {
   /**
-   * Honored by Codex only: titles use empty capability declarations and a read-only
-   * sandbox. Claude and Pi ignore it.
+   * Codex titles use empty capability declarations and a read-only sandbox.
+   * Pi titles without a resume id use in-memory sessions. Other providers may ignore it.
    */
   purpose?: 'title-generation';
   /** Observer for capped-provider admission transitions (queue visibility, #2817). */
@@ -316,4 +316,14 @@ export interface IAgentProvider {
    * Used by the dag-executor to warn when nodes specify unsupported features.
    */
   getCapabilities(): ProviderCapabilities;
+}
+
+/** Host providers inherit native configuration; container children receive only the request bag. */
+export function buildProviderSubprocessEnv(
+  requestOptions?: Pick<SendQueryOptions, 'env' | 'execContext'>
+): NodeJS.ProcessEnv {
+  return {
+    ...(requestOptions?.execContext?.kind === 'container' ? { TERM: 'dumb' } : process.env),
+    ...requestOptions?.env,
+  };
 }

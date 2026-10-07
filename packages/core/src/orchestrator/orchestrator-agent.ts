@@ -766,7 +766,7 @@ async function dispatchOrchestratorWorkflowOwned(
       );
       return;
     }
-    const resolved = await resolveRunWorkflow(request.run, runCwd, platform);
+    const resolved = await resolveRunWorkflow(createWorkflowDeps(), request.run, runCwd, platform);
     if (!resolved.ok) {
       await platform.sendMessage(
         conversationId,
@@ -913,7 +913,7 @@ async function dispatchOrchestratorWorkflowOwned(
     | undefined;
 
   if (request.kind === 'start' && willContinueExistingRun && resumableRun) {
-    const resolved = await resolveRunWorkflow(resumableRun, runCwd, platform);
+    const resolved = await resolveRunWorkflow(createWorkflowDeps(), resumableRun, runCwd, platform);
     if (!resolved.ok) {
       await platform.sendMessage(
         conversationId,
@@ -1082,19 +1082,24 @@ async function dispatchOrchestratorWorkflowOwned(
     }
   }
 
+  // A fresh run reads repo config from the project's registered checkout, never from a
+  // worktree an earlier run left on this conversation, so uncommitted and gitignored
+  // config apply. An adopted worktree stays the estate. The run records the result, and
+  // every continuation reuses that record.
+  const launchConfigCwd =
+    adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : codebase.default_cwd;
+  const prepareLaunchAiConfiguration = (): ReturnType<typeof prepareRunAiConfiguration> =>
+    prepareRunAiConfiguration(createWorkflowDeps(), workflow, launchConfigCwd, {
+      codebaseId: codebase.id,
+      userId,
+      aiConfigurationRun: adoption?.adoptedRun,
+      runConfig: options?.runConfig,
+      ...(options?.modelOverrides
+        ? { modelOverrideLayer: { kind: 'raw', overrides: options.modelOverrides } }
+        : {}),
+    });
   const preparedAiConfiguration =
-    branchPrepared ??
-    (!willContinueExistingRun
-      ? await prepareRunAiConfiguration(createWorkflowDeps(), workflow, captureCwd, {
-          codebaseId: codebase.id,
-          userId,
-          aiConfigurationRun: adoption?.adoptedRun,
-          runConfig: options?.runConfig,
-          ...(options?.modelOverrides
-            ? { modelOverrideLayer: { kind: 'raw', overrides: options.modelOverrides } }
-            : {}),
-        })
-      : undefined);
+    branchPrepared ?? (!willContinueExistingRun ? await prepareLaunchAiConfiguration() : undefined);
   if (preparedAiConfiguration)
     await assertRunCredentials(createWorkflowDeps(), preparedAiConfiguration);
 
@@ -1368,6 +1373,8 @@ async function dispatchOrchestratorWorkflowOwned(
         );
         if (!captured) return; // capture failed, message already sent
         workflow = captured.workflow;
+        const freshAiConfiguration = await prepareLaunchAiConfiguration();
+        await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration);
         await platform.sendMessage(
           conversationId,
           `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
@@ -1392,6 +1399,7 @@ async function dispatchOrchestratorWorkflowOwned(
               codebaseId: codebase.id,
               source,
               preparedSource: captured.preparedSource,
+              preparedAiConfiguration: freshAiConfiguration,
               parseWarnings,
               baseBranch: codebaseBaseBranch,
               resolveChildIsolation,

@@ -10,8 +10,8 @@
  * Authentication:
  * - Credentials reach the subprocess via process.env (already cleaned by
  *   stripCwdEnv) PLUS any per-request `requestOptions.env` (per-user delivered
- *   keys/subscriptions), merged LAST so it wins. `buildSubprocessEnv` does NOT
- *   filter tokens — it only logs which posture process.env shows (explicit
+ *   keys/subscriptions), merged LAST so it wins. `buildProviderSubprocessEnv` does NOT
+ *   filter tokens — the Claude wrapper logs which posture process.env shows (explicit
  *   token present vs not); the historical env-token allowlist was removed in
  *   #1067, so the log can read "global" while a per-request token authenticates.
  * - CLAUDE_USE_GLOBAL_AUTH is an Archon-only boot sentinel (set for solo
@@ -28,6 +28,7 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
+import { buildProviderSubprocessEnv } from '@archon/provider-contract';
 import type { CredentialStatus } from '@archon/provider-contract';
 import {
   query,
@@ -198,54 +199,18 @@ function selectResolvedModelId(
   return selected[0];
 }
 
-/**
- * Build environment for Claude subprocess.
- *
- * process.env is already clean at this point:
- * - stripCwdEnv() at entry point removed CWD .env keys + CLAUDECODE markers
- * - ~/.archon/.env loaded with override:true as the trusted source
- */
-function buildSubprocessEnv(): NodeJS.ProcessEnv {
-  // Using || intentionally: empty string should be treated as missing credential
-  const hasExplicitTokens = Boolean(
-    process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_API_KEY
-  );
-  const authMode = hasExplicitTokens ? 'explicit' : 'global';
-  getLog().info(
-    { authMode },
-    authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
-  );
-  return { ...process.env };
-}
-
-/**
- * Build the base env for a CONTAINER run. Deliberately does NOT spread
- * `process.env` — that is the isolation boundary itself (the container must
- * never inherit the host's environment). The Archon-managed bag
- * (`requestOptions.env`: codebase env vars + per-user AI creds + GitHub token)
- * is layered on top by the caller, and PATH/HOME/CLAUDE_CONFIG_DIR come from the
- * runner image. Only a minimal, host-independent base is seeded here.
- */
-function buildContainerBaseEnv(): NodeJS.ProcessEnv {
-  return { TERM: 'dumb' };
-}
-
-/**
- * Resolve the environment delivered to the Claude subprocess for a request.
- *
- * This is the env-isolation ENFORCEMENT POINT. A container run
- * (`execContext.kind === 'container'`) gets ONLY the Archon-managed bag
- * (`requestOptions.env`: codebase env + per-user creds + GitHub token) layered
- * over a minimal base — host `process.env` NEVER crosses the boundary. A host run
- * inherits the (already-cleaned) host env exactly as before. Exported so the
- * invariant can be unit-tested with a `process.env` canary.
- */
 export function buildRequestSubprocessEnv(
   requestOptions: SendQueryOptions | undefined
 ): NodeJS.ProcessEnv {
-  const isContainerRun = requestOptions?.execContext?.kind === 'container';
-  const subprocessEnv = isContainerRun ? buildContainerBaseEnv() : buildSubprocessEnv();
-  const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
+  if (requestOptions?.execContext?.kind !== 'container') {
+    const authMode =
+      process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_API_KEY ? 'explicit' : 'global';
+    getLog().info(
+      { authMode },
+      authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
+    );
+  }
+  const env = buildProviderSubprocessEnv(requestOptions);
   // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
   // ANTHROPIC_API_KEY, so mirror it or solo .env installs never authenticate
   // (delivery.ts sets both vars on the per-user api_key path). Guarded on the

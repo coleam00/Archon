@@ -39,7 +39,7 @@ import {
 import {
   NODE_STATE_EVENT_TYPES,
   WORKFLOW_EVENT_TYPES,
-  isNodeStateEventType,
+  isDurableWorkflowEventType,
   type WorkflowEventType,
 } from '@archon/workflows/store';
 import {
@@ -2430,21 +2430,12 @@ async function runWorkflowWithOwnedSource(
         }
       );
     } else {
-      const existingBranch =
-        wantsIsolation && detachCodebase && options.branchName
-          ? await host.records.isolation.findActiveByWorkflow(
-              detachCodebase.id,
-              'task',
-              options.branchName
-            )
-          : undefined;
+      // A fresh launch reads repo config from the launch checkout, not from a worktree
+      // --branch would reuse; the child inherits what this records before the fork.
       const configCwd =
         detachedAdoptionLane?.kind === 'reuse-worktree'
           ? detachedAdoptionLane.workingPath
-          : (continuationRun?.working_path ??
-            (existingBranch && existsSync(existingBranch.working_path)
-              ? existingBranch.working_path
-              : cwd));
+          : (continuationRun?.working_path ?? cwd);
       if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
         await recaptureForLane(configCwd);
       detachedPrepared = await prepareCredentialPreflight(configCwd, detachCodebase?.id);
@@ -2866,10 +2857,6 @@ async function runWorkflowWithOwnedSource(
     wantsIsolation && codebase && options.branchName
       ? await host.records.isolation.findActiveByWorkflow(codebase.id, 'task', options.branchName)
       : undefined;
-  const executionConfigCwd =
-    existingBranchEnv && existsSync(existingBranchEnv.working_path)
-      ? existingBranchEnv.working_path
-      : workingCwd;
   const preparedAiConfiguration =
     adoptedTaskBranch && codebase
       ? await withBranchLaunchSource(
@@ -2883,7 +2870,10 @@ async function runWorkflowWithOwnedSource(
       : await (async (): Promise<PreparedRunAiConfiguration> => {
           if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined)
             await recaptureForLane(workingCwd);
-          return prepareCredentialPreflight(executionConfigCwd, codebase?.id);
+          // Still the launch checkout (or an adopted run's worktree): repo config comes
+          // from where the operator launched, including uncommitted and gitignored edits,
+          // even when --branch reuses an existing worktree for the code.
+          return prepareCredentialPreflight(workingCwd, codebase?.id);
         })();
 
   const isFolderCodebase = codebase?.kind === 'folder';
@@ -4418,7 +4408,8 @@ export async function workflowWaitCommand(
   let resolvedId: string;
   try {
     resolvedId = await resolveRunIdArg(host, runId, cwd);
-    result = await waitForRunAttention(resolvedId, {
+    result = await waitForRunAttention(host.deps.store, resolvedId, {
+      doorbell: host.doorbell,
       // No timeout by default: a wait that ends on its own clock would answer a
       // question only the run can answer.
       ...(timeoutSeconds === undefined ? {} : { deadlineMs: timeoutSeconds * 1000 }),
@@ -6444,7 +6435,7 @@ export async function workflowEventEmitCommand(
 ): Promise<void> {
   const resolvedId = await resolveRunIdArg(host, runId, cwd, true);
   const store = host.deps.store;
-  if (isNodeStateEventType(eventType)) {
+  if (isDurableWorkflowEventType(eventType)) {
     await store.persistWorkflowEvent({
       workflow_run_id: resolvedId,
       event_type: eventType,
