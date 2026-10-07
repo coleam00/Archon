@@ -124,7 +124,7 @@ afterEach(async () => {
 describe('durable resource starts', () => {
   test('receipt inspection rejects invalid limits through the SQL store', async () => {
     for (const limit of [NaN, 1.5, 0, 1001]) {
-      expect(listStartReceipts(limit)).rejects.toThrow(
+      await expect(listStartReceipts(limit)).rejects.toThrow(
         'Receipt limit must be an integer from 1 to 1000.'
       );
     }

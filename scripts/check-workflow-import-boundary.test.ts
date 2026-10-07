@@ -8,8 +8,10 @@ import { checkWorkflowImports, WORKFLOW_BOUNDARY_FILES } from './check-workflow-
 const tempRoots = trackTempRoots();
 test('workflow boundary rejects static, dynamic and barrel persistence imports', async () => {
   const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-workflow-boundary-')));
-  const db = resolve(import.meta.dir, '../packages/core/src/db/workflows.ts');
-  const core = resolve(import.meta.dir, '../packages/core/src/index.ts');
+  // Forward slashes keep Windows paths intact inside the template-literal case,
+  // where `\a`-style escapes would otherwise erase the separators.
+  const db = resolve(import.meta.dir, '../packages/core/src/db/workflows.ts').replaceAll('\\', '/');
+  const core = resolve(import.meta.dir, '../packages/core/src/index.ts').replaceAll('\\', '/');
   for (const [name, source] of [
     ['direct', `import { getWorkflowRun } from ${JSON.stringify(db)}; void getWorkflowRun;`],
     ['dynamic', `void import(${JSON.stringify(db)});`],

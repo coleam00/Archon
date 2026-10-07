@@ -157,11 +157,13 @@ test('admission preserves FIFO, skips overlap, deduplicates receipts and fences 
     })
   ).toEqual({ receiptId: receipt.receipt.id, replay: true });
   expect(
-    store.acceptStartReceipt({
-      ...receipt,
-      receipt: { ...receipt.receipt, contentDigest: 'conflict' },
-    })
-  ).rejects.toBeInstanceOf(SourceReceiptDigestConflictError);
+    await store
+      .acceptStartReceipt({
+        ...receipt,
+        receipt: { ...receipt.receipt, contentDigest: 'conflict' },
+      })
+      .catch((error: unknown) => error)
+  ).toBeInstanceOf(SourceReceiptDigestConflictError);
   const owner = { receiptId: receipt.receipt.id, bindingId: binding.bindingId, ownerId: 'owner' };
   expect(
     await Promise.all([
@@ -302,7 +304,9 @@ test('receipt preparation and real engine execution use supplied ports without S
         event => event.event_type === 'workflow_completed'
       )
     ).toHaveLength(1);
-    expect(execute()).rejects.toThrow('not pending');
+    expect(await execute().catch((error: unknown) => error)).toMatchObject({
+      message: expect.stringContaining('not pending'),
+    });
     if (receipt.outcome !== 'matched') throw new Error('Expected a matched receipt');
     const delayedReceipt = acceptance(receipt.bindings[0], 'delayed');
     await host.deps.store.acceptStartReceipt(delayedReceipt);
@@ -383,9 +387,9 @@ test('receipt preparation and real engine execution use supplied ports without S
 test('receipt inspection rejects invalid limits through the in-memory store', async () => {
   const store = hostForTest().deps.store;
   for (const limit of [NaN, 1.5, 0, 1001]) {
-    expect(store.listStartReceipts(limit)).rejects.toThrow(
-      'Receipt limit must be an integer from 1 to 1000.'
-    );
+    expect(await store.listStartReceipts(limit).catch((error: unknown) => error)).toMatchObject({
+      message: 'Receipt limit must be an integer from 1 to 1000.',
+    });
   }
   expect(await store.listStartReceipts(1)).toEqual([]);
   expect(await store.listStartReceipts(1000)).toEqual([]);
