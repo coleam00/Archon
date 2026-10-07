@@ -105,6 +105,16 @@ try {
   const failures = await runProviderConformance({
     capabilities: client.getCapabilities(),
     turns: [{ name: 'turn', run: () => client.sendQuery('hello', process.cwd()) }],
+    failureCases: [
+      {
+        name: 'auth',
+        expected: 'auth',
+        // Vendor text the typed failure's evidence must keep.
+        evidence: 'HTTP 401',
+        // A fixture prompt your executable answers with a vendor auth failure.
+        run: () => client.sendQuery('failure', process.cwd()),
+      },
+    ],
   });
   if (failures.length) throw new Error(failures.join('\n'));
 } finally {

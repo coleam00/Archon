@@ -197,254 +197,235 @@ async function snapshot(dir: string): Promise<Record<string, string>> {
   return result;
 }
 
-test(
-  'release install registers a provider, runs a workflow, and removal rejects before a run or worktree',
-  async () => {
-    const env = await environment();
-    expect(await pluginCommand('install', [ID], env)).toBe(0);
-    const receipts = await readReceipts(env.pluginsDir);
-    expect(receipts[0]).toMatchObject({
-      manifest: { kind: 'provider' },
-      descriptor: { id: 'test-provider' },
-    });
-    const registrations = await loadProviderPlugins(env.pluginsDir);
+test('release install registers a provider, runs a workflow, and removal rejects before a run or worktree', async () => {
+  const env = await environment();
+  expect(await pluginCommand('install', [ID], env)).toBe(0);
+  const receipts = await readReceipts(env.pluginsDir);
+  expect(receipts[0]).toMatchObject({
+    manifest: { kind: 'provider' },
+    descriptor: { id: 'test-provider' },
+  });
+  const registrations = await loadProviderPlugins(env.pluginsDir);
+  expect(
+    (
+      await checkAssistantLogin({}, async () => ({
+        assistant: registrations[0].id,
+        model: 'echo-model',
+        vendor: undefined,
+        connectedVendors: [],
+        provider: registrations[0].factory(),
+      }))
+    ).status
+  ).toBe('pass');
+  expect(parseProviderRunModel(registrations[0], 'echo-model')).toBe('echo-model');
+  expect(() => parseProviderRunModel(registrations[0], '')).toThrow();
+  await git(env.projectDir, 'init', '-q');
+  await git(env.projectDir, 'commit', '--allow-empty', '-qm', 'initial');
+  const workflowDir = join(env.projectDir, '.archon/workflows/echo');
+  await mkdir(workflowDir, { recursive: true });
+  await writeFile(
+    join(workflowDir, 'echo.yaml'),
+    'name: echo\ndescription: Provider plugin proof\nprovider: test-provider\nnodes:\n  - id: echo\n    prompt: release-provider-echo\n'
+  );
+  const run = await cli(env, ['workflow', 'run', 'echo', '--cwd', env.projectDir, '--no-worktree']);
+  expect(run.output).toContain('release-provider-echo');
+  expect(run.code).toBe(0);
+  const db = new Database(join(dirname(env.pluginsDir), 'archon.db'), { readonly: true });
+  const count = (): number =>
+    db.query<{ n: number }, []>('SELECT count(*) as n FROM remote_agent_workflow_runs').get()?.n ??
+    0;
+  try {
+    expect(count()).toBe(1);
     expect(
-      (
-        await checkAssistantLogin({}, async () => ({
-          assistant: registrations[0].id,
-          model: 'echo-model',
-          vendor: undefined,
-          connectedVendors: [],
-          provider: registrations[0].factory(),
-        }))
-      ).status
-    ).toBe('pass');
-    expect(parseProviderRunModel(registrations[0], 'echo-model')).toBe('echo-model');
-    expect(() => parseProviderRunModel(registrations[0], '')).toThrow();
-    await git(env.projectDir, 'init', '-q');
-    await git(env.projectDir, 'commit', '--allow-empty', '-qm', 'initial');
-    const workflowDir = join(env.projectDir, '.archon/workflows/echo');
-    await mkdir(workflowDir, { recursive: true });
+      db
+        .query<
+          { output: string },
+          []
+        >("SELECT json_extract(data, '$.node_output') AS output FROM remote_agent_workflow_events WHERE event_type = 'node_completed' AND step_name = 'echo'")
+        .get()?.output
+    ).toContain('release-provider-echo');
+    for (const field of ['skills', 'plugins', 'mcp']) {
+      await writeFile(
+        join(workflowDir, 'echo.yaml'),
+        `name: echo\ndescription: Unsupported capability\nprovider: test-provider\nnodes:\n  - id: echo\n    prompt: never-spend\n    ${field}: ${field === 'mcp' ? 'undeclared' : '[undeclared]'}\n`
+      );
+      const rejected = await cli(env, [
+        'workflow',
+        'run',
+        'echo',
+        '--cwd',
+        env.projectDir,
+        '--no-worktree',
+      ]);
+      expect(rejected.code).not.toBe(0);
+      expect(rejected.output).toContain(field);
+      expect(rejected.output).toContain('test-provider');
+      expect(rejected.output).toContain('cannot load what the node names');
+    }
     await writeFile(
       join(workflowDir, 'echo.yaml'),
       'name: echo\ndescription: Provider plugin proof\nprovider: test-provider\nnodes:\n  - id: echo\n    prompt: release-provider-echo\n'
     );
-    const run = await cli(env, [
-      'workflow',
-      'run',
-      'echo',
-      '--cwd',
-      env.projectDir,
-      '--no-worktree',
-    ]);
-    expect(run.output).toContain('release-provider-echo');
-    expect(run.code).toBe(0);
-    const db = new Database(join(dirname(env.pluginsDir), 'archon.db'), { readonly: true });
-    const count = (): number =>
-      db.query<{ n: number }, []>('SELECT count(*) as n FROM remote_agent_workflow_runs').get()
-        ?.n ?? 0;
-    try {
-      expect(count()).toBe(1);
-      expect(
-        db
-          .query<
-            { output: string },
-            []
-          >("SELECT json_extract(data, '$.node_output') AS output FROM remote_agent_workflow_events WHERE event_type = 'node_completed' AND step_name = 'echo'")
-          .get()?.output
-      ).toContain('release-provider-echo');
-      for (const field of ['skills', 'plugins', 'mcp']) {
-        await writeFile(
-          join(workflowDir, 'echo.yaml'),
-          `name: echo\ndescription: Unsupported capability\nprovider: test-provider\nnodes:\n  - id: echo\n    prompt: never-spend\n    ${field}: ${field === 'mcp' ? 'undeclared' : '[undeclared]'}\n`
-        );
-        const rejected = await cli(env, [
-          'workflow',
-          'run',
-          'echo',
-          '--cwd',
-          env.projectDir,
-          '--no-worktree',
-        ]);
-        expect(rejected.code).not.toBe(0);
-        expect(rejected.output).toContain(field);
-        expect(rejected.output).toContain('test-provider');
-        expect(rejected.output).toContain('cannot load what the node names');
-      }
-      await writeFile(
-        join(workflowDir, 'echo.yaml'),
-        'name: echo\ndescription: Provider plugin proof\nprovider: test-provider\nnodes:\n  - id: echo\n    prompt: release-provider-echo\n'
-      );
-      expect(await pluginCommand('update', [`${ID}@v2`], env)).toBe(0);
-      expect((await readReceipts(env.pluginsDir))[0].tag).toBe('v2');
-      expect((await plugin(env, 'list', [])).out).toContain('owner/repo  provider  v2');
-      const beforeRemoval = count();
-      const beforeWorktrees = await git(env.projectDir, 'worktree', 'list', '--porcelain');
-      expect(await pluginCommand('remove', [ID], env)).toBe(0);
-      expect(await Bun.file(join(env.pluginsDir, executable)).exists()).toBe(false);
-      expect(await loadProviderPlugins(env.pluginsDir)).toEqual([]);
-      for (const args of [
-        ['validate', 'workflows', 'echo'],
-        ['workflow', 'run', 'echo'],
-      ]) {
-        const removed = await cli(env, [...args, '--cwd', env.projectDir]);
-        expect(removed.code).not.toBe(0);
-        expect(removed.output).toContain('test-provider');
-        expect(removed.output.toLowerCase()).toContain('unknown provider');
-      }
-      expect(count()).toBe(beforeRemoval);
-      expect(await git(env.projectDir, 'worktree', 'list', '--porcelain')).toBe(beforeWorktrees);
-    } finally {
-      db.close();
+    expect(await pluginCommand('update', [`${ID}@v2`], env)).toBe(0);
+    expect((await readReceipts(env.pluginsDir))[0].tag).toBe('v2');
+    expect((await plugin(env, 'list', [])).out).toContain('owner/repo  provider  v2');
+    const beforeRemoval = count();
+    const beforeWorktrees = await git(env.projectDir, 'worktree', 'list', '--porcelain');
+    expect(await pluginCommand('remove', [ID], env)).toBe(0);
+    expect(await Bun.file(join(env.pluginsDir, executable)).exists()).toBe(false);
+    expect(await loadProviderPlugins(env.pluginsDir)).toEqual([]);
+    for (const args of [
+      ['validate', 'workflows', 'echo'],
+      ['workflow', 'run', 'echo'],
+    ]) {
+      const removed = await cli(env, [...args, '--cwd', env.projectDir]);
+      expect(removed.code).not.toBe(0);
+      expect(removed.output).toContain('test-provider');
+      expect(removed.output.toLowerCase()).toContain('unknown provider');
     }
-  },
-  testTimeout(60_000)
-);
+    expect(count()).toBe(beforeRemoval);
+    expect(await git(env.projectDir, 'worktree', 'list', '--porcelain')).toBe(beforeWorktrees);
+  } finally {
+    db.close();
+  }
+}, 120_000);
 
-test(
-  'invalid provider initialize, ids, capabilities and vendors preserve the previous install',
-  async () => {
-    const env = await environment();
-    expect(await pluginCommand('install', [`${ID}@v1`], env)).toBe(0);
-    const before = await snapshot(env.pluginsDir);
-    const receipt = (await readReceipts(env.pluginsDir))[0];
-    if (!('descriptor' in receipt)) throw new Error('missing descriptor');
-    const descriptor = providerPluginDescriptorSchema.parse(receipt.descriptor);
-    const caps = descriptor.capabilities;
-    const cases = [
-      {
-        descriptor: { ...descriptor, id: 'mismatch' },
-        executableId: descriptor.id,
-        error: 'descriptor id must match',
-      },
-      { descriptor: { ...descriptor, id: 'claude' }, error: 'already registered' },
-      {
-        descriptor: { ...descriptor, credentials: { kind: 'dynamic' } },
-        error: 'failed initialize',
-      },
-      {
-        descriptor: { ...descriptor, capabilities: { ...caps, nativeTools: true } },
-        error: 'failed initialize',
-      },
-      {
-        descriptor: {
-          ...descriptor,
-          credentials: {
-            kind: 'static',
-            specs: [{ vendor: 'undeliverable', displayName: 'Bad vendor', kinds: ['api_key'] }],
-          },
+test('invalid provider initialize, ids, capabilities and vendors preserve the previous install', async () => {
+  const env = await environment();
+  expect(await pluginCommand('install', [`${ID}@v1`], env)).toBe(0);
+  const before = await snapshot(env.pluginsDir);
+  const receipt = (await readReceipts(env.pluginsDir))[0];
+  if (!('descriptor' in receipt)) throw new Error('missing descriptor');
+  const descriptor = providerPluginDescriptorSchema.parse(receipt.descriptor);
+  const caps = descriptor.capabilities;
+  const cases = [
+    {
+      descriptor: { ...descriptor, id: 'mismatch' },
+      executableId: descriptor.id,
+      error: 'descriptor id must match',
+    },
+    { descriptor: { ...descriptor, id: 'claude' }, error: 'already registered' },
+    {
+      descriptor: { ...descriptor, credentials: { kind: 'dynamic' } },
+      error: 'failed initialize',
+    },
+    {
+      descriptor: { ...descriptor, capabilities: { ...caps, nativeTools: true } },
+      error: 'failed initialize',
+    },
+    {
+      descriptor: {
+        ...descriptor,
+        credentials: {
+          kind: 'static',
+          specs: [{ vendor: 'undeliverable', displayName: 'Bad vendor', kinds: ['api_key'] }],
         },
-        error: 'no credential delivery rule',
       },
-      {
-        descriptor: {
-          ...descriptor,
-          capabilities: { ...caps, sessionFork: true, sessionResume: false },
-        },
-        error: 'sessionFork requires sessionResume',
+      error: 'no credential delivery rule',
+    },
+    {
+      descriptor: {
+        ...descriptor,
+        capabilities: { ...caps, sessionFork: true, sessionResume: false },
       },
-      {
-        descriptor: { ...descriptor, ownsUnprefixedModelRefs: true },
-        error: 'already owns unprefixed model refs',
-      },
-    ];
-    const descriptorFile = join(root, 'invalid-descriptor.json');
-    const invalidBinary = await runnable(
-      `const descriptor = await Bun.file(${JSON.stringify(join(root, 'invalid-descriptor.json'))}).json(); for await (const line of console) { const request = JSON.parse(line); console.log(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{protocolVersion:1,agentCapabilities:{_meta:{archon:descriptor}},authMethods:[]}})); }`,
-      'invalid-provider'
-    );
-    for (const scenario of cases) {
-      manifests.set(commits.get('invalid') ?? '', {
-        schemaVersion: 1,
-        kind: 'provider',
-        name: 'test-provider',
-        description: 'Invalid provider',
-        executable: `archon-provider-${scenario.executableId ?? scenario.descriptor.id}`,
-      });
-      await writeFile(descriptorFile, JSON.stringify(scenario.descriptor));
-      assets.set('invalid', invalidBinary);
-      const rejected = await plugin(env, 'update', [`${ID}@invalid`]);
-      expect(rejected.code).toBe(1);
-      expect(rejected.err).toContain(scenario.error);
-      expect(await snapshot(env.pluginsDir)).toEqual(before);
-    }
-    assets.set('invalid', new TextEncoder().encode('broken executable'));
-    expect(await pluginCommand('update', [`${ID}@invalid`], env)).toBe(1);
+      error: 'sessionFork requires sessionResume',
+    },
+    {
+      descriptor: { ...descriptor, ownsUnprefixedModelRefs: true },
+      error: 'already owns unprefixed model refs',
+    },
+  ];
+  const descriptorFile = join(root, 'invalid-descriptor.json');
+  const invalidBinary = await runnable(
+    `const descriptor = await Bun.file(${JSON.stringify(join(root, 'invalid-descriptor.json'))}).json(); for await (const line of console) { const request = JSON.parse(line); console.log(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{protocolVersion:1,agentCapabilities:{_meta:{archon:descriptor}},authMethods:[]}})); }`,
+    'invalid-provider'
+  );
+  for (const scenario of cases) {
+    manifests.set(commits.get('invalid') ?? '', {
+      schemaVersion: 1,
+      kind: 'provider',
+      name: 'test-provider',
+      description: 'Invalid provider',
+      executable: `archon-provider-${scenario.executableId ?? scenario.descriptor.id}`,
+    });
+    await writeFile(descriptorFile, JSON.stringify(scenario.descriptor));
+    assets.set('invalid', invalidBinary);
+    const rejected = await plugin(env, 'update', [`${ID}@invalid`]);
+    expect(rejected.code).toBe(1);
+    expect(rejected.err).toContain(scenario.error);
     expect(await snapshot(env.pluginsDir)).toEqual(before);
-    const fresh = await environment();
-    expect((await plugin(fresh, 'install', [`${ID}@invalid`])).code).toBe(1);
-    expect(await readReceipts(fresh.pluginsDir)).toEqual([]);
-    expect(await snapshot(fresh.pluginsDir)).toEqual({});
-  },
-  testTimeout(60_000)
-);
+  }
+  assets.set('invalid', new TextEncoder().encode('broken executable'));
+  expect(await pluginCommand('update', [`${ID}@invalid`], env)).toBe(1);
+  expect(await snapshot(env.pluginsDir)).toEqual(before);
+  const fresh = await environment();
+  expect((await plugin(fresh, 'install', [`${ID}@invalid`])).code).toBe(1);
+  expect(await readReceipts(fresh.pluginsDir)).toEqual([]);
+  expect(await snapshot(fresh.pluginsDir)).toEqual({});
+}, 120_000);
 
-test(
-  'a process holding the install lock excludes competing install, update and remove',
-  async () => {
-    const env = await environment();
-    const spawnMutation = (command: string, id: string): Promise<[number, string, string]> => {
-      const child = Bun.spawn(
-        [
-          process.execPath,
-          '--eval',
-          `import { pluginCommand } from ${JSON.stringify(join(import.meta.dir, 'plugin.ts'))}; process.exit(await pluginCommand(Bun.argv[1], [Bun.argv[2]], JSON.parse(Bun.argv[3])));`,
-          command,
-          id,
-          JSON.stringify(env),
-        ],
-        { stdout: 'pipe', stderr: 'pipe' }
-      );
-      return Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-      ]);
-    };
-    let reachedDownload!: () => void;
-    const downloading = new Promise<void>(resolve => {
-      reachedDownload = resolve;
-    });
-    let releaseDownload!: () => void;
-    const release = new Promise<void>(resolve => {
-      releaseDownload = resolve;
-    });
-    let gated = false;
-    beforeAssetDownload = async (): Promise<void> => {
-      if (gated) return;
-      gated = true;
-      reachedDownload();
-      await release;
-    };
-    const installing = spawnMutation('install', `${ID}@v1`);
-    try {
-      await downloading;
-      for (const [command, id] of [
-        ['install', `${ID}/alternate@v1`],
-        ['update', `${ID}@v2`],
-        ['remove', ID],
-      ]) {
-        const [code, , error] = await spawnMutation(command, id);
-        expect(code).toBe(1);
-        expect(error).toContain('Plugin mutation locked');
-      }
-    } finally {
-      beforeAssetDownload = undefined;
-      releaseDownload();
-      await installing;
-    }
-    expect((await installing)[0]).toBe(0);
-    const [code, , error] = await spawnMutation('install', `${ID}/alternate@v1`);
-    expect(code).toBe(1);
-    expect(error).toContain(`belongs to ${ID}`);
-    expect(await readReceipts(env.pluginsDir)).toHaveLength(1);
-    expect((await loadProviderPlugins(env.pluginsDir)).map(provider => provider.id)).toEqual([
-      'test-provider',
+test('a process holding the install lock excludes competing install, update and remove', async () => {
+  const env = await environment();
+  const spawnMutation = (command: string, id: string): Promise<[number, string, string]> => {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        '--eval',
+        `import { pluginCommand } from ${JSON.stringify(join(import.meta.dir, 'plugin.ts'))}; process.exit(await pluginCommand(Bun.argv[1], [Bun.argv[2]], JSON.parse(Bun.argv[3])));`,
+        command,
+        id,
+        JSON.stringify(env),
+      ],
+      { stdout: 'pipe', stderr: 'pipe' }
+    );
+    return Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
     ]);
-    expect((await cli(env, ['doctor', '--json'])).code).toBe(0);
-    expect((await spawnMutation('update', `${ID}@v2`))[0]).toBe(0);
-    expect((await spawnMutation('remove', ID))[0]).toBe(0);
-    expect(await readReceipts(env.pluginsDir)).toEqual([]);
-  },
-  testTimeout(30_000)
-);
+  };
+  let reachedDownload!: () => void;
+  const downloading = new Promise<void>(resolve => {
+    reachedDownload = resolve;
+  });
+  let releaseDownload!: () => void;
+  const release = new Promise<void>(resolve => {
+    releaseDownload = resolve;
+  });
+  let gated = false;
+  beforeAssetDownload = async (): Promise<void> => {
+    if (gated) return;
+    gated = true;
+    reachedDownload();
+    await release;
+  };
+  const installing = spawnMutation('install', `${ID}@v1`);
+  try {
+    await downloading;
+    for (const [command, id] of [
+      ['install', `${ID}/alternate@v1`],
+      ['update', `${ID}@v2`],
+      ['remove', ID],
+    ]) {
+      const [code, , error] = await spawnMutation(command, id);
+      expect(code).toBe(1);
+      expect(error).toContain('Plugin mutation locked');
+    }
+  } finally {
+    beforeAssetDownload = undefined;
+    releaseDownload();
+    await installing;
+  }
+  expect((await installing)[0]).toBe(0);
+  const [code, , error] = await spawnMutation('install', `${ID}/alternate@v1`);
+  expect(code).toBe(1);
+  expect(error).toContain(`belongs to ${ID}`);
+  expect(await readReceipts(env.pluginsDir)).toHaveLength(1);
+  expect((await loadProviderPlugins(env.pluginsDir)).map(provider => provider.id)).toEqual([
+    'test-provider',
+  ]);
+  expect((await cli(env, ['doctor', '--json'])).code).toBe(0);
+  expect((await spawnMutation('update', `${ID}@v2`))[0]).toBe(0);
+  expect((await spawnMutation('remove', ID))[0]).toBe(0);
+  expect(await readReceipts(env.pluginsDir)).toEqual([]);
+}, 120_000);
