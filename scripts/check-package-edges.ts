@@ -11,7 +11,7 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   // SDK-free filesystem and process foundations.
   paths: { runtime: [] },
   // Forge contracts; fixtures use paths' test cleanup helpers.
-  forge: { runtime: [], test: ['paths'] },
+  forge: { runtime: ['paths'] },
   // Plugin manifest vocabulary.
   'plugin-manifest': { runtime: [] },
   // External providers can depend on the contract without pulling in implementations.
