@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { giteaPolicy } from './policy';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -242,7 +243,7 @@ export class GiteaAdapter implements IPlatformAdapter {
    * Get platform type
    */
   getPlatformType(): string {
-    return 'gitea';
+    return giteaPolicy.id;
   }
 
   /**

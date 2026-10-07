@@ -455,15 +455,18 @@ describe('isolation-environments', () => {
       expect(params[0]).toBe(7);
     });
 
-    test('excludes registered retain-policy environments in query', async () => {
-      setPlatformPolicies([{ id: 'retain-test', workspaceRetention: 'retain' }]);
+    test('only registered age-based platforms enter the stale query', async () => {
+      setPlatformPolicies([
+        { id: 'retain-test', workspaceRetention: 'retain' },
+        { id: 'cli', workspaceRetention: 'age-based' },
+      ]);
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await findStaleEnvironments();
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain('created_by_platform NOT IN ($3)');
-      expect(params).toEqual([14, 14, 'retain-test']);
+      expect(query).toContain('created_by_platform IN ($3)');
+      expect(params).toEqual([14, 14, 'cli']);
     });
 
     test('returns environments with codebase info', async () => {

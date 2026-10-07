@@ -27,6 +27,9 @@ test('bundled policies are valid and keep existing retention and streaming defau
       workspaceRetention: 'age-based',
       streaming: { defaultMode: 'batch', envVar: 'DISCORD_STREAMING_MODE' },
     },
+    { id: 'github', workspaceRetention: 'age-based' },
+    { id: 'gitea', workspaceRetention: 'age-based' },
+    { id: 'gitlab', workspaceRetention: 'age-based' },
   ]);
   expect(retainsWorkspace('telegram')).toBe(true);
 });

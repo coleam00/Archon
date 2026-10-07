@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { gitlabPolicy } from './policy';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
@@ -144,7 +145,7 @@ export class GitLabAdapter implements IPlatformAdapter {
   }
 
   getPlatformType(): string {
-    return 'gitlab';
+    return gitlabPolicy.id;
   }
 
   async start(): Promise<void> {

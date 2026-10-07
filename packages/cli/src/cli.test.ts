@@ -4,6 +4,7 @@
  * Note: These tests focus on argument parsing logic.
  * Full integration tests would require mocking the database and commands.
  */
+import { receiptPath } from '@archon/plugin-manifest/store';
 import { GITHUB_TOKEN_KEYS } from '@archon/workflows/utils/github-token-policy';
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
@@ -13,7 +14,7 @@ import { cliArgOptions } from './args';
 import { generateConversationId } from './utils/conversation-id';
 import * as git from '@archon/git';
 import { canonicalizeProjectPath } from '@archon/paths';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -1923,4 +1924,109 @@ globalThis.fetch = () => ${entry.pending ? 'new Promise(() => {})' : "Promise.re
       }
     });
   }
+});
+
+describe('receipt policies in the CLI host', () => {
+  it(
+    'registers a receipt without executing its binary, then keeps and reports its workspace after removal',
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), 'cli-chat-policy-'));
+      const home = join(root, 'home');
+      const workspace = join(root, 'workspace');
+      const executable = join(home, 'plugins', 'archon-chat-fixture');
+      const marker = join(root, 'executed');
+      const file = receiptPath(join(home, 'plugins'), 'owner/chat-fixture');
+      mkdirSync(join(home, 'plugins', 'installed', 'owner', 'chat-fixture'), { recursive: true });
+      mkdirSync(workspace);
+      mkdirSync(join(workspace, '.git'));
+      writeFileSync(
+        executable,
+        `#!/bin/sh\necho executed > '${marker.replaceAll("'", "'\\''")}'\nexit 99\n`,
+        { mode: 0o755 }
+      );
+      const receipt = {
+        schemaVersion: 1,
+        id: 'owner/chat-fixture',
+        manifest: {
+          schemaVersion: 1,
+          kind: 'chat',
+          name: 'fixture',
+          description: 'Fixture',
+          executable: 'archon-chat-fixture',
+        },
+        tag: 'v1',
+        commit: 'a'.repeat(40),
+        installedAt: new Date(0).toISOString(),
+        files: [{ path: 'archon-chat-fixture', sha256: 'b'.repeat(64) }],
+        descriptor: {
+          protocol: 'archon-chat/1',
+          id: 'slack',
+          displayName: 'Fixture',
+          version: '1',
+          capabilities: { defaultWorkflowDispatch: 'background' },
+          policy: { workspaceRetention: 'retain' },
+        },
+      };
+      writeFileSync(file, JSON.stringify(receipt));
+      const db = new SqliteAdapter(join(home, 'archon.db'));
+      const run = () =>
+        spawnSync(process.execPath, [CLI_ENTRY, 'isolation', 'cleanup'], {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            ARCHON_HOME: home,
+            DATABASE_URL: '',
+            ARCHON_TELEMETRY_DISABLED: '1',
+          },
+        });
+      try {
+        await db.query(
+          "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('cb', 'fixture', $1)",
+          [workspace]
+        );
+        await db.query(
+          `INSERT INTO remote_agent_isolation_environments
+        (id, codebase_id, workflow_type, workflow_id, provider, working_path, branch_name, status, created_by_platform, created_at)
+        VALUES ('env', 'cb', 'thread', 'fixture', 'worktree', $1, 'fixture', 'active', 'slack', datetime('now', '-30 days'))`,
+          [workspace]
+        );
+        const registered = run();
+        expect(registered.status).toBe(0);
+        expect(registered.stdout).toContain('No stale environments found.');
+        expect(registered.stdout).not.toContain('not registered');
+        expect(registered.stdout).not.toContain('Reconciled');
+        expect(existsSync(marker)).toBe(false);
+        receipt.descriptor.id = 'matrix-chat';
+        writeFileSync(file, JSON.stringify(receipt));
+        await db.query(
+          "UPDATE remote_agent_isolation_environments SET created_by_platform = 'matrix-chat' WHERE id = 'env'",
+          []
+        );
+        const installed = run();
+        expect(installed.status).toBe(0);
+        expect(installed.stdout).toContain('No stale environments found.');
+        expect(installed.stdout).not.toContain('not registered');
+        await import('node:fs/promises').then(fs => fs.unlink(file));
+        await removeTempTree(workspace);
+        const removed = run();
+        expect(removed.status).toBe(0);
+        expect(removed.stdout).toContain("platform 'matrix-chat' is not registered");
+        expect(removed.stdout).not.toContain('Reconciled');
+        expect(
+          (
+            await db.query<{ status: string }>(
+              "SELECT status FROM remote_agent_isolation_environments WHERE id = 'env'",
+              []
+            )
+          ).rows[0]?.status
+        ).toBe('active');
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        await db.close();
+        await removeTempTree(root);
+      }
+    },
+    testTimeout(60_000)
+  );
 });

@@ -2,6 +2,7 @@
  * GitHub platform adapter using Octokit REST API and Webhooks
  * Handles issue and PR comments with @mention detection
  */
+import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
 import { verifyGitHubWebhookSignature } from './webhook-signature';
@@ -509,7 +510,7 @@ export class GitHubAdapter implements IPlatformAdapter {
    * Get platform type
    */
   getPlatformType(): string {
-    return 'github';
+    return githubPolicy.id;
   }
 
   /**
