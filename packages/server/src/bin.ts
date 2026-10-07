@@ -9,7 +9,8 @@ export async function runServerEntry(
     import('./index')
 ): Promise<void> {
   const options = parseServerLaunchArgv(argv);
-  if (!env.ARCHON_CLI_COMMAND) throw new Error(SERVER_LAUNCH_REQUIRED);
+  const cliCommand = env.ARCHON_CLI_COMMAND;
+  if (!cliCommand) throw new Error(SERVER_LAUNCH_REQUIRED);
   if (options.cliVersion !== BUNDLED_VERSION) {
     throw new Error(
       `archon-server version ${BUNDLED_VERSION} does not match CLI version ${options.cliVersion}. ` +
@@ -17,6 +18,8 @@ export async function runServerEntry(
     );
   }
   const { startServer } = await loadServer();
+  // Application env loading must not replace the launcher-owned CLI command.
+  env.ARCHON_CLI_COMMAND = cliCommand;
   await startServer({ port: options.port, webDistPath: options.webDistPath });
 }
 

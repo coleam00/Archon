@@ -17,6 +17,19 @@ test('matching launcher starts the server with parsed overrides', async () => {
   expect(startServer).toHaveBeenCalledWith({ port: 8080, webDistPath: '/web dist' });
 });
 
+test('application env loading cannot replace the validated launcher command', async () => {
+  const launchEnv = { ARCHON_CLI_COMMAND: '["/installed/archon"]' };
+  const command = launchEnv.ARCHON_CLI_COMMAND;
+  const startServer = mock(async () => {
+    expect(launchEnv.ARCHON_CLI_COMMAND).toBe(command);
+  });
+  await runServerEntry(['--cli-version', BUNDLED_VERSION], launchEnv, async () => {
+    launchEnv.ARCHON_CLI_COMMAND = '["/wrong/archon-server"]';
+    return { startServer };
+  });
+  expect(startServer).toHaveBeenCalledTimes(1);
+});
+
 test('mismatch refuses before importing application code and names both versions', async () => {
   const loadServer = mock(async () => ({ startServer: async () => {} }));
   await expect(runServerEntry(['--cli-version', '0.0.0'], env, loadServer)).rejects.toThrow(
