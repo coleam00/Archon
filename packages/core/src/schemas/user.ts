@@ -2,16 +2,13 @@
  * Zod schemas for user and user identity row types.
  */
 import { z } from '@hono/zod-openapi';
+import { identityPlatformSchema } from '@archon/chat-contract';
 
 // ---------------------------------------------------------------------------
 // IdentityPlatform
 // ---------------------------------------------------------------------------
 
-export const identityPlatformSchema = z
-  .string()
-  .min(1)
-  .max(32)
-  .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
+export { identityPlatformSchema } from '@archon/chat-contract';
 
 export type IdentityPlatform = z.infer<typeof identityPlatformSchema>;
 

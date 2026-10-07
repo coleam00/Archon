@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import type { IAgentProvider } from '../agent-provider';
 import type { ProviderStopReason } from '../result';
-import { ProviderRpc, type ProviderPluginIO } from './rpc';
+import { PluginRpc, type PluginIO } from './rpc';
 import {
   acpStopReason,
   cancelNotificationSchema,
@@ -17,7 +17,7 @@ import {
 
 export async function serveProvider(
   options: { descriptor: ProviderPluginDescriptor; create: () => IAgentProvider },
-  io: ProviderPluginIO = {
+  io: PluginIO = {
     readable: Readable.toWeb(process.stdin),
     writable: Writable.toWeb(process.stdout),
   }
@@ -26,8 +26,8 @@ export async function serveProvider(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
   const descriptor = providerPluginDescriptorSchema.parse(options.descriptor);
-  const rpc = new ProviderRpc(io);
-  rpc.provider = descriptor.id;
+  const rpc = new PluginRpc(io);
+  rpc.plugin = descriptor.id;
   const connectionAbort = new AbortController();
   const sessions = new Map<
     string,
