@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 import { validationSourceConfigSchema, workflowValidationConfig } from './validation-config';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -90,12 +90,18 @@ async function validateCorpus(cwd: string): Promise<{ findings: Finding[]; files
   return { findings, files };
 }
 
-test('repository workflows have no errors or unsafe shell output references', async () => {
-  const { findings, files } = await validateCorpus(repo);
-  expect(files.length).toBeGreaterThan(0);
-  expect(files.some(file => file.startsWith('sdlc/'))).toBe(true);
-  expect(findings).toEqual([]);
-});
+// Expands every repository workflow's includes; the SDLC pack's nested compositions
+// make this the slowest corpus case.
+test(
+  'repository workflows have no errors or unsafe shell output references',
+  async () => {
+    const { findings, files } = await validateCorpus(repo);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some(file => file.startsWith('sdlc/'))).toBe(true);
+    expect(findings).toEqual([]);
+  },
+  testTimeout(30_000)
+);
 
 test('corpus inventory excludes fixtures and identifies SDLC sources with either path separator', () => {
   const paths = [
