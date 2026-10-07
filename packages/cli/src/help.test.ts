@@ -225,7 +225,7 @@ Commands:
   serve                      Start the web UI server (binary installs download it on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
   plugin install <owner/repo[/path][@tag]>
-                             Install a plugin from GitHub (default: forge plugins the latest release, workflow packs the default branch)
+                             Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
   plugin update <id>[@tag]   Reinstall an installed plugin at a tag, or its latest release or default branch
   plugin remove <id>         Delete the files an installed plugin wrote
   plugin copy <id>           Copy an installed workflow pack into this project's .archon/workflows/

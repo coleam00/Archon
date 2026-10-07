@@ -231,6 +231,45 @@ function createMockStore(): MockWorkflowStore {
   const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(async _data => {});
   return {
     setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
+    admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
+      throw new Error('Unexpected admitResourceStart');
+    }),
+    drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
+      throw new Error('Unexpected drainResourceStarts');
+    }),
+    acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
+      throw new Error('Unexpected acceptStartReceipt');
+    }),
+    getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(() => {
+      throw new Error('Unexpected getStartReceipt');
+    }),
+    listStartReceipts: mock<IWorkflowStore['listStartReceipts']>(() => {
+      throw new Error('Unexpected listStartReceipts');
+    }),
+    listPendingStartBindings: mock<IWorkflowStore['listPendingStartBindings']>(() => {
+      throw new Error('Unexpected listPendingStartBindings');
+    }),
+    getResourceStartRequest: mock<IWorkflowStore['getResourceStartRequest']>(() => {
+      throw new Error('Unexpected getResourceStartRequest');
+    }),
+    listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(() => {
+      throw new Error('Unexpected listQueuedResourceStartsForHost');
+    }),
+    withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(() => {
+      throw new Error('Unexpected withdrawQueuedResourceStart');
+    }),
+    claimStartBindingPreparation: mock<IWorkflowStore['claimStartBindingPreparation']>(() => {
+      throw new Error('Unexpected claimStartBindingPreparation');
+    }),
+    completeStartBindingPreparation: mock<IWorkflowStore['completeStartBindingPreparation']>(() => {
+      throw new Error('Unexpected completeStartBindingPreparation');
+    }),
+    failStartBindingPreparation: mock<IWorkflowStore['failStartBindingPreparation']>(() => {
+      throw new Error('Unexpected failStartBindingPreparation');
+    }),
+    resetStartBindingPreparation: mock<IWorkflowStore['resetStartBindingPreparation']>(() => {
+      throw new Error('Unexpected resetStartBindingPreparation');
+    }),
     listDueWorkflowContinuations: mock<IWorkflowStore['listDueWorkflowContinuations']>(() => {
       throw new Error('Unexpected listDueWorkflowContinuations');
     }),
@@ -14516,11 +14555,17 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       if (calls.length) raised?.();
       return true;
     });
+    let reachedWork: (() => void) | undefined;
+    const workOpen = new Promise<void>(resolve => {
+      reachedWork = resolve;
+    });
     mockSendQueryDag.mockImplementationOnce(async function* (_prompt, _cwd, _session, options) {
       signal = options?.abortSignal;
       yield taskType
         ? { type: 'subtask', taskId: 'live', status: 'started', taskType, description: 'bun test' }
         : { type: 'tool_call', toolCallId: 'live', name: 'Bash', title: 'bun test' };
+      // Resumed only once the executor has consumed the open-work event.
+      reachedWork?.();
       await completion;
       yield taskType
         ? { type: 'subtask', taskId: 'live', status: 'completed' }
@@ -14582,7 +14627,9 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
-          thresholdMs === 0 ? new Promise(resolve => setTimeout(resolve, 80)) : publication,
+          thresholdMs === 0
+            ? workOpen.then(() => new Promise(resolve => setTimeout(resolve, 80)))
+            : publication,
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(() => reject(new Error('Tool attention was never published')), 1000);
           }),
@@ -14611,9 +14658,10 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
           { nodeId: 'implement', provider, name: taskType ?? 'Bash', title: 'bun test' },
         ]);
     } finally {
+      // Settle the run even when an assertion failed, so it cannot consume a later test's mock.
       complete?.();
+      await execution;
     }
-    await execution;
     if (thresholdMs === 0) expect(store.setToolCallAttention).not.toHaveBeenCalled();
     else expect(store.setToolCallAttention.mock.calls.at(-1)?.[2]).toEqual([]);
     expect(signal?.aborted).toBe(false);

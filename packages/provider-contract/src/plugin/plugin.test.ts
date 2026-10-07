@@ -465,3 +465,30 @@ test('aborting a credential check fails only that check and leaves other turns r
     }
   );
 });
+
+test('optional undefined config fields are omitted before wire validation', async () => {
+  await withProvider(fixtureProvider(), async client => {
+    expect(
+      await collect(
+        client.sendQuery('turn', '/workspace', undefined, {
+          nodeConfig: { skills: undefined, systemPrompt: undefined },
+          assistantConfig: { model: undefined, nested: { unset: undefined, enabled: true } },
+        })
+      )
+    ).toEqual(chunks);
+  });
+});
+
+test('config normalization still refuses values that cannot cross the JSON wire', async () => {
+  await withProvider(fixtureProvider(), async client => {
+    for (const value of [new Date(), () => undefined]) {
+      await expect(
+        collect(
+          client.sendQuery('turn', '/workspace', undefined, {
+            assistantConfig: { invalid: value },
+          })
+        )
+      ).rejects.toThrow();
+    }
+  });
+});

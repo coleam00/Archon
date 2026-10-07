@@ -37,6 +37,22 @@ function finish(turn: Turn, error?: unknown): void {
   else turn.controller.close();
 }
 
+function omitUndefinedFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(omitUndefinedFields);
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  ) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, field]) => field !== undefined)
+        .map(([key, field]) => [key, omitUndefinedFields(field)])
+    );
+  }
+  return value;
+}
+
 export async function connectProvider(io: ProviderPluginIO): Promise<ConnectedProvider> {
   const rpc = new ProviderRpc(io);
   const turns = new Map<string, Turn>();
@@ -123,9 +139,12 @@ export async function connectProvider(io: ProviderPluginIO): Promise<ConnectedPr
         throw rpc.error('nativeTools handlers cannot cross the provider wire');
       if (options.abortSignal?.aborted) return;
       const serializable = Object.fromEntries(
-        Object.entries(options).filter(
-          ([key]) => !HOST_ONLY_REQUEST_KEYS.some(hostKey => hostKey === key)
-        )
+        Object.entries(options)
+          .filter(([key]) => !HOST_ONLY_REQUEST_KEYS.some(hostKey => hostKey === key))
+          .map(([key, value]) => [
+            key,
+            key === 'nodeConfig' || key === 'assistantConfig' ? omitUndefinedFields(value) : value,
+          ])
       );
       const request = providerSessionRequestSchema.parse({
         ...serializable,

@@ -18,6 +18,7 @@ export { CREDENTIAL_KINDS } from './types';
 
 // Registry
 export {
+  assertProviderRegistrationAllowed,
   registerProvider,
   getAgentProvider,
   getRegistration,
