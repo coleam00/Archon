@@ -1,0 +1,275 @@
+name: archon-lifecycle
+description: >-
+  Take one issue through shared ship, runtime and optional independent holdout verification,
+  optional discovery publication and a shared merge queue. All agents are visible
+  Archon command nodes. Scheduling belongs to the caller.
+model: medium
+# Unattended-class, so a schedule or trigger can start it. The two blocks that can
+# pause for a human (merge approval, discovery publication) run as child workflows
+# below: a child keeps its own interactive posture and gate, approved by the
+# child's run id, while this run waits on it. In auto modes nothing pauses.
+inputs:
+  target:
+    default: ''
+    description: >-
+      One issue or work order. Empty selects the oldest open issue in the
+      origin repository that has no configured state label, no open PR
+      claiming it (Closes/Fixes/Resolves/Relates to #N), and no open
+      `Depends on: #n`. Automatic intake requires all state_labels; an
+      explicit target works without them.
+  publish:
+    default: 'false'
+    description: >-
+      Forwarded to triage. "true" writes the proposed state label to the issue,
+      which is what marks it as touched for backlog intake.
+  state_labels:
+    default: '{}'
+    description: >-
+      Caller-owned JSON mapping of workflow states to GitHub labels, forwarded
+      through ship. Automatic intake requires every state to be mapped and
+      treats only mapped labels as previously touched.
+  scenario:
+    required: true
+    description: Absolute path to a project runtime scenario JSON.
+  holdout:
+    default: ''
+    description: >-
+      Optional absolute path to an independent runtime scenario JSON, verified
+      after the scenario passes. Empty skips the holdout pass; qualification then
+      rests on the scenario alone.
+  merge_mode:
+    default: approve
+    description: preview, approve, or auto for the shared merge workflow.
+  merge_method:
+    default: ''
+    description: 'Required merge strategy: merge, squash, or rebase.'
+  required_checks:
+    default: ''
+    description: >-
+      Forwarded to the merge queue: "none" or comma-separated check names when
+      GitHub cannot report the base branch's required checks. Empty reads them
+      from GitHub.
+  publish_holds:
+    default: 'false'
+    description: >-
+      Forwarded to the merge queue. In approve or auto mode, "true" publishes
+      hold comments; preview remains read-only and merging remains separately gated.
+  discovery_publication:
+    default: preview
+    description: preview, approve, or auto for discovered adjacent work.
+  validation_scope:
+    default: ''
+    description: >-
+      Optional package, directory, or named-check scope forwarded through ship
+      and any repair delivery. Empty keeps the project's full applicable gate.
+  validation_context:
+    default: ''
+    description: >-
+      Optional nonsecret external-state identity forwarded through ship and
+      any repair delivery. Changing it requires fresh validation.
+  deploy:
+    default: ''
+    description: >-
+      Optional trusted project deployment command, forwarded to archon-deploy
+      after a successful merge. Empty skips deployment.
+  health:
+    default: ''
+    description: Trusted project health command for archon-deploy; required with deploy.
+  identity:
+    default: ''
+    description: Optional command printing the deployed revision, for archon-deploy.
+returns: merge
+nodes:
+  # Backlog intake is deterministic gh reads; judgment about the issue belongs
+  # to triage. An explicit target passes through unchanged.
+  - id: intake
+    script: select-target
+    runtime: uv
+    mutates_checkout: false
+    with:
+      target: "$INPUTS.target"
+      state_labels: "$INPUTS.state_labels"
+    output_format:
+      type: object
+      properties:
+        target: { type: string }
+        found: { type: boolean }
+        selected: { type: boolean }
+        reason: { type: string }
+        waiting_on: { type: array, items: { type: integer } }
+      required: [target, found, selected, reason, waiting_on]
+
+  - id: ship
+    include: archon-ship
+    depends_on: [intake]
+    when: "$intake.output.found == true"
+    with:
+      target: "$intake.output.target"
+      publish: "$INPUTS.publish"
+      state_labels: "$INPUTS.state_labels"
+      validation_scope: "$INPUTS.validation_scope"
+      validation_context: "$INPUTS.validation_context"
+
+  - id: candidate
+    command: bind-delivered-pr
+    context: fresh
+    mutates_checkout: false
+    depends_on: [ship]
+    with:
+      delivery: "$ship.output"
+    output_format:
+      type: object
+      properties:
+        delivered: { type: boolean }
+        prs: { type: array, items: { type: string } }
+        head: { type: string }
+      required: [delivered, prs, head]
+
+  - id: runtime
+    include: archon-verify-runtime
+    depends_on: [candidate]
+    when: "$candidate.output.delivered == true"
+    with:
+      scenario: "$INPUTS.scenario"
+
+  - id: holdout
+    include: archon-verify-runtime
+    depends_on: [runtime]
+    when: "$runtime.output.verified == true && $INPUTS.holdout != ''"
+    with:
+      scenario: "$INPUTS.holdout"
+
+  - id: qualify
+    command: qualify-runtime
+    context: fresh
+    mutates_checkout: false
+    depends_on: [candidate, runtime, holdout]
+    trigger_rule: none_failed_min_one_success
+    with:
+      candidate: "$candidate.output"
+      runtime: { from: "$runtime.output", if_skipped: null }
+      holdout: { from: "$holdout.output", if_skipped: null }
+      holdout_scenario: "$INPUTS.holdout"
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        repair: { type: boolean }
+        evidence: { type: string }
+      required: [ready, repair, evidence]
+
+  - id: repair
+    include: archon-deliver
+    depends_on: [qualify]
+    when: "$qualify.output.repair == true"
+    with:
+      validation_scope: "$INPUTS.validation_scope"
+      validation_context: "$INPUTS.validation_context"
+      work: >-
+        Repair the existing PR on this same branch using the concrete runtime
+        findings in $qualify.output.evidence. Preserve the original work order in
+        $ARTIFACTS_DIR/triage.md and the runtime scenarios. Do not switch branches
+        or create another PR. Independently review every correction.
+
+  - id: repaired-candidate
+    command: bind-delivered-pr
+    context: fresh
+    mutates_checkout: false
+    depends_on: [repair]
+    when: "$qualify.output.repair == true"
+    with:
+      delivery: "$repair.output"
+    output_format:
+      type: object
+      properties:
+        delivered: { type: boolean }
+        prs: { type: array, items: { type: string } }
+        head: { type: string }
+      required: [delivered, prs, head]
+
+  - id: runtime-retry
+    include: archon-verify-runtime
+    depends_on: [repaired-candidate]
+    when: "$repaired-candidate.output.delivered == true"
+    with:
+      scenario: "$INPUTS.scenario"
+
+  - id: holdout-retry
+    include: archon-verify-runtime
+    depends_on: [runtime-retry]
+    when: "$runtime-retry.output.verified == true && $INPUTS.holdout != ''"
+    with:
+      scenario: "$INPUTS.holdout"
+
+  - id: qualify-retry
+    command: qualify-runtime
+    context: fresh
+    mutates_checkout: false
+    depends_on: [repaired-candidate, runtime-retry, holdout-retry]
+    trigger_rule: none_failed_min_one_success
+    when: "$qualify.output.repair == true"
+    with:
+      candidate: "$repaired-candidate.output"
+      runtime: { from: "$runtime-retry.output", if_skipped: null }
+      holdout: { from: "$holdout-retry.output", if_skipped: null }
+      holdout_scenario: "$INPUTS.holdout"
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        repair: { type: boolean }
+        evidence: { type: string }
+      required: [ready, repair, evidence]
+
+  - id: selected
+    script: select-qualified
+    runtime: uv
+    depends_on: [candidate, qualify, qualify-retry]
+    trigger_rule: none_failed_min_one_success
+    with:
+      candidate: "$candidate.output"
+      initial: "$qualify.output"
+      repaired: { from: "$repaired-candidate.output", if_skipped: null }
+      retried: { from: "$qualify-retry.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        prs: { type: array, items: { type: string } }
+        evidence: { type: string }
+      required: [ready, prs, evidence]
+
+  - id: discoveries
+    workflow: archon-discoveries
+    depends_on: [selected]
+    when: "$selected.output.ready == true"
+    with:
+      discovery_artifact: "$ARTIFACTS_DIR/discoveries.json"
+      publication: "$INPUTS.discovery_publication"
+
+  # A skipped discovery run (no qualified candidate) must not skip the merge entry
+  # under the default all-success join; none_failed lets it through, while a FAILED
+  # discovery run still blocks the merge.
+  - id: merge
+    workflow: archon-merge-queue
+    depends_on: [selected, discoveries]
+    trigger_rule: none_failed_min_one_success
+    when: "$selected.output.ready == true"
+    with:
+      prs: "$selected.output.prs"
+      mode: "$INPUTS.merge_mode"
+      merge_method: "$INPUTS.merge_method"
+      required_checks: "$INPUTS.required_checks"
+      publish_holds: "$INPUTS.publish_holds"
+      evidence: "$selected.output.evidence"
+
+  # Merging is not shipping. With deployment inputs set, a confirmed merge rolls
+  # the default branch onto the running service and reads the revision back.
+  - id: deploy
+    include: archon-deploy
+    depends_on: [merge]
+    when: "$merge.output.merged == true && $INPUTS.deploy != ''"
+    with:
+      deploy: "$INPUTS.deploy"
+      health: "$INPUTS.health"
+      identity: "$INPUTS.identity"

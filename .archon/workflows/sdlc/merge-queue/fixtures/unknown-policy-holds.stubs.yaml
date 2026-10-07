@@ -1,0 +1,49 @@
+# Dry-run fixture: an undeclared policy GitHub would not report reaches the agent
+# and the gate as unknown; the gate holds and no merge is attempted.
+ci-policy:
+  requirement: "unknown"
+  source: ""
+  checks: []
+  checks_state: "unknown"
+  results: []
+  reason: "GitHub did not report the required checks for example/app@main: rulesets (HTTP 403). Declare them with the required_checks input"
+assess:
+  summary: "stub: review and validation verified"
+  eligible: true
+  method: "squash"
+  validation_verified: true
+  review_verified: true
+  plan_digest: "fixture"
+  holds: []
+publish-holds:
+  published: false
+  updated: []
+  summary: "stub: nothing to publish"
+gate:
+  ready: false
+  summary: "required CI policy is unknown: GitHub did not report the required checks"
+  method: "squash"
+  plan_digest: "fixture"
+refresh:
+  authorized: false
+  repository: "example/app"
+  number: 7
+  head_sha: "0123456789abcdef0123456789abcdef01234567"
+  method: "squash"
+  summary: "stub: gate not ready"
+execute:
+  done: true
+  merged: false
+  urls: []
+  queued: []
+  prior_base_sha: ""
+  summary: "merge is not authorized"
+fixture:
+  expect: completed
+  reached: [ci-policy, assess, gate]
+  resolved-text-contains:
+    assess: 'Declare them with the required_checks input'
+  inputs:
+    prs: '["https://github.com/example/app/pull/7"]'
+    mode: "approve"
+    merge_method: "squash"

@@ -1,0 +1,7 @@
+# Unknown run: the real resolver must refuse lookup failure. No agents execute.
+fixture:
+  expect: failed
+  fail-node: resolve-input
+  inputs:
+    run_id: "01977e2a-0000-7000-8000-000000000000"
+exec-code: true

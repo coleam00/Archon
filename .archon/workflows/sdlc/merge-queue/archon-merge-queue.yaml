@@ -1,0 +1,188 @@
+name: archon-merge-queue
+description: >-
+  Assess an explicit bounded list of GitHub PRs, then merge eligible changes
+  sequentially using gh and GitHub branch protection. A script reads the
+  required-check policy and results; agents judge review and validation
+  evidence. No forge engine extension is required.
+model: medium
+interactive: true
+mutates_checkout: false
+inputs:
+  prs:
+    required: true
+    description: JSON array of 1-5 explicit PR URLs in this repository.
+  mode:
+    default: approve
+    description: preview only assesses; approve waits for a human; auto authorizes this batch.
+  evidence:
+    default: ''
+    description: Optional runtime/review report paths or structured evidence for this batch.
+  merge_method:
+    default: ''
+    description: 'Requested merge strategy: merge, squash, or rebase. Ambiguous or conflicting intent holds.'
+  required_checks:
+    default: ''
+    description: >-
+      Required checks when GitHub cannot report them (rulesets and protection
+      details return 403 on plans without those features): "none", or a
+      comma-separated list of check names. Empty reads the policy from GitHub
+      and holds when GitHub does not answer. Checks GitHub enforces are always
+      required.
+  publish_holds:
+    default: 'false'
+    description: >-
+      In approve or auto mode, "true" publishes evidence-backed hold comments.
+      Preview is always read-only. This does not authorize merging.
+returns: merge
+nodes:
+  - id: ci-policy
+    script: ci-policy
+    runtime: bun
+    mutates_checkout: false
+    with:
+      prs: "$INPUTS.prs"
+      required_checks: "$INPUTS.required_checks"
+    output_format:
+      type: object
+      properties:
+        requirement: { type: string, enum: [none, required, unknown] }
+        source: { type: string, enum: [declared, github, ''] }
+        checks: { type: array, items: { type: string } }
+        checks_state: { type: string, enum: [passing, failing, pending, missing, not_applicable, unknown] }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              pr: { type: string }
+              head_sha: { type: string }
+              check: { type: string }
+              state: { type: string, enum: [passing, failing, pending, missing] }
+            required: [pr, head_sha, check, state]
+        reason: { type: string }
+      required: [requirement, source, checks, checks_state, results, reason]
+
+  - id: assess
+    command: assess-merge-queue
+    context: fresh
+    depends_on: [ci-policy]
+    with:
+      ci_policy: "$ci-policy.output"
+      prs: "$INPUTS.prs"
+      evidence: "$INPUTS.evidence"
+      merge_method: "$INPUTS.merge_method"
+      mode: "$INPUTS.mode"
+      publish_holds: "$INPUTS.publish_holds"
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+        eligible: { type: boolean }
+        method: { type: string, enum: [merge, squash, rebase, ''] }
+        validation_verified: { type: boolean }
+        review_verified: { type: boolean }
+        plan_digest: { type: string }
+        holds:
+          type: array
+          items:
+            type: object
+            properties:
+              pr_url: { type: string }
+              head_sha: { type: string }
+              action: { type: string, enum: [hold, clear] }
+              reasons: { type: array, items: { type: string } }
+            required: [pr_url, head_sha, action, reasons]
+      required: [summary, eligible, method, validation_verified, review_verified, plan_digest, holds]
+
+  - id: publish-holds
+    script: publish-holds
+    runtime: bun
+    depends_on: [assess]
+    with:
+      prs: "$INPUTS.prs"
+      holds: "$assess.output.holds"
+      mode: "$INPUTS.mode"
+      publish_holds: "$INPUTS.publish_holds"
+    output_format:
+      type: object
+      properties:
+        published: { type: boolean }
+        updated: { type: array, items: { type: string } }
+        summary: { type: string }
+      required: [published, updated, summary]
+
+  - id: gate
+    script: merge-action
+    runtime: bun
+    depends_on: [ci-policy, assess, publish-holds]
+    with:
+      action: gate
+      assessment: "$assess.output"
+      ci_policy: "$ci-policy.output"
+      merge_method: "$INPUTS.merge_method"
+    output_format: &gate-result
+      type: object
+      properties:
+        ready: { type: boolean }
+        summary: { type: string }
+        method: { type: string, enum: [merge, squash, rebase, ''] }
+        plan_digest: { type: string }
+      required: [ready, summary, method, plan_digest]
+
+  - id: approval
+    depends_on: [gate]
+    when: "$gate.output.ready == true && $INPUTS.mode == 'approve'"
+    approval:
+      message: >-
+        Approve the PRs, pinned heads, evidence and $gate.output.method method in
+        $ARTIFACTS_DIR/merge-plan.json (digest $gate.output.plan_digest)? $gate.output.summary
+      decisions:
+        - id: approve
+          label: Merge eligible PRs
+        - id: hold
+          label: Hold batch
+
+  - id: merge
+    depends_on: [gate, approval]
+    trigger_rule: none_failed_min_one_success
+    loop_group:
+      until_bash: test $execute.output.done = true
+      max_iterations: 5
+      fresh_context: true
+      nodes:
+        - id: refresh
+          command: merge-approved-prs
+          context: fresh
+          output_format:
+            type: object
+            properties:
+              authorized: { type: boolean }
+              repository: { type: string }
+              number: { type: integer }
+              head_sha: { type: string }
+              method: { type: string, enum: [merge, squash, rebase, ''] }
+              summary: { type: string }
+            required: [authorized, repository, number, head_sha, method, summary]
+
+        - id: execute
+          script: merge-action
+          runtime: bun
+          depends_on: [refresh]
+          with:
+            action: execute
+            gate: "$gate.output"
+            mode: "$INPUTS.mode"
+            approval: { from: "$approval.output", if_skipped: null }
+            request: "$refresh.output"
+            previous: "$LOOP_PREV.execute.output"
+            merge_method: "$INPUTS.merge_method"
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+              merged: { type: boolean }
+              urls: { type: array, items: { type: string } }
+              queued: { type: array, items: { type: string } }
+              prior_base_sha: { type: string }
+              summary: { type: string }
+            required: [done, merged, urls, queued, prior_base_sha, summary]

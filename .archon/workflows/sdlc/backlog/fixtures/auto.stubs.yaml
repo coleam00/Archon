@@ -1,0 +1,23 @@
+# Dry-run fixture: auto publication. The approval node is skipped by its
+# condition and the publisher runs on the caller's explicit authorization.
+read-prd:
+  path: "PRD.md"
+  characters: 2400
+  max_issues: 12
+slice:
+  count: 2
+  summary: "stub: two tickets"
+check:
+  count: 2
+  keys: ["skeleton", "create"]
+publish:
+  published: true
+  created: ["https://github.com/example/app/issues/1", "https://github.com/example/app/issues/2"]
+  existing: []
+  summary: "stub: both created"
+fixture:
+  expect: completed
+  reached: [publish]
+  inputs:
+    prd: "PRD.md"
+    publication: "auto"

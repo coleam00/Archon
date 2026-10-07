@@ -1,0 +1,77 @@
+# Package-test scenario: agents and gh reads are simulated; scripts and git execute for real.
+revalidate:
+  entries:
+    - item_index: 0
+      verdict: disproved
+      evidence_refs: []
+      note: "stub: no longer reproduces"
+    - item_index: 1
+      verdict: supported
+      evidence_refs: [{ path: "AGENTS.md", line: 1 }]
+      note: "stub: still applies"
+    - item_index: 2
+      verdict: supported
+      evidence_refs: [{ path: "AGENTS.md", line: 1 }]
+      note: "stub: still applies"
+    - item_index: 3
+      verdict: supported
+      evidence_refs: [{ path: "AGENTS.md", line: 1 }]
+      note: "stub: still applies"
+search-existing:
+  entries:
+    - item_index: 0
+      forge_checked: false
+      matches: []
+    - item_index: 1
+      forge_checked: true
+      matches:
+        - number: 101
+          url: "https://github.com/example/repo/issues/101"
+          title: "Existing tracked item, same defect"
+          similarity_note: "stub: same underlying problem"
+    - item_index: 2
+      forge_checked: true
+      matches:
+        - number: 202
+          url: "https://github.com/example/repo/issues/202"
+          title: "Existing tracked item, related defect"
+          similarity_note: "stub: related but not identical"
+    - item_index: 3
+      forge_checked: true
+      matches: []
+classify:
+  entries:
+    - item_index: 0
+      classification: stale
+      target_item: null
+      public_title: "Example source finding"
+      public_summary: "A fixture proposal for reviewer inspection."
+      disclosure_safe: true
+      rationale: "stub: the model judged the claim disproved"
+    - item_index: 1
+      classification: duplicate
+      target_item: { number: 101, url: "https://github.com/example/repo/issues/101" }
+      public_title: "Example source finding"
+      public_summary: "A fixture proposal for reviewer inspection."
+      disclosure_safe: true
+      rationale: "stub: same defect as #101"
+    - item_index: 2
+      classification: update-existing
+      target_item: { number: 202, url: "https://github.com/example/repo/issues/202" }
+      public_title: "Example source finding"
+      public_summary: "A fixture proposal for reviewer inspection."
+      disclosure_safe: true
+      rationale: "stub: related to #202, should update it instead of filing new"
+    - item_index: 3
+      classification: new
+      target_item: null
+      public_title: "Example source finding"
+      public_summary: "A fixture proposal for reviewer inspection."
+      disclosure_safe: true
+      rationale: "stub: no existing coverage found"
+fixture:
+  expect: completed
+  reached: [resolve-input, revalidate, check-evidence, search-existing, classify, render]
+  inputs:
+    discovery_artifact: ".archon/workflows/sdlc/discoveries/fixtures/data/four-classes.json"
+exec-code: true

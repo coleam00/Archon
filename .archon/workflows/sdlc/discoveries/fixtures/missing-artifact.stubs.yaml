@@ -1,0 +1,7 @@
+# Agent outputs are simulated; script nodes execute through the fixture runner.
+fixture:
+  expect: failed
+  fail-node: resolve-input
+  inputs:
+    discovery_artifact: ".archon/workflows/sdlc/discoveries/fixtures/data/does-not-exist.json"
+exec-code: true

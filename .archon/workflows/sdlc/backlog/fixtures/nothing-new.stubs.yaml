@@ -1,0 +1,19 @@
+# Dry-run fixture: the document yields nothing the tracker does not already
+# carry. The check accepts the empty slice, nobody is asked to publish zero
+# tickets, the publisher is skipped, and the run completes.
+read-prd:
+  path: "PRD.md"
+  characters: 2400
+  max_issues: 12
+slice:
+  count: 0
+  summary: "stub: every ticket already exists"
+check:
+  count: 0
+  keys: []
+fixture:
+  expect: completed
+  reached: [check]
+  inputs:
+    prd: "PRD.md"
+    publication: "approve"

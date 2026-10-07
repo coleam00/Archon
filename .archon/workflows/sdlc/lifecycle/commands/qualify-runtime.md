@@ -1,0 +1,34 @@
+# Qualify runtime evidence
+
+Candidate: $INPUTS.candidate
+Runtime: $INPUTS.runtime
+Independent holdout: $INPUTS.holdout
+Configured holdout scenario: "$INPUTS.holdout_scenario"
+When the configured holdout scenario is empty, the caller chose no holdout: qualify
+on the runtime result alone and say so in the report. Otherwise a holdout was
+required, and a missing or skipped holdout result holds merging like any other
+missing evidence.
+Read the returned directory and report_path references for every result present, then
+read the referenced reports, assertions and target identity evidence in full.
+Require an actual verified=true result for each required scenario, independent fresh
+environments, and proof from each scenario's saved runtime metadata that the target
+ran the delivered candidate source revision. Existing adapters may provide
+`source_revision` or equivalent genuine runtime build/source provenance. The
+runtime result's `candidate` remains the
+opaque target-probe identity and need not equal a Git SHA.
+Re-read git HEAD and the PR head with gh; both must still equal the candidate head. Missing, inconclusive,
+stale or mismatched evidence holds merging. Write runtime-qualification.md under
+$ARTIFACTS_DIR with the PR, revision, result and report paths; return that path
+as evidence. Do not alter scenarios, reports or source code to make them pass.
+
+On an actual application failure at the unchanged PR head, record concrete repair
+findings, return ready=false and repair=true. Missing evidence, target mismatch,
+changed head, or infrastructure failure returns ready=false and repair=false.
+Success returns ready=true and repair=false. The graph owns one bounded repair
+through archon-deliver and fresh runtime (and, when configured, holdout) repeats. Never launch agents or
+another workflow from a tool. Use a unique qualification report path each time
+so the first failure evidence survives a retry.
+If ready, ensure discoveries.json is the review-produced consolidation. When it
+does not exist, consolidate the actual raw discovery sidecars into that file,
+preserving title/claim/evidence/relation/source attribution. Write [] only if no
+actual findings exist. Never replace an existing consolidation or discard findings.

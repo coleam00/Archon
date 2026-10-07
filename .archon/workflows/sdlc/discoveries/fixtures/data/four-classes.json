@@ -1,0 +1,30 @@
+[
+  {
+    "title": "Stale finding: fixture-only, not a real defect",
+    "claim": "This record exists only to exercise the stale path; the revalidate stub marks it no longer valid.",
+    "evidence": ["AGENTS.md:1"],
+    "relation": "adjacent",
+    "source_node": "review-code"
+  },
+  {
+    "title": "Duplicate finding: fixture-only, not a real defect",
+    "claim": "This record exists only to exercise the duplicate path; the search-existing stub names an existing match.",
+    "evidence": ["AGENTS.md:1"],
+    "relation": "scope_conflict",
+    "source_node": "review-errors"
+  },
+  {
+    "title": "Update-existing finding: fixture-only, not a real defect",
+    "claim": "This record exists only to exercise the update-existing path; the search-existing stub names a related match.",
+    "evidence": ["AGENTS.md:1"],
+    "relation": "adjacent",
+    "source_node": "review-tests"
+  },
+  {
+    "title": "New finding: fixture-only, not a real defect",
+    "claim": "This record exists only to exercise the new path; no match is named for it.",
+    "evidence": ["AGENTS.md:1"],
+    "relation": "adjacent",
+    "source_node": "review-docs"
+  }
+]

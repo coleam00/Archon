@@ -1,0 +1,19 @@
+# Dry-run fixture: the service never reports healthy after the deploy command
+# (run with --exec-code). resolve, deploy and health are stubbed; the read-back
+# script executes for real, sees health false, and exits non-zero — so the run
+# fails truthfully instead of completing with a quiet deployed=false.
+resolve:
+  revision: "0123456789abcdef0123456789abcdef01234567"
+  branch: "main"
+  deploy: "true"
+  health: "false"
+  identity: ""
+deploy: '{"ok":true}'
+health: '{"ok":false}'
+fixture:
+  expect: failed
+  fail-node: verify
+  inputs:
+    deploy: "true"
+    health: "false"
+exec-code: true

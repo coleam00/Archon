@@ -1,0 +1,21 @@
+# Dry-run fixture: the happy path. Fully stubbed — proves the wiring from the
+# resolved revision through deploy and health to the read-back verdict without
+# running a single project command.
+resolve:
+  revision: "0123456789abcdef0123456789abcdef01234567"
+  branch: "main"
+  deploy: "true"
+  health: "true"
+  identity: "echo 0123456789abcdef0123456789abcdef01234567"
+deploy: '{"ok":true}'
+health: '{"ok":true}'
+verify:
+  deployed: true
+  revision: "0123456789abcdef0123456789abcdef01234567"
+  observed: "0123456789abcdef0123456789abcdef01234567"
+  summary: "stub: main head deployed, healthy and reports its revision"
+fixture:
+  expect: completed
+  inputs:
+    deploy: "true"
+    health: "true"
