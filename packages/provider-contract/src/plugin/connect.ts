@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
   providerDiagnosticsSchema,
   providerModelListSchema,
@@ -13,6 +14,9 @@ import {
   diagnoseRequestSchema,
   listModelsRequestSchema,
   chunkNotificationSchema,
+  toolCallRequestSchema,
+  logNotificationSchema,
+  type ProviderLog,
   checkCredentialRequestSchema,
   resolveCredentialModelRequestSchema,
   HOST_ONLY_REQUEST_KEYS,
@@ -36,6 +40,7 @@ export interface ConnectedProvider extends IAgentProvider {
 
 interface Turn {
   controller: ReadableStreamDefaultController<ProviderChunk>;
+  tools: NonNullable<SendQueryOptions['nativeTools']>;
   settled: ProviderSettled | undefined;
   ended: boolean;
   cancelled: boolean;
@@ -63,9 +68,37 @@ function omitUndefinedFields(value: unknown): unknown {
   return value;
 }
 
-export async function connectProvider(io: PluginIO): Promise<ConnectedProvider> {
+export async function connectProvider(
+  io: PluginIO,
+  options: { onLog?: (record: ProviderLog) => void } = {}
+): Promise<ConnectedProvider> {
   const rpc = new PluginRpc(io);
   const turns = new Map<string, Turn>();
+  rpc.handle('_archon/tool_call', async raw => {
+    const { sessionId, name, input } = rpc.parse(toolCallRequestSchema, raw);
+    const turn = turns.get(sessionId);
+    if (!turn || turn.ended || turn.cancelled || turn.settled)
+      throw rpc.error('tool call names an inactive session');
+    const tool = turn.tools.find(tool => tool.name === name);
+    if (!tool) throw rpc.error('tool call names an unknown tool');
+    const shape: Record<string, z.ZodType<string | boolean | undefined>> = {};
+    for (const [key, property] of Object.entries(tool.inputSchema.properties)) {
+      const field =
+        property.kind === 'string'
+          ? z.string()
+          : property.kind === 'boolean'
+            ? z.boolean()
+            : z.enum(property.values);
+      shape[key] = tool.inputSchema.required.includes(key) ? field : field.optional();
+    }
+    const parsed = z.strictObject(shape).safeParse(input);
+    if (!parsed.success) throw rpc.error('invalid tool input');
+    return { text: await tool.handler(parsed.data) };
+  });
+  rpc.on('_archon/log', raw => {
+    const record = rpc.parse(logNotificationSchema, raw);
+    options.onLog?.(record);
+  });
   rpc.on('_archon/chunk', raw => {
     const { sessionId, chunk } = rpc.parse(chunkNotificationSchema, raw);
     const turn = turns.get(sessionId);
@@ -162,12 +195,15 @@ export async function connectProvider(io: PluginIO): Promise<ConnectedProvider> 
       resumeSessionId?: string,
       options: SendQueryOptions = {}
     ): AsyncGenerator<ProviderChunk> {
-      if (options.nativeTools?.length)
-        throw rpc.error('nativeTools handlers cannot cross the provider wire');
       if (options.abortSignal?.aborted) return;
       const serializable = Object.fromEntries(
         Object.entries(options)
-          .filter(([key]) => !HOST_ONLY_REQUEST_KEYS.some(hostKey => hostKey === key))
+          .filter(
+            ([key]) =>
+              key !== 'nativeTools' &&
+              key !== 'env' &&
+              !HOST_ONLY_REQUEST_KEYS.some(hostKey => hostKey === key)
+          )
           .map(([key, value]) => [
             key,
             key === 'nodeConfig' || key === 'assistantConfig' ? omitUndefinedFields(value) : value,
@@ -175,6 +211,10 @@ export async function connectProvider(io: PluginIO): Promise<ConnectedProvider> 
       );
       const request = providerSessionRequestSchema.parse({
         ...serializable,
+        ...(options.nativeTools
+          ? { nativeTools: options.nativeTools.map(({ handler: _handler, ...spec }) => spec) }
+          : {}),
+        ...(options.execContext?.kind === 'container' && options.env ? { env: options.env } : {}),
         prompt,
         cwd,
         resumeSessionId,
@@ -196,6 +236,7 @@ export async function connectProvider(io: PluginIO): Promise<ConnectedProvider> 
         start(controller): void {
           turn = {
             controller,
+            tools: options.nativeTools ?? [],
             settled: undefined,
             ended: false,
             cancelled: false,

@@ -310,10 +310,6 @@ test('invalid provider initialize, ids, capabilities and vendors preserve the pr
       error: 'failed initialize',
     },
     {
-      descriptor: { ...descriptor, capabilities: { ...caps, nativeTools: true } },
-      error: 'failed initialize',
-    },
-    {
       descriptor: {
         ...descriptor,
         credentials: {

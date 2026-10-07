@@ -54,15 +54,19 @@ function startProcess(
   // One logger per process, not a module cache: a logger cached by an earlier caller
   // would outlive any test that replaces createLogger to observe these diagnostics.
   const log = createLogger('core.provider-process');
-  const env = buildProviderSubprocessEnv(options);
-  const secrets = collectCredentialValues(
-    env,
-    options.protectedEnvKeys,
-    Object.values(options.env ?? {}).filter(value => value.length >= 8)
-  );
+  const env = buildProviderSubprocessEnv(options.execContext?.kind === 'container' ? {} : options);
+  const secrets = [
+    ...collectCredentialValues(env, options.protectedEnvKeys),
+    ...collectCredentialValues(
+      options.env ?? {},
+      options.protectedEnvKeys,
+      Object.values(options.env ?? {}).filter(value => value.length >= 8)
+    ),
+  ];
   secrets.push(...secrets.map(value => JSON.stringify(value).slice(1, -1)));
   secrets.sort((a, b) => b.length - a.length);
   const redact = (text: string): string => redactCredentialValues(text, secrets);
+  const providerLog = createLogger(`provider.${descriptor.id}`);
   const child = spawn(argv[0], argv.slice(1), {
     detached: process.platform !== 'win32',
     windowsHide: true,
@@ -155,10 +159,19 @@ function startProcess(
   }
   return {
     async connect(): Promise<ConnectedProvider> {
-      const connection = await connectProvider({
-        readable: Readable.toWeb(child.stdout),
-        writable: Writable.toWeb(child.stdin),
-      });
+      const connection = await connectProvider(
+        {
+          readable: Readable.toWeb(child.stdout),
+          writable: Writable.toWeb(child.stdin),
+        },
+        {
+          onLog(record): void {
+            // Plugin text and arbitrary JSON can encode message excerpts or credentials.
+            // Only the validated severity crosses into the host's diagnostic log.
+            providerLog[record.level]({}, 'provider.plugin.log');
+          },
+        }
+      );
       if (!isDeepStrictEqual(connection.descriptor, descriptor)) {
         throw new Error(
           `Provider plugin ${descriptor.id} changed since install; run archon plugin update for this plugin`

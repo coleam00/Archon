@@ -33,7 +33,7 @@ async function closeOutput(): Promise<never> {
 await serveProvider(
   {
     descriptor,
-    create: (): IAgentProvider => ({
+    create: (log): IAgentProvider => ({
       getType: (): string => descriptor.id,
       getCapabilities: (): typeof descriptor.capabilities => descriptor.capabilities,
       async diagnose({ assistantConfig }): Promise<ProviderDiagnostics> {
@@ -122,6 +122,35 @@ await serveProvider(
           await Bun.sleep(30);
           process.stderr.write(`${secret.slice(6)} crash evidence\n`);
           process.exit(7);
+        }
+        if (mode === 'logs') {
+          await log({
+            level: 'warn',
+            msg: `provider.ready ${options?.env?.CONTAINER_TOKEN ?? ''}`,
+            bindings: {
+              token: options?.env?.CONTAINER_TOKEN ?? '',
+              hostToken: process.env.CONTAINER_TOKEN ?? '',
+              custom: options?.env?.CUSTOM_AUTH ?? '',
+              nested: { message: prompt, lines: prompt.split('\n'), count: 1 },
+              excerpt: prompt.slice(0, 7),
+              escaped: JSON.stringify(prompt),
+              system: options?.systemPrompt ?? '',
+              numeric: Number(options?.env?.NUMERIC_TOKEN),
+              [prompt]: [true, null],
+            },
+          });
+        }
+        if (mode === 'plugin-env') {
+          yield {
+            type: 'result',
+            text: JSON.stringify({
+              host: process.env.PROCESS_HOST_CANARY,
+              path: process.env.PATH,
+              container: process.env.PROCESS_CANARY,
+            }),
+          };
+          yield { type: 'settled' };
+          return;
         }
         if (mode === 'env') {
           yield { type: 'result', text: JSON.stringify(options?.env) };
