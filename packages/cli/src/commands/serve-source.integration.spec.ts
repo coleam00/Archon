@@ -113,7 +113,9 @@ test('source archon serve starts the server on the requested port and serves the
       const exitedInTime = await Promise.race([
         child.exited.then(() => true),
         new Promise<false>(resolve => {
-          timer = setTimeout(() => resolve(false), 10_000);
+          timer = setTimeout(() => {
+            resolve(false);
+          }, 10_000);
         }),
       ]);
       if (!exitedInTime) {
