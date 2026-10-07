@@ -105,7 +105,7 @@ export async function serveCommand(
   );
   const serverPath = join(getServerDistDir(version), asset);
   try {
-    if (!existsSync(serverPath)) await downloadServer(version, serverPath);
+    if (!existsSync(serverPath)) await downloadServer(version, serverPath, asset);
     else log.info({ serverPath }, 'server_dist.cache_hit');
   } catch (err) {
     log.error({ err: toError(err), version, serverPath }, 'server_dist.download_failed');
@@ -184,11 +184,9 @@ async function launchServer(
 export async function downloadServer(
   version: string,
   serverPath: string,
+  asset: string,
   embeddedChecksum: string = BUNDLED_SERVER_SHA256
 ): Promise<void> {
-  const asset = serverReleaseAsset(
-    `bun-${process.platform === 'win32' ? 'windows' : process.platform}-${process.arch}`
-  );
   log.info({ version, serverPath, asset }, 'server_dist.download_started');
   const bytes = await fetchVerifiedAsset(version, asset, embeddedChecksum, 'server_dist');
   mkdirSync(dirname(serverPath), { recursive: true });

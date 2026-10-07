@@ -131,11 +131,25 @@ describe('binary server download and launch', () => {
   });
   it.each([404, 500])('reports HTTP %i with the asset URL and no install', async status => {
     fetchSpy.mockImplementation(async () => new Response('', { status }));
-    await expect(downloadServer('1.2.3', serverPath, serverHash)).rejects.toThrow(`/${asset}`);
+    await expect(downloadServer('1.2.3', serverPath, asset, serverHash)).rejects.toThrow(
+      `/${asset}`
+    );
     expect(existsSync(serverPath)).toBe(false);
   });
+  it('downloads the selected asset without resolving the host again', async () => {
+    const selectedAsset = serverReleaseAsset(
+      process.platform === 'win32' ? 'bun-linux-x64' : 'bun-windows-x64'
+    );
+    const selectedPath = join(binaryRoot, 'server', '1.2.3', selectedAsset);
+    fetchSpy.mockImplementation(async () => new Response(serverBytes));
+    await downloadServer('1.2.3', selectedPath, selectedAsset, serverHash);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `https://github.com/coleam00/Archon/releases/download/v1.2.3/${selectedAsset}`
+    );
+    expect(readFileSync(selectedPath)).toEqual(Buffer.from(serverBytes));
+  });
   it('requires an embedded server checksum before fetching', async () => {
-    await expect(downloadServer('1.2.3', serverPath, '')).rejects.toThrow(
+    await expect(downloadServer('1.2.3', serverPath, asset, '')).rejects.toThrow(
       'Missing embedded server checksum'
     );
     expect(fetchSpy).not.toHaveBeenCalled();
