@@ -59,6 +59,18 @@ archon workflow run archon-ship --branch fix/login-crash "#142"
 
 **What it produces**: A PR flipped ready for review once review findings are closed and checks pass, or an explained stop when triage finds no work is owed. The workflow never merges; merging stays with you.
 
+#### `archon-prp`
+
+An experimental, smaller alternative to `archon-ship`, shaped like the PRP delivery skills. One agent session plans the work, implements it, opens the PR, and makes every correction, so its reasoning carries through. A fresh, read-only reviewer judges the PR in its own checkout. The run then sleeps on a durable wait until CI concludes. The owner judges each red check: it fixes failures the PR caused and records the cause of the rest. One correction pass covers the review findings and the CI reds together, followed by a verify review and a second CI wait when that pass changed anything.
+
+**When to use it**: You want to compare the PRP shape with `archon-ship` on real work, or the work is already clear enough that triage would add nothing.
+
+```bash
+archon workflow run archon-prp --branch fix/login-crash "#142"
+```
+
+**What it produces**: A PR with one review comment and one disposition comment. The run's outcome is `ready: true` only when the latest review is `READY TO MERGE` and the PR's checks are green when the run ends. Otherwise it ends with a typed reason, such as an open finding or a red check the PR did not cause. The workflow never merges.
+
 ---
 
 ### One stage at a time
@@ -198,6 +210,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | Workflow | Use When | Creates PR? | Changes code? |
 |----------|----------|-------------|---------------|
 | `archon-ship` | Issue or request to reviewed PR | Yes | Yes |
+| `archon-prp` | Issue or request to reviewed PR, PRP shape (experimental) | Yes | Yes |
 | `archon-triage` | Decide what an item needs next | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |

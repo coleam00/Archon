@@ -1,0 +1,31 @@
+# The review finds a blocking defect. The owner fixes it in the implementation
+# session's finish pass, a fresh verify review confirms it, CI is awaited again on
+# the corrected head, and the run reports delivery.
+plan:
+  ready: true
+  summary: "stub: plan written"
+implement:
+  green: true
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1" }
+  summary: "stub: implemented, validated, PR opened"
+review:
+  ready: false
+  verdict: "NEEDS FIXES"
+  summary: "stub: R1 Important open"
+ci-probe: '{"state":"concluded","detail":"green: build (success)"}'
+finish:
+  changed: true
+  verify: true
+  ci_cause: ""
+  summary: "stub: R1 fixed and pushed"
+reverify:
+  ready: true
+  verdict: "READY TO MERGE"
+  summary: "stub: R1 FIXED"
+recheck-probe: '{"state":"concluded","detail":"green: build (success)"}'
+outcome: { ready: true, reason: delivered, pr_url: "https://github.com/example/repo/pull/1", summary: "stub: delivered" }
+fixture:
+  expect: completed
+  reached: [review, finish, reverify, recheck, outcome]
+  resolved-text-contains:
+    reverify: "Mode: **verify**"

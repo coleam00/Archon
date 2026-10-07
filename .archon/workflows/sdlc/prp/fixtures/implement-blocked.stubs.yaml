@@ -1,0 +1,13 @@
+# Implementation cannot reach green and opens no PR. Review and CI never start, and
+# the real outcome script reports the typed stop without reading any forge.
+plan:
+  ready: true
+  summary: "stub: plan written"
+implement:
+  green: false
+  pr: { repo: { host: "", path: "" }, number: 0, url: "" }
+  summary: "stub: a prerequisite migration is missing"
+fixture:
+  expect: completed
+  reached: [implement, outcome]
+exec-code: true

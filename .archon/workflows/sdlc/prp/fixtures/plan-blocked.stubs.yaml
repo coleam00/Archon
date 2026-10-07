@@ -1,0 +1,9 @@
+# Planning stops on a missing decision. Nothing is built, and the real outcome
+# script reports the typed stop without reading any forge.
+plan:
+  ready: false
+  summary: "stub: the issue leaves the storage format undecided"
+fixture:
+  expect: completed
+  reached: [plan, outcome]
+exec-code: true

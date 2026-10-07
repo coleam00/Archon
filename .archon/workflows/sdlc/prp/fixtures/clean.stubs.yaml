@@ -1,0 +1,24 @@
+# Clean delivery: the review is ready, CI concludes green, the owner's finish pass
+# changes nothing, and the run reports delivery. reverify and recheck carry no stub,
+# so the fixture fails if either runs.
+plan:
+  ready: true
+  summary: "stub: plan written"
+implement:
+  green: true
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1" }
+  summary: "stub: implemented, validated, PR opened"
+review:
+  ready: true
+  verdict: "READY TO MERGE"
+  summary: "stub: no findings"
+ci-probe: '{"state":"concluded","detail":"green: build (success)"}'
+finish:
+  changed: false
+  verify: false
+  ci_cause: ""
+  summary: "stub: nothing to correct"
+outcome: { ready: true, reason: delivered, pr_url: "https://github.com/example/repo/pull/1", summary: "stub: delivered" }
+fixture:
+  expect: completed
+  reached: [plan, implement, review, finish, outcome]
