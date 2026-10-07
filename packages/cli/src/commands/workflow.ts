@@ -1,4 +1,3 @@
-import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import type { Conversation } from '@archon/core/schemas/conversation';
 import { providerRegistry } from '@archon/providers';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
@@ -81,10 +80,7 @@ import {
   type DetachedInstallContext,
 } from '@archon/paths';
 import { isAbsolute, join, resolve } from 'node:path';
-import {
-  applyWorkflowRunConfigLayer,
-  WORKFLOW_RUN_CONFIG_METADATA_KEY,
-} from '@archon/workflows/run-config';
+import { applyWorkflowRunConfigLayer } from '@archon/workflows/run-config';
 import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { mkdir, open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -2273,7 +2269,6 @@ async function runWorkflowWithOwnedSource(
   await assertCliWorkflowRequirementsMet(host, workflow);
 
   const cliUserId = await resolveCliUserRecordId(host);
-  let aiConfigurationRun: typeof continuationRun;
   const prepareCredentialPreflight = async (
     configCwd: string,
     codebaseId?: string
@@ -2281,8 +2276,6 @@ async function runWorkflowWithOwnedSource(
     if (!workflow) throw new Error('Workflow disappeared before credential preflight');
     const prepared = await prepareRunAiConfiguration(host.deps, workflow, configCwd, {
       codebaseId,
-      aiConfigurationRun: detachedPreCreatedRun ?? aiConfigurationRun,
-      ...(detachedPreCreatedRun ? { inheritAiConfiguration: true } : {}),
       userId: detachedPreCreatedRun ? (detachedPreCreatedRun.user_id ?? undefined) : cliUserId,
       ...(isContinuation && continuationRun
         ? { continuationRun }
@@ -2392,21 +2385,21 @@ async function runWorkflowWithOwnedSource(
           false,
           detachCodebase.id
         );
-        const adoption = await resolveWorkflowAdoption({
-          deps: {
-            getRun: id => host.deps.store.getWorkflowRun(id),
-            getActiveRunByPath: (...args) => host.deps.store.getActiveWorkflowRunByPath(...args),
-            findEnvironmentByPath: (...args) =>
-              host.records.isolation.findLatestByCodebaseAndWorkingPath(...args),
-          },
-          adoptedRunId,
-          codebaseId: detachCodebase.id,
-          codebasePath: detachCodebase.default_cwd,
-          codebaseKind: detachCodebase.kind,
-          containerRequested: options.container === true,
-        });
-        detachedAdoptionLane = adoption.lane;
-        aiConfigurationRun = adoption.adoptedRun;
+        detachedAdoptionLane = (
+          await resolveWorkflowAdoption({
+            deps: {
+              getRun: id => host.deps.store.getWorkflowRun(id),
+              getActiveRunByPath: (...args) => host.deps.store.getActiveWorkflowRunByPath(...args),
+              findEnvironmentByPath: (...args) =>
+                host.records.isolation.findLatestByCodebaseAndWorkingPath(...args),
+            },
+            adoptedRunId,
+            codebaseId: detachCodebase.id,
+            codebasePath: detachCodebase.default_cwd,
+            codebaseKind: detachCodebase.kind,
+            containerRequested: options.container === true,
+          })
+        ).lane;
       } else if (options.supersedesRunId !== undefined) {
         supersededRunId = await resolveRunIdArg(
           host,
@@ -2419,14 +2412,13 @@ async function runWorkflowWithOwnedSource(
       }
     }
 
-    let detachedPrepared: PreparedRunAiConfiguration;
     if (detachedAdoptionLane?.kind === 'checkout-branch' && detachCodebase) {
-      detachedPrepared = await withBranchLaunchSource(
+      await withBranchLaunchSource(
         detachCodebase.default_cwd,
         detachedAdoptionLane.taskBranch.branch,
         async snapshot => {
           if (options.discoveryCwd === undefined) await recaptureForLane(snapshot);
-          return prepareCredentialPreflight(snapshot, detachCodebase.id);
+          await prepareCredentialPreflight(snapshot, detachCodebase.id);
         }
       );
     } else {
@@ -2447,7 +2439,7 @@ async function runWorkflowWithOwnedSource(
               : cwd));
       if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
         await recaptureForLane(configCwd);
-      detachedPrepared = await prepareCredentialPreflight(configCwd, detachCodebase?.id);
+      await prepareCredentialPreflight(configCwd, detachCodebase?.id);
     }
 
     // The run id the ack hands back. A continuation already has one; a fresh launch
@@ -2486,10 +2478,6 @@ async function runWorkflowWithOwnedSource(
           ...(detachCodebase ? { codebase_id: detachCodebase.id } : {}),
           user_message: userMessage,
           metadata: {
-            [RUN_AI_CONFIGURATION_METADATA_KEY]: detachedPrepared.aiConfigurationSnapshot,
-            ...(detachedPrepared.runConfigMetadata
-              ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: detachedPrepared.runConfigMetadata }
-              : {}),
             // Declared inputs (#2554): `$INPUTS` is read off the row, so a pre-created
             // row that omits them starts a run whose inputs silently disappeared.
             ...(resolvedInputs && Object.keys(resolvedInputs).length > 0
@@ -2745,7 +2733,6 @@ async function runWorkflowWithOwnedSource(
         codebaseKind: codebase.kind,
         containerRequested: options.container === true,
       });
-      aiConfigurationRun = adoptedRun;
       if (lane.kind === 'reuse-worktree') {
         workingCwd = lane.workingPath;
         isolationEnvId = lane.envId;

@@ -255,10 +255,5 @@ export function parsePiConfigStrict(
     }
   }
   const parsed = parsePiConfig(raw);
-  if (scope === 'snapshot') {
-    for (const key of Object.keys(parsed)) {
-      if (Object.hasOwn(PROCESS_SCOPED_SETTINGS, key)) Reflect.deleteProperty(parsed, key);
-    }
-  }
   return model === undefined ? parsed : { ...parsed, model };
 }

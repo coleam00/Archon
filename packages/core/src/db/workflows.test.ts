@@ -1362,23 +1362,20 @@ describe('workflows database', () => {
   });
 
   describe('metadata serialization', () => {
-    test.each(['github_context', 'ai_configuration'])(
-      'throws when critical %s metadata fails to serialize',
-      async key => {
-        const circularObj: Record<string, unknown> = { [key]: 'required' };
-        circularObj.self = circularObj;
+    test('throws when critical github_context metadata fails to serialize', async () => {
+      // Create metadata with a circular reference
+      const circularObj: Record<string, unknown> = { github_context: 'Issue context' };
+      circularObj.self = circularObj;
 
-        await expect(
-          createWorkflowRun({
-            workflow_name: 'test',
-            origin: { conversationId: 'conv' },
-            user_message: 'test',
-            metadata: circularObj,
-          })
-        ).rejects.toThrow('Failed to serialize workflow metadata');
-        expect(mockQuery).not.toHaveBeenCalled();
-      }
-    );
+      await expect(
+        createWorkflowRun({
+          workflow_name: 'test',
+          origin: { conversationId: 'conv' },
+          user_message: 'test',
+          metadata: circularObj,
+        })
+      ).rejects.toThrow('Failed to serialize workflow metadata');
+    });
 
     test('falls back to empty object for non-critical metadata serialization failure', async () => {
       // Create metadata WITHOUT github_context but with circular reference

@@ -1,5 +1,3 @@
-import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
-import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { providerRegistry } from '@archon/providers';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
@@ -445,9 +443,6 @@ async function dispatchBackgroundWorkflowOwned(
       {
         codebaseId: ctx.codebaseId,
         userId: ctx.userId,
-        aiConfigurationRun: ctx.adoptRunId
-          ? ((await workflowDeps.store.getWorkflowRun(ctx.adoptRunId)) ?? undefined)
-          : undefined,
         runConfig: ctx.runConfig,
         ...(ctx.modelOverrides
           ? { modelOverrideLayer: { kind: 'raw', overrides: ctx.modelOverrides } }
@@ -634,10 +629,6 @@ async function dispatchBackgroundWorkflowOwned(
       user_message: ctx.originalMessage,
       working_path: workerCwd,
       metadata: {
-        [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAiConfiguration.aiConfigurationSnapshot,
-        ...(preparedAiConfiguration.runConfigMetadata
-          ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAiConfiguration.runConfigMetadata }
-          : {}),
         ...(ctx.issueContext ? { github_context: ctx.issueContext } : {}),
         // Declared inputs supplied by this invocation (#2554). Stamped here because the
         // executor only writes them when IT creates the row, and this path hands it a

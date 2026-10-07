@@ -1,4 +1,3 @@
-import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 /**
  * Database operations for workflow runs
  */
@@ -372,18 +371,18 @@ export async function insertWorkflowRun(
   } catch (serializeError) {
     const err = serializeError as Error;
 
-    // Losing launch policy would silently change execution on the next resume.
-    if (
-      data.metadata &&
-      ('github_context' in data.metadata || RUN_AI_CONFIGURATION_METADATA_KEY in data.metadata)
-    ) {
+    // Check if metadata contains critical context that must not be silently lost
+    if (data.metadata && 'github_context' in data.metadata) {
+      // Critical context (e.g., GitHub issue/PR details) must not be silently discarded.
+      // Failing here surfaces the problem to the user instead of running the workflow
+      // with empty context variables ($CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT).
       getLog().error(
         { err, metadataKeys: Object.keys(data.metadata) },
         'db.workflow_run_metadata_serialize_failed'
       );
       throw new Error(
         `Failed to serialize workflow metadata: ${err.message}. ` +
-          'Metadata contains required workflow context or AI configuration.'
+          'Metadata contains github_context which is required for this workflow.'
       );
     }
 

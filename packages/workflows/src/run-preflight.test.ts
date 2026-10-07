@@ -1,14 +1,9 @@
 import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
-import type { CredentialStatus, ProviderDefaultsMap } from '@archon/provider-contract';
-import type {
-  ClaudeProviderDefaults,
-  CodexProviderDefaults,
-  IAgentProvider,
-} from '@archon/providers/types';
+import type { CredentialStatus } from '@archon/provider-contract';
+import type { IAgentProvider } from '@archon/providers/types';
 import type { WorkflowConfig } from './deps';
-import type { WorkflowRun } from './schemas';
 import { makeTestResolvedWorkflow, makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import {
   prepareRunAiConfiguration,
@@ -64,7 +59,7 @@ function fixture(status: CredentialStatus = { state: 'not_checked', source: 'nat
     provider,
     deps: {
       providers: providerRegistry,
-      loadConfig: mock(async () => structuredClone(config)),
+      loadConfig: mock(async () => config),
       store: { getCodebaseEnvVars: mock(async () => ({ DB_SETTING: 'db' })) },
       getAgentProvider: mock(() => provider),
       isPerUserProviderKeysEnabled: () => true,
@@ -273,203 +268,4 @@ describe('run credential preflight', () => {
     });
     expect(checkCredential).not.toHaveBeenCalled();
   });
-});
-
-function savedRun(metadata: Record<string, unknown>): WorkflowRun {
-  return {
-    id: 'run',
-    workflow_name: 'ai',
-    origin: { conversationId: 'conversation' },
-    conversation_id: 'conversation',
-    parent_conversation_id: null,
-    codebase_id: null,
-    status: 'paused',
-    outcome: null,
-    user_message: '',
-    metadata,
-    started_at: new Date(),
-    completed_at: null,
-    last_activity_at: null,
-    working_path: '/p',
-    user_id: null,
-    parent_run_id: null,
-    adopted_from_run_id: null,
-    output_root: null,
-    checkout_baseline: null,
-  };
-}
-
-/** Loaded config carries provider-native settings beyond WorkflowConfig's narrow view. */
-function loadedAssistants(
-  assistants: { claude: ClaudeProviderDefaults; codex: CodexProviderDefaults } & ProviderDefaultsMap
-): WorkflowConfig['assistants'] {
-  return assistants;
-}
-
-test('continuation retains launch AI values while native settings and environment stay live', async () => {
-  const { deps } = fixture();
-  const workflow = makeTestResolvedWorkflow({
-    name: 'ai',
-    nodes: [{ id: 'ai', prompt: 'go', model: '@custom' }],
-  });
-  deps.loadConfig.mockResolvedValue({
-    ...config,
-    assistants: loadedAssistants({
-      claude: { model: 'sonnet', settingSources: ['user'], claudeBinaryPath: '/launch/claude' },
-      codex: {
-        model: 'gpt-launch',
-        modelReasoningEffort: 'high',
-        webSearchMode: 'disabled',
-        additionalDirectories: ['/launch/context'],
-        codexBinaryPath: '/launch/codex',
-      },
-      copilot: {
-        model: 'gpt-launch',
-        modelReasoningEffort: 'high',
-        copilotCliPath: '/launch/copilot',
-        configDir: '/launch/home',
-        enableConfigDiscovery: false,
-        useLoggedInUser: false,
-        logLevel: 'error',
-      },
-      pi: { model: 'openai/native', env: { TOKEN: 'launch-secret' } },
-    }),
-    tiers: { small: { provider: 'claude', model: 'haiku' } },
-    aliases: { '@custom': { provider: 'claude', model: 'sonnet' } },
-    envVars: { TOKEN: 'launch-secret' },
-  });
-  const launch = await prepareRunAiConfiguration(deps, workflow, '/p');
-  // The persisted record is a JSON round-trip, as it is in both database adapters.
-  const metadata = JSON.parse(JSON.stringify({ ai_configuration: launch.aiConfigurationSnapshot }));
-  deps.loadConfig.mockResolvedValue({
-    ...config,
-    assistant: 'codex',
-    assistants: loadedAssistants({
-      claude: { model: 'opus', settingSources: ['project'], claudeBinaryPath: '/live/claude' },
-      codex: {
-        model: 'gpt-live',
-        modelReasoningEffort: 'low',
-        webSearchMode: 'live',
-        additionalDirectories: ['/live/context'],
-        codexBinaryPath: '/live/codex',
-      },
-      copilot: {
-        model: 'gpt-live',
-        modelReasoningEffort: 'low',
-        copilotCliPath: '/live/copilot',
-        configDir: '/live/home',
-        enableConfigDiscovery: true,
-        useLoggedInUser: true,
-        logLevel: 'debug',
-      },
-      pi: { env: { TOKEN: 'live-secret' } },
-    }),
-    aliases: { '@custom': { provider: 'codex', model: 'gpt' } },
-    envVars: { TOKEN: 'live-secret' },
-  });
-  const resumed = await prepareRunAiConfiguration(deps, workflow, '/changed', {
-    continuationRun: savedRun(metadata),
-  });
-  expect(resumed.aiProfile).toEqual(launch.aiProfile);
-  expect(resumed.scope).toEqual(launch.scope);
-  expect(resumed.config.assistant).toBe('claude');
-  // Widen to the providers' own shapes: native settings ride beyond WorkflowConfig's view.
-  const claude: ClaudeProviderDefaults = resumed.config.assistants.claude;
-  const codex: CodexProviderDefaults = resumed.config.assistants.codex;
-  expect(claude).toEqual({
-    model: 'sonnet',
-    settingSources: ['project'],
-    claudeBinaryPath: '/live/claude',
-  });
-  expect(codex).toEqual({
-    model: 'gpt-launch',
-    modelReasoningEffort: 'high',
-    webSearchMode: 'live',
-    additionalDirectories: ['/live/context'],
-    codexBinaryPath: '/live/codex',
-  });
-  expect(resumed.config.assistants.copilot).toEqual({
-    model: 'gpt-launch',
-    modelReasoningEffort: 'high',
-    copilotCliPath: '/live/copilot',
-    configDir: '/live/home',
-    enableConfigDiscovery: true,
-    useLoggedInUser: true,
-    logLevel: 'debug',
-  });
-  expect(launch.aiConfigurationSnapshot.assistants.claude).toEqual({ model: 'sonnet' });
-  expect(launch.aiConfigurationSnapshot.assistants.codex).toEqual({
-    model: 'gpt-launch',
-    modelReasoningEffort: 'high',
-  });
-  expect(launch.aiConfigurationSnapshot.assistants.copilot).toEqual({
-    model: 'gpt-launch',
-    modelReasoningEffort: 'high',
-  });
-  expect(resumed.config.assistants.pi?.model).toBe('openai/native');
-  expect(resumed.config.assistants.pi?.env).toEqual({ TOKEN: 'live-secret' });
-  expect(resumed.config.envVars?.TOKEN).toBe('live-secret');
-  expect(JSON.stringify(metadata)).not.toContain('launch-secret');
-});
-
-test('legacy continuation reloads configuration and retains only explicit model overrides', async () => {
-  const { deps } = fixture();
-  const workflow = makeTestResolvedWorkflow({ name: 'ai', model: 'large' });
-  const launch = await prepareRunAiConfiguration(deps, workflow, '/p', {
-    modelOverrideLayer: { kind: 'raw', overrides: { tiers: { large: 'claude/opus' } } },
-  });
-  deps.loadConfig.mockResolvedValue({
-    ...config,
-    assistant: 'codex',
-    aliases: { '@new': { provider: 'codex', model: 'gpt' } },
-  });
-  const resumed = await prepareRunAiConfiguration(deps, workflow, '/p', {
-    continuationRun: savedRun({ model_bindings: launch.modelBindingsMetadata }),
-  });
-  expect(resumed.baseAiProfile.defaultProvider).toBe('codex');
-  expect(resumed.aiProfile.aliases.large).toEqual(launch.aiProfile.aliases.large);
-  expect(resumed.aiProfile.aliases['@new']?.model).toBe('gpt');
-});
-
-test('restoration skips user preferences and native model rediscovery', async () => {
-  const { deps, provider } = fixture();
-  const workflow = makeTestResolvedWorkflow({ name: 'ai', provider: 'pi' });
-  deps.loadConfig.mockResolvedValue({ ...config, assistants: { claude: {}, codex: {}, pi: {} } });
-  provider.resolveCredentialModel = mock(async () => 'openai/native-model');
-  const getUserAiPrefs = mock(async () => ({ defaultProvider: 'claude' }));
-  const launch = await prepareRunAiConfiguration({ ...deps, getUserAiPrefs }, workflow, '/p', {
-    userId: 'launcher',
-  });
-  getUserAiPrefs.mockRejectedValue(new Error('preferences must not be read'));
-  const resumed = await prepareRunAiConfiguration({ ...deps, getUserAiPrefs }, workflow, '/p', {
-    continuationRun: {
-      ...savedRun({ ai_configuration: launch.aiConfigurationSnapshot }),
-      user_id: 'launcher',
-    },
-  });
-  expect(resumed.config.assistants.pi?.model).toBe('openai/native-model');
-  expect(getUserAiPrefs).toHaveBeenCalledTimes(1);
-  expect(provider.resolveCredentialModel).toHaveBeenCalledTimes(1);
-});
-
-test('AI-only inheritance uses the new actor and refuses conflicting adoption inputs', async () => {
-  const { deps } = fixture();
-  const workflow = makeTestResolvedWorkflow({ name: 'ai' });
-  const launch = await prepareRunAiConfiguration(deps, workflow, '/p');
-  const ancestor = {
-    ...savedRun({ ai_configuration: launch.aiConfigurationSnapshot }),
-    user_id: 'ancestor',
-  };
-  const adopted = await prepareRunAiConfiguration(deps, workflow, '/p', {
-    aiConfigurationRun: ancestor,
-    userId: 'new-actor',
-  });
-  expect(adopted.executionUserId).toBe('new-actor');
-  expect(adopted.aiConfigurationSnapshot).toEqual(launch.aiConfigurationSnapshot);
-  await expect(
-    prepareRunAiConfiguration(deps, workflow, '/p', {
-      aiConfigurationRun: ancestor,
-      modelOverrideLayer: { kind: 'raw', overrides: {} },
-    })
-  ).rejects.toThrow('Cannot override AI configuration');
 });

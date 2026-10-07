@@ -2,7 +2,6 @@
  * Typed config parsing for Claude provider defaults.
  * Validates and narrows the opaque assistantConfig to typed fields.
  */
-import type { ProviderConfigScope } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import { parseClaudeSettingSources } from '@archon/paths/skills';
 import type { ClaudeProviderDefaults } from '../types';
@@ -53,10 +52,7 @@ export function parseClaudeConfig(raw: Record<string, unknown>): ClaudeProviderD
 }
 
 /** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
-export function parseClaudeConfigStrict(
-  raw: Record<string, unknown>,
-  scope: ProviderConfigScope = 'install'
-): ClaudeProviderDefaults {
+export function parseClaudeConfigStrict(raw: Record<string, unknown>): ClaudeProviderDefaults {
   assertKnownRunConfigKeys(raw, ['model', 'settingSources', 'claudeBinaryPath']);
   const model = normalizeRunConfigString(raw.model, 'model');
   const claudeBinaryPath = normalizeRunConfigString(raw.claudeBinaryPath, 'claudeBinaryPath');
@@ -72,11 +68,6 @@ export function parseClaudeConfigStrict(
     }
   }
   const parsed = parseClaudeConfig(raw);
-  if (scope === 'snapshot') {
-    return {
-      ...(model === undefined ? {} : { model }),
-    };
-  }
   return {
     ...parsed,
     ...(model === undefined ? {} : { model }),

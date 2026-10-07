@@ -1,10 +1,4 @@
 import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
-import {
-  createRunAiConfigurationSnapshot,
-  readRunAiConfigurationSnapshot,
-  restoreRunAiConfigurationDefaults,
-} from './run-ai-configuration';
-import type { RunAiConfigurationSnapshot } from './schemas/run-ai-configuration';
 import type { CredentialStatus } from '@archon/provider-contract';
 import type { WorkflowConfig, WorkflowDeps } from './deps';
 import type { ResolvedWorkflow, WorkflowRun, DagNode } from './schemas';
@@ -40,8 +34,6 @@ export interface RunAiConfigurationOptions {
   codebaseId?: string;
   userId?: string;
   continuationRun?: WorkflowRun;
-  aiConfigurationRun?: WorkflowRun;
-  inheritAiConfiguration?: boolean;
   runConfig?: WorkflowRunConfigInput;
   modelOverrideLayer?:
     | { kind: 'raw'; overrides: RunModelOverrides }
@@ -94,27 +86,8 @@ export async function prepareRunAiConfiguration(
     { ...fileConfig, envVars: { ...fileConfig.envVars, ...dbEnvVars } },
     effectiveRunConfig?.layer
   );
-  const snapshot =
-    readRunAiConfigurationSnapshot(deps.providers, options.continuationRun?.metadata) ??
-    readRunAiConfigurationSnapshot(deps.providers, options.aiConfigurationRun?.metadata);
-  if (
-    snapshot &&
-    options.aiConfigurationRun &&
-    !options.continuationRun &&
-    !options.inheritAiConfiguration
-  ) {
-    const layer = options.runConfig?.layer;
-    if (
-      options.modelOverrideLayer ||
-      (layer &&
-        ['assistant', 'assistants', 'tiers', 'aliases'].some(key => Object.hasOwn(layer, key)))
-    ) {
-      throw new Error('Cannot override AI configuration inherited from a recorded run.');
-    }
-  }
-  if (snapshot) restoreRunAiConfigurationDefaults(deps.providers, config, snapshot);
   let userAiPrefs: UserAiPrefsLayer = {};
-  if (!snapshot && executionUserId && deps.getUserAiPrefs) {
+  if (executionUserId && deps.getUserAiPrefs) {
     try {
       userAiPrefs = await deps.getUserAiPrefs(executionUserId);
     } catch (error) {
@@ -125,42 +98,37 @@ export async function prepareRunAiConfiguration(
     }
   }
   let baseAiProfile: ResolvedAiProfile;
-  if (snapshot) {
-    baseAiProfile = snapshot.baseAiProfile;
-  } else
-    try {
-      baseAiProfile = buildAiProfile(
-        effectiveRunConfig?.layer.assistant ?? userAiPrefs.defaultProvider ?? fileConfig.assistant,
-        {
-          repoTiers: fileConfig.tiers,
-          repoAliases: fileConfig.aliases,
-          userTiers: userAiPrefs.tiers,
-          userAliases: userAiPrefs.aliases,
-          runTiers: effectiveRunConfig?.layer.tiers,
-          runAliases: effectiveRunConfig?.layer.aliases,
-        }
-      );
-    } catch (error) {
-      // Corrupt stored preferences degrade to config-only. Invalid file or run
-      // configuration still fails when rebuilt without the stored preferences.
-      log.error(
-        { err: error as Error, userId: executionUserId },
-        'workflow.user_ai_prefs_profile_invalid'
-      );
-      baseAiProfile = buildAiProfile(effectiveRunConfig?.layer.assistant ?? fileConfig.assistant, {
+  try {
+    baseAiProfile = buildAiProfile(
+      effectiveRunConfig?.layer.assistant ?? userAiPrefs.defaultProvider ?? fileConfig.assistant,
+      {
         repoTiers: fileConfig.tiers,
         repoAliases: fileConfig.aliases,
+        userTiers: userAiPrefs.tiers,
+        userAliases: userAiPrefs.aliases,
         runTiers: effectiveRunConfig?.layer.tiers,
         runAliases: effectiveRunConfig?.layer.aliases,
-      });
-    }
+      }
+    );
+  } catch (error) {
+    // Corrupt stored preferences degrade to config-only. Invalid file or run
+    // configuration still fails when rebuilt without the stored preferences.
+    log.error(
+      { err: error as Error, userId: executionUserId },
+      'workflow.user_ai_prefs_profile_invalid'
+    );
+    baseAiProfile = buildAiProfile(effectiveRunConfig?.layer.assistant ?? fileConfig.assistant, {
+      repoTiers: fileConfig.tiers,
+      repoAliases: fileConfig.aliases,
+      runTiers: effectiveRunConfig?.layer.tiers,
+      runAliases: effectiveRunConfig?.layer.aliases,
+    });
+  }
 
-  const persistedModelBindings =
-    !snapshot && options.continuationRun
-      ? readRunModelBindingsMetadata(deps.providers, options.continuationRun.metadata)
-      : undefined;
+  const persistedModelBindings = options.continuationRun
+    ? readRunModelBindingsMetadata(deps.providers, options.continuationRun.metadata)
+    : undefined;
   const resolvedModelOverrides =
-    snapshot?.modelOverrides ??
     persistedModelBindings?.overrides ??
     (options.modelOverrideLayer?.kind === 'resolved'
       ? options.modelOverrideLayer.overrides
@@ -184,12 +152,13 @@ export async function prepareRunAiConfiguration(
         .map(p => p.id)
         .join(', ')}`
     );
+  const defaults = assistantModelDefaults(config);
   const unresolved = collectRunCredentialRequirements(deps.providers, workflow, {
     config,
     aiProfile,
     scope,
   }).filter(r => r.model === undefined);
-  for (const provider of new Set((snapshot ? [] : unresolved).map(r => r.provider))) {
+  for (const provider of new Set(unresolved.map(r => r.provider))) {
     const runtime = deps.getAgentProvider(provider);
     if (runtime.resolveCredentialModel) {
       const model = await runtime.resolveCredentialModel({
@@ -201,21 +170,12 @@ export async function prepareRunAiConfiguration(
           ...config.assistants,
           [provider]: { ...config.assistants[provider], model },
         };
+        defaults[provider] = model;
       }
     }
   }
-  const aiConfigurationSnapshot =
-    snapshot ??
-    createRunAiConfigurationSnapshot(deps.providers, config, baseAiProfile, resolvedModelOverrides);
-  if (!snapshot) restoreRunAiConfigurationDefaults(deps.providers, config, aiConfigurationSnapshot);
-  scope = resolveWorkflowModelScope(
-    workflow,
-    config.assistant,
-    assistantModelDefaults(config),
-    aiProfile
-  );
+  scope = resolveWorkflowModelScope(workflow, config.assistant, defaults, aiProfile);
   return {
-    aiConfigurationSnapshot,
     config,
     dbEnvVars,
     baseAiProfile,
@@ -236,7 +196,6 @@ export async function prepareRunAiConfiguration(
 }
 
 export interface PreparedRunAiConfiguration {
-  aiConfigurationSnapshot: RunAiConfigurationSnapshot;
   requirements: readonly RunCredentialRequirement[];
   connectedVendors: Set<string>;
   config: WorkflowConfig;

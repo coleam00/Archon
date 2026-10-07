@@ -3,11 +3,7 @@
  * Validates and narrows the opaque assistantConfig to typed fields.
  */
 import type { CodexProviderDefaults } from '../types';
-import {
-  EFFORT_LADDER,
-  type EffortRung,
-  type ProviderConfigScope,
-} from '@archon/provider-contract';
+import { EFFORT_LADDER, type EffortRung } from '@archon/provider-contract';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,
@@ -61,10 +57,7 @@ export function parseCodexConfig(raw: Record<string, unknown>): CodexProviderDef
 }
 
 /** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
-export function parseCodexConfigStrict(
-  raw: Record<string, unknown>,
-  scope: ProviderConfigScope = 'install'
-): CodexProviderDefaults {
+export function parseCodexConfigStrict(raw: Record<string, unknown>): CodexProviderDefaults {
   assertKnownRunConfigKeys(raw, [
     'model',
     'modelReasoningEffort',
@@ -94,14 +87,6 @@ export function parseCodexConfigStrict(
     }
   }
   const parsed = parseCodexConfig(raw);
-  if (scope === 'snapshot') {
-    return {
-      ...(model === undefined ? {} : { model }),
-      ...(parsed.modelReasoningEffort === undefined
-        ? {}
-        : { modelReasoningEffort: parsed.modelReasoningEffort }),
-    };
-  }
   return {
     ...parsed,
     ...(model === undefined ? {} : { model }),

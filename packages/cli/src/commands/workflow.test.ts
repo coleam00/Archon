@@ -1,6 +1,3 @@
-import { createRunAiConfigurationSnapshot } from '@archon/workflows/run-ai-configuration';
-import { buildAiProfile } from '@archon/workflows/model-validation';
-import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
 import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path';
 import { providerRegistry } from '@archon/providers';
 mock.module('@archon/core/services/provider-admission', () => ({
@@ -8271,14 +8268,7 @@ describe('workflowRunCommand — detach', () => {
 
     const execBefore = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
     const child = createDetachedChildFixture();
-    const workflowDb = await import('@archon/core/db/workflows');
-    const spawnSpy = spyOn(Bun, 'spawn').mockImplementation(() => {
-      const created = (workflowDb.createWorkflowRun as ReturnType<typeof mock>).mock.calls.at(
-        -1
-      )?.[0];
-      expect(created?.metadata.ai_configuration).toMatchObject({ version: 1 });
-      return child.child;
-    });
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
     const savedArgv = process.argv;
     process.argv = ['bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach'];
 
@@ -9146,20 +9136,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       default_cwd: '/test/path',
       kind: 'repo',
     });
-    const snapshot = createRunAiConfigurationSnapshot(
-      providerRegistry,
-      {
-        assistant: 'codex',
-        commands: {},
-        assistants: { claude: {}, codex: { model: 'launch-model' } },
-      },
-      buildAiProfile('codex'),
-      {}
-    );
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      ...preCreatedRow,
-      metadata: { ai_configuration: snapshot },
-    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
     (prepareWorkflowSource as ReturnType<typeof mock>).mockClear();
     (executeWorkflow as ReturnType<typeof mock>).mockClear();
 
@@ -9175,12 +9152,9 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     );
     const opts = (executeWorkflow as ReturnType<typeof mock>).mock.calls.at(-1)?.[7] as {
       preCreatedRun?: { id: string };
-      preparedAiConfiguration?: PreparedRunAiConfiguration;
       priorCompletedNodes?: unknown;
     };
     expect(opts.preCreatedRun?.id).toBe('run-precreated');
-    expect(opts.preparedAiConfiguration?.config.assistant).toBe('codex');
-    expect(opts.preparedAiConfiguration?.config.assistants.codex.model).toBe('launch-model');
     // A fresh pre-created row is NOT a resume: prior state would make the executor
     // skip nodes that never ran.
     expect(opts.priorCompletedNodes).toBeUndefined();
