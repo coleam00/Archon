@@ -8,6 +8,7 @@ import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowResumeTarget } from './services/workflow-resume-service';
+import type { ProviderRegistration } from '@archon/provider-contract';
 
 type SlackWorkflowResume = (runId: string, slackUserId: string) => Promise<boolean>;
 
@@ -118,10 +119,15 @@ mock.module('@archon/paths/cli-command', () => ({
 }));
 const mockRegisterBuiltinProviders = mock((): void => undefined);
 const mockRegisterCommunityProviders = mock((): void => undefined);
+const mockRegisterProvider = mock((_registration: ProviderRegistration): void => undefined);
+const mockLoadProviderPlugins = mock(
+  async (_pluginsDir: string): Promise<ProviderRegistration[]> => []
+);
 mock.module('@archon/providers', () => ({
   claimPiExtensionProcessError: (): boolean => false,
   registerBuiltinProviders: mockRegisterBuiltinProviders,
   registerCommunityProviders: mockRegisterCommunityProviders,
+  registerProvider: mockRegisterProvider,
 }));
 
 interface TestLogger {
@@ -155,6 +161,7 @@ const logger: TestLogger = {
 mock.module('@archon/paths', () => ({
   BUNDLED_IS_BINARY: false,
   getArchonEnvPath: (): string => '/tmp/.archon/.env',
+  getPluginsPath: (): string => '/tmp/.archon/plugins',
   createLogger: (): typeof logger => logger,
   logArchonPaths: (): void => undefined,
   validateAppDefaultsPaths: async (): Promise<void> => undefined,
@@ -177,7 +184,11 @@ class MockConversationLockManager {
 }
 
 mock.module('@archon/core', () => ({
-  getVendorCatalog: (): object => ({}),
+  loadProviderPlugins: mockLoadProviderPlugins,
+  getVendorCatalog: (): object => {
+    expect(mockLoadProviderPlugins).toHaveBeenCalledWith('/tmp/.archon/plugins');
+    return {};
+  },
   handleMessage: async (): Promise<void> => undefined,
   pool: {
     query: async (): Promise<object> => ({}),
