@@ -167,6 +167,12 @@ jobs:
           fi
           grep -F 'archon-server is started by `archon serve`' <<< "$OUTPUT"
 
+      - name: Smoke-test archon serve
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        env:
+          RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: bun scripts/smoke-serve.ts dist/archon-linux-x64 dist/archon-server-linux-x64 "${RAW_VERSION#v}" archon-web.tar.gz
+
       - name: Smoke-test built binary
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
         env:
@@ -443,7 +449,7 @@ jobs:
           | Asset | Purpose |
           | --- | --- |
           | `archon-<os>-<arch>[.exe]` | CLI |
-          | `archon-server-<os>-<arch>[.exe]` | Server executable reserved for the forthcoming CLI launcher |
+          | `archon-server-<os>-<arch>[.exe]` | Version-matched server executable fetched by `archon serve` |
           | `archon-forge-github-<os>-<arch>[.exe]` | GitHub forge plugin |
           | `archon-web.tar.gz` | Web UI |
           | `checksums.txt` | SHA-256 checksums for every asset |
