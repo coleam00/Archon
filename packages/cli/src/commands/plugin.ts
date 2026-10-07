@@ -43,10 +43,8 @@ import {
 } from '@archon/plugin-manifest/store';
 import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-plugin';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
-import {
-  providerPluginDescriptorSchema,
-  type ProviderPluginDescriptor,
-} from '@archon/provider-contract/plugin';
+import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
+import { withPluginMutationLock } from './plugin-mutation-lock';
 import {
   assertProviderRegistrationAllowed,
   registerBuiltinProviders,
@@ -288,11 +286,7 @@ async function inspectInstallableProvider(
   const installed = receipts.filter(isProviderReceipt).filter(receipt => receipt.id !== id);
   const registrations = [
     ...getRegisteredProviders(),
-    ...installed.map(receipt =>
-      processProviderRegistration(providerPluginDescriptorSchema.parse(receipt.descriptor), [
-        stagedBinary,
-      ])
-    ),
+    ...installed.map(receipt => processProviderRegistration(receipt.descriptor, [stagedBinary])),
   ];
   assertProviderRegistrationAllowed(registration, registrations);
   return descriptor;
@@ -781,9 +775,13 @@ export async function pluginCommand(
     const ref = parsePluginRef(target);
     if (subcommand === 'remove' || subcommand === 'copy') {
       if (ref.tag) throw new Error(`${subcommand} takes a plugin id without @tag: ${ref.id}`);
-      await (subcommand === 'remove' ? removePlugin(ref, env) : copyPlugin(ref, env));
+      await withPluginMutationLock(env.pluginsDir, () =>
+        subcommand === 'remove' ? removePlugin(ref, env) : copyPlugin(ref, env)
+      );
     } else {
-      await installPlugin(ref, subcommand === 'install' ? 'install' : 'update', env);
+      await withPluginMutationLock(env.pluginsDir, () =>
+        installPlugin(ref, subcommand === 'install' ? 'install' : 'update', env)
+      );
     }
     return 0;
   } catch (error) {

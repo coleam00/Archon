@@ -28,6 +28,7 @@ const assets = new Map<string, Uint8Array<ArrayBuffer>>();
 let root: string;
 let server: ReturnType<typeof Bun.serve>;
 let binary: Uint8Array<ArrayBuffer>;
+let beforeAssetDownload: (() => Promise<void>) | undefined;
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const child = Bun.spawn(
@@ -103,7 +104,9 @@ beforeAll(async () => {
         const file = Bun.file(join(repo, '.git', gitPath[1]));
         return (await file.exists()) ? new Response(file) : new Response(null, { status: 404 });
       }
-      const raw = /^\/raw\/owner\/repo\/([a-f0-9]{40})\/archon-plugin.json$/.exec(path);
+      const raw = /^\/raw\/owner\/repo\/([a-f0-9]{40})(?:\/alternate)?\/archon-plugin.json$/.exec(
+        path
+      );
       if (raw) return Response.json(manifests.get(raw[1]));
       const release = /^\/owner\/repo\/releases\/download\/([^/]+)\/(.+)$/.exec(path);
       const bytes = release && assets.get(release[1]);
@@ -115,7 +118,10 @@ beforeAll(async () => {
           return new Response(
             `${createHash('sha256').update(bytes).digest('hex')}  ${releaseAsset}\n`
           );
-        if (release[2] === releaseAsset) return new Response(bytes);
+        if (release[2] === releaseAsset) {
+          await beforeAssetDownload?.();
+          return new Response(bytes);
+        }
       }
       return new Response(null, { status: 404 });
     },
@@ -371,4 +377,74 @@ test(
     expect(await snapshot(fresh.pluginsDir)).toEqual({});
   },
   testTimeout(60_000)
+);
+
+test(
+  'a process holding the install lock excludes competing install, update and remove',
+  async () => {
+    const env = await environment();
+    const spawnMutation = (command: string, id: string): Promise<[number, string, string]> => {
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          '--eval',
+          `import { pluginCommand } from ${JSON.stringify(join(import.meta.dir, 'plugin.ts'))}; process.exit(await pluginCommand(Bun.argv[1], [Bun.argv[2]], JSON.parse(Bun.argv[3])));`,
+          command,
+          id,
+          JSON.stringify(env),
+        ],
+        { stdout: 'pipe', stderr: 'pipe' }
+      );
+      return Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+    };
+    let reachedDownload!: () => void;
+    const downloading = new Promise<void>(resolve => {
+      reachedDownload = resolve;
+    });
+    let releaseDownload!: () => void;
+    const release = new Promise<void>(resolve => {
+      releaseDownload = resolve;
+    });
+    let gated = false;
+    beforeAssetDownload = async (): Promise<void> => {
+      if (gated) return;
+      gated = true;
+      reachedDownload();
+      await release;
+    };
+    const installing = spawnMutation('install', `${ID}@v1`);
+    try {
+      await downloading;
+      for (const [command, id] of [
+        ['install', `${ID}/alternate@v1`],
+        ['update', `${ID}@v2`],
+        ['remove', ID],
+      ]) {
+        const [code, , error] = await spawnMutation(command, id);
+        expect(code).toBe(1);
+        expect(error).toContain('Plugin mutation locked');
+      }
+    } finally {
+      beforeAssetDownload = undefined;
+      releaseDownload();
+      await installing;
+    }
+    expect((await installing)[0]).toBe(0);
+    const [code, , error] = await spawnMutation('install', `${ID}/alternate@v1`);
+    expect(code).toBe(1);
+    expect(error).toContain(`belongs to ${ID}`);
+    expect(await readReceipts(env.pluginsDir)).toHaveLength(1);
+    expect((await loadProviderPlugins(env.pluginsDir)).map(provider => provider.id)).toEqual([
+      'test-provider',
+    ]);
+    expect((await cli(env, ['doctor', '--json'])).code).toBe(0);
+    expect((await spawnMutation('update', `${ID}@v2`))[0]).toBe(0);
+    expect((await spawnMutation('remove', ID))[0]).toBe(0);
+    expect(await readReceipts(env.pluginsDir)).toEqual([]);
+  },
+  testTimeout(30_000)
 );
