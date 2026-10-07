@@ -3297,6 +3297,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     // The workflow argument (position 4) is the freshly resolved graph, NOT the
     // resume-input graph. Before the fix this was the prior run's frozen graph.
     expect(callArgs[4]).toBe(freshWorkflow);
+    // A fresh run records launch AI config prepared here, not in the prior run's worktree.
+    expect(
+      (callArgs[7] as { preparedAiConfiguration?: unknown }).preparedAiConfiguration
+    ).toBeDefined();
     // Capture lifecycle: hold then adopt — the prior branch's `if (preparedSource)
     // owner.adopt()` is now a live guard, not inert.
     expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'adopt']);
@@ -3369,6 +3373,41 @@ describe('workflow dispatch routing — interactive flag', () => {
       inputs?: Record<string, string>;
     };
     expect(ctx.inputs).toEqual({ diff: 'D1' });
+  });
+
+  test('a fresh run reads launch AI config from the source checkout, not the conversation worktree', async () => {
+    // The conversation already sits in a worktree holding only committed config; the
+    // project checkout carries an uncommitted codex selection.
+    mockResolveWorkflowSourceRoot.mockResolvedValue('/repos/test-repo');
+    const adapter = await import('../workflows/store-adapter');
+    const original = adapter.createWorkflowDeps();
+    const loadConfig = mock(async (cwd?: string) => ({
+      ...(await original.loadConfig(cwd)),
+      assistant: cwd === '/repos/test-repo' ? 'codex' : 'claude',
+    }));
+    const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+      ...original,
+      loadConfig,
+    }));
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeDispatchConversation({ cwd: '/worktrees/conv' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    try {
+      await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+      });
+      expect(loadConfig).toHaveBeenCalledWith('/repos/test-repo');
+      expect(loadConfig).not.toHaveBeenCalledWith('/worktrees/conv');
+      const opts = mockExecuteWorkflow.mock.calls[0]?.[7] as {
+        preparedAiConfiguration?: { config: { assistant: string } };
+      };
+      expect(opts.preparedAiConfiguration?.config.assistant).toBe('codex');
+    } finally {
+      factory.mockRestore();
+      (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
   });
 
   test('foreground credential refusal stops before isolation or execution', async () => {

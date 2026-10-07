@@ -53,7 +53,7 @@ Settings are loaded in this order (later overrides earlier):
 6. **Run config** - Sparse content selected for one fresh run
 7. **Explicit run model bindings** - Repeatable `--model` or HTTP `tiers`/`aliases`, per named binding
 
-New runs record their resolved Archon AI configuration at launch preparation: assistant, provider defaults, tiers, aliases, and model bindings. Resume and continuation reuse that record. New child runs inherit the parent's recorded AI base; existing children keep their own record. Editing configuration or user AI preferences affects new independent runs, not an existing run. Detached launches record the same values before handing the run to a child process; queued resource starts record them before admission.
+New runs record their resolved Archon AI configuration at launch preparation: assistant, provider defaults, tiers, aliases, and model bindings. Resume and continuation reuse that record. New child runs inherit the parent's recorded AI base; existing children keep their own record. Editing configuration or user AI preferences affects new independent runs, not an existing run. The repo config in that record comes from the checkout the run was launched from, not from its worktree; see [Where a run reads `.archon/config.yaml`](#where-a-run-reads-archonconfigyaml). Detached launches record the same values before handing the run to a child process; queued resource starts record them before admission.
 
 Adoption inherits the recorded AI configuration while the selected workflow still owns its graph and scripts. New model bindings or AI-bearing run config are rejected for this adoption. Supersession prepares fresh AI configuration. Older runs without a recorded configuration keep resolving from current configuration and their existing sparse run overrides.
 
@@ -303,6 +303,28 @@ assistants:
 
 Set in `~/.archon/config.yaml` (global) or `.archon/config.yaml` (repo-specific).
 
+### Where a run reads `.archon/config.yaml`
+
+A new run reads `.archon/config.yaml` from the checkout it was launched from, live, including uncommitted and gitignored edits. The run still gets its own worktree for code; only the source of its config differs. The launch checkout is:
+
+- **Foreground CLI:** the directory you run the command in, or `--cwd` when given. That can be the main checkout or a linked worktree. A `--branch` run that reuses an existing worktree still reads the launch checkout, not that worktree.
+- **`archon workflow run --detach`:** the same directory. The launching process records the config before it hands the run to the background process.
+- **Web and chat:** the project's checkout that the workflow source is read from. When the conversation already sits in a worktree, that is the worktree's primary checkout, normally the project's registered path.
+- **Queued resource starts** (triggers and forge sources): the launch path recorded when the start was queued. The config is recorded at that point, before admission.
+
+The run records the resolved AI configuration (assistant, provider defaults, tiers, aliases, and model bindings) at launch. Resume, approve, reject, child runs, and adoption reuse that record, so later edits to `.archon/config.yaml`, in your checkout or in the run's worktree, do not change a run already started. An adopted run whose prior run has no record reads the adopted worktree or branch instead.
+
+Some repo settings are read at launch from fixed places rather than the launch checkout:
+
+- **`worktree.*`** (`baseBranch`, `remote`, `path`, `copyFiles`, `initSubmodules`) is read from the project's registered checkout when Archon creates the worktree.
+- **Workflow-source settings** (`defaults.loadDefaultWorkflows`, `defaults.loadDefaultCommands`, `commands.folder`) are read from the source directory when the run captures its source (`--workflow-source` on the CLI), and are recorded with that capture.
+
+To change the configuration a run uses:
+
+- **Edit `.archon/config.yaml` before launching.** Committing is not needed; the launch reads your working tree.
+- **A running run keeps its launch config.** To use new config, start a new run, or use `archon workflow run --supersedes <run-id>` to replace a finished one with fresh config.
+- **Use `--config <file>`** for a one-off layer on a fresh run. It covers the settings listed in [Run-scoped configuration](#run-scoped-configuration).
+
 ### Worktree file copying (`worktree.copyFiles`)
 
 `git worktree add` only copies **tracked** files into a new worktree. Anything gitignored — secrets, local planning docs, agent reports, IDE settings, data fixtures — is absent by default. Archon's `worktree.copyFiles` closes that gap: after the worktree is created, each listed path is copied from the canonical repo into the worktree via raw filesystem copy (not git), so gitignored content comes along for the ride.
@@ -315,15 +337,17 @@ Copy the **real** gitignored file, never a tracked template. Listing `.env.examp
 
 **Nothing is copied unless you list it.** Archon used to copy `.archon/` into every worktree automatically, because that was the only way a workflow's own commands and scripts could be found from inside the worktree it was running against. Runs now carry their own source (see below), so the implicit copy is gone.
 
-If you relied on it — most often for a gitignored `.archon/config.yaml` holding local settings — add it explicitly:
+If you relied on it for a gitignored `.archon/config.yaml` holding local settings, list that file explicitly:
 
 ```yaml
 worktree:
   copyFiles:
-    - .archon
+    - .archon/config.yaml
 ```
 
-You do **not** need this for workflows, commands, or scripts. Those are captured by the run itself, including uncommitted ones.
+Copy only gitignored files this way. Copying a **tracked** file overwrites the version the worktree checked out, so if the two differ the worktree starts with an uncommitted change in its `git status`, and an agent that commits everything commits it too. Listing all of `.archon` has the same effect on its tracked workflows, commands, and scripts.
+
+You do **not** need this for workflows, commands, or scripts. Those are captured by the run itself, including uncommitted ones. `.archon/config.yaml` is not part of that capture, but a new run's AI configuration is read from the checkout it was launched from, not from the worktree, so uncommitted and gitignored config applies without copying. See [Where a run reads `.archon/config.yaml`](#where-a-run-reads-archonconfigyaml).
 
 **Workflow source no longer travels through the worktree.** When a run starts, Archon freezes the workflow's own `.archon/workflows`, `.archon/commands`, and `.archon/scripts` — plus your home-scoped `~/.archon/` source, so a statically included global workflow is frozen too — into that run's artifacts directory, and resolves them from there for the run's whole life. Three consequences:
 

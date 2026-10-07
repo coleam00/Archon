@@ -438,10 +438,12 @@ async function dispatchBackgroundWorkflowOwned(
       return;
     }
 
+    // Repo config comes from the same checkout as the source, not from a worktree the
+    // parent conversation already holds, so uncommitted and gitignored config apply.
     const preparedAiConfiguration = await prepareRunAiConfiguration(
       workflowDeps,
       workflow,
-      preflightCwd,
+      workflowSourceRoot,
       {
         codebaseId: ctx.codebaseId,
         userId: ctx.userId,
