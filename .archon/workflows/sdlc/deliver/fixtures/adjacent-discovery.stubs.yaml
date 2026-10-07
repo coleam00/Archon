@@ -43,11 +43,13 @@ review__publish:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 gate-ready: '{"ready":"true"}'
 validate__mode: '{"comparison":false}'
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: "first validation for this run", nonce: fixture, reuse: false }
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
 validate__result:
   evidence: null
   green: true
+  checks_performed: true
   red_cause: ""
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
@@ -58,5 +60,6 @@ flip-ready: { pr_url: "https://github.com/example/repo/pull/5" }
 outcome: { pr_url: "https://github.com/example/repo/pull/5", summary: "https://github.com/example/repo/pull/5" }
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'
+final-gate: '{"validate":true}'
 fixture:
   expect: completed

@@ -1,0 +1,99 @@
+# Exec-code fixture: the repair of an existing pull request, composed the way a
+# caller composes it (a lifecycle repair passes `work`, `validation_scope` and
+# `validation_context`). The work order's instruction to commit on the pull
+# request's own branch and never open another reaches both implementation turns
+# (the first implementation and the correction), the correction is independently
+# re-reviewed, and the same pull request is flipped. The pull request is in the
+# same repository, where the final local validation is skipped by default; the
+# caller asks for it with `final_validation: always`, so it runs, and the caller's
+# scope reaches its discovery prompt; the real applicability and result scripts run under the
+# caller's scope and context. AI and publication nodes are stubbed: this proves
+# composition, not live adoption, PR reuse, or agent compliance.
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: findings on PR #42 addressed on its branch"
+impl__assert-changed: "2 files changed"
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 42, url: "https://github.com/example/repo/pull/42", head: "feat/existing-42", base: "dev", is_draft: false, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__coverage: { full: true }
+review__scope:
+  # PR #42 diff in scope; head sha stubbed
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
+review__code: "1 blocking finding"
+review__simplify__simplify: { findings: false }
+review__seams: "0 findings"
+shape__simplify: { findings: false }
+review__tests: "0 findings"
+review__synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: 1 blocking finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: 1 blocking finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+ci-note: "CI state for this pull request (head abc123def456): No concluded failures."
+fix__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: finding fixed, pushed to feat/existing-42"
+fix__assert-changed: "1 file changed"
+gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":""}'
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"recheck__mode","invocation":{"loopPath":[]}}}'
+recheck__coverage: { full: false }
+recheck__scope:
+  # light mode; delta since cursor
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
+recheck__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no open blocking finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: no open blocking finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/42" }
+publish-pr-body: {}
+sync-pr-body: { intent: "/fixture/pr-body-intent.json" }
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
+validate__run: { status: green, summary: "stub: full gate green" }
+gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
+ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
+ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/42" }
+outcome: { pr_url: "https://github.com/example/repo/pull/42", summary: "https://github.com/example/repo/pull/42" }
+review-policy: { risks: "fixture-owned-policy" }
+classify:
+  tier: full
+  errors: false
+  docs: false
+  reasons:
+    tier: "stub: touches persisted state"
+    errors: "stub: no new failure paths"
+    docs: "stub: no doc-facing changes"
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":false}'
+fixture:
+  expect: completed
+  inputs:
+    work: "Findings for the review on pull request #42, already open on this branch: fix the blocking finding below. This is a repair of an existing pull request on its own branch: commit here and never open another branch or pull request for it."
+    final_validation: always
+    validation_scope: "packages/fixture-scope"
+    validation_context: "fixture-db-snapshot-7"
+  reached: [review__code, ci-note, fix__implement, recheck__synthesize, validate__applicability, validate__run, validate__result, gate-validated, flip-ready]
+  resolved-text-contains:
+    impl__implement: "repair of an existing pull request on its own branch: commit here and never open another branch or pull request for it"
+    fix__implement: "repair of an existing pull request on its own branch: commit here and never open another branch or pull request for it"
+    validate__discover: "packages/fixture-scope"
+exec-code: true

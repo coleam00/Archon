@@ -48,6 +48,7 @@ validate__classify:
 validate__result:
   evidence: null
   green: false
+  checks_performed: true
   red_cause: interaction
   summary: "project gate passes PR A and PR B separately; their exact composition fails"
 file-discoveries: '{"issues":[]}'

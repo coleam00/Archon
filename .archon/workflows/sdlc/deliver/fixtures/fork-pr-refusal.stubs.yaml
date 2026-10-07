@@ -1,0 +1,17 @@
+# A pull request this run cannot publish to (a fork whose author did not allow
+# maintainer edits) is refused at the pr node, and the refusal stops everything
+# downstream: no review, no correction, no validation, no flip. pr__pr is
+# deliberately unstubbed to simulate that refusal; this proves the failure
+# cascade, not live fork detection, which is pr.md's prompt guidance.
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green on the fork's review branch"
+impl__assert-changed: "2 files changed"
+shape__simplify: { findings: false }
+fixture:
+  expect: failed
+  fail-node: pr__pr
+  reached: [gate-green, shape__simplify]
+exec-code: true
