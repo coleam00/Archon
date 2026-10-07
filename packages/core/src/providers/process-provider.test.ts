@@ -11,9 +11,14 @@ import { processProviderRegistration } from './process-registration';
 import { descriptor, chunks } from './fixtures/process-provider-data';
 
 const processLog = paths.createLogger('core.provider-process');
+const providerLog = paths.createLogger(`provider.${descriptor.id}`);
 const realCreateLogger = paths.createLogger;
 spyOn(paths, 'createLogger').mockImplementation(module =>
-  module === 'core.provider-process' ? processLog : realCreateLogger(module)
+  module === 'core.provider-process'
+    ? processLog
+    : module === `provider.${descriptor.id}`
+      ? providerLog
+      : realCreateLogger(module)
 );
 
 const fixture = join(import.meta.dir, 'fixtures/process-provider.ts');
@@ -87,31 +92,31 @@ test('process conforms, including real background state and typed failure', asyn
   }
 });
 
-// Windows adds variables it needs to start a process (SYSTEMROOT and others) to a
-// minimal environment, so the child's environment is checked for what the shared
-// builder decides, not for exact equality.
-test.each(['host', 'container'] as const)('process uses the shared %s environment', async kind => {
-  const options = {
-    env: { PROCESS_CANARY: 'request-value' },
-    execContext: kind === 'host' ? { kind } : { kind, containerId: 'test' },
-  };
-  process.env.PROCESS_HOST_CANARY = 'host-value';
-  try {
-    const result = await collect(provider('env').sendQuery('turn', tmpdir(), undefined, options));
-    expect(result[0].type).toBe('result');
-    if (result[0].type !== 'result') throw new Error('missing result');
-    const expected = buildProviderSubprocessEnv(options);
-    const actual = JSON.parse(result[0].text ?? '{}') as Record<string, unknown>;
-    const missing = Object.entries(expected).filter(
-      ([key, value]) => value !== undefined && actual[key] !== value
-    );
-    expect(missing.map(([key]) => key)).toEqual([]);
-    expect(actual.PROCESS_CANARY).toBe('request-value');
-    expect('PROCESS_HOST_CANARY' in actual).toBe(kind === 'host');
-  } finally {
-    delete process.env.PROCESS_HOST_CANARY;
+test.each(['host', 'container'] as const)(
+  'provider receives the %s execution environment',
+  async kind => {
+    const options = {
+      env: { PROCESS_CANARY: 'request-value' },
+      execContext: kind === 'host' ? { kind } : { kind, containerId: 'test' },
+    };
+    process.env.PROCESS_HOST_CANARY = 'host-value';
+    try {
+      const result = await collect(provider('env').sendQuery('turn', tmpdir(), undefined, options));
+      expect(result[0].type).toBe('result');
+      if (result[0].type !== 'result') throw new Error('missing result');
+      const expected = kind === 'container' ? options.env : buildProviderSubprocessEnv(options);
+      const actual = JSON.parse(result[0].text ?? '{}') as Record<string, unknown>;
+      const missing = Object.entries(expected).filter(
+        ([key, value]) => value !== undefined && actual[key] !== value
+      );
+      expect(missing.map(([key]) => key)).toEqual([]);
+      expect(actual.PROCESS_CANARY).toBe('request-value');
+      expect('PROCESS_HOST_CANARY' in actual).toBe(kind === 'host');
+    } finally {
+      delete process.env.PROCESS_HOST_CANARY;
+    }
   }
-});
+);
 
 test(
   'cancel kills the child tree even while the consumer is suspended',
@@ -314,5 +319,60 @@ test('credential crash diagnostics withhold short custom credential values', asy
     expect(JSON.stringify(debug.mock.calls)).not.toContain('§');
   } finally {
     debug.mockRestore();
+  }
+});
+
+test('container request env does not replace the plugin host environment', async () => {
+  process.env.PROCESS_HOST_CANARY = 'host-value';
+  try {
+    const result = await collect(
+      provider('plugin-env').sendQuery('turn', tmpdir(), undefined, {
+        execContext: { kind: 'container', containerId: 'test' },
+        env: { PROCESS_CANARY: 'container-value', PATH: 'container-path' },
+      })
+    );
+    expect(result[0].type).toBe('result');
+    if (result[0].type !== 'result') throw new Error('missing result');
+    expect(JSON.parse(result[0].text ?? '{}')).toEqual({
+      host: 'host-value',
+      path: process.env.PATH,
+    });
+  } finally {
+    delete process.env.PROCESS_HOST_CANARY;
+  }
+});
+
+test('provider logs reach the host logger with container credentials and messages redacted', async () => {
+  const info = spyOn(providerLog, 'info').mockImplementation(() => {});
+  const previous = process.env.CONTAINER_TOKEN;
+  process.env.CONTAINER_TOKEN = 'host-credential';
+  try {
+    await collect(
+      provider('logs').sendQuery(
+        'private message container-credential\nsecond private line',
+        tmpdir(),
+        undefined,
+        {
+          execContext: { kind: 'container', containerId: 'test' },
+          env: { CONTAINER_TOKEN: 'container-credential', CUSTOM_AUTH: '§' },
+          protectedEnvKeys: ['CUSTOM_AUTH'],
+        }
+      )
+    );
+    expect(info.mock.calls).toEqual([
+      [
+        {
+          token: '[REDACTED]',
+          hostToken: '[REDACTED]',
+          custom: '[REDACTED]',
+          nested: { message: '[REDACTED]', lines: ['[REDACTED]', '[REDACTED]'], count: 1 },
+        },
+        'provider.ready [REDACTED]',
+      ],
+    ]);
+  } finally {
+    info.mockRestore();
+    if (previous === undefined) delete process.env.CONTAINER_TOKEN;
+    else process.env.CONTAINER_TOKEN = previous;
   }
 });

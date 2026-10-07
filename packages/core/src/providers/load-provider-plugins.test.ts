@@ -32,10 +32,14 @@ test('receipt loading builds registrations without spawning and leaves an empty 
   expect(await loadProviderPlugins(dir)).toEqual([]);
   const file = receiptPath(dir, id);
   await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify(receipt));
+  const supported = {
+    ...descriptor,
+    capabilities: { ...descriptor.capabilities, nativeTools: true },
+  };
+  await writeFile(file, JSON.stringify({ ...receipt, descriptor: supported }));
   const [registration] = await loadProviderPlugins(dir);
   expect(registration.id).toBe(descriptor.id);
-  expect(registration.capabilities).toEqual(descriptor.capabilities);
+  expect(registration.capabilities).toEqual(supported.capabilities);
   expect(parseProviderRunModel(registration, 'test-model')).toBe('test-model');
   expect(() => registration.parseConfig({ model: 42 }, 'run')).toThrow();
 });
@@ -46,13 +50,7 @@ test('invalid descriptors, executable identities and delivery rules name the rec
   await mkdir(dirname(file), { recursive: true });
   for (const value of [
     { ...receipt, descriptor: { id: descriptor.id } },
-    {
-      ...receipt,
-      descriptor: {
-        ...descriptor,
-        capabilities: { ...descriptor.capabilities, nativeTools: true },
-      },
-    },
+    { ...receipt, descriptor: { ...descriptor, protocol: 2 } },
     { ...receipt, descriptor: { ...descriptor, id: 'other' } },
     { ...receipt, files: [{ path: 'unowned', sha256: 'b'.repeat(64) }] },
     {
@@ -70,7 +68,7 @@ test('invalid descriptors, executable identities and delivery rules name the rec
     await expect(loadProviderPlugins(dir)).rejects.toThrow(file);
     await expect(loadProviderPlugins(dir)).rejects.toThrow('archon plugin update');
     await expect(loadProviderPlugins(dir)).rejects.toThrow('archon plugin remove');
-    if (!('protocol' in value.descriptor) || value.descriptor.capabilities.nativeTools) {
+    if (!('protocol' in value.descriptor) || value.descriptor.protocol !== 1) {
       await expect(readReceipts(dir)).rejects.toThrow(`Invalid plugin receipt ${file}`);
     }
   }

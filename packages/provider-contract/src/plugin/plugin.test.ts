@@ -6,7 +6,7 @@ import { connectProvider, type ConnectedProvider } from './connect';
 import { checkAcp } from './fixtures/acp';
 import { chunks, credentialStatuses, descriptor, fixtureProvider } from './fixtures/provider';
 import { streamPair } from './fixtures/streams';
-import { rpcMessageSchema } from './rpc';
+import { PluginRpc, rpcMessageSchema } from './rpc';
 import { serveProvider } from './serve';
 
 async function withProvider(
@@ -157,7 +157,7 @@ test('in-process and stream-pair conformance agree with live background evidence
   });
 });
 
-test('serializable options survive; the provider receives its process environment', async () => {
+test('serializable options and container environment survive', async () => {
   let received:
     | { prompt: string; cwd: string; resume?: string; options?: SendQueryOptions }
     | undefined;
@@ -183,7 +183,7 @@ test('serializable options survive; the provider receives its process environmen
     },
     assistantConfig: { extensions: false },
     execContext: { kind: 'container', containerId: 'id', execUser: 'user' },
-    env: { KEY: 'host-only' },
+    env: { KEY: 'container-only' },
     onAdmission: () => {},
   };
   await withProvider(
@@ -203,7 +203,7 @@ test('serializable options survive; the provider receives its process environmen
   const { env: _env, onAdmission: _admission, ...data } = options;
   const { env, abortSignal: _signal, onAdmission: _observer, ...actual } = received?.options ?? {};
   expect(actual).toEqual(data);
-  expect(matchesProcessEnvironment(env)).toBe(true);
+  expect(env).toEqual(options.env);
   expect(received?.options?.abortSignal).toBeInstanceOf(AbortSignal);
   expect(received?.options?.onAdmission).toBeUndefined();
 });
@@ -490,5 +490,159 @@ test('config normalization still refuses values that cannot cross the JSON wire'
         )
       ).rejects.toThrow();
     }
+  });
+});
+
+test('tool callbacks reject unknown names and sessions, cancellation and settlement', async () => {
+  const pair = streamPair();
+  const rpc = new PluginRpc(pair.provider);
+  async function rejected(call: Promise<unknown>, message: string): Promise<void> {
+    let failure: unknown;
+    try {
+      await call;
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) throw new Error('callback unexpectedly succeeded');
+    expect(failure.message).toContain(message);
+  }
+  rpc.handle('initialize', () => ({
+    protocolVersion: 1,
+    agentCapabilities: { _meta: { archon: descriptor } },
+    authMethods: [],
+  }));
+  let next = 0;
+  rpc.handle('session/new', () => ({ sessionId: String(next++) }));
+  let calls = 0;
+  rpc.handle('session/prompt', async () => {
+    const call = (sessionId: string, name = 'host') =>
+      rpc.request('_archon/tool_call', { sessionId, name, input: { action: 'inspect' } });
+    await rejected(call('unknown'), 'inactive session');
+    await rejected(call('0', 'unknown'), 'unknown tool');
+    expect(await call('0')).toEqual({ text: 'host-result' });
+    await rpc.notify('_archon/chunk', { sessionId: '0', chunk: { type: 'settled' } });
+    await rejected(call('0'), 'inactive session');
+    return { stopReason: 'end_turn' };
+  });
+  const client = await connectProvider(pair.host);
+  try {
+    expect(
+      await collect(
+        client.sendQuery('turn', '/', undefined, {
+          nativeTools: [
+            {
+              name: 'host',
+              description: 'Host tool',
+              inputSchema: { properties: {}, required: [] },
+              handler: async () => {
+                calls++;
+                return 'host-result';
+              },
+            },
+          ],
+        })
+      )
+    ).toEqual([{ type: 'settled' }]);
+    expect(calls).toBe(1);
+    await expect(
+      rpc.request('_archon/tool_call', { sessionId: '0', name: 'host', input: {} })
+    ).rejects.toThrow('inactive session');
+    const abort = new AbortController();
+    rpc.handle('session/prompt', async () => {
+      const cancelled = new Promise<void>(resolve => rpc.on('session/cancel', () => resolve()));
+      await rpc.notify('_archon/chunk', {
+        sessionId: '1',
+        chunk: { type: 'state_update', state: 'running' },
+      });
+      await cancelled;
+      await rejected(
+        rpc.request('_archon/tool_call', { sessionId: '1', name: 'host', input: {} }),
+        'inactive session'
+      );
+      return { stopReason: 'cancelled' };
+    });
+    const turn = client.sendQuery('cancel', '/', undefined, {
+      abortSignal: abort.signal,
+      nativeTools: [
+        {
+          name: 'host',
+          description: 'Host tool',
+          inputSchema: { properties: {}, required: [] },
+          handler: async () => {
+            calls++;
+            return 'unexpected';
+          },
+        },
+      ],
+    });
+    await turn.next();
+    abort.abort();
+    expect((await turn.next()).done).toBe(true);
+    expect(calls).toBe(1);
+  } finally {
+    await client.close();
+    await rpc.done;
+    await rpc.close();
+  }
+});
+
+test('concurrent native tools remain scoped to their owning session', async () => {
+  await withProvider(
+    fixtureProvider({
+      async *sendQuery(prompt, _cwd, _resume, options) {
+        const tool = options?.nativeTools?.[0];
+        if (!tool) throw new Error('missing tool');
+        yield { type: 'result', text: await tool.handler({ prompt }) };
+        yield { type: 'settled' };
+      },
+    }),
+    async client => {
+      const turn = (name: string) =>
+        collect(
+          client.sendQuery(name, '/', undefined, {
+            nativeTools: [
+              {
+                name: 'host',
+                description: 'Host tool',
+                inputSchema: { properties: { prompt: { kind: 'string' } }, required: ['prompt'] },
+                handler: async input => {
+                  expect(input).toEqual({ prompt: name });
+                  return name;
+                },
+              },
+            ],
+          })
+        );
+      expect(await Promise.all([turn('one'), turn('two')])).toEqual([
+        [{ type: 'result', text: 'one' }, { type: 'settled' }],
+        [{ type: 'result', text: 'two' }, { type: 'settled' }],
+      ]);
+    }
+  );
+});
+
+test('host env stays off the wire while container env travels as request data', async () => {
+  const requests: unknown[] = [];
+  await withProvider(
+    fixtureProvider(),
+    async client => {
+      await collect(client.sendQuery('host', '/', undefined, { env: { KEY: 'host-secret' } }));
+      await collect(
+        client.sendQuery('container', '/', undefined, {
+          execContext: { kind: 'container', containerId: 'test' },
+          env: { KEY: 'container-secret' },
+        })
+      );
+    },
+    (side, bytes) => {
+      const message = rpcMessageSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
+      if (side === 'host' && 'method' in message && message.method === 'session/new')
+        requests.push(message.params);
+    }
+  );
+  expect(JSON.stringify(requests[0])).not.toContain('host-secret');
+  expect(requests[1]).toMatchObject({
+    _meta: { archon: { request: { env: { KEY: 'container-secret' } } } },
   });
 });

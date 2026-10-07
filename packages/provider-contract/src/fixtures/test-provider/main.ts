@@ -1,5 +1,9 @@
 import { existsSync, writeFileSync } from 'node:fs';
-import { serveProvider, type ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
+import {
+  serveProvider,
+  type ProviderPluginDescriptor,
+  type ProviderLogSink,
+} from '@archon/provider-contract/plugin';
 
 type TestProvider = ReturnType<Parameters<typeof serveProvider>[0]['create']>;
 
@@ -32,17 +36,32 @@ export const descriptor: ProviderPluginDescriptor = {
     fallbackModel: false,
     sandbox: false,
     settingSources: false,
-    nativeTools: false,
-    containerExec: false,
+    nativeTools: true,
+    containerExec: true,
   },
 };
 
-export function createProvider(stateFile?: string): TestProvider {
+export function createProvider(stateFile?: string, log?: ProviderLogSink): TestProvider {
   return {
     getType: () => descriptor.id,
     getCapabilities: () => descriptor.capabilities,
     checkCredential: async () => ({ state: 'usable', source: 'native' }),
     async *sendQuery(prompt, _cwd, resume, options): ReturnType<TestProvider['sendQuery']> {
+      if (prompt === 'parity') {
+        await log?.({ level: 'info', msg: 'provider.parity', bindings: { transport: 'ready' } });
+        const tool = options?.nativeTools?.[0];
+        if (!tool) throw new Error('missing host tool');
+        yield {
+          type: 'result',
+          structuredOutput: {
+            tool: await tool.handler({ action: 'inspect', enabled: true }),
+            env: options?.env ?? {},
+            hostPath: process.env.PATH ?? '',
+          },
+        };
+        yield { type: 'settled' };
+        return;
+      }
       if (prompt === 'failure') {
         yield { type: 'result', isError: true, failure: { class: 'auth', evidence: 'HTTP 401' } };
         yield { type: 'settled' };
@@ -71,6 +90,6 @@ export function createProvider(stateFile?: string): TestProvider {
   };
 }
 
-export const create: Parameters<typeof serveProvider>[0]['create'] = () => createProvider();
+export const create = (): TestProvider => createProvider();
 if (import.meta.main)
-  await serveProvider({ descriptor, create: () => createProvider(process.argv[2]) });
+  await serveProvider({ descriptor, create: log => createProvider(process.argv[2], log) });

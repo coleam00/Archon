@@ -974,138 +974,7 @@
           "minLength": 1
         },
         "capabilities": {
-          "type": "object",
-          "properties": {
-            "backgroundWork": {
-              "type": "string",
-              "enum": [
-                "reported",
-                "none",
-                "unobserved"
-              ]
-            },
-            "sessionResume": {
-              "type": "boolean"
-            },
-            "sessionFork": {
-              "type": "boolean"
-            },
-            "mcp": {
-              "type": "boolean"
-            },
-            "hooks": {
-              "type": "boolean"
-            },
-            "skills": {
-              "type": "boolean"
-            },
-            "plugins": {
-              "type": "boolean"
-            },
-            "agents": {
-              "type": "boolean"
-            },
-            "toolRestrictions": {
-              "type": "boolean"
-            },
-            "knownToolNames": {
-              "readOnly": true,
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "renamedTools": {
-              "readOnly": true,
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "structuredOutput": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "const": "enforced"
-                },
-                {
-                  "type": "string",
-                  "const": "best-effort"
-                },
-                {
-                  "type": "boolean",
-                  "const": false
-                }
-              ]
-            },
-            "requiresAllPropertiesRequired": {
-              "type": "boolean"
-            },
-            "envInjection": {
-              "type": "boolean"
-            },
-            "costControl": {
-              "type": "boolean"
-            },
-            "costReporting": {
-              "type": "boolean"
-            },
-            "tokenReporting": {
-              "type": "boolean"
-            },
-            "stopReasonReporting": {
-              "type": "boolean"
-            },
-            "turnCountReporting": {
-              "type": "boolean"
-            },
-            "resolvedModelReporting": {
-              "type": "boolean"
-            },
-            "effortControl": {
-              "type": "boolean"
-            },
-            "fallbackModel": {
-              "type": "boolean"
-            },
-            "sandbox": {
-              "type": "boolean"
-            },
-            "settingSources": {
-              "type": "boolean"
-            },
-            "nativeTools": {
-              "type": "boolean",
-              "const": false
-            },
-            "containerExec": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "backgroundWork",
-            "sessionResume",
-            "mcp",
-            "hooks",
-            "skills",
-            "plugins",
-            "agents",
-            "toolRestrictions",
-            "structuredOutput",
-            "requiresAllPropertiesRequired",
-            "envInjection",
-            "costControl",
-            "costReporting",
-            "effortControl",
-            "fallbackModel",
-            "sandbox",
-            "settingSources",
-            "nativeTools",
-            "containerExec"
-          ]
+          "$ref": "#/$defs/ProviderCapabilities"
         },
         "credentials": {
           "type": "object",
@@ -1296,6 +1165,120 @@
               ]
             }
           ]
+        },
+        "nativeTools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "properties": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "enum"
+                            },
+                            "values": {
+                              "readOnly": true,
+                              "type": "array",
+                              "prefixItems": [
+                                {
+                                  "type": "string"
+                                }
+                              ],
+                              "items": {
+                                "type": "string"
+                              },
+                              "minItems": 1
+                            },
+                            "description": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "values"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "boolean"
+                            },
+                            "description": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "required": {
+                    "readOnly": true,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "properties",
+                  "required"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "inputSchema"
+            ]
+          }
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -1531,6 +1514,77 @@
       "required": [
         "sessionId",
         "chunk"
+      ]
+    },
+    "ProviderToolCallRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema7"
+          }
+        }
+      },
+      "required": [
+        "sessionId",
+        "name",
+        "input"
+      ]
+    },
+    "ProviderToolCallResponse": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "ProviderLogNotification": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "fatal",
+            "error",
+            "warn",
+            "info",
+            "debug",
+            "trace"
+          ]
+        },
+        "msg": {
+          "type": "string"
+        },
+        "bindings": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema8"
+          }
+        }
+      },
+      "required": [
+        "level",
+        "msg",
+        "bindings"
       ]
     },
     "ProviderCheckCredentialRequest": {
@@ -1909,6 +1963,68 @@
           },
           "additionalProperties": {
             "$ref": "#/$defs/schema6"
+          }
+        }
+      ]
+    },
+    "schema7": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema7"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema7"
+          }
+        }
+      ]
+    },
+    "schema8": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema8"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema8"
           }
         }
       ]

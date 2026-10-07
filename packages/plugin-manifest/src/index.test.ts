@@ -201,14 +201,19 @@ test('provider receipts validate the owned descriptor contract', () => {
     }),
   };
   expect(pluginReceiptSchema.parse(JSON.parse(JSON.stringify(receipt)))).toEqual(receipt);
+  expect(
+    pluginReceiptSchema.safeParse({
+      ...receipt,
+      descriptor: {
+        ...receipt.descriptor,
+        capabilities: { ...receipt.descriptor.capabilities, nativeTools: true },
+      },
+    }).success
+  ).toBe(true);
   for (const descriptor of [
     { id: 'example' },
     { ...receipt.descriptor, protocol: 2 },
     { ...receipt.descriptor, credentials: { kind: 'dynamic' } },
-    {
-      ...receipt.descriptor,
-      capabilities: { ...receipt.descriptor.capabilities, nativeTools: true },
-    },
   ]) {
     expect(pluginReceiptSchema.safeParse({ ...receipt, descriptor }).success).toBe(false);
   }

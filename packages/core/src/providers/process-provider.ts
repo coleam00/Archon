@@ -20,6 +20,7 @@ import {
   PluginRemoteError,
   type ConnectedProvider,
   type ProviderPluginDescriptor,
+  type ProviderLog,
 } from '@archon/provider-contract/plugin';
 
 const EXIT_GRACE_MS = 10_000;
@@ -42,7 +43,8 @@ function startProcess(
   descriptor: ProviderPluginDescriptor,
   argv: readonly [string, ...string[]],
   options: Pick<SendQueryOptions, 'env' | 'execContext' | 'protectedEnvKeys'>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  messageText?: string
 ): {
   connect(): Promise<ConnectedProvider>;
   failure(error: unknown): Promise<Error>;
@@ -54,15 +56,35 @@ function startProcess(
   // One logger per process, not a module cache: a logger cached by an earlier caller
   // would outlive any test that replaces createLogger to observe these diagnostics.
   const log = createLogger('core.provider-process');
-  const env = buildProviderSubprocessEnv(options);
-  const secrets = collectCredentialValues(
-    env,
-    options.protectedEnvKeys,
-    Object.values(options.env ?? {}).filter(value => value.length >= 8)
-  );
+  const env = buildProviderSubprocessEnv(options.execContext?.kind === 'container' ? {} : options);
+  const secrets = [
+    ...collectCredentialValues(env, options.protectedEnvKeys),
+    ...collectCredentialValues(
+      options.env ?? {},
+      options.protectedEnvKeys,
+      Object.values(options.env ?? {}).filter(value => value.length >= 8)
+    ),
+  ];
   secrets.push(...secrets.map(value => JSON.stringify(value).slice(1, -1)));
   secrets.sort((a, b) => b.length - a.length);
   const redact = (text: string): string => redactCredentialValues(text, secrets);
+  const providerLog = createLogger(`provider.${descriptor.id}`);
+  const logSecrets = [
+    ...secrets,
+    ...(messageText ? [messageText, ...messageText.split('\n').filter(Boolean)] : []),
+  ].sort((a, b) => b.length - a.length);
+  function redactLogValue(value: ProviderLog['bindings'][string]): ProviderLog['bindings'][string] {
+    if (typeof value === 'string') return redactCredentialValues(value, logSecrets);
+    if (Array.isArray(value)) return value.map(redactLogValue);
+    if (value !== null && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value).map(([key, field]) => [
+          redactCredentialValues(key, logSecrets),
+          redactLogValue(field),
+        ])
+      );
+    return value;
+  }
   const child = spawn(argv[0], argv.slice(1), {
     detached: process.platform !== 'win32',
     windowsHide: true,
@@ -155,10 +177,20 @@ function startProcess(
   }
   return {
     async connect(): Promise<ConnectedProvider> {
-      const connection = await connectProvider({
-        readable: Readable.toWeb(child.stdout),
-        writable: Writable.toWeb(child.stdin),
-      });
+      const connection = await connectProvider(
+        {
+          readable: Readable.toWeb(child.stdout),
+          writable: Writable.toWeb(child.stdin),
+        },
+        {
+          onLog(record): void {
+            providerLog[record.level](
+              redactLogValue(record.bindings),
+              redactCredentialValues(record.msg, logSecrets)
+            );
+          },
+        }
+      );
       if (!isDeepStrictEqual(connection.descriptor, descriptor)) {
         throw new Error(
           `Provider plugin ${descriptor.id} changed since install; run archon plugin update for this plugin`
@@ -220,7 +252,7 @@ export class ProcessAgentProvider implements IAgentProvider {
     options: SendQueryOptions = {}
   ): AsyncGenerator<ProviderChunk> {
     if (options.abortSignal?.aborted) return;
-    const process = startProcess(this.descriptor, this.argv, options, options.abortSignal);
+    const process = startProcess(this.descriptor, this.argv, options, options.abortSignal, prompt);
     let settled = false;
     try {
       const connection = await process.connect();

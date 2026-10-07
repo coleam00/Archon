@@ -85,11 +85,21 @@ A workflow can then name the descriptor id in `provider:`.
 
 Provider plugins execute code as your operating-system user. On the host they receive
 the ambient environment plus Archon's per-request environment, just like an in-process
-provider. For container execution they receive the minimal container environment plus
-the request environment. Credentials use that process environment, not protocol fields.
+provider. For container execution the plugin still inherits the host environment so it
+can launch the container runtime; the container request environment travels as session
+data and becomes the provider's `options.env`. Credential checks use the plugin process
+environment.
 The process boundary supplies packaging, crash isolation, and cancellation; it is not a
 security sandbox. Archon withholds plugin stderr contents from its logs and errors because
 they may contain credentials or user messages.
+
+Native tool specifications travel with the session; their handlers run in the host
+through `_archon/tool_call`. Calls after settlement or cancellation are rejected.
+`serveProvider` passes a structured log sink to its `create(log)` factory. Await that
+sink with `{ level, msg, bindings }` to forward metadata through `_archon/log` to the
+host's `provider.<id>` logger. Never put credentials, tokens, or message text in log
+records. Keep stdout exclusively for RPC; configure other logging to stderr before
+it writes. Stderr remains withheld.
 
 See [building a community provider](/contributing/adding-a-community-provider/) for
 `serveProvider`, descriptors, wire schemas, and conformance tests.
