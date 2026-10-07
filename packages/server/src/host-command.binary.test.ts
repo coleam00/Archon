@@ -7,7 +7,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 const trackTempRoot = trackTempRoots();
 
 test.each(['user', 'repository'])(
-  'in-process binary CLI server import republishes its host command after %s env loading',
+  'standalone server entry preserves its launching CLI command after %s env loading',
   async scope => {
     const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-server-binary-host-')));
     const home = join(root, 'home');
@@ -23,18 +23,23 @@ test.each(['user', 'repository'])(
         '-e',
         `
         import { mock } from 'bun:test';
+        const bundledBuild = await import(${JSON.stringify(resolve(import.meta.dir, '../../paths/src/bundled-build.ts'))});
         mock.module(${JSON.stringify(resolve(import.meta.dir, '../../paths/src/bundled-build.ts'))}, () => ({
+          ...bundledBuild,
           BUNDLED_IS_BINARY: true,
           BUNDLED_VERSION: '1.2.3',
-          BUNDLED_GIT_COMMIT: 'test',
-          BUNDLED_WEB_DIST_SHA256: '',
         }));
-        const { publishArchonCliCommand } = await import(${JSON.stringify(resolve(import.meta.dir, '../../paths/src/cli-command.ts'))});
-        publishArchonCliCommand();
-        await import(${JSON.stringify(join(import.meta.dir, 'index.ts'))});
-        if (process.env.ARCHON_CLI_COMMAND !== JSON.stringify([process.execPath])) {
-          throw new Error('Server import lost the binary CLI host command');
-        }
+        const cliCommand = JSON.stringify(['/installed/archon']);
+        const { runServerEntry } = await import(${JSON.stringify(join(import.meta.dir, 'bin.ts'))});
+        process.env.ARCHON_CLI_COMMAND = cliCommand;
+        await runServerEntry(['--cli-version', '1.2.3'], process.env, async () => {
+          await import(${JSON.stringify(join(import.meta.dir, 'index.ts'))});
+          return { startServer: async () => {
+            if (process.env.ARCHON_CLI_COMMAND !== cliCommand) {
+              throw new Error('Server entry lost the binary CLI host command');
+            }
+          }};
+        });
         `,
       ],
       {
@@ -49,7 +54,7 @@ test.each(['user', 'repository'])(
       new Response(child.stderr).text(),
       new Response(child.stdout).text(),
     ]);
-    expect(stderr).not.toContain('Server import lost the binary CLI host command');
+    expect(stderr).not.toContain('Server entry lost the binary CLI host command');
     expect(exitCode).toBe(0);
   }
 );

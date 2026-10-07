@@ -1891,7 +1891,9 @@ describe('compiled CLI update notices', () => {
       writeFileSync(
         preload,
         `import { mock } from 'bun:test';
+const bundledBuild = await import(${JSON.stringify(join(repoRoot, 'packages/paths/src/bundled-build.ts'))});
 mock.module(${JSON.stringify(join(repoRoot, 'packages/paths/src/bundled-build.ts'))}, () => ({
+  ...bundledBuild,
   BUNDLED_IS_BINARY: ${!entry.source}, BUNDLED_VERSION: '0.11.1', BUNDLED_GIT_COMMIT: 'test', BUNDLED_WEB_DIST_SHA256: '',
 }));
 globalThis.fetch = () => ${entry.pending ? 'new Promise(() => {})' : "Promise.reject(new Error('Network unavailable'))"};

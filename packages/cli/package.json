@@ -20,7 +20,6 @@
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
     "@archon/providers": "workspace:*",
-    "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",
     "@archon/forge": "workspace:*",
@@ -57,6 +56,9 @@
     ],
     [
       "src/commands/serve.test.ts"
+    ],
+    [
+      "src/commands/serve-binary.test.ts"
     ],
     [
       "src/commands/ai.test.ts"

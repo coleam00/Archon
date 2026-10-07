@@ -90,3 +90,22 @@ test.each([
   );
   expect(loadServer).not.toHaveBeenCalled();
 });
+
+test('launcher log level survives application env loading', async () => {
+  const launchEnv = { ARCHON_CLI_COMMAND: '["archon"]', LOG_LEVEL: 'debug' };
+  const { getLogLevel, setLogLevel } = await import('@archon/paths/logger');
+  const previous = getLogLevel();
+  try {
+    await runServerEntry(['--cli-version', BUNDLED_VERSION], launchEnv, async () => {
+      launchEnv.LOG_LEVEL = 'warn';
+      setLogLevel('warn');
+      return {
+        startServer: async () => {
+          expect(getLogLevel()).toBe('debug');
+        },
+      };
+    });
+  } finally {
+    setLogLevel(previous);
+  }
+});

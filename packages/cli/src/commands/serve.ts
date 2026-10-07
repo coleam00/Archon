@@ -1,13 +1,19 @@
 import { dirname, join } from 'path';
-import { existsSync, mkdirSync, renameSync, rmSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from 'fs';
 import {
   createLogger,
   getWebDistDir,
+  getServerDistDir,
+  getSourceServerEntry,
+  getLogLevel,
   getSourceWebDistDir,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   BUNDLED_WEB_DIST_SHA256,
+  BUNDLED_SERVER_SHA256,
 } from '@archon/paths';
+
+import { serverLaunchArgv, serverReleaseAsset } from '@archon/paths/server-launch';
 
 const log = createLogger('cli.serve');
 
@@ -40,11 +46,20 @@ export function parseEmbeddedChecksum(checksum: string): string {
 export interface ServeOptions {
   /** TCP port to bind. Ignored when downloadOnly is true. Range: 1–65535. */
   port?: number;
-  /** Download the web UI and exit without starting the server. */
+  /** Download the server and web UI and exit without starting the server. */
   downloadOnly?: boolean;
 }
 
-export async function serveCommand(opts: ServeOptions): Promise<number> {
+type ServerChild = Pick<Bun.Subprocess, 'exited' | 'kill' | 'pid'>;
+type SpawnServer = (
+  argv: string[],
+  options: Bun.SpawnOptions.OptionsObject<'inherit', 'inherit', 'inherit'>
+) => ServerChild;
+
+export async function serveCommand(
+  opts: ServeOptions,
+  spawn: SpawnServer = (argv, options) => Bun.spawn(argv, options)
+): Promise<number> {
   if (
     opts.port !== undefined &&
     (!Number.isInteger(opts.port) || opts.port < 1 || opts.port > 65535)
@@ -75,11 +90,29 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
     }
 
     log.info({ webDistDir }, 'web_dist.source_build_found');
-    return startServerUntilSignal(webDistDir, opts.port);
+    return launchServer(
+      [process.execPath, '--no-env-file', getSourceServerEntry()],
+      webDistDir,
+      opts.port,
+      spawn
+    );
   }
 
   const version = BUNDLED_VERSION;
   const webDistDir = getWebDistDir(version);
+  const asset = serverReleaseAsset(
+    `bun-${process.platform === 'win32' ? 'windows' : process.platform}-${process.arch}`
+  );
+  const serverPath = join(getServerDistDir(version), asset);
+  try {
+    if (!existsSync(serverPath)) await downloadServer(version, serverPath);
+    else log.info({ serverPath }, 'server_dist.cache_hit');
+  } catch (err) {
+    log.error({ err: toError(err), version, serverPath }, 'server_dist.download_failed');
+    console.error(`Error: Failed to download server: ${toError(err).message}`);
+    console.error('Retry with: archon serve --download-only');
+    return 1;
+  }
 
   if (!existsSync(webDistDir)) {
     try {
@@ -96,40 +129,118 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
 
   if (opts.downloadOnly) {
     log.info({ webDistDir }, 'web_dist.download_completed');
+    console.log(`Server downloaded to: ${serverPath}`);
     console.log(`Web UI downloaded to: ${webDistDir}`);
     return 0;
   }
 
-  return startServerUntilSignal(webDistDir, opts.port);
+  return launchServer([serverPath], webDistDir, opts.port, spawn);
 }
 
-/** Run the server in the foreground until the operator interrupts it. */
-async function startServerUntilSignal(
+async function launchServer(
+  command: string[],
   webDistDir: string,
-  port: number | undefined
+  port: number | undefined,
+  spawn: SpawnServer
 ): Promise<number> {
-  // Import server and start (dynamic import keeps CLI startup fast for other commands)
+  const ignoreInterrupt = (): void => undefined;
+  let forwardTerminate: (() => void) | undefined;
   try {
-    const { startServer } = await import('@archon/server');
-    await startServer({
-      webDistPath: webDistDir,
-      port,
-    });
+    // Ctrl+C reaches the foreground process group. Forwarding it would interrupt
+    // the server twice and cut its graceful shutdown short.
+    process.on('SIGINT', ignoreInterrupt);
+    const child = spawn(
+      [
+        ...command,
+        ...serverLaunchArgv({
+          cliVersion: BUNDLED_VERSION,
+          port,
+          webDistPath: webDistDir,
+        }),
+      ],
+      {
+        stdin: 'inherit',
+        stdout: 'inherit',
+        stderr: 'inherit',
+        env: { ...process.env, LOG_LEVEL: getLogLevel() },
+      }
+    );
+    forwardTerminate = (): void => {
+      child.kill('SIGTERM');
+    };
+    process.once('SIGTERM', forwardTerminate);
+    log.info({ serverPid: child.pid }, 'server.spawned');
+    return await child.exited;
   } catch (err) {
-    const error = toError(err);
-    log.error({ err: error, webDistDir, port }, 'server.start_failed');
-    console.error(`Error: Server failed to start: ${error.message}`);
+    log.error({ err: toError(err), webDistDir, port }, 'server.start_failed');
+    console.error(`Error: Server failed to start: ${toError(err).message}`);
     return 1;
+  } finally {
+    process.removeListener('SIGINT', ignoreInterrupt);
+    if (forwardTerminate) process.removeListener('SIGTERM', forwardTerminate);
   }
+}
 
-  // Block forever — Bun.serve() keeps the event loop alive, but the CLI's
-  // process.exit(exitCode) would kill it. Wait on a promise that only resolves
-  // on SIGINT/SIGTERM so the server stays running.
-  await new Promise<void>(resolve => {
-    process.once('SIGINT', resolve);
-    process.once('SIGTERM', resolve);
-  });
-  return 0;
+export async function downloadServer(
+  version: string,
+  serverPath: string,
+  embeddedChecksum: string = BUNDLED_SERVER_SHA256
+): Promise<void> {
+  const asset = serverReleaseAsset(
+    `bun-${process.platform === 'win32' ? 'windows' : process.platform}-${process.arch}`
+  );
+  log.info({ version, serverPath, asset }, 'server_dist.download_started');
+  const bytes = await fetchVerifiedAsset(version, asset, embeddedChecksum, 'server_dist');
+  mkdirSync(dirname(serverPath), { recursive: true });
+  const staged = `${serverPath}.${process.pid}.tmp`;
+  try {
+    await Bun.write(staged, bytes);
+    log.info({ staged, bytes: bytes.byteLength }, 'server_dist.staged');
+    chmodSync(staged, 0o755);
+    renameSync(staged, serverPath);
+    log.info({ serverPath }, 'server_dist.installed');
+  } finally {
+    rmSync(staged, { force: true });
+  }
+}
+
+async function fetchVerifiedAsset(
+  version: string,
+  asset: string,
+  embeddedChecksum: string,
+  phase: 'web_dist' | 'server_dist'
+): Promise<ArrayBuffer> {
+  const url = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${asset}`;
+  try {
+    let expectedHash: string;
+    if (embeddedChecksum) expectedHash = parseEmbeddedChecksum(embeddedChecksum);
+    else if (phase === 'web_dist') {
+      // Development binary builds without a packaged web artifact retain the remote-checksum fallback.
+      const checksumsUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/checksums.txt`;
+      const checksums = await fetch(checksumsUrl);
+      if (!checksums.ok)
+        throw new Error(`Failed to download checksums from ${checksumsUrl}: ${checksums.status}`);
+      expectedHash = parseChecksum(await checksums.text(), asset);
+    } else {
+      throw new Error('Missing embedded server checksum');
+    }
+    log.info({ source: embeddedChecksum ? 'embedded' : 'remote' }, `${phase}.checksum_resolved`);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    const size = response.headers.get('content-length');
+    console.log(
+      `Downloading ${asset} for Archon v${version} (${size ? `${size} bytes` : 'size unavailable'}) from ${url}...`
+    );
+    const bytes = await response.arrayBuffer();
+    const actualHash = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+    if (actualHash !== expectedHash)
+      throw new Error(`Checksum mismatch: expected ${expectedHash}, got ${actualHash}`);
+    console.log('Checksum verified.');
+    log.info({ bytes: bytes.byteLength }, `${phase}.verified`);
+    return bytes;
+  } catch (error) {
+    throw new Error(`${toError(error).message} (${url})`, { cause: error });
+  }
 }
 
 // Exported for tests; `embeddedChecksum` and `extractionTimeoutMs` default to the
@@ -142,69 +253,14 @@ export async function downloadWebDist(
   embeddedChecksum: string = BUNDLED_WEB_DIST_SHA256,
   extractionTimeoutMs: number = EXTRACTION_TIMEOUT_MS
 ): Promise<void> {
-  const tarballUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/archon-web.tar.gz`;
-  const checksumsUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/checksums.txt`;
-
-  // Phase markers, not metrics. When this stalls on windows CI the only surviving
-  // evidence is the log, and a single start line cannot say whether the wait sat
-  // in the fetch, the staged write, the spawn call, the child, or the rename
-  // afterwards (#2924). Each `web_dist.*` event below closes one phase and
-  // carries that phase's own durationMs, so the phases chain from here.
   const downloadStartedAt = performance.now();
   log.info({ version, targetDir }, 'web_dist.download_started');
-  console.log(`Web UI not found locally — downloading from release v${version}...`);
-
-  // Determine expected hash: prefer build-time embedded hash (independent trust anchor)
-  // over the remote checksums.txt (same-source, weaker guarantee).
-  let expectedHash: string;
-  let tarballRes: Response;
-  if (embeddedChecksum) {
-    expectedHash = parseEmbeddedChecksum(embeddedChecksum);
-    log.info({ source: 'embedded' }, 'web_dist.checksum_resolved');
-    console.log(`Downloading ${tarballUrl}...`);
-    tarballRes = await fetch(tarballUrl).catch((err: unknown) => {
-      throw new Error(`Network error fetching tarball from ${tarballUrl}: ${toError(err).message}`);
-    });
-  } else {
-    // Fallback: download checksums and tarball in parallel (dev mode or pre-build binaries)
-    console.log(`Downloading ${tarballUrl}...`);
-    const [checksumsRes, fetchedTarballRes] = await Promise.all([
-      fetch(checksumsUrl).catch((err: unknown) => {
-        throw new Error(
-          `Network error fetching checksums from ${checksumsUrl}: ${toError(err).message}`
-        );
-      }),
-      fetch(tarballUrl).catch((err: unknown) => {
-        throw new Error(
-          `Network error fetching tarball from ${tarballUrl}: ${toError(err).message}`
-        );
-      }),
-    ]);
-    if (!checksumsRes.ok) {
-      throw new Error(
-        `Failed to download checksums: ${checksumsRes.status} ${checksumsRes.statusText}`
-      );
-    }
-    const checksumsText = await checksumsRes.text();
-    expectedHash = parseChecksum(checksumsText, 'archon-web.tar.gz');
-    log.info({ source: 'remote' }, 'web_dist.checksum_resolved');
-    tarballRes = fetchedTarballRes;
-  }
-
-  if (!tarballRes.ok) {
-    throw new Error(`Failed to download web UI: ${tarballRes.status} ${tarballRes.statusText}`);
-  }
-  const tarballBuffer = await tarballRes.arrayBuffer();
-
-  // Verify checksum
-  const hasher = new Bun.CryptoHasher('sha256');
-  hasher.update(new Uint8Array(tarballBuffer));
-  const actualHash = hasher.digest('hex');
-
-  if (actualHash !== expectedHash) {
-    throw new Error(`Checksum mismatch: expected ${expectedHash}, got ${actualHash}`);
-  }
-  console.log('Checksum verified.');
+  const tarballBuffer = await fetchVerifiedAsset(
+    version,
+    'archon-web.tar.gz',
+    embeddedChecksum,
+    'web_dist'
+  );
   const verifiedAt = performance.now();
   log.info({ durationMs: Math.round(verifiedAt - downloadStartedAt) }, 'web_dist.tarball_verified');
 

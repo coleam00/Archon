@@ -48,7 +48,7 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   server: {
     runtime: ['adapters', 'core', 'git', 'paths', 'provider-contract', 'providers', 'workflows'],
   },
-  // CLI composes local services and can launch the server.
+  // CLI composes local services and launches the server executable.
   cli: {
     runtime: [
       'adapters',
@@ -60,7 +60,6 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
       'plugin-manifest',
       'provider-contract',
       'providers',
-      'server',
       'workflows',
     ],
   },
