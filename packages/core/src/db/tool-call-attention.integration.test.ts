@@ -82,7 +82,7 @@ test('a separate executor process publishes durable attention for an already att
       '--no-env-file',
       '--eval',
       `
-    const { setToolCallAttention } = await import(${JSON.stringify(new URL('./workflows.ts', import.meta.url).pathname)});
+    const { setToolCallAttention } = await import(${JSON.stringify(new URL('./workflows.ts', import.meta.url).href)});
     await setToolCallAttention(${JSON.stringify(runId)}, 's', ${JSON.stringify([call])});
     process.exit(0);
   `,
