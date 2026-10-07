@@ -58,14 +58,18 @@ import {
   claimPiExtensionProcessError,
   registerBuiltinProviders,
   registerCommunityProviders,
+  registerProvider,
 } from '@archon/providers';
-import { getVendorCatalog } from '@archon/core';
+import { getPluginsPath } from '@archon/paths';
+import { getVendorCatalog, loadProviderPlugins } from '@archon/core';
 import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
 import { CODEX_BOOT_CHECKED, readCodexBootAuth } from './boot/codex-auth-posture';
 
 // Bootstrap provider registry before any provider lookups
 registerBuiltinProviders();
 registerCommunityProviders();
+for (const registration of await loadProviderPlugins(getPluginsPath()))
+  registerProvider(registration);
 // Fail fast at boot (not on first API request) if any registration declares a
 // credential vendor the delivery map can't deliver — that's a provider bug
 // that must block startup, not surface as a runtime 500 (#1955).

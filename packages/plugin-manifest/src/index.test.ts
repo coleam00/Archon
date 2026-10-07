@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { providerCapabilitiesSchema } from '@archon/provider-contract';
+import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
 import {
   forgeManifestSchema,
-  forgeReleaseAsset,
+  pluginReleaseAsset,
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
   pluginReceiptSchema,
@@ -100,13 +102,13 @@ describe('compatibility.archon', () => {
 
 describe('forge release asset', () => {
   test('names each asset from the executable and the Bun compile target', () => {
-    expect(forgeReleaseAsset('archon-forge-github', 'bun-linux-x64')).toBe(
+    expect(pluginReleaseAsset('archon-forge-github', 'bun-linux-x64')).toBe(
       'archon-forge-github-linux-x64'
     );
-    expect(forgeReleaseAsset('archon-forge-github', 'bun-windows-x64')).toBe(
+    expect(pluginReleaseAsset('archon-forge-github', 'bun-windows-x64')).toBe(
       'archon-forge-github-windows-x64.exe'
     );
-    expect(() => forgeReleaseAsset('archon-forge-github', 'bun-freebsd-x64')).toThrow();
+    expect(() => pluginReleaseAsset('archon-forge-github', 'bun-freebsd-x64')).toThrow();
   });
 });
 
@@ -155,4 +157,59 @@ describe('plugin receipt', () => {
       expect(parsed.success).toBe(false);
     }
   });
+});
+
+const providerManifest = {
+  ...manifest,
+  schemaVersion: 1 as const,
+  kind: 'provider' as const,
+  executable: 'archon-provider-example',
+};
+test('provider receipts validate the owned descriptor contract', () => {
+  expect(pluginManifestSchema.parse(providerManifest)).toEqual(providerManifest);
+  for (const executable of [
+    'archon-forge-example',
+    '../archon-provider-example',
+    'archon-provider-example.exe',
+  ]) {
+    expect(pluginManifestSchema.safeParse({ ...providerManifest, executable }).success).toBe(false);
+  }
+  const receipt = {
+    schemaVersion: 1 as const,
+    id: 'owner/provider',
+    manifest: providerManifest,
+    tag: 'v1',
+    commit: 'a'.repeat(40),
+    installedAt: new Date(0).toISOString(),
+    files: [{ path: 'archon-provider-example', sha256: 'b'.repeat(64) }],
+    descriptor: providerPluginDescriptorSchema.parse({
+      protocol: 1,
+      id: 'example',
+      displayName: 'Example',
+      version: '1',
+      credentials: { kind: 'static', specs: [] },
+      configSchema: { type: 'object' },
+      capabilities: {
+        ...Object.fromEntries(
+          Object.keys(providerCapabilitiesSchema.shape).map(key => [key, false])
+        ),
+        backgroundWork: 'none',
+        sessionFork: undefined,
+        knownToolNames: undefined,
+        renamedTools: undefined,
+      },
+    }),
+  };
+  expect(pluginReceiptSchema.parse(JSON.parse(JSON.stringify(receipt)))).toEqual(receipt);
+  for (const descriptor of [
+    { id: 'example' },
+    { ...receipt.descriptor, protocol: 2 },
+    { ...receipt.descriptor, credentials: { kind: 'dynamic' } },
+    {
+      ...receipt.descriptor,
+      capabilities: { ...receipt.descriptor.capabilities, nativeTools: true },
+    },
+  ]) {
+    expect(pluginReceiptSchema.safeParse({ ...receipt, descriptor }).success).toBe(false);
+  }
 });

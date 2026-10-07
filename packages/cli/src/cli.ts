@@ -130,11 +130,19 @@ function installProviderProcessErrorHandlers(
 
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
-  const { claimPiExtensionProcessError, registerBuiltinProviders, registerCommunityProviders } =
-    await import('@archon/providers');
+  const {
+    claimPiExtensionProcessError,
+    registerBuiltinProviders,
+    registerCommunityProviders,
+    registerProvider,
+  } = await import('@archon/providers');
   installProviderProcessErrorHandlers(claimPiExtensionProcessError);
   registerBuiltinProviders();
   registerCommunityProviders();
+  const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
+  const { getPluginsPath } = await import('@archon/paths');
+  for (const registration of await loadProviderPlugins(getPluginsPath()))
+    registerProvider(registration);
   providersRegistered = true;
 }
 

@@ -55,18 +55,26 @@ function assertValidCapabilities(entry: ProviderRegistration): void {
   }
 }
 
-/**
- * Register a provider. Throws on duplicate registration.
- */
-export function registerProvider(entry: ProviderRegistration): void {
-  if (registry.has(entry.id)) {
+export function assertProviderRegistrationAllowed(
+  entry: ProviderRegistration,
+  existing: Iterable<ProviderRegistration>
+): void {
+  const registrations = [...existing];
+  if (registrations.some(provider => provider.id === entry.id)) {
     throw new Error(`Provider '${entry.id}' is already registered`);
   }
-  const owner = [...registry.values()].find(provider => provider.ownsUnprefixedModelRefs);
+  const owner = registrations.find(provider => provider.ownsUnprefixedModelRefs);
   if (entry.ownsUnprefixedModelRefs && owner) {
     throw new Error(`Provider '${owner.id}' already owns unprefixed model refs`);
   }
   assertValidCapabilities(entry);
+}
+
+/**
+ * Register a provider. Throws on duplicate registration.
+ */
+export function registerProvider(entry: ProviderRegistration): void {
+  assertProviderRegistrationAllowed(entry, registry.values());
   registry.set(entry.id, entry);
   getLog().debug({ provider: entry.id, builtIn: entry.builtIn }, 'provider.registered');
 }
@@ -184,26 +192,7 @@ export function registerBuiltinProviders(): void {
   }
 }
 
-/**
- * Register all bundled community providers in one call.
- *
- * Process entrypoints (server, CLI) call this once after
- * `registerBuiltinProviders()`. Adding a new community provider means:
- *   1. Drop the implementation under `packages/providers/src/community/<id>/`.
- *   2. Export a `register<Name>Provider()` function from it.
- *   3. Import + call it here.
- *
- * That's the entire cross-cutting change outside the provider's own
- * directory. No entrypoint edits, no config-type edits — just add a line
- * to this function. That's the Phase 2 contract (#1195): community
- * providers are a localized addition.
- *
- * Each `register*Provider` is itself idempotent, so calling this
- * aggregator multiple times
- * is safe. Errors during registration are not caught here — a broken
- * community provider should fail loud at bootstrap, not silently
- * disappear.
- */
+/** Register the remaining bundled providers; new community providers install as plugins. */
 export function registerCommunityProviders(): void {
   registerOpencodeProvider();
   registerPiProvider();

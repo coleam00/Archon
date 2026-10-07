@@ -70,9 +70,6 @@
       "src/registry.test.ts"
     ],
     [
-      "src/community/_template/capabilities.test.ts"
-    ],
-    [
       "src/oauth.test.ts"
     ],
     [
