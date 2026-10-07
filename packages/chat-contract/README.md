@@ -24,8 +24,11 @@ shutdown of their platform connection after `serveChat` returns.
 | Host to plugin | `chat/run_event` notification | Requires `runEvents` capability |
 
 All payloads have exported Zod schemas and inferred TypeScript types. Malformed
-request arguments get JSON-RPC `-32602`. Malformed replies or notifications fail
-the connection with `PluginProtocolError`; `closed` exposes that failure.
+request arguments get JSON-RPC `-32602`. Malformed reply payloads reject the
+affected call with `PluginProtocolError`; the connection remains usable. An
+invalid initialization reply prevents connection setup and closes the peer.
+Malformed JSON-RPC messages or run-event notifications fail the connection;
+`closed` exposes that failure.
 Rendering exceptions are contained and reported to stderr without event contents,
 so a rendering failure does not disconnect chat. Start implementations can throw
 `ChatStartError(message, retryable)`; unclassified start errors are non-retryable.

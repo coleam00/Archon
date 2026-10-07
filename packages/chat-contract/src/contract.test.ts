@@ -257,6 +257,14 @@ test('descriptor comparison checks policy, capabilities and command prefix regar
     { ...descriptor, version: '2' },
     { ...descriptor, workflowCommand: { prefix: '/changed ' } },
     { ...descriptor, policy: { workspaceRetention: 'retain' } },
+    {
+      ...descriptor,
+      capabilities: { defaultWorkflowDispatch: 'background', runEvents: true },
+    },
+    {
+      ...descriptor,
+      capabilities: { defaultWorkflowDispatch: 'background', resultFooter: true },
+    },
   ]) {
     const pair = streamPair();
     const peer = new PluginRpc(pair.provider);
@@ -278,20 +286,28 @@ test('descriptor comparison checks policy, capabilities and command prefix regar
   await peer.close();
 });
 
-test('malformed host-side request replies are typed protocol failures', async () => {
+test('malformed reply payloads reject the call and leave the connection usable', async () => {
   const pair = streamPair();
   const peer = new PluginRpc(pair.provider);
   peer.handle('initialize', () => descriptor);
   peer.handle('chat/start', () => {
     throw new PluginRemoteError(-32000, 'failure', { retryable: 'yes' });
   });
-  peer.handle('chat/send', () => ({ unexpected: true }));
+  let malformed = true;
+  peer.handle('chat/send', () => {
+    if (malformed) {
+      malformed = false;
+      return { unexpected: true };
+    }
+    return {};
+  });
   const chat = await connectChat(pair.host, descriptor);
   try {
     await expect(chat.start()).rejects.toBeInstanceOf(PluginProtocolError);
     await expect(chat.send({ conversationId: 'thread', text: '' })).rejects.toBeInstanceOf(
       PluginProtocolError
     );
+    await chat.send({ conversationId: 'thread', text: 'valid reply' });
   } finally {
     await chat.close();
     await peer.close();
