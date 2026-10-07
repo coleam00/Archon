@@ -121,6 +121,7 @@ export async function serveCommand(
       const error = toError(err);
       log.error({ err: error, version, webDistDir }, 'web_dist.download_failed');
       console.error(`Error: Failed to download web UI: ${error.message}`);
+      console.error('Retry with: archon serve --download-only');
       return 1;
     }
   } else {

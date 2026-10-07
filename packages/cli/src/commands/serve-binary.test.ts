@@ -129,6 +129,27 @@ describe('binary server download and launch', () => {
     expect(errors).toContain(`/${asset}`);
     expect(errors).toContain('archon serve --download-only');
   });
+  it.each(['HTTP failure', 'checksum mismatch'])(
+    'reports a web %s after installing the server, with its URL and retry command',
+    async failure => {
+      fetchSpy.mockImplementation(async (url: string | URL | Request) => {
+        if (String(url).endsWith(asset)) return new Response(serverBytes);
+        return failure === 'HTTP failure'
+          ? new Response('', { status: 503 })
+          : new Response('corrupt web archive');
+      });
+      const spawn = mock(() => fakeChild());
+      expect(await serveCommand({}, spawn)).toBe(1);
+      expect(readFileSync(serverPath)).toEqual(Buffer.from(serverBytes));
+      expect(existsSync(join(binaryRoot, 'web-dist', 'dev'))).toBe(false);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(spawn).not.toHaveBeenCalled();
+      const errors = consoleErrorSpy.mock.calls.flat().join(' ');
+      expect(errors).toContain('Failed to download web UI');
+      expect(errors).toContain('/vdev/archon-web.tar.gz');
+      expect(errors).toContain('archon serve --download-only');
+    }
+  );
   it.each([404, 500])('reports HTTP %i with the asset URL and no install', async status => {
     fetchSpy.mockImplementation(async () => new Response('', { status }));
     await expect(downloadServer('1.2.3', serverPath, asset, serverHash)).rejects.toThrow(
