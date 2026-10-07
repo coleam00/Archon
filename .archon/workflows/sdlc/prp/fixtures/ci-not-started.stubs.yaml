@@ -8,7 +8,10 @@ implement:
   green: true
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1" }
   summary: "stub: implemented, validated, PR opened"
-review:
+review__prepare: { code: true, seams: true, simplify: false, tests: false, comments: false, errors: false, docs: false, risk: "stub: full risk call", reviewed_head: "stubhead" }
+review__code: "0 findings"
+review__seams: "0 findings"
+review__synthesize:
   ready: true
   verdict: "READY TO MERGE"
   summary: "stub: no findings"

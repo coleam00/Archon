@@ -8,7 +8,10 @@ implement:
   green: true
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1" }
   summary: "stub: implemented, validated, PR opened"
-review:
+review__prepare: { code: true, seams: true, simplify: false, tests: false, comments: false, errors: false, docs: false, risk: "stub: full risk call", reviewed_head: "stubhead" }
+review__code: "0 findings"
+review__seams: "0 findings"
+review__synthesize:
   ready: true
   verdict: "READY TO MERGE"
   summary: "stub: no findings"
@@ -18,7 +21,10 @@ finish:
   verify: true
   ci_cause: introduced
   summary: "stub: the changed test failed on Windows; fixed and pushed"
-reverify:
+reverify__prepare: { code: true, seams: true, simplify: false, tests: false, comments: false, errors: false, docs: false, risk: "stub: verify risk call", reviewed_head: "stubhead" }
+reverify__code: "0 findings"
+reverify__seams: "0 findings"
+reverify__synthesize:
   ready: true
   verdict: "READY TO MERGE"
   summary: "stub: CI fix verified"
@@ -26,4 +32,4 @@ recheck-probe: '{"state":"concluded","detail":"green: test (success)","unstarted
 outcome: { ready: true, reason: delivered, pr_url: "https://github.com/example/repo/pull/1", summary: "stub: delivered" }
 fixture:
   expect: completed
-  reached: [finish, reverify, recheck, outcome]
+  reached: [finish, reverify__synthesize, recheck, outcome]

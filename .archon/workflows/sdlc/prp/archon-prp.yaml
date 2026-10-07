@@ -2,9 +2,9 @@ name: archon-prp
 description: |
   Take one issue, plan, or request to a pull request with an independent
   READY TO MERGE review and green CI, in the PRP shape: one owner session plans,
-  implements, opens the PR and makes every correction; a fresh read-only
-  reviewer judges it; CI is waited on durably and its reds are judged by the
-  owner. Never merges. An experimental, smaller alternative to archon-ship.
+  implements, opens the PR and makes every correction; fresh read-only
+  reviewers, picked by risk, judge it; CI is waited on durably and its reds are
+  judged by the owner. Never merges. An experimental, smaller alternative to archon-ship.
 
   Use when: "deliver this issue with archon-prp", "take #123 to a reviewed PR
   the PRP way", comparing the PRP shape with archon-ship on real work.
@@ -20,6 +20,12 @@ inputs:
     description: >-
       What to deliver: an issue, plan, document, or free-form request. When
       empty, the run's trigger message is the target.
+  review_scopes:
+    default: ""
+    description: >-
+      Reviewer scopes to add to the risk-scaled defaults (code, seams, tests,
+      comments, errors, docs, simplify, or all), or an explicit restriction
+      such as "only tests". Empty lets each review pick scopes by risk.
 
 # ready:false is an honest typed ending (blocked plan, open finding, red CI the
 # PR did not cause), never a PR reported as delivered.
@@ -73,22 +79,17 @@ nodes:
         summary: { type: string }
       required: [green, pr, summary]
 
+  # Each review is the archon-prp-review block: a coordinator picks scopes by
+  # risk, the selected reviewers run in parallel with fresh contexts, and the
+  # coordinator aggregates and publishes one verdict.
   - id: review
-    command: review
+    include: archon-prp-review
     depends_on: [implement]
     when: "$implement.output.green == true"
-    context: fresh
-    mutates_checkout: false
     with:
       mode: full
       pr: "$implement.output.pr.url"
-    output_format: &verdict
-      type: object
-      properties:
-        ready: { type: boolean }
-        verdict: { type: string, enum: [READY TO MERGE, NEEDS FIXES, REVIEW INCOMPLETE] }
-        summary: { type: string }
-      required: [ready, verdict, summary]
+      scopes: "$INPUTS.review_scopes"
 
   # CI is awaited on the implemented head before the owner's one correction
   # pass, so that pass sees review findings and CI reds together. The probe
@@ -140,15 +141,13 @@ nodes:
       required: [changed, verify, ci_cause, summary]
 
   - id: reverify
-    command: review
+    include: archon-prp-review
     depends_on: [finish]
     when: "$review.output.ready == false || $finish.output.verify == true"
-    context: fresh
-    mutates_checkout: false
     with:
       mode: verify
       pr: "$implement.output.pr.url"
-    output_format: *verdict
+      scopes: "$INPUTS.review_scopes"
 
   - id: recheck
     depends_on: [finish, reverify]

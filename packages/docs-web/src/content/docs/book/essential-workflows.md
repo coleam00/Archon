@@ -61,7 +61,7 @@ archon workflow run archon-ship --branch fix/login-crash "#142"
 
 #### `archon-prp`
 
-An experimental, smaller alternative to `archon-ship`, shaped like the PRP delivery skills. One agent session plans the work, implements it, opens the PR, and makes every correction, so its reasoning carries through. A fresh, read-only reviewer judges the PR in its own checkout. The run then sleeps on a durable wait until CI concludes. The owner judges each red check: it fixes failures the PR caused and records the cause of the rest. One correction pass covers the review findings and the CI reds together, followed by a verify review and a second CI wait when that pass changed anything.
+An experimental, smaller alternative to `archon-ship`, shaped like the PRP delivery skills. One agent session plans the work, implements it, opens the PR, and makes every correction, so its reasoning carries through. A fresh review judges the PR in its own checkout: a coordinator runs the project's checks and picks reviewer scopes by risk (general correctness always, missing types at seams for contract, state or security changes, and others on request through the `review_scopes` input), the selected reviewers work in parallel, and the coordinator decides one verdict. The run then sleeps on a durable wait until CI concludes. The owner judges each red check: it fixes failures the PR caused and records the cause of the rest. One correction pass covers the review findings and the CI reds together, followed by a verify review and a second CI wait when that pass changed anything.
 
 **When to use it**: You want to compare the PRP shape with `archon-ship` on real work, or the work is already clear enough that triage would add nothing.
 
