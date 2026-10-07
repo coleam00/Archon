@@ -1,0 +1,3 @@
+# Bun reads bunfig.toml from the test process's cwd; the root preload does not apply here.
+[test]
+preload = ["../../scripts/test-telemetry-off.ts"]
