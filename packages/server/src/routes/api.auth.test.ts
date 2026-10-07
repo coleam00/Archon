@@ -177,7 +177,13 @@ function makeApp(
       await fn();
       return { status: 'started' };
     }),
-    getStats: mock(() => ({ active: 0, queued: 0 })),
+    getStats: mock(() => ({
+      active: 0,
+      queuedTotal: 0,
+      queuedByConversation: [] as { conversationId: string; queuedMessages: number }[],
+      maxConcurrent: 10,
+      activeConversationIds: [] as string[],
+    })),
   } as unknown as ConversationLockManager;
   registerApiRoutes(app, webAdapter ?? mockWebAdapter, mockLockManager);
   return app;
