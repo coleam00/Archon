@@ -35,7 +35,7 @@ nodes:
   - id: verify-loop
     depends_on: [read-scenario]
     loop_group:
-      until_bash: test $finish-attempt.output.done = true
+      until_bash: done=$finish-attempt.output.done; test "$done" = true
       max_iterations: &attempt-limit 2
       fresh_context: true
       nodes:
@@ -73,7 +73,8 @@ nodes:
         - id: start-run
           depends_on: [setup-run]
           bash: |
-            if [ $setup-run.output.ok != true ]; then
+            setup_ok=$setup-run.output.ok
+            if [ "$setup_ok" != true ]; then
               echo '{"ok":false}'
               exit 0
             fi
@@ -107,7 +108,8 @@ nodes:
           depends_on: [verify]
           trigger_rule: all_done
           bash: |
-            if [ $start-run.output.ok != true ]; then
+            start_ok=$start-run.output.ok
+            if [ "$start_ok" != true ]; then
               echo '{"ok":false}'
               exit 0
             fi

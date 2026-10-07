@@ -74,7 +74,8 @@ nodes:
   - id: health
     depends_on: [deploy]
     bash: |
-      if [ $deploy.output.ok != true ]; then
+      deploy_ok=$deploy.output.ok
+      if [ "$deploy_ok" != true ]; then
         echo '{"ok":false}'
         exit 0
       fi
