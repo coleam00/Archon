@@ -1,3 +1,4 @@
+import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 /**
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
@@ -118,7 +119,6 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   isApprovalContext,
   isGateResolved,
-  isWorkflowWaitContext,
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -1028,6 +1028,7 @@ const cancelWorkflowRunRoute = createRoute({
       description: 'Cancelled',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
     409: jsonError(
       'No live owner answered, or the owner could not be stopped; the run was not changed'
@@ -1048,6 +1049,7 @@ const resumeWorkflowRunRoute = createRoute({
       description: 'Resumed',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1075,6 +1077,7 @@ const signalWorkflowWaitRoute = createRoute({
       description: 'Signal accepted; the scheduler will resume the workflow shortly',
     },
     400: jsonError('Run is not waiting on this event'),
+    403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1092,6 +1095,7 @@ const abandonWorkflowRunRoute = createRoute({
       description: 'Abandoned',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
     409: jsonError('Abandonment or worktree release refused; inspect the reported reason'),
     500: jsonError('Server error'),
@@ -1113,6 +1117,7 @@ const approveWorkflowRunRoute = createRoute({
       description: 'Approved',
     },
     400: jsonGateRefusal('Bad request'),
+    403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1133,6 +1138,7 @@ const rejectWorkflowRunRoute = createRoute({
       description: 'Rejected',
     },
     400: jsonGateRefusal('Bad request'),
+    403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1153,6 +1159,7 @@ const respondWorkflowRunRoute = createRoute({
       description: 'Responded',
     },
     400: jsonGateRefusal('Bad request'),
+    403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1170,6 +1177,7 @@ const deleteWorkflowRunRoute = createRoute({
       description: 'Deleted',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Run action forbidden'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1689,7 +1697,7 @@ const getUpdateCheckRoute = createRoute({
 
 function apiError(
   c: Context,
-  status: 400 | 401 | 404 | 409 | 422 | 500 | 503,
+  status: 400 | 401 | 403 | 404 | 409 | 422 | 500 | 503,
   message: string,
   detail?: string
 ): Response {
@@ -1745,7 +1753,9 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
 export async function resolveRunActor(c: Context): Promise<RunActor> {
   const identity = await resolveAuthContext(c);
   if (identity) return { kind: 'user', userId: identity.userId };
-  return { kind: isWebAuthEnabled() ? 'unidentified' : 'operator' };
+  const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+  const suppliedIdentity = Boolean(c.req.header(headerName)?.trim());
+  return { kind: isWebAuthEnabled() || suppliedIdentity ? 'unidentified' : 'operator' };
 }
 
 export async function resolveWebUserId(c: Context): Promise<string | undefined> {
@@ -1807,6 +1817,9 @@ export function registerApiRoutes(
   activePlatforms?: readonly string[]
 ): void {
   const {
+    assertRunActionAllowed,
+    signalWorkflowWait,
+    deleteWorkflowRun,
     resumeWorkflow,
     abandonWorkflow,
     cancelWorkflow,
@@ -3802,6 +3815,7 @@ export function registerApiRoutes(
       }
       return c.json({ success: true, message });
     } catch (error) {
+      if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       if (error instanceof CancelRefusedError) {
         return apiError(c, error.reason === 'not_running' ? 400 : 409, error.message);
       }
@@ -3818,10 +3832,11 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const actor = await resolveRunActor(c);
+      await assertRunActionAllowed(run, actor, 'resume');
       if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
       }
-      const actor = await resolveRunActor(c);
       await resumeWorkflow(runId, actor);
       // Dispatch resume by sending `/workflow resume <id>` to the parent web
       // conversation; the command handler validates the run and hands the
@@ -3879,6 +3894,7 @@ export function registerApiRoutes(
         message: `Resuming workflow: ${run.workflow_name}`,
       });
     } catch (error) {
+      if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_resume_failed');
       return apiError(c, 500, 'Failed to resume workflow run');
     }
@@ -3890,11 +3906,13 @@ export function registerApiRoutes(
     try {
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
-      const wait = isWorkflowWaitContext(run.metadata?.wait) ? run.metadata.wait : undefined;
-      if (wait?.kind !== 'event' || wait.event !== event || wait.resumeAt !== resumeAt) {
-        return apiError(c, 400, `Run is not waiting on event '${event}'`);
-      }
-      const { signaled } = await workflowDb.signalWorkflowWait(runId, wait, payload);
+      const { signaled } = await signalWorkflowWait(
+        runId,
+        event,
+        resumeAt,
+        payload,
+        await resolveRunActor(c)
+      );
       if (!signaled) {
         return apiError(c, 400, `Run is not waiting on event '${event}'`);
       }
@@ -3903,6 +3921,7 @@ export function registerApiRoutes(
         message: `Signaled '${event}'. The workflow will resume shortly.`,
       });
     } catch (error) {
+      if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       getLog().error({ err: error, runId, event }, 'signal_workflow_wait_api_failed');
       return apiError(c, 500, 'Failed to signal workflow wait');
     }
@@ -3932,6 +3951,7 @@ export function registerApiRoutes(
       }
       return c.json({ success: true, message });
     } catch (error) {
+      if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       if (error instanceof AbandonOwnerNotStoppedError || error instanceof AbandonRefusedError) {
         return apiError(c, 409, error.message);
       }
@@ -4023,6 +4043,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const actor = await resolveRunActor(c);
+      await assertRunActionAllowed(run, actor, 'approve');
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot approve workflow in '${run.status}' status`);
       }
@@ -4060,7 +4082,6 @@ export function registerApiRoutes(
       // defaults the recorded comment internally, but "no feedback" must survive
       // so a signal-bearing interactive-loop gate finalizes instead of re-running
       // (#2074, loop_feedback_given).
-      const actor = await resolveRunActor(c);
       await approveWorkflow(runId, body.comment, actor);
 
       // Auto-resume: dispatch to the orchestrator so the workflow continues
@@ -4078,6 +4099,7 @@ export function registerApiRoutes(
           : `Workflow approved: ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or resume it from the originating conversation.`,
       });
     } catch (error) {
+      if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
       return apiError(c, 500, 'Failed to approve workflow run');
     }
@@ -4091,6 +4113,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const actor = await resolveRunActor(c);
+      await assertRunActionAllowed(run, actor, 'reject');
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot reject workflow in '${run.status}' status`);
       }
@@ -4122,7 +4146,6 @@ export function registerApiRoutes(
       // Shared gate logic (events, telemetry, staging/cancel decision). When an
       // on_reject rework is staged the run stays 'paused' with
       // metadata.approval.resolved = 'rejected' (#2075).
-      const actor = await resolveRunActor(c);
       const result = await rejectWorkflow(runId, reason, actor);
 
       if (result.cancelled) {
@@ -4153,6 +4176,7 @@ export function registerApiRoutes(
             : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run when the run resumes — ${resumeHint}.`,
       });
     } catch (error) {
+      if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_reject_failed');
       return apiError(c, 500, 'Failed to reject workflow run');
     }
@@ -4169,6 +4193,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const actor = await resolveRunActor(c);
+      await assertRunActionAllowed(run, actor, 'respond');
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot respond to workflow in '${run.status}' status`);
       }
@@ -4202,7 +4228,6 @@ export function registerApiRoutes(
       // Only for decision === 'reject' — every other decision (including 'approve',
       // which stays optional/undefined) is unaffected.
       const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const actor = await resolveRunActor(c);
       const result = await respondToWorkflow(runId, decision, text, actor, body.expectedGate);
 
       if ('cancelled' in result && result.cancelled) {
@@ -4227,6 +4252,7 @@ export function registerApiRoutes(
           : `Workflow responded '${decision}': ${run.workflow_name}. The run will continue when it resumes — ${resumeHint}.`,
       });
     } catch (error) {
+      if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_respond_failed');
       return apiError(c, 500, 'Failed to respond to workflow run');
     }
@@ -4240,6 +4266,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const actor = await resolveRunActor(c);
+      await assertRunActionAllowed(run, actor, 'delete');
       if (!TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(
           c,
@@ -4247,9 +4275,10 @@ export function registerApiRoutes(
           `Cannot delete workflow in '${run.status}' status — cancel it first`
         );
       }
-      await workflowDb.deleteWorkflowRun(runId);
+      await deleteWorkflowRun(runId, actor);
       return c.json({ success: true, message: `Deleted workflow run: ${run.workflow_name}` });
     } catch (error) {
+      if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_delete_failed');
       return apiError(c, 500, 'Failed to delete workflow run');
     }

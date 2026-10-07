@@ -15,6 +15,7 @@
     "./strip-cwd-env-boot": "./src/strip-cwd-env-boot.ts",
     "./env-loader": "./src/env-loader.ts",
     "./test-utils": "./src/test-utils.ts",
+    "./plugin-process": "./src/plugin-process.ts",
     "./skills": "./src/skills.ts"
   },
   "scripts": {

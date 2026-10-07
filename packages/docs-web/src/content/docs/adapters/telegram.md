@@ -11,7 +11,7 @@ sidebar:
 
 Connect Archon to Telegram so you can interact with your AI coding assistant from any Telegram client.
 
-New identities are created as members. The operator can designate admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); run-action enforcement ships separately.
+New identities are created as members. The operator can designate admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); only a run's starter or an admin can act on it. See [Who can act on a run](/reference/security/#who-can-act-on-a-run).
 
 ## Prerequisites
 
