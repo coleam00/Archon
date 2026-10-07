@@ -14482,56 +14482,193 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     );
   });
 
+  it.each(
+    (['agent', 'loop'] as const).flatMap(kind => [
+      { kind, provider: 'claude', taskType: undefined, thresholdMs: 20 },
+      { kind, provider: 'claude', taskType: undefined, thresholdMs: 0 },
+      { kind, provider: 'codex', taskType: 'command_execution', thresholdMs: 20 },
+      { kind, provider: 'codex', taskType: 'local_agent', thresholdMs: 20 },
+      { kind, provider: 'claude', taskType: 'background', thresholdMs: 20 },
+    ])
+  )('silent reported work stays live: %j', async ({ kind, provider, taskType, thresholdMs }) => {
+    const store = createMockStore();
+    const workflowRun = makeWorkflowRun(`live-tool-${kind}`);
+    let signal: AbortSignal | undefined;
+    let complete: (() => void) | undefined;
+    const completion = new Promise<void>(resolve => {
+      complete = resolve;
+    });
+    let raised: (() => void) | undefined;
+    const publication = new Promise<void>(resolve => {
+      raised = resolve;
+    });
+    store.setToolCallAttention.mockImplementation(async (_runId, _streamId, calls) => {
+      workflowRun.metadata.tool_call_attention = calls;
+      if (calls.length) raised?.();
+      return true;
+    });
+    mockSendQueryDag.mockImplementationOnce(async function* (_prompt, _cwd, _session, options) {
+      signal = options?.abortSignal;
+      yield taskType
+        ? { type: 'subtask', taskId: 'live', status: 'started', taskType, description: 'bun test' }
+        : { type: 'tool_call', toolCallId: 'live', name: 'Bash', title: 'bun test' };
+      await completion;
+      yield taskType
+        ? { type: 'subtask', taskId: 'live', status: 'completed' }
+        : { type: 'tool_call_update', toolCallId: 'live', status: 'completed' };
+      yield { type: 'agent_message_chunk', text: '{"done":true}' };
+      yield { type: 'result', sessionId: 'session', structuredOutput: { done: true } };
+      yield { type: 'settled', reason: 'turn_complete' };
+    });
+    const deps = createMockDeps(store);
+    deps.getAgentProvider = () => ({
+      ...mockGetAgentProviderDag(provider),
+      getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork: 'reported' }),
+    });
+    const config = {
+      ...minimalConfig,
+      workflows: {
+        autoResumeOnQuotaReset: false,
+        quotaMaxAttempts: 1,
+        quotaDeadlineMs: 1000,
+        toolCallAttentionMs: thresholdMs,
+      },
+    };
+    const node =
+      kind === 'agent'
+        ? {
+            id: 'implement',
+            kind: 'agent' as const,
+            source: { kind: 'command' as const, name: 'my-cmd' },
+            idle_timeout: 10,
+            retry: { max_attempts: 0 },
+          }
+        : {
+            id: 'implement',
+            kind: 'loop' as const,
+            idle_timeout: 10,
+            output_format: {
+              type: 'object',
+              properties: { done: { type: 'boolean' } },
+              required: ['done'],
+            },
+            loop: {
+              fresh_context: false,
+              prompt: 'Implement',
+              max_iterations: 1,
+              until_field: 'done',
+            },
+          };
+    const execution = executeDagWorkflow(
+      dagOptions({
+        deps,
+        workflowProvider: provider,
+        config,
+        cwd: testDir,
+        workflow: { name: 'live-tool', nodes: [node] },
+        workflowRun,
+      })
+    );
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          thresholdMs === 0 ? new Promise(resolve => setTimeout(resolve, 80)) : publication,
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error('Tool attention was never published')), 1000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+      expect(signal?.aborted).toBe(false);
+      expect(workflowRun.status).toBe('running');
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+      expect(
+        store.createWorkflowEvent.mock.calls.some(
+          ([event]) => event.event_type === 'node_started' && event.step_name === 'implement'
+        )
+      ).toBe(true);
+      expect(
+        store.createWorkflowEvent.mock.calls.some(
+          ([event]) => event.event_type === 'node_completed' && event.step_name === 'implement'
+        )
+      ).toBe(false);
+      if (thresholdMs === 0) expect(store.setToolCallAttention).not.toHaveBeenCalled();
+      else
+        expect(workflowRun.metadata.tool_call_attention).toMatchObject([
+          { nodeId: 'implement', provider, name: taskType ?? 'Bash', title: 'bun test' },
+        ]);
+    } finally {
+      complete?.();
+    }
+    await execution;
+    if (thresholdMs === 0) expect(store.setToolCallAttention).not.toHaveBeenCalled();
+    else expect(store.setToolCallAttention.mock.calls.at(-1)?.[2]).toEqual([]);
+    expect(signal?.aborted).toBe(false);
+  });
+
   it.each(['agent', 'loop'] as const)(
-    'a silent open tool raises advisory attention without aborting a %s node',
+    'failed %s stream cleanup clears while its successor remains running',
     async kind => {
       const store = createMockStore();
-      const workflowRun = makeWorkflowRun(`live-tool-${kind}`);
-      let signal: AbortSignal | undefined;
-      let complete: (() => void) | undefined;
-      const completion = new Promise<void>(resolve => {
-        complete = resolve;
+      const workflowRun = makeWorkflowRun(`cleanup-${kind}`);
+      const snapshots = new Map<string, Parameters<IWorkflowStore['setToolCallAttention']>[2]>();
+      let firstStream: string | undefined;
+      let failures = 0;
+      let recovered = false;
+      let finishFirst!: () => void;
+      const firstPublished = new Promise<void>(resolve => {
+        finishFirst = resolve;
       });
-      let raised: (() => void) | undefined;
-      const publication = new Promise<void>(resolve => {
-        raised = resolve;
+      let finishSecond!: () => void;
+      const secondCompletion = new Promise<void>(resolve => {
+        finishSecond = resolve;
       });
-      store.setToolCallAttention.mockImplementation(async (_runId, _streamId, calls) => {
-        workflowRun.metadata.tool_call_attention = calls;
-        if (calls.length) raised?.();
+      let enteredSecond!: () => void;
+      const secondStarted = new Promise<void>(resolve => {
+        enteredSecond = resolve;
+      });
+      store.setToolCallAttention.mockImplementation(async (_runId, streamId, calls) => {
+        if (firstStream === undefined && calls.length) firstStream = streamId;
+        if (streamId === firstStream && calls.length === 0 && !recovered) {
+          failures++;
+          throw new Error('Transient cleanup outage');
+        }
+        snapshots.set(streamId, calls);
+        workflowRun.metadata.tool_call_attention = [...snapshots.values()].flat();
+        if (streamId === firstStream && calls.length) finishFirst();
         return true;
       });
-      mockSendQueryDag.mockImplementationOnce(async function* (_prompt, _cwd, _session, options) {
-        signal = options?.abortSignal;
-        yield { type: 'tool_call', toolCallId: 'live', name: 'Bash', title: 'bun test' };
-        await completion;
-        yield { type: 'tool_call_update', toolCallId: 'live', status: 'completed' };
-        yield { type: 'agent_message_chunk', text: '{"done":true}' };
-        yield { type: 'result', sessionId: 'session', structuredOutput: { done: true } };
+      mockSendQueryDag.mockImplementationOnce(async function* () {
+        yield { type: 'tool_call', toolCallId: 'first', name: 'Bash' };
+        await firstPublished;
+        yield { type: 'result', sessionId: 's', structuredOutput: { done: true } };
+        yield { type: 'tool_call_update', toolCallId: 'first', status: 'completed' };
         yield { type: 'settled', reason: 'turn_complete' };
       });
-      const deps = createMockDeps(store);
-      const config = {
-        ...minimalConfig,
-        workflows: {
-          autoResumeOnQuotaReset: false,
-          quotaMaxAttempts: 1,
-          quotaDeadlineMs: 1000,
-          toolCallAttentionMs: 20,
-        },
-      };
-      const node =
+      mockSendQueryDag.mockImplementationOnce(async function* () {
+        recovered = true;
+        yield { type: 'tool_call', toolCallId: 'successor', name: 'Bash' };
+        enteredSecond();
+        await secondCompletion;
+        yield { type: 'tool_call_update', toolCallId: 'successor', status: 'completed' };
+        yield { type: 'result', sessionId: 's' };
+        yield { type: 'settled', reason: 'turn_complete' };
+      });
+      const firstNode =
         kind === 'agent'
           ? {
-              id: 'implement',
-              kind: 'agent' as const,
+              id: 'first',
+              kind,
               source: { kind: 'command' as const, name: 'my-cmd' },
               idle_timeout: 10,
-              retry: { max_attempts: 0 },
             }
           : {
-              id: 'implement',
-              kind: 'loop' as const,
+              id: 'first',
+              kind,
               idle_timeout: 10,
               output_format: {
                 type: 'object',
@@ -14547,42 +14684,52 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
             };
       const execution = executeDagWorkflow(
         dagOptions({
-          deps,
-          config,
+          deps: createMockDeps(store),
           cwd: testDir,
-          workflow: { name: 'live-tool', nodes: [node] },
           workflowRun,
+          config: {
+            ...minimalConfig,
+            workflows: {
+              autoResumeOnQuotaReset: false,
+              quotaMaxAttempts: 1,
+              quotaDeadlineMs: 1000,
+              toolCallAttentionMs: 20,
+            },
+          },
+          workflow: {
+            name: 'cleanup-retry',
+            nodes: [
+              firstNode,
+              {
+                id: 'next',
+                kind: 'agent',
+                source: { kind: 'command', name: 'my-cmd' },
+                depends_on: ['first'],
+                idle_timeout: 10,
+              },
+            ],
+          },
         })
       );
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          await Promise.race([
-            publication,
-            new Promise<never>((_resolve, reject) => {
-              timer = setTimeout(
-                () => reject(new Error('Tool attention was never published')),
-                1000
-              );
-            }),
-          ]);
-        } finally {
-          clearTimeout(timer);
-        }
-        expect(signal?.aborted).toBe(false);
+        await Promise.race([
+          secondStarted,
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error('Successor never started')), 1000);
+          }),
+        ]);
+        expect(failures).toBe(4);
+        expect(snapshots.get(firstStream!)).toEqual([]);
         expect(workflowRun.status).toBe('running');
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
         expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
-        expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
-        expect(workflowRun.metadata.tool_call_attention).toMatchObject([
-          { nodeId: 'implement', name: 'Bash', title: 'bun test' },
-        ]);
       } finally {
-        complete?.();
+        clearTimeout(timer);
+        finishFirst();
+        finishSecond();
+        await execution;
       }
-      await execution;
-      expect(store.setToolCallAttention.mock.calls.at(-1)?.[2]).toEqual([]);
-      expect(signal?.aborted).toBe(false);
     }
   );
 

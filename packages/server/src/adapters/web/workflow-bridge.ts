@@ -211,6 +211,7 @@ function dataSkipCause(data: Record<string, unknown>): SkipCause | undefined {
 /** DB event_type → run-level status, emitted as a `workflow_status` SSE event. */
 const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'cancelled'> = {
   workflow_started: 'running',
+  run_attention_changed: 'running',
   workflow_completed: 'completed',
   workflow_failed: 'failed',
   workflow_cancelled: 'cancelled',
@@ -250,7 +251,6 @@ interface WorkflowStatusSsePayload {
  * exceeds the drain limit (the boundary paging can't stall on overflow).
  */
 export const DASHBOARD_SOURCE_EVENT_TYPES: readonly string[] = [
-  'run_attention_changed',
   ...Object.keys(ROW_WORKFLOW_STATUS),
   ...Object.keys(ROW_NODE_STATUS),
   'approval_requested',
@@ -274,8 +274,7 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
   const data = row.data;
   const timestamp = Date.now();
 
-  const workflowStatus =
-    row.event_type === 'run_attention_changed' ? 'running' : ROW_WORKFLOW_STATUS[row.event_type];
+  const workflowStatus = ROW_WORKFLOW_STATUS[row.event_type];
   if (workflowStatus) {
     const payload: WorkflowStatusSsePayload = {
       type: 'workflow_status',

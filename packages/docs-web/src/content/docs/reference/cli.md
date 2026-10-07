@@ -566,7 +566,8 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
   only the nodes that ran.
 - `attention`: what the run needs from outside, if anything: `null`, or an object whose `kind`
   is `terminal`, `awaiting_response` (an approval or response gate), `action_required` (a
-  `wait:` on attention), `blocked_on_child` (the child run is the one to inspect), or `unreadable`.
+  `wait:` on attention), `blocked_on_child` (the child run is the one to inspect), `stalled_tool_calls` (still-running
+  work with overdue provider tools or reported subtasks), or `unreadable`.
   It is read from the run row alone.
 
 The node events for every listed run are read in one query, so the cost does not grow with

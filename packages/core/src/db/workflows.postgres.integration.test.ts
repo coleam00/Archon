@@ -106,7 +106,6 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
     await workflows.setToolCallAttention(id, 's', [
       {
         streamId: 's',
-        attemptId: 'a',
         nodeId: 'implement',
         provider: 'codex',
         toolCallId: 'tool',

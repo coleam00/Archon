@@ -4890,7 +4890,6 @@ describe('workflowStatusCommand', () => {
             tool_call_attention: [
               {
                 streamId: 's',
-                attemptId: 'a',
                 nodeId: 'implement',
                 provider: 'codex',
                 toolCallId: 'tool',
@@ -14434,7 +14433,6 @@ describe('workflowWaitCommand', () => {
         calls: [
           {
             streamId: 's',
-            attemptId: 'a',
             nodeId: 'implement',
             provider: 'codex',
             toolCallId: 'call',

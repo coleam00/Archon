@@ -37,7 +37,6 @@ test('the detail header displays live tool attention', () => {
       tool_call_attention: [
         {
           streamId: 's',
-          attemptId: 'a',
           nodeId: 'implement',
           provider: 'pi',
           toolCallId: 'tool',

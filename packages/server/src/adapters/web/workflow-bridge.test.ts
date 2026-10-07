@@ -20,7 +20,12 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { mapWorkflowEvent, mapWorkflowEventRow, WorkflowEventBridge } from './workflow-bridge';
+import {
+  DASHBOARD_SOURCE_EVENT_TYPES,
+  mapWorkflowEvent,
+  mapWorkflowEventRow,
+  WorkflowEventBridge,
+} from './workflow-bridge';
 import type { SSETransport } from './transport';
 import {
   getWorkflowEventEmitter,
@@ -278,6 +283,7 @@ test('live approval frames retain the exact declared vocabulary', () => {
 });
 
 test('attention publication and clearing invalidate existing dashboard readers without command contents', () => {
+  expect(DASHBOARD_SOURCE_EVENT_TYPES).toContain('run_attention_changed');
   for (const hasAttention of [true, false]) {
     const local = JSON.parse(
       mapWorkflowEvent({

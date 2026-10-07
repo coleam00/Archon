@@ -47,7 +47,6 @@ test('a running card displays overdue tools without offering resume', () => {
           toolCallAttention: [
             {
               streamId: 's',
-              attemptId: 'a',
               nodeId: 'parallel-a',
               provider: 'codex',
               toolCallId: 'call',

@@ -1,4 +1,4 @@
-import type { createToolCallAttention } from './tool-call-attention';
+import type { createRunToolCallAttention } from './tool-call-attention';
 /**
  * What the engine does with each non-terminal event a provider streams. Both AI-node
  * loops in `dag-executor.ts` (the agent node and the loop node) hand every event to one
@@ -49,7 +49,7 @@ export function createAttemptEventSequence(attemptId: string): AttemptEventSeque
 }
 
 export interface ProviderEventHandlerDeps {
-  toolAttention: ReturnType<typeof createToolCallAttention>;
+  toolAttention: ReturnType<ReturnType<typeof createRunToolCallAttention>['createStream']>;
   store: Pick<IWorkflowStore, 'createWorkflowEvent'>;
   platform: IWorkflowPlatform;
   conversationId: string;

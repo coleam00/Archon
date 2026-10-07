@@ -52,7 +52,6 @@ test('a separate executor process publishes durable attention for an already att
   );
   const call = {
     streamId: 's',
-    attemptId: 'a',
     nodeId: 'implement',
     provider: 'codex',
     toolCallId: 'tool',

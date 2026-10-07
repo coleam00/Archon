@@ -290,7 +290,6 @@ describe('watchRunAttention', () => {
 test('running tool advisories alert only on new occurrence identities', async () => {
   const call = {
     streamId: 's',
-    attemptId: 'a',
     nodeId: 'node',
     provider: 'codex',
     toolCallId: 'call',

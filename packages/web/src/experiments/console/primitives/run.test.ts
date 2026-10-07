@@ -545,7 +545,6 @@ describe('toRun — terminal record', () => {
 test('running advisories are normalized through API metadata and disappear for terminal rows', () => {
   const call = {
     streamId: 's',
-    attemptId: 'a',
     nodeId: 'node',
     provider: 'codex',
     toolCallId: 'call',

@@ -1,4 +1,4 @@
-import { createToolCallAttention } from './tool-call-attention';
+import { createRunToolCallAttention } from './tool-call-attention';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
 import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
 import { randomUUID } from 'node:crypto';
@@ -2372,11 +2372,9 @@ async function executeNodeInternal(
     watchdogResets = createWatchdogResetRecorder(logDir, workflowRun.id, node.id);
     backgroundTasksIncomplete = [];
     const providerEvents = createProviderEventHandler({
-      toolAttention: createToolCallAttention({
-        store: deps.store,
-        runId: workflowRun.id,
+      toolAttention: ctx.toolAttention.createStream({
         nodeId: stepName,
-        attemptId: attemptEvents.attemptId,
+        reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
         provider: provider,
         thresholdMs: ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
         env: { ...(ctx.execContext.kind === 'host' ? process.env : {}), ...nodeOptions?.env },
@@ -2411,6 +2409,7 @@ async function executeNodeInternal(
       },
     });
     const shouldStopStream = async (): Promise<boolean> => {
+      await ctx.toolAttention.refresh();
       await providerEvents.refreshAttention();
       const tickNow = Date.now();
       if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
@@ -4714,6 +4713,7 @@ async function executeLoopGroupBody(
 
     const terminalSuspendNode = findLoopGroupTerminalSuspendNode(iterBodyNodes);
     const iterCtx: RunLayersContext = {
+      toolAttention: ctx.toolAttention,
       bodyGateOwner:
         terminalSuspendNode && isGateNode(terminalSuspendNode)
           ? { nodeId: node.id, bodyGateId: terminalSuspendNode.id, iteration: i }
@@ -5782,11 +5782,9 @@ async function executeLoopNode(
 
       const createIterationProviderEvents = (): ProviderEventHandler =>
         createProviderEventHandler({
-          toolAttention: createToolCallAttention({
-            store: deps.store,
-            runId: workflowRun.id,
+          toolAttention: ctx.toolAttention.createStream({
             nodeId: stepName,
-            attemptId: attemptEvents.attemptId,
+            reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
             provider: workflowProvider,
             thresholdMs:
               ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
@@ -5926,6 +5924,7 @@ async function executeLoopNode(
           const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
 
           const shouldStopStream = async (): Promise<boolean> => {
+            await ctx.toolAttention.refresh();
             await providerEvents.refreshAttention();
             const tickNow = Date.now();
             if (tickNow - lastStreamStatusCheckAt > CANCEL_CHECK_INTERVAL_MS) {
@@ -8982,6 +8981,7 @@ async function executeComposeFanOutNode(
         };
       }
       const instanceCtx: RunLayersContext = {
+        toolAttention: ctx.toolAttention,
         unfinishedInvocations: resumeSnapshot.unfinishedInvocations,
         deps: ctx.deps,
         platform: ctx.platform,
@@ -9277,6 +9277,7 @@ interface RunInputs {
 
 /** Run-level values derived exactly once at the DAG boundary, never supplied by callers. */
 interface RunDerived {
+  toolAttention: ReturnType<typeof createRunToolCallAttention>;
   /**
    * The roots nodes READ executable source from — command files and named scripts.
    *
@@ -9573,6 +9574,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
+    await ctx.toolAttention.refresh();
     const layer = ctx.layers[layerIdx];
     const isParallelLayer = layer.length > 1;
 
@@ -11607,6 +11609,7 @@ export async function executeDagWorkflow(
       ? undefined
       : (await deps.store.getDagResumeSnapshot(workflowRun.id)).unfinishedInvocations;
   const runCtx: RunLayersContext = {
+    toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
     deps,
     platform,
@@ -11790,6 +11793,8 @@ export async function executeDagWorkflow(
       );
     }
     throw error;
+  } finally {
+    await runCtx.toolAttention.refresh();
   }
 
   // Normal return has no primary error to preserve, so a verdict persistence failure

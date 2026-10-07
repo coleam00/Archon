@@ -32,7 +32,6 @@ export function toolCallAttentionContract(
     };
     const call = (streamId: string): ToolCallAttention => ({
       streamId,
-      attemptId: streamId,
       nodeId: streamId,
       provider: 'codex',
       toolCallId: 'same-id',

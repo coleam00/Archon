@@ -1,25 +1,27 @@
 import { describe, expect, mock, test } from 'bun:test';
 const warn = mock(() => undefined);
 mock.module('@archon/paths', () => ({ createLogger: () => ({ warn }) }));
-const { createToolCallAttention } = await import('./tool-call-attention');
+const { createRunToolCallAttention } = await import('./tool-call-attention');
 import { runAttention, type ToolCallAttention } from './schemas/workflow-run';
 import {
   workflowRunContinuationConfigSchema,
   DEFAULT_TOOL_CALL_ATTENTION_MS,
 } from './schemas/run-config';
 
-function harness(thresholdMs = 100) {
+function harness(thresholdMs = 100, reportedBackgroundWork = false) {
   let time = Date.parse('2026-10-01T00:00:00Z');
   const snapshots: ToolCallAttention[][] = [];
   const write = mock(async (_run: string, _stream: string, calls: ToolCallAttention[]) => {
     snapshots.push(calls);
     return true;
   });
-  const tracker = createToolCallAttention({
+  const owner = createRunToolCallAttention({
     store: { setToolCallAttention: write },
     runId: 'run',
+  });
+  const tracker = owner.createStream({
+    reportedBackgroundWork,
     nodeId: 'group.node',
-    attemptId: 'attempt',
     provider: 'codex',
     thresholdMs,
     env: { API_TOKEN: 'secret-value', SPECIAL: 'file-key' },
@@ -29,6 +31,7 @@ function harness(thresholdMs = 100) {
   });
   return {
     tracker,
+    owner,
     write,
     snapshots,
     advance: (ms: number) => {
@@ -146,7 +149,7 @@ describe('tool call attention', () => {
     h.write.mockRejectedValueOnce(new Error('cleanup failed'));
     await h.tracker.clear();
     expect(h.snapshots).toHaveLength(1);
-    await h.tracker.clear();
+    await h.owner.refresh();
     expect(h.snapshots.at(-1)).toEqual([]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain('secret-value');
     expect(JSON.stringify(warn.mock.calls)).not.toContain('INPUT_SENTINEL');
@@ -220,6 +223,107 @@ describe('tool call attention', () => {
         runAttention({ id: 'run', status: 'running', metadata: { tool_call_attention: malformed } })
       ).toMatchObject({ kind: 'unreadable', reason: 'malformed_tool_call_attention' });
     expect(runAttention({ id: 'run', status: 'running', metadata: {} })).toBeNull();
+  });
+
+  test.each([
+    ['codex', 'command_execution'],
+    ['codex', 'local_agent'],
+    ['claude', 'background'],
+  ])('reported %s %s work raises, renews and clears independently', async (_provider, taskType) => {
+    const h = harness(100, true);
+    const event = {
+      type: 'subtask',
+      taskId: 'task',
+      taskType,
+      status: 'started',
+      description: 'bun test secret-value',
+      summary: 'SUMMARY_SENTINEL',
+    } as const;
+    await h.tracker.observe(event);
+    h.advance(60);
+    await h.tracker.observe(event);
+    h.advance(40);
+    await h.tracker.refresh();
+    expect(h.snapshots.at(-1)).toMatchObject([
+      { toolCallId: 'subtask:task', name: taskType, title: 'bun test [REDACTED]' },
+    ]);
+    await h.tracker.observe({ type: 'subtask', taskId: 'other', status: 'started' });
+    await h.tracker.observe({ ...event, status: 'running' });
+    expect(h.snapshots.at(-1)).toEqual([]);
+    h.advance(100);
+    await h.tracker.refresh();
+    expect(h.snapshots.at(-1)).toHaveLength(2);
+    for (const status of ['completed', 'failed', 'stopped'] as const) {
+      await h.tracker.observe(event);
+      h.advance(100);
+      await h.tracker.refresh();
+      expect(h.snapshots.at(-1)).toHaveLength(2);
+      await h.tracker.observe({ ...event, status });
+      expect(h.snapshots.at(-1)?.map(c => c.toolCallId)).toEqual(['subtask:other']);
+    }
+    expect(JSON.stringify(h.snapshots)).not.toContain('SUMMARY_SENTINEL');
+    const unreported = harness(100, false);
+    await unreported.tracker.observe(event);
+    unreported.advance(100);
+    await unreported.tracker.refresh();
+    expect(unreported.write).not.toHaveBeenCalled();
+  });
+
+  test('reported subtasks remain observable after their parent tool closes and clear with late correlation', async () => {
+    const h = harness(100, true);
+    await h.tracker.observe(start);
+    await h.tracker.observe({
+      type: 'subtask',
+      taskId: 'child',
+      parentToolCallId: 'call',
+      status: 'started',
+      taskType: 'local_agent',
+      description: 'Review',
+    });
+    h.advance(100);
+    await h.tracker.refresh();
+    expect(h.snapshots.at(-1)?.map(c => c.toolCallId)).toEqual(['call']);
+    await h.tracker.observe({ type: 'tool_call_update', toolCallId: 'call', status: 'completed' });
+    expect(h.snapshots.at(-1)?.map(c => c.toolCallId)).toEqual(['subtask:child']);
+    await h.tracker.observe({ type: 'subtask', taskId: 'child', status: 'completed' });
+    expect(h.snapshots.at(-1)).toEqual([]);
+    await h.tracker.observe({ type: 'subtask', taskId: 'late', status: 'started' });
+    h.advance(100);
+    await h.tracker.refresh();
+    await h.tracker.observe({
+      type: 'subtask',
+      taskId: 'late',
+      parentToolCallId: 'closed',
+      status: 'completed',
+    });
+    expect(h.snapshots.at(-1)).toEqual([]);
+  });
+
+  test('run owner retains failed final deletions across successor streams', async () => {
+    const h = harness();
+    await h.tracker.observe(start);
+    h.advance(100);
+    await h.tracker.refresh();
+    h.write.mockRejectedValueOnce(new Error('completion failed'));
+    await h.tracker.observe({ type: 'tool_call_update', toolCallId: 'call', status: 'completed' });
+    h.write.mockRejectedValueOnce(new Error('final cleanup failed'));
+    await h.tracker.clear();
+    expect(h.snapshots.at(-1)).toHaveLength(1);
+    const successor = h.owner.createStream({
+      nodeId: 'next',
+      provider: 'codex',
+      reportedBackgroundWork: true,
+      thresholdMs: 100,
+      env: {},
+      now: h.now,
+    });
+    await successor.observe({ ...start, toolCallId: 'successor' });
+    await h.owner.refresh();
+    expect(h.snapshots.at(-1)).toEqual([]);
+    expect(successor.hasOpenTools()).toBe(true);
+    const writes = h.write.mock.calls.length;
+    await h.owner.refresh();
+    expect(h.write.mock.calls).toHaveLength(writes);
   });
 
   test('policy has a 30-minute default and accepts only safe nonnegative integer overrides', () => {

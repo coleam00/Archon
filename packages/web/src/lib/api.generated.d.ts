@@ -4588,7 +4588,6 @@ export interface components {
     WorkflowRunMetadata: {
       tool_call_attention?: {
         streamId: string;
-        attemptId: string;
         nodeId: string;
         provider: string;
         toolCallId: string;

@@ -131,7 +131,6 @@ describe('waitForRunAttention', () => {
       const calls = [
         {
           streamId: 'stream',
-          attemptId: 'attempt',
           nodeId: 'implement',
           provider: 'codex',
           toolCallId: 'tool',

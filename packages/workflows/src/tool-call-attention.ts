@@ -1,4 +1,4 @@
-import type { ProviderEvent } from '@archon/provider-contract';
+import { subtaskTerminalStatusSchema, type ProviderEvent } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import {
   collectCredentialValues,
@@ -11,8 +11,8 @@ interface ToolCallAttentionOptions {
   store: Pick<IWorkflowStore, 'setToolCallAttention'>;
   runId: string;
   nodeId: string;
-  attemptId: string;
   provider: string;
+  reportedBackgroundWork: boolean;
   thresholdMs: number;
   env: Readonly<Record<string, string | undefined>>;
   protectedEnvKeys?: readonly string[];
@@ -21,7 +21,35 @@ interface ToolCallAttentionOptions {
   streamId?: string;
 }
 
-export function createToolCallAttention(options: ToolCallAttentionOptions): {
+const terminalSubtasks: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
+
+export function createRunToolCallAttention(
+  options: Pick<ToolCallAttentionOptions, 'store' | 'runId'>
+): {
+  createStream(
+    stream: Omit<ToolCallAttentionOptions, 'store' | 'runId'>
+  ): ReturnType<typeof createToolCallAttention>;
+  refresh(): Promise<void>;
+} {
+  const pending = new Set<() => Promise<boolean>>();
+  return {
+    createStream(
+      stream: Omit<ToolCallAttentionOptions, 'store' | 'runId'>
+    ): ReturnType<typeof createToolCallAttention> {
+      return createToolCallAttention({ ...options, ...stream }, retry => pending.add(retry));
+    },
+    async refresh(): Promise<void> {
+      for (const retry of pending) {
+        if (await retry()) pending.delete(retry);
+      }
+    },
+  };
+}
+
+function createToolCallAttention(
+  options: ToolCallAttentionOptions,
+  retainCleanup: (retry: () => Promise<boolean>) => void
+): {
   hasOpenTools(): boolean;
   observe(event: ProviderEvent): Promise<void>;
   refresh(): Promise<void>;
@@ -37,14 +65,21 @@ export function createToolCallAttention(options: ToolCallAttentionOptions): {
   const display = (value: string): string =>
     Array.from(redactCredentialValues(value, credentials)).slice(0, 512).join('');
   const tools = new Map<string, Omit<ToolCallAttention, 'raisedAt'> & { raisedAt?: string }>();
+  const subtasks = new Map<string, Omit<ToolCallAttention, 'raisedAt'> & { raisedAt?: string }>();
   const parents = new Map<string, string>();
   let persisted = '[]';
 
-  async function refresh(): Promise<void> {
+  async function persist(): Promise<boolean> {
     const time = now();
     const calls: ToolCallAttention[] = [];
+    const independentSubtasks = [...subtasks]
+      .filter(([id]) => {
+        const parent = parents.get(id);
+        return !parent || !tools.has(parent);
+      })
+      .map(([, task]) => task);
     if (options.thresholdMs > 0)
-      for (const tool of tools.values()) {
+      for (const tool of [...tools.values(), ...independentSubtasks]) {
         if (
           tool.raisedAt !== undefined ||
           time - Date.parse(tool.lastProgressAt) >= options.thresholdMs
@@ -54,18 +89,26 @@ export function createToolCallAttention(options: ToolCallAttentionOptions): {
         }
       }
     const snapshot = JSON.stringify(calls);
-    if (snapshot === persisted) return;
+    if (snapshot === persisted) return true;
     try {
-      if (await options.store.setToolCallAttention(options.runId, streamId, calls))
+      const changed = await options.store.setToolCallAttention(options.runId, streamId, calls);
+      if (changed || calls.length === 0) {
         persisted = snapshot;
+        return true;
+      }
     } catch {
-      // Observability must never turn live work into node failure. Retry on the next stream tick.
+      // Observability must never turn live work into node failure.
       createLogger('workflow.tool-attention').warn(
         { runId: options.runId, nodeId: options.nodeId, streamId, category: 'persistence' },
         'tool_attention.write_failed'
       );
     }
+    return false;
   }
+
+  const refresh = async (): Promise<void> => {
+    await persist();
+  };
 
   return {
     hasOpenTools: () => tools.size > 0,
@@ -74,7 +117,6 @@ export function createToolCallAttention(options: ToolCallAttentionOptions): {
         const at = new Date(now()).toISOString();
         tools.set(event.toolCallId, {
           streamId,
-          attemptId: options.attemptId,
           nodeId: options.nodeId,
           provider: options.provider,
           toolCallId: event.toolCallId,
@@ -94,14 +136,40 @@ export function createToolCallAttention(options: ToolCallAttentionOptions): {
           tool.lastProgressAt = new Date(now()).toISOString();
           delete tool.raisedAt;
         }
+        if (options.reportedBackgroundWork) {
+          if (terminalSubtasks.has(event.status)) subtasks.delete(event.taskId);
+          else {
+            const at = new Date(now()).toISOString();
+            const task = subtasks.get(event.taskId);
+            if (task) {
+              if (event.status === 'running') {
+                task.lastProgressAt = at;
+                delete task.raisedAt;
+              }
+            } else {
+              subtasks.set(event.taskId, {
+                streamId,
+                nodeId: options.nodeId,
+                provider: options.provider,
+                toolCallId: `subtask:${event.taskId}`,
+                name: display(event.taskType || 'subtask'),
+                ...(event.description ? { title: display(event.description) } : {}),
+                startedAt: at,
+                lastProgressAt: at,
+                thresholdMs: options.thresholdMs,
+              });
+            }
+          }
+        }
       }
       await refresh();
     },
     refresh,
     async clear(): Promise<void> {
       tools.clear();
+      subtasks.clear();
       parents.clear();
-      await refresh();
+      if (!(await persist())) retainCleanup(persist);
     },
   };
 }

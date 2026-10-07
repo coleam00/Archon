@@ -898,7 +898,6 @@ export const TOOL_CALL_ATTENTION_METADATA_KEY = 'tool_call_attention';
 export const toolCallAttentionSchema = z
   .object({
     streamId: z.string().min(1),
-    attemptId: z.string().min(1),
     nodeId: z.string().min(1),
     provider: z.string().min(1),
     toolCallId: z.string().min(1),
