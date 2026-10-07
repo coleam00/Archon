@@ -1,0 +1,24 @@
+# Sparse guard fixture: run with --default-stubs --exec-code. The target names
+# several work items and triage refuses to choose among them. The refusal is a
+# prompt judgment a fixture cannot exercise; this proves the tuple the command
+# documents for it (NO_ACTION, no single item) completes ship without delivering.
+triage__triage:
+  contract: NO_ACTION
+  route: no_action
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: target names issues #10, #11, and #12; refusing to choose one to triage"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+fixture:
+  expect: completed
+  reached: [triage__verdict, outcome]
+  inputs:
+    target: "issues #10, #11 and #12"
+  resolved-text-contains:
+    triage__triage: "refuse to choose a route or a contract verdict for any of them"
+exec-code: true
