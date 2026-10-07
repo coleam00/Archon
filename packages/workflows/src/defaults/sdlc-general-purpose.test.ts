@@ -573,3 +573,32 @@ describe('hold-comment write boundary', () => {
     expect(duplicate.stderr.toString()).toContain('holds must not contain duplicate PRs');
   });
 });
+
+describe('merge hold is a claim the shared review settles', () => {
+  test('review scope reads the exact marker the merge queue publishes', async () => {
+    const holds = await readFile(holdsScript, 'utf8');
+    const marker = /const marker = '([^']+)';/.exec(holds)?.[1];
+    expect(marker).toBe('<!-- archon-merge-hold -->');
+    const scope = await readFile(
+      join(workflowRoot, 'review', 'commands', 'review-scope.md'),
+      'utf8'
+    );
+    expect(scope).toContain(`first line is \`${String(marker)}\``);
+    expect(scope).toContain('**Merge hold**');
+    // The queue writes `Held at <sha>:` and reasons as bullets; a cleared hold says so.
+    expect(holds).toContain('Held at');
+    expect(holds).toContain('Hold cleared at');
+    expect(scope).toContain('Held at <sha>:');
+    expect(scope).toContain('cleared carries no claim');
+  });
+
+  test('review synthesis settles each held reason as a merge-queue finding', async () => {
+    const synthesize = await readFile(
+      join(workflowRoot, 'review', 'commands', 'review-synthesize.md'),
+      'utf8'
+    );
+    expect(synthesize).toContain('A **Merge hold** section in scope.md');
+    expect(synthesize).toContain('`sources: [merge-queue]`');
+    expect(synthesize).toContain('a merge-hold finding, which carries `merge-queue`');
+  });
+});

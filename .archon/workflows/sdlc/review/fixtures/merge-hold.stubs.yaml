@@ -1,0 +1,38 @@
+# Dry-run fixture: a pull request the shared merge queue held. The queue publishes
+# a fixable hold as one PR comment whose first line is `<!-- archon-merge-hold -->`
+# (merge-queue/scripts/publish-holds.ts writes it), and a re-driven delivery must
+# settle each held reason instead of reviewing as if the PR were clean.
+#
+# Which reasons hold is model judgment no fixture can assert. What this pins is the
+# wiring: scope's resolved prompt tells it to find that exact marker and record
+# the reasons, and synthesize's resolved prompt tells it to settle them as findings
+# attributed to the merge queue (`sources: [merge-queue]`). The verdict stubs show
+# the shape the hold produces: not ready, with a correction owed.
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
+coverage: { full: true }
+scope:
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+code: "0 findings"
+seams: "0 findings"
+simplify__simplify: { findings: false }
+tests: "0 findings"
+review-complete: "settled"
+synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: merge-hold reason M1 confirmed open against the code"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: merge-hold reason M1 confirmed open against the code"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+fixture:
+  expect: completed
+  inputs:
+    scope: "7"
+  reached: [scope, synthesize, publish]
+  resolved-text-contains:
+    scope: "first line is `<!-- archon-merge-hold -->`"
+    synthesize: "record it as a finding with `sources: [merge-queue]`"
