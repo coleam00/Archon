@@ -1180,7 +1180,14 @@ Abandon deletes uncommitted work in that worktree, keeps its branch, and never r
 an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
 how to retry.
 
-Remove stale environments.
+Remove stale environments. Ordinary removal requires a stored creation proof matching
+Archon's marker and Git registration in the expected repository. Replacement
+repositories, adopted checkouts, and older records without proof are retained for
+operator inspection. If Git removal leaves a directory behind, cleanup reports it
+and keeps the environment active; inspect that path before removing it manually.
+
+These ownership checks also apply to `/worktree remove` and `archon complete`;
+`--force` never bypasses them.
 
 ```bash
 # Default: 7 days
@@ -1271,14 +1278,14 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass safety checks
+archon complete feature-auth --force  # bypass completion and uncommitted-change checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip safety checks |
+| `--force` | Skip completion and uncommitted-change checks; ownership checks still apply |
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone

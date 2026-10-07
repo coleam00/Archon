@@ -4,7 +4,7 @@
  * CLI and command-handler are thin formatting adapters over these functions.
  */
 import { createLogger } from '@archon/paths';
-import { toWorktreePath, worktreeExists } from '@archon/git';
+import { lstat } from 'node:fs/promises';
 import * as isolationDb from '../db/isolation-environments';
 import { cleanupStaleWorktrees, cleanupMergedWorktrees } from '../services/cleanup-service';
 import type { CleanupOperationResult, MergedCleanupResult } from '../services/cleanup-service';
@@ -61,7 +61,13 @@ async function reconcileGhosts(
   let reconciled = 0;
   for (const env of envs) {
     try {
-      const exists = await worktreeExists(toWorktreePath(env.working_path));
+      const exists = await lstat(env.working_path).then(
+        () => true,
+        (error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+          throw error;
+        }
+      );
       if (!exists) {
         const liveRun = await isolationDb.getLiveRunOwningEnv(env.id);
         if (liveRun) {

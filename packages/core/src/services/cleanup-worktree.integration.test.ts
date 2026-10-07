@@ -38,7 +38,7 @@ mock.module('../db/connection', () => ({
 }));
 const isolationDb = await import('../db/isolation-environments');
 const { claimPendingWorkflowRun } = await import('../db/workflows');
-const { reclaimRunWorktree } = await import('./cleanup-service');
+const { reclaimRunWorktree, removeEnvironment } = await import('./cleanup-service');
 
 async function git(path: string, ...args: string[]): Promise<string> {
   const process = Bun.spawn(['git', '-C', path, ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -480,4 +480,49 @@ describe('owned worktree release', () => {
       exec.mockRestore();
     }
   });
+});
+
+test('ordinary cleanup preserves a replacement clone and its active record', async () => {
+  await git(repo, 'worktree', 'remove', env.working_path);
+  await git(root, 'clone', '-q', repo, env.working_path);
+  await writeFile(join(env.working_path, 'operator-file'), 'keep me');
+
+  const error = await removeEnvironment(env.id, { force: true }).catch((error: unknown) => error);
+
+  expect(await readFile(join(env.working_path, 'operator-file'), 'utf8')).toBe('keep me');
+  expect(error).toBeInstanceOf(Error);
+  expect(String(error)).toContain('ownership');
+  expect(await status()).toBe('active');
+  expect(await git(repo, 'branch', '--list', env.branch_name)).toContain(env.branch_name);
+});
+
+test('ordinary cleanup removes a proven checkout and its branch', async () => {
+  const result = await removeEnvironment(env.id);
+  expect(result.worktreeRemoved).toBe(true);
+  expect(result.branchDeleted).toBe(true);
+  expect(existsSync(env.working_path)).toBe(false);
+  expect(await status()).toBe('destroyed');
+  expect(await git(repo, 'branch', '--list', env.branch_name)).toBe('');
+});
+
+test('listing retains a replacement directory without a Git entry', async () => {
+  await git(repo, 'worktree', 'remove', env.working_path);
+  await mkdir(env.working_path);
+  await writeFile(join(env.working_path, 'operator-file'), 'keep me');
+  const { listEnvironments } = await import('../operations/isolation-operations');
+  const result = await listEnvironments();
+  expect(result.codebases.flatMap(codebase => codebase.environments).map(env => env.id)).toContain(
+    env.id
+  );
+  expect(await status()).toBe('active');
+  await expect(removeEnvironment(env.id, { force: true })).rejects.toThrow('ownership');
+  expect(await readFile(join(env.working_path, 'operator-file'), 'utf8')).toBe('keep me');
+});
+
+test('ordinary cleanup removes a proven checkout under a symlinked base', async () => {
+  await useSymlinkedBase();
+  const result = await removeEnvironment(env.id);
+  expect(result.worktreeRemoved).toBe(true);
+  expect(existsSync(env.working_path)).toBe(false);
+  expect(await status()).toBe('destroyed');
 });

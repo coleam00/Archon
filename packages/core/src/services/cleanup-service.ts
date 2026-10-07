@@ -395,6 +395,7 @@ export async function removeEnvironment(
     // Call destroy even if path doesn't exist - branch cleanup may still be needed
     const destroyResult = await provider.destroy(env.working_path, {
       force: options?.force,
+      creationId: readWorktreeCreationId(env.metadata) ?? undefined,
       branchName: toBranchName(env.branch_name),
       canonicalRepoPath,
       deleteRemoteBranch: options?.deleteRemoteBranch,
