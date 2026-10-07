@@ -1017,8 +1017,8 @@ export function describeWorkflowStoreConformance(
         (
           await store.listWorkflowRuns({
             codebaseId: CONFORMANCE_CODEBASE_ID,
-            after: '2026-01-01T12:00:00',
-            before: '2026-01-03T00:00:00',
+            after: '2026-01-01T12:00:00.000Z',
+            before: '2026-01-03T00:00:00.000Z',
           })
         ).runs.map(run => run.id)
       ).toEqual([second.id]);
