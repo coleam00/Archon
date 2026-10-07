@@ -85,6 +85,7 @@ function collectOAuthCredentialValues(
 
 export function createWorkflowStore(): IWorkflowStore {
   return {
+    setToolCallAttention: workflowDb.setToolCallAttention,
     admitResourceStart: resourceStarts.admitResourceStart,
     drainResourceStarts: resourceStarts.drainResourceStarts,
     acceptStartReceipt: resourceStarts.acceptStartReceipt,

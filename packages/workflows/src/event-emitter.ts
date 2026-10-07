@@ -194,6 +194,7 @@ export interface ContainerLifecycleEvent {
 }
 
 export type WorkflowEmitterEvent =
+  | { type: 'run_attention_changed'; runId: string; streamId: string; hasAttention: boolean }
   | WorkflowStartedEvent
   | WorkflowCompletedEvent
   | WorkflowFailedEvent

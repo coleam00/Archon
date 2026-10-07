@@ -110,6 +110,47 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('waitForRunAttention', () => {
+  test.each([false, true])(
+    'running advisory returns the affected child identity: %s',
+    async child => {
+      const calls = [
+        {
+          streamId: 'stream',
+          nodeId: 'implement',
+          provider: 'codex',
+          toolCallId: 'tool',
+          name: 'bash',
+          startedAt: '2026-10-01T00:00:00.000Z',
+          lastProgressAt: '2026-10-01T00:00:00.000Z',
+          raisedAt: '2026-10-01T00:30:00.000Z',
+          thresholdMs: 1800000,
+        },
+      ];
+      const affected = putRun('affected', { metadata: { tool_call_attention: calls } });
+      if (child)
+        putRun('parent', {
+          status: 'paused',
+          metadata: gate({ type: 'child_workflow', childRunId: 'affected' }),
+        });
+      const result = await wait(child ? 'parent' : 'affected');
+      expect(result).toMatchObject({
+        kind: 'attention',
+        attention: {
+          kind: 'stalled_tool_calls',
+          runId: 'affected',
+          status: 'running',
+          calls: [{ nodeId: 'implement', toolCallId: 'tool' }],
+        },
+      });
+      expect(affected.status).toBe('running');
+      expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
+      affected.metadata = {};
+      expect(await wait('affected', { deadlineMs: 10 })).toMatchObject({
+        kind: 'deadline',
+        observedStatus: 'running',
+      });
+    }
+  );
   test('returns not_found for an id that names no run', async () => {
     // Distinct from every other outcome: waiting on an id that does not exist must
     // not look like waiting on a live run.

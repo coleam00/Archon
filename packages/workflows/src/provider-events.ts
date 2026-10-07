@@ -1,3 +1,4 @@
+import type { createRunToolCallAttention } from './tool-call-attention';
 /**
  * What the engine does with each non-terminal event a provider streams. Both AI-node
  * loops in `dag-executor.ts` (the agent node and the loop node) hand every event to one
@@ -48,6 +49,7 @@ export function createAttemptEventSequence(attemptId: string): AttemptEventSeque
 }
 
 export interface ProviderEventHandlerDeps {
+  toolAttention: ReturnType<ReturnType<typeof createRunToolCallAttention>['createStream']>;
   store: Pick<IWorkflowStore, 'createWorkflowEvent'>;
   platform: IWorkflowPlatform;
   conversationId: string;
@@ -78,6 +80,9 @@ export interface ProviderEventHandler {
   handle(event: ProviderEvent): Promise<void>;
   /** Subtasks that started and have not ended: the work a stream cut short would lose. */
   liveSubtaskIds(): string[];
+  hasOpenTools(): boolean;
+  refreshAttention(): Promise<void>;
+  clearAttention(): Promise<void>;
 }
 
 /** One handler per provider stream pass: its subtask state belongs to that pass. */
@@ -119,6 +124,7 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
 
   return {
     async handle(event): Promise<void> {
+      await deps.toolAttention.observe(event);
       await record(event);
       const streaming = platform.getStreamingMode() === 'stream';
       switch (event.type) {
@@ -182,6 +188,13 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           throw new Error(`Unhandled provider event: ${JSON.stringify(unhandled)}`);
         }
       }
+    },
+    hasOpenTools: () => deps.toolAttention.hasOpenTools(),
+    refreshAttention: async (): Promise<void> => {
+      await deps.toolAttention.refresh();
+    },
+    clearAttention: async (): Promise<void> => {
+      await deps.toolAttention.clear();
     },
     liveSubtaskIds(): string[] {
       return [...liveSubtasks];

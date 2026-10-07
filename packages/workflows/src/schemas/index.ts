@@ -311,3 +311,10 @@ export { workflowRunOriginSchema } from './workflow-run';
 export type { WorkflowRunOrigin } from './workflow-run';
 
 export * from './workflow-event';
+
+export {
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+  toolCallAttentionSchema,
+  toolCallAttentionArraySchema,
+  type ToolCallAttention,
+} from './workflow-run';
