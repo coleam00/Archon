@@ -40301,11 +40301,7 @@ describe('executeDagWorkflow -- packaged validation evidence across an approval 
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'result', sessionId: 'session-id' };
     });
-    try {
-      await rm(testDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   function gitIn(cwd: string, ...args: string[]): void {
