@@ -24,6 +24,9 @@ import { pluginCommand, RESERVED_CHAT_PLATFORMS, type PluginEnvironment } from '
 
 const windows = process.platform === 'win32';
 const enabled = !windows || (!!process.env.CI && !skipCompiledBinaryTests());
+// Each install spawns the fixture; on Windows that is a fresh compiled executable, and
+// these tests run several installs in series, so their budgets match the provider plugin
+// integration tests rather than the single-spawn Windows floor.
 const integration = enabled ? test : test.skip;
 const trackRoot = trackTempRoots();
 const suffix = windows ? '.exe' : '';
@@ -284,7 +287,8 @@ integration(
     );
     expect(await Bun.file(receiptPath(env.pluginsDir, 'owner/repo')).exists()).toBe(false);
     expect(await Bun.file(unrelated).text()).toBe('keep');
-  }
+  },
+  120_000
 );
 
 integration(
@@ -306,7 +310,8 @@ integration(
     expect(refused.code).toBe(1);
     expect(refused.output).toContain('owner/repo/alternate collides with owner/repo');
     expect(await snapshot(env.pluginsDir)).toEqual(beforeUpdate);
-  }
+  },
+  120_000
 );
 
 integration(
@@ -321,7 +326,7 @@ integration(
       expect(await snapshot(env.pluginsDir)).toEqual({});
     }
   },
-  testTimeout(20_000)
+  120_000
 );
 
 integration(
@@ -364,7 +369,7 @@ integration(
       }
     }
   },
-  testTimeout(60_000)
+  180_000
 );
 
 integration('chat receipts do not interfere with provider and pack discovery', async () => {
