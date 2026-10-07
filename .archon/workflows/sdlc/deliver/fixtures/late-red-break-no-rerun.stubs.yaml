@@ -1,6 +1,7 @@
-# Guard fixture: the re-run agent judges a red a real break yet requests a re-run
-# (live run b77b0945). A break goes straight to classification and the fix, so the
-# node's schema admits no re-run for it: the pairing is re-asked at ci-rerun.
+# Guard fixture: the re-run agent judges a red a real break yet asks for a re-run
+# (live run b77b0945). The re-run script runs only for a flake or infrastructure
+# failure, so the trap stub below is never reached: the red goes straight to
+# classification and the CI fix.
 impl__implement:
   done: true
   green: true
@@ -55,7 +56,10 @@ validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-settle: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
-ci-rerun: { failure: break, requested: true, reason: "stub: the failure points to a real break rather than a flake; re-ran the failed jobs anyway" }
+ci-rerun: { failure: break, requested: true, reason: "stub: the failure points to a real break rather than a flake, but a re-run was asked for anyway" }
+# A trap: this value fails the node's schema, so the run fails if a break ever
+# reaches the re-run script.
+rerun-failed: "trap: a break must never be re-run"
 ci-reverdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-changed: '{"files":["packages/core/src/feature.ts","packages/core/src/feature.test.ts"]}'
 ci-classify:
@@ -83,6 +87,6 @@ fork: '{"fork":true}'
 push-ci-fix: "push-head: fixture-branch is at fixturehead"
 publish-pr-body: {}
 fixture:
-  expect: failed
-  fail-node: ci-rerun
+  expect: completed
+  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, fix-ci-probe, ci-attention-route, flip-ready, confirm-ready]
 exec-code: true

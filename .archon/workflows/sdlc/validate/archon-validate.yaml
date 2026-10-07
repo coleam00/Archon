@@ -75,7 +75,9 @@ nodes:
   #
   # In ordinary validation only `run` re-executes on a resume (always_run): the verdict is what a
   # fix changes. The discovered check list is reused, so an unchanged tree keys to
-  # the same recorded green and a wake of a later wait re-runs nothing.
+  # the same recorded green and a wake of a later wait re-runs nothing. That holds
+  # within one include of this workflow; a separate include (archon-pr's revalidate)
+  # discovers the checks again.
   - id: discover
     command: discover-checks
     depends_on: [mode]

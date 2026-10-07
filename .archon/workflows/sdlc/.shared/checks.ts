@@ -250,25 +250,31 @@ export interface RerunOutcome {
 
 /**
  * Re-run the pull request's failed checks once, through the source the run selected.
- * The forge source asks the plugin's `checks.rerun` for every failing unit with the
- * re-run group the observation reports. The gh source re-runs the failed jobs of each
- * GitHub Actions workflow run a failing check belongs to; a check another CI posts has
- * no re-run here and is named instead. Nothing re-runs a check that did not fail.
+ * The forge source asks the plugin's `checks.rerun` for every failing unit the
+ * observation gives a re-run group; the gh source re-runs the failed jobs of each
+ * GitHub Actions workflow run a failing check belongs to. Either way a failing check
+ * this source cannot re-run is named, not allowed to block the ones it can, and a
+ * check that did not fail is never re-run. `requested` is true when any re-run was
+ * accepted, so the wait that follows sees it; a refused part is named in `detail`.
  */
 export function rerunFailedChecks(pr: QualifiedPr): RerunOutcome {
+  const named = (names: readonly string[]): string =>
+    names.length === 0 ? '' : `; no re-run from here for ${names.join(', ')}`;
   if (forgeSource() === 'forge') {
     const observation = readChecks(pr);
     const failing = observation.units.filter(unit => unit.state === 'red' || unit.state === 'unknown');
-    if (failing.length === 0) return { requested: false, detail: 'no check is failing, so nothing was re-run' };
+    const runnable = failing.filter(unit => unit.rerun !== undefined && unit.rerun !== null);
+    const other = named(failing.filter(unit => !runnable.includes(unit)).map(unit => unit.unit.name));
+    if (runnable.length === 0) return { requested: false, detail: `nothing re-runnable is failing${other}` };
     const result = record(
       invokeForge('checks.rerun', {
         ref: { repo: pr.repo, number: pr.number },
         revision: observation.revision,
-        units: failing.map(unit => ({ unit: unit.unit, rerun: unit.rerun ?? null })),
+        units: runnable.map(unit => ({ unit: unit.unit, rerun: unit.rerun })),
       })
     );
     if (result?.outcome !== 'applied') throw new Error('forge checks.rerun did not report an applied re-run');
-    return { requested: true, detail: `re-ran ${describeUnits(failing)} at ${observation.revision}` };
+    return { requested: true, detail: `re-ran ${describeUnits(runnable)} at ${observation.revision}${other}` };
   }
   const listed = gh('pr', 'checks', String(pr.number), '--repo', ghRepo(pr), '--json', 'name,state,link');
   let rows: unknown;
@@ -289,13 +295,20 @@ export function rerunFailedChecks(pr: QualifiedPr): RerunOutcome {
     if (run === undefined) external.push(row.name);
     else runs.add(run);
   }
-  const unrunnable = external.length === 0 ? '' : `; no re-run from here for ${external.join(', ')}`;
-  if (runs.size === 0) return { requested: false, detail: `nothing re-runnable is failing${unrunnable}` };
+  if (runs.size === 0) return { requested: false, detail: `nothing re-runnable is failing${named(external)}` };
+  const accepted: string[] = [];
+  const refused: string[] = [];
   for (const run of runs) {
     const done = gh('run', 'rerun', run, '--failed', '--repo', ghRepo(pr));
-    if (!done.ok) throw new Error(`re-running workflow run ${run} failed: ${done.stderr.trim()}`);
+    if (done.ok) accepted.push(run);
+    else refused.push(`${run} (${done.stderr.trim()})`);
   }
-  return { requested: true, detail: `re-ran the failed jobs of workflow run(s) ${[...runs].join(', ')}${unrunnable}` };
+  const refusedNote = refused.length === 0 ? '' : `; the re-run was refused for workflow run(s) ${refused.join(', ')}`;
+  if (accepted.length === 0) throw new Error(`re-running workflow run(s) failed: ${refused.join(', ')}`);
+  return {
+    requested: true,
+    detail: `re-ran the failed jobs of workflow run(s) ${accepted.join(', ')}${refusedNote}${named(external)}`,
+  };
 }
 
 /** The expected checks that have not registered on the pull request, by exact name. */

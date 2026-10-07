@@ -37,6 +37,24 @@ describe('rerun-failed on the default gh source', () => {
     expect(result.gh.some(call => call.startsWith('run rerun'))).toBe(false);
   });
 
+  // A wait must follow any accepted re-run, even when another run's re-run was refused.
+  it('reports requested when any run was re-run, naming the run that was refused', () => {
+    const result = rerun({
+      gh: {
+        checks: [
+          { name: 'test', state: 'FAILURE', bucket: 'fail', link: job(11) },
+          { name: 'e2e', state: 'FAILURE', bucket: 'fail', link: job(12) },
+        ],
+        rerunFailFor: { '12': 'HTTP 409: already running' },
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      requested: true,
+      detail:
+        're-ran the failed jobs of workflow run(s) 11; the re-run was refused for workflow run(s) 12 (HTTP 409: already running)',
+    });
+  });
+
   it('reports a refused re-run as not requested, with the reason, instead of failing the run', () => {
     const result = rerun({
       gh: {
@@ -51,15 +69,17 @@ describe('rerun-failed on the default gh source', () => {
 });
 
 describe('rerun-failed on the opt-in forge source', () => {
-  it('asks the plugin to re-run every failing unit, never gh', () => {
+  // One external red the plugin cannot re-run must not block the flaky part it can.
+  it('asks the plugin to re-run every failing unit it can, names the rest, never gh', () => {
     const result = rerun({
       source: 'forge',
       forge: {
         kind: 'fake',
         response: [
           forgeResponse([
-            { name: 'build', state: 'red' },
-            { name: 'lint', state: 'green' },
+            { name: 'build', state: 'red', rerun: { id: '11', attempt: 1 } },
+            { name: 'ci/external', state: 'red', rerun: null },
+            { name: 'lint', state: 'green', rerun: { id: '12', attempt: 1 } },
           ]),
           forgeOperation('checks.rerun', {
             target: { repo: { host: 'ghe.example.com', path: 'example/repo' }, number: 42 },
@@ -69,8 +89,23 @@ describe('rerun-failed on the opt-in forge source', () => {
         ],
       },
     });
-    expect(JSON.parse(result.stdout)).toMatchObject({ requested: true });
+    expect(JSON.parse(result.stdout)).toEqual({
+      requested: true,
+      detail: 're-ran build (failure) at deadbeef; no re-run from here for ci/external',
+    });
     expect(result.forge.some(call => call.includes('forge checks.rerun'))).toBe(true);
     expect(result.gh).toEqual([]);
+  });
+
+  it('requests nothing when no failing unit has a re-run group', () => {
+    const result = rerun({
+      source: 'forge',
+      forge: { kind: 'fake', response: forgeResponse([{ name: 'ci/external', state: 'red', rerun: null }]) },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      requested: false,
+      detail: 'nothing re-runnable is failing; no re-run from here for ci/external',
+    });
+    expect(result.forge.some(call => call.includes('forge checks.rerun'))).toBe(false);
   });
 });

@@ -388,6 +388,34 @@ describe('bundled-defaults', () => {
     // that registers after that wait concluded, a re-run, or the one CI fix earns
     // another wait, and the operator's attention loop waits for an explicit re-run;
     // nothing reads or waits on CI earlier in the run.
+    // OpenAI Structured Outputs (the Codex provider's path) accepts only an object at a
+    // schema's root, so a root union or scalar ends the node on every call there. A
+    // decision with variants nests its union under a property instead.
+    it('every bundled output_format has a plain object at its root', () => {
+      const offenders: string[] = [];
+      const visit = (workflow: string, nodes: readonly unknown[]): void => {
+        for (const node of nodes as Record<string, unknown>[]) {
+          const format = node.output_format as Record<string, unknown> | undefined;
+          if (
+            format !== undefined &&
+            (format.type !== 'object' ||
+              'anyOf' in format ||
+              'oneOf' in format ||
+              'allOf' in format)
+          ) {
+            offenders.push(`${workflow}:${String(node.id)}`);
+          }
+          const group = node.loop_group as { nodes?: unknown[] } | undefined;
+          if (group?.nodes) visit(workflow, group.nodes);
+        }
+      };
+      for (const [name, source] of Object.entries(BUNDLED_WORKFLOWS)) {
+        const raw = Bun.YAML.parse(source) as { nodes?: unknown[] };
+        visit(name, raw.nodes ?? []);
+      }
+      expect(offenders).toEqual([]);
+    });
+
     it('archon-deliver waits on CI only before the flip', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],

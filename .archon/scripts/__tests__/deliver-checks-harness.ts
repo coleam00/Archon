@@ -70,6 +70,8 @@ export interface GhFake {
   readonly approvalRuns?: number | 'fail';
   /** stderr for a refused `gh run rerun`; omit for a re-run that is accepted. */
   readonly rerunFail?: string;
+  /** The same, for one workflow run id only. */
+  readonly rerunFailFor?: Readonly<Record<string, string>>;
   /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
   readonly readyFail?: string;
   /** The pull request every `gh pr view`/`gh pr list` read reports. */
@@ -275,7 +277,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     }
     return result(0, JSON.stringify({ id, body, html_url: url(id) }));
   }
-  if (text.startsWith('run rerun')) return fake.rerunFail ? result(1, '', fake.rerunFail) : result(0);
+  if (text.startsWith('run rerun')) {
+    const refused = fake.rerunFailFor?.[argv[3]] ?? fake.rerunFail;
+    return refused ? result(1, '', refused) : result(0);
+  }
   return result(95, '', 'unexpected gh call');
 } });
 `;
@@ -454,7 +459,12 @@ type ForgeState = 'none' | 'pending' | 'green' | 'red' | 'gated' | 'unknown';
 
 /** A `checks.state` response in the forge wire shape, one unit per named state. */
 export function forgeResponse(
-  units: readonly { name: string; state: Exclude<ForgeState, 'none'> }[],
+  units: readonly {
+    name: string;
+    state: Exclude<ForgeState, 'none'>;
+    /** The re-run group the plugin reports for this unit, when it can re-run it. */
+    rerun?: { id: string; attempt: number } | null;
+  }[],
   options: { revision?: string; required?: typeof units | null; approvalPending?: boolean | null } = {}
 ): string {
   const set = (list: typeof units): Pick<ChecksObservation, 'units' | 'summary'> => {
@@ -471,6 +481,7 @@ export function forgeResponse(
         nativeResult: unit.state,
         result: unit.state === 'green' ? 'success' : unit.state === 'pending' ? null : 'failure',
         state: unit.state,
+        ...(unit.rerun === undefined ? {} : { rerun: unit.rerun }),
       })),
       summary: { state, counts },
     };

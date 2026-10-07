@@ -25,7 +25,8 @@
  * Only green is reused: red and incomplete can clear without a tree change (a freed
  * port, a restored service), and the operator's resume after one runs the gate again.
  * The reused result is the recorded one, byte for byte, so nothing downstream reads
- * it as changed.
+ * it as changed. The key is the tracked tree, so a reused green cannot see gitignored
+ * state (installed dependencies, build output) that changed since it was recorded.
  *
  * No timer lives here. The node's `timeout:` is the only one, and the engine stops
  * this script with SIGTERM when it expires. The handler below then stops the

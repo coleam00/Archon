@@ -671,9 +671,9 @@ nodes:
     trigger_rule: none_failed_min_one_success
     output_format: *ci_state
 
-  # Whether a red deserves one re-run before anyone attributes it, and how this
-  # project's CI re-runs a job, is judgment. A re-run comes before classification,
-  # so its result is evidence the classifier reads like any other.
+  # Whether a red deserves one re-run before anyone attributes it is judgment; the
+  # re-run itself is rerun-failed's. A re-run comes before classification, so its
+  # result is evidence the classifier reads like any other.
   - id: ci-rerun
     command: rerun-ci
     model: small
@@ -683,26 +683,16 @@ nodes:
     with:
       detail: "$ci-verdict.output.detail"
       ci: "$discover-ci.output"
-    # A re-run is only for a failure that may not reproduce. A real break never
-    # carries `requested: true`: the schema re-asks that pairing at this node.
     output_format:
-      anyOf:
-        - type: object
-          additionalProperties: false
-          properties:
-            failure: { type: string, enum: [flake, infrastructure] }
-            requested: { type: boolean }
-            reason: { type: string, pattern: '\S' }
-          required: [failure, requested, reason]
-        - type: object
-          additionalProperties: false
-          properties:
-            failure: { type: string, enum: [break, unknown] }
-            requested: { type: boolean, enum: [false] }
-            reason: { type: string, pattern: '\S' }
-          required: [failure, requested, reason]
+      type: object
+      properties:
+        failure: { type: string, enum: [flake, infrastructure, break, unknown] }
+        requested: { type: boolean }
+        reason: { type: string, pattern: '\S' }
+      required: [failure, requested, reason]
 
-  # The agent decides; this re-runs, and only a failure that may not reproduce.
+  # The agent decides; this re-runs, and only a failure that may not reproduce: a
+  # break or unknown failure never reaches it, whatever `requested` says.
   - id: rerun-failed
     script: rerun-failed
     runtime: bun
