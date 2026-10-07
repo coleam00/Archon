@@ -794,7 +794,7 @@ export function describeWorkflowStoreConformance(
       expect(await store.listEventsForRuns([], ['workflow_artifact'])).toEqual(new Map());
       expect(await store.listEventsForRuns([first.id], [])).toEqual(new Map([[first.id, []]]));
     });
-    test('resume reduction preserves durable fan-out, starts and usage from failed attempts', async () => {
+    test('resume reduction preserves durable fan-out, starts and usage from failed and deferred attempts', async () => {
       const run = await create(store);
       const snapshots = [{ ordinal: 0, identity: 'one', item: 1, inputs: { value: 1 } }];
       const rows = [
@@ -836,6 +836,18 @@ export function describeWorkflowStoreConformance(
           data: { instances: snapshots },
         },
         { event_type: 'fan_out_instances' as const, step_name: 'fan', data: { instances: [] } },
+        // Deferred spend is accounting only: it must neither clear reusable output nor
+        // resolve an unfinished start.
+        {
+          event_type: 'node_deferred_usage' as const,
+          step_name: 'success',
+          data: { accounting: 'node', tokens: { input: 1, output: 1 }, cost_usd: 0.125 },
+        },
+        {
+          event_type: 'node_deferred_usage' as const,
+          step_name: 'unfinished',
+          data: { accounting: 'node', tokens: { input: 1, output: 1 }, cost_usd: 0.125 },
+        },
       ];
       for (const row of rows) await store.persistWorkflowEvent({ ...row, workflow_run_id: run.id });
       const snapshot = await store.getDagResumeSnapshot(run.id);
@@ -844,8 +856,8 @@ export function describeWorkflowStoreConformance(
       );
       expect(snapshot.fanOutSnapshots).toEqual(new Map([['fan', snapshots]]));
       expect(snapshot.unresolvedNodeStarts).toEqual(new Set(['unfinished']));
-      expect(snapshot.tokens).toMatchObject({ input: 7, output: 10 });
-      expect(snapshot.costUsd).toBe(0.75);
+      expect(snapshot.tokens).toMatchObject({ input: 9, output: 12 });
+      expect(snapshot.costUsd).toBe(1);
     });
     test('provider events follow emission order within attempts and honor the node cursor', async () => {
       const run = await create(store);

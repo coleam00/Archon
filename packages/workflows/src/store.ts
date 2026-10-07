@@ -4,7 +4,12 @@ import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type { DeclaredOutputPaths } from './output-ref';
-import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-record-serialization';
+import {
+  serializeNodeStateRecord,
+  DEFERRED_NODE_USAGE_EVENT_TYPE,
+  type SerializedDeferredNodeUsageEvent,
+  type SerializedNodeEvent,
+} from './node-record-serialization';
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { RunCancelReason, RunExitReason, RunStopSignal } from './schemas/run-terminal-reason';
@@ -67,7 +72,7 @@ export interface DagResumeSnapshot {
   /** Node/instance starts with no later terminal event, in lifecycle order. */
   unresolvedNodeStarts: Set<string>;
   tokens?: TokenUsage;
-  /** Cumulative USD cost persisted by completed and failed node attempts across prior passes. */
+  /** Cumulative USD cost persisted by completed/failed attempts and abandoned deferred segments. */
   costUsd: number;
 }
 
@@ -120,6 +125,13 @@ export const NODE_STATE_EVENT_TYPES = [
 
 export type NodeStateEventType = (typeof NODE_STATE_EVENT_TYPES)[number];
 
+export const DURABLE_WORKFLOW_EVENT_TYPES = [
+  ...NODE_STATE_EVENT_TYPES,
+  DEFERRED_NODE_USAGE_EVENT_TYPE,
+] as const;
+export type DurableWorkflowEventType = (typeof DURABLE_WORKFLOW_EVENT_TYPES)[number];
+export type DurableNodeEventInput = NodeStateEventInput | SerializedDeferredNodeUsageEvent;
+
 export const WORKFLOW_EVENT_TYPES = [
   'workflow_started',
   'workflow_completed',
@@ -133,7 +145,7 @@ export const WORKFLOW_EVENT_TYPES = [
   // Between-run continuation (#2747) — written on the ADOPTING run's log when it
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
-  ...NODE_STATE_EVENT_TYPES,
+  ...DURABLE_WORKFLOW_EVENT_TYPES,
   'node_retry_scheduled',
   'loop_iteration_started',
   'loop_iteration_completed',
@@ -208,8 +220,10 @@ export const LEGACY_PROVIDER_EVENT_TYPES = [
 
 export const PROVIDER_EVENT_ROW_TYPES = ['provider_event', ...LEGACY_PROVIDER_EVENT_TYPES] as const;
 
-export function isNodeStateEventType(value: WorkflowEventType): value is NodeStateEventType {
-  return NODE_STATE_EVENT_TYPES.some(eventType => eventType === value);
+export function isDurableWorkflowEventType(
+  value: WorkflowEventType
+): value is DurableWorkflowEventType {
+  return DURABLE_WORKFLOW_EVENT_TYPES.some(eventType => eventType === value);
 }
 
 /** The column payload shared by every workflow-event writer. */
@@ -223,7 +237,7 @@ export interface WorkflowEventInput<EventType extends WorkflowEventType = Workfl
 
 export type NodeStateEventInput = SerializedNodeEvent;
 export type ObservabilityEventInput = WorkflowEventInput<
-  Exclude<WorkflowEventType, NodeStateEventType>
+  Exclude<WorkflowEventType, DurableWorkflowEventType>
 >;
 
 /**
