@@ -1,3 +1,4 @@
+import type { RunDoorbell } from '../services/run-attention-watch';
 import type { IIsolationStore, IsolationEnvironmentRow } from '@archon/isolation';
 import type { Codebase, CreateCodebaseInput, UpdateCodebaseInput } from '../schemas/codebase';
 import type { User, IdentityPlatform } from '../schemas/user';
@@ -57,4 +58,5 @@ export interface WorkflowHost {
   records: IWorkflowHostStore;
   engine: IWorkflowEngine;
   operations: WorkflowOperations;
+  doorbell?: RunDoorbell;
 }

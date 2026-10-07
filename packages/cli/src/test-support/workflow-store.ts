@@ -13,6 +13,7 @@ import {
   workflowRunStatusSchema,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
+  pendingWorkflowWaitDeadline,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
@@ -201,6 +202,74 @@ export function createInMemoryWorkflowStore(
     precedingEvents: WorkflowEventInput[] = []
   ): Promise<void> => terminalBatch([{ run, event, precedingEvents }]);
   const store: InMemoryWorkflowStore = {
+    listDueWorkflowContinuations: async (
+      now,
+      limit = 25
+    ): ReturnType<IWorkflowStore['listDueWorkflowContinuations']> =>
+      structuredClone(
+        [...runs.values()]
+          .filter(run => {
+            const retry = run.metadata.continuation_retry_at;
+            if (typeof retry === 'string' && Date.parse(retry) > now.getTime()) return false;
+            const wait = pendingWorkflowWaitDeadline(run);
+            if (wait)
+              return (
+                Date.parse(wait.resumeAt) <= now.getTime() ||
+                (wait.kind === 'event' && wait.signaledAt !== undefined)
+              );
+            const scheduled = run.metadata.scheduled_resume;
+            return (
+              run.status === 'failed' &&
+              isScheduledWorkflowResume(scheduled) &&
+              !scheduled.triggeredAt &&
+              Date.parse(scheduled.resumeAt) <= now.getTime()
+            );
+          })
+          .slice(0, limit)
+      ),
+    deferWorkflowContinuation: serialize(async (id, retryAt, cursor) => {
+      const run = row(id);
+      const wait = pendingWorkflowWaitDeadline(run);
+      const scheduled = run.metadata.scheduled_resume;
+      if (
+        cursor.kind === 'wait'
+          ? wait?.nodeId === cursor.nodeId && wait.resumeAt === cursor.resumeAt
+          : run.status === 'failed' &&
+            isScheduledWorkflowResume(scheduled) &&
+            !scheduled.triggeredAt &&
+            scheduled.attempt === cursor.attempt &&
+            scheduled.resumeAt === cursor.resumeAt
+      ) {
+        run.metadata.continuation_retry_at = retryAt;
+      }
+    }),
+    signalWorkflowWait: serialize(async (id, expected, payload) => {
+      const run = row(id);
+      const wait = run.metadata.wait;
+      if (
+        run.status !== 'paused' ||
+        !isWorkflowWaitContext(wait) ||
+        wait.kind !== 'event' ||
+        wait.signaledAt ||
+        wait.event !== expected.event ||
+        wait.nodeId !== expected.nodeId ||
+        wait.resumeAt !== expected.resumeAt ||
+        Date.parse(wait.resumeAt) <= Date.now()
+      )
+        return { signaled: false };
+      run.metadata.wait = {
+        ...wait,
+        signaledAt: new Date().toISOString(),
+        ...(payload === undefined ? {} : { payload: structuredClone(payload) }),
+      };
+      record({
+        workflow_run_id: id,
+        event_type: 'wait_signaled',
+        step_name: wait.nodeId,
+        data: { event: wait.event, payload },
+      });
+      return { signaled: true };
+    }),
     backdate: serialize(async (id, dates) => {
       Object.assign(row(id), structuredClone(dates));
     }),

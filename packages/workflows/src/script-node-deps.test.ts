@@ -60,6 +60,15 @@ import type { IWorkflowStore } from './store';
 
 function createMockStore(): IWorkflowStore {
   return {
+    listDueWorkflowContinuations: mock<IWorkflowStore['listDueWorkflowContinuations']>(() => {
+      throw new Error('Unexpected listDueWorkflowContinuations');
+    }),
+    deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
+      throw new Error('Unexpected deferWorkflowContinuation');
+    }),
+    signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
+      throw new Error('Unexpected signalWorkflowWait');
+    }),
     resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
       throw new Error('Unexpected resolveApprovalGate');
     }),

@@ -28,7 +28,9 @@ import type { GateResolutionEvent } from './workflows';
 
 const workflowWarnings = mock((_context: unknown, _message: string) => {});
 
+const actualPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...actualPaths,
   createLogger: () => ({
     info() {},
     warn: workflowWarnings,
@@ -72,10 +74,7 @@ const {
   pauseWorkflowRunForWait,
   failPausedAttentionWait,
   clearWorkflowWaitContext,
-  signalWorkflowWait,
-  listDueWorkflowContinuations,
   listWorkflowEventSignalCandidates,
-  deferWorkflowContinuation,
   getWorkflowRun,
   findResumableRun,
   findResumableRunByParentConversation,
@@ -86,6 +85,9 @@ const {
   failWorkflowRun,
   WorkflowNotResumableError,
 } = await import('./workflows');
+const { createWorkflowStore } = await import('../workflows/store-adapter');
+const { signalWorkflowWait, deferWorkflowContinuation, listDueWorkflowContinuations } =
+  createWorkflowStore();
 const workflowDb = await import('./workflows');
 const { createWorkflowOperations } = await import('../operations/workflow-operations');
 const { createIsolationStore } = await import('./isolation-environments');
@@ -839,6 +841,30 @@ describe('fan-out cancellation recovery — real SQLite', () => {
 });
 
 describe('durable wait continuation races — real SQLite', () => {
+  test('the store defaults an omitted due-scan limit to 25 and honors an explicit limit', async () => {
+    const now = new Date('2020-01-02T00:00:00.000Z');
+    for (let index = 0; index < 26; index++) {
+      await seed(`default-scan-limit-${index}`, 'paused', "datetime('now')", {
+        wait: {
+          owner: 'node',
+          nodeId: 'delay',
+          kind: 'time',
+          waitingSince: '2020-01-01T00:00:00.000Z',
+          resumeAt: '2020-01-01T01:00:00.000Z',
+        },
+      });
+    }
+    try {
+      expect(await listDueWorkflowContinuations(now)).toHaveLength(25);
+      expect(await listDueWorkflowContinuations(now, 26)).toHaveLength(26);
+    } finally {
+      await db.query(
+        "DELETE FROM remote_agent_workflow_runs WHERE id LIKE 'default-scan-limit-%'",
+        []
+      );
+    }
+  });
+
   const waitA = {
     owner: 'loop_group' as const,
     nodeId: 'release-loop',
@@ -1015,7 +1041,13 @@ describe('durable wait continuation races — real SQLite', () => {
       signalWorkflowWait('wait-signal-cursor', waitA, { conclusion: 'stale' })
     ).resolves.toEqual({ signaled: false });
 
+    await deferWorkflowContinuation('wait-signal-cursor', '2099-08-25T10:02:00.000Z', {
+      kind: 'wait',
+      nodeId: waitA.nodeId,
+      resumeAt: waitA.resumeAt,
+    });
     const run = await getWorkflowRun('wait-signal-cursor');
+    expect(run?.metadata.continuation_retry_at).toBeUndefined();
     expect(run?.status).toBe('paused');
     expect(run?.metadata.wait).toEqual(waitB);
     expect(await countEvents('wait-signal-cursor', 'wait_signaled')).toBe(0);

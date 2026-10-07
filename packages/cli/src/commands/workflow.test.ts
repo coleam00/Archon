@@ -1,3 +1,4 @@
+import { PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
 import { createRunAiConfigurationSnapshot } from '@archon/workflows/run-ai-configuration';
 import { buildAiProfile } from '@archon/workflows/model-validation';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
@@ -224,6 +225,7 @@ mock.module(
 // under test: prefix resolution, both output modes, and the exit code per outcome.
 const mockWaitForRunAttention = mock(
   (
+    _store: import('@archon/workflows/store').IWorkflowStore,
     _runId: string,
     _opts?: { onAttached?: (observedStatus: string) => void | Promise<void> }
   ): Promise<unknown> => Promise.resolve({ kind: 'not_found', runId: 'unset' })
@@ -674,13 +676,14 @@ mock.module('@archon/core/db/workflows', () => ({
   listDashboardRuns: mockListDashboardRuns,
   findOpenWorkRuns: mock(() => Promise.resolve([])),
   deleteOldWorkflowRuns: mock(() => Promise.resolve({ count: 0 })),
+  deleteWorkflowRun: mock(() => Promise.resolve()),
 }));
 
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(() => Promise.resolve([])),
   listEventsForRuns: mock(() => Promise.resolve(new Map())),
   createWorkflowEvent: mock(() => Promise.resolve()),
-  PROVIDER_EVENT_ROW_TYPES: ['provider_event', 'tool_called'],
+  PROVIDER_EVENT_ROW_TYPES,
 }));
 
 // Reset-sessions runs the real resetWorkflowNodeSessions operation over this mocked
@@ -5042,7 +5045,7 @@ describe('workflowStatusCommand', () => {
     });
 
     expect(eventsSpy).toHaveBeenCalledWith('run-summary', {
-      excludeEventTypes: ['provider_event', 'tool_called'],
+      excludeEventTypes: PROVIDER_EVENT_ROW_TYPES,
     });
   });
 
@@ -14447,7 +14450,8 @@ describe('workflowWaitCommand', () => {
       result: 'deadline',
       observedStatus: 'running',
     });
-    expect(mockWaitForRunAttention).toHaveBeenCalledWith(FULL_ID, {
+    expect(mockWaitForRunAttention).toHaveBeenCalledWith(expect.any(Object), FULL_ID, {
+      doorbell: expect.any(Function),
       deadlineMs: 5000,
       onAttached: expect.any(Function),
     });
@@ -14493,7 +14497,7 @@ describe('workflowWaitCommand', () => {
 
   it('announces the attachment on stderr, leaving stdout one --json document', async () => {
     const stderrSpy = spyOnStderr();
-    mockWaitForRunAttention.mockImplementationOnce(async (_runId, opts) => {
+    mockWaitForRunAttention.mockImplementationOnce(async (_store, _runId, opts) => {
       await opts?.onAttached?.('running');
       return terminal('cancelled');
     });
@@ -14516,7 +14520,7 @@ describe('workflowWaitCommand', () => {
 
   it('names the run and the status it attached on in human mode', async () => {
     const stderrSpy = spyOnStderr();
-    mockWaitForRunAttention.mockImplementationOnce(async (_runId, opts) => {
+    mockWaitForRunAttention.mockImplementationOnce(async (_store, _runId, opts) => {
       await opts?.onAttached?.('paused');
       return terminal('completed');
     });
@@ -14541,7 +14545,7 @@ describe('workflowWaitCommand', () => {
       }
       return true;
     });
-    mockWaitForRunAttention.mockImplementationOnce(async (_runId, opts) => {
+    mockWaitForRunAttention.mockImplementationOnce(async (_store, _runId, opts) => {
       await opts?.onAttached?.('running');
       return terminal('completed');
     });
@@ -14562,7 +14566,8 @@ describe('workflowWaitCommand', () => {
 
     await workflowWaitCommand(createTestWorkflowHost(), FULL_ID, undefined, '/repo');
 
-    expect(mockWaitForRunAttention).toHaveBeenCalledWith(FULL_ID, {
+    expect(mockWaitForRunAttention).toHaveBeenCalledWith(expect.any(Object), FULL_ID, {
+      doorbell: expect.any(Function),
       onAttached: expect.any(Function),
     });
   });
@@ -14629,7 +14634,8 @@ describe('workflowWaitCommand', () => {
     );
 
     expect(code).toBe(0);
-    expect(mockWaitForRunAttention).toHaveBeenCalledWith(FULL_ID, {
+    expect(mockWaitForRunAttention).toHaveBeenCalledWith(expect.any(Object), FULL_ID, {
+      doorbell: expect.any(Function),
       onAttached: expect.any(Function),
     });
   });

@@ -339,6 +339,58 @@ export function describeWorkflowStoreConformance(
       expect(rows[2]).toMatchObject(winner.nodeEvent);
       expect((await store.getWorkflowRun(run.id))?.metadata).not.toHaveProperty('wait');
     });
+    test('continuation scans honor exact-cursor deferral and an event signal has one winner', async () => {
+      const due = async (now: Date): Promise<string[]> =>
+        (await store.listDueWorkflowContinuations(now, 10)).map(run => run.id);
+      const afterWait = new Date(Date.parse(wait.resumeAt) + 1000);
+      const timed = await running(store);
+      await store.pauseWorkflowRunForWait(timed.id, wait, { kind: 'started', stepName: 'wait' });
+      expect(await due(new Date(Date.parse(wait.resumeAt) - 1000))).not.toContain(timed.id);
+      expect(await due(afterWait)).toContain(timed.id);
+      const retryAt = schedule.deadlineAt;
+      await store.deferWorkflowContinuation(timed.id, retryAt, {
+        kind: 'wait',
+        nodeId: 'other',
+        resumeAt: wait.resumeAt,
+      });
+      expect(await due(afterWait)).toContain(timed.id);
+      await store.deferWorkflowContinuation(timed.id, retryAt, {
+        kind: 'wait',
+        nodeId: wait.nodeId,
+        resumeAt: wait.resumeAt,
+      });
+      expect(await due(afterWait)).not.toContain(timed.id);
+      expect(await due(new Date(Date.parse(retryAt) + 1000))).toContain(timed.id);
+
+      const event: Extract<WorkflowWaitContext, { kind: 'event' }> = {
+        owner: 'node',
+        nodeId: 'gate',
+        kind: 'event',
+        event: 'ready',
+        waitingSince: new Date().toISOString(),
+        resumeAt: new Date(Date.now() + 86_400_000).toISOString(),
+      };
+      const signaled = await running(store);
+      await store.pauseWorkflowRunForWait(signaled.id, event, {
+        kind: 'started',
+        stepName: 'gate',
+      });
+      expect(await due(new Date())).not.toContain(signaled.id);
+      expect(
+        await store.signalWorkflowWait(signaled.id, { ...event, event: 'other' }, { n: -1 })
+      ).toEqual({ signaled: false });
+      const results = await eight(index =>
+        store.signalWorkflowWait(signaled.id, event, { n: index })
+      );
+      expect(results.filter(result => result.signaled)).toHaveLength(1);
+      const winner = results.findIndex(result => result.signaled);
+      expect((await store.getWorkflowRun(signaled.id))?.metadata.wait).toMatchObject({
+        signaledAt: expect.any(String),
+        payload: { n: winner },
+      });
+      expect(await types(store, signaled.id)).toEqual(['wait_started', 'wait_signaled']);
+      expect(await due(new Date())).toContain(signaled.id);
+    });
     test('attention failure matches its exact owner and reports only the winner', async () => {
       const run = await running(store);
       const attention = {

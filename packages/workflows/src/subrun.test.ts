@@ -215,6 +215,16 @@ const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 // ---------------------------------------------------------------------------
 
 class InMemoryStore implements IWorkflowStore {
+  listDueWorkflowContinuations: IWorkflowStore['listDueWorkflowContinuations'] = () => {
+    throw new Error('Unexpected listDueWorkflowContinuations');
+  };
+  deferWorkflowContinuation: IWorkflowStore['deferWorkflowContinuation'] = () => {
+    throw new Error('Unexpected deferWorkflowContinuation');
+  };
+  signalWorkflowWait: IWorkflowStore['signalWorkflowWait'] = () => {
+    throw new Error('Unexpected signalWorkflowWait');
+  };
+
   resolveApprovalGate: IWorkflowStore['resolveApprovalGate'] = () => {
     throw new Error('Unexpected resolveApprovalGate');
   };
