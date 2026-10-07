@@ -217,6 +217,7 @@ export function createInMemoryWorkflowStore(records: IWorkflowHostStore): IWorkf
       run.completed_at = null;
       return structuredClone(run);
     },
+    setToolCallAttention: async () => true,
     createWorkflowEvent: async (input): ReturnType<IWorkflowStore['createWorkflowEvent']> => {
       record(input);
     },

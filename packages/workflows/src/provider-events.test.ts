@@ -55,6 +55,16 @@ async function makeHandler(
 }
 
 describe('createProviderEventHandler', () => {
+  test('typed open tools stay live until their own terminal update', async () => {
+    const { handler } = await makeHandler();
+    await handler.handle({ type: 'tool_call', toolCallId: 'a', name: 'Bash' });
+    await handler.handle({ type: 'tool_call', toolCallId: 'b', name: 'Bash' });
+    await handler.handle({ type: 'tool_call_update', toolCallId: 'a', status: 'completed' });
+    await handler.handle({ type: 'tool_call_update', toolCallId: 'unknown', status: 'cancelled' });
+    expect(handler.hasOpenTools()).toBe(true);
+    await handler.handle({ type: 'tool_call_update', toolCallId: 'b', status: 'failed' });
+    expect(handler.hasOpenTools()).toBe(false);
+  });
   test('tracks a subtask from its start until a terminal status', async () => {
     const { handler } = await makeHandler();
 

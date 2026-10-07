@@ -286,3 +286,34 @@ describe('watchRunAttention', () => {
     expect(h.alerted).toEqual([]);
   });
 });
+
+test('running tool advisories alert only on new occurrence identities', async () => {
+  const call = {
+    streamId: 's',
+    attemptId: 'a',
+    nodeId: 'node',
+    provider: 'codex',
+    toolCallId: 'call',
+    name: 'bash',
+    title: 'COMMAND_SENTINEL',
+    startedAt: '2026-10-01T00:00:00Z',
+    lastProgressAt: '2026-10-01T00:00:00Z',
+    raisedAt: '2026-10-01T00:30:00Z',
+    thresholdMs: 1800000,
+  };
+  const h = harness([run('live', { toolCallAttention: [call] })]);
+  await h.seed();
+  await h.change(run('live', { toolCallAttention: [call] }));
+  expect(h.alerted).toEqual([]);
+  const second = { ...call, toolCallId: 'second' };
+  await h.change(run('live', { toolCallAttention: [call, second] }));
+  expect(h.alerted).toEqual(['live:running']);
+  await h.change(run('live', { toolCallAttention: [second] }));
+  await h.change(run('live', { toolCallAttention: [] }));
+  expect(h.alerted).toHaveLength(1);
+  await h.change(
+    run('live', { toolCallAttention: [{ ...call, raisedAt: '2026-10-01T01:00:00Z' }] })
+  );
+  expect(h.alerted).toHaveLength(2);
+  h.watcher.stop();
+});

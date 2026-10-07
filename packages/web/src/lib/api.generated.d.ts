@@ -4586,6 +4586,22 @@ export interface components {
       agents_total: number | null;
     };
     WorkflowRunMetadata: {
+      tool_call_attention?: {
+        streamId: string;
+        attemptId: string;
+        nodeId: string;
+        provider: string;
+        toolCallId: string;
+        name: string;
+        title?: string;
+        /** Format: date-time */
+        startedAt: string;
+        /** Format: date-time */
+        lastProgressAt: string;
+        /** Format: date-time */
+        raisedAt: string;
+        thresholdMs: number;
+      }[];
       approval?: {
         nodeId: string;
         pauseId?: string;

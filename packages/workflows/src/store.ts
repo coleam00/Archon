@@ -120,6 +120,7 @@ export const NODE_STATE_EVENT_TYPES = [
 export type NodeStateEventType = (typeof NODE_STATE_EVENT_TYPES)[number];
 
 export const WORKFLOW_EVENT_TYPES = [
+  'run_attention_changed',
   'workflow_started',
   'workflow_completed',
   'workflow_failed',
@@ -316,6 +317,11 @@ export class WorkflowRunPauseConflictError extends Error {
 }
 
 export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionStore {
+  setToolCallAttention(
+    runId: string,
+    streamId: string,
+    calls: import('./schemas/workflow-run').ToolCallAttention[]
+  ): Promise<boolean>;
   /** Resolve an open paused gate and commit its audit events atomically; a CAS loser writes nothing. */
   resolveApprovalGate(
     id: string,

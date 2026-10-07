@@ -541,3 +541,26 @@ describe('toRun — terminal record', () => {
     );
   });
 });
+
+test('running advisories are normalized through API metadata and disappear for terminal rows', () => {
+  const call = {
+    streamId: 's',
+    attemptId: 'a',
+    nodeId: 'node',
+    provider: 'codex',
+    toolCallId: 'call',
+    name: 'bash',
+    startedAt: '2026-10-01T00:00:00Z',
+    lastProgressAt: '2026-10-01T00:00:00Z',
+    raisedAt: '2026-10-01T00:30:00Z',
+    thresholdMs: 1800000,
+  };
+  const metadata = { tool_call_attention: [call] };
+  const live = toRun(raw({ id: 'live', workflow_name: 'work', status: 'running', metadata }));
+  expect(live.toolCallAttention).toEqual([call]);
+  expect(runStatusLabel(live)).toBe('Running · tool call needs attention');
+  expect(
+    toRun(raw({ id: 'done', workflow_name: 'work', status: 'completed', metadata }))
+      .toolCallAttention
+  ).toEqual([]);
+});

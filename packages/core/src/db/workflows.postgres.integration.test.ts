@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { toolCallAttentionContract } from './tool-call-attention.contract';
 /**
  * Integration tests: workflow-run queries that behave differently on a REAL Postgres
  * server than on SQLite.
@@ -60,6 +61,7 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
       getDatabase: () => db,
       getDialect: () => postgresDialect,
       getDatabaseType: () => 'postgresql',
+      getDbNotificationListener: () => db,
     }));
 
     workflows = await import('./workflows');
@@ -76,6 +78,49 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
       await admin.query(`DROP DATABASE IF EXISTS "${SCRATCH_DB}" WITH (FORCE)`);
       await admin.end();
     }
+  });
+
+  toolCallAttentionContract(
+    () => db,
+    () => workflows
+  );
+
+  test('a durable attention notification wakes an attached waiter before its poll', async () => {
+    mock.module('../services/run-live-owner', () => ({
+      watchRunLiveOwner: async () => ({ kind: 'attached', handle: { unsubscribe() {} } }),
+    }));
+    const { waitForRunAttention } = await import('../services/run-attention-watch');
+    const id = await seed('running', {});
+    let attached: (() => void) | undefined;
+    const ready = new Promise<void>(resolve => {
+      attached = resolve;
+    });
+    const waiting = waitForRunAttention(id, {
+      deadlineMs: 3000,
+      pollIntervalMs: 60000,
+      onAttached: () => {
+        attached?.();
+      },
+    });
+    await ready;
+    await workflows.setToolCallAttention(id, 's', [
+      {
+        streamId: 's',
+        attemptId: 'a',
+        nodeId: 'implement',
+        provider: 'codex',
+        toolCallId: 'tool',
+        name: 'bash',
+        startedAt: '2026-10-01T00:00:00.000Z',
+        lastProgressAt: '2026-10-01T00:00:00.000Z',
+        raisedAt: '2026-10-01T00:30:00.000Z',
+        thresholdMs: 1800000,
+      },
+    ]);
+    expect(await waiting).toMatchObject({
+      kind: 'attention',
+      attention: { kind: 'stalled_tool_calls', runId: id, status: 'running' },
+    });
   });
 
   async function seed(status: string, metadata: Record<string, unknown>): Promise<string> {

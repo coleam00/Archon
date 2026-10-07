@@ -113,8 +113,9 @@ concurrency:
   # providers:
   #   pi: 1
 
-# Optional continuation for provider quota-window exhaustion. Off by default.
+# Live tool attention is enabled by default; quota continuation is opt-in.
 workflows:
+  toolCallAttentionMs: 1800000  # 30 minutes; 0 disables tool-call advisories
   autoResumeOnQuotaReset: false
   # quotaFallbackDelayMs: 3600000
   quotaMaxAttempts: 1
@@ -792,16 +793,23 @@ DISCORD_STREAMING_MODE=batch
 
 ---
 
-## Workflow continuation settings
+## Workflow attention and continuation settings
 
 `workflows:` can be set globally or per repository; repo fields override matching global fields.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
+| `toolCallAttentionMs` | `1800000` | Milliseconds without reported progress before an open provider tool call raises advisory run attention. `0` disables publication; positive safe integers override the default |
 | `autoResumeOnQuotaReset` | `false` | Schedule a failed workflow for continuation when a node's provider reported a `quota_exhausted` failure |
 | `quotaFallbackDelayMs` | unset | Explicit delay to use when the provider's quota failure reports no reset time, or a reset time that has already passed, capped at 1000 years. When unset, Archon records that automatic continuation was skipped instead of guessing |
 | `quotaMaxAttempts` | `1` | Maximum number of scheduled continuation attempts for one run |
 | `quotaDeadlineMs` | `86400000` | Maximum window from the first quota failure in which a continuation may be scheduled, capped at 1000 years |
+
+Tool-call attention leaves the run and node running. It never kills, fails, cancels, pauses, retries, or resumes work. `workflow wait`, `workflow status`, and the console show the affected node, provider, tool, provider title or command, and duration. A tool's terminal update clears its advisory; a correlated subtask update renews only its parent tool and clears its advisory until the threshold passes again. Unrelated text or tool events do not count as that tool's progress. Leaving running state hides the advisory, and resume clears old descriptors.
+
+The threshold follows the same global, repository, and run-scoped `workflows` layering. It is an operator policy, not a workflow YAML field. Even with publication disabled, typed open tools suspend the silence watchdog; streams with no open tools or reported live subtasks retain their existing idle timeout.
+
+Attention stores only ids, timestamps, and bounded display fields. It never copies raw tool inputs, outputs, assistant messages, or reasoning from provider transcripts. Commands are redacted against known credentials from the effective environment and protected credential values, including file-delivered credentials. Arbitrary secrets unknown to Archon cannot be discovered by that redaction.
 
 This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt because retrying in the same provider window only repeats the failure. When enabled, Archon leaves the run `failed`, records the scheduled time in run metadata, and the server claims and resumes it when due. The claim is durable and bounded, so two server scans cannot launch the same attempt and an early resume failure does not create a rapid retry loop.
 

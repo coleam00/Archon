@@ -4021,6 +4021,7 @@ export function registerApiRoutes(
       case 'awaiting_response':
         // The gate is open and this route may go on to resolve it.
         return null;
+      case 'stalled_tool_calls':
       case 'terminal':
         // Unreachable: every route checks `status !== 'paused'` before calling this.
         return null;

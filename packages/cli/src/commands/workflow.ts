@@ -4239,7 +4239,10 @@ export async function workflowStatusCommand(
 
   if (opts.json) {
     if (!opts.verbose) {
-      await writeJsonLine({ runs, scopeFallback });
+      await writeJsonLine({
+        runs: runs.map(run => ({ ...run, attention: runAttention(run) })),
+        scopeFallback,
+      });
       return;
     }
 
@@ -4249,8 +4252,8 @@ export async function workflowStatusCommand(
     const runsOutput = runs.map((run, i) => {
       const runEvents = fetchedPerRun[i]?.events ?? [];
       return opts.rawEvents
-        ? { ...run, events: runEvents }
-        : { ...run, nodes: buildNodeSummaries(runEvents) };
+        ? { ...run, attention: runAttention(run), events: runEvents }
+        : { ...run, attention: runAttention(run), nodes: buildNodeSummaries(runEvents) };
     });
     await writeJsonLine({ runs: runsOutput, scopeFallback });
     return;
@@ -4272,6 +4275,8 @@ export async function workflowStatusCommand(
     console.log(`  Name:   ${run.workflow_name}`);
     console.log(`  Path:   ${run.working_path ?? '(none)'}`);
     console.log(`  Status: ${run.status}`);
+    const attention = runAttention(run);
+    if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
     if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
     console.log(`  Age:    ${age}`);
     if (run.active_nodes.length > 0) {
@@ -4290,6 +4295,21 @@ export async function workflowStatusCommand(
 
     console.log('');
   }
+}
+
+function formatToolAttention(
+  attention: Extract<RunAttention, { kind: 'stalled_tool_calls' }>
+): string {
+  return (
+    `Run ${attention.runId} is still running; tool calls need attention:\n` +
+    attention.calls
+      .map(
+        call =>
+          `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)`
+      )
+      .join('\n') +
+    `\nInspect with archon workflow logs ${attention.runId}, or explicitly cancel the run.`
+  );
 }
 
 /**
@@ -4318,6 +4338,8 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
   }
   const attention = result.attention;
   switch (attention.kind) {
+    case 'stalled_tool_calls':
+      return formatToolAttention(attention);
     case 'terminal':
       return `Run ${watchedRunId} ${attention.status}.`;
     case 'awaiting_response':

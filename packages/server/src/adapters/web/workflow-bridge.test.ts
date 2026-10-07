@@ -276,3 +276,35 @@ test('live approval frames retain the exact declared vocabulary', () => {
     approval: { nodeId: 'review', message: 'Choose', decisions, pauseId: 'pause-one' },
   });
 });
+
+test('attention publication and clearing invalidate existing dashboard readers without command contents', () => {
+  for (const hasAttention of [true, false]) {
+    const local = JSON.parse(
+      mapWorkflowEvent({
+        type: 'run_attention_changed',
+        runId: 'run',
+        streamId: 'stream',
+        hasAttention,
+      })!
+    );
+    const durable = JSON.parse(
+      mapWorkflowEventRow({
+        id: 'event',
+        workflow_run_id: 'run',
+        event_type: 'run_attention_changed',
+        step_index: null,
+        step_name: null,
+        created_at: new Date().toISOString(),
+        data: { streamId: 'stream', hasAttention },
+      })!
+    );
+    for (const payload of [local, durable])
+      expect(payload).toEqual({
+        type: 'workflow_status',
+        runId: 'run',
+        workflowName: '',
+        status: 'running',
+        timestamp: expect.any(Number),
+      });
+  }
+});

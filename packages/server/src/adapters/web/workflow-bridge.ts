@@ -23,6 +23,14 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
   switch (event.type) {
+    case 'run_attention_changed':
+      return JSON.stringify({
+        type: 'workflow_status',
+        runId: event.runId,
+        workflowName: '',
+        status: 'running',
+        timestamp: Date.now(),
+      });
     case 'workflow_started':
     case 'workflow_completed':
     case 'workflow_failed':
@@ -242,6 +250,7 @@ interface WorkflowStatusSsePayload {
  * exceeds the drain limit (the boundary paging can't stall on overflow).
  */
 export const DASHBOARD_SOURCE_EVENT_TYPES: readonly string[] = [
+  'run_attention_changed',
   ...Object.keys(ROW_WORKFLOW_STATUS),
   ...Object.keys(ROW_NODE_STATUS),
   'approval_requested',
@@ -265,7 +274,8 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
   const data = row.data;
   const timestamp = Date.now();
 
-  const workflowStatus = ROW_WORKFLOW_STATUS[row.event_type];
+  const workflowStatus =
+    row.event_type === 'run_attention_changed' ? 'running' : ROW_WORKFLOW_STATUS[row.event_type];
   if (workflowStatus) {
     const payload: WorkflowStatusSsePayload = {
       type: 'workflow_status',

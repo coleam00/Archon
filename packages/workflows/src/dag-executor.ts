@@ -1,3 +1,5 @@
+import { createToolCallAttention } from './tool-call-attention';
+import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
 import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
 import { randomUUID } from 'node:crypto';
 import { nodeInvocationKey } from './node-record-reader';
@@ -2370,6 +2372,17 @@ async function executeNodeInternal(
     watchdogResets = createWatchdogResetRecorder(logDir, workflowRun.id, node.id);
     backgroundTasksIncomplete = [];
     const providerEvents = createProviderEventHandler({
+      toolAttention: createToolCallAttention({
+        store: deps.store,
+        runId: workflowRun.id,
+        nodeId: stepName,
+        attemptId: attemptEvents.attemptId,
+        provider: provider,
+        thresholdMs: ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
+        env: { ...(ctx.execContext.kind === 'host' ? process.env : {}), ...nodeOptions?.env },
+        protectedEnvKeys: ctx.config.protectedEnvKeys,
+        protectedCredentialValues: ctx.config.protectedCredentialValues,
+      }),
       store: deps.store,
       platform,
       conversationId,
@@ -2398,6 +2411,7 @@ async function executeNodeInternal(
       },
     });
     const shouldStopStream = async (): Promise<boolean> => {
+      await providerEvents.refreshAttention();
       const tickNow = Date.now();
       if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
         lastNodeCancelCheck.set(nodeKey, tickNow);
@@ -2421,131 +2435,134 @@ async function executeNodeInternal(
 
       return false;
     };
-    for await (const msg of withIdleTimeout(
-      aiClient.sendQuery(attemptPrompt, cwd, pass.resumeSessionId, nodeOptionsWithAbort),
-      effectiveIdleTimeout,
-      () => {
-        nodeIdleTimedOut = true;
-        getLog().warn(
-          {
-            nodeId: node.id,
-            timeoutMs: effectiveIdleTimeout,
-            ...(lastWatchdogReset
-              ? {
-                  lastResetType: lastWatchdogReset.type,
-                  lastResetAt: new Date(lastWatchdogReset.at).toISOString(),
-                }
-              : {}),
-          },
-          'dag_node_idle_timeout_reached'
-        );
-        nodeAbortController.abort();
-      },
-      (msg, resetAt) => {
-        const type = msg.type;
-        lastWatchdogReset = { type, at: resetAt };
-        watchdogResets.observe(type, resetAt);
-      },
-      // Only a provider that declares `reported` vouches that silent work is alive;
-      // any other provider's silence is a hung turn and must still time out.
-      () =>
-        aiClient.getCapabilities().backgroundWork === 'reported' &&
-        providerEvents.liveSubtaskIds().length > 0,
-      shouldStopStream
-    )) {
-      const tickNow = Date.now();
-
-      if (await shouldStopStream()) break;
-
-      // Activity heartbeat — write, throttled to every 60s (only for stale/zombie detection)
-      if (tickNow - (lastNodeActivityUpdate.get(nodeKey) ?? 0) > ACTIVITY_HEARTBEAT_INTERVAL_MS) {
-        lastNodeActivityUpdate.set(nodeKey, tickNow);
-        try {
-          await deps.store.updateWorkflowActivity(workflowRun.id);
-        } catch (e) {
+    try {
+      for await (const msg of withIdleTimeout(
+        aiClient.sendQuery(attemptPrompt, cwd, pass.resumeSessionId, nodeOptionsWithAbort),
+        effectiveIdleTimeout,
+        () => {
+          nodeIdleTimedOut = true;
           getLog().warn(
-            { err: e as Error, workflowRunId: workflowRun.id },
-            'dag.activity_update_failed'
+            {
+              nodeId: node.id,
+              timeoutMs: effectiveIdleTimeout,
+              ...(lastWatchdogReset
+                ? {
+                    lastResetType: lastWatchdogReset.type,
+                    lastResetAt: new Date(lastWatchdogReset.at).toISOString(),
+                  }
+                : {}),
+            },
+            'dag_node_idle_timeout_reached'
           );
-        }
-      }
+          nodeAbortController.abort();
+        },
+        (msg, resetAt) => {
+          const type = msg.type;
+          lastWatchdogReset = { type, at: resetAt };
+          watchdogResets.observe(type, resetAt);
+        },
+        () =>
+          providerEvents.hasOpenTools() ||
+          (aiClient.getCapabilities().backgroundWork === 'reported' &&
+            providerEvents.liveSubtaskIds().length > 0),
+        shouldStopStream
+      )) {
+        const tickNow = Date.now();
 
-      if (msg.type === 'result') {
-        if (pass.threadsSession) {
-          newSessionId = msg.sessionId;
-          if (msg.resumed !== undefined) nodeResumed = msg.resumed;
-        }
-        if (msg.tokens !== undefined) {
-          nodeTokens = sumTokenUsage([...(nodeTokens ? [nodeTokens] : []), msg.tokens], {
-            nodeId: node.id,
-          });
-        }
-        if (msg.cost !== undefined) {
-          if (Number.isFinite(msg.cost)) {
-            nodeCostUsd = (nodeCostUsd ?? 0) + msg.cost;
-          } else {
+        if (await shouldStopStream()) break;
+
+        // Activity heartbeat — write, throttled to every 60s (only for stale/zombie detection)
+        if (tickNow - (lastNodeActivityUpdate.get(nodeKey) ?? 0) > ACTIVITY_HEARTBEAT_INTERVAL_MS) {
+          lastNodeActivityUpdate.set(nodeKey, tickNow);
+          try {
+            await deps.store.updateWorkflowActivity(workflowRun.id);
+          } catch (e) {
             getLog().warn(
-              { nodeId: node.id, costUsd: msg.cost },
-              'dag_node.usage_cost_non_finite_ignored'
+              { err: e as Error, workflowRunId: workflowRun.id },
+              'dag.activity_update_failed'
             );
           }
         }
-        if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
-        if (msg.numTurns !== undefined) nodeNumTurns = msg.numTurns;
-        // Assigned UNCONDITIONALLY. A guarded assignment cannot CLEAR a stale value:
-        // Pi/Copilot reask loops yield several result chunks, and Pi omits resolvedModel
-        // when its later assistant message has no responseModel — so an earlier attempt's
-        // model would be persisted as the final attempt's answer. Fabricated attribution
-        // is the exact defect #2314 exists to prevent; absence must stay absence.
-        nodeResolvedModel = msg.resolvedModel;
-        if (msg.text !== undefined) {
-          nodeOutputText = msg.text;
-          batchMessages.splice(0, batchMessages.length, msg.text);
-        }
-        structuredOutput = msg.structuredOutput;
-        if (msg.failure !== undefined) {
-          throw providerReportedFailure(
-            `Node '${node.id}'`,
-            msg.failure,
-            nodeOptions?.maxBudgetUsd,
-            {
+
+        if (msg.type === 'result') {
+          if (pass.threadsSession) {
+            newSessionId = msg.sessionId;
+            if (msg.resumed !== undefined) nodeResumed = msg.resumed;
+          }
+          if (msg.tokens !== undefined) {
+            nodeTokens = sumTokenUsage([...(nodeTokens ? [nodeTokens] : []), msg.tokens], {
               nodeId: node.id,
-              durationMs: Date.now() - nodeStartTime,
+            });
+          }
+          if (msg.cost !== undefined) {
+            if (Number.isFinite(msg.cost)) {
+              nodeCostUsd = (nodeCostUsd ?? 0) + msg.cost;
+            } else {
+              getLog().warn(
+                { nodeId: node.id, costUsd: msg.cost },
+                'dag_node.usage_cost_non_finite_ignored'
+              );
             }
-          );
+          }
+          if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
+          if (msg.numTurns !== undefined) nodeNumTurns = msg.numTurns;
+          // Assigned UNCONDITIONALLY. A guarded assignment cannot CLEAR a stale value:
+          // Pi/Copilot reask loops yield several result chunks, and Pi omits resolvedModel
+          // when its later assistant message has no responseModel — so an earlier attempt's
+          // model would be persisted as the final attempt's answer. Fabricated attribution
+          // is the exact defect #2314 exists to prevent; absence must stay absence.
+          nodeResolvedModel = msg.resolvedModel;
+          if (msg.text !== undefined) {
+            nodeOutputText = msg.text;
+            batchMessages.splice(0, batchMessages.length, msg.text);
+          }
+          structuredOutput = msg.structuredOutput;
+          if (msg.failure !== undefined) {
+            throw providerReportedFailure(
+              `Node '${node.id}'`,
+              msg.failure,
+              nodeOptions?.maxBudgetUsd,
+              {
+                nodeId: node.id,
+                durationMs: Date.now() - nodeStartTime,
+              }
+            );
+          }
+          // Fail loudly on any other SDK error result. Previously we broke out of
+          // the stream silently, producing empty/partial output without signaling
+          // failure — which let failed iterations masquerade as successes.
+          // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+          // clean stop_sequence termination. The Claude provider already filters
+          // this out, but the guard here keeps a third-party IAgentProvider that
+          // forwards the SDK pair raw from producing a "SDK returned success"
+          // false failure.
+          if (msg.isError && msg.errorSubtype !== 'success') {
+            const subtype = msg.errorSubtype ?? 'unknown';
+            const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
+            getLog().error(
+              {
+                nodeId: node.id,
+                errorSubtype: subtype,
+                errors: msg.errors,
+                ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
+                stopReason: msg.stopReason,
+                durationMs: Date.now() - nodeStartTime,
+              },
+              'dag.node_sdk_error_result'
+            );
+            throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
+          }
+        } else if (msg.type === 'settled') {
+          streamSettled =
+            aiClient.getCapabilities().backgroundWork !== 'reported' ||
+            providerEvents.liveSubtaskIds().length === 0;
+          break;
+        } else {
+          await providerEvents.handle(msg);
         }
-        // Fail loudly on any other SDK error result. Previously we broke out of
-        // the stream silently, producing empty/partial output without signaling
-        // failure — which let failed iterations masquerade as successes.
-        // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
-        // clean stop_sequence termination. The Claude provider already filters
-        // this out, but the guard here keeps a third-party IAgentProvider that
-        // forwards the SDK pair raw from producing a "SDK returned success"
-        // false failure.
-        if (msg.isError && msg.errorSubtype !== 'success') {
-          const subtype = msg.errorSubtype ?? 'unknown';
-          const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
-          getLog().error(
-            {
-              nodeId: node.id,
-              errorSubtype: subtype,
-              errors: msg.errors,
-              ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
-              stopReason: msg.stopReason,
-              durationMs: Date.now() - nodeStartTime,
-            },
-            'dag.node_sdk_error_result'
-          );
-          throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
-        }
-      } else if (msg.type === 'settled') {
-        streamSettled =
-          aiClient.getCapabilities().backgroundWork !== 'reported' ||
-          providerEvents.liveSubtaskIds().length === 0;
-        break;
-      } else {
-        await providerEvents.handle(msg);
       }
+    } finally {
+      await providerEvents.clearAttention();
     }
 
     // Stream ended with subtasks still live: the SDK subprocess died or the idle
@@ -5765,6 +5782,21 @@ async function executeLoopNode(
 
       const createIterationProviderEvents = (): ProviderEventHandler =>
         createProviderEventHandler({
+          toolAttention: createToolCallAttention({
+            store: deps.store,
+            runId: workflowRun.id,
+            nodeId: stepName,
+            attemptId: attemptEvents.attemptId,
+            provider: workflowProvider,
+            thresholdMs:
+              ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
+            env: {
+              ...(ctx.execContext.kind === 'host' ? process.env : {}),
+              ...resolvedOptions?.env,
+            },
+            protectedEnvKeys: ctx.config.protectedEnvKeys,
+            protectedCredentialValues: ctx.config.protectedCredentialValues,
+          }),
           store: deps.store,
           platform,
           conversationId,
@@ -5894,6 +5926,7 @@ async function executeLoopNode(
           const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
 
           const shouldStopStream = async (): Promise<boolean> => {
+            await providerEvents.refreshAttention();
             const tickNow = Date.now();
             if (tickNow - lastStreamStatusCheckAt > CANCEL_CHECK_INTERVAL_MS) {
               lastStreamStatusCheckAt = tickNow;
@@ -5923,139 +5956,143 @@ async function executeLoopNode(
 
             return false;
           };
-          for await (const msg of withIdleTimeout(
-            generator,
-            effectiveIdleTimeout,
-            () => {
-              iterationIdleTimedOut = true;
-              getLog().warn(
-                {
-                  nodeId: node.id,
-                  iteration: i,
-                  timeoutMs: effectiveIdleTimeout,
-                  ...(lastWatchdogReset
-                    ? {
-                        lastResetType: lastWatchdogReset.type,
-                        lastResetAt: new Date(lastWatchdogReset.at).toISOString(),
-                      }
-                    : {}),
-                },
-                'loop_node.idle_timeout_reached'
-              );
-              iterationAbortController.abort();
-            },
-            (msg, resetAt) => {
-              const type = msg.type;
-              lastWatchdogReset = { type, at: resetAt };
-              watchdogResets.observe(type, resetAt);
-            },
-            // Same rule as the agent node: only `reported` work suspends the watchdog.
-            () =>
-              aiClient.getCapabilities().backgroundWork === 'reported' &&
-              providerEvents.liveSubtaskIds().length > 0,
-            shouldStopStream
-          )) {
-            if (await shouldStopStream()) break;
-
-            if (msg.type === 'result') {
-              // A reask's throwaway session is not the thread (structuredOutputPass):
-              // adopting it would silently discard iterations 1…N and break the
-              // `fresh_context: false` contract ("each iteration resumes the prior
-              // conversation"). The repaired answer still reaches the next iteration
-              // through $LOOP_PREV_OUTPUT, which is prompt text rather than session state.
-              if (pass.threadsSession) {
-                currentSessionId = msg.sessionId;
-                iterationSessionId = msg.sessionId;
-              } else if (msg.sessionId && currentSessionId !== msg.sessionId) {
-                getLog().debug(
+          try {
+            for await (const msg of withIdleTimeout(
+              generator,
+              effectiveIdleTimeout,
+              () => {
+                iterationIdleTimedOut = true;
+                getLog().warn(
                   {
                     nodeId: node.id,
                     iteration: i,
-                    attempt: reaskAttempt,
-                    ...(currentSessionId !== undefined
-                      ? { keptSessionIdPreview: sessionPreview(currentSessionId) }
+                    timeoutMs: effectiveIdleTimeout,
+                    ...(lastWatchdogReset
+                      ? {
+                          lastResetType: lastWatchdogReset.type,
+                          lastResetAt: new Date(lastWatchdogReset.at).toISOString(),
+                        }
                       : {}),
                   },
-                  'loop_node.reask_session_not_threaded'
+                  'loop_node.idle_timeout_reached'
                 );
-              }
-              if (msg.cost !== undefined) {
-                if (Number.isFinite(msg.cost)) {
-                  iterationCost = (iterationCost ?? 0) + msg.cost;
-                } else {
-                  getLog().warn(
-                    { nodeId: node.id, iteration: i, costUsd: msg.cost },
-                    'loop_node.usage_cost_non_finite_ignored'
+                iterationAbortController.abort();
+              },
+              (msg, resetAt) => {
+                const type = msg.type;
+                lastWatchdogReset = { type, at: resetAt };
+                watchdogResets.observe(type, resetAt);
+              },
+              () =>
+                providerEvents.hasOpenTools() ||
+                (aiClient.getCapabilities().backgroundWork === 'reported' &&
+                  providerEvents.liveSubtaskIds().length > 0),
+              shouldStopStream
+            )) {
+              if (await shouldStopStream()) break;
+
+              if (msg.type === 'result') {
+                // A reask's throwaway session is not the thread (structuredOutputPass):
+                // adopting it would silently discard iterations 1…N and break the
+                // `fresh_context: false` contract ("each iteration resumes the prior
+                // conversation"). The repaired answer still reaches the next iteration
+                // through $LOOP_PREV_OUTPUT, which is prompt text rather than session state.
+                if (pass.threadsSession) {
+                  currentSessionId = msg.sessionId;
+                  iterationSessionId = msg.sessionId;
+                } else if (msg.sessionId && currentSessionId !== msg.sessionId) {
+                  getLog().debug(
+                    {
+                      nodeId: node.id,
+                      iteration: i,
+                      attempt: reaskAttempt,
+                      ...(currentSessionId !== undefined
+                        ? { keptSessionIdPreview: sessionPreview(currentSessionId) }
+                        : {}),
+                    },
+                    'loop_node.reask_session_not_threaded'
                   );
                 }
-              }
-              if (msg.tokens !== undefined) {
-                iterationTokens = sumTokenUsage(
-                  [...(iterationTokens ? [iterationTokens] : []), msg.tokens],
-                  {
-                    nodeId: node.id,
-                    iteration: i,
+                if (msg.cost !== undefined) {
+                  if (Number.isFinite(msg.cost)) {
+                    iterationCost = (iterationCost ?? 0) + msg.cost;
+                  } else {
+                    getLog().warn(
+                      { nodeId: node.id, iteration: i, costUsd: msg.cost },
+                      'loop_node.usage_cost_non_finite_ignored'
+                    );
                   }
-                );
+                }
+                if (msg.tokens !== undefined) {
+                  iterationTokens = sumTokenUsage(
+                    [...(iterationTokens ? [iterationTokens] : []), msg.tokens],
+                    {
+                      nodeId: node.id,
+                      iteration: i,
+                    }
+                  );
+                }
+                if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
+                if (msg.numTurns !== undefined) {
+                  iterationNumTurns = msg.numTurns;
+                }
+                // Unconditional, for the same reason as the AI-node path above: a later
+                // iteration or result chunk that reports no resolved model must clear the
+                // previous one rather than leave it to be recorded as this node's answer.
+                loopResolvedModel = msg.resolvedModel;
+                if (msg.text !== undefined) {
+                  fullOutput = msg.text;
+                  cleanOutput = stripCompletionTags(msg.text, loop.until);
+                }
+                attemptStructured = msg.structuredOutput;
+                if (msg.failure !== undefined) {
+                  throw providerReportedFailure(
+                    `Loop '${node.id}' iteration ${String(i)}`,
+                    msg.failure,
+                    resolvedOptions?.maxBudgetUsd,
+                    { nodeId: node.id, iteration: i }
+                  );
+                }
+                // Fail the iteration loudly on SDK error results. Previously we broke
+                // silently, producing empty output and continuing to the next iteration —
+                // which made `error_during_execution` on resumed interactive loops look
+                // like a "5-second crash" that kept burning iterations.
+                // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+                // clean stop_sequence termination (the SDK sets is_error: true alongside
+                // subtype: 'success' to encode "non-default termination, not a failure").
+                // The Claude provider already filters this; the guard here defends
+                // against a third-party IAgentProvider that forwards the SDK pair raw.
+                if (msg.isError && msg.errorSubtype !== 'success') {
+                  const subtype = msg.errorSubtype ?? 'unknown';
+                  const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
+                  getLog().error(
+                    {
+                      nodeId: node.id,
+                      iteration: i,
+                      errorSubtype: subtype,
+                      errors: msg.errors,
+                      ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
+                      stopReason: msg.stopReason,
+                    },
+                    'loop_node.iteration_sdk_error'
+                  );
+                  throw new Error(
+                    `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
+                  );
+                }
+                // A result is not the end of the iteration; `settled` is. See the
+                // AI-node stream loop for the full rationale.
+              } else if (msg.type === 'settled') {
+                iterationSettled =
+                  aiClient.getCapabilities().backgroundWork !== 'reported' ||
+                  providerEvents.liveSubtaskIds().length === 0;
+                break;
+              } else {
+                await providerEvents.handle(msg);
               }
-              if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
-              if (msg.numTurns !== undefined) {
-                iterationNumTurns = msg.numTurns;
-              }
-              // Unconditional, for the same reason as the AI-node path above: a later
-              // iteration or result chunk that reports no resolved model must clear the
-              // previous one rather than leave it to be recorded as this node's answer.
-              loopResolvedModel = msg.resolvedModel;
-              if (msg.text !== undefined) {
-                fullOutput = msg.text;
-                cleanOutput = stripCompletionTags(msg.text, loop.until);
-              }
-              attemptStructured = msg.structuredOutput;
-              if (msg.failure !== undefined) {
-                throw providerReportedFailure(
-                  `Loop '${node.id}' iteration ${String(i)}`,
-                  msg.failure,
-                  resolvedOptions?.maxBudgetUsd,
-                  { nodeId: node.id, iteration: i }
-                );
-              }
-              // Fail the iteration loudly on SDK error results. Previously we broke
-              // silently, producing empty output and continuing to the next iteration —
-              // which made `error_during_execution` on resumed interactive loops look
-              // like a "5-second crash" that kept burning iterations.
-              // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
-              // clean stop_sequence termination (the SDK sets is_error: true alongside
-              // subtype: 'success' to encode "non-default termination, not a failure").
-              // The Claude provider already filters this; the guard here defends
-              // against a third-party IAgentProvider that forwards the SDK pair raw.
-              if (msg.isError && msg.errorSubtype !== 'success') {
-                const subtype = msg.errorSubtype ?? 'unknown';
-                const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
-                getLog().error(
-                  {
-                    nodeId: node.id,
-                    iteration: i,
-                    errorSubtype: subtype,
-                    errors: msg.errors,
-                    ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
-                    stopReason: msg.stopReason,
-                  },
-                  'loop_node.iteration_sdk_error'
-                );
-                throw new Error(
-                  `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
-                );
-              }
-              // A result is not the end of the iteration; `settled` is. See the
-              // AI-node stream loop for the full rationale.
-            } else if (msg.type === 'settled') {
-              iterationSettled =
-                aiClient.getCapabilities().backgroundWork !== 'reported' ||
-                providerEvents.liveSubtaskIds().length === 0;
-              break;
-            } else {
-              await providerEvents.handle(msg);
             }
+          } finally {
+            await providerEvents.clearAttention();
           }
           foldIterationUsage();
 

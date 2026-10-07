@@ -230,6 +230,7 @@ function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
 function createMockStore(): MockWorkflowStore {
   const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(async _data => {});
   return {
+    setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
     resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
       throw new Error('Unexpected resolveApprovalGate');
     }),
@@ -14481,6 +14482,110 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     );
   });
 
+  it.each(['agent', 'loop'] as const)(
+    'a silent open tool raises advisory attention without aborting a %s node',
+    async kind => {
+      const store = createMockStore();
+      const workflowRun = makeWorkflowRun(`live-tool-${kind}`);
+      let signal: AbortSignal | undefined;
+      let complete: (() => void) | undefined;
+      const completion = new Promise<void>(resolve => {
+        complete = resolve;
+      });
+      let raised: (() => void) | undefined;
+      const publication = new Promise<void>(resolve => {
+        raised = resolve;
+      });
+      store.setToolCallAttention.mockImplementation(async (_runId, _streamId, calls) => {
+        workflowRun.metadata.tool_call_attention = calls;
+        if (calls.length) raised?.();
+        return true;
+      });
+      mockSendQueryDag.mockImplementationOnce(async function* (_prompt, _cwd, _session, options) {
+        signal = options?.abortSignal;
+        yield { type: 'tool_call', toolCallId: 'live', name: 'Bash', title: 'bun test' };
+        await completion;
+        yield { type: 'tool_call_update', toolCallId: 'live', status: 'completed' };
+        yield { type: 'agent_message_chunk', text: '{"done":true}' };
+        yield { type: 'result', sessionId: 'session', structuredOutput: { done: true } };
+        yield { type: 'settled', reason: 'turn_complete' };
+      });
+      const deps = createMockDeps(store);
+      const config = {
+        ...minimalConfig,
+        workflows: {
+          autoResumeOnQuotaReset: false,
+          quotaMaxAttempts: 1,
+          quotaDeadlineMs: 1000,
+          toolCallAttentionMs: 20,
+        },
+      };
+      const node =
+        kind === 'agent'
+          ? {
+              id: 'implement',
+              kind: 'agent' as const,
+              source: { kind: 'command' as const, name: 'my-cmd' },
+              idle_timeout: 10,
+              retry: { max_attempts: 0 },
+            }
+          : {
+              id: 'implement',
+              kind: 'loop' as const,
+              idle_timeout: 10,
+              output_format: {
+                type: 'object',
+                properties: { done: { type: 'boolean' } },
+                required: ['done'],
+              },
+              loop: {
+                fresh_context: false,
+                prompt: 'Implement',
+                max_iterations: 1,
+                until_field: 'done',
+              },
+            };
+      const execution = executeDagWorkflow(
+        dagOptions({
+          deps,
+          config,
+          cwd: testDir,
+          workflow: { name: 'live-tool', nodes: [node] },
+          workflowRun,
+        })
+      );
+      try {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            publication,
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(
+                () => reject(new Error('Tool attention was never published')),
+                1000
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+        expect(signal?.aborted).toBe(false);
+        expect(workflowRun.status).toBe('running');
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+        expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+        expect(workflowRun.metadata.tool_call_attention).toMatchObject([
+          { nodeId: 'implement', name: 'Bash', title: 'bun test' },
+        ]);
+      } finally {
+        complete?.();
+      }
+      await execution;
+      expect(store.setToolCallAttention.mock.calls.at(-1)?.[2]).toEqual([]);
+      expect(signal?.aborted).toBe(false);
+    }
+  );
+
   it('a stream of many chunks writes a bounded number of reset records with every renewal counted', async () => {
     const chunkCount = 300;
     mockSendQueryDag.mockImplementation(async function* (
@@ -14499,6 +14604,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
         name: 'Bash',
         rawInput: { command: 'private tool input' },
       };
+      yield { type: 'tool_call_update', toolCallId: 'call-1', status: 'completed' };
       await new Promise<void>(resolve => {
         if (options?.abortSignal?.aborted) resolve();
         else options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
@@ -14531,11 +14637,11 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     const resetEvents = transcript.filter(event => event.type === 'watchdog_reset');
     expect(resetEvents.map(event => [event.step, event.chunk_type, event.chunk_count])).toEqual([
       ['review', 'agent_thought_chunk', 1],
-      ['review', 'tool_call', chunkCount],
+      ['review', 'tool_call_update', chunkCount + 1],
     ]);
     const failed = transcript.find(event => event.type === 'node_error' && event.step === 'review');
     expect(failed?.error).toContain(
-      `Last watchdog reset: ${String(resetEvents.at(-1)?.ts)} from chunk type 'tool_call'.`
+      `Last watchdog reset: ${String(resetEvents.at(-1)?.ts)} from chunk type 'tool_call_update'.`
     );
   });
 
@@ -14601,6 +14707,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
         name: 'Bash',
         rawInput: { command: 'private tool input' },
       },
+      { type: 'tool_call_update', toolCallId: 'call-1', status: 'completed' },
     ]);
     const assistant = await runCase('loop-assistant-timeout', [
       {
@@ -14614,18 +14721,22 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     // One burst: its start, then its end written by the iteration's flush.
     expect(toolReset.map(event => [event.step, event.chunk_type, event.chunk_count])).toEqual([
       ['implement-iteration-1', 'agent_thought_chunk', 1],
-      ['implement-iteration-1', 'tool_call', 1],
+      ['implement-iteration-1', 'tool_call_update', 2],
     ]);
     expect(assistantReset.map(event => event.chunk_type)).toEqual(['agent_message_chunk']);
     expect(toolReset.every(event => !('content' in event) && !('tool_input' in event))).toBe(true);
     expect(assistantReset.every(event => !('content' in event))).toBe(true);
-    expect(tool.error).toContain("chunk type 'tool_call'");
+    expect(tool.error).toContain("chunk type 'tool_call_update'");
     expect(assistant.error).toContain("chunk type 'agent_message_chunk'");
     const recordedTypes = (transcript: Array<Record<string, unknown>>): unknown[] =>
       transcript
         .filter(event => event.type === 'provider_event')
         .map(event => (event.event as { type: string }).type);
-    expect(recordedTypes(tool.transcript)).toEqual(['agent_thought_chunk', 'tool_call']);
+    expect(recordedTypes(tool.transcript)).toEqual([
+      'agent_thought_chunk',
+      'tool_call',
+      'tool_call_update',
+    ]);
     expect(recordedTypes(assistant.transcript)).toEqual(['agent_message_chunk']);
   });
 
