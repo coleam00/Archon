@@ -290,7 +290,12 @@ export class SqliteAdapter implements IDatabase {
   private prepareRun(sql: string, params: SQLQueryBindings[] = []): number {
     const stmt = this.db.prepare(sql);
     try {
-      return stmt.run(...params).changes;
+      const changes = stmt.run(...params).changes;
+      // Bun includes foreign-key actions in .changes; rowCount must describe only
+      // the statement's rows, as PostgreSQL does (not children updated by SET NULL).
+      return changes === 0
+        ? 0
+        : (this.prepareGet<{ count: number }>('SELECT changes() AS count')?.count ?? 0);
     } finally {
       stmt.finalize();
     }

@@ -309,7 +309,7 @@ A new run reads `.archon/config.yaml` from the checkout it was launched from, li
 
 - **Foreground CLI:** the directory you run the command in, or `--cwd` when given. That can be the main checkout or a linked worktree. A `--branch` run that reuses an existing worktree still reads the launch checkout, not that worktree.
 - **`archon workflow run --detach`:** the same directory. The launching process records the config before it hands the run to the background process.
-- **Web and chat:** the project's registered checkout path, even when the conversation already sits in a worktree from an earlier run. Adopting a run's worktree reads that worktree instead.
+- **Web, chat, and background dispatch:** the project's registered checkout path, even when the conversation already sits in a worktree from an earlier run. Adopting a run's worktree reads that worktree instead.
 - **Queued resource starts** (triggers and forge sources): the launch path recorded when the start was queued. The config is recorded at that point, before admission.
 
 The run records the resolved AI configuration (assistant, provider defaults, tiers, aliases, and model bindings) at launch. Resume, approve, reject, child runs, and adoption reuse that record, so later edits to `.archon/config.yaml`, in your checkout or in the run's worktree, do not change a run already started. An adopted run whose prior run has no record reads the adopted worktree or branch instead.
