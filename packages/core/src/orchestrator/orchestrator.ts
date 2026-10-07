@@ -438,12 +438,17 @@ async function dispatchBackgroundWorkflowOwned(
       return;
     }
 
-    // Repo config comes from the same checkout as the source, not from a worktree the
-    // parent conversation already holds, so uncommitted and gitignored config apply.
+    // A fresh run reads repo config from the project's registered checkout, not from a
+    // worktree the parent conversation holds, so uncommitted and gitignored config apply.
+    // Adoption stays on its declared estate.
+    const launchConfigCwd = ctx.adoptionLane
+      ? preflightCwd
+      : ((ctx.codebaseId ? (await getCodebase(ctx.codebaseId))?.default_cwd : undefined) ??
+        preflightCwd);
     const preparedAiConfiguration = await prepareRunAiConfiguration(
       workflowDeps,
       workflow,
-      workflowSourceRoot,
+      launchConfigCwd,
       {
         codebaseId: ctx.codebaseId,
         userId: ctx.userId,

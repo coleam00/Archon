@@ -867,15 +867,14 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   });
 
-  test('reads launch AI config from the source checkout, not the parent worktree', async () => {
+  test('reads launch AI config from the registered checkout, not the parent worktree', async () => {
     // The parent conversation already sits in a worktree, which holds only committed
-    // config; the operator's checkout carries an uncommitted codex selection.
-    mockResolveWorkflowSourceRoot.mockResolvedValue('/canonical/repo');
+    // config; the registered checkout carries an uncommitted codex selection.
     const adapter = await import('../workflows/store-adapter');
     const original = adapter.createWorkflowDeps();
     const loadConfig = mock(async (cwd?: string) => ({
       ...(await original.loadConfig(cwd)),
-      assistant: cwd === '/canonical/repo' ? 'codex' : 'claude',
+      assistant: cwd === '/workspace/test-repo' ? 'codex' : 'claude',
     }));
     const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
       ...original,
@@ -887,7 +886,7 @@ describe('dispatchBackgroundWorkflow', () => {
         makeWorkflow({ worktree: { enabled: false } })
       );
       await flushBackgroundExecution();
-      expect(loadConfig).toHaveBeenCalledWith('/canonical/repo');
+      expect(loadConfig).toHaveBeenCalledWith('/workspace/test-repo');
       expect(loadConfig).not.toHaveBeenCalledWith('/worktrees/parent');
       const row = mockCreateWorkflowRun.mock.calls[0]?.[0];
       expect(row?.metadata?.ai_configuration).toMatchObject({ assistant: 'codex' });

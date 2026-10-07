@@ -3375,10 +3375,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(ctx.inputs).toEqual({ diff: 'D1' });
   });
 
-  test('a fresh run reads launch AI config from the source checkout, not the conversation worktree', async () => {
+  test('a fresh run reads launch AI config from the registered checkout, not the conversation worktree', async () => {
     // The conversation already sits in a worktree holding only committed config; the
-    // project checkout carries an uncommitted codex selection.
-    mockResolveWorkflowSourceRoot.mockResolvedValue('/repos/test-repo');
+    // registered checkout carries an uncommitted codex selection.
     const adapter = await import('../workflows/store-adapter');
     const original = adapter.createWorkflowDeps();
     const loadConfig = mock(async (cwd?: string) => ({

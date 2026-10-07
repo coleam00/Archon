@@ -908,7 +908,9 @@ async function dispatchOrchestratorWorkflowOwned(
   //
   // For a fresh run: freeze, then re-resolve the workflow FROM the frozen copy, so the
   // definition executed and the resources beside it are one consistent set of bytes.
-  let freshCaptured: FreshCapture | undefined;
+  let freshCaptured:
+    | { preparedSource: PreparedWorkflowSource; workflow: ResolvedWorkflow }
+    | undefined;
 
   if (request.kind === 'start' && willContinueExistingRun && resumableRun) {
     const resolved = await resolveRunWorkflow(resumableRun, runCwd, platform);
@@ -1080,13 +1082,14 @@ async function dispatchOrchestratorWorkflowOwned(
     }
   }
 
-  // A fresh run's repo config comes from the checkout its workflow source came from:
-  // the project's checkout, never a worktree an earlier run left on this conversation.
-  // The run records it, and every continuation reuses that record.
-  const prepareLaunchAiConfiguration = (
-    configCwd: string
-  ): ReturnType<typeof prepareRunAiConfiguration> =>
-    prepareRunAiConfiguration(createWorkflowDeps(), workflow, configCwd, {
+  // A fresh run reads repo config from the project's registered checkout, never from a
+  // worktree an earlier run left on this conversation, so uncommitted and gitignored
+  // config apply. An adopted worktree stays the estate. The run records the result, and
+  // every continuation reuses that record.
+  const launchConfigCwd =
+    adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : codebase.default_cwd;
+  const prepareLaunchAiConfiguration = (): ReturnType<typeof prepareRunAiConfiguration> =>
+    prepareRunAiConfiguration(createWorkflowDeps(), workflow, launchConfigCwd, {
       codebaseId: codebase.id,
       userId,
       aiConfigurationRun: adoption?.adoptedRun,
@@ -1096,10 +1099,7 @@ async function dispatchOrchestratorWorkflowOwned(
         : {}),
     });
   const preparedAiConfiguration =
-    branchPrepared ??
-    (!willContinueExistingRun
-      ? await prepareLaunchAiConfiguration(freshCaptured?.sourceRoot ?? captureCwd)
-      : undefined);
+    branchPrepared ?? (!willContinueExistingRun ? await prepareLaunchAiConfiguration() : undefined);
   if (preparedAiConfiguration)
     await assertRunCredentials(createWorkflowDeps(), preparedAiConfiguration);
 
@@ -1373,7 +1373,7 @@ async function dispatchOrchestratorWorkflowOwned(
         );
         if (!captured) return; // capture failed, message already sent
         workflow = captured.workflow;
-        const freshAiConfiguration = await prepareLaunchAiConfiguration(captured.sourceRoot);
+        const freshAiConfiguration = await prepareLaunchAiConfiguration();
         await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration);
         await platform.sendMessage(
           conversationId,
@@ -1549,13 +1549,6 @@ async function dispatchOrchestratorWorkflowOwned(
  * `return` immediately — the owner reclaims any unadopted capture on the way out, so
  * no manual cleanup is needed.
  */
-interface FreshCapture {
-  preparedSource: PreparedWorkflowSource;
-  workflow: ResolvedWorkflow;
-  /** The checkout the source was frozen from; a fresh run reads its repo config there too. */
-  sourceRoot: string;
-}
-
 async function captureFreshSource(
   owner: CapturedSourceOwner,
   runCwd: string,
@@ -1563,11 +1556,11 @@ async function captureFreshSource(
   conversationId: string,
   platform: IPlatformAdapter,
   explicitSourceRoot?: string
-): Promise<FreshCapture | undefined> {
+): Promise<{ preparedSource: PreparedWorkflowSource; workflow: ResolvedWorkflow } | undefined> {
   try {
-    const sourceRoot = explicitSourceRoot ?? (await resolveWorkflowSourceRoot(runCwd)) ?? runCwd;
+    const workflowSourceRoot = explicitSourceRoot ?? (await resolveWorkflowSourceRoot(runCwd));
     const preparedSource = await prepareWorkflowSource(createWorkflowDeps(), {
-      sourceRoot,
+      sourceRoot: workflowSourceRoot ?? runCwd,
     });
     // From here the owner reclaims it unless a run adopts it, whichever way we leave.
     owner.hold(preparedSource);
@@ -1598,7 +1591,7 @@ async function captureFreshSource(
       resolvedWorkflow = reResolved;
     }
     await recordSelectedWorkflow(preparedSource.anchor.root, resolvedWorkflow.name);
-    return { preparedSource, workflow: resolvedWorkflow, sourceRoot };
+    return { preparedSource, workflow: resolvedWorkflow };
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, workflowName: workflow.name }, 'workflow.source_capture_failed');
