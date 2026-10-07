@@ -560,3 +560,62 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
   });
 });
+
+describe('markPrDraft uses the selected source', () => {
+  const script = '../../scripts/__tests__/mark-pr-draft';
+  it('converts through gh and reads back draft state', () => {
+    const result = runPackScript(script, { gh: { pr: { isDraft: false } } });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ is_draft: true, state: 'open' });
+    expect(result.gh).toContain('pr ready 42 --repo ghe.example.com/example/repo --undo');
+  });
+  it.each(['CLOSED', 'MERGED'] as const)('refuses %s without a write', state => {
+    const result = runPackScript(script, { gh: { pr: { state } } });
+    expect(result.code).not.toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
+  });
+  it('does not write for an already-draft PR', () => {
+    const result = runPackScript(script);
+    expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
+  });
+  it('fails when gh conversion does not read back', () => {
+    const result = runPackScript(script, { gh: { pr: { isDraft: false }, writeLost: true } });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('does not report an open draft');
+  });
+  it('calls pr.draft through forge without gh', () => {
+    const result = runPackScript(script, {
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        response: forgeOperation('pr.draft', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          pr: forgePrRecord(),
+        }),
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(result.forge[0]).toContain('forge pr.draft --json --data-file');
+    expect(JSON.parse(result.forgeRequests[0]).ref).toEqual(PR);
+    expect(JSON.parse(result.stdout)).toMatchObject({ is_draft: true });
+  });
+  it.each(['refused', 'verification_failed', 'outcome_unknown'] as const)(
+    'surfaces %s with no fallback',
+    outcome => {
+      const result = runPackScript(script, {
+        source: 'forge',
+        forge: {
+          kind: 'fake',
+          response: forgeFailure('pr.draft', outcome, 'unsupported or unverifiable conversion'),
+        },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(outcome);
+      expect(result.gh).toEqual([]);
+    }
+  );
+});

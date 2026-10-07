@@ -1,3 +1,4 @@
+import { RunActionForbiddenError } from '../operations/run-authorization';
 /**
  * Command handler for slash commands
  * Handles deterministic operations without AI
@@ -1417,6 +1418,25 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       // {codebase_id: <kept>, cwd: null, isolation_env_id: null} — is byte-for-
       // byte what /setproject already writes, so this is a well-trodden state,
       // not a novel one. Detaching the project is /detach-project's job.
+      let abandoned = 0;
+      let cleanupWarnings: string[] | undefined;
+      let releasedWorktrees: AbandonConversationRunsResult['releasedWorktrees'];
+      let abandonBlockedParentRunId: string | null = null;
+      try {
+        ({
+          abandoned,
+          cleanupWarnings,
+          releasedWorktrees,
+          blockedParentRunId: abandonBlockedParentRunId,
+        } = await operations.abandonResumableRunsForConversation(conversation.id, actor));
+      } catch (error) {
+        const err = error as Error;
+        if (error instanceof RunActionForbiddenError)
+          return { success: false, message: error.message };
+        getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_abandon_failed');
+        return { success: false, message: `Could not reset conversation: ${err.message}` };
+      }
+
       let hadActiveSession = false;
       let sessionError: string | null = null;
       try {
@@ -1429,29 +1449,6 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         const err = error as Error;
         getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_clear_session_failed');
         sessionError = err.message;
-      }
-
-      // Three independent effects, three independent try blocks. Sharing the
-      // run and binding effects would mean that a binding-clear failure AFTER
-      // a successful abandon swallows
-      // the count and reports only the failure — precisely the case where the
-      // user most needs to know that N runs were already cancelled.
-      let abandoned = 0;
-      let cleanupWarnings: string[] | undefined;
-      let releasedWorktrees: AbandonConversationRunsResult['releasedWorktrees'];
-      let abandonBlockedParentRunId: string | null = null;
-      let abandonError: string | null = null;
-      try {
-        ({
-          abandoned,
-          cleanupWarnings,
-          releasedWorktrees,
-          blockedParentRunId: abandonBlockedParentRunId,
-        } = await operations.abandonResumableRunsForConversation(conversation.id, actor));
-      } catch (error) {
-        const err = error as Error;
-        getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_abandon_failed');
-        abandonError = err.message;
       }
 
       let bindingCleared = true;
@@ -1485,15 +1482,9 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
           `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`
         );
       }
-      if (abandonError !== null) {
-        parts.push(`⚠️ Could not look up resumable runs: ${abandonError}`);
-      }
 
       const resetComplete =
-        sessionError === null &&
-        bindingCleared &&
-        abandonError === null &&
-        abandonBlockedParentRunId === null;
+        sessionError === null && bindingCleared && abandonBlockedParentRunId === null;
       parts.push(
         resetComplete
           ? 'Project attachment preserved — next message starts fresh.'

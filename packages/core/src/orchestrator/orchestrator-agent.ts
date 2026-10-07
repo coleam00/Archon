@@ -2,6 +2,7 @@ import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import * as sqlWorkflow from '@archon/core/db/workflows';
 import { providerRegistry } from '@archon/providers';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
+import { RunActionForbiddenError, type RunActor } from '../operations/run-authorization';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
 /**
@@ -741,8 +742,8 @@ async function dispatchOrchestratorWorkflowOwned(
   conversation: Conversation,
   codebase: Codebase,
   request: WorkflowRequest,
+  actor: RunActor,
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string,
   /**
    * Discovery source of the workflow — telemetry only (bundled workflows
    * report their real name, custom ones report "custom"). Optional: callers
@@ -751,6 +752,7 @@ async function dispatchOrchestratorWorkflowOwned(
   source?: WorkflowSource,
   options?: WorkflowDispatchOptions
 ): Promise<void> {
+  const userId = actor.kind === 'user' ? actor.userId : undefined;
   const userMessage = request.kind === 'resume' ? request.run.user_message : request.args;
   const parseWarnings = request.kind === 'start' ? request.parseWarnings : undefined;
   const runCwd = conversation.cwd ?? codebase.default_cwd;
@@ -873,6 +875,16 @@ async function dispatchOrchestratorWorkflowOwned(
   const willContinueExistingRun =
     Boolean(resumableRun?.working_path) &&
     (resumableRun?.status === 'paused' || explicitResumeRequested);
+
+  if (willContinueExistingRun && resumableRun) {
+    try {
+      await createSqlWorkflowOperations().resumeWorkflow(resumableRun.id, actor);
+    } catch (error) {
+      if (!(error instanceof RunActionForbiddenError)) throw error;
+      await platform.sendMessage(conversationId, error.message);
+      return;
+    }
+  }
 
   // Adoption and continuation are mutually exclusive: both decide where the run
   // executes and which estate it inherits, and every continuation path below forwards
@@ -1598,8 +1610,8 @@ async function dispatchOrchestratorWorkflow(
   conversation: Conversation,
   codebase: Codebase,
   request: WorkflowRequest,
+  actor: RunActor,
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string,
   source?: WorkflowSource,
   options?: WorkflowDispatchOptions
 ): Promise<void> {
@@ -1611,8 +1623,8 @@ async function dispatchOrchestratorWorkflow(
       conversation,
       codebase,
       request,
+      actor,
       isolationHints,
-      userId,
       source,
       options
     )
@@ -1650,8 +1662,8 @@ export async function continueResolvedGateRun(
   codebase: Codebase | null,
   run: WorkflowRun,
   action: 'approve' | 'reject' | 'respond',
-  isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string
+  actor: RunActor,
+  isolationHints?: HandleMessageContext['isolationHints']
 ): Promise<void> {
   const decision =
     action === 'approve' ? 'Approved' : action === 'reject' ? 'Rejected' : 'Responded';
@@ -1689,8 +1701,8 @@ export async function continueResolvedGateRun(
         conversation,
         codebase,
         { kind: 'resume', run },
-        isolationHints,
-        userId
+        actor,
+        isolationHints
       );
       getLog().info(
         { conversationId, workflowRunId: run.id, workflowName: run.workflow_name, action },
@@ -2064,8 +2076,8 @@ export async function handleMessage(
             conversationId,
             conversation,
             result.workflow,
+            actor,
             isolationHints,
-            userId,
             {
               // Declared inputs (#2554) arrive on the request context, not in the
               // command text — the run route is the only caller that sets them.
@@ -2655,9 +2667,9 @@ export async function handleMessage(
           session,
           isolationHints,
           conversation,
+          actor,
           issueContext,
-          requestOptions,
-          userId
+          requestOptions
         );
       } else {
         await handleBatchMode(
@@ -2673,9 +2685,9 @@ export async function handleMessage(
           session,
           isolationHints,
           conversation,
+          actor,
           issueContext,
-          requestOptions,
-          userId
+          requestOptions
         );
       }
     } catch (error) {
@@ -2700,8 +2712,8 @@ export async function handleMessage(
           discoveredCodebase ?? null,
           gateResolution.resolved.run,
           gateResolution.resolved.action,
-          isolationHints,
-          userId
+          actor,
+          isolationHints
         );
       }
     }
@@ -2790,9 +2802,9 @@ async function handleStreamMode(
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
+  actor: RunActor,
   issueContext?: string,
-  requestOptions?: SendQueryOptions,
-  userId?: string
+  requestOptions?: SendQueryOptions
 ): Promise<void> {
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
@@ -2949,8 +2961,8 @@ async function handleStreamMode(
       commands.workflowInvocation,
       originalMessage,
       isolationHints,
-      issueContext,
-      userId
+      actor,
+      issueContext
     );
     return;
   }
@@ -3018,9 +3030,9 @@ async function handleBatchMode(
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
+  actor: RunActor,
   issueContext?: string,
-  requestOptions?: SendQueryOptions,
-  userId?: string
+  requestOptions?: SendQueryOptions
 ): Promise<void> {
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];
@@ -3209,8 +3221,8 @@ async function handleBatchMode(
       commands.workflowInvocation,
       originalMessage,
       isolationHints,
-      issueContext,
-      userId
+      actor,
+      issueContext
     );
     return;
   }
@@ -3294,8 +3306,8 @@ async function handleWorkflowInvocationResult(
   invocation: WorkflowInvocation,
   originalMessage: string,
   isolationHints: HandleMessageContext['isolationHints'],
-  issueContext?: string,
-  userId?: string
+  actor: RunActor,
+  issueContext?: string
 ): Promise<void> {
   const { workflowName, projectName, remainingMessage } = invocation;
 
@@ -3337,8 +3349,8 @@ async function handleWorkflowInvocationResult(
         args: workflowPrompt,
         parseWarnings: workflowEntry?.parseWarnings,
       },
+      actor,
       isolationHints,
-      userId,
       workflowEntry?.source
     );
     return;
@@ -3648,8 +3660,8 @@ async function handleWorkflowRunCommand(
   conversationId: string,
   conversation: Conversation,
   request: WorkflowRequest,
+  actor: RunActor,
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string,
   options?: WorkflowDispatchOptions
 ): Promise<void> {
   // Check if conversation has a project
@@ -3669,8 +3681,8 @@ async function handleWorkflowRunCommand(
       conversation,
       codebase,
       request,
+      actor,
       isolationHints,
-      userId,
       undefined,
       options
     );

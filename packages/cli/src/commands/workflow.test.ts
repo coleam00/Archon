@@ -676,6 +676,7 @@ mock.module('@archon/core/db/workflows', () => ({
   listDashboardRuns: mockListDashboardRuns,
   findOpenWorkRuns: mock(() => Promise.resolve([])),
   deleteOldWorkflowRuns: mock(() => Promise.resolve({ count: 0 })),
+  deleteWorkflowRun: mock(() => Promise.resolve()),
 }));
 
 mock.module('@archon/core/db/workflow-events', () => ({
@@ -827,6 +828,8 @@ mock.module('@archon/core/workflows/sql-host', () => ({
     createWorkflowOperations({
       getUserRole: async () => undefined,
       store: {
+        signalWorkflowWait: (...args) => operationWorkflowDb.signalWorkflowWait(...args),
+        deleteWorkflowRun: (...args) => operationWorkflowDb.deleteWorkflowRun(...args),
         getWorkflowRun: (...args) => operationWorkflowDb.getWorkflowRun(...args),
         findChildRuns: (...args) => operationWorkflowDb.findChildRuns(...args),
         getRunAncestry: (...args) => operationWorkflowDb.getRunAncestry(...args),

@@ -283,7 +283,9 @@ async function signalEvent(
       'Run is not waiting on that event occurrence; use its full run id and current resumeAt'
     );
   }
-  const { signaled } = await host.deps.store.signalWorkflowWait(runId, wait, payload);
+  const { signaled } = await host.operations.signalWorkflowWait(runId, event, resumeAt, payload, {
+    kind: 'operator',
+  });
   if (!signaled)
     throw new Error('Event occurrence is stale, expired, already signaled, or no longer paused');
   let outcome: ContinuationWakeOutcome;

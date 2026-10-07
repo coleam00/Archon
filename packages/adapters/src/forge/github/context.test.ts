@@ -294,6 +294,13 @@ describe('GitHubAdapter non-slash command context passing', () => {
     }
   });
 
+  test('an unresolved forge commenter remains unidentified', async () => {
+    mockFindOrCreateUserByPlatformIdentity.mockRejectedValueOnce(new Error('lookup unavailable'));
+    const payload = createIssueCommentPayload('@archon /workflow approve run-auth');
+    await adapter.handleWebhook(payload, signPayload(payload));
+    expect(mockHandleMessage.mock.calls[0][3]?.actor).toEqual({ kind: 'unidentified' });
+  });
+
   test('should set contextToAppend for issue_comment events on issues', async () => {
     const payload = createIssueCommentPayload('@archon help me with this issue', {
       issueNumber: 99,
@@ -303,6 +310,15 @@ describe('GitHubAdapter non-slash command context passing', () => {
     await adapter.handleWebhook(payload, signPayload(payload));
 
     expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+    expect(mockHandleMessage.mock.calls[0][3]?.actor).toEqual({
+      kind: 'user',
+      userId: 'user-test-uuid',
+    });
+    expect(mockFindOrCreateUserByPlatformIdentity).toHaveBeenCalledWith(
+      'github',
+      'user123',
+      'user123'
+    );
     const contextArg = mockHandleMessage.mock.calls[0][3]?.issueContext as string;
     expect(contextArg).toBe(
       'GitHub Issue #99: "Bug in login flow"\nUse \'gh issue view 99\' for full details if needed.'

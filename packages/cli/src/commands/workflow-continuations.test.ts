@@ -42,7 +42,8 @@ mock.module('@archon/core/workflows/continuation-host', () => ({
   resumeWorkflowContinuation: resume,
 }));
 const host = {
-  deps: { store: { getWorkflowRun: getRun, signalWorkflowWait: signal } },
+  deps: { store: { getWorkflowRun: getRun } },
+  operations: { signalWorkflowWait: signal },
 } as unknown as import('@archon/core/workflows/host-store').WorkflowHost;
 mock.module('../utils/stdout', () => ({
   writeStdout: async (value: string) => {
@@ -219,7 +220,7 @@ test('schedule management uses no persistence or engine capability', async () =>
   expect(resume).not.toHaveBeenCalled();
 });
 
-test('signal passes the exact event cursor to the supplied store and rejects a CAS loser', async () => {
+test('signal passes the exact event cursor to the host operation as the local operator and rejects a CAS loser', async () => {
   const wait = {
     owner: 'node' as const,
     nodeId: 'hold',
@@ -237,7 +238,15 @@ test('signal passes the exact event cursor to the supplied store and rejects a C
     data: '{"ready":true}',
   };
   expect(await workflowContinuationCommand(host, 'signal', ['run'], values)).toBe(1);
-  expect(signal).toHaveBeenCalledWith('run', wait, { ready: true });
+  expect(signal).toHaveBeenCalledWith(
+    'run',
+    wait.event,
+    wait.resumeAt,
+    { ready: true },
+    {
+      kind: 'operator',
+    }
+  );
   expect(resume).not.toHaveBeenCalled();
   signal.mockResolvedValueOnce({ signaled: true });
   expect(await workflowContinuationCommand(host, 'signal', ['run'], values)).toBe(0);

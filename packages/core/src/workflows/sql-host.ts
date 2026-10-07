@@ -1,6 +1,7 @@
 import { createLogger } from '@archon/paths';
 import { WORKFLOW_EVENT_NOTIFY_CHANNEL } from '../db/adapters/types';
 import * as connection from '../db/connection';
+import { deleteWorkflowRun } from '../db/workflows';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import * as isolationDb from '../db/isolation-environments';
 import * as codebases from '../db/codebases';
@@ -37,7 +38,7 @@ export function createSqlWorkflowOperations(
 ): WorkflowOperations {
   return createWorkflowOperations({
     getUserRole: async userId => (await hostStore.users.getUserById(userId))?.role,
-    store,
+    store: { ...store, deleteWorkflowRun },
     hostStore,
     requestDetachedRunStop,
     isRunOwnedByThisProcess,

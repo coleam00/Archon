@@ -42,7 +42,12 @@ function createTestHost(): WorkflowHost {
     engine: new InProcessWorkflowEngine(deps),
     operations: createWorkflowOperations({
       getUserRole: async userId => (await records.users.getUserById(userId))?.role,
-      store,
+      store: {
+        ...store,
+        deleteWorkflowRun: async () => {
+          throw new Error('No run deletion');
+        },
+      },
       hostStore: records,
       requestDetachedRunStop: async () => {
         throw new Error('No detached run');
