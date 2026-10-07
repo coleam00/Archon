@@ -1,0 +1,18 @@
+# Dry-run fixture: READY routed to plan without design-first. The implementation
+# shape is undecided for reasons other than needing a design pass first.
+triage:
+  contract: READY
+  route: plan
+  design_first: false
+  complexity: risky
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: desired outcome is current; implementation shape needs a decision"
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true

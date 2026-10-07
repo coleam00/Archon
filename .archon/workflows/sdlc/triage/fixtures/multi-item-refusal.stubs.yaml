@@ -1,0 +1,25 @@
+# Dry-run fixture: the target names several distinct work items, and the command
+# refuses to choose among them rather than pick one silently. The refusal itself is
+# a prompt-level judgment a fixture cannot exercise; this proves the prompt carries
+# the rule and that the tuple it documents for a refusal (NO_ACTION, no single
+# item) completes the run.
+triage:
+  contract: NO_ACTION
+  route: no_action
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: target names issues #10, #11, and #12; refusing to choose one to triage"
+fixture:
+  expect: completed
+  reached: [verdict]
+  inputs:
+    target: "issues #10, #11 and #12"
+  resolved-text-contains:
+    triage: "refuse to choose a route or a contract verdict for any of them"
+exec-code: true

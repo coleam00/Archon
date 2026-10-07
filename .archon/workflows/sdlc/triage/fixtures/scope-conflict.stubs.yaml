@@ -1,0 +1,18 @@
+# Dry-run fixture: the outcome and an invariant contradict each other, so a run
+# would guess. NEEDS_CONTRACT_WORK proposes the contract and routes nowhere.
+triage:
+  contract: NEEDS_CONTRACT_WORK
+  route: no_action
+  design_first: false
+  complexity: small
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 123 }
+  area_labels: []
+  proposed_edits: { title: "stub: reconcile the outcome with its invariant", body: "stub: proposed Outcome and Invariants sections" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: outcome and invariant contradict each other"
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true

@@ -1,0 +1,18 @@
+# Guard fixture, seen red: two proposed area labels that differ only by case name
+# one tracker label twice. The real verdict script must refuse them.
+triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: ["area-ui", "Area-UI"]
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: duplicate area labels the boundary must catch"
+fixture:
+  expect: failed
+  fail-node: verdict
+exec-code: true
