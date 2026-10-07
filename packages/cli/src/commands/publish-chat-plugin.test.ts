@@ -89,6 +89,14 @@ test('failed same-name update restores executable bytes', async () => {
   expect(await Bun.file(data.receiptFile).text()).toBe('old receipt');
 });
 
+test('successful same-name update replaces receipt and executable without leftover staging files', async () => {
+  const data = await fixture(true, false);
+  await publishChatPlugin(data);
+  expect(await Bun.file(data.receiptFile).text()).toBe('new receipt');
+  expect(await Bun.file(data.target).text()).toBe('new binary');
+  expect((await real.readdir(data.root)).sort()).toEqual(['binary', 'receipt.json']);
+});
+
 test('rollback failure reports recovery paths and preserves the usable backup', async () => {
   const data = await fixture(true, false);
   fail = (op, path) =>

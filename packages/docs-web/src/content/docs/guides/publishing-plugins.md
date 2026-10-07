@@ -129,6 +129,37 @@ Initialization has a ten-second deadline and must work without chat credentials 
 `chat/start`. The receipt records the descriptor, release tag, commit, and binary digest.
 The descriptor's platform id is independent of the manifest name and executable suffix.
 
+The wire uses newline-delimited JSON-RPC 2.0 on stdin/stdout. For an initialize
+request such as `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+reply with the same request id and a descriptor as `result`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocol": "archon-chat/1",
+    "id": "example-chat",
+    "displayName": "Example chat integration",
+    "version": "1.0.0",
+    "capabilities": {
+      "defaultWorkflowDispatch": "foreground"
+    },
+    "policy": {
+      "workspaceRetention": "age-based"
+    }
+  }
+}
+```
+
+Write the response as one JSON line followed by a newline; the example is expanded
+for readability. Keep stdout for protocol messages. The generated
+[chat contract schema](https://github.com/coleam00/Archon/blob/dev/packages/chat-contract/schema/chat-contract.schema.json)
+defines `ChatPluginDescriptor` and the other wire payloads under `$defs`, including
+optional descriptor fields. TypeScript plugins can use
+[`serveChat` from `@archon/chat-contract`](https://github.com/coleam00/Archon/tree/dev/packages/chat-contract)
+to handle initialization and framing.
+
 A platform id cannot belong to two chat installs. `web`, `cli`, `api`, `github`,
 `gitea`, and `gitlab` are reserved for host surfaces and bundled forge adapters.
 Collisions name both owners. A rejected initialization or collision leaves existing
