@@ -702,9 +702,25 @@ nodes:
             reason: { type: string, pattern: '\S' }
           required: [failure, requested, reason]
 
-  - id: await-rerun
+  # The agent decides; this re-runs, and only a failure that may not reproduce.
+  - id: rerun-failed
+    script: rerun-failed
+    runtime: bun
     depends_on: [ci-rerun]
-    when: "$ci-rerun.output.requested == true"
+    when: "$ci-rerun.output.requested == true && $ci-rerun.output.failure == 'flake' || $ci-rerun.output.requested == true && $ci-rerun.output.failure == 'infrastructure'"
+    with:
+      pr: "$pr.output"
+    timeout: 120000
+    output_format:
+      type: object
+      properties:
+        requested: { type: boolean }
+        detail: { type: string }
+      required: [requested, detail]
+
+  - id: await-rerun
+    depends_on: [rerun-failed]
+    when: "$rerun-failed.output.requested == true"
     loop_group:
       max_iterations: 13
       until_bash: |
@@ -743,7 +759,7 @@ nodes:
       flipped_at:
         from: "$flip-ready.output.flipped_at"
     timeout: 120000
-    depends_on: [ci-verdict, ci-rerun, await-rerun]
+    depends_on: [ci-verdict, ci-rerun, rerun-failed, await-rerun]
     trigger_rule: none_failed_min_one_success
     when: "$ci-verdict.output.state == 'red'"
     output_format: *ci_state

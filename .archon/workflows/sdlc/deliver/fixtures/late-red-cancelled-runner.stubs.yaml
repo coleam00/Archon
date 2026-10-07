@@ -58,6 +58,7 @@ ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workf
 ci-settle: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
 ci-verdict: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
 ci-rerun: { failure: infrastructure, requested: true, reason: "stub: two checks were cancelled before a runner was acquired; re-ran the failed and cancelled jobs" }
+rerun-failed: { requested: true, detail: "stub: re-ran the failed jobs of workflow run 41" }
 # CI cancels them again: the re-run reproduced no failure.
 rerun-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
 ci-reverdict: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
@@ -81,7 +82,7 @@ mark-draft: "mark-draft: the pull request is a draft while CI stays red"
 publish-pr-body: {}
 fixture:
   expect: paused
-  reached: [ci-rerun, rerun-probe, ci-classify, ci-cause, gate-ci-fix, ci-attention-route, mark-draft, attention-ci-probe]
+  reached: [ci-rerun, rerun-failed, rerun-probe, ci-classify, ci-cause, gate-ci-fix, ci-attention-route, mark-draft, attention-ci-probe]
   resolved-text-contains:
     attention-ci-pause: "after Archon classified the failure as environment"
 exec-code: true

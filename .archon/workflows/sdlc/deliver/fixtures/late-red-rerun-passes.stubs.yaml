@@ -56,6 +56,7 @@ ci-probe: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
 ci-settle: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
 ci-verdict: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
 ci-rerun: { failure: flake, requested: true, reason: "stub: the failing test is outside the change and passes on the base; one re-run requested" }
+rerun-failed: { requested: true, detail: "stub: re-ran the failed jobs of workflow run 41" }
 rerun-probe: '{"state":"concluded","detail":"all 9 observed check(s) green"}'
 ci-reverdict: '{"state":"concluded","detail":"all 9 observed check(s) green"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/10", flipped_at: null }
@@ -67,5 +68,5 @@ fork: '{"fork":true}'
 publish-pr-body: {}
 fixture:
   expect: completed
-  reached: [ci-verdict, ci-rerun, rerun-probe, ci-reverdict, ci-attention-route, flip-ready, confirm-ready]
+  reached: [ci-verdict, ci-rerun, rerun-failed, rerun-probe, ci-reverdict, ci-attention-route, flip-ready, confirm-ready]
 exec-code: true

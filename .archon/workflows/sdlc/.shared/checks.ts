@@ -9,8 +9,10 @@
 import {
   CONCLUDED_CHECK_STATES,
   forgeSource,
+  invokeForge,
   preferredChecks,
   readChecks,
+  record,
   type CheckUnit,
   type ForgeSource,
   type QualifiedPr,
@@ -238,6 +240,62 @@ export function readPrChecks(pr: QualifiedPr): CheckRead {
       `ARCHON_SDLC_FORGE=forge: ${error instanceof Error ? error.message : String(error)}`
     );
   }
+}
+
+/** What a re-run request did: whether CI accepted one, and the operator's account. */
+export interface RerunOutcome {
+  readonly requested: boolean;
+  readonly detail: string;
+}
+
+/**
+ * Re-run the pull request's failed checks once, through the source the run selected.
+ * The forge source asks the plugin's `checks.rerun` for every failing unit with the
+ * re-run group the observation reports. The gh source re-runs the failed jobs of each
+ * GitHub Actions workflow run a failing check belongs to; a check another CI posts has
+ * no re-run here and is named instead. Nothing re-runs a check that did not fail.
+ */
+export function rerunFailedChecks(pr: QualifiedPr): RerunOutcome {
+  if (forgeSource() === 'forge') {
+    const observation = readChecks(pr);
+    const failing = observation.units.filter(unit => unit.state === 'red' || unit.state === 'unknown');
+    if (failing.length === 0) return { requested: false, detail: 'no check is failing, so nothing was re-run' };
+    const result = record(
+      invokeForge('checks.rerun', {
+        ref: { repo: pr.repo, number: pr.number },
+        revision: observation.revision,
+        units: failing.map(unit => ({ unit: unit.unit, rerun: unit.rerun ?? null })),
+      })
+    );
+    if (result?.outcome !== 'applied') throw new Error('forge checks.rerun did not report an applied re-run');
+    return { requested: true, detail: `re-ran ${describeUnits(failing)} at ${observation.revision}` };
+  }
+  const listed = gh('pr', 'checks', String(pr.number), '--repo', ghRepo(pr), '--json', 'name,state,link');
+  let rows: unknown;
+  try {
+    rows = JSON.parse(listed.stdout) as unknown;
+  } catch {
+    throw new Error(`could not read check state: ${listed.stderr.trim()}`);
+  }
+  if (!Array.isArray(rows)) throw new Error(`unexpected check payload shape: ${listed.stdout.slice(0, 200)}`);
+  const runs = new Set<string>();
+  const external: string[] = [];
+  for (const row of rows as { name: string; state: string; link?: string }[]) {
+    const state = ghCheckUnit(row).state;
+    if (state !== 'red' && state !== 'unknown') continue;
+    // A GitHub Actions job links to `.../actions/runs/<run>/job/<job>`; the run is
+    // what GitHub re-runs.
+    const run = /\/actions\/runs\/(\d+)(?:\/|$)/.exec(row.link ?? '')?.[1];
+    if (run === undefined) external.push(row.name);
+    else runs.add(run);
+  }
+  const unrunnable = external.length === 0 ? '' : `; no re-run from here for ${external.join(', ')}`;
+  if (runs.size === 0) return { requested: false, detail: `nothing re-runnable is failing${unrunnable}` };
+  for (const run of runs) {
+    const done = gh('run', 'rerun', run, '--failed', '--repo', ghRepo(pr));
+    if (!done.ok) throw new Error(`re-running workflow run ${run} failed: ${done.stderr.trim()}`);
+  }
+  return { requested: true, detail: `re-ran the failed jobs of workflow run(s) ${[...runs].join(', ')}${unrunnable}` };
 }
 
 /** The expected checks that have not registered on the pull request, by exact name. */

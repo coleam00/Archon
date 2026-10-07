@@ -35,6 +35,8 @@ export interface GhCheckRow {
   readonly bucket: 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel';
   /** When the check concluded; gh prints the zero time for one still running. */
   readonly completedAt?: string;
+  /** The check's page: a GitHub Actions job links into its workflow run. */
+  readonly link?: string;
 }
 
 /** One row of `gh api .../issues/<n>/comments`. */
@@ -66,6 +68,8 @@ export interface GhFake {
   readonly rollup?: number | 'fail';
   /** Workflow runs for the head commit that concluded `action_required`; 'fail' exits 1. */
   readonly approvalRuns?: number | 'fail';
+  /** stderr for a refused `gh run rerun`; omit for a re-run that is accepted. */
+  readonly rerunFail?: string;
   /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
   readonly readyFail?: string;
   /** The pull request every `gh pr view`/`gh pr list` read reports. */
@@ -271,6 +275,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     }
     return result(0, JSON.stringify({ id, body, html_url: url(id) }));
   }
+  if (text.startsWith('run rerun')) return fake.rerunFail ? result(1, '', fake.rerunFail) : result(0);
   return result(95, '', 'unexpected gh call');
 } });
 `;
@@ -393,7 +398,7 @@ else {
 }
 
 export function runDeliverScript(
-  script: 'check-ci' | 'flip-ready' | 'confirm-ready' | 'mark-draft',
+  script: 'check-ci' | 'flip-ready' | 'confirm-ready' | 'mark-draft' | 'rerun-failed',
   options: ScriptOptions = {}
 ): ScriptRun {
   // A ready mark checks mergeability against the base in a real checkout.
