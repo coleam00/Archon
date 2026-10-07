@@ -165,10 +165,14 @@ describe('tool call attention', () => {
 
   test('disable affects publication only; a fresh stream owns reused provider ids', async () => {
     const h = harness(0);
+    expect(h.tracker.hasOpenTools()).toBe(false);
     await h.tracker.observe(start);
     h.advance(10000000);
     await h.tracker.refresh();
     expect(h.write).not.toHaveBeenCalled();
+    expect(h.tracker.hasOpenTools()).toBe(true);
+    await h.tracker.clear();
+    expect(h.tracker.hasOpenTools()).toBe(false);
     const a = harness(),
       b = harness();
     await a.tracker.observe(start);

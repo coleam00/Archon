@@ -49,7 +49,7 @@ export function createAttemptEventSequence(attemptId: string): AttemptEventSeque
 }
 
 export interface ProviderEventHandlerDeps {
-  toolAttention?: ReturnType<typeof createToolCallAttention>;
+  toolAttention: ReturnType<typeof createToolCallAttention>;
   store: Pick<IWorkflowStore, 'createWorkflowEvent'>;
   platform: IWorkflowPlatform;
   conversationId: string;
@@ -89,7 +89,6 @@ export interface ProviderEventHandler {
 export function createProviderEventHandler(deps: ProviderEventHandlerDeps): ProviderEventHandler {
   const { store, platform, conversationId, messageContext, logDir, runId, nodeId, stepName } = deps;
   const liveSubtasks = new Set<string>();
-  const openTools = new Set<string>();
 
   const record = async (event: ProviderEvent): Promise<void> => {
     const envelope: ProviderEventEnvelope = {
@@ -125,9 +124,7 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
 
   return {
     async handle(event): Promise<void> {
-      if (event.type === 'tool_call') openTools.add(event.toolCallId);
-      if (event.type === 'tool_call_update') openTools.delete(event.toolCallId);
-      await deps.toolAttention?.observe(event);
+      await deps.toolAttention.observe(event);
       await record(event);
       const streaming = platform.getStreamingMode() === 'stream';
       switch (event.type) {
@@ -192,12 +189,12 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
         }
       }
     },
-    hasOpenTools: () => openTools.size > 0,
+    hasOpenTools: () => deps.toolAttention.hasOpenTools(),
     refreshAttention: async (): Promise<void> => {
-      await deps.toolAttention?.refresh();
+      await deps.toolAttention.refresh();
     },
     clearAttention: async (): Promise<void> => {
-      await deps.toolAttention?.clear();
+      await deps.toolAttention.clear();
     },
     liveSubtaskIds(): string[] {
       return [...liveSubtasks];

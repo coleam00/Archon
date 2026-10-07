@@ -22,6 +22,7 @@ interface ToolCallAttentionOptions {
 }
 
 export function createToolCallAttention(options: ToolCallAttentionOptions): {
+  hasOpenTools(): boolean;
   observe(event: ProviderEvent): Promise<void>;
   refresh(): Promise<void>;
   clear(): Promise<void>;
@@ -67,6 +68,7 @@ export function createToolCallAttention(options: ToolCallAttentionOptions): {
   }
 
   return {
+    hasOpenTools: () => tools.size > 0,
     async observe(event: ProviderEvent): Promise<void> {
       if (event.type === 'tool_call' && !tools.has(event.toolCallId)) {
         const at = new Date(now()).toISOString();

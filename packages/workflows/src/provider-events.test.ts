@@ -13,6 +13,7 @@ import {
 import { orderProviderEventRecords, providerEventEnvelopeSchema } from './schemas/provider-event';
 import orderFixture from './schemas/provider-event-order.fixture.json';
 import type { IWorkflowStore } from './store';
+import { createToolCallAttention } from './tool-call-attention';
 
 const trackTempRoot = trackTempRoots();
 
@@ -35,6 +36,15 @@ async function makeHandler(
     getPlatformType: () => 'test',
   };
   const handler = createProviderEventHandler({
+    toolAttention: createToolCallAttention({
+      store: { setToolCallAttention: mock(async () => true) },
+      runId: 'run-1',
+      nodeId: 'node-1',
+      attemptId: options.attempt?.attemptId ?? 'attempt-1',
+      provider: 'test',
+      thresholdMs: 0,
+      env: {},
+    }),
     store: {
       createWorkflowEvent: mock(async (event: Parameters<CreateEvent>[0]) => {
         rows.push(event);
