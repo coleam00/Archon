@@ -38,7 +38,8 @@ mock.module('../db/connection', () => ({
 }));
 const isolationDb = await import('../db/isolation-environments');
 const { claimPendingWorkflowRun } = await import('../db/workflows');
-const { reclaimRunWorktree, removeEnvironment } = await import('./cleanup-service');
+const { onConversationClosed, reclaimRunWorktree, removeEnvironment } =
+  await import('./cleanup-service');
 
 async function git(path: string, ...args: string[]): Promise<string> {
   const process = Bun.spawn(['git', '-C', path, ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -92,6 +93,73 @@ const request = () => ({
   identifier: 'release',
 });
 const status = async () => (await isolationDb.getById(env.id))?.status;
+
+test.each(['replacement', 'partial', 'dirty'] as const)(
+  'conversation close retains references and reports %s cleanup failure',
+  async mode => {
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations
+        (id, platform_type, platform_conversation_id, codebase_id, isolation_env_id, cwd)
+       VALUES ($1, 'github', $1, $2, $3, $4)`,
+      [conversationId, codebaseId, env.id, env.working_path]
+    );
+    if (mode === 'replacement') {
+      await git(repo, 'worktree', 'remove', env.working_path);
+      await git(root, 'clone', '-q', repo, env.working_path);
+    } else if (mode === 'dirty') {
+      await writeFile(join(env.working_path, 'file'), 'operator edits');
+    }
+    const partial =
+      mode === 'partial'
+        ? spyOn(getIsolationProvider(), 'destroy').mockResolvedValue({
+            worktreeRemoved: true,
+            directoryClean: false,
+            branchDeleted: null,
+            remoteBranchDeleted: null,
+            warnings: ['Retained directory'],
+          })
+        : undefined;
+    try {
+      await expect(onConversationClosed('github', conversationId)).rejects.toThrow();
+    } finally {
+      partial?.mockRestore();
+    }
+    const { rows } = await db.query<{ isolation_env_id: string; cwd: string }>(
+      'SELECT isolation_env_id, cwd FROM remote_agent_conversations WHERE id = $1',
+      [conversationId]
+    );
+    expect(rows[0]).toEqual({ isolation_env_id: env.id, cwd: env.working_path });
+    expect(await status()).toBe('active');
+    expect(await readFile(join(env.working_path, 'file'), 'utf8')).toBe(
+      mode === 'dirty' ? 'operator edits' : 'original'
+    );
+  }
+);
+
+test.each(['active', 'destroyed'] as const)(
+  'conversation close clears references after cleanup of a %s environment',
+  async initialStatus => {
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations
+        (id, platform_type, platform_conversation_id, codebase_id, isolation_env_id, cwd)
+       VALUES ($1, 'github', $1, $2, $3, $4)`,
+      [conversationId, codebaseId, env.id, env.working_path]
+    );
+    if (initialStatus === 'destroyed') await removeEnvironment(env.id);
+
+    await onConversationClosed('github', conversationId);
+
+    const { rows } = await db.query<{ isolation_env_id: string | null; cwd: string | null }>(
+      'SELECT isolation_env_id, cwd FROM remote_agent_conversations WHERE id = $1',
+      [conversationId]
+    );
+    expect(rows[0]).toEqual({ isolation_env_id: null, cwd: null });
+    expect(await status()).toBe('destroyed');
+    expect(existsSync(env.working_path)).toBe(false);
+  }
+);
 
 beforeEach(async () => {
   root = track(await realpath(await mkdtemp(join(tmpdir(), 'archon-release-'))));
