@@ -9,16 +9,14 @@ const trackTempRoot = trackTempRoots();
 
 async function createFixture(): Promise<string> {
   const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-typed-lint-')));
-  for (const directory of [
-    'scripts',
-    '.archon/scripts',
-    '.archon/workflows',
-    'packages/fixture/src',
-  ]) {
+  for (const directory of ['bin', '.archon/scripts', '.archon/workflows', 'packages/fixture/src']) {
     await mkdir(join(root, directory), { recursive: true });
   }
+  // The wrapper sits outside every lint target so each pass type-checks only the two
+  // fixture files. Linting the wrapper too put bun-types into every program, and the
+  // cold first case on windows-latest took 17-26 s instead of 12-13 s.
+  await copyFile(join(REPO_ROOT, 'scripts/lint.ts'), join(root, 'bin/lint.ts'));
   for (const file of [
-    'scripts/lint.ts',
     'eslint.config.mjs',
     '.archon/scripts/tsconfig.json',
     '.archon/workflows/tsconfig.json',
@@ -29,14 +27,8 @@ async function createFixture(): Promise<string> {
   await writeFile(
     join(root, 'tsconfig.json'),
     JSON.stringify({
-      compilerOptions: {
-        strict: true,
-        module: 'ESNext',
-        moduleResolution: 'Bundler',
-        resolveJsonModule: true,
-        types: ['bun-types'],
-      },
-      include: ['packages/fixture/src/**/*.ts', 'scripts/**/*.ts'],
+      compilerOptions: { strict: true, lib: ['es2022'], types: [] },
+      include: ['packages/fixture/src/**/*.ts'],
     })
   );
   await writeFile(
@@ -50,7 +42,7 @@ async function lint(
   root: string,
   args: readonly string[]
 ): Promise<{ code: number; output: string }> {
-  const child = Bun.spawn([process.execPath, 'run', 'scripts/lint.ts', ...args], {
+  const child = Bun.spawn([process.execPath, 'run', 'bin/lint.ts', ...args], {
     cwd: root,
     stdout: 'pipe',
     stderr: 'pipe',

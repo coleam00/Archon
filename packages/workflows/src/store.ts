@@ -331,7 +331,7 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     expectedGate?: ExpectedApprovalGate
   ): Promise<{ resolved: boolean }>;
   /**
-   * Atomically cancel conversation-scoped resumable runs and their descendants; return only winning rows.
+   * Atomically cancel resumable runs matching conversation_id or parent_conversation_id; return their pre-cancellation rows.
    * Invoke assertMayCancel on the locked snapshot before any write; a thrown refusal aborts the transaction.
    */
   cancelResumableRunsForConversation(

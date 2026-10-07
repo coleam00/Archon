@@ -37,6 +37,7 @@
       "src/commands/setup.test.ts",
       "src/commands/skill.test.ts",
       "src/commands/doctor.test.ts",
+      "src/commands/doctor-process-provider.test.ts",
       "src/commands/telemetry.test.ts"
     ],
     [
@@ -134,6 +135,9 @@
     ],
     [
       "src/commands/workflow-store.integration.spec.ts"
+    ],
+    [
+      "src/test-support/workflow-store.conformance.test.ts"
     ]
   ]
 }
