@@ -211,11 +211,19 @@ export async function foldDagResumeSnapshot(
     )
       continue;
     if (row.event_type === DEFERRED_NODE_USAGE_EVENT_TYPE) {
-      const usage = readDeferredNodeUsageEvent({
-        workflow_run_id: workflowRunId,
-        ...row,
-        data: row.data,
-      });
+      let usage: ReturnType<typeof readDeferredNodeUsageEvent>;
+      try {
+        usage = readDeferredNodeUsageEvent({
+          workflow_run_id: workflowRunId,
+          ...row,
+          data: row.data,
+        });
+      } catch (parseErr) {
+        throw new Error(
+          `Invalid deferred usage record for '${row.step_name}' in run ${workflowRunId}`,
+          { cause: parseErr }
+        );
+      }
       if (usage && nodeCostScope(usage.data) !== 'total') addUsage(row.step_name, usage.rawUsage);
       continue;
     }

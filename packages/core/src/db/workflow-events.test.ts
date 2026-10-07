@@ -1620,6 +1620,17 @@ describe('workflow-events', () => {
       );
     });
 
+    test('names the step and run when a deferred usage record is corrupt', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'review', event_type: 'node_deferred_usage', data: '{not json' },
+        ])
+      );
+      await expect(getDagResumeSnapshot('run-corrupt-deferred')).rejects.toThrow(
+        "Invalid deferred usage record for 'review' in run run-corrupt-deferred"
+      );
+    });
+
     test('retains unfinished typed invocations by path and loop lineage', async () => {
       const typed = (invocationId: string, iteration: number) => ({
         node: { id: 'worker', kind: 'exec', runtime: 'sh' },
