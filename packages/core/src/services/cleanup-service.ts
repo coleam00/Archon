@@ -335,7 +335,7 @@ export interface RemoveEnvironmentResult {
   /** Whether the branch was deleted (null if branch cleanup was not attempted) */
   branchDeleted: boolean | null;
   /**
-   * Why the environment was left in place. A closed set so callers that branch
+   * Why removal did not proceed. A closed set so callers that branch
    * on a reason fail type-check when it changes, instead of silently diverging.
    */
   skippedReason?:
