@@ -207,6 +207,9 @@
     ],
     [
       "src/store-conformance.test.ts"
+    ],
+    [
+      "src/file-store/"
     ]
   ]
 }

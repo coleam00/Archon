@@ -16,7 +16,7 @@ import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-st
  */
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType } from './connection';
-import { isOwnerProvablyGone, type ProcessOwner } from './process-owner';
+import { isOwnerProvablyGone, type ProcessOwner } from '@archon/paths/process-owner';
 
 export type TransactionQuery = Parameters<
   Parameters<ReturnType<typeof getDatabase>['withTransaction']>[0]

@@ -172,6 +172,23 @@ jobs:
       - name: Run workflow fixtures
         run: bun run validate --only workflow-fixtures
 
+  file-store-primitives-macos:
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Prove file store primitives, including a compiled binary
+        env:
+          ARCHON_TEST_COMPILED_BINARIES: '1'
+        run: bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts
+
   static:
     needs: changes
     if: needs.changes.outputs.run-tests == 'true'
@@ -380,6 +397,7 @@ jobs:
         test,
         workflow-fixtures,
         workflow-fixtures-windows,
+        file-store-primitives-macos,
         schema-upgrade,
         postgres-parity,
         docker-build,

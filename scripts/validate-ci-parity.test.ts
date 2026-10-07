@@ -40,6 +40,11 @@ const DEPENDENCY_INSTALL = 'bun install';
  */
 const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
   {
+    command: 'bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts',
+    reason:
+      'Proves macOS compiled-binary filesystem behavior on a disposable CI host; local compilation can stall syspolicyd.',
+  },
+  {
     command: 'bun scripts/should-run-test-suite.ts',
     reason: 'Decides whether the suite runs at all. CI plumbing, not a repository check.',
   },

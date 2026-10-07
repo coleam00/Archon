@@ -1,5 +1,5 @@
 /**
- * The identity of the process that owns a provider-attempt slot holder, and the only
+ * The identity of the process that owns a shared resource, and the only
  * proof Archon accepts that such an owner is gone.
  *
  * A pid alone is not an identity: a restarted container often gets its old pid back.

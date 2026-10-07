@@ -46,6 +46,10 @@ While you work, run the narrow check instead — `bun run type-check`, `bun run 
 
 **macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Set `ARCHON_TEST_COMPILED_BINARIES=1` to run them on a Mac anyway. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`.
 
+The file-store primitive tests additionally compile their probe only on GitHub Actions.
+The `file-store-primitives-macos` job runs the lock, rename and compiled probe on a
+disposable Mac, with `ARCHON_TEST_COMPILED_BINARIES=1`. Do not compile this probe locally.
+
 #### What `bun run validate` deliberately leaves out
 
 These PR-gating jobs need something a contributor may not have, so they stay in CI only.
@@ -57,6 +61,7 @@ If you touched what they cover, run them yourself.
 | `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, and `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
 | `docs-build` | Node (Astro's CLI does not run under Bun); path-filtered to `packages/docs-web/` | `bun run build:docs` — run it when you change the docs site |
+| `file-store-primitives-macos` | a disposable macOS runner for the compiled-binary probe | `bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts` runs the source probes locally; the compiled probe is CI-only |
 
 **Schema changes**: run `bun run check:schema-upgrades` and `bun run check:sqlite-vintages`
 yourself if you touched `migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can

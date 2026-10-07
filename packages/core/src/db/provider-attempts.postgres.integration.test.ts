@@ -32,7 +32,7 @@ describe.skipIf(!baseUrl)('provider-attempt holders — real Postgres behavior',
   let admin: PgPool;
   let db: import('./adapters/postgres').PostgresAdapter;
   let attempts: typeof import('./provider-attempts');
-  let owner: typeof import('./process-owner');
+  let owner: typeof import('@archon/paths/process-owner');
 
   beforeAll(async () => {
     const { Pool } = await import('pg');
@@ -72,7 +72,7 @@ describe.skipIf(!baseUrl)('provider-attempt holders — real Postgres behavior',
     }));
 
     attempts = await import('./provider-attempts');
-    owner = await import('./process-owner');
+    owner = await import('@archon/paths/process-owner');
   });
 
   afterAll(async () => {
