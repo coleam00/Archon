@@ -79,11 +79,11 @@ nodes:
         summary: { type: string }
       required: [green, pr, summary]
 
-  # Each review is the archon-prp-review block: a coordinator picks scopes by
+  # Each review is the archon-prp-reviewers block: a coordinator picks scopes by
   # risk, the selected reviewers run in parallel with fresh contexts, and the
   # coordinator aggregates and publishes one verdict.
   - id: review
-    include: archon-prp-review
+    include: archon-prp-reviewers
     depends_on: [implement]
     when: "$implement.output.green == true"
     with:
@@ -141,7 +141,7 @@ nodes:
       required: [changed, verify, ci_cause, summary]
 
   - id: reverify
-    include: archon-prp-review
+    include: archon-prp-reviewers
     depends_on: [finish]
     when: "$review.output.ready == false || $finish.output.verify == true"
     with:

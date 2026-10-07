@@ -1,4 +1,4 @@
-name: archon-prp-review
+name: archon-prp-reviewers
 description: |
   Building block for archon-prp, not a standalone run: one independent review of a
   pull request. A coordinator pins the head, runs the repository's validation and
