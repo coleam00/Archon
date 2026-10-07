@@ -6,7 +6,7 @@ import { connectProvider, type ConnectedProvider } from './connect';
 import { checkAcp } from './fixtures/acp';
 import { chunks, credentialStatuses, descriptor, fixtureProvider } from './fixtures/provider';
 import { streamPair } from './fixtures/streams';
-import { rpcMessageSchema } from './rpc';
+import { PluginProtocolError, PluginRemoteError, PluginRpc, rpcMessageSchema } from './rpc';
 import { serveProvider } from './serve';
 
 async function withProvider(
@@ -491,4 +491,83 @@ test('config normalization still refuses values that cannot cross the JSON wire'
       ).rejects.toThrow();
     }
   });
+});
+
+test('information hooks return all diagnostic states and optional model labels', async () => {
+  const checks = (['ok', 'warn', 'fail', 'skip'] as const).map(status => ({
+    id: status,
+    label: status,
+    status,
+    message: 'Provider information',
+  }));
+  await withProvider(
+    fixtureProvider({
+      async diagnose(request) {
+        expect(request.assistantConfig).toEqual({ nested: { enabled: true } });
+        return { checks };
+      },
+      async listModels() {
+        return { models: [{ id: 'one', label: 'One' }, { id: 'two' }] };
+      },
+    }),
+    async client => {
+      expect(
+        await client.diagnose({ assistantConfig: { nested: { enabled: true, unset: undefined } } })
+      ).toEqual({ checks });
+      expect(await client.listModels()).toEqual({
+        models: [{ id: 'one', label: 'One' }, { id: 'two' }],
+      });
+    }
+  );
+});
+
+test('absent information hooks report unsupported rather than successful empty results', async () => {
+  await withProvider(fixtureProvider(), async client => {
+    for (const call of [() => client.diagnose({}), () => client.listModels()]) {
+      try {
+        await call();
+        throw new Error('accepted absent hook');
+      } catch (error) {
+        expect(error).toBeInstanceOf(PluginRemoteError);
+        if (error instanceof PluginRemoteError) expect(error.code).toBe(-32601);
+      }
+    }
+    expect(await collect(client.sendQuery('turn', '/'))).toEqual(chunks);
+  });
+});
+
+test('client rejects malformed successful information responses from an independent peer', async () => {
+  const pair = streamPair();
+  const peer = new PluginRpc(pair.provider);
+  peer.handle('initialize', () => ({
+    protocolVersion: 1,
+    agentCapabilities: { _meta: { archon: descriptor } },
+    authMethods: [],
+  }));
+  peer.handle('_archon/diagnose', () => ({
+    checks: [{ id: 'bad', status: 'ok', message: 'Info' }],
+  }));
+  peer.handle('_archon/list_models', () => ({ models: [{ label: 'Missing id' }] }));
+  const client = await connectProvider(pair.host);
+  try {
+    for (const [call, field] of [
+      [() => client.diagnose({}), 'label'],
+      [() => client.listModels(), 'id'],
+    ] as const) {
+      try {
+        await call();
+        throw new Error('accepted malformed information response');
+      } catch (error) {
+        expect(error).toBeInstanceOf(PluginProtocolError);
+        if (error instanceof PluginProtocolError) {
+          expect(error.plugin).toBe(descriptor.id);
+          expect(error.message).toContain('invalid payload');
+          expect(error.message).toContain(field);
+        }
+      }
+    }
+  } finally {
+    await client.close();
+    await peer.close();
+  }
 });

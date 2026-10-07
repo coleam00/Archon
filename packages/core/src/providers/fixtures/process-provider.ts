@@ -2,7 +2,13 @@ import { closeSync, writeSync, existsSync, writeFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { spawn } from 'node:child_process';
 import { serveProvider } from '@archon/provider-contract/plugin';
-import type { ProviderChunk, CredentialStatus, IAgentProvider } from '@archon/provider-contract';
+import type {
+  ProviderChunk,
+  CredentialStatus,
+  IAgentProvider,
+  ProviderDiagnostics,
+  ProviderModelList,
+} from '@archon/provider-contract';
 import { descriptor, chunks } from './process-provider-data';
 
 const mode = process.argv[2];
@@ -30,6 +36,30 @@ await serveProvider(
     create: (): IAgentProvider => ({
       getType: (): string => descriptor.id,
       getCapabilities: (): typeof descriptor.capabilities => descriptor.capabilities,
+      async diagnose({ assistantConfig }): Promise<ProviderDiagnostics> {
+        if (mode === 'live-eof') return await closeOutput();
+        if (mode === 'information-crash') {
+          process.stderr.write('private message and token');
+          throw new Error('private message and token');
+        }
+        return {
+          checks: [
+            {
+              id: 'config',
+              label: 'Configuration',
+              status: assistantConfig?.model ? 'ok' : 'skip',
+              message: 'Configuration inspected',
+              remedy: 'Select a model',
+            },
+          ],
+        };
+      },
+      async listModels(): Promise<ProviderModelList> {
+        if (mode === 'live-eof') return await closeOutput();
+        return {
+          models: [{ id: 'fixture/model', label: 'Fixture model' }, { id: 'fixture/other' }],
+        };
+      },
       async checkCredential({ env, signal }): Promise<CredentialStatus> {
         if (mode === 'live-eof') return await closeOutput();
         if (mode === 'credential-crash') {

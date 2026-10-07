@@ -48,3 +48,11 @@ test('published prompt request enforces the same single text block as the owner'
     expect(schema.safeParse(value).success).toBe(promptRequestSchema.safeParse(value).success);
   }
 });
+
+test('JSON Schema conversion preserves unknown keys without additionalProperties: false', () => {
+  const schema = z.fromJSONSchema({ type: 'object', properties: { model: { type: 'string' } } });
+  expect(schema.parse({ model: 'model', secret: 'private' })).toEqual({
+    model: 'model',
+    secret: 'private',
+  });
+});

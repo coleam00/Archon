@@ -1,8 +1,11 @@
+import { providerDiagnosticsSchema, providerModelListSchema } from '../information';
 import { Readable, Writable } from 'node:stream';
 import type { IAgentProvider } from '../agent-provider';
 import type { ProviderStopReason } from '../result';
-import { PluginRpc, type PluginIO } from './rpc';
+import { PluginRemoteError, PluginRpc, type PluginIO } from './rpc';
 import {
+  diagnoseRequestSchema,
+  listModelsRequestSchema,
   acpStopReason,
   cancelNotificationSchema,
   checkCredentialRequestSchema,
@@ -97,6 +100,22 @@ export async function serveProvider(
     const request = resolveCredentialModelRequestSchema.parse(raw);
     const model = await options.create().resolveCredentialModel?.(request);
     return model === undefined ? {} : { model };
+  });
+  rpc.handle('_archon/diagnose', async raw => {
+    requireInitialized();
+    const request = diagnoseRequestSchema.parse(raw);
+    const provider = options.create();
+    if (!provider.diagnose)
+      throw new PluginRemoteError(-32601, 'Provider does not support diagnose');
+    return providerDiagnosticsSchema.parse(await provider.diagnose(request));
+  });
+  rpc.handle('_archon/list_models', async raw => {
+    requireInitialized();
+    listModelsRequestSchema.parse(raw);
+    const provider = options.create();
+    if (!provider.listModels)
+      throw new PluginRemoteError(-32601, 'Provider does not support listModels');
+    return providerModelListSchema.parse(await provider.listModels());
   });
   try {
     await rpc.done;

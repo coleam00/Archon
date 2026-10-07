@@ -1,3 +1,4 @@
+import type { ProviderDiagnostics, ProviderModelList } from './information';
 import { z } from 'zod';
 import type { CredentialStatus } from './credential-status';
 import type { ProviderCapabilities } from './capabilities';
@@ -278,6 +279,11 @@ export interface SendQueryOptions extends AgentRequestOptions {
  * Allows supporting multiple agent providers (Claude, Codex, etc.)
  */
 export interface IAgentProvider {
+  diagnose?(request: {
+    assistantConfig?: SendQueryOptions['assistantConfig'];
+  }): Promise<ProviderDiagnostics>;
+  listModels?(): Promise<ProviderModelList>;
+
   resolveCredentialModel?(request: {
     model?: string;
     assistantConfig?: SendQueryOptions['assistantConfig'];

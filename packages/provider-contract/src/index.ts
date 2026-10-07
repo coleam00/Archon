@@ -110,3 +110,10 @@ export {
 } from './registration';
 
 export { buildProviderSubprocessEnv } from './agent-provider';
+
+export {
+  providerDiagnosticsSchema,
+  providerModelListSchema,
+  type ProviderDiagnostics,
+  type ProviderModelList,
+} from './information';
