@@ -325,6 +325,11 @@ mock.module('./services/webhook-source-plugins', () => ({
 mock.module('./services/resource-start-hosting', () => ({
   createServerResourceStartHost: (): undefined => undefined,
 }));
+const workflowHost = {} as import('@archon/core/workflows/host-store').WorkflowHost;
+mock.module('@archon/core/workflows/sql-host', () => ({
+  createSqlWorkflowHost: () => workflowHost,
+}));
+
 mock.module('./services/workflow-resume-service', () => ({
   resumeWorkflowRunFromServer: mockResumeWorkflowRunFromServer,
   startWorkflowContinuationScheduler: (): void => undefined,
@@ -440,6 +445,7 @@ describe('Slack workflow resume composition', () => {
       expect(platforms?.get('slack')).toBe(slackAdapterInstance);
       expect(platforms?.get('web')).toBeInstanceOf(MockWebAdapter);
       expect(mockResumeWorkflowRunFromServer).toHaveBeenCalledWith(
+        workflowHost,
         persistedRun,
         'actor-user-1',
         resumeTarget

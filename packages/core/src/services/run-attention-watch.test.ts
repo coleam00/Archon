@@ -2,11 +2,7 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunLiveOwnerWatchEvent, RunLiveOwnerWatchResult } from './run-live-owner';
-import type { DbNotificationListener } from '../db/adapters/types';
-
-// ---------------------------------------------------------------------------
-// Mock DB modules before importing the module under test
-// ---------------------------------------------------------------------------
+import type { RunDoorbell } from './run-attention-watch';
 
 /**
  * The rows the waiter can see, keyed by run id. Mutating this between reads is how a
@@ -15,18 +11,8 @@ import type { DbNotificationListener } from '../db/adapters/types';
 const rows = new Map<string, WorkflowRun>();
 const mockGetWorkflowRun = mock((id: string) => Promise.resolve(rows.get(id) ?? null));
 
-// Deliberately the ONLY member of the store this module may reach. Any write the
-// waiter attempted — updateWorkflowRun, cancelWorkflowRun, resolveApprovalGate —
-// would throw "is not a function" here rather than silently mutating a run.
-mock.module('../db/workflows', () => ({
-  getWorkflowRun: mockGetWorkflowRun,
-}));
-
-// SQLite posture by default: no listener, so the interval is the only wake source.
-const mockGetDbNotificationListener = mock((): DbNotificationListener | null => null);
-mock.module('../db/connection', () => ({
-  getDbNotificationListener: mockGetDbNotificationListener,
-}));
+const store = { getWorkflowRun: mockGetWorkflowRun };
+let doorbell: RunDoorbell | undefined;
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -99,9 +85,8 @@ const gate = (over: Record<string, unknown> = {}) => ({
   approval: { nodeId: 'review', message: 'Approve the plan.', ...over },
 });
 
-/** A fast wait — the interval is the wake source in every test here. */
 const wait = (runId: string, over: Record<string, unknown> = {}) =>
-  waitForRunAttention(runId, { pollIntervalMs: 5, deadlineMs: 3000, ...over });
+  waitForRunAttention(store, runId, { doorbell, pollIntervalMs: 5, deadlineMs: 3000, ...over });
 
 async function waitForOwner(runId: string): Promise<void> {
   const deadline = Date.now() + 1000;
@@ -115,7 +100,7 @@ beforeEach(() => {
   rows.clear();
   mockGetWorkflowRun.mockImplementation((id: string) => Promise.resolve(rows.get(id) ?? null));
   mockGetWorkflowRun.mockClear();
-  mockGetDbNotificationListener.mockClear();
+  doorbell = undefined;
   reachableOwners = null;
   ownerEvents.clear();
   ownerUnsubscribes.length = 0;
@@ -199,7 +184,7 @@ describe('waitForRunAttention', () => {
 
   test('owner attention wakes a durable re-read without waiting for the interval', async () => {
     putRun('r1', { status: 'running' });
-    const pending = waitForRunAttention('r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
+    const pending = waitForRunAttention(store, 'r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
     await waitForOwner('r1');
     putRun('r1', { status: 'completed', completed_at: new Date() });
     ownerEvents.get('r1')?.('attention');
@@ -212,7 +197,7 @@ describe('waitForRunAttention', () => {
 
   test('an unexpected owner disconnect wakes immediately as owner_lost', async () => {
     putRun('r1', { status: 'running' });
-    const pending = waitForRunAttention('r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
+    const pending = waitForRunAttention(store, 'r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
     await waitForOwner('r1');
     reachableOwners = new Set();
     ownerEvents.get('r1')?.('disconnected');
@@ -246,7 +231,7 @@ describe('waitForRunAttention', () => {
 
   test('a stop handoff gives the controller bounded time to persist cancellation', async () => {
     putRun('r1', { status: 'running' });
-    const pending = waitForRunAttention('r1', { pollIntervalMs: 20, deadlineMs: 3000 });
+    const pending = waitForRunAttention(store, 'r1', { pollIntervalMs: 20, deadlineMs: 3000 });
     await waitForOwner('r1');
     ownerEvents.get('r1')?.('control_handoff');
     reachableOwners = new Set();
@@ -270,7 +255,7 @@ describe('waitForRunAttention', () => {
     try {
       putRun('r1', { status: 'running' });
       let settled = false;
-      const pending = waitForRunAttention('r1', { pollIntervalMs: 5 }).finally(() => {
+      const pending = waitForRunAttention(store, 'r1', { pollIntervalMs: 5 }).finally(() => {
         settled = true;
       });
       await waitForOwner('r1');
@@ -299,7 +284,7 @@ describe('waitForRunAttention', () => {
     try {
       putRun('r1', { status: 'running' });
       let settled = false;
-      const pending = waitForRunAttention('r1', { pollIntervalMs: 5 }).finally(() => {
+      const pending = waitForRunAttention(store, 'r1', { pollIntervalMs: 5 }).finally(() => {
         settled = true;
       });
       await waitForOwner('r1');
@@ -329,7 +314,7 @@ describe('waitForRunAttention', () => {
     putRun('r1', { status: 'running' });
     const attached: string[] = [];
 
-    const result = await waitForRunAttention('r1', {
+    const result = await waitForRunAttention(store, 'r1', {
       pollIntervalMs: 5,
       deadlineMs: 40,
       onAttached: status => {
@@ -507,7 +492,7 @@ describe('waitForRunAttention', () => {
       putRun('parent', { status: 'paused', metadata: blockedOn('child') });
       putRun('child', { status: 'running', parent_run_id: 'parent' });
       reachableOwners = new Set(['parent']);
-      const pending = waitForRunAttention('parent', {
+      const pending = waitForRunAttention(store, 'parent', {
         pollIntervalMs: 60_000,
         deadlineMs: 3000,
       });
@@ -617,72 +602,69 @@ describe('waitForRunAttention', () => {
   });
 
   describe('the notification doorbell', () => {
-    test('is skipped entirely when the dialect has none (SQLite)', async () => {
-      putRun('r1', { status: 'completed', completed_at: new Date() });
-
-      await wait('r1');
-
-      expect(mockGetDbNotificationListener).toHaveBeenCalled();
-    });
-
-    test('wakes a re-read, but the row is still the answer', async () => {
-      // A notification carrying this run id must never BE the answer: the doorbell
-      // rings here while the run is still running, and the wait continues.
-      let ring: ((payload: string) => void) | undefined;
-      const unsubscribe = mock(() => undefined);
-      mockGetDbNotificationListener.mockReturnValueOnce({
-        listen: (_channel: string, onNotify: (payload: string) => void) => {
-          ring = onNotify;
-          return Promise.resolve(unsubscribe);
+    test('polls a durable terminal row when the supplied doorbell rejects', async () => {
+      const error = new Error('notification transport unavailable');
+      doorbell = async () => {
+        throw error;
+      };
+      putRun('r1', { status: 'pending' });
+      const pending = wait('r1', {
+        onAttached: () => {
+          putRun('r1', { status: 'completed', completed_at: new Date() });
         },
       });
-      putRun('r1', { status: 'running' });
-
-      // A long interval: only the doorbell can move this forward in time.
-      const pending = waitForRunAttention('r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
-      await Bun.sleep(20);
-      ring?.('r1');
-      await Bun.sleep(20);
+      expect(await pending).toMatchObject({ attention: { kind: 'terminal', status: 'completed' } });
       expect(mockGetWorkflowRun.mock.calls.length).toBeGreaterThan(1);
-
-      putRun('r1', { status: 'completed', completed_at: new Date() });
-      ring?.('r1');
-
-      expect(await pending).toMatchObject({ attention: { kind: 'terminal' } });
-      expect(unsubscribe).toHaveBeenCalled();
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        { err: error, runId: 'r1' },
+        'run_attention.doorbell_unavailable'
+      );
     });
 
-    test('ignores a notification for a different run', async () => {
-      let ring: ((payload: string) => void) | undefined;
-      mockGetDbNotificationListener.mockReturnValueOnce({
-        listen: (_channel: string, onNotify: (payload: string) => void) => {
-          ring = onNotify;
-          return Promise.resolve(() => undefined);
-        },
-      });
-      putRun('r1', { status: 'running' });
-
-      // A 60s interval and NO deadline: between the opening read and the abort,
-      // the doorbell is the only thing that can cause another read. So the count
-      // measures the doorbell directly instead of racing a deadline timer against
-      // the clock — pinning an exact total across a deadline made this assertion a
-      // function of timer alignment, and CI duly read 3 where a laptop read 2.
-      const controller = new AbortController();
-      const pending = waitForRunAttention('r1', {
-        pollIntervalMs: 60_000,
-        signal: controller.signal,
-      });
+    test('polls correctly when no notification implementation is supplied', async () => {
+      putRun('r1', { status: 'pending' });
+      const pending = wait('r1');
       await Bun.sleep(20);
-      const readsBeforeRing = mockGetWorkflowRun.mock.calls.length;
+      putRun('r1', { status: 'completed', completed_at: new Date() });
+      expect(await pending).toMatchObject({ attention: { kind: 'terminal' } });
+    });
 
-      ring?.('some-other-run');
-      await Bun.sleep(50);
+    test('wakes a re-read, leaves the row authoritative and unsubscribes', async () => {
+      let ring: (() => void) | undefined;
+      const unsubscribe = mock(() => undefined);
+      doorbell = async (runId, onDoorbell) => {
+        expect(runId).toBe('r1');
+        ring = onDoorbell;
+        return unsubscribe;
+      };
+      putRun('r1', { status: 'running' });
+      const pending = waitForRunAttention(store, 'r1', {
+        doorbell,
+        pollIntervalMs: 60_000,
+        deadlineMs: 3000,
+      });
+      await waitForOwner('r1');
+      const reads = mockGetWorkflowRun.mock.calls.length;
+      ring?.();
+      await Bun.sleep(20);
+      expect(mockGetWorkflowRun.mock.calls.length).toBeGreaterThan(reads);
+      putRun('r1', { status: 'completed', completed_at: new Date() });
+      ring?.();
+      expect(await pending).toMatchObject({ attention: { kind: 'terminal' } });
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
 
-      // The whole point: a payload naming a different run woke nothing.
-      expect(mockGetWorkflowRun.mock.calls.length).toBe(readsBeforeRing);
-
-      controller.abort();
-      expect(await pending).toMatchObject({ kind: 'aborted' });
+    test('unsubscribes the doorbell on abort', async () => {
+      const unsubscribe = mock(() => undefined);
+      const controller = new AbortController();
+      putRun('r1', { status: 'pending' });
+      const pending = waitForRunAttention(store, 'r1', {
+        doorbell: async () => unsubscribe,
+        signal: controller.signal,
+        onAttached: () => controller.abort(),
+      });
+      expect(await pending).toEqual({ kind: 'aborted', runId: 'r1' });
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
     });
   });
 });

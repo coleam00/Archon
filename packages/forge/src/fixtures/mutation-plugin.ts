@@ -15,6 +15,10 @@ const OPS = [
   'resolve',
   'checks.state',
   'workitem.view',
+  'workitem.create',
+  'workitem.labels.set',
+  'repo.labels.list',
+  'repo.label.ensure',
   'pr.view',
   'pr.create',
   'pr.edit-body',
@@ -56,6 +60,12 @@ else {
     base?: string;
     draft?: boolean;
     body?: string;
+    marker?: string;
+    title?: string;
+    labels?: string[];
+    name?: string;
+    color?: string;
+    description?: string;
     method?: 'merge' | 'squash';
     conditions?: { head?: string };
     revision?: string;
@@ -126,6 +136,43 @@ else {
     landed: { commit: 'landed', tree: 'tree', parents: ['base', 'head'] },
   });
   const applied = (): unknown => {
+    if (input.op === 'workitem.create')
+      return answer(repo, {
+        changed: mode !== 'recovery',
+        workitem: {
+          ref: { repo, number: ref.number },
+          kind: 'issue',
+          url: `https://forge.example/${repo.path}/issues/${String(ref.number)}`,
+          state: mode === 'recovery' ? 'closed' : 'open',
+        },
+        markerDigest: digest(input.marker ?? ''),
+        titleDigest: digest(mode === 'recovery' ? 'edited' : (input.title ?? '')),
+        bodyDigest: digest(mode === 'recovery' ? 'edited' : (input.body ?? '')),
+      });
+    if (input.op === 'workitem.labels.set')
+      return answer(ref, {
+        workitem: {
+          ref,
+          kind: 'issue',
+          url: `https://forge.example/${repo.path}/issues/${String(ref.number)}`,
+          state: 'open',
+        },
+        labels: input.labels,
+      });
+    if (input.op === 'repo.label.ensure')
+      return answer(repo, {
+        label: {
+          name: input.name,
+          color: input.color,
+          descriptionDigest: digest(input.description ?? ''),
+        },
+      });
+    if (input.op === 'repo.labels.list')
+      return {
+        operationId: input.operationId,
+        ok: true,
+        result: { op: input.op, value: { repo, labels: [{ name: 'a' }] } },
+      };
     if (input.op === 'pr.merge') return answer(ref, mergeValue());
     if (input.op === 'checks.rerun')
       return answer(ref, {
@@ -209,7 +256,7 @@ else {
         operationId: input.operationId,
         ok: false,
         error: { kind: 'conflict', message: 'the forge said no' },
-        mutation: { op: input.op, target: ref, outcome: 'refused' },
+        mutation: { op: input.op, target: input.repo ?? ref, outcome: 'refused' },
       })
     );
     process.exit(1);

@@ -12,9 +12,8 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
-import { WORKFLOW_EVENT_NOTIFY_CHANNEL } from '../db/adapters/types';
-import { getDbNotificationListener } from '../db/connection';
-import * as workflowDb from '../db/workflows';
+import type { IWorkflowStore } from '@archon/workflows/store';
+
 import {
   watchRunLiveOwner,
   type RunLiveOwnerWatch,
@@ -22,6 +21,9 @@ import {
   type RunLiveOwnerWatchResult,
 } from './run-live-owner';
 import { DETACHED_RUN_STOP_HANDOFF_GRACE_MS } from './run-stop-bounds';
+
+export type RunAttentionReadStore = Pick<IWorkflowStore, 'getWorkflowRun'>;
+export type RunDoorbell = (runId: string, onDoorbell: () => void) => Promise<(() => void) | null>;
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -48,6 +50,7 @@ export type RunWaitResult =
 export interface RunAttentionWaitOptions {
   /** Stop waiting when this aborts. The run row is left untouched. */
   signal?: AbortSignal;
+  doorbell?: RunDoorbell;
   /** Give up after this long. Omitted means wait until the run says something. */
   deadlineMs?: number;
   /** Backstop re-read cadence. Defaults to `DEFAULT_ATTENTION_POLL_INTERVAL_MS`. */
@@ -83,7 +86,7 @@ function isNonTerminalStatus(status: WorkflowRunStatus): status is NonTerminalWo
 }
 
 /** Resolve the child chain while retaining whether its current state needs a live process. */
-async function resolveRun(run: WorkflowRun): Promise<RunResolution> {
+async function resolveRun(store: RunAttentionReadStore, run: WorkflowRun): Promise<RunResolution> {
   const executionChain = [run];
   let current = run;
   let attention = runAttention(current);
@@ -101,7 +104,7 @@ async function resolveRun(run: WorkflowRun): Promise<RunResolution> {
         ),
       };
     }
-    const child = await workflowDb.getWorkflowRun(attention.childRunId);
+    const child = await store.getWorkflowRun(attention.childRunId);
     if (!child) {
       return {
         kind: 'attention',
@@ -138,6 +141,7 @@ async function resolveRun(run: WorkflowRun): Promise<RunResolution> {
 
 /** Prefer the active child, then walk toward the process-entry ancestor. */
 async function ownerCandidates(
+  store: RunAttentionReadStore,
   resolution: Extract<RunResolution, { kind: 'owner_required' }>
 ): Promise<string[]> {
   const candidates = [...resolution.executionChainIds];
@@ -152,37 +156,16 @@ async function ownerCandidates(
       seen.add(parentId);
       candidates.push(parentId);
     }
-    const parent = await workflowDb.getWorkflowRun(parentId);
+    const parent = await store.getWorkflowRun(parentId);
     if (!parent) break;
     current = parent;
   }
   return candidates;
 }
 
-async function subscribeToRunDoorbell(
-  runId: string,
-  onDoorbell: () => void
-): Promise<(() => void) | null> {
-  const listener = getDbNotificationListener();
-  if (!listener) return null;
-  try {
-    return await listener.listen(
-      WORKFLOW_EVENT_NOTIFY_CHANNEL,
-      payload => {
-        if (payload === runId) onDoorbell();
-      },
-      err => {
-        getLog().debug({ err, runId }, 'run_attention.doorbell_dropped');
-      }
-    );
-  } catch (err) {
-    getLog().debug({ err, runId }, 'run_attention.doorbell_unavailable');
-    return null;
-  }
-}
-
 /** Block until durable attention, owner loss, deadline, or caller abort. */
 export async function waitForRunAttention(
+  store: RunAttentionReadStore,
   runId: string,
   opts: RunAttentionWaitOptions = {}
 ): Promise<RunWaitResult> {
@@ -201,9 +184,15 @@ export async function waitForRunAttention(
     if (wake) wake(source);
     else pendingWake = source;
   };
-  const unsubscribeDoorbell = await subscribeToRunDoorbell(runId, () => {
-    queueWake('notify');
-  });
+  let unsubscribeDoorbell: (() => void) | null | undefined;
+  try {
+    unsubscribeDoorbell = await opts.doorbell?.(runId, () => {
+      queueWake('notify');
+    });
+  } catch (err) {
+    // Notifications only reduce latency; durable polling must survive subscription failure.
+    getLog().debug({ err, runId }, 'run_attention.doorbell_unavailable');
+  }
 
   const nextWake = (): Promise<WakeSource> => {
     if (pendingWake) {
@@ -262,7 +251,7 @@ export async function waitForRunAttention(
   const attachOwner = async (
     resolution: Extract<RunResolution, { kind: 'owner_required' }>
   ): Promise<RunLiveOwnerWatchResult['kind']> => {
-    const candidates = await ownerCandidates(resolution);
+    const candidates = await ownerCandidates(store, resolution);
     if (ownerWatch && !ownerWatchEnded && candidates.includes(ownerWatch.runId)) return 'attached';
     discardOwnerWatch();
     let attachment: Exclude<RunLiveOwnerWatchResult['kind'], 'attached'> = 'unreachable';
@@ -284,10 +273,10 @@ export async function waitForRunAttention(
     for (;;) {
       if (ownerWatchEnded) discardOwnerWatch();
 
-      const run = await workflowDb.getWorkflowRun(runId);
+      const run = await store.getWorkflowRun(runId);
       if (!run) return { kind: 'not_found', runId };
       let observedStatus = run.status;
-      let resolution = await resolveRun(run);
+      let resolution = await resolveRun(store, run);
       if (resolution.kind === 'attention') {
         getLog().debug(
           { runId, wakeSource, attention: resolution.attention.kind },
@@ -299,10 +288,10 @@ export async function waitForRunAttention(
       if (resolution.kind === 'owner_required') {
         let ownerAttachment = await attachOwner(resolution);
         if (ownerAttachment !== 'attached') {
-          const latestRun = await workflowDb.getWorkflowRun(runId);
+          const latestRun = await store.getWorkflowRun(runId);
           if (!latestRun) return { kind: 'not_found', runId };
           observedStatus = latestRun.status;
-          resolution = await resolveRun(latestRun);
+          resolution = await resolveRun(store, latestRun);
           if (resolution.kind === 'attention') {
             return { kind: 'attention', attention: resolution.attention };
           }
@@ -328,10 +317,10 @@ export async function waitForRunAttention(
           }
         }
         if (ownerAttachment === 'attached' && !attached) {
-          const verifiedRun = await workflowDb.getWorkflowRun(runId);
+          const verifiedRun = await store.getWorkflowRun(runId);
           if (!verifiedRun) return { kind: 'not_found', runId };
           observedStatus = verifiedRun.status;
-          const verified = await resolveRun(verifiedRun);
+          const verified = await resolveRun(store, verifiedRun);
           if (verified.kind === 'attention') {
             return { kind: 'attention', attention: verified.attention };
           }

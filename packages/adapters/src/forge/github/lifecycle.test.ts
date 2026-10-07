@@ -124,6 +124,9 @@ function fakeGitHub(
     }
     if (url.includes('/issues/7')) {
       return json({
+        number: 7,
+        repository_url: ROOT,
+        labels: [],
         html_url: 'https://github.com/archon/test/issues/7',
         title: 'Issue title',
         body: 'Issue body',

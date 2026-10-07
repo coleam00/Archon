@@ -29,6 +29,16 @@ export interface FakePull {
 export interface FakeGitHubState {
   /** The revision a created pull request's head points at. */
   headSha: string;
+  issues: {
+    number: number;
+    repository_url: string;
+    html_url: string;
+    title: string;
+    body: string;
+    state: string;
+    labels: { name: string }[];
+  }[];
+  labels: { name: string; color: string; description: string }[];
   pulls: FakePull[];
   comments: { id: number; body: string }[];
   nextComment: number;
@@ -41,6 +51,22 @@ export interface FakeGitHubState {
 export function initialState(headSha: string): FakeGitHubState {
   return {
     headSha,
+    issues: [
+      {
+        number: 7,
+        repository_url: ROOT,
+        html_url: `https://${FAKE_HOST}/example/repo/issues/7`,
+        title: 'Triage issue',
+        body: '',
+        state: 'open',
+        labels: [{ name: 'operator' }, { name: 'archon-blocked' }],
+      },
+    ],
+    labels: [
+      { name: 'operator', color: 'abcdef', description: '' },
+      { name: 'area', color: 'abcdef', description: '' },
+      { name: 'archon-blocked', color: 'abcdef', description: '' },
+    ],
     pulls: [],
     comments: [],
     nextComment: 900,
@@ -68,6 +94,48 @@ function route(
   const path = `${url.origin}${url.pathname}`;
   const page = Number(url.searchParams.get('page') ?? '1');
   const pull = state.pulls[0];
+  if (path === `${ROOT}/issues`) {
+    if (method === 'POST' && body) {
+      const number = state.issues.length + 100;
+      const issue = {
+        number,
+        repository_url: ROOT,
+        html_url: `https://${FAKE_HOST}/example/repo/issues/${String(number)}`,
+        title: String(body.title),
+        body: String(body.body),
+        state: 'open',
+        labels: [],
+      };
+      state.issues.push(issue);
+      return Response.json(issue, { status: 201 });
+    }
+    return Response.json(state.issues.slice((page - 1) * 100, page * 100));
+  }
+  if (path === `${ROOT}/labels`) {
+    if (method === 'POST' && body)
+      state.labels.push({
+        name: String(body.name),
+        color: String(body.color),
+        description: String(body.description),
+      });
+    return Response.json(state.labels.slice((page - 1) * 100, page * 100));
+  }
+  if (path.startsWith(`${ROOT}/labels/`)) {
+    const label = state.labels.find(
+      row => row.name === decodeURIComponent(url.pathname.split('/').pop() ?? '')
+    );
+    return label ? Response.json(label) : Response.json({}, { status: 404 });
+  }
+  const issue = state.issues.find(
+    row =>
+      path === `${ROOT}/issues/${String(row.number)}` ||
+      path === `${ROOT}/issues/${String(row.number)}/labels`
+  );
+  if (issue) {
+    if (method === 'PUT' && Array.isArray(body?.labels))
+      issue.labels = body.labels.map(name => ({ name: String(name) }));
+    return Response.json(issue);
+  }
   if (path === GRAPHQL && method === 'POST' && pull) {
     const mutation = String(body?.query).includes('convertPullRequestToDraft')
       ? 'convertPullRequestToDraft'

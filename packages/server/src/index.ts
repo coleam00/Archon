@@ -102,6 +102,7 @@ import { registerApiRoutes } from './routes/api';
 import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
+import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import {
   resumeWorkflowRunFromServer,
   startWorkflowContinuationScheduler,
@@ -710,7 +711,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         if (!run) return false;
         const actorUserId = await resolveUserId('slack', slackUserId, undefined);
         const target = await workflowResumeTargetForRun(run, workflowPlatforms);
-        return resumeWorkflowRunFromServer(run, actorUserId, target);
+        return resumeWorkflowRunFromServer(createSqlWorkflowHost(), run, actorUserId, target);
       });
       slackBridge.attach();
 
@@ -1033,6 +1034,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // conversation but deliver to their visible parent; other runs use their owning
   // conversation directly.
   startWorkflowContinuationScheduler(
+    createSqlWorkflowHost(),
     run => workflowResumeTargetForRun(run, workflowPlatforms),
     requestResourceStartDrain
   );
