@@ -18,13 +18,13 @@ export async function runServerEntry(
         'Run `archon serve --download-only` to fetch the matching server.'
     );
   }
-  const { startServer } = await loadServer();
-  // Application env loading must not replace the launcher-owned CLI command.
-  env.ARCHON_CLI_COMMAND = cliCommand;
   if (logLevel) {
     const { setLogLevel } = await import('@archon/paths/logger');
     setLogLevel(logLevel);
   }
+  const { startServer } = await loadServer();
+  // Application env loading must not replace the launcher-owned CLI command.
+  env.ARCHON_CLI_COMMAND = cliCommand;
   await startServer({ port: options.port, webDistPath: options.webDistPath });
 }
 
