@@ -35,30 +35,44 @@ function hasCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code;
 }
 
-async function retryWindowsHandles(operation: () => Promise<void>): Promise<number> {
-  for (let retries = 0; ; retries++) {
+const windowsHandleCodes = ['EPERM', 'EBUSY', 'EACCES'];
+
+/**
+ * Windows reports a name it cannot touch yet as EPERM, EBUSY or EACCES: another
+ * process holds a handle that denies delete sharing, or the file was unlinked
+ * while open and stays delete-pending until the last handle closes. Every lock
+ * file operation that can race a release or a replace retries those codes a
+ * bounded number of times; the retry never changes what the operation decides.
+ */
+async function retryWindowsHandles<T>(
+  operation: string,
+  path: string,
+  attempt: () => Promise<T>
+): Promise<{ value: T; retries: number }> {
+  const codes: string[] = [];
+  for (;;) {
     try {
-      await operation();
-      return retries;
-    } catch (error) {
-      if (
-        process.platform !== 'win32' ||
-        retries === 20 ||
-        !['EPERM', 'EBUSY', 'EACCES'].some(code => hasCode(error, code))
-      ) {
-        throw error;
+      const value = await attempt();
+      if (codes.length > 0) {
+        log.debug({ operation, path, codes }, 'file_store.windows_handle_retry');
       }
+      return { value, retries: codes.length };
+    } catch (error) {
+      const code = windowsHandleCodes.find(candidate => hasCode(error, candidate));
+      if (process.platform !== 'win32' || codes.length === 20 || !code) throw error;
+      codes.push(code);
       await Bun.sleep(10);
     }
   }
 }
 
-export function renameReplacing(source: string, target: string): Promise<number> {
-  return retryWindowsHandles(() => rename(source, target));
+export async function renameReplacing(source: string, target: string): Promise<number> {
+  const { retries } = await retryWindowsHandles('rename', target, () => rename(source, target));
+  return retries;
 }
 
 async function remove(path: string): Promise<void> {
-  await retryWindowsHandles(async () => {
+  await retryWindowsHandles('unlink', path, async () => {
     try {
       await unlink(path);
     } catch (error) {
@@ -78,13 +92,15 @@ async function writeOwner(path: string): Promise<void> {
 }
 
 async function readOwner(path: string): Promise<ProcessOwner | null> {
-  let contents: string;
-  try {
-    contents = await readFile(path, 'utf8');
-  } catch (error) {
-    if (hasCode(error, 'ENOENT')) return null;
-    throw error;
-  }
+  const { value: contents } = await retryWindowsHandles('read', path, async () => {
+    try {
+      return await readFile(path, 'utf8');
+    } catch (error) {
+      if (hasCode(error, 'ENOENT')) return null;
+      throw error;
+    }
+  });
+  if (contents === null) return null;
   const owner: unknown = JSON.parse(contents);
   if (
     typeof owner !== 'object' ||
@@ -108,13 +124,16 @@ function sameOwner(a: ProcessOwner, b: ProcessOwner): boolean {
 }
 
 async function tryLink(source: string, target: string): Promise<boolean> {
-  try {
-    await link(source, target);
-    return true;
-  } catch (error) {
-    if (hasCode(error, 'EEXIST')) return false;
-    throw error;
-  }
+  const { value } = await retryWindowsHandles('link', target, async () => {
+    try {
+      await link(source, target);
+      return true;
+    } catch (error) {
+      if (hasCode(error, 'EEXIST')) return false;
+      throw error;
+    }
+  });
+  return value;
 }
 
 async function acquire(root: string, timeoutMs: number): Promise<() => Promise<void>> {

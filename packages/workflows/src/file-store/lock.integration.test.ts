@@ -31,12 +31,12 @@ async function fixture(): Promise<string> {
 }
 
 const lockModule = join(import.meta.dir, 'lock.ts');
-function spawn(script: string, root: string): Child {
+function spawn(script: string, root: string, logLevel = 'silent'): Child {
   const child = Bun.spawn([process.execPath, '-e', script, root], {
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, LOG_LEVEL: 'silent' },
+    env: { ...process.env, LOG_LEVEL: logLevel },
   });
   children.push(child);
   return child;
@@ -136,8 +136,20 @@ describe('file store filesystem primitives', () => {
         }, 60000);
       }
     `;
-    await Promise.all(Array.from({ length: 4 }, () => succeeds(spawn(script, root))));
+    const outputs = await Promise.all(
+      Array.from({ length: 4 }, () => succeeds(spawn(script, root, 'debug')))
+    );
     expect(await readFile(join(root, 'count'), 'utf8')).toBe('2000');
+    const retries: Record<string, number> = {};
+    for (const line of outputs.join('').split('\n')) {
+      if (!line.includes('file_store.windows_handle_retry')) continue;
+      const entry = JSON.parse(line) as { operation: string; codes: string[] };
+      for (const code of entry.codes) {
+        const key = `${entry.operation} ${code}`;
+        retries[key] = (retries[key] ?? 0) + 1;
+      }
+    }
+    console.info(`lock handle retries: ${JSON.stringify(retries)}`);
   }, 120_000);
 
   test('independent in-process callers queue, including after a rejection', async () => {
