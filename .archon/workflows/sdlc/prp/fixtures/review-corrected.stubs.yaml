@@ -12,7 +12,7 @@ review:
   ready: false
   verdict: "NEEDS FIXES"
   summary: "stub: R1 Important open"
-ci-probe: '{"state":"concluded","detail":"green: build (success)"}'
+ci-probe: '{"state":"concluded","detail":"green: build (success)","unstarted":0}'
 finish:
   changed: true
   verify: true
@@ -22,7 +22,7 @@ reverify:
   ready: true
   verdict: "READY TO MERGE"
   summary: "stub: R1 FIXED"
-recheck-probe: '{"state":"concluded","detail":"green: build (success)"}'
+recheck-probe: '{"state":"concluded","detail":"green: build (success)","unstarted":0}'
 outcome: { ready: true, reason: delivered, pr_url: "https://github.com/example/repo/pull/1", summary: "stub: delivered" }
 fixture:
   expect: completed

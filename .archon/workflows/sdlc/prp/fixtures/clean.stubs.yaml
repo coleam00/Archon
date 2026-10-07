@@ -12,7 +12,7 @@ review:
   ready: true
   verdict: "READY TO MERGE"
   summary: "stub: no findings"
-ci-probe: '{"state":"concluded","detail":"green: build (success)"}'
+ci-probe: '{"state":"concluded","detail":"green: build (success)","unstarted":0}'
 finish:
   changed: false
   verify: false

@@ -12,7 +12,7 @@ review:
   ready: true
   verdict: "READY TO MERGE"
   summary: "stub: no findings"
-ci-probe: '{"state":"concluded","detail":"red: test (failure)"}'
+ci-probe: '{"state":"concluded","detail":"red: test (failure)","unstarted":0}'
 finish:
   changed: true
   verify: true
@@ -22,7 +22,7 @@ reverify:
   ready: true
   verdict: "READY TO MERGE"
   summary: "stub: CI fix verified"
-recheck-probe: '{"state":"concluded","detail":"green: test (success)"}'
+recheck-probe: '{"state":"concluded","detail":"green: test (success)","unstarted":0}'
 outcome: { ready: true, reason: delivered, pr_url: "https://github.com/example/repo/pull/1", summary: "stub: delivered" }
 fixture:
   expect: completed

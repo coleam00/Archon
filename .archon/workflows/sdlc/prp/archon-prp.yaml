@@ -107,12 +107,16 @@ nodes:
           runtime: bun
           with:
             pr: { from: "$implement.output.pr" }
+            unstarted: "$LOOP_PREV.ci-probe.output.unstarted"
           output_format: &ci_state
             type: object
             properties:
               state: { type: string, enum: [pending, concluded] }
               detail: { type: string }
-            required: [state, detail]
+              # Consecutive reads with CI configured but nothing registered; the probe
+              # concludes at its bound so the outcome can report ci_missing.
+              unstarted: { type: integer }
+            required: [state, detail, unstarted]
         - id: ci-pause
           depends_on: [ci-probe]
           when: "$ci-probe.output.state == 'pending'"
@@ -161,6 +165,7 @@ nodes:
           runtime: bun
           with:
             pr: { from: "$implement.output.pr" }
+            unstarted: "$LOOP_PREV.recheck-probe.output.unstarted"
           output_format: *ci_state
         - id: recheck-pause
           depends_on: [recheck-probe]
