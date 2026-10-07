@@ -5,12 +5,14 @@ description: |
   stale assumptions, and explicit direction; judges whether the item is a
   contract a run can start from; then routes to investigate, plan, deliver, or
   no action. Advisory: it leaves the checkout unchanged, and writes labels only
-  when asked to publish.
+  when asked to publish. For NEEDS_CONTRACT_WORK it proposes the edits that
+  would make the item ready; it never applies them.
 
   Use when: an issue, plan, report, or request may be stale or may prescribe an
   unverified solution — "triage this issue", "what does this need next", "is
   this ready to build".
-  NOT for: performing the investigation, writing the plan, or delivering work.
+  NOT for: performing the investigation, writing the plan, delivering work, or
+  applying the proposed edits.
 
 model: medium
 
@@ -24,7 +26,17 @@ inputs:
     default: "false"
     description: >-
       Write the derived labels to the tracker item — true or false. Off by
-      default; the run then records the labels it would apply.
+      default; the run then records the labels it would apply. Any other value
+      is refused.
+  state_labels:
+    default: ""
+    description: >-
+      Empty keeps the pack's own labels. Otherwise a JSON object mapping any of
+      READY, DESIGN_FIRST, NEEDS_CONTRACT_WORK, BLOCKED and NO_ACTION to the
+      caller's own label names: the mapped label is the item's state label, the
+      pack writes none of its own, and publishing removes only the caller's
+      other mapped labels. `{}` maps nothing, so no state label. Names must be
+      distinct regardless of case; a malformed mapping is refused.
 
 # The verdict node is what a composing caller resolves to: the same fields the
 # prompt declared, after the boundary has verified the tuple is legal.
@@ -119,7 +131,8 @@ nodes:
   # is a READY item routed to plan, only NEEDS_CONTRACT_WORK proposes edits, only
   # BLOCKED names blockers, and the pack's labels are derived here rather than
   # chosen by the model: one state label, plus a size label while the item can
-  # still be worked. Each field's own type and vocabulary were certified on the
+  # still be worked, or only the caller's mapped state label when `state_labels`
+  # names one. Each field's own type and vocabulary were certified on the
   # node above. Labels are written only under publish, after the item's identity
   # is verified on the tracker, and read back before the node reports them.
   - id: verdict
@@ -139,6 +152,7 @@ nodes:
       summary: "$triage.output.summary"
       report: { from: "$triage.output.report" }
       publish: "$INPUTS.publish"
+      state_labels: "$INPUTS.state_labels"
     output_format:
       type: object
       properties:
@@ -161,6 +175,12 @@ nodes:
             type: string
         published:
           type: boolean
+        # Proposed area labels the repository does not have, so publishing
+        # applied none of them. Empty when nothing was published.
+        skipped_labels:
+          type: array
+          items:
+            type: string
         proposed_edits:
           type: object
           properties:
@@ -194,6 +214,7 @@ nodes:
         - complexity
         - labels
         - published
+        - skipped_labels
         - proposed_edits
         - blocked_reason
         - blocked_by

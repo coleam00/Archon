@@ -1,0 +1,21 @@
+# Guard fixture, seen red: ship forwards state_labels to triage unchanged. An
+# ambiguous mapping must reach triage's real verdict script and be refused there;
+# had ship dropped it, triage would fall back to the pack's labels and complete.
+triage__triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: current code confirms a complete work order"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+fixture:
+  expect: failed
+  fail-node: triage__verdict
+  inputs:
+    state_labels: '{"READY":"same","BLOCKED":"SAME"}'
+exec-code: true

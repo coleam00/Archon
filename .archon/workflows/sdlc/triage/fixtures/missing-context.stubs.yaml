@@ -1,0 +1,19 @@
+# Dry-run fixture: required source material is inaccessible. The item is not
+# reconstructed from hints; it waits until the input can be grounded, which is
+# BLOCKED with the missing source named and no invented reference.
+triage:
+  contract: BLOCKED
+  route: no_action
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: "stub: the linked design document is not accessible to this run"
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: required source is inaccessible; no engineering can start"
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true

@@ -1,0 +1,20 @@
+# Sparse guard fixture: run with --default-stubs --exec-code. The outcome is worth
+# pursuing but the item misses contract elements a run would have to guess. The
+# proposed edits travel with the verdict, nothing is delivered, and the outcome
+# report names NEEDS_CONTRACT_WORK.
+triage__triage:
+  contract: NEEDS_CONTRACT_WORK
+  route: no_action
+  design_first: false
+  complexity: small
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 123 }
+  area_labels: []
+  proposed_edits: { title: "stub: add acceptance criteria and invariants", body: "stub: proposed Acceptance and Invariants sections" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: the issue names no acceptance criteria and no invariants"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+fixture:
+  expect: completed
+  reached: [triage__verdict, outcome]
+exec-code: true

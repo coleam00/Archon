@@ -13,6 +13,13 @@
  * issue does this verify the item's identity on the tracker, apply the labels, and
  * read them back. Area labels are never created: the prompt may only pick labels
  * the repository already has. Publishing uses the selected forge source.
+ *
+ * The state label is the pack's own by default. A caller that owns its workflow
+ * vocabulary passes `state_labels`, a JSON object mapping any of the five states
+ * below to its own label names; the mapped label then replaces the pack's, the pack
+ * writes no label of its own, and only the mapped labels count as owned when a
+ * stale state is removed. A state the caller left unmapped gets no state label.
+ * Label names compare case-insensitively, the way the tracker matches them.
  */
 
 import {
@@ -71,6 +78,84 @@ const PACK_LABELS: Record<string, { color: string; description: string }> = {
   },
 };
 
+// The workflow states a caller may map to its own labels. A caller's intake reads
+// the same vocabulary, so the two must name the same five states.
+type State = 'READY' | 'DESIGN_FIRST' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
+const STATE_LABEL_METADATA: Record<State, { color: string; description: string }> = {
+  READY: { color: '0E8A16', description: 'Contract is ready for engineering' },
+  DESIGN_FIRST: { color: 'FBCA04', description: 'Engineering shape needs design' },
+  NEEDS_CONTRACT_WORK: { color: 'D93F0B', description: 'Contract needs work' },
+  BLOCKED: { color: 'B60205', description: 'Unresolved dependency or decision' },
+  NO_ACTION: { color: 'CFD3D7', description: 'A human should consider closing' },
+};
+
+/** The labels this run may write and the ones it owns, so it may also remove. */
+interface Vocabulary {
+  /** The state and size labels the verdict derives, before the repository's spelling. */
+  readonly derived: string[];
+  /** Folded names of every label this vocabulary owns. */
+  readonly owned: ReadonlySet<string>;
+  /** Color and description for a derived label the repository does not have yet. */
+  readonly metadata: (name: string) => { color: string; description: string };
+}
+
+const fold = (name: string): string => name.toLowerCase();
+
+/** '' keeps the pack's own labels; a JSON object is the caller's state vocabulary. */
+function parseStateLabels(raw: string): Partial<Record<State, string>> | undefined {
+  if (raw.trim() === '') return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error('state_labels must be a JSON object');
+  }
+  const mapping = record(value);
+  if (!mapping || Array.isArray(value)) throw new Error('state_labels must be a JSON object');
+  const names: string[] = [];
+  for (const [state, name] of Object.entries(mapping)) {
+    if (!Object.hasOwn(STATE_LABEL_METADATA, state))
+      throw new Error(`state_labels contains an unsupported state: ${state}`);
+    if (
+      typeof name !== 'string' ||
+      name === '' ||
+      name.trim() !== name ||
+      name.length > 50 ||
+      // eslint-disable-next-line no-control-regex -- a label name may not carry a control character
+      /[\u0000-\u001f]/.test(name)
+    )
+      throw new Error('state_labels values must be non-empty label names');
+    names.push(fold(name));
+  }
+  if (new Set(names).size !== names.length)
+    throw new Error('state_labels must not map multiple states to the same label');
+  return mapping as Partial<Record<State, string>>;
+}
+
+function vocabulary(
+  mapping: Partial<Record<State, string>> | undefined,
+  state: State,
+  contract: Contract,
+  complexity: Complexity
+): Vocabulary {
+  if (mapping === undefined) {
+    const derived = [state === 'DESIGN_FIRST' ? DESIGN_FIRST_LABEL : STATE_LABEL[contract]];
+    // Size only matters on an item that can still be worked; a close verdict carries none.
+    if (contract !== 'NO_ACTION') derived.push(COMPLEXITY_LABEL[complexity]);
+    return {
+      derived,
+      owned: new Set(Object.keys(PACK_LABELS).map(fold)),
+      metadata: name => PACK_LABELS[name],
+    };
+  }
+  const mapped = mapping[state];
+  return {
+    derived: mapped === undefined ? [] : [mapped],
+    owned: new Set(Object.values(mapping).map(fold)),
+    metadata: () => STATE_LABEL_METADATA[state],
+  };
+}
+
 type Item = QualifiedPr;
 interface Edits {
   readonly title: string;
@@ -100,15 +185,15 @@ function gh(...args: string[]): string {
   return result.stdout.toString();
 }
 
-function existingLabels(repository: string): Set<string> {
+function existingLabels(repository: string): string[] {
   const rows = JSON.parse(
     gh('label', 'list', '--repo', repository, '--limit', '500', '--json', 'name')
   ) as { name: string }[];
-  return new Set(rows.map(row => row.name));
+  return rows.map(row => row.name);
 }
 
 /** The item's current labels, after proving the number names the issue the prompt declared. */
-function readIssue(item: Item): Set<string> {
+function readIssue(item: Item): string[] {
   const issue = JSON.parse(
     gh('api', '--hostname', item.repo.host, `repos/${item.repo.path}/issues/${String(item.number)}`)
   ) as {
@@ -126,56 +211,82 @@ function readIssue(item: Item): Set<string> {
   ) {
     throw new Error(`tracker identity mismatch: ${url} is not the issue the verdict names`);
   }
-  return new Set((issue.labels ?? []).map(row => row.name));
+  return (issue.labels ?? []).map(row => row.name);
 }
 
-function apply(item: Item, wanted: string[], area: string[]): string[] {
+interface Applied {
+  /** Every label the item now carries from this verdict, in the repository's spelling. */
+  readonly labels: string[];
+  /** Proposed area labels the repository does not have, so nothing applied them. */
+  readonly skipped: string[];
+}
+
+const has = (names: readonly string[], name: string): boolean =>
+  names.some(candidate => fold(candidate) === fold(name));
+
+function sortedUnique(names: readonly string[]): string[] {
+  const byFold = new Map<string, string>();
+  for (const name of names) if (!byFold.has(fold(name))) byFold.set(fold(name), name);
+  return [...byFold.values()].sort();
+}
+
+/**
+ * Resolve the labels to apply against the repository's own: a derived label the
+ * repository lacks is created first, an area label it lacks is skipped, and each name
+ * takes the repository's spelling, since the tracker matches labels regardless of case.
+ */
+function resolve(
+  present: string[],
+  labelsFor: Vocabulary,
+  area: string[],
+  create: (name: string) => void
+): Applied {
+  const spelled = (name: string): string | undefined =>
+    present.find(candidate => fold(candidate) === fold(name));
+  const derived = labelsFor.derived.map(name => {
+    const existing = spelled(name);
+    if (existing !== undefined) return existing;
+    create(name);
+    return name;
+  });
+  const areaPresent = area.map(spelled).filter((name): name is string => name !== undefined);
+  return {
+    labels: sortedUnique([...derived, ...areaPresent]),
+    skipped: area.filter(name => spelled(name) === undefined),
+  };
+}
+
+function apply(item: Item, labelsFor: Vocabulary, area: string[]): Applied {
   if (forgeSource() === 'forge') {
     const current = readWorkItemLabels(item);
-    const present = new Set(readRepositoryLabels(item.repo));
-    for (const name of wanted) {
-      if (!present.has(name))
-        invokeForge('repo.label.ensure', { repo: item.repo, name, ...PACK_LABELS[name] });
-    }
-    const intended = [...new Set([...wanted, ...area.filter(name => present.has(name))])].sort();
-    const labels = [
-      ...new Set([...current.filter(name => !Object.hasOwn(PACK_LABELS, name)), ...intended]),
-    ].sort();
+    const intended = resolve(readRepositoryLabels(item.repo), labelsFor, area, name => {
+      invokeForge('repo.label.ensure', { repo: item.repo, name, ...labelsFor.metadata(name) });
+    });
+    const labels = sortedUnique([
+      ...current.filter(name => !labelsFor.owned.has(fold(name))),
+      ...intended.labels,
+    ]);
     const result = invokeForge('workitem.labels.set', { ref: item, labels });
-    const observedLabels = result?.labels;
+    const observed: unknown = result?.labels;
     if (
       result?.outcome !== 'applied' ||
-      !Array.isArray(observedLabels) ||
-      observedLabels.length !== labels.length ||
-      !labels.every(name => observedLabels.includes(name))
+      !Array.isArray(observed) ||
+      observed.length !== labels.length ||
+      !labels.every(name => observed.some(seen => typeof seen === 'string' && fold(seen) === fold(name)))
     )
       throw new Error('forge label-set read-back disagrees');
     return intended;
   }
   const repository = `${item.repo.host}/${item.repo.path}`;
   const current = readIssue(item);
-  const present = existingLabels(repository);
-  for (const name of wanted) {
-    if (!present.has(name)) {
-      const { color, description } = PACK_LABELS[name];
-      gh(
-        'label',
-        'create',
-        name,
-        '--repo',
-        repository,
-        '--color',
-        color,
-        '--description',
-        description
-      );
-    }
-  }
-  const areaPresent = area.filter(name => present.has(name));
-  const stale = [...current]
-    .filter(name => Object.hasOwn(PACK_LABELS, name) && !wanted.includes(name))
+  const intended = resolve(existingLabels(repository), labelsFor, area, name => {
+    const { color, description } = labelsFor.metadata(name);
+    gh('label', 'create', name, '--repo', repository, '--color', color, '--description', description);
+  });
+  const stale = current
+    .filter(name => labelsFor.owned.has(fold(name)) && !has(intended.labels, name))
     .sort();
-  const toAdd = [...new Set([...wanted, ...areaPresent])].filter(name => !current.has(name)).sort();
+  const toAdd = intended.labels.filter(name => !has(current, name));
   // Narrow add and remove operations, never a whole-set write, so labels an
   // operator adds concurrently survive.
   if (toAdd.length > 0 || stale.length > 0) {
@@ -185,14 +296,16 @@ function apply(item: Item, wanted: string[], area: string[]): string[] {
     gh(...args);
   }
   const after = readIssue(item);
-  const missing = [...wanted, ...areaPresent].filter(name => !after.has(name));
-  const lingering = stale.filter(name => after.has(name));
-  if (missing.length > 0 || lingering.length > 0) {
+  const missing = intended.labels.filter(name => !has(after, name));
+  const lingering = stale.filter(name => has(after, name));
+  // A label this run does not own must survive it untouched.
+  const lost = current.filter(name => !labelsFor.owned.has(fold(name)) && !has(after, name));
+  if (missing.length > 0 || lingering.length > 0 || lost.length > 0) {
     throw new Error(
-      `label read-back disagrees: missing=${JSON.stringify(missing)} lingering=${JSON.stringify(lingering)}`
+      `label read-back disagrees: missing=${JSON.stringify(missing)} lingering=${JSON.stringify(lingering)} lost=${JSON.stringify(lost)}`
     );
   }
-  return [...new Set([...wanted, ...areaPresent])].sort();
+  return intended;
 }
 
 function main(): void {
@@ -200,12 +313,26 @@ function main(): void {
   const route = text(process.env.INPUTS_ROUTE);
   const complexity = text(process.env.INPUTS_COMPLEXITY) as Complexity;
   const designFirst = text(process.env.INPUTS_DESIGN_FIRST) === 'true';
-  const publish = text(process.env.INPUTS_PUBLISH) === 'true';
+  const publishInput = text(process.env.INPUTS_PUBLISH);
+  const stateLabelsInput = text(process.env.INPUTS_STATE_LABELS);
   const summary = text(process.env.INPUTS_SUMMARY);
   const blockedReason = text(process.env.INPUTS_BLOCKED_REASON);
   const area = bound(process.env.INPUTS_AREA_LABELS) as string[];
   const boundItem = record(bound(process.env.INPUTS_ITEM));
   const repo = record(boundItem?.repo);
+  // Inputs first: a caller's typo must never read as "stay advisory" or "no mapping".
+  if (publishInput !== 'true' && publishInput !== 'false') {
+    refuse(`invalid triage input: publish must be true or false, got "${publishInput}"`);
+    return;
+  }
+  const publish = publishInput === 'true';
+  let mapping: Partial<Record<State, string>> | undefined;
+  try {
+    mapping = parseStateLabels(stateLabelsInput);
+  } catch (error) {
+    refuse(`invalid triage input: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
   if (
     typeof repo?.host !== 'string' ||
     typeof repo.path !== 'string' ||
@@ -268,27 +395,36 @@ function main(): void {
     invalid('summary is empty');
     return;
   }
-  if (area.some(name => name === '')) {
+  if (area.some(name => name.trim() === '')) {
     invalid('area_labels must be label names');
     return;
   }
-  if (area.some(name => Object.hasOwn(PACK_LABELS, name))) {
-    // The state and size labels are derived below; a pack label smuggled in as an
+  if (new Set(area.map(fold)).size !== area.length) {
+    // The tracker matches labels regardless of case, so these name one label twice.
+    invalid('area_labels must not contain duplicates');
+    return;
+  }
+  const state: State = designFirst ? 'DESIGN_FIRST' : contract;
+  const labelsFor = vocabulary(mapping, state, contract, complexity);
+  if (
+    area.some(name => Object.hasOwn(PACK_LABELS, fold(name)) || labelsFor.owned.has(fold(name)))
+  ) {
+    // The state and size labels are derived below; a state label smuggled in as an
     // area label would be added beside the derived state or removed as stale.
-    invalid('area_labels may not name a pack label; those derive from the verdict');
+    invalid(
+      'area_labels may not name a pack label or a caller-owned state label; those derive from the verdict'
+    );
     return;
   }
 
-  let labels = [designFirst ? DESIGN_FIRST_LABEL : STATE_LABEL[contract]];
-  // Size only matters on an item that can still be worked; a close verdict carries none.
-  if (contract !== 'NO_ACTION') labels.push(COMPLEXITY_LABEL[complexity]);
-
+  let labels: string[];
+  let skipped: string[] = [];
   let published = false;
   if (publish && item !== undefined) {
-    labels = apply(item, labels, area);
+    ({ labels, skipped } = apply(item, labelsFor, area));
     published = true;
   } else {
-    labels = [...new Set([...labels, ...area])].sort();
+    labels = sortedUnique([...labelsFor.derived, ...area]);
   }
 
   emit({
@@ -299,6 +435,7 @@ function main(): void {
     complexity,
     labels,
     published,
+    skipped_labels: skipped,
     proposed_edits: { title: edits.title, body: edits.body },
     blocked_reason: blockedReason,
     blocked_by: blockedBy,

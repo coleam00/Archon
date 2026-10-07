@@ -5,7 +5,8 @@ import { delimiter, join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 
 const workflowRoot = resolve(import.meta.dir, '../../../../.archon/workflows/sdlc');
-const triageScript = join(workflowRoot, 'triage', 'scripts', 'validate-contract.py');
+const triageScript = join(workflowRoot, 'triage', 'scripts', 'verdict.ts');
+const shipOutcomeScript = join(workflowRoot, 'ship', 'scripts', 'outcome.ts');
 const intakeScript = join(workflowRoot, 'lifecycle', 'scripts', 'select-target.py');
 const holdsScript = join(workflowRoot, 'merge-queue', 'scripts', 'publish-holds.ts');
 const publishPrScript = join(workflowRoot, 'pr', 'scripts', 'publish-pr.ts');
@@ -25,7 +26,22 @@ beforeAll(async () => {
 const args = process.argv.slice(2);
 const payloadText = await Bun.stdin.text();
 if (process.env.GH_LOG) appendFileSync(process.env.GH_LOG, JSON.stringify({args,payload:payloadText ? JSON.parse(payloadText) : null}) + '\\n');
-if (args[0] === 'issue') {
+const statePath = process.env.GH_STATE;
+const readState = () => statePath ? JSON.parse(readFileSync(statePath, 'utf8')) : {labels:[],available:[],comments:[]};
+if (args[0] === 'label' && args[1] === 'list') console.log(JSON.stringify(readState().available.map((name:string) => ({name}))));
+else if (args[0] === 'label' && args[1] === 'create') {
+  const state = readState(); state.available = [...new Set([...state.available,args[2]])]; writeFileSync(statePath, JSON.stringify(state));
+}
+else if (args[0] === 'issue' && args[1] === 'edit') {
+  // Like gh: a label matches regardless of case, and an added one takes the repository's spelling.
+  const state = readState();
+  const values = (flag:string) => args.flatMap((value:string, index:number) => args[index - 1] === flag ? [value] : []);
+  const removed = values('--remove-label').map((label:string) => label.toLowerCase());
+  const added = values('--add-label').map((label:string) => state.available.find((name:string) => name.toLowerCase() === label.toLowerCase()) ?? label);
+  state.labels = [...new Map([...state.labels.filter((label:string) => !removed.includes(label.toLowerCase())),...added].map((label:string) => [label.toLowerCase(),label])).values()];
+  writeFileSync(statePath, JSON.stringify(state));
+}
+else if (args[0] === 'issue') {
   // Like gh: the listing is newest first and --limit truncates it.
   const issues = JSON.parse(process.env.GH_ISSUES ?? '[]');
   const limit = args.indexOf('--limit');
@@ -94,47 +110,58 @@ function stdout(result: ReturnType<typeof Bun.spawnSync>): string {
   return result.stdout?.toString() ?? '';
 }
 
-async function triageFixture(
-  labels: string[] = ['area-ui']
-): Promise<{ artifacts: string; triage: string }> {
-  const artifacts = await mkdtemp(join(root, 'triage-'));
-  await writeFile(join(artifacts, 'triage.md'), 'evidence\n');
+/** The verdict node's bindings for a READY deliver verdict on owner/repo#7. */
+function triageVerdict(areaLabels: string[] = ['area-ui']): Record<string, string> {
   return {
-    artifacts,
-    triage: JSON.stringify({
-      route: 'deliver',
-      summary: 'ready',
-      contract: 'READY',
-      design_first: false,
-      complexity: 'small_bounded',
-      proposed_edits: { title: '', body: '' },
-      labels,
-      blocked_by: [],
-      blocked_reason: '',
-      issue_repo: 'owner/repo',
-      issue_number: 7,
-      issue_url: 'https://github.com/owner/repo/issues/7',
-    }),
+    INPUTS_CONTRACT: 'READY',
+    INPUTS_ROUTE: 'deliver',
+    INPUTS_DESIGN_FIRST: 'false',
+    INPUTS_COMPLEXITY: 'small',
+    INPUTS_ITEM: JSON.stringify({ repo: { host: 'github.com', path: 'owner/repo' }, number: 7 }),
+    INPUTS_AREA_LABELS: JSON.stringify(areaLabels),
+    INPUTS_PROPOSED_EDITS: JSON.stringify({ title: '', body: '' }),
+    INPUTS_BLOCKED_REASON: '',
+    INPUTS_BLOCKED_BY: '[]',
+    INPUTS_SUMMARY: 'ready',
+    INPUTS_REPORT: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'triage.md' }),
   };
 }
 
+function runBun(script: string, values: Record<string, string>): ReturnType<typeof Bun.spawnSync> {
+  return Bun.spawnSync([process.execPath, script], {
+    env: env(values),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+}
+
 describe('caller-owned triage state labels', () => {
-  test('keeps a neutral result unlabeled when the mapping is empty', async () => {
-    const fixture = await triageFixture();
-    const result = runPython(triageScript, {
-      ARTIFACTS_DIR: fixture.artifacts,
-      INPUTS_TRIAGE: fixture.triage,
+  test('keeps a neutral result unlabeled when the mapping is empty', () => {
+    const result = runBun(triageScript, {
+      ...triageVerdict(),
       INPUTS_STATE_LABELS: '{}',
       INPUTS_PUBLISH: 'false',
     });
-    expect(result.exitCode).toBe(0);
-    expect(JSON.parse(stdout(result))).toMatchObject({ labels: ['area-ui'] });
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    expect(JSON.parse(stdout(result))).toMatchObject({ labels: ['area-ui'], published: false });
+  });
+
+  test("keeps the pack's own state and size labels when no mapping is given", () => {
+    const result = runBun(triageScript, {
+      ...triageVerdict(),
+      INPUTS_STATE_LABELS: '',
+      INPUTS_PUBLISH: 'false',
+    });
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    expect(JSON.parse(stdout(result))).toMatchObject({
+      labels: ['archon-ready', 'archon-small', 'area-ui'],
+    });
   });
 
   test('publishes the mapped state, preserves unrelated labels, and removes only mapped states', async () => {
-    const fixture = await triageFixture();
-    const statePath = join(fixture.artifacts, 'state.json');
-    const log = join(fixture.artifacts, 'gh.jsonl');
+    const artifacts = await mkdtemp(join(root, 'triage-'));
+    const statePath = join(artifacts, 'state.json');
+    const log = join(artifacts, 'gh.jsonl');
     await writeFile(
       statePath,
       JSON.stringify({
@@ -143,18 +170,19 @@ describe('caller-owned triage state labels', () => {
         comments: [],
       })
     );
-    const result = runPython(triageScript, {
-      ARTIFACTS_DIR: fixture.artifacts,
-      INPUTS_TRIAGE: fixture.triage,
+    const result = runBun(triageScript, {
+      ...triageVerdict(),
       INPUTS_STATE_LABELS: JSON.stringify({ READY: 'team-ready', BLOCKED: 'team-blocked' }),
       INPUTS_PUBLISH: 'true',
       GH_STATE: statePath,
       GH_LOG: log,
     });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    // Applied labels take the repository's spelling, since the tracker matches by case.
     expect(JSON.parse(stdout(result))).toMatchObject({
-      labels: ['area-ui', 'team-ready'],
-      publication: { published: true, applied_labels: ['Area-UI', 'team-ready'] },
+      labels: ['Area-UI', 'Team-Ready'],
+      published: true,
+      skipped_labels: [],
     });
     expect(JSON.parse(await readFile(statePath, 'utf8')).labels.sort()).toEqual([
       'Area-UI',
@@ -165,22 +193,19 @@ describe('caller-owned triage state labels', () => {
       .trim()
       .split('\n')
       .map(line => JSON.parse(line) as { args: string[] });
-    expect(
-      calls.some(
-        call => call.args.includes('repos/owner/repo/labels') && call.args.includes('POST')
+    // Both mapped labels already exist in the repository, so none is created.
+    expect(calls.some(call => call.args[0] === 'label' && call.args[1] === 'create')).toBe(false);
+    const removals = calls.flatMap(call =>
+      call.args.flatMap((value, index) =>
+        call.args[index - 1] === '--remove-label' ? [value] : []
       )
-    ).toBe(false);
-    expect(calls.filter(call => call.args.includes('DELETE'))).toHaveLength(1);
-    expect(calls.find(call => call.args.includes('DELETE'))?.args.join(' ')).toContain(
-      'Team-Blocked'
     );
+    expect(removals).toEqual(['Team-Blocked']);
   });
 
-  test('rejects proposed labels that differ only by case', async () => {
-    const fixture = await triageFixture(['area-ui', 'Area-UI']);
-    const result = runPython(triageScript, {
-      ARTIFACTS_DIR: fixture.artifacts,
-      INPUTS_TRIAGE: fixture.triage,
+  test('rejects proposed labels that differ only by case', () => {
+    const result = runBun(triageScript, {
+      ...triageVerdict(['area-ui', 'Area-UI']),
       INPUTS_STATE_LABELS: '{}',
       INPUTS_PUBLISH: 'false',
     });
@@ -189,32 +214,61 @@ describe('caller-owned triage state labels', () => {
   });
 
   test('rejects ambiguous and malformed mappings before publication', async () => {
-    const fixture = await triageFixture();
+    const artifacts = await mkdtemp(join(root, 'triage-'));
+    const log = join(artifacts, 'gh.jsonl');
     for (const mapping of [{ READY: 'same', BLOCKED: 'SAME' }, { UNKNOWN: 'label' }, []]) {
-      const result = runPython(triageScript, {
-        ARTIFACTS_DIR: fixture.artifacts,
-        INPUTS_TRIAGE: fixture.triage,
+      const result = runBun(triageScript, {
+        ...triageVerdict(),
         INPUTS_STATE_LABELS: JSON.stringify(mapping),
         INPUTS_PUBLISH: 'true',
+        GH_LOG: log,
       });
       expect(result.exitCode).toBe(1);
     }
+    // Refused before any read or write reached the tracker.
+    expect(await Bun.file(log).exists()).toBe(false);
+  });
+});
+
+describe('ship outcome', () => {
+  test('names a negative contract verdict other than NO_ACTION in the advisory report', async () => {
+    const artifacts = await mkdtemp(join(root, 'ship-'));
+    const outcome = (contract: string): { delivered: boolean; summary: string } => {
+      const result = runBun(shipOutcomeScript, {
+        ARTIFACTS_DIR: artifacts,
+        INPUTS_ROUTE: 'no_action',
+        INPUTS_SUMMARY: 'stub summary',
+        INPUTS_CONTRACT: contract,
+        INPUTS_DELIVERED: 'null',
+      });
+      expect(result.exitCode, result.stderr?.toString()).toBe(0);
+      return JSON.parse(stdout(result)) as { delivered: boolean; summary: string };
+    };
+    expect(outcome('BLOCKED')).toMatchObject({ delivered: false });
+    expect(outcome('BLOCKED').summary).toStartWith('No delivery needed [BLOCKED]: stub summary');
+    expect(outcome('NEEDS_CONTRACT_WORK').summary).toStartWith(
+      'No delivery needed [NEEDS_CONTRACT_WORK]: stub summary'
+    );
+    expect(outcome('NO_ACTION').summary).toStartWith('No delivery needed: stub summary');
   });
 });
 
 describe('lifecycle intake state ownership', () => {
-  test('uses the same state key domain as triage publication', () => {
-    const extract = (script: string, assignment: string): string[] => {
-      const program = `import ast,json,sys\nfrom pathlib import Path\nnode=next(n for n in ast.parse(Path(sys.argv[1]).read_text()).body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id==sys.argv[2] for t in n.targets))\nvalues=[k.value for k in (node.value.keys if isinstance(node.value,ast.Dict) else node.value.elts)]\nprint(json.dumps(sorted(values)))`;
-      const result = Bun.spawnSync(
-        ['uv', 'run', '--no-project', 'python', '-c', program, script, assignment],
-        { stdout: 'pipe', stderr: 'pipe' }
-      );
-      expect(result.exitCode, result.stderr.toString()).toBe(0);
-      return JSON.parse(stdout(result)) as string[];
-    };
-    const publicationStates = extract(triageScript, 'STATE_LABEL_METADATA');
-    const intakeStates = extract(intakeScript, 'STATES');
+  test('uses the same state key domain as triage publication', async () => {
+    // The triage vocabulary is a TypeScript object literal: its top-level keys.
+    const source = await readFile(triageScript, 'utf8');
+    const block = /const STATE_LABEL_METADATA[^=]*=\s*\{([\s\S]*?)\n\};/.exec(source)?.[1];
+    expect(block, 'triage declares STATE_LABEL_METADATA').toBeDefined();
+    const publicationStates = [...(block ?? '').matchAll(/^\s{2}([A-Z_]+):/gm)]
+      .map(match => match[1])
+      .sort();
+    const program = `import ast,json,sys\nfrom pathlib import Path\nnode=next(n for n in ast.parse(Path(sys.argv[1]).read_text()).body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id==sys.argv[2] for t in n.targets))\nvalues=[k.value for k in (node.value.keys if isinstance(node.value,ast.Dict) else node.value.elts)]\nprint(json.dumps(sorted(values)))`;
+    const result = Bun.spawnSync(
+      ['uv', 'run', '--no-project', 'python', '-c', program, intakeScript, 'STATES'],
+      { stdout: 'pipe', stderr: 'pipe' }
+    );
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    const intakeStates = JSON.parse(stdout(result)) as string[];
     expect(intakeStates).toEqual(publicationStates);
     expect(intakeStates).toEqual([
       'BLOCKED',

@@ -1,0 +1,19 @@
+# Dry-run fixture: another tracker item already owns the same outcome, so the
+# item should be closed. The real verdict script accepts the NO_ACTION tuple and,
+# with publish off, writes nothing.
+triage:
+  contract: NO_ACTION
+  route: no_action
+  design_first: false
+  complexity: small
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 88 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: duplicate of the current canonical issue; no new work remains"
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true

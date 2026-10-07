@@ -1,0 +1,21 @@
+# Guard fixture, seen red: two states mapped to one label (the tracker ignores
+# case) would make a stale state indistinguishable from the current one. The real
+# verdict script must refuse the mapping before anything is published.
+triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: an ambiguous caller mapping the boundary must catch"
+fixture:
+  expect: failed
+  fail-node: verdict
+  inputs:
+    state_labels: '{"READY":"same","BLOCKED":"SAME"}'
+exec-code: true

@@ -1,0 +1,19 @@
+# Dry-run fixture: the contract is sound but waits on an external decision that
+# has no tracker item. BLOCKED needs a reason, and an empty blocked_by is legal:
+# a blocker reference is never invented.
+triage:
+  contract: BLOCKED
+  route: no_action
+  design_first: false
+  complexity: risky
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: "stub: awaiting the external operator decision"
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: awaiting an external operator decision, with no tracker blocker"
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true

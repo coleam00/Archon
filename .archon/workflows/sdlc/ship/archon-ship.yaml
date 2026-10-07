@@ -29,6 +29,23 @@ inputs:
       Let triage write its derived labels to the tracker item — true or false.
       Off by default. Forwarded unchanged to triage; a scheduled ship run is the
       only place an unattended intake can turn it on.
+  state_labels:
+    default: ""
+    description: >-
+      Forwarded unchanged to triage. Empty keeps the pack's own labels; a JSON
+      object maps READY, DESIGN_FIRST, NEEDS_CONTRACT_WORK, BLOCKED and
+      NO_ACTION to the caller's own state labels, which triage then publishes
+      in place of the pack's. `{}` publishes no state label.
+  validation_scope:
+    default: ""
+    description: >-
+      Optional package, directory, or named-check scope forwarded to delivery.
+      Empty keeps the project's full applicable gate.
+  validation_context:
+    default: ""
+    description: >-
+      Optional nonsecret external-state identity forwarded to delivery.
+      Changing it requires fresh validation.
 
 # `delivered:false` is a valid completion: an honest "no work is owed" is a
 # successful run that shipped nothing, and lifecycle status and work outcome are
@@ -44,6 +61,7 @@ nodes:
     with:
       target: "$INPUTS.target"
       publish: "$INPUTS.publish"
+      state_labels: "$INPUTS.state_labels"
 
   - id: inv
     include: archon-investigate
@@ -88,6 +106,8 @@ nodes:
     include: archon-deliver
     with:
       errors: "$INPUTS.errors"
+      validation_scope: "$INPUTS.validation_scope"
+      validation_context: "$INPUTS.validation_context"
       work: >-
         Deliver the work prepared by this run. Read $ARTIFACTS_DIR/triage.md
         first. When present, plan.md or investigation.md is the detailed work
@@ -118,6 +138,7 @@ nodes:
     with:
       route: "$triage.output.route"
       summary: "$triage.output.summary"
+      contract: "$triage.output.contract"
       delivered: { from: "$deliver.output.pr_url", if_skipped: null }
     output_format:
       type: object

@@ -1,0 +1,18 @@
+# Sparse guard fixture: run with --default-stubs --exec-code. Another tracker item
+# owns the same outcome, so nothing is delivered and the run completes honestly.
+triage__triage:
+  contract: NO_ACTION
+  route: no_action
+  design_first: false
+  complexity: small
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 88 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: duplicate of the current canonical issue; no new work remains"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+fixture:
+  expect: completed
+  reached: [triage__verdict, outcome]
+exec-code: true

@@ -1,0 +1,19 @@
+# Sparse guard fixture: run with --default-stubs --exec-code. The item waits on an
+# external decision with no tracker reference; an empty blocked_by is legal and the
+# run completes with the BLOCKED report.
+triage__triage:
+  contract: BLOCKED
+  route: no_action
+  design_first: false
+  complexity: risky
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: "stub: awaiting the external operator decision"
+  blocked_by: []
+  summary: "stub: awaiting an external operator decision, with no tracker blocker"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+fixture:
+  expect: completed
+  reached: [triage__verdict, outcome]
+exec-code: true

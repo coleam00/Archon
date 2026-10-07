@@ -1,0 +1,21 @@
+# Guard fixture, seen red: the prompt proposed the caller's own state label as an
+# area label. State labels derive from the verdict, so the real verdict script must
+# refuse it, whatever its case.
+triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: ["Team-Blocked"]
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: a caller-owned label proposed as an area label"
+fixture:
+  expect: failed
+  fail-node: verdict
+  inputs:
+    state_labels: '{"READY":"team-ready","BLOCKED":"team-blocked"}'
+exec-code: true

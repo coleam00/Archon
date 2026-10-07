@@ -1,0 +1,20 @@
+# Sparse guard fixture: run with --default-stubs --exec-code. The contract is
+# sound but waits on another unresolved issue. The real verdict accepts the
+# blocker, every delivery node stays skipped, and the real outcome node completes
+# with the report that names the BLOCKED verdict.
+triage__triage:
+  contract: BLOCKED
+  route: no_action
+  design_first: false
+  complexity: risky
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 100 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: "stub: waiting for the upstream dependency"
+  blocked_by: ["https://github.com/example/dependency/issues/45"]
+  summary: "stub: depends on unresolved work in example/dependency#45"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+fixture:
+  expect: completed
+  reached: [triage__verdict, outcome]
+exec-code: true

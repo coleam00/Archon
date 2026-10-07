@@ -1,0 +1,20 @@
+# Dry-run fixture: a caller that owns its state labels passes them in. A
+# well-formed mapping is accepted; with publish off nothing is written.
+triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: current code confirms the work order"
+fixture:
+  expect: completed
+  reached: [verdict]
+  inputs:
+    state_labels: '{"READY":"team-ready","BLOCKED":"team-blocked"}'
+exec-code: true
