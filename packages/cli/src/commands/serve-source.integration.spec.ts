@@ -108,13 +108,15 @@ test('source archon serve starts the server on the requested port and serves the
     child.kill('SIGTERM');
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
-        child.exited,
-        new Promise<void>(resolve => {
-          timer = setTimeout(resolve, 10_000);
+      // Not `child.exitCode === null`: a launcher killed by a signal (always the
+      // case on Windows) exits with a null exitCode and a signalCode instead.
+      const exitedInTime = await Promise.race([
+        child.exited.then(() => true),
+        new Promise<false>(resolve => {
+          timer = setTimeout(() => resolve(false), 10_000);
         }),
       ]);
-      if (child.exitCode === null) {
+      if (!exitedInTime) {
         if (serverPid !== undefined) process.kill(serverPid, 'SIGKILL');
         child.kill('SIGKILL');
       }
