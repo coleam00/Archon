@@ -1,3 +1,4 @@
+import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-start-store';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
  *
@@ -26,18 +27,7 @@ export type ResourceSlotHolder =
   | { kind: 'run'; id: string }
   | { kind: 'attempt'; id: string; owner: ProcessOwner };
 
-export class ResourceSlotCapacityConflictError extends Error {
-  constructor(
-    public readonly resource: string,
-    public readonly configured: number,
-    public readonly requested: number
-  ) {
-    super(
-      `Resource '${resource}' has capacity ${String(configured)}; a request declared ${String(requested)}. Every binding for one resource must declare the same capacity.`
-    );
-    this.name = 'ResourceSlotCapacityConflictError';
-  }
-}
+export { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-start-store';
 
 const terminalList = TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ');
 

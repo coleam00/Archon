@@ -15,8 +15,6 @@ on:
     paths:
       - 'packages/docs-web/**'
       - 'packages/plugin-manifest/**'
-      # The community-provider page renders this file's contents, so changing it changes the site.
-      - 'packages/providers/src/community/_template/capabilities.ts'
       - 'bun.lock'
       - '.github/workflows/docs-build.yml'
 

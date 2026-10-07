@@ -13,6 +13,7 @@
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
+    "@archon/provider-contract": "workspace:*",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

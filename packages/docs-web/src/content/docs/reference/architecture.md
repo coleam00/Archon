@@ -294,7 +294,7 @@ Resolve the authenticated sender to an Archon user before dispatch. If resolutio
 
 AI agent providers wrap AI SDKs and provide a unified streaming interface. Implement the `IAgentProvider` interface to add new providers.
 
-> **Note:** This section covers built-in providers maintained by the core team (Claude, Codex). For community providers (`builtIn: false`) — which live under `packages/providers/src/community/` and register through `registerCommunityProviders()` — see [Adding a Community Provider](../contributing/adding-a-community-provider/).
+> **Note:** This section covers maintained in-repo providers (Claude, Codex and Pi). OpenCode and Copilot remain bundled transition providers under `packages/providers/src/community/`. New community providers attach as independently installed process plugins; see [Adding a Community Provider](../contributing/adding-a-community-provider/).
 
 ### IAgentProvider Interface
 
@@ -425,9 +425,9 @@ export function registerBuiltinProviders(): void {
 }
 ```
 
-The host process (CLI or server) calls `registerBuiltinProviders()` and `registerCommunityProviders()` before loading config or workflows. Core does not register providers. The host supplies the read-only `ProviderRegistry` to workflow parsing, discovery and validation, and through `WorkflowDeps.providers` for execution. The port exposes provider metadata without factories; provider instances still pass through host admission.
+The host process (CLI or server) calls `registerBuiltinProviders()` and `registerCommunityProviders()`, then loads installed provider receipts through `loadProviderPlugins()` and registers each result before loading config or workflows and creating the credential catalog. Core does not register providers. The host supplies the read-only `ProviderRegistry` to workflow parsing, discovery and validation, and through `WorkflowDeps.providers` for execution. The port exposes provider metadata without factories; provider instances still pass through host admission.
 
-Community providers use `registerCommunityProviders()` (same file). See the [community provider guide](../contributing/adding-a-community-provider/) for that path.
+The bundled transition providers use `registerCommunityProviders()` (same file). New community providers use the external process-plugin path described in the [community provider guide](../contributing/adding-a-community-provider/). Hosts reconstruct their registrations from installed receipts; the server must restart after install, update or removal.
 
 **4. Add environment variables:** `.env.example`
 
@@ -1357,7 +1357,7 @@ Post single comment on issue with summary
 
 ### Adding a New AI Agent Provider
 
-This checklist is for **built-in** providers only. For community providers (`builtIn: false`), see [Adding a Community Provider](../contributing/adding-a-community-provider/) — the folder layout, registration, and capability discipline are covered there in depth.
+This checklist is for **built-in** providers only. For community providers (`builtIn: false`), see [Adding a Community Provider](../contributing/adding-a-community-provider/) — the external process-plugin manifest, descriptor, installation and conformance are covered there.
 
 - [ ] Create `packages/providers/src/your-assistant/provider.ts`
 - [ ] Implement `IAgentProvider` interface (checkCredential + sendQuery + getType + getCapabilities)

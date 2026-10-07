@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./conformance": "./src/conformance.ts",
     "./effort": "./src/effort.ts",
-    "./plugin": "./src/plugin/index.ts"
+    "./plugin": "./src/plugin/index.ts",
+    "./plugin/wire": "./src/plugin/wire.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
