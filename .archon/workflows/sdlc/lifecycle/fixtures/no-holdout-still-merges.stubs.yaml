@@ -67,12 +67,14 @@ ship__deliver__shape__simplify: { findings: false }
 ship__deliver__review__tests: "0 findings"
 ship__deliver__review__review-complete: "settled"
 ship__deliver__ci-attention-route: { attention: false, red_cause: "" }
+ship__deliver__validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: "first validation for this run", nonce: fixture, reuse: false }
 ship__deliver__validate__mode: { comparison: false }
-ship__deliver__validate__result: { green: true, red_cause: "", summary: "stub: project gate green", evidence: null }
+ship__deliver__validate__result: { green: true, checks_performed: true, red_cause: "", summary: "stub: project gate green", evidence: null }
 ship__deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
 ship__deliver__validate__run: { status: green, summary: "stub: project gate green" }
 ship__deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ship__deliver__file-discoveries: '{"issues":[]}'
+ship__deliver__final-gate: '{"validate":true}'
 ship__deliver__fork: '{"fork":true}'
 ship__triage__verdict:
   contract: READY
