@@ -306,57 +306,60 @@ test(
     const descriptor = providerPluginDescriptorSchema.parse(receipt.descriptor);
     const caps = descriptor.capabilities;
     const cases = [
-      { ...descriptor, id: 'mismatch' },
-      { ...descriptor, id: 'claude' },
-      { ...descriptor, credentials: { kind: 'dynamic' } },
-      { ...descriptor, capabilities: { ...caps, nativeTools: true } },
       {
-        ...descriptor,
-        credentials: {
-          kind: 'static',
-          specs: [{ vendor: 'undeliverable', displayName: 'Bad vendor', kinds: ['api_key'] }],
-        },
+        descriptor: { ...descriptor, id: 'mismatch' },
+        executableId: descriptor.id,
+        error: 'descriptor id must match',
       },
-      { ...descriptor, capabilities: { ...caps, sessionFork: true, sessionResume: false } },
-      { ...descriptor, ownsUnprefixedModelRefs: true },
+      { descriptor: { ...descriptor, id: 'claude' }, error: 'already registered' },
+      {
+        descriptor: { ...descriptor, credentials: { kind: 'dynamic' } },
+        error: 'failed initialize',
+      },
+      {
+        descriptor: { ...descriptor, capabilities: { ...caps, nativeTools: true } },
+        error: 'failed initialize',
+      },
+      {
+        descriptor: {
+          ...descriptor,
+          credentials: {
+            kind: 'static',
+            specs: [{ vendor: 'undeliverable', displayName: 'Bad vendor', kinds: ['api_key'] }],
+          },
+        },
+        error: 'no credential delivery rule',
+      },
+      {
+        descriptor: {
+          ...descriptor,
+          capabilities: { ...caps, sessionFork: true, sessionResume: false },
+        },
+        error: 'sessionFork requires sessionResume',
+      },
+      {
+        descriptor: { ...descriptor, ownsUnprefixedModelRefs: true },
+        error: 'already owns unprefixed model refs',
+      },
     ];
     const descriptorFile = join(root, 'invalid-descriptor.json');
     const invalidBinary = await runnable(
       `const descriptor = await Bun.file(${JSON.stringify(join(root, 'invalid-descriptor.json'))}).json(); for await (const line of console) { const request = JSON.parse(line); console.log(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{protocolVersion:1,agentCapabilities:{_meta:{archon:descriptor}},authMethods:[]}})); }`,
       'invalid-provider'
     );
-    for (const [index, value] of cases.entries()) {
-      const id = value.id;
+    for (const scenario of cases) {
       manifests.set(commits.get('invalid') ?? '', {
         schemaVersion: 1,
         kind: 'provider',
         name: 'test-provider',
         description: 'Invalid provider',
-        executable: `archon-provider-${id}`,
+        executable: `archon-provider-${scenario.executableId ?? scenario.descriptor.id}`,
       });
-      await writeFile(descriptorFile, JSON.stringify(value));
+      await writeFile(descriptorFile, JSON.stringify(scenario.descriptor));
       assets.set('invalid', invalidBinary);
-      if (index === 0)
-        manifests.set(commits.get('invalid') ?? '', {
-          schemaVersion: 1,
-          kind: 'provider',
-          name: 'test-provider',
-          description: 'Invalid provider',
-          executable: 'archon-provider-test-provider',
-        });
       const rejected = await plugin(env, 'update', [`${ID}@invalid`]);
       expect(rejected.code).toBe(1);
-      expect(rejected.err).toContain(
-        [
-          'descriptor id must match',
-          'already registered',
-          'failed initialize',
-          'failed initialize',
-          'no credential delivery rule',
-          'sessionFork requires sessionResume',
-          'already owns unprefixed model refs',
-        ][index]
-      );
+      expect(rejected.err).toContain(scenario.error);
       expect(await snapshot(env.pluginsDir)).toEqual(before);
     }
     assets.set('invalid', new TextEncoder().encode('broken executable'));
