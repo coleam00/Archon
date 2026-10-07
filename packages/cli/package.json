@@ -67,7 +67,8 @@
       "src/default-cwd-canonicalization.test.ts",
       "src/utils/stdout.test.ts",
       "src/utils/safe-console.test.ts",
-      "src/utils/cli-start-telemetry.test.ts"
+      "src/utils/cli-start-telemetry.test.ts",
+      "src/utils/cli-program-arguments.test.ts"
     ],
     [
       "src/utils/detached-run-control.integration.spec.ts"
