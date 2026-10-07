@@ -16,8 +16,9 @@ export function ToolCallAttentionSection({ run }: { run: Run }): ReactElement | 
   }, [calls.length]);
   if (calls.length === 0) return null;
   return (
-    <div className="w-full px-4 py-2 text-xs text-warning" role="status">
-      <p>Tool calls need attention. Work remains running.</p>
+    <div className="w-full px-4 py-2 text-xs text-warning">
+      {/* Only the static notice is live; the ticking rows would re-announce every second. */}
+      <p role="status">Tool calls need attention. Work remains running.</p>
       {calls.map(call => (
         <p key={JSON.stringify([call.streamId, call.toolCallId])} className="break-words font-mono">
           {call.nodeId} · {call.provider} · {call.name}: {call.title || call.name} (running{' '}
