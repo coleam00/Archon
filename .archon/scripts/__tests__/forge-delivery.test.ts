@@ -13,7 +13,13 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { PR, runPackScript, type ScriptOptions, type ScriptRun } from './deliver-checks-harness';
+import {
+  forgePrRecord,
+  PR,
+  runPackScript,
+  type ScriptOptions,
+  type ScriptRun,
+} from './deliver-checks-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
 
 const trackTempRoot = trackTempRoots();
@@ -30,12 +36,30 @@ const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
 const ROUND_TWO = `Round two at ${HEAD_SHA}: every finding resolved.`;
 
 /** A host with the GitHub plugin configured for the fake host and a host command. */
-function forgeHost(): { argv: string[]; statePath: string } {
+function forgeHost(other = false): { argv: string[]; statePath: string } {
   const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-forge-delivery-')));
   const home = join(root, 'home');
   mkdirSync(home);
   const statePath = join(root, 'github.json');
-  writeFileSync(statePath, JSON.stringify(initialState(HEAD_SHA)));
+  writeFileSync(
+    statePath,
+    JSON.stringify(
+      other
+        ? {
+            issues: [
+              { number: 7, title: 'Triage', body: '', labels: ['operator', 'archon-blocked'] },
+            ],
+            labels: [
+              { name: 'operator', color: 'abcdef', description: '' },
+              { name: 'area', color: 'abcdef', description: '' },
+              { name: 'archon-blocked', color: 'abcdef', description: '' },
+            ],
+            operations: [],
+            writes: [],
+          }
+        : initialState(HEAD_SHA)
+    )
+  );
 
   const preload = join(root, 'fake-github.ts');
   writeFileSync(
@@ -49,10 +73,17 @@ function forgeHost(): { argv: string[]; statePath: string } {
       forge: {
         scanPath: false,
         hosts: {
-          [FAKE_HOST]: {
-            plugin: 'github',
+          [other ? 'tracker.example' : FAKE_HOST]: {
+            plugin: other ? 'tracker' : 'github',
             command: process.execPath,
-            args: ['--no-env-file', '--preload', preload, GITHUB_PLUGIN],
+            args: other
+              ? [
+                  '--no-env-file',
+                  join(import.meta.dir, 'fixtures/workitem-plugin.ts'),
+                  '--state',
+                  statePath,
+                ]
+              : ['--no-env-file', '--preload', preload, GITHUB_PLUGIN],
           },
         },
       },
@@ -191,3 +222,80 @@ describe('the forge opt-in delivers through plugin operations', () => {
     ]);
   }, 120_000);
 });
+
+for (const other of [false, true]) {
+  it(`preserves inherited-property labels and publishes marker-idempotent discoveries through ${other ? 'a non-GitHub tracker' : 'GitHub'}`, () => {
+    const host = forgeHost(other);
+    const operatorLabels = Object.getOwnPropertyNames(Object.prototype);
+    const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
+      issues: { labels: (string | { name: string })[] }[];
+      labels: { name: string; color: string; description: string }[];
+    };
+    seeded.issues[0].labels.push(...operatorLabels.map(name => (other ? name : { name })));
+    seeded.labels.push(...operatorLabels.map(name => ({ name, color: 'abcdef', description: '' })));
+    writeFileSync(host.statePath, JSON.stringify(seeded));
+    const repo = other ? { host: 'tracker.example', path: 'group/team/project' } : PR.repo;
+    const inputs = {
+      INPUTS_ITEM: JSON.stringify({ repo, number: 7 }),
+      INPUTS_PUBLISH: 'true',
+      INPUTS_CONTRACT: 'READY',
+      INPUTS_ROUTE: 'direct',
+      INPUTS_COMPLEXITY: 'small',
+      INPUTS_DESIGN_FIRST: 'false',
+      INPUTS_SUMMARY: 'Ready',
+      INPUTS_BLOCKED_REASON: '',
+      INPUTS_BLOCKED_BY: '[]',
+      INPUTS_AREA_LABELS: JSON.stringify(['area', 'nonexistent', 'constructor']),
+      INPUTS_PROPOSED_EDITS: '{"title":"","body":""}',
+      INPUTS_REPORT: '{"path":"triage.md"}',
+    };
+    const options = { source: 'forge', forge: { kind: 'command' as const, argv: host.argv } };
+    const triage = runPackScript('triage/scripts/verdict', { ...options, inputs });
+    expect({ code: triage.code, stderr: triage.stderr }).toMatchObject({ code: 0 });
+    expect(triage.gh).toEqual([]);
+    expect(JSON.parse(triage.stdout)).toMatchObject({
+      published: true,
+      labels: ['archon-ready', 'archon-small', 'area', 'constructor'],
+    });
+    const record = {
+      title: 'Proved discovery',
+      claim: 'Concrete claim',
+      evidence: ['file:12'],
+      relation: 'unrelated',
+      source_nodes: ['review'],
+    };
+    const discovery = (runId: string): ScriptRun =>
+      runPackScript('deliver/scripts/file-discoveries', {
+        ...options,
+        inputs: { INPUTS_PR: JSON.stringify(forgePrRecord({ repo })), WORKFLOW_ID: runId },
+        artifacts: { 'discoveries.json': JSON.stringify([{ ...record, source_nodes: [runId] }]) },
+      });
+    const first = discovery('first');
+    const second = discovery('second');
+    for (const result of [first, second]) {
+      expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
+      expect(result.gh).toEqual([]);
+      const saved = JSON.parse(readFileSync(join(result.artifacts, 'discoveries.json'), 'utf8'));
+      expect(saved[0].issue).toBe(JSON.parse(result.stdout).issues[0]);
+    }
+    expect(JSON.parse(first.stdout)).toEqual(JSON.parse(second.stdout));
+    const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
+      issues: { number: number; labels: (string | { name: string })[] }[];
+      labels: { name: string }[];
+      writes?: string[];
+      calls?: string[];
+    };
+    expect(state.issues).toHaveLength(2);
+    const labels = state.issues[0].labels.map(label =>
+      typeof label === 'string' ? label : label.name
+    );
+    expect(labels.sort()).toEqual(
+      ['archon-ready', 'archon-small', 'area', 'operator', ...operatorLabels].sort()
+    );
+    expect(state.labels.some(label => label.name === 'nonexistent')).toBe(false);
+    const writes = other
+      ? state.writes?.filter(op => op === 'workitem.create')
+      : state.calls?.filter(call => call.startsWith('POST ') && call.includes('/issues'));
+    expect(writes).toHaveLength(1);
+  });
+}

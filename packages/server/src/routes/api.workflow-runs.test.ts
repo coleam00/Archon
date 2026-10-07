@@ -219,7 +219,12 @@ mock.module('@archon/core', () => ({
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   generateAndSetTitle: mockGenerateAndSetTitle,
   resolveTitleRequest: mockResolveTitleRequest,
-  createWorkflowDeps: mock(() => ({ store: {} })),
+  createWorkflowDeps: mock(() => ({
+    store: {
+      getWorkflowRun: mockGetWorkflowRun,
+      signalWorkflowWait: mockSignalWorkflowWait,
+    },
+  })),
   createCodebaseChildResolver: mockCreateCodebaseChildResolver,
   createLogger: () => ({
     fatal: mock(() => undefined),

@@ -102,7 +102,7 @@ function newerAttempt(observed: SelectedCheck, selected: SelectedCheck): boolean
 }
 
 function requestRepo(request: Exclude<ForgeRequest, { op: 'resolve' }>): RepoRef {
-  if (request.op === 'pr.create') return request.repo;
+  if ('repo' in request) return request.repo;
   if (request.op === 'pr.view')
     return request.selector.kind === 'head' ? request.selector.repo : request.selector.ref.repo;
   return request.ref.repo;
@@ -112,7 +112,7 @@ function requestTarget(
   request: ForgeRequest,
   response?: ForgeResponse
 ): ForgeOperationAudit['target'] {
-  if (request.op === 'pr.create') return request.repo;
+  if ('repo' in request) return request.repo;
   if (request.op === 'pr.view')
     return request.selector.kind === 'head' ? request.selector.repo : request.selector.ref;
   if (request.op !== 'resolve') return request.ref;
@@ -182,13 +182,29 @@ export function matchesForgeOperationResponse(
         ))
     )
       return false;
-    return (
-      !('observed' in evidence) ||
-      !evidence.observed ||
-      (request.op === 'pr.create'
-        ? sameRepo(evidence.observed.repo, request.repo)
-        : sameRef(evidence.observed, request.ref))
-    );
+    if (
+      'observed' in evidence &&
+      evidence.observed &&
+      ('repo' in request
+        ? !sameRepo(evidence.observed.repo, request.repo)
+        : !sameRef(evidence.observed, request.ref))
+    )
+      return false;
+    if (
+      'workitem' in evidence &&
+      evidence.workitem &&
+      !(request.op === 'workitem.create'
+        ? sameRepo(evidence.workitem.ref.repo, request.repo)
+        : request.op === 'workitem.labels.set' && sameRef(evidence.workitem.ref, request.ref))
+    )
+      return false;
+    if (
+      'label' in evidence &&
+      evidence.label &&
+      !(request.op === 'repo.label.ensure' && evidence.label.name === request.name)
+    )
+      return false;
+    return true;
   }
   const result = response.result;
   if (result.op !== request.op) return false;
@@ -224,6 +240,36 @@ export function matchesForgeOperationResponse(
             sameRepo(value.pr.head_repo, selector.headRepo) &&
             (selector.base === undefined || value.pr.base === selector.base);
     }
+    case 'repo.labels.list':
+      return request.op === result.op && sameRepo(result.value.repo, request.repo);
+    case 'workitem.create':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, request.repo) &&
+        sameRepo(result.value.workitem.ref.repo, request.repo) &&
+        result.value.markerDigest === contentDigest(request.marker) &&
+        (!result.value.changed ||
+          (result.value.workitem.state === 'open' &&
+            result.value.titleDigest === contentDigest(request.title) &&
+            result.value.bodyDigest === contentDigest(request.body)))
+      );
+    case 'workitem.labels.set':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, request.ref) &&
+        sameRef(result.value.workitem.ref, request.ref) &&
+        result.value.labels.length === request.labels.length &&
+        request.labels.every(name => result.value.labels.includes(name))
+      );
+    case 'repo.label.ensure':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, request.repo) &&
+        result.value.label.name === request.name &&
+        (!result.value.changed ||
+          (result.value.label.color === request.color &&
+            result.value.label.descriptionDigest === contentDigest(request.description)))
+      );
     case 'pr.merge': {
       if (request.op !== result.op) return false;
       const value = result.value;

@@ -2,7 +2,6 @@
  * Test factories for workflow types.
  * Use these instead of inline fixture objects — schema changes update one file.
  */
-import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
 import { workflowDefinitionSchema } from './schemas/workflow';
 import type {
   DeclaredWorkflowConfig,
@@ -14,10 +13,7 @@ import type {
 import { expandWorkflowIncludes } from './include-expander';
 import { resolveWorkflow } from './graph-plan';
 import type { CapturedSourceOwner } from './executor';
-import { readNodeRecordEvent, nodeInvocationKey } from './node-record-reader';
-import { nodeCostScope, DEFERRED_NODE_USAGE_EVENT_TYPE } from './node-record-serialization';
-import { DURABLE_WORKFLOW_EVENT_TYPES } from './store';
-import type { DagResumeSnapshot, PersistedNodeOutput } from './store';
+import type { WorkflowEventInput } from './store';
 
 const DEFAULT_NODE = { id: 'default', command: 'test-command' };
 
@@ -132,120 +128,9 @@ export async function executeTestDagWorkflow(
 }
 
 /** A persisted workflow event as an in-memory test store records it. */
-export interface InMemoryStoreEvent {
-  workflow_run_id: string;
+export interface InMemoryStoreEvent extends Pick<
+  WorkflowEventInput,
+  'workflow_run_id' | 'step_name' | 'data'
+> {
   event_type: string;
-  step_name?: string;
-  data?: Record<string, unknown>;
-}
-
-/**
- * Rebuild a DAG resume snapshot from an in-memory event log, for test doubles of
- * `IWorkflowStore.getDagResumeSnapshot`. It models the subset of the real store's fold
- * that workflow-package tests exercise; core's `workflow-events.test.ts` runs the same
- * rows through both so the output selection and usage scope cannot drift unnoticed.
- */
-export function inMemoryDagResumeSnapshot(
-  events: readonly InMemoryStoreEvent[],
-  workflowRunId: string
-): DagResumeSnapshot {
-  const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
-  const unfinishedInvocations: NonNullable<DagResumeSnapshot['unfinishedInvocations']> = new Map();
-  const tokenContributions: TokenUsage[] = [];
-  let costUsd = 0;
-  for (const e of events) {
-    if (
-      e.workflow_run_id !== workflowRunId ||
-      !DURABLE_WORKFLOW_EVENT_TYPES.some(type => type === e.event_type) ||
-      typeof e.step_name !== 'string'
-    )
-      continue;
-    const record = readNodeRecordEvent({ ...e, data: e.data });
-    if (record?.metadata !== undefined) {
-      const execution = record.metadata;
-      const key = nodeInvocationKey(record.path, execution.invocation.loopPath);
-      if (
-        execution.lifecycle.status === 'started' ||
-        execution.lifecycle.status === 'failed' ||
-        execution.lifecycle.status === 'suspended'
-      ) {
-        unfinishedInvocations.set(key, execution);
-      } else {
-        unfinishedInvocations.delete(key);
-      }
-    } else if (
-      record?.eventType === 'node_skipped_prior_success' ||
-      record?.eventType === 'node_always_run_reset' ||
-      record?.eventType === 'node_prior_cache_invalidated'
-    ) {
-      for (const [key, execution] of unfinishedInvocations) {
-        if (execution.path === record.path) unfinishedInvocations.delete(key);
-      }
-    }
-    // Every later node state supersedes reusable success; only a success restores it.
-    if (e.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE) completedNodeOutputs.delete(e.step_name);
-    if (
-      e.event_type !== 'node_completed' &&
-      e.event_type !== 'node_skipped_prior_success' &&
-      e.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE
-    )
-      continue;
-    if (
-      e.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE &&
-      typeof e.data?.node_output === 'string'
-    ) {
-      // The logical value rides beside the text (#2637), and the field contract the
-      // node completed under rides beside both (#2453), read through the real reader.
-      const declaredOutputPaths = readNodeRecordEvent({ ...e, data: e.data })?.data
-        .declared_output_paths;
-      completedNodeOutputs.set(e.step_name, {
-        output: e.data.node_output,
-        ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
-        ...(e.data.structured_output !== undefined
-          ? { structuredOutput: e.data.structured_output }
-          : {}),
-      });
-    }
-    // A derived row (loop_group roll-up) restates usage other rows already carry, so it
-    // contributes output but never usage (#2469).
-    if (
-      (e.event_type !== 'node_completed' && e.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE) ||
-      nodeCostScope(e.data ?? {}) === 'total'
-    )
-      continue;
-    const eventTokens = e.data?.tokens;
-    if (
-      typeof eventTokens === 'object' &&
-      eventTokens !== null &&
-      'input' in eventTokens &&
-      'output' in eventTokens &&
-      typeof eventTokens.input === 'number' &&
-      typeof eventTokens.output === 'number' &&
-      Number.isFinite(eventTokens.input) &&
-      Number.isFinite(eventTokens.output)
-    ) {
-      const normalized: TokenUsage = { input: eventTokens.input, output: eventTokens.output };
-      const optionalTokens: Record<string, unknown> = eventTokens;
-      for (const axis of ['cacheRead', 'cacheWrite'] as const) {
-        const value = optionalTokens[axis];
-        if (typeof value === 'number' && Number.isFinite(value)) normalized[axis] = value;
-      }
-      if ('cachePartial' in eventTokens && eventTokens.cachePartial === true) {
-        normalized.cachePartial = true;
-      }
-      tokenContributions.push(normalized);
-    }
-    const eventCost = e.data?.cost_usd;
-    if (typeof eventCost === 'number' && Number.isFinite(eventCost)) {
-      costUsd += eventCost;
-    }
-  }
-  return {
-    completedNodeOutputs,
-    unfinishedInvocations,
-    fanOutSnapshots: new Map(),
-    unresolvedNodeStarts: new Set(),
-    tokens: mergeTokenUsage(tokenContributions) ?? { input: 0, output: 0 },
-    costUsd,
-  };
 }

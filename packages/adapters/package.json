@@ -83,7 +83,8 @@
       "src/forge/github/operations.test.ts"
     ],
     [
-      "src/forge/github/lifecycle.test.ts"
+      "src/forge/github/lifecycle.test.ts",
+      "src/forge/github/workitems.test.ts"
     ],
     [
       "src/platform-policies.test.ts"

@@ -96,6 +96,15 @@ import { executeWorkflow } from './executor';
 
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
+    listDueWorkflowContinuations: mock<IWorkflowStore['listDueWorkflowContinuations']>(() => {
+      throw new Error('Unexpected listDueWorkflowContinuations');
+    }),
+    deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
+      throw new Error('Unexpected deferWorkflowContinuation');
+    }),
+    signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
+      throw new Error('Unexpected signalWorkflowWait');
+    }),
     resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
       throw new Error('Unexpected resolveApprovalGate');
     }),

@@ -95,6 +95,53 @@ export const commentUpsertRequestSchema = requestBase.extend({
   body: text,
 });
 
+export const labelNamesSchema = z
+  .array(text)
+  .refine(names => new Set(names).size === names.length, 'label names must be unique');
+export const repoLabelsListRequestSchema = requestBase.extend({
+  op: z.literal('repo.labels.list'),
+  repo: repoRefSchema,
+});
+export const repoLabelsListSchema = z.object({
+  repo: repoRefSchema,
+  labels: z.array(z.object({ name: text })),
+});
+export const workItemCreateRequestSchema = requestBase
+  .extend({
+    op: z.literal('workitem.create'),
+    repo: repoRefSchema,
+    title: text,
+    body: text,
+    marker: text.refine(value => !/[\r\n]/.test(value), 'marker must be one line'),
+  })
+  .refine(
+    value => value.body.split(/\r?\n/, 1)[0] === value.marker,
+    'body must begin with the exact marker'
+  );
+export const workItemLabelsSetRequestSchema = requestBase.extend({
+  op: z.literal('workitem.labels.set'),
+  ref: workItemRefSchema,
+  labels: labelNamesSchema,
+});
+export const repoLabelEnsureRequestSchema = requestBase.extend({
+  op: z.literal('repo.label.ensure'),
+  repo: repoRefSchema,
+  name: text,
+  color: z
+    .string()
+    .regex(/^[0-9a-fA-F]{6}$/)
+    .transform(value => value.toLowerCase()),
+  description: z.string(),
+});
+export const workItemRecordSchema = z.object({
+  ref: workItemRefSchema,
+  kind: z.literal('issue'),
+  url: z.url(),
+  state: z.enum(['open', 'closed']),
+});
+export type ForgeWorkItemRecord = z.infer<typeof workItemRecordSchema>;
+export const labelRecordSchema = z.object({ name: text, color: text, descriptionDigest: text });
+export type ForgeLabelRecord = z.infer<typeof labelRecordSchema>;
 export const mergeConditionsSchema = z.strictObject({
   head: gitObjectIdSchema.optional(),
   base: gitObjectIdSchema.optional(),
@@ -147,6 +194,7 @@ export const mergeEvidenceSchema = z.object({
 export const lifecycleReadRequestSchemas = [
   workItemViewRequestSchema,
   prViewRequestSchema,
+  repoLabelsListRequestSchema,
   prReviewsRequestSchema,
 ] as const;
 export const mutationRequestSchemas = [
@@ -157,6 +205,9 @@ export const mutationRequestSchemas = [
   prReadyRequestSchema,
   prDraftRequestSchema,
   commentUpsertRequestSchema,
+  workItemCreateRequestSchema,
+  workItemLabelsSetRequestSchema,
+  repoLabelEnsureRequestSchema,
 ] as const;
 export const mutationRequestSchema = z.discriminatedUnion('op', mutationRequestSchemas);
 export type ForgeMutationRequest = z.infer<typeof mutationRequestSchema>;
@@ -164,13 +215,11 @@ export const mutationOperationSchema = z.enum(
   mutationRequestSchemas.map(schema => schema.shape.op.value)
 );
 
-export const workItemViewSchema = z.object({
-  ref: workItemRefSchema,
+export const workItemViewSchema = workItemRecordSchema.extend({
   kind: z.enum(['issue', 'pr']),
-  url: z.url(),
   title: z.string(),
   body: z.string(),
-  state: z.enum(['open', 'closed']),
+  labels: labelNamesSchema.optional(),
 });
 export const prViewSchema = z.object({
   pr: forgePrRecordSchema,
@@ -185,7 +234,7 @@ export const commentRecordSchema = z.object({
 });
 export type ForgeCommentRecord = z.infer<typeof commentRecordSchema>;
 
-/** What a mutation addressed: a repository for a create, the pull request otherwise. */
+/** The repository or item addressed by a mutation. */
 export const mutationTargetSchema = z.union([prRefSchema, repoRefSchema]);
 export type ForgeMutationTarget = z.infer<typeof mutationTargetSchema>;
 
@@ -195,17 +244,23 @@ const failureBase = z.object({
   merge: mergeEvidenceSchema.optional(),
   rerun: rerunEvidenceSchema.optional(),
 });
+const failureObservations = {
+  observed: forgePrRecordSchema.optional(),
+  workitem: workItemRecordSchema.optional(),
+  label: labelRecordSchema.optional(),
+};
 export const mutationFailureSchema = z
   .discriminatedUnion('outcome', [
-    failureBase.extend({ outcome: z.literal('refused'), observed: forgePrRecordSchema.optional() }),
+    failureBase.extend({ outcome: z.literal('refused'), ...failureObservations }),
     failureBase.extend({
       outcome: z.literal('verification_failed'),
-      observed: forgePrRecordSchema.optional(),
+      ...failureObservations,
       comment: commentRecordSchema.optional(),
       // What may remain on the forge, in the operator's terms, so reconciliation
       // starts from evidence rather than from a retry.
       leaveBehind: text,
     }),
+    // Nothing was read back, so an unknown outcome carries no observation.
     failureBase.extend({ outcome: z.literal('outcome_unknown') }),
   ])
   .superRefine((value, ctx) => {
@@ -228,8 +283,26 @@ export const lifecycleReadResultSchemas = [
   z.object({ op: prReviewsRequestSchema.shape.op, value: prReviewsSchema }),
   z.object({ op: workItemViewRequestSchema.shape.op, value: workItemViewSchema }),
   z.object({ op: prViewRequestSchema.shape.op, value: prViewSchema.nullable() }),
+  z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
 ] as const;
 export const mutationResultSchemas = [
+  z.object({
+    op: workItemCreateRequestSchema.shape.op,
+    value: appliedSchema.extend({
+      workitem: workItemRecordSchema,
+      markerDigest: text,
+      titleDigest: text,
+      bodyDigest: text,
+    }),
+  }),
+  z.object({
+    op: workItemLabelsSetRequestSchema.shape.op,
+    value: appliedSchema.extend({ workitem: workItemRecordSchema, labels: labelNamesSchema }),
+  }),
+  z.object({
+    op: repoLabelEnsureRequestSchema.shape.op,
+    value: appliedSchema.extend({ label: labelRecordSchema }),
+  }),
   z.object({
     op: prMergeRequestSchema.shape.op,
     value: appliedSchema.extend({
@@ -275,7 +348,7 @@ export const mutationResultSchemas = [
 ] as const;
 
 export function mutationTarget(request: ForgeMutationRequest): ForgeMutationTarget {
-  return request.op === 'pr.create' ? request.repo : request.ref;
+  return 'repo' in request ? request.repo : request.ref;
 }
 
 export function mutationAttempt(

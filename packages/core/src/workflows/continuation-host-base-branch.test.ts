@@ -47,22 +47,6 @@ mock.module('@archon/isolation', () => ({
   configureIsolation: mock(() => undefined),
   getIsolationProvider: () => ({ create: providerCreate }),
 }));
-mock.module('../db/isolation-environments', () => ({
-  createIsolationStore: () => ({ create: async () => ({ id: 'child-env' }) }),
-}));
-mock.module('../db/workflows', () => ({
-  getWorkflowRun: async () => run,
-  WorkflowNotResumableError: class extends Error {},
-}));
-mock.module('../db/codebases', () => ({
-  getCodebase: async () => ({
-    id: 'cb',
-    name: 'project',
-    kind: 'repo',
-    default_cwd: '/repo',
-    default_branch: storedBranch,
-  }),
-}));
 mock.module('../services/run-live-owner', () => ({
   startRunLiveOwner: async () => ({ close: async () => {} }),
   RunLiveOwnerAlreadyOwnedError: class extends Error {},
@@ -85,11 +69,30 @@ for (const choice of [null, '', ' release ']) {
         return { accepted: false, reason: 'nothing-to-resume' };
       },
     };
-    await resumeWorkflowContinuation(engine, run.id, async () => ({
-      kind: 'ready',
-      platform: new HeadlessPlatform(),
-      conversationId: 'conv',
-    }));
+    await resumeWorkflowContinuation(
+      {
+        engine,
+        deps: { store: { getWorkflowRun: async () => run } },
+        records: {
+          codebases: {
+            getCodebase: async () => ({
+              id: 'cb',
+              name: 'project',
+              kind: 'repo',
+              default_cwd: '/repo',
+              default_branch: storedBranch,
+            }),
+          },
+          isolation: { create: async () => ({ id: 'child-env' }) },
+        },
+      } as unknown as import('./host-store').WorkflowHost,
+      run.id,
+      async () => ({
+        kind: 'ready',
+        platform: new HeadlessPlatform(),
+        conversationId: 'conv',
+      })
+    );
     expect(captured?.options?.baseBranch).toBe(choice?.trim() || undefined);
     const resolver = captured?.options?.resolveChildIsolation;
     if (!resolver) throw new Error('Child resolver missing');
