@@ -61,6 +61,12 @@ export interface ResourceStartRequestInspection {
   launch: PreparedWorkflowLaunch;
 }
 
+export function validateStartReceiptLimit(limit = 50): number {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
+    throw new Error('Receipt limit must be an integer from 1 to 1000.');
+  return limit;
+}
+
 export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {

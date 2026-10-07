@@ -342,11 +342,102 @@ test('receipt preparation and real engine execution use supplied ports without S
         event => event.event_type === 'node_started'
       )
     ).toEqual([]);
+    if (!prepared) throw new Error('Missing prepared launch');
+    const queuedLaunch = { ...prepared.launch, run: { ...prepared.launch.run, id: randomUUID() } };
+    expect(
+      (
+        await host.deps.store.admitResourceStart({
+          resource: 'portable',
+          capacity: 1,
+          hostId: 'host',
+          overlap: 'queue',
+          launch: queuedLaunch,
+        })
+      ).status
+    ).toBe('queued');
+    await host.deps.store.completeWorkflowRun(delayedId, { duration_ms: 1 });
+    await triggerCommand(host, 'drain', [], { host: 'host' });
+    expect((await host.deps.store.getWorkflowRun(queuedLaunch.run.id))?.status).toBe('completed');
+    expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\nexecuted\n');
+    const configPath = join(root, 'timer.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        sourceInstanceId: 'timer',
+        binding: receipt.bindings[0],
+        schedule: { intervalSeconds: 60, runAtLoad: false },
+      })
+    );
+    await triggerCommand(host, 'fire', [], { config: configPath });
+    expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\nexecuted\nexecuted\n');
     expect(accesses).toBe(0);
   } finally {
     for (const trap of traps) trap.mockRestore();
     stdout.mockRestore();
     if (previousHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = previousHome;
+  }
+});
+
+test('receipt inspection rejects invalid limits through the in-memory store', async () => {
+  const store = hostForTest().deps.store;
+  for (const limit of [NaN, 1.5, 0, 1001]) {
+    expect(store.listStartReceipts(limit)).rejects.toThrow(
+      'Receipt limit must be an integer from 1 to 1000.'
+    );
+  }
+  expect(await store.listStartReceipts(1)).toEqual([]);
+  expect(await store.listStartReceipts(1000)).toEqual([]);
+});
+
+test('preparation preserves both failures when rejection cannot be persisted', async () => {
+  const host = hostForTest();
+  const statusError = new Error('status write unavailable');
+  const receipt = acceptance(
+    {
+      bindingId: 'missing-user',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: randomUUID(),
+      resource: 'portable',
+      capacity: 1,
+      overlap: 'queue',
+      launch: {
+        cwd: '/portable',
+        workflowName: 'portable',
+        inputs: {},
+        isolation: { kind: 'in-place' },
+      },
+    },
+    'missing-user'
+  );
+  await host.deps.store.acceptStartReceipt(receipt);
+  const fail = spyOn(host.deps.store, 'failStartBindingPreparation').mockRejectedValue(statusError);
+  try {
+    let caught: unknown;
+    try {
+      await drainResourceStartHost({
+        ...host,
+        hostId: 'host',
+        startAdmitted: async () => {
+          throw new Error('unexpected start');
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AggregateError);
+    const preparation = (caught as AggregateError).errors[0] as AggregateError;
+    expect(preparation).toBeInstanceOf(AggregateError);
+    expect(preparation.message).toContain('run_as_user_failed');
+    expect(preparation.errors[0].message).toBe('The configured run-as user no longer exists.');
+    expect(preparation.errors[1]).toBe(statusError);
+    expect((await host.deps.store.getStartReceipt(receipt.receipt.id))?.bindings[0]).toMatchObject({
+      status: 'preparing',
+      error: null,
+    });
+  } finally {
+    fail.mockRestore();
   }
 });

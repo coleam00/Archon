@@ -9,6 +9,7 @@ import { closeDatabase, getDatabase, resetDatabase } from './connection';
 import { createWorkflowStore } from '../workflows/store-adapter';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 const {
+  listStartReceipts,
   acceptStartReceipt,
   admitResourceStart,
   completeStartBindingPreparation,
@@ -121,6 +122,16 @@ afterEach(async () => {
 });
 
 describe('durable resource starts', () => {
+  test('receipt inspection rejects invalid limits through the SQL store', async () => {
+    for (const limit of [NaN, 1.5, 0, 1001]) {
+      expect(listStartReceipts(limit)).rejects.toThrow(
+        'Receipt limit must be an integer from 1 to 1000.'
+      );
+    }
+    expect(await listStartReceipts(1)).toEqual([]);
+    expect(await listStartReceipts(1000)).toEqual([]);
+  });
+
   test('paused ownership skips same-resource requests while unrelated resources progress', async () => {
     const owner = crypto.randomUUID();
     const skipped = crypto.randomUUID();

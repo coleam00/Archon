@@ -1,4 +1,5 @@
 import {
+  validateStartReceiptLimit,
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
   type IResourceStartStore,
@@ -173,11 +174,13 @@ export function createInMemoryResourceStartStore(
       const receipt = receipts.get(id);
       return receipt ? inspectReceipt(receipt) : null;
     },
-    listStartReceipts: async (limit = 50): ReturnType<IResourceStartStore['listStartReceipts']> =>
+    listStartReceipts: async (
+      limit?: number
+    ): ReturnType<IResourceStartStore['listStartReceipts']> =>
       structuredClone(
         [...receipts.values()]
           .reverse()
-          .slice(0, limit)
+          .slice(0, validateStartReceiptLimit(limit))
           .map(({ id, sourceInstanceId, deliveryId, outcome, reason, receivedAt }) => ({
             id,
             sourceInstanceId,

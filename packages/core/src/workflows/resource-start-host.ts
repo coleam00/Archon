@@ -238,7 +238,6 @@ async function prepareBinding(
   });
 }
 
-/** Claim, prepare and admit one pending binding. Records a rejection on failure. */
 async function prepareClaimedBinding(
   host: WorkflowHost,
   intent: ResourceStartBindingIntent,
@@ -259,14 +258,21 @@ async function prepareClaimedBinding(
     // Unknown failures are not an implicit retry policy; the receipt stays inspectable.
     // Configuration and provider errors can contain secret values, so persist the
     // failed boundary, not the exception text. The original cause reaches the caller.
-    await host.deps.store.failStartBindingPreparation({
-      ...identity,
-      retryable: false,
-      error:
-        error instanceof ResourceSlotCapacityConflictError
-          ? 'resource_capacity_conflict'
-          : `${stage}_failed`,
-    });
+    try {
+      await host.deps.store.failStartBindingPreparation({
+        ...identity,
+        retryable: false,
+        error:
+          error instanceof ResourceSlotCapacityConflictError
+            ? 'resource_capacity_conflict'
+            : `${stage}_failed`,
+      });
+    } catch (statusError) {
+      throw new AggregateError(
+        [error, statusError],
+        `Preparation ${stage}_failed; recording the rejection also failed.`
+      );
+    }
     throw error;
   }
 }

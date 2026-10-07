@@ -1,4 +1,7 @@
-import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+import {
+  SourceReceiptDigestConflictError,
+  validateStartReceiptLimit,
+} from '@archon/workflows/resource-start-store';
 import type {
   StartBindingInspection,
   StartReceiptInspection,
@@ -323,15 +326,14 @@ export async function getStartReceipt(id: string): Promise<StartReceiptInspectio
 }
 
 export async function listStartReceipts(
-  limit = 50
+  limit?: number
 ): Promise<
   Pick<
     StartReceiptInspection,
     'id' | 'sourceInstanceId' | 'deliveryId' | 'outcome' | 'reason' | 'receivedAt'
   >[]
 > {
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
-    throw new Error('Receipt limit must be an integer from 1 to 1000.');
+  const receiptLimit = validateStartReceiptLimit(limit);
   const result = await getDatabase().query<{
     id: string;
     source_instance_id: string;
@@ -341,7 +343,7 @@ export async function listStartReceipts(
     received_at: string | Date;
   }>(
     'SELECT id, source_instance_id, delivery_id, outcome, reason, received_at FROM remote_agent_start_receipts ORDER BY received_at DESC, id DESC LIMIT $1',
-    [limit]
+    [receiptLimit]
   );
   return result.rows.map(row => ({
     id: row.id,

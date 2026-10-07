@@ -54,7 +54,11 @@ async function loadTimerConfig(
 }
 
 /** Hand one admitted request to a detached `trigger execute` process with its own log. */
-async function spawnAdmitted(host: WorkflowHost, requestId: string, hostId: string): Promise<void> {
+export async function spawnAdmitted(
+  host: WorkflowHost,
+  requestId: string,
+  hostId: string
+): Promise<void> {
   const request = await host.deps.store.getResourceStartRequest(requestId);
   if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
   const [executable, ...prefix] = cliProgramArguments();
@@ -83,11 +87,15 @@ async function spawnAdmitted(host: WorkflowHost, requestId: string, hostId: stri
   }
 }
 
-function drainHost(host: WorkflowHost, hostId: string): Promise<void> {
+function drainHost(
+  host: WorkflowHost,
+  hostId: string,
+  dispatch: (requestId: string, hostId: string) => Promise<void>
+): Promise<void> {
   return drainResourceStartHost({
     ...host,
     hostId,
-    startAdmitted: requestId => spawnAdmitted(host, requestId, hostId),
+    startAdmitted: requestId => dispatch(requestId, hostId),
   });
 }
 
@@ -95,7 +103,9 @@ export async function triggerCommand(
   host: WorkflowHost,
   action: string | undefined,
   args: string[],
-  options: { config?: string; host?: string; owner?: string; yes?: boolean; limit?: string }
+  options: { config?: string; host?: string; owner?: string; yes?: boolean; limit?: string },
+  dispatch: (requestId: string, hostId: string) => Promise<void> = (requestId, hostId) =>
+    triggerCommand(host, 'execute', [requestId], { host: hostId })
 ): Promise<void> {
   if (action === 'whoami') {
     const cliId = resolveCliUserId();
@@ -135,7 +145,7 @@ export async function triggerCommand(
       bindings: [binding],
     });
     try {
-      await drainHost(host, binding.hostId);
+      await drainHost(host, binding.hostId, dispatch);
     } catch (error) {
       throw new Error(
         `Receipt ${receipt.receiptId} is retained, but its host drain failed. Inspect that receipt before recovery.`,
@@ -147,7 +157,7 @@ export async function triggerCommand(
   }
   if (action === 'drain') {
     if (!options.host) throw new Error('Usage: archon trigger drain --host <configured-host>');
-    await drainHost(host, options.host);
+    await drainHost(host, options.host, dispatch);
     await writeJsonLine({ hostId: options.host, drained: true });
     return;
   }

@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { getOrCreateConversation } from '@archon/core/db/conversations';
+import { listMessages } from '@archon/core/db/messages';
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { execFileSync } from 'node:child_process';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
@@ -253,6 +256,79 @@ afterEach(async () => {
 });
 
 describe('server resource-start host', () => {
+  test('a version-1 queued launch delivers output and metadata to its real conversation', async () => {
+    const { deliver } = await fixture(false);
+    expect((await deliver('blocker', 'queue')).status).toBe(200);
+    const blockerId = await admitWithoutStarting();
+    const sqlHost = createSqlWorkflowHost();
+    const blocker = await sqlHost.deps.store.getResourceStartRequest(blockerId);
+    if (!blocker) throw new Error('Missing blocker');
+    const conversation = await getOrCreateConversation('cli', 'legacy-thread');
+    const id = randomUUID();
+    const launch = {
+      ...blocker.launch,
+      run: {
+        ...blocker.launch.run,
+        id,
+        origin: { conversationId: conversation.id, userId: USER_ID },
+      },
+    };
+    expect(
+      (
+        await sqlHost.deps.store.admitResourceStart({
+          resource: blocker.resource,
+          capacity: 1,
+          hostId: HOST_ID,
+          overlap: 'queue',
+          launch,
+        })
+      ).status
+    ).toBe('queued');
+    const { origin: _origin, ...run } = launch.run;
+    await getDatabase().query(
+      'UPDATE remote_agent_resource_start_requests SET launch = $1 WHERE id = $2',
+      [
+        JSON.stringify({
+          version: 1,
+          run: { ...run, conversation_id: conversation.id, user_id: USER_ID },
+          execution: launch.execution,
+        }),
+        id,
+      ]
+    );
+    await sqlHost.deps.store.claimPendingWorkflowRun(blockerId);
+    await sqlHost.deps.store.completeWorkflowRun(blockerId, { duration_ms: 1 });
+    const engine = recordingEngine();
+    let delivered = false;
+    const host = createServerResourceStartHost(HOST_ID, {
+      ...sqlHost,
+      engine: {
+        ...engine,
+        async submit(input) {
+          const result = await engine.submit(input);
+          expect(input.origin).toEqual({ conversationId: conversation.id, userId: USER_ID });
+          await input.platform.sendMessage(input.conversationId, 'Legacy output', {
+            category: 'workflow_status',
+            segment: 'new',
+          });
+          delivered = true;
+          return result;
+        },
+      },
+    });
+    await host.requestDrain();
+    await until(() => (delivered ? true : undefined));
+    expect(engine.claimed).toEqual([id]);
+    const messages = await listMessages(conversation.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      conversation_id: conversation.id,
+      role: 'assistant',
+      content: 'Legacy output',
+    });
+    expect(JSON.parse(messages[0].metadata)).toEqual({ category: 'workflow_status' });
+  });
+
   test('a webhook receipt is prepared, admitted and started through the engine port', async () => {
     const { deliver, engine } = await fixture();
     await writeFile(join(root, 'home', 'config.yaml'), 'defaultAssistant: pi\n');
