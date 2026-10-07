@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { writeFileSync, mkdirSync, rmSync } from 'fs';
+import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { getArchonEnvNames, getPluginsPath, loadArchonEnv } from './env-loader';
 
@@ -12,7 +13,7 @@ import { getArchonEnvNames, getPluginsPath, loadArchonEnv } from './env-loader';
  * argument. Both are tmpdirs; no real ~/.archon/ is touched.
  */
 
-const tmpRoot = join(import.meta.dir, '__env-loader-test-tmp__');
+const tmpRoot = mkdtempSync(join(tmpdir(), 'archon-env-loader-test-'));
 const archonHomeDir = join(tmpRoot, 'archon-home');
 const repoDir = join(tmpRoot, 'repo');
 
