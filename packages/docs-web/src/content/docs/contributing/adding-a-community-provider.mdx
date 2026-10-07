@@ -57,13 +57,23 @@ await serveProvider({ descriptor, create: () => new ExampleProvider() });
 
 `capabilities` must provide the full `ProviderCapabilities` shape. The descriptor's
 `configSchema` validates all configuration scopes for existing v1 plugins. A provider can
-add `config: { install, run, snapshot, snapshotKeys }` to use separate JSON Schemas
-for install defaults, per-run settings, and persisted snapshots. Keep `configSchema`
-for older hosts; newer hosts prefer `config`. Generate these schemas from the same
-schemas used by the in-process parser. `snapshotKeys` lists the fields retained before
-snapshot validation, because JSON Schema conversion preserves unknown keys when
-`additionalProperties` is omitted. Derive that list from the snapshot schema rather
-than maintaining it separately. Credentials are a static
+add `config: { install, run, snapshot, stripUnknownKeys? }` to use separate JSON
+Schemas for install defaults, per-run settings, and persisted snapshots. Newer hosts
+prefer `config`. Generate these schemas from the same schemas used by the in-process
+parser, using `z.toJSONSchema(schema, { io: 'input' })` for Zod schemas. Set
+`stripUnknownKeys: true` to strip undeclared fields recursively at object schemas that
+omit `additionalProperties`. Explicit `additionalProperties: false` still rejects
+unknown fields; `true` or a schema preserves allowed fields, including record keys.
+Snapshot projection derives its retained root fields from `snapshot.properties`.
+
+Keep `configSchema` as a compatibility superset of every configuration accepted in
+any scope by older hosts, which use that one schema for install, run, and snapshot.
+Older hosts cannot apply scoped snapshot exclusion or recursive stripping. Providers
+that require those semantics must raise their minimum compatible Archon version to
+one supporting scoped configuration; retaining `configSchema` alone does not provide
+that compatibility.
+
+Credentials are a static
 list of vendor specs; declare only vendors the provider consumes. API-key vendors must
 have an existing Archon delivery rule. With one vendor, all models use it; with several,
 the model's `vendor/` prefix selects a declared vendor after credential alias normalization. An empty list uses native auth.

@@ -28,7 +28,7 @@ export const providerPluginDescriptorSchema = z.object({
       install: z.record(z.string(), z.json()),
       run: z.record(z.string(), z.json()),
       snapshot: z.record(z.string(), z.json()),
-      snapshotKeys: z.array(z.string()),
+      stripUnknownKeys: z.literal(true).optional(),
     })
     .optional(),
   ownsUnprefixedModelRefs: z.literal(true).optional(),

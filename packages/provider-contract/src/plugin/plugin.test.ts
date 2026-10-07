@@ -6,7 +6,7 @@ import { connectProvider, type ConnectedProvider } from './connect';
 import { checkAcp } from './fixtures/acp';
 import { chunks, credentialStatuses, descriptor, fixtureProvider } from './fixtures/provider';
 import { streamPair } from './fixtures/streams';
-import { PluginRemoteError, rpcMessageSchema } from './rpc';
+import { PluginProtocolError, PluginRemoteError, PluginRpc, rpcMessageSchema } from './rpc';
 import { serveProvider } from './serve';
 
 async function withProvider(
@@ -534,4 +534,40 @@ test('absent information hooks report unsupported rather than successful empty r
     }
     expect(await collect(client.sendQuery('turn', '/'))).toEqual(chunks);
   });
+});
+
+test('client rejects malformed successful information responses from an independent peer', async () => {
+  const pair = streamPair();
+  const peer = new PluginRpc(pair.provider);
+  peer.handle('initialize', () => ({
+    protocolVersion: 1,
+    agentCapabilities: { _meta: { archon: descriptor } },
+    authMethods: [],
+  }));
+  peer.handle('_archon/diagnose', () => ({
+    checks: [{ id: 'bad', status: 'ok', message: 'Info' }],
+  }));
+  peer.handle('_archon/list_models', () => ({ models: [{ label: 'Missing id' }] }));
+  const client = await connectProvider(pair.host);
+  try {
+    for (const [call, field] of [
+      [() => client.diagnose({}), 'label'],
+      [() => client.listModels(), 'id'],
+    ] as const) {
+      try {
+        await call();
+        throw new Error('accepted malformed information response');
+      } catch (error) {
+        expect(error).toBeInstanceOf(PluginProtocolError);
+        if (error instanceof PluginProtocolError) {
+          expect(error.plugin).toBe(descriptor.id);
+          expect(error.message).toContain('invalid payload');
+          expect(error.message).toContain(field);
+        }
+      }
+    }
+  } finally {
+    await client.close();
+    await peer.close();
+  }
 });

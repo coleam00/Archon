@@ -1165,18 +1165,15 @@
                 "$ref": "#/$defs/schema8"
               }
             },
-            "snapshotKeys": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
+            "stripUnknownKeys": {
+              "type": "boolean",
+              "const": true
             }
           },
           "required": [
             "install",
             "run",
-            "snapshot",
-            "snapshotKeys"
+            "snapshot"
           ]
         },
         "ownsUnprefixedModelRefs": {

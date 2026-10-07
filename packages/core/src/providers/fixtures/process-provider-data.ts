@@ -34,7 +34,7 @@ export const descriptor = providerPluginDescriptorSchema.parse({
     install: z.toJSONSchema(configSchemas.install, { io: 'input' }),
     run: z.toJSONSchema(configSchemas.run, { io: 'input' }),
     snapshot: z.toJSONSchema(configSchemas.snapshot, { io: 'input' }),
-    snapshotKeys: Object.keys(configSchemas.snapshot.shape),
+    stripUnknownKeys: true,
   },
   capabilities: {
     backgroundWork: 'reported',

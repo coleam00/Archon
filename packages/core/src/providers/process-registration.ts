@@ -11,6 +11,7 @@ import {
 } from '@archon/provider-contract/plugin';
 import { KNOWN_VENDORS } from '../credentials/delivery';
 import { ProcessAgentProvider } from './process-provider';
+import { scopedConfigSchema } from './scoped-config';
 
 export function processProviderRegistration(
   input: ProviderPluginDescriptor,
@@ -31,9 +32,9 @@ export function processProviderRegistration(
   const legacySchema = z.fromJSONSchema(descriptor.configSchema);
   const schemas = config
     ? {
-        install: z.fromJSONSchema(config.install),
-        run: z.fromJSONSchema(config.run),
-        snapshot: z.fromJSONSchema(config.snapshot),
+        install: scopedConfigSchema(config.install, config.stripUnknownKeys === true, false),
+        run: scopedConfigSchema(config.run, config.stripUnknownKeys === true, false),
+        snapshot: scopedConfigSchema(config.snapshot, config.stripUnknownKeys === true, true),
       }
     : { install: legacySchema, run: legacySchema, snapshot: legacySchema };
   const specs = descriptor.credentials.specs;
@@ -53,13 +54,7 @@ export function processProviderRegistration(
       },
     },
     parseConfig(raw, scope): ProviderDefaults {
-      const input =
-        scope === 'snapshot' && config
-          ? Object.fromEntries(
-              Object.entries(raw).filter(([key]) => config.snapshotKeys.includes(key))
-            )
-          : raw;
-      const parsed = schemas[scope].safeParse(input);
+      const parsed = schemas[scope].safeParse(raw);
       if (!parsed.success) {
         const issue = parsed.error.issues[0];
         throw new InvalidProviderRunConfigError(
