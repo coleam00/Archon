@@ -19,6 +19,7 @@ const OPS = [
   'pr.create',
   'pr.edit-body',
   'pr.ready',
+  'pr.draft',
   'comment.upsert',
   'pr.merge',
   'checks.rerun',
@@ -75,8 +76,8 @@ else {
     url: `https://forge.example/${repo.path}/pull/${String(ref.number)}`,
     head: input.head ?? 'feature',
     base: input.base ?? 'dev',
-    is_draft: input.op === 'pr.create' ? (input.draft ?? false) : false,
-    state: 'open',
+    is_draft: input.op === 'pr.create' ? (input.draft ?? false) : input.op === 'pr.draft',
+    state: mode === 'not-open' ? 'closed' : 'open',
     head_repo: input.headRepo ?? repo,
     head_revision: input.headRevision ?? 'headsha',
     base_revision: 'basesha',
@@ -93,7 +94,10 @@ else {
   const answer = (target: unknown, value: object): unknown => ({
     operationId: input.operationId,
     ok: true,
-    result: { op: input.op, value: { target, outcome: 'applied', changed: true, ...value } },
+    result: {
+      op: input.op,
+      value: { target, outcome: 'applied', changed: mode !== 'unchanged', ...value },
+    },
   });
 
   /** An applied answer that does not answer the request it was sent. */
@@ -107,7 +111,8 @@ else {
       return answer(ref, { ref, revision: input.revision, units: input.units });
     if (input.op === 'pr.create')
       return answer(repo, { pr: { ...pr, head_revision: 'another-revision' } });
-    if (input.op === 'pr.ready') return answer(ref, { pr: { ...pr, is_draft: true } });
+    if (input.op === 'pr.ready' || input.op === 'pr.draft')
+      return answer(ref, { pr: { ...pr, is_draft: !pr.is_draft } });
     if (input.op === 'comment.upsert')
       return answer(ref, { comment: { ...comment, bodyDigest: digest('something else') } });
     return answer(ref, { pr, bodyDigest: digest('something else') });
@@ -155,7 +160,7 @@ else {
         },
       };
     if (input.op === 'pr.create') return answer(repo, { pr });
-    if (input.op === 'pr.ready') return answer(ref, { pr });
+    if (input.op === 'pr.ready' || input.op === 'pr.draft') return answer(ref, { pr });
     if (input.op === 'comment.upsert') return answer(ref, { comment });
     return answer(ref, { pr, bodyDigest: digest(input.body ?? '') });
   };
