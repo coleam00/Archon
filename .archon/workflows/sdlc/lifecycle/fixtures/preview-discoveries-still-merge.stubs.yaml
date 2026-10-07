@@ -102,12 +102,21 @@ discoveries__render:
   duplicate_count: 0
   update_existing_count: 0
   new_count: 0
+merge__ci-policy:
+  requirement: "required"
+  source: "declared"
+  checks: ["tests"]
+  checks_state: "passing"
+  results:
+    - pr: "https://github.com/example/app/pull/7"
+      head_sha: "0123456789abcdef0123456789abcdef01234567"
+      check: "tests"
+      state: "passing"
+  reason: ""
 merge__assess:
   summary: "stub: batch eligible"
   eligible: true
   method: "squash"
-  ci_requirement: "none"
-  checks_state: "not_applicable"
   validation_verified: true
   review_verified: true
   plan_digest: "fixture"
@@ -142,7 +151,9 @@ execute:
 ship__deliver__validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed
-  reached: [merge__assess, merge__publish-holds, execute]
+  reached: [merge__ci-policy, merge__assess, merge__publish-holds, execute]
+  resolved-text-contains:
+    merge__assess: '"checks":["tests"]'
   inputs:
     target: "https://github.com/example/app/issues/1"
     scenario: "/private/scenario.json"

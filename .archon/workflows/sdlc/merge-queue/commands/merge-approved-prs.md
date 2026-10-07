@@ -8,8 +8,10 @@ Return authorized=false for changed plan or exhausted/unclear state. Native mode
 and approval authorization are enforced separately at the script write boundary.
 
 Use gh with the explicit repository. Before EACH merge, re-read the PR, its head,
-base, review and CI. Require the recorded head SHA and target base, a non-draft
-open same-repository PR, resolved review findings, and passing required checks.
+base and review. Require the recorded head SHA and target base, a non-draft
+open same-repository PR, and resolved review findings. A script settled the
+required-check policy and its results for these pinned heads before approval; do
+not re-decide whether CI is required.
 Compare the live base SHA with the plan before the first merge and with the
 previous result's exact `prior_base_sha` thereafter. The live base SHA is the branch reference
 itself: `gh api repos/<owner>/<repo>/branches/<base> --jq .commit.sha` (or

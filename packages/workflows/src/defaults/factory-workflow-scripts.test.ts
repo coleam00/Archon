@@ -7,6 +7,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 
 const workflowRoot = resolve(import.meta.dir, '../../../../.archon/workflows/sdlc');
 const mergeScript = join(workflowRoot, 'merge-queue', 'scripts', 'merge-action.ts');
+const ciPolicyScript = join(workflowRoot, 'merge-queue', 'scripts', 'ci-policy.ts');
 const captureScript = join(workflowRoot, 'verify-runtime', 'scripts', 'capture-command.ts');
 const finishScript = join(workflowRoot, 'verify-runtime', 'scripts', 'finish-attempt.py');
 const gateScript = join(workflowRoot, 'verify-runtime', 'scripts', 'gate-verified.py');
@@ -25,9 +26,20 @@ beforeAll(async () => {
   fakeGh = process.platform === 'win32' ? `${fakeGhOutput}.exe` : fakeGhOutput;
   await writeFile(
     source,
-    `import { appendFileSync } from 'node:fs';
+    `import { appendFileSync, readFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 appendFileSync(process.env.GH_LOG!, JSON.stringify(args) + '\\n');
+if (process.env.GH_FIXTURE) {
+  // Longest argument-prefix match wins; an unmatched call fails like an API error.
+  const responses = JSON.parse(readFileSync(process.env.GH_FIXTURE, 'utf8'));
+  const call = args.join(' ');
+  const key = Object.keys(responses)
+    .filter(prefix => call.startsWith(prefix))
+    .sort((a, b) => b.length - a.length)[0];
+  if (key === undefined) process.exit(1);
+  process.stdout.write(responses[key].stdout ?? '');
+  process.exit(responses[key].exit ?? 0);
+}
 if (args[0] === 'pr' && args[1] === 'view') {
   if (process.env.GH_VIEW_MODE === 'failed') process.exit(1);
   if (process.env.GH_VIEW_MODE === 'malformed') {
@@ -111,8 +123,6 @@ function assessment(
     summary: 'eligible',
     eligible: true,
     method: 'squash',
-    ci_requirement: 'none',
-    checks_state: 'not_applicable',
     validation_verified: true,
     review_verified: true,
     plan_digest: digest(content),
@@ -121,13 +131,15 @@ function assessment(
 }
 
 describe('merge action boundary', () => {
-  test('distinguishes known no-CI from unknown or failing required CI', async () => {
+  test('gates on the scripted CI policy, never on an agent claim about CI', async () => {
     const { artifacts, content } = await mergeFixture();
-    const invoke = (overrides: Record<string, unknown>) => {
+    const none = { requirement: 'none', checks_state: 'not_applicable', reason: '' };
+    const invoke = (overrides: Record<string, unknown>, policy: unknown = none) => {
       const result = run(mergeScript, {
         ARTIFACTS_DIR: artifacts,
         INPUTS_ACTION: 'gate',
         INPUTS_ASSESSMENT: JSON.stringify(assessment(content, overrides)),
+        INPUTS_CI_POLICY: policy === null ? '' : JSON.stringify(policy),
         INPUTS_MERGE_METHOD: 'squash',
       });
       expect(result.exitCode).toBe(0);
@@ -135,14 +147,35 @@ describe('merge action boundary', () => {
     };
 
     expect(invoke({})).toMatchObject({ ready: true, method: 'squash' });
+    // An agent's own CI fields no longer decide anything: on identical evidence
+    // the model answered "none" and "unknown" by turns.
     expect(invoke({ ci_requirement: 'unknown', checks_state: 'missing' })).toMatchObject({
+      ready: true,
+    });
+    expect(
+      invoke({}, { requirement: 'required', checks_state: 'passing', reason: '' })
+    ).toMatchObject({ ready: true });
+    expect(
+      invoke(
+        {},
+        { requirement: 'unknown', checks_state: 'unknown', reason: 'declare required_checks' }
+      )
+    ).toMatchObject({
+      ready: false,
+      summary: expect.stringContaining('required CI policy is unknown: declare required_checks'),
+    });
+    expect(invoke({}, null)).toMatchObject({
       ready: false,
       summary: expect.stringContaining('required CI policy is unknown'),
     });
-    expect(invoke({ ci_requirement: 'required', checks_state: 'failing' })).toMatchObject({
-      ready: false,
-      summary: expect.stringContaining('required checks are not passing'),
-    });
+    for (const state of ['failing', 'pending', 'missing', 'unknown']) {
+      expect(
+        invoke({}, { requirement: 'required', checks_state: state, reason: `tests is ${state}` })
+      ).toMatchObject({
+        ready: false,
+        summary: expect.stringContaining(`required checks are not passing: tests is ${state}`),
+      });
+    }
     expect(invoke({ method: '' })).toMatchObject({
       ready: false,
       summary: expect.stringContaining('merge method is missing'),
@@ -476,6 +509,165 @@ describe('merge action boundary', () => {
         summary: expect.stringContaining('state is unclear'),
       });
     }
+  });
+});
+
+describe('required-check policy script', () => {
+  const pr = 'https://github.test/owner/repo/pull/17';
+  const head = 'head-17';
+  const http = (status: number, body: unknown) =>
+    `HTTP/2.0 ${status} X\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(body)}`;
+  const forbidden = http(403, { message: 'Upgrade to GitHub Pro', status: '403' });
+  const unprotected = http(200, {
+    name: 'main',
+    protected: false,
+    protection: {
+      enabled: false,
+      required_status_checks: { enforcement_level: 'off', contexts: [], checks: [] },
+    },
+  });
+  const lines = (items: unknown[]) => items.map(item => JSON.stringify(item)).join('\n') + '\n';
+
+  async function policy(
+    requiredChecks: string,
+    responses: Record<string, { stdout?: string; exit?: number }>
+  ): Promise<Record<string, unknown>> {
+    const dir = await mkdtemp(join(root, 'ci-policy-'));
+    const fixture = join(dir, 'gh.json');
+    await writeFile(
+      fixture,
+      JSON.stringify({
+        'pr view 17 --repo owner/repo': {
+          stdout: JSON.stringify({ baseRefName: 'main', headRefOid: head }),
+        },
+        ...responses,
+      })
+    );
+    const result = run(ciPolicyScript, {
+      INPUTS_PRS: JSON.stringify([pr]),
+      INPUTS_REQUIRED_CHECKS: requiredChecks,
+      GH_FIXTURE: fixture,
+      GH_LOG: join(dir, 'gh.jsonl'),
+      PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+    });
+    expect(result.exitCode).toBe(0);
+    return JSON.parse(stdout(result)) as Record<string, unknown>;
+  }
+
+  const freePrivate = {
+    'api --include repos/owner/repo/branches/main': { stdout: unprotected, exit: 0 },
+    'api --include repos/owner/repo/rules/branches/main': { stdout: forbidden, exit: 1 },
+  };
+  const checks = (runs: unknown[], statuses: unknown[] = []) => ({
+    [`api --paginate repos/owner/repo/commits/${head}/check-runs`]: { stdout: lines(runs) },
+    [`api --paginate repos/owner/repo/commits/${head}/statuses`]: { stdout: lines(statuses) },
+  });
+
+  test('an undeclared policy GitHub will not report is unknown, never none', async () => {
+    const result = await policy('', freePrivate);
+    expect(result).toMatchObject({ requirement: 'unknown', checks_state: 'unknown' });
+    expect(result.reason).toContain('rulesets (HTTP 403)');
+    expect(result.reason).toContain('required_checks');
+  });
+
+  test('a declared policy decides when GitHub cannot report one', async () => {
+    expect(await policy('none', freePrivate)).toMatchObject({
+      requirement: 'none',
+      source: 'declared',
+      checks_state: 'not_applicable',
+    });
+    const passing = { id: 2, name: 'tests', status: 'completed', conclusion: 'success' };
+    expect(await policy('tests', { ...freePrivate, ...checks([passing]) })).toMatchObject({
+      requirement: 'required',
+      source: 'declared',
+      checks: ['tests'],
+      checks_state: 'passing',
+    });
+  });
+
+  test('reads each required check result at the pull request head', async () => {
+    const cases: Array<[unknown[], unknown[], string]> = [
+      [[{ id: 1, name: 'tests', status: 'in_progress', conclusion: null }], [], 'pending'],
+      [[{ id: 1, name: 'tests', status: 'completed', conclusion: 'failure' }], [], 'failing'],
+      [[{ id: 1, name: 'lint', status: 'completed', conclusion: 'success' }], [], 'missing'],
+      [[], [{ context: 'tests', state: 'success' }], 'passing'],
+      [[], [{ context: 'tests', state: 'pending' }], 'pending'],
+      // A rerun supersedes the earlier failure.
+      [
+        [
+          { id: 1, name: 'tests', status: 'completed', conclusion: 'failure' },
+          { id: 2, name: 'tests', status: 'completed', conclusion: 'success' },
+        ],
+        [],
+        'passing',
+      ],
+    ];
+    for (const [runs, statuses, state] of cases) {
+      expect(await policy('tests', { ...freePrivate, ...checks(runs, statuses) })).toMatchObject({
+        requirement: 'required',
+        checks_state: state,
+      });
+    }
+  });
+
+  test('reads protection and rulesets when GitHub reports them', async () => {
+    const noRules = {
+      'api --include repos/owner/repo/rules/branches/main': { stdout: http(200, []) },
+    };
+    expect(
+      await policy('', {
+        'api --include repos/owner/repo/branches/main': { stdout: unprotected },
+        ...noRules,
+      })
+    ).toMatchObject({ requirement: 'none', source: 'github' });
+
+    const protectedBranch = http(200, {
+      protected: true,
+      protection: {
+        enabled: true,
+        required_status_checks: { contexts: ['tests'], checks: [{ context: 'tests' }] },
+      },
+    });
+    const passing = checks([{ id: 1, name: 'tests', status: 'completed', conclusion: 'success' }]);
+    expect(
+      await policy('', {
+        'api --include repos/owner/repo/branches/main': { stdout: protectedBranch },
+        ...noRules,
+        ...passing,
+      })
+    ).toMatchObject({ requirement: 'required', source: 'github', checks: ['tests'] });
+
+    const ruleset = http(200, [
+      { type: 'pull_request' },
+      {
+        type: 'required_status_checks',
+        parameters: { required_status_checks: [{ context: 'tests' }] },
+      },
+    ]);
+    expect(
+      await policy('', {
+        'api --include repos/owner/repo/branches/main': { stdout: unprotected },
+        'api --include repos/owner/repo/rules/branches/main': { stdout: ruleset },
+        ...passing,
+      })
+    ).toMatchObject({ requirement: 'required', checks: ['tests'], checks_state: 'passing' });
+
+    // A declaration never removes a check GitHub enforces.
+    expect(
+      await policy('none', {
+        'api --include repos/owner/repo/branches/main': { stdout: protectedBranch },
+        ...noRules,
+        ...passing,
+      })
+    ).toMatchObject({ requirement: 'required', checks: ['tests'] });
+  });
+
+  test('holds on a malformed declaration or unreadable check results', async () => {
+    expect(await policy('tests, none', freePrivate)).toMatchObject({ requirement: 'unknown' });
+    expect(await policy('tests', freePrivate)).toMatchObject({
+      requirement: 'required',
+      checks_state: 'unknown',
+    });
   });
 });
 

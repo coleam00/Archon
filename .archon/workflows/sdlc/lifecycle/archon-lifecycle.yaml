@@ -36,6 +36,12 @@ inputs:
   merge_method:
     default: ''
     description: 'Required merge strategy: merge, squash, or rebase.'
+  required_checks:
+    default: ''
+    description: >-
+      Forwarded to the merge queue: "none" or comma-separated check names when
+      GitHub cannot report the base branch's required checks. Empty reads them
+      from GitHub.
   publish_holds:
     default: 'false'
     description: >-
@@ -245,6 +251,7 @@ nodes:
       prs: "$selected.output.prs"
       mode: "$INPUTS.merge_mode"
       merge_method: "$INPUTS.merge_method"
+      required_checks: "$INPUTS.required_checks"
       publish_holds: "$INPUTS.publish_holds"
       evidence: "$selected.output.evidence"
 

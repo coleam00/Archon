@@ -4,7 +4,7 @@
 validation and delivery correction loops), runtime verification, a fresh holdout,
 discoveries, merge queue and, optionally, deployment. Inputs are `target`, absolute
 `scenario` and `holdout` paths, `merge_mode`, `discovery_publication`, `publish`,
-`state_labels`, `publish_holds`,
+`state_labels`, `publish_holds`, `required_checks` (forwarded to the merge queue),
 and the optional `deploy`/`health`/`identity` commands forwarded to `archon-deploy`
 after a confirmed merge. Modes default to approval and preview; select auto
 explicitly for unattended publication/merge.

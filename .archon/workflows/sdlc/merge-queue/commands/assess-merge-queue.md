@@ -5,17 +5,17 @@ Additional evidence: $INPUTS.evidence
 Requested merge method: $INPUTS.merge_method
 Mode: $INPUTS.mode
 Hold-comment publication requested: $INPUTS.publish_holds
+Required-check policy and results (read by a script): $INPUTS.ci_policy
 Keep the checkout and GitHub unchanged. A later deterministic node owns any hold
 comment publication. Read project guidance and use gh with an explicit repository. Require 1-5 distinct same-repository PRs targeting one base.
-Reject ambiguous identity, forks, drafts, closed PRs, conflicts, unknown checks,
-or unresolved review findings. Read PR bodies, review comments, status checks and
-required CI for the current head; pending is not passing. Distinguish a known
-repository policy with no required CI (`ci_requirement=none`,
-`checks_state=not_applicable`) from an unknown policy and from required checks.
-An empty check list proves none of those states. Unknown policy, or required
-checks that are failing, pending or missing, holds. Require independent
-review and actual validation evidence, including project-required runtime checks.
-No checks is not evidence of validation. Read the supplied reports in full and
+Reject ambiguous identity, forks, drafts, closed PRs, conflicts, or unresolved
+review findings. Read PR bodies, review comments and status checks for the current
+head. The required-check policy above is a fact the workflow already established
+and the gate enforces: do not re-derive whether CI is required, and do not record
+a hold for CI that policy does not require. Require independent review and actual
+validation evidence, including project-required runtime checks. A passing or
+absent check is not evidence of validation, and a failing check is evidence
+against it. Read the supplied reports in full and
 verify their source/head matches; a prose assertion that tests passed is insufficient.
 
 Independent review means review judgment produced independently from the
@@ -44,8 +44,8 @@ merge. If a PR's validation predates the live base
 head, judge that here (GitHub's mergeability and the checks on the current PR head)
 rather than recording the older base. Record holds in merge-plan.md. Return ready only when the entire requested batch is
 eligible. Compute the SHA-256 of the exact merge-plan.json bytes and return it as
-plan_digest. Also return the typed CI requirement/check state and whether ordinary
-validation and independent review were verified. Return `eligible=true` only when
+plan_digest. Also return whether ordinary validation and independent review were
+verified. Return `eligible=true` only when
 every whole-batch eligibility condition above passes. The deterministic gate, not a
 lone ready claim, decides eligibility. No code changes, branch switches, custom
 worktrees, or agent subprocesses.

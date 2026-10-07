@@ -134,14 +134,14 @@ function gate(): void {
   if (assessment.plan_digest !== current.digest) {
     reasons.push('merge plan digest does not match the assessed file');
   }
-  if (assessment.ci_requirement === 'none') {
-    if (assessment.checks_state !== 'not_applicable') {
-      reasons.push('known no-required-CI must use the not_applicable checks state');
+  const policy = object(input('ci_policy'));
+  const policyReason = typeof policy.reason === 'string' ? policy.reason : '';
+  if (policy.requirement === 'required') {
+    if (policy.checks_state !== 'passing') {
+      reasons.push(`required checks are not passing${policyReason ? `: ${policyReason}` : ''}`);
     }
-  } else if (assessment.ci_requirement === 'required') {
-    if (assessment.checks_state !== 'passing') reasons.push('required checks are not passing');
-  } else {
-    reasons.push('required CI policy is unknown');
+  } else if (policy.requirement !== 'none') {
+    reasons.push(`required CI policy is unknown${policyReason ? `: ${policyReason}` : ''}`);
   }
   if (assessment.validation_verified !== true) reasons.push('independent validation is not verified');
   if (assessment.review_verified !== true) reasons.push('independent review is not verified');

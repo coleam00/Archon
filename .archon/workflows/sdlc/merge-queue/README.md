@@ -1,13 +1,23 @@
 # Merge queue
 
 `archon-merge-queue` accepts `prs` (1-5 explicit PR URLs), optional `evidence`,
-`merge_method` (`merge|squash|rebase`), `mode=preview|approve|auto`, and
-`publish_holds=false|true`. Evidence
+`merge_method` (`merge|squash|rebase`), `mode=preview|approve|auto`,
+`required_checks`, and `publish_holds=false|true`. Evidence
 may be an empty array when validation and review are GitHub-only; file-backed
 entries bind an exact path and SHA-256 and are rechecked before merge authorization.
 Authorized hold comments use the assessment-time evidence snapshot. It uses two medium command agents with a native
 approval node between them. GitHub operations and CI inspection use gh inside
 those nodes, with explicit repository and expected head identity.
+
+Whether CI is required is a fact, so the `ci-policy` script reads it and no agent
+decides it. It reads the base branch's protection and rulesets with gh, then the
+results of each required check at each PR head. GitHub returns 403 for rulesets and
+protection details on plans without those features (free private repositories);
+there the caller declares `required_checks` as `none` or a comma-separated list of
+check names. Checks GitHub enforces are always added to a declaration. An undeclared
+policy GitHub will not report is `unknown` and holds, with a reason naming the
+input to set; it is never assumed to be `none`. The gate merges only when the
+policy is `none`, or `required` with every required check passing.
 
 Approval covers the recorded batch. Auto explicitly authorizes that batch without
 a human pause, subject to repository guidance. Processing is sequential. Changed
