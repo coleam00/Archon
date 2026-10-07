@@ -2,7 +2,6 @@ import { join } from 'node:path';
 import { isProviderReceipt } from '@archon/plugin-manifest';
 import { readReceipts, receiptPath } from '@archon/plugin-manifest/store';
 import type { ProviderRegistration } from '@archon/provider-contract';
-import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
 import { processProviderRegistration } from './process-registration';
 
 export async function loadProviderPlugins(pluginsDir: string): Promise<ProviderRegistration[]> {
@@ -13,7 +12,7 @@ export async function loadProviderPlugins(pluginsDir: string): Promise<ProviderR
   });
   return receipts.filter(isProviderReceipt).map(receipt => {
     try {
-      const descriptor = providerPluginDescriptorSchema.parse(receipt.descriptor);
+      const descriptor = receipt.descriptor;
       if (receipt.manifest.executable !== `archon-provider-${descriptor.id}`) {
         throw new Error('descriptor id does not match the manifest executable');
       }

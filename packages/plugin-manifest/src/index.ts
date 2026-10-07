@@ -4,11 +4,13 @@
  *
  * The CLI installer, workflow discovery, the docs-site index and the release
  * workflow all need these shapes and names, and none of those can import
- * another, so they live in this leaf package with no dependency beyond zod.
+ * another, so they share this package. Provider descriptors are owned by
+ * `@archon/provider-contract`.
  * Reading receipts from disk lives in `./store`, so a consumer that only
  * needs the schemas does not load filesystem code.
  */
 import { z } from 'zod';
+import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
 
 export const PLUGIN_MANIFEST_FILE = 'archon-plugin.json';
 
@@ -140,7 +142,7 @@ export const forgeReceiptSchema = z
 
 export const providerReceiptSchema = forgeReceiptSchema.extend({
   manifest: providerManifestSchema,
-  descriptor: z.record(z.string(), z.unknown()),
+  descriptor: providerPluginDescriptorSchema,
 });
 
 /**

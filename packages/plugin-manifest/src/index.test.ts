@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { providerCapabilitiesSchema } from '@archon/provider-contract';
+import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
 import {
   forgeManifestSchema,
   pluginReleaseAsset,
@@ -163,7 +165,7 @@ const providerManifest = {
   kind: 'provider' as const,
   executable: 'archon-provider-example',
 };
-test('provider manifests and receipts round-trip without owning the descriptor contract', () => {
+test('provider receipts validate the owned descriptor contract', () => {
   expect(pluginManifestSchema.parse(providerManifest)).toEqual(providerManifest);
   for (const executable of [
     'archon-forge-example',
@@ -180,7 +182,34 @@ test('provider manifests and receipts round-trip without owning the descriptor c
     commit: 'a'.repeat(40),
     installedAt: new Date(0).toISOString(),
     files: [{ path: 'archon-provider-example', sha256: 'b'.repeat(64) }],
-    descriptor: { id: 'example' },
+    descriptor: providerPluginDescriptorSchema.parse({
+      protocol: 1,
+      id: 'example',
+      displayName: 'Example',
+      version: '1',
+      credentials: { kind: 'static', specs: [] },
+      configSchema: { type: 'object' },
+      capabilities: {
+        ...Object.fromEntries(
+          Object.keys(providerCapabilitiesSchema.shape).map(key => [key, false])
+        ),
+        backgroundWork: 'none',
+        sessionFork: undefined,
+        knownToolNames: undefined,
+        renamedTools: undefined,
+      },
+    }),
   };
   expect(pluginReceiptSchema.parse(JSON.parse(JSON.stringify(receipt)))).toEqual(receipt);
+  for (const descriptor of [
+    { id: 'example' },
+    { ...receipt.descriptor, protocol: 2 },
+    { ...receipt.descriptor, credentials: { kind: 'dynamic' } },
+    {
+      ...receipt.descriptor,
+      capabilities: { ...receipt.descriptor.capabilities, nativeTools: true },
+    },
+  ]) {
+    expect(pluginReceiptSchema.safeParse({ ...receipt, descriptor }).success).toBe(false);
+  }
 });

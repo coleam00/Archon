@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { receiptPath } from '@archon/plugin-manifest/store';
+import { readReceipts, receiptPath } from '@archon/plugin-manifest/store';
 import { parseProviderRunModel } from '@archon/provider-contract';
 import { descriptor } from './fixtures/process-provider-data';
 import { loadProviderPlugins } from './load-provider-plugins';
@@ -45,6 +45,7 @@ test('invalid descriptors, executable identities and delivery rules name the rec
   const file = receiptPath(dir, id);
   await mkdir(dirname(file), { recursive: true });
   for (const value of [
+    { ...receipt, descriptor: { id: descriptor.id } },
     {
       ...receipt,
       descriptor: {
@@ -67,8 +68,10 @@ test('invalid descriptors, executable identities and delivery rules name the rec
   ]) {
     await writeFile(file, JSON.stringify(value));
     await expect(loadProviderPlugins(dir)).rejects.toThrow(file);
-    await expect(loadProviderPlugins(dir)).rejects.toThrow(
-      `archon plugin update ${id} or archon plugin remove ${id}`
-    );
+    await expect(loadProviderPlugins(dir)).rejects.toThrow('archon plugin update');
+    await expect(loadProviderPlugins(dir)).rejects.toThrow('archon plugin remove');
+    if (!('protocol' in value.descriptor) || value.descriptor.capabilities.nativeTools) {
+      await expect(readReceipts(dir)).rejects.toThrow(`Invalid plugin receipt ${file}`);
+    }
   }
 });
