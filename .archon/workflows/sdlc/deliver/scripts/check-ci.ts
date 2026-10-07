@@ -49,10 +49,10 @@ function probe(): void {
   const units = read.units;
   const flippedAt = parseFlippedAt(text(process.env.INPUTS_FLIPPED_AT));
   const now = Date.now();
-  const state = gateState(units, flippedAt, now);
+  const state = gateState(units, flippedAt, expected, now);
   if (state === 'pending') {
     const running = units.filter(unit => unit.state === 'pending');
-    const stale = draftSkips(units, flippedAt, now);
+    const stale = draftSkips(units, flippedAt, expected, now);
     const parts: string[] = [];
     if (running.length > 0) parts.push(`${running.length} check(s) running${at}`);
     if (stale.length > 0) {

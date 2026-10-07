@@ -59,6 +59,41 @@ describe('check-ci on the default gh source', () => {
     });
   });
 
+  // Run acd2449c (#3775): the draft's run records the matrix parent as one skipped
+  // `test`; the ready run registers `test (ubuntu-latest)` and `test (windows-latest)`.
+  // No `test` ever runs again, so it must not hold the gate once the expected
+  // checks it was never part of are green.
+  it('concludes when a draft-time skip was renamed by the ready run and every expected check is green', () => {
+    const result = probe({
+      gh: {
+        checks: [
+          { name: 'test', state: 'SKIPPED', bucket: 'skipping', completedAt: at(-40_000) },
+          { name: 'test (ubuntu-latest)', state: 'SUCCESS', bucket: 'pass', completedAt: at(-2_000) },
+          { name: 'test (windows-latest)', state: 'SUCCESS', bucket: 'pass', completedAt: at(-1_000) },
+        ],
+      },
+      inputs: {
+        INPUTS_FLIPPED_AT: at(-30_000),
+        INPUTS_EXPECTED: JSON.stringify(['test (ubuntu-latest)', 'test (windows-latest)']),
+      },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'concluded',
+      detail: 'all 3 observed check(s) green; skipped (non-blocking): test',
+    });
+  });
+
+  it('still waits on an expected check the draft skipped', () => {
+    const result = probe({
+      gh: { checks: draftSkipped(-1_000) },
+      inputs: { INPUTS_FLIPPED_AT: at(-1_000), INPUTS_EXPECTED: JSON.stringify(['test']) },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'pending',
+      detail: 'skipped before the ready flip, so not yet run for review: test (skipped)',
+    });
+  });
+
   it('concludes on a check skipped after the flip beside one that ran', () => {
     const result = probe({
       gh: {

@@ -66,7 +66,7 @@ function unresolved(
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
-  const state = gateState(read.units, flippedAt);
+  const state = gateState(read.units, flippedAt, expected);
   if (state !== 'green' && state !== 'none') {
     // A pending verdict can rest on skipped checks, which are green units.
     const notGreen = read.units.filter(

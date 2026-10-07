@@ -52,15 +52,26 @@ function awaitingReadyRuns(flippedAt: number | null, now: number): boolean {
  * draft-time jobs as skipped; they say nothing about the ready pull request.
  * `flippedAt` is null when this run did not flip the pull request, and then
  * nothing is stale.
+ *
+ * Only a check the gate waits for can hold it. A ready run can register a job
+ * under a different name than its draft-time skip (a matrix parent `test` skipped
+ * on the draft becomes `test (ubuntu-latest)` and `test (windows-latest)`), so a
+ * skip outside `expected` may never be replaced. With nothing expected, every
+ * draft-time skip holds, for the grace window only.
  */
 export function draftSkips(
   units: readonly ReadUnit[],
   flippedAt: number | null,
+  expected: readonly string[],
   now: number = Date.now()
 ): ReadUnit[] {
   if (flippedAt === null || !awaitingReadyRuns(flippedAt, now)) return [];
   return units.filter(
-    unit => unit.result === 'skipped' && unit.completedAt !== null && unit.completedAt < flippedAt
+    unit =>
+      unit.result === 'skipped' &&
+      unit.completedAt !== null &&
+      unit.completedAt < flippedAt &&
+      (expected.length === 0 || expected.includes(unit.unit.name))
   );
 }
 
@@ -68,7 +79,8 @@ export function draftSkips(
  * The pack's gate policy over one read. A running check wins, so a gate never
  * concludes while anything is still running; red and unknown both block; gated is
  * reported as a maintainer's gate, never as green. Within the grace window after
- * this run's flip, a check skipped before the flip counts as not yet run, and so
+ * this run's flip, an expected check skipped before the flip counts as not yet run
+ * (see draftSkips), and so
  * does a set in which every check was skipped (the forge source reports no check
  * times, so this is how it sees a draft's skips): the ready runs that replace them
  * may still register.
@@ -78,11 +90,12 @@ export type GateState = 'none' | 'pending' | 'red' | 'gated' | 'green';
 export function gateState(
   units: readonly ReadUnit[],
   flippedAt: number | null,
+  expected: readonly string[],
   now: number = Date.now()
 ): GateState {
   if (units.length === 0) return 'none';
   if (units.some(unit => unit.state === 'pending')) return 'pending';
-  if (draftSkips(units, flippedAt, now).length > 0) return 'pending';
+  if (draftSkips(units, flippedAt, expected, now).length > 0) return 'pending';
   if (units.some(unit => unit.state === 'red' || unit.state === 'unknown')) return 'red';
   if (units.some(unit => unit.state === 'gated')) return 'gated';
   if (awaitingReadyRuns(flippedAt, now) && units.every(unit => unit.result === 'skipped')) {

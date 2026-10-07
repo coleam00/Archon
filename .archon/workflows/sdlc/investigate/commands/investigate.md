@@ -71,7 +71,7 @@ A proved defect you meet that this work does not need is a discovery, never sile
 
 ## Not your job
 
-Do not modify source files, commit, branch, push, open or comment on pull requests or issues, or fix the problem. Scratch files and instrumentation live under `$ARTIFACTS_DIR` only. If observing the behavior genuinely requires a temporary source edit, revert it completely before finishing and note it in the report — the run fails on any tree change you leave behind.
+Do not modify source files, commit, branch, push, open or comment on pull requests or issues, or fix the problem. `$ARTIFACTS_DIR/repro/` holds only what the fixer reruns or reads: repro scripts and their captured output. Never copy the checkout or install dependencies there. A reproduction that needs another checkout, an older revision, or its own dependency install does it in a temporary directory outside the checkout, which you remove before finishing. Installing the project's dependencies in this checkout the way the project normally does is fine: git ignores them, so they are not a tree change. If observing the behavior genuinely requires a temporary source edit, revert it completely before finishing and note it in the report — the run fails on any tracked or untracked change you leave in the tree.
 
 ## Declare the verdict
 
