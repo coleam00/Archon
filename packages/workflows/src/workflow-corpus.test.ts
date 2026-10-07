@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 import { validationSourceConfigSchema, workflowValidationConfig } from './validation-config';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -97,7 +97,8 @@ async function validateCorpus(cwd: string): Promise<{ findings: Finding[]; files
 // machine (50 files: ~0.7 s, measured 2026-10-07), mostly the expanded SDLC
 // pack's resource checks, and grows with every workflow added. CI runs it beside
 // the rest of the suite several times slower, where the default 5 s timed out, so
-// the bound scales with the corpus at 200 ms per file.
+// the bound scales with the corpus at 200 ms per file (never under the Windows
+// floor, through testTimeout).
 const corpusFiles = workflowSourceFiles(
   Array.from(new Bun.Glob('**/*.{yaml,yml}').scanSync(join(repo, '.archon/workflows')))
 );
@@ -109,7 +110,7 @@ test(
     expect(files.some(file => file.startsWith('sdlc/'))).toBe(true);
     expect(findings).toEqual([]);
   },
-  Math.max(5_000, corpusFiles.length * 200)
+  testTimeout(Math.max(5_000, corpusFiles.length * 200))
 );
 
 test('corpus inventory excludes fixtures and identifies SDLC sources with either path separator', () => {
