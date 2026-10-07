@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import * as bundledBuild from '../packages/paths/src/bundled-build';
 
 const repoRoot = join(import.meta.dir, '..');
 const CLI_ENTRY = join(repoRoot, 'packages/cli/src/cli.ts');
@@ -81,22 +82,30 @@ async function serverBundleInputs(restoreServerImport = false): Promise<string[]
     target: 'bun',
     minify: true,
     metafile: true,
-    plugins: restoreServerImport
-      ? [
-          {
-            name: 'prove-server-boundary',
-            setup(build): void {
-              build.onLoad(
-                { filter: /packages[/\\]cli[/\\]src[/\\]commands[/\\]serve\.ts$/ },
-                async args => ({
-                  contents: `${await Bun.file(args.path).text()}\nconst server = await import('@archon/server'); await server.startServer();`,
-                  loader: 'ts',
-                })
-              );
-            },
-          },
-        ]
-      : [],
+    plugins: [
+      {
+        name: 'prove-cli-bundle-boundary',
+        setup(build): void {
+          // Release builds rewrite this module before bundling. Inspect that mode,
+          // including branches the source-checkout constants would eliminate.
+          build.onLoad({ filter: /packages[/\\]paths[/\\]src[/\\]bundled-build\.ts$/ }, () => ({
+            contents: Object.entries({ ...bundledBuild, BUNDLED_IS_BINARY: true })
+              .map(([name, value]) => `export const ${name} = ${JSON.stringify(value)};`)
+              .join('\n'),
+            loader: 'ts',
+          }));
+          if (restoreServerImport) {
+            build.onLoad(
+              { filter: /packages[/\\]cli[/\\]src[/\\]commands[/\\]serve\.ts$/ },
+              async args => ({
+                contents: `${await Bun.file(args.path).text()}\nconst server = await import('@archon/server'); await server.startServer();`,
+                loader: 'ts',
+              })
+            );
+          }
+        },
+      },
+    ],
   });
   if (!result.success || !result.metafile)
     throw new Error(
