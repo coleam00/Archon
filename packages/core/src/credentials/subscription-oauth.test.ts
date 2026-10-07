@@ -13,7 +13,6 @@ function makeCreds(expires: number): SubscriptionOAuthCredentials {
 function makeProvider(overrides?: Partial<OAuthProviderInterface>): {
   provider: OAuthProviderInterface;
   refreshToken: ReturnType<typeof mock>;
-  getApiKey: ReturnType<typeof mock>;
 } {
   const refreshToken = mock(
     async (): Promise<SubscriptionOAuthCredentials> => ({
@@ -23,18 +22,14 @@ function makeProvider(overrides?: Partial<OAuthProviderInterface>): {
       expires: Date.now() + 3_600_000,
     })
   );
-  const getApiKey = mock(async (creds: Record<string, unknown>) => ({
-    apiKey: String(creds.access),
-  }));
   const provider: OAuthProviderInterface = {
     login: async () => {
       throw new Error('not under test');
     },
     refreshToken,
-    getApiKey,
     ...overrides,
   };
-  return { provider, refreshToken, getApiKey };
+  return { provider, refreshToken };
 }
 
 describe('mintOAuthApiKey', () => {
@@ -52,14 +47,12 @@ describe('mintOAuthApiKey', () => {
   });
 
   test('expired credential refreshes BEFORE minting and returns the rotated blob', async () => {
-    const { provider, refreshToken, getApiKey } = makeProvider();
+    const { provider, refreshToken } = makeProvider();
     const creds = makeCreds(Date.now() - 1000);
 
     const result = await mintOAuthApiKey(provider, creds);
 
     expect(refreshToken).toHaveBeenCalledTimes(1);
-    // The mint must run on the REFRESHED credential, not the stale one.
-    expect(getApiKey).toHaveBeenCalledWith(expect.objectContaining({ access: 'refreshed-access' }));
     expect(result.apiKey).toBe('refreshed-access');
     expect(result.newCredentials.access).toBe('refreshed-access');
   });

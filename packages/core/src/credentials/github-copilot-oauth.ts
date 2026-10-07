@@ -298,5 +298,4 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
     );
     return { ...current, availableModelIds: catalog.available };
   },
-  getApiKey: async credentials => ({ apiKey: credentialString(credentials, 'access') }),
 };

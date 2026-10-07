@@ -32,7 +32,6 @@ export interface OAuthProviderInterface {
     credentials: OAuthCredentials,
     options?: { signal?: AbortSignal }
   ): Promise<SubscriptionOAuthCredentials>;
-  getApiKey(credentials: OAuthCredentials): Promise<{ apiKey: string }>;
 }
 
 export class SubscriptionOAuthError extends Error {
@@ -132,6 +131,5 @@ export async function mintOAuthApiKey(
     Date.now() >= credentials.expires
       ? await provider.refreshToken(credentials, { signal })
       : credentials;
-  const { apiKey } = await provider.getApiKey(current);
-  return { newCredentials: current, apiKey };
+  return { newCredentials: current, apiKey: credentialString(current, 'access') };
 }

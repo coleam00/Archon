@@ -184,5 +184,4 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
       options?.signal,
       credentials
     ),
-  getApiKey: async credentials => ({ apiKey: credentialString(credentials, 'access') }),
 };
