@@ -931,17 +931,11 @@ export class PiProvider implements IAgentProvider {
         };
       }
 
-      // 5. Session management. Pi stores each session as a JSONL file under
-      //    ~/.pi/agent/sessions/<encoded-cwd>/<uuid>.jsonl. `resolvePiSession`
-      //    returns a SessionManager bound to either a new session (no resume
-      //    id) or an existing session (resume id matches a file); if the id
-      //    was provided but not found, it falls through to a new session and
-      //    the caller surfaces a resume_failed warning (matches the Codex
-      //    provider's fallback pattern for the same condition).
       const { sessionManager, resumeFailed } = await resolvePiSession(
         cwd,
         resumeSessionId,
-        requestOptions?.forkSession
+        requestOptions?.forkSession,
+        requestOptions?.ephemeralSession
       );
       if (resumeFailed) {
         yield {

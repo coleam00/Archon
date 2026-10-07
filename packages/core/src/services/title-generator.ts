@@ -58,6 +58,7 @@ export async function generateAndSetTitle(
     const options: SendQueryOptions = {
       ...(requestOptions ?? {}),
       purpose: 'title-generation',
+      ephemeralSession: true,
       ...(titleModel ? { model: titleModel } : {}),
       assistantConfig: requestOptions?.assistantConfig ?? assistantConfig,
       nodeConfig: {

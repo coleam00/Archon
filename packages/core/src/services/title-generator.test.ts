@@ -192,7 +192,7 @@ describe('title-generator', () => {
     await generateAndSetTitle('conv-11', 'Some message', 'claude', '/tmp');
 
     const optionsArg = mockSendQuery.mock.calls[0][3];
-    expect(optionsArg).toMatchObject({ purpose: 'title-generation' });
+    expect(optionsArg).toMatchObject({ purpose: 'title-generation', ephemeralSession: true });
     expect(optionsArg?.nodeConfig?.nodeId).toBeUndefined();
     expect(optionsArg?.nodeConfig?.allowed_tools).toEqual([]);
   });
@@ -222,10 +222,11 @@ describe('title-generator', () => {
       nodeConfig: { effort: 'high' },
       env: { CODEX_API_KEY: 'fixture-key' },
       protectedEnvKeys: ['CODEX_API_KEY'],
+      ephemeralSession: false,
     });
 
     const optionsArg = mockSendQuery.mock.calls[0][3] as SendQueryOptions;
-    expect(optionsArg).toMatchObject({ purpose: 'title-generation' });
+    expect(optionsArg).toMatchObject({ purpose: 'title-generation', ephemeralSession: true });
     expect(optionsArg.env).toEqual({ CODEX_API_KEY: 'fixture-key' });
     expect(optionsArg.protectedEnvKeys).toEqual(['CODEX_API_KEY']);
     expect(optionsArg.model).toBe('haiku');

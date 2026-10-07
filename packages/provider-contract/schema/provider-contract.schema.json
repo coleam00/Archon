@@ -1240,6 +1240,9 @@
         "forkSession": {
           "type": "boolean"
         },
+        "ephemeralSession": {
+          "type": "boolean"
+        },
         "purpose": {
           "type": "string",
           "const": "title-generation"

@@ -256,6 +256,11 @@ export interface ProviderAdmissionEvent {
  */
 export interface SendQueryOptions extends AgentRequestOptions {
   /**
+   * Request an in-memory session for a turn without a resume id. Pi honors this;
+   * providers without ephemeral sessions ignore it. Defaults to persistence.
+   */
+  ephemeralSession?: boolean;
+  /**
    * Honored by Codex only: titles use empty capability declarations and a read-only
    * sandbox. Claude and Pi ignore it.
    */

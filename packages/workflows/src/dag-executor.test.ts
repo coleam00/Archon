@@ -22744,7 +22744,7 @@ describe('executeDagWorkflow -- persist_session', () => {
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
   });
 
-  it("node.context: 'fresh' bypasses persistence even when persist_session: true", async () => {
+  it("node.context: 'fresh' bypasses cross-run session reuse even when persist_session: true", async () => {
     const store = createMockStore();
     store.listWorkflowNodeSessions.mockResolvedValue([
       {
@@ -22781,6 +22781,7 @@ describe('executeDagWorkflow -- persist_session', () => {
     );
 
     expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    expect(mockSendQueryDag.mock.calls[0][3]?.ephemeralSession).toBeUndefined();
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
   });
 

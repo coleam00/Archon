@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { removeTempTree } from '@archon/paths/test-utils';
+import { SessionManager } from '@earendil-works/pi-coding-agent';
 
 import type { MessageChunk } from '../../types';
 import { PiProvider } from './provider';
@@ -136,5 +137,36 @@ describe('PiProvider with a substituted custom provider and a provider-registeri
     expect(result && 'failure' in result ? result.failure : undefined).toBeUndefined();
     expect(authHeaders).toEqual(['Bearer sk-per-call', 'Bearer sk-per-call']);
     expect(readdirSync(join(perCallTmp, 'archon-pi-models'))).toEqual([]);
+    const sessions = await SessionManager.list(repoDir);
+    expect(sessions).toHaveLength(1);
+    expect(result).toMatchObject({ sessionId: sessions[0].id });
   }, 30_000);
+
+  test('an ephemeral title turn writes no session file', async () => {
+    const before = await SessionManager.list(repoDir);
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of new PiProvider().sendQuery(
+      'Generate a short title',
+      repoDir,
+      undefined,
+      {
+        model: 'mycustom/m1',
+        env: { MY_KEY: 'sk-per-call' },
+        purpose: 'title-generation',
+        ephemeralSession: true,
+        nodeConfig: { allowed_tools: [] },
+      }
+    )) {
+      chunks.push(chunk);
+    }
+    expect(chunks.find(c => c.type === 'result')).toMatchObject({ stopReason: 'end_turn' });
+    expect(
+      chunks
+        .filter(c => c.type === 'agent_message_chunk')
+        .map(c => c.text)
+        .join('')
+    ).toBe('done');
+    expect(chunks.find(c => c.type === 'result' && c.failure !== undefined)).toBeUndefined();
+    expect(await SessionManager.list(repoDir)).toEqual(before);
+  });
 });

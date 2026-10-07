@@ -174,6 +174,7 @@ test('serializable options survive; the provider receives its process environmen
     maxBudgetUsd: 2,
     fallbackModel: 'fallback',
     forkSession: true,
+    ephemeralSession: true,
     purpose: 'title-generation',
     nodeConfig: {
       mcp: 'test',
