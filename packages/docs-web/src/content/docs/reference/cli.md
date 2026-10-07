@@ -1280,14 +1280,14 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass completion and uncommitted-change checks
+archon complete feature-auth --force  # bypass uncommitted-change, running-workflow, and open-PR checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip completion and uncommitted-change checks; ownership checks still apply |
+| `--force` | Skip uncommitted-change, running-workflow, and open-PR checks; ownership checks still apply |
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone
