@@ -21,8 +21,9 @@ Before you commit, the project's own type-check, lint, and tests have all run an
 
 - Commit by outcome, staging files by name (never `git add -A`). Write messages as a human explains an outcome. No AI attribution.
 - Push the branch with an explicit refspec: `git push origin HEAD:refs/heads/$(git branch --show-current)`. Never force-push.
-- If an open pull request already has this branch as its head, use it. Otherwise open one against `$BASE_BRANCH` with `gh pr create`, not as a draft. Title: the outcome, concise. Body: the problem first, then the solution briefly, then the validation evidence; link the source issue with a closing keyword when the work has one. No AI attribution.
-- Read the pull request back (`gh pr view --json number,url,headRefName,headRefOid`) and confirm its head is this branch at your pushed commit.
+- Every `gh pr` command names the repository `origin` points at with `--repo <owner>/<repo>`: in a clone of a fork, gh otherwise resolves the upstream parent and publishes your diff there.
+- If an open pull request already has this branch as its head (`gh pr list --repo <owner>/<repo> --head <branch> --state open`), use it. Otherwise open one against `$BASE_BRANCH` with `gh pr create --repo <owner>/<repo>`, not as a draft. Title: the outcome, concise. Body: the problem first, then the solution briefly, then the validation evidence; link the source issue with a closing keyword when the work has one. No AI attribution.
+- Read the pull request back (`gh pr view <number> --repo <owner>/<repo> --json number,url,headRefName,headRefOid`) and confirm its head is this branch at your pushed commit.
 
 ## Report
 
