@@ -37,7 +37,7 @@ export {
   type PersistProviderApiKeyResult,
   type PersistProviderOAuthResult,
 } from './connect-service';
-export { SUBSCRIPTION_PROVIDERS, ARCHON_TO_PI_OAUTH, piOAuthProviderFor } from './oauth-providers';
+export { SUBSCRIPTION_PROVIDERS, subscriptionOAuthProviderFor } from './oauth-providers';
 export {
   startOAuth,
   pollOAuth,
