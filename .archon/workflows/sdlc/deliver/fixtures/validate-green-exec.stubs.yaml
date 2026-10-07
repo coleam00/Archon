@@ -1,11 +1,11 @@
 # Exec-code fixture: the project gate's real runner executes a passing check,
 # and gate-validated runs the real gate-green script and passes. Only discovery
 # is stubbed. This covers the first-execution green path through gate-validated
-# — the same path a corrected resume delivers after the `always_run: true`
-# opt-out on the validate package's discover and run nodes. The dry-run
+# — the same path a corrected resume delivers when the validate package's
+# always-run applicability check finds no reusable verdict. The dry-run
 # simulator has no resume support, so this fixture proves the gate script reads
-# the verdict correctly; the engine's `always_run` re-execution on resume is
-# covered by dag-executor.test.ts.
+# the verdict correctly; applicability and native resume reuse are covered by
+# scripts/sdlc-validation-evidence.test.ts and dag-executor.test.ts.
 #
 # The red paths through the same gate with exec-code are covered by the
 # validate-red*.stubs.yaml fixtures.
