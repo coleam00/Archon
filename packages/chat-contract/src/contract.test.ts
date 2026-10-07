@@ -424,3 +424,40 @@ test('conformance refuses fabricated inbound success that never reached the host
     log.mockRestore();
   }
 });
+
+test('install inspection initializes and closes without starting a credential-dependent chat', async () => {
+  const { inspectChat } = await import('./connect');
+  const pair = streamPair();
+  let starts = 0;
+  const stopped = serveChat(
+    {
+      descriptor,
+      start() {
+        starts++;
+        throw new Error('credentials required');
+      },
+      async send() {},
+      async resultFooter() {},
+      onRunEvent() {},
+    },
+    pair.provider
+  );
+  expect(await inspectChat(pair.host)).toEqual(descriptor);
+  await stopped;
+  expect(starts).toBe(0);
+});
+
+for (const invalid of [
+  { ...descriptor, protocol: 'wrong' },
+  { ...descriptor, policy: {} },
+]) {
+  test('install inspection rejects an invalid descriptor and closes its streams', async () => {
+    const { inspectChat } = await import('./connect');
+    const pair = streamPair();
+    const rpc = new PluginRpc(pair.provider);
+    rpc.handle('initialize', () => invalid);
+    await expect(inspectChat(pair.host)).rejects.toThrow('invalid payload');
+    await rpc.done;
+    await rpc.close();
+  });
+}

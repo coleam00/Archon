@@ -1,6 +1,6 @@
 ---
 title: Publish a plugin
-description: Publish Archon workflow packs, forge plugins, and provider plugins on GitHub and list them on archon.diy.
+description: Publish Archon workflow packs, forge plugins, provider plugins, and chat plugins on GitHub and list them on archon.diy.
 ---
 
 GitHub is the registry. Publish in your own public repository, then add the `archon-plugin` repository topic to appear in the [plugin index](/plugins/). No Archon pull request, Archon account, or publication service is required. Listing is optional: `archon plugin install owner/repo[/path][@tag]` works independently of the index.
@@ -106,6 +106,84 @@ See [building a community provider](/contributing/adding-a-community-provider/) 
 
 Provider receipts are additive, but older Archon binaries reject their unknown kind.
 Remove provider plugins before downgrading to a release without provider-plugin support.
+
+## Chat plugins
+
+A chat plugin declares an `archon-chat-*` executable:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "chat",
+  "name": "example-chat",
+  "description": "Example chat integration",
+  "executable": "archon-chat-example"
+}
+```
+
+Publish release assets and `checksums.txt` with the same platform naming rules as
+forge and provider plugins, for example `archon-chat-example-linux-x64` and
+`archon-chat-example-windows-x64.exe`. Do not put `.exe` in the manifest.
+
+```sh
+archon plugin install owner/repo@v1.0.0
+archon plugin list
+archon plugin update owner/repo
+archon plugin remove owner/repo
+```
+
+Without a tag, install and update use the latest GitHub release. After checksum
+verification, Archon starts the staged executable, sends only `initialize`, validates
+its `archon-chat/1` descriptor, and stops the process before recording the install.
+Initialization has a ten-second deadline and must work without chat credentials or
+`chat/start`. The receipt records the descriptor, release tag, commit, and binary digest.
+The descriptor's platform id is independent of the manifest name and executable suffix.
+
+The wire uses newline-delimited JSON-RPC 2.0 on stdin/stdout. For an initialize
+request such as `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+reply with the same request id and a descriptor as `result`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocol": "archon-chat/1",
+    "id": "example-chat",
+    "displayName": "Example chat integration",
+    "version": "1.0.0",
+    "capabilities": {
+      "defaultWorkflowDispatch": "foreground"
+    },
+    "policy": {
+      "workspaceRetention": "age-based"
+    }
+  }
+}
+```
+
+Write the response as one JSON line followed by a newline; the example is expanded
+for readability. Keep stdout for protocol messages. The generated
+[chat contract schema](https://github.com/coleam00/Archon/blob/dev/packages/chat-contract/schema/chat-contract.schema.json)
+defines `ChatPluginDescriptor` and the other wire payloads under `$defs`, including
+optional descriptor fields. TypeScript plugins can use
+[`serveChat` from `@archon/chat-contract`](https://github.com/coleam00/Archon/tree/dev/packages/chat-contract)
+to handle initialization and framing.
+
+A platform id cannot belong to two chat installs. `web`, `cli`, `api`, `github`,
+`gitea`, and `gitlab` are reserved for host surfaces and bundled forge adapters.
+Collisions name both owners. A rejected initialization or collision leaves existing
+files unchanged; handled publication failures restore the previous install when the
+filesystem permits rollback. A rollback failure reports local recovery and backup paths.
+Installation does not promise crash atomicity across receipt and binary files.
+
+Chat plugins run as your operating-system user and inherit the ambient environment.
+Plugin stderr and plugin-controlled error details are withheld because they may contain
+credentials or user messages. The process boundary is not a security sandbox.
+
+Chat installation currently records the binary and descriptor only. Running hosts do not
+yet load these chat plugins; installing one does not replace a bundled chat adapter.
+Remove chat installs before downgrading to an Archon release without chat receipts.
 
 ## Listing and refresh
 
