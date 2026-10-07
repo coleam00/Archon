@@ -342,8 +342,9 @@ test('container request env does not replace the plugin host environment', async
   }
 });
 
-test('provider logs reach the host logger with container credentials and messages redacted', async () => {
+test('provider logs preserve severity and withhold arbitrary content', async () => {
   const info = spyOn(providerLog, 'info').mockImplementation(() => {});
+  const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
   const previous = process.env.CONTAINER_TOKEN;
   process.env.CONTAINER_TOKEN = 'host-credential';
   try {
@@ -354,24 +355,21 @@ test('provider logs reach the host logger with container credentials and message
         undefined,
         {
           execContext: { kind: 'container', containerId: 'test' },
-          env: { CONTAINER_TOKEN: 'container-credential', CUSTOM_AUTH: '§' },
+          env: {
+            CONTAINER_TOKEN: 'container-credential',
+            CUSTOM_AUTH: '§',
+            NUMERIC_TOKEN: '12345678',
+          },
+          systemPrompt: 'private system guidance',
           protectedEnvKeys: ['CUSTOM_AUTH'],
         }
       )
     );
-    expect(info.mock.calls).toEqual([
-      [
-        {
-          token: '[REDACTED]',
-          hostToken: '[REDACTED]',
-          custom: '[REDACTED]',
-          nested: { message: '[REDACTED]', lines: ['[REDACTED]', '[REDACTED]'], count: 1 },
-        },
-        'provider.ready [REDACTED]',
-      ],
-    ]);
+    expect(warn.mock.calls).toEqual([[{}, 'provider.plugin.log']]);
+    expect(info.mock.calls).toEqual([]);
   } finally {
     info.mockRestore();
+    warn.mockRestore();
     if (previous === undefined) delete process.env.CONTAINER_TOKEN;
     else process.env.CONTAINER_TOKEN = previous;
   }

@@ -95,13 +95,18 @@ await serveProvider(
         }
         if (mode === 'logs') {
           await log({
-            level: 'info',
+            level: 'warn',
             msg: `provider.ready ${options?.env?.CONTAINER_TOKEN ?? ''}`,
             bindings: {
               token: options?.env?.CONTAINER_TOKEN ?? '',
               hostToken: process.env.CONTAINER_TOKEN ?? '',
               custom: options?.env?.CUSTOM_AUTH ?? '',
               nested: { message: prompt, lines: prompt.split('\n'), count: 1 },
+              excerpt: prompt.slice(0, 7),
+              escaped: JSON.stringify(prompt),
+              system: options?.systemPrompt ?? '',
+              numeric: Number(options?.env?.NUMERIC_TOKEN),
+              [prompt]: [true, null],
             },
           });
         }

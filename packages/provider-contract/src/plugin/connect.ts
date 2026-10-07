@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { IAgentProvider, SendQueryOptions } from '../agent-provider';
 import { credentialStatusSchema, type CredentialStatus } from '../credential-status';
 import type { ProviderChunk } from '../events';
@@ -70,7 +71,19 @@ export async function connectProvider(
       throw rpc.error('tool call names an inactive session');
     const tool = turn.tools.find(tool => tool.name === name);
     if (!tool) throw rpc.error('tool call names an unknown tool');
-    return { text: await tool.handler(input) };
+    const shape: Record<string, z.ZodType<string | boolean | undefined>> = {};
+    for (const [key, property] of Object.entries(tool.inputSchema.properties)) {
+      const field =
+        property.kind === 'string'
+          ? z.string()
+          : property.kind === 'boolean'
+            ? z.boolean()
+            : z.enum(property.values);
+      shape[key] = tool.inputSchema.required.includes(key) ? field : field.optional();
+    }
+    const parsed = z.strictObject(shape).safeParse(input);
+    if (!parsed.success) throw rpc.error('invalid tool input');
+    return { text: await tool.handler(parsed.data) };
   });
   rpc.on('_archon/log', raw => {
     const record = rpc.parse(logNotificationSchema, raw);

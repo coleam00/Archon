@@ -20,7 +20,6 @@ import {
   PluginRemoteError,
   type ConnectedProvider,
   type ProviderPluginDescriptor,
-  type ProviderLog,
 } from '@archon/provider-contract/plugin';
 
 const EXIT_GRACE_MS = 10_000;
@@ -43,8 +42,7 @@ function startProcess(
   descriptor: ProviderPluginDescriptor,
   argv: readonly [string, ...string[]],
   options: Pick<SendQueryOptions, 'env' | 'execContext' | 'protectedEnvKeys'>,
-  signal?: AbortSignal,
-  messageText?: string
+  signal?: AbortSignal
 ): {
   connect(): Promise<ConnectedProvider>;
   failure(error: unknown): Promise<Error>;
@@ -69,22 +67,6 @@ function startProcess(
   secrets.sort((a, b) => b.length - a.length);
   const redact = (text: string): string => redactCredentialValues(text, secrets);
   const providerLog = createLogger(`provider.${descriptor.id}`);
-  const logSecrets = [
-    ...secrets,
-    ...(messageText ? [messageText, ...messageText.split('\n').filter(Boolean)] : []),
-  ].sort((a, b) => b.length - a.length);
-  function redactLogValue(value: ProviderLog['bindings'][string]): ProviderLog['bindings'][string] {
-    if (typeof value === 'string') return redactCredentialValues(value, logSecrets);
-    if (Array.isArray(value)) return value.map(redactLogValue);
-    if (value !== null && typeof value === 'object')
-      return Object.fromEntries(
-        Object.entries(value).map(([key, field]) => [
-          redactCredentialValues(key, logSecrets),
-          redactLogValue(field),
-        ])
-      );
-    return value;
-  }
   const child = spawn(argv[0], argv.slice(1), {
     detached: process.platform !== 'win32',
     windowsHide: true,
@@ -184,10 +166,9 @@ function startProcess(
         },
         {
           onLog(record): void {
-            providerLog[record.level](
-              redactLogValue(record.bindings),
-              redactCredentialValues(record.msg, logSecrets)
-            );
+            // Plugin text and arbitrary JSON can encode message excerpts or credentials.
+            // Only the validated severity crosses into the host's diagnostic log.
+            providerLog[record.level]({}, 'provider.plugin.log');
           },
         }
       );
@@ -252,7 +233,7 @@ export class ProcessAgentProvider implements IAgentProvider {
     options: SendQueryOptions = {}
   ): AsyncGenerator<ProviderChunk> {
     if (options.abortSignal?.aborted) return;
-    const process = startProcess(this.descriptor, this.argv, options, options.abortSignal, prompt);
+    const process = startProcess(this.descriptor, this.argv, options, options.abortSignal);
     let settled = false;
     try {
       const connection = await process.connect();

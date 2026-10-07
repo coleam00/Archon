@@ -520,6 +520,18 @@ test('tool callbacks reject unknown names and sessions, cancellation and settlem
       rpc.request('_archon/tool_call', { sessionId, name, input: { action: 'inspect' } });
     await rejected(call('unknown'), 'inactive session');
     await rejected(call('0', 'unknown'), 'unknown tool');
+    for (const input of [
+      { action: 'wrong' },
+      {},
+      { action: true },
+      { action: 'inspect', extra: 'value' },
+    ]) {
+      await rejected(
+        rpc.request('_archon/tool_call', { sessionId: '0', name: 'host', input }),
+        'invalid tool input'
+      );
+    }
+    expect(calls).toBe(0);
     expect(await call('0')).toEqual({ text: 'host-result' });
     await rpc.notify('_archon/chunk', { sessionId: '0', chunk: { type: 'settled' } });
     await rejected(call('0'), 'inactive session');
@@ -534,7 +546,10 @@ test('tool callbacks reject unknown names and sessions, cancellation and settlem
             {
               name: 'host',
               description: 'Host tool',
-              inputSchema: { properties: {}, required: [] },
+              inputSchema: {
+                properties: { action: { kind: 'enum', values: ['inspect'] } },
+                required: ['action'],
+              },
               handler: async () => {
                 calls++;
                 return 'host-result';

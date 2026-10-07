@@ -73,6 +73,9 @@ and mid-run permission requests remain unsupported. A dynamic catalog is rejecte
 `_archon/log` carries structured metadata logs (`level`, `msg`, JSON `bindings`).
 `serveProvider` supplies an awaitable log sink to `create(log)`; `connectProvider` accepts
 an `onLog` callback. Log metadata only, never credentials, tokens, or message text.
+The process host preserves severity through `provider.<id>` as a fixed
+`provider.plugin.log` event and withholds plugin text and bindings, which can encode
+sensitive content even when their keys appear harmless.
 Container requests carry their optional `env` bag as session data while the plugin
 process retains the host environment.
 This is an Archon provider protocol, not a generic plain-ACP adapter.
