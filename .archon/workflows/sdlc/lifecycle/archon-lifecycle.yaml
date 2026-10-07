@@ -67,6 +67,12 @@ inputs:
     description: >-
       Optional nonsecret external-state identity forwarded through ship and
       any repair delivery. Changing it requires fresh validation.
+  final_validation:
+    default: always
+    description: >-
+      Forwarded through ship and any repair delivery. The merge queue requires
+      validation evidence, so this composition defaults to always; auto limits
+      final local validation to fork pull requests.
   deploy:
     default: ''
     description: >-
@@ -109,6 +115,7 @@ nodes:
       state_labels: "$INPUTS.state_labels"
       validation_scope: "$INPUTS.validation_scope"
       validation_context: "$INPUTS.validation_context"
+      final_validation: "$INPUTS.final_validation"
 
   - id: candidate
     command: bind-delivered-pr
@@ -165,6 +172,7 @@ nodes:
     with:
       validation_scope: "$INPUTS.validation_scope"
       validation_context: "$INPUTS.validation_context"
+      final_validation: "$INPUTS.final_validation"
       work: >-
         Repair the existing PR on this same branch using the concrete runtime
         findings in $qualify.output.evidence. Preserve the original work order in
