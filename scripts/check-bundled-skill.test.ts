@@ -37,7 +37,9 @@ const checkerPath = 'scripts/check-bundled-skill.ts';
 const bundledSource = readFileSync(join(repoRoot, modulePath), 'utf8');
 const skillFiles = [
   ...new Bun.Glob('**/*').scanSync({ cwd: join(repoRoot, skillPath), onlyFiles: true }),
-].sort();
+]
+  .map(file => file.replaceAll('\\', '/'))
+  .sort();
 const track = trackTempRoots();
 
 function fixture(): string {
