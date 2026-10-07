@@ -57,7 +57,7 @@ validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
 ci-settle: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
 ci-verdict: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
-ci-rerun: { requested: true, reason: "stub: two checks were cancelled before a runner was acquired; re-ran the failed and cancelled jobs" }
+ci-rerun: { failure: infrastructure, requested: true, reason: "stub: two checks were cancelled before a runner was acquired; re-ran the failed and cancelled jobs" }
 # CI cancels them again: the re-run reproduced no failure.
 rerun-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
 ci-reverdict: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'

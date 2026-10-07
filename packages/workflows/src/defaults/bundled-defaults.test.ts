@@ -686,21 +686,22 @@ describe('bundled-defaults', () => {
       }
     });
 
-    it('archon-validate re-discovers and re-runs the checks on resume (#3092)', () => {
+    // A resume after a fix must re-derive the verdict from the current tree (#3092), so
+    // the gate runner is always_run. Discovery is not: every durable CI wait in a
+    // delivery resumes the run, and a re-run discover agent would hand the runner a new
+    // check list and re-run the whole gate on every wake. The runner itself reuses a
+    // green it recorded for the same clean tree (scripts/sdlc-validation-run.test.ts).
+    it('archon-validate re-runs only its gate runner on resume (#3092)', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-validate'],
         'archon-validate.yaml',
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-
-      for (const id of ['discover', 'run']) {
-        const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
-        if (node === undefined || !('always_run' in node)) {
-          throw new Error(`archon-validate has no executable ${id} node carrying always_run`);
-        }
-        expect(node.always_run).toBe(true);
-      }
+      const alwaysRun = parsed.workflow.nodes
+        .filter(node => 'always_run' in node && node.always_run === true)
+        .map(node => node.id);
+      expect(alwaysRun).toEqual(['compare', 'run']);
     });
 
     // Replaces the deleted scripts/output-format-strict.test.ts, which guarded this

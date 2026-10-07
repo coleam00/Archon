@@ -1,16 +1,17 @@
-# Dry-run fixture: after the one CI fix pass, CI is red again and the classifier
-# attributes it to the branch. There is no second fix: the post-fix gate refuses
-# with that cause, as the first fix's gate would.
+# Guard fixture: the re-run agent judges a red a real break yet requests a re-run
+# (live run b77b0945). A break goes straight to classification and the fix, so the
+# node's schema admits no re-run for it: the pairing is re-asked at ci-rerun.
 impl__implement:
   done: true
   green: true
   red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-# The gates are deliberately unstubbed: the real gate scripts decide.
+# gate-green, gate-validated, and gate-ci-fix are deliberately unstubbed: the
+# real gates must accept this run at every gate it reaches.
 pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
 pr__synced: { recorded: true }
-pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 10, url: "https://github.com/example/repo/pull/10", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 9, url: "https://github.com/example/repo/pull/9", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
 review-policy: { risks: "fixture-owned-policy" }
 classify:
@@ -27,7 +28,7 @@ review__coverage: { full: true, errors: false, docs: false, lenses: [seams, code
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
-  pr: { repo: { host: "github.com", path: "example/repo" }, number: 10 }
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 9 }
 review__code: "0 findings"
 review__simplify__simplify: { findings: false }
 review__simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
@@ -51,11 +52,11 @@ review__publish:
   discoveries: []
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
-ci-probe: '{"state":"red","detail":"test (windows-latest) (failure)"}'
-ci-settle: '{"state":"red","detail":"test (windows-latest) (failure)"}'
-ci-verdict: '{"state":"red","detail":"test (windows-latest) (failure)"}'
-ci-rerun: { failure: break, requested: false, reason: "stub: no re-run warranted" }
-ci-reverdict: '{"state":"red","detail":"test (windows-latest) (failure)"}'
+ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-settle: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-rerun: { failure: break, requested: true, reason: "stub: the failure points to a real break rather than a flake; re-ran the failed jobs anyway" }
+ci-reverdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-changed: '{"files":["packages/core/src/feature.ts","packages/core/src/feature.test.ts"]}'
 ci-classify:
   failing_checks: ["test (windows-latest)"]
@@ -63,34 +64,25 @@ ci-classify:
   base: passes
   rerun: not_rerun
   claim: introduced
-  evidence: "stub: the branch's new test fails on Windows"
+  evidence: "stub: the new test fails on Windows; the base passes"
 ci-fix__implement:
   done: true
   green: true
   red_cause: ""
-  summary: "stub: fixed the new test"
+  summary: "stub: the branch's new test asserted an unsorted order; fixed at the cause and pushed"
 ci-fix__assert-changed: "1 file changed"
-push-ci-fix: "push-head: fixture-branch is at fixturehead"
 ci-delta-scope: '{"moved":false}'
-fix-ci-probe: '{"state":"red","detail":"test (windows-latest) (failure)"}'
-fix-verdict: '{"state":"red","detail":"test (windows-latest) (failure)"}'
-fix-classify:
-  failing_checks: ["test (windows-latest)"]
-  failing_paths: ["packages/core/src/feature.test.ts"]
-  base: passes
-  rerun: not_rerun
-  claim: introduced
-  evidence: "stub: the fix left the new test failing"
+fix-ci-probe: '{"state":"concluded","detail":"all 9 required check(s) green"}'
+fix-verdict: '{"state":"concluded","detail":"all 9 required check(s) green"}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/9", flipped_at: null }
+confirm-ready: { pr_url: "https://github.com/example/repo/pull/9" }
+outcome: { pr_url: "https://github.com/example/repo/pull/9", summary: "https://github.com/example/repo/pull/9" }
 file-discoveries: '{"records":[]}'
 match-discoveries: { matches: [] }
 fork: '{"fork":true}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/10", flipped_at: null }
-# The final confirmation finds CI red on the ready pull request: it converts it
-# back to draft and refuses (a string stub fails its schema, as the refusal does).
-confirm-ready: "confirm-ready: the pull request is back in draft"
+push-ci-fix: "push-head: fixture-branch is at fixturehead"
 publish-pr-body: {}
 fixture:
   expect: failed
-  fail-node: [gate-fix-result, confirm-ready]
-  reached: [ci-fix__implement, fix-verdict, fix-classify]
+  fail-node: ci-rerun
 exec-code: true

@@ -55,7 +55,7 @@ validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"ci/external (failure)"}'
 ci-settle: '{"state":"red","detail":"ci/external (failure)"}'
 ci-verdict: '{"state":"red","detail":"ci/external (failure)"}'
-ci-rerun: { requested: false, reason: "stub: the external CI cannot be re-run from here" }
+ci-rerun: { failure: unknown, requested: false, reason: "stub: the external CI cannot be re-run from here" }
 ci-reverdict: '{"state":"red","detail":"ci/external (failure)"}'
 ci-changed: '{"files":["packages/core/src/feature.ts"]}'
 ci-classify:

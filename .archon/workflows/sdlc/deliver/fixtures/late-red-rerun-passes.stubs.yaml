@@ -55,7 +55,7 @@ validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
 ci-settle: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
 ci-verdict: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
-ci-rerun: { requested: true, reason: "stub: the failing test is outside the change and passes on the base; one re-run requested" }
+ci-rerun: { failure: flake, requested: true, reason: "stub: the failing test is outside the change and passes on the base; one re-run requested" }
 rerun-probe: '{"state":"concluded","detail":"all 9 observed check(s) green"}'
 ci-reverdict: '{"state":"concluded","detail":"all 9 observed check(s) green"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/10", flipped_at: null }

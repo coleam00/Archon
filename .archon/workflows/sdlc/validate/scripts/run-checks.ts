@@ -18,6 +18,15 @@
  * - `green`: every declared check ran and exited 0. No declared checks is green only
  *   because `discover` judged that the project defines none; its notes say so.
  *
+ * A clean tree that already passed these exact checks in this run is not gated again.
+ * `always_run` re-executes this node on every resume, so a resume after a fix reads a
+ * fresh verdict; but a delivery's durable CI waits also resume the run, every few
+ * minutes, and re-running a long gate on an unchanged tree each time bought nothing.
+ * Only green is reused: red and incomplete can clear without a tree change (a freed
+ * port, a restored service), and the operator's resume after one runs the gate again.
+ * The reused result is the recorded one, byte for byte, so nothing downstream reads
+ * it as changed.
+ *
  * No timer lives here. The node's `timeout:` is the only one, and the engine stops
  * this script with SIGTERM when it expires. The handler below then stops the
  * running check's whole process tree, records the stop, and re-raises the signal
@@ -25,9 +34,11 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { artifactsDir, emit, text } from '../../.shared/io.ts';
+import { git } from '../../.shared/git.ts';
+import { artifactsDir, emit, note, text } from '../../.shared/io.ts';
 import { projectEnvironment } from '../../.shared/node-env.ts';
 
 interface Check {
@@ -189,37 +200,69 @@ function runOne(entry: Entry): Promise<void> {
   });
 }
 
-mkdirSync(logDir, { recursive: true });
-const stoppedGroups = new Set<string>();
-for (const entry of entries) {
-  if (stoppedGroups.has(entry.check.group)) continue;
-  await runOne(entry);
-  if (entry.outcome.kind !== 'passed') stoppedGroups.add(entry.check.group);
+interface Result {
+  status: 'green' | 'red' | 'incomplete';
+  summary: string;
 }
-render(entries);
 
-const failures = entries.filter(entry => entry.outcome.kind === 'failed');
-const unstarted = entries.find(entry => entry.outcome.kind === 'not-started');
-const passed = entries
-  .filter(entry => entry.outcome.kind === 'passed')
-  .map(entry => entry.check.name);
-const ranPassed = passed.length === 0 ? 'No check passed.' : `Passed: ${passed.join(', ')}.`;
+/** This tree and check list, or undefined when the tree is dirty or not a git checkout. */
+function cleanTreeKey(): string | undefined {
+  const status = git('status', '--porcelain');
+  const tree = git('rev-parse', 'HEAD^{tree}');
+  if (status.code !== 0 || status.stdout !== '' || tree.code !== 0) return undefined;
+  return createHash('sha256')
+    .update(`${tree.stdout}\n${JSON.stringify(discovery.checks)}`)
+    .digest('hex');
+}
 
-const failed = failures.map(entry => `${entry.check.name} ${describe(entry.outcome)}`).join('; ');
-// A check that could not start leaves part of the gate unrun, so the result is
-// unfinished even when another group failed: a red verdict would read as complete.
-if (unstarted !== undefined) {
-  emit({
-    status: 'incomplete',
-    summary: `${unstarted.check.name} ${describe(unstarted.outcome)}. ${ranPassed} Later checks in its group never ran.${failed === '' ? '' : ` Failed: ${failed}.`}`,
-  });
-} else if (failures.length > 0) {
-  emit({ status: 'red', summary: `${failed}. ${ranPassed} See validation.md.` });
-} else if (entries.length === 0) {
-  emit({
-    status: 'green',
-    summary: `No checks defined by this project. ${discovery.notes}`.trim(),
-  });
+async function runGate(): Promise<Result> {
+  const stoppedGroups = new Set<string>();
+  for (const entry of entries) {
+    if (stoppedGroups.has(entry.check.group)) continue;
+    await runOne(entry);
+    if (entry.outcome.kind !== 'passed') stoppedGroups.add(entry.check.group);
+  }
+  render(entries);
+
+  const failures = entries.filter(entry => entry.outcome.kind === 'failed');
+  const unstarted = entries.find(entry => entry.outcome.kind === 'not-started');
+  const passed = entries
+    .filter(entry => entry.outcome.kind === 'passed')
+    .map(entry => entry.check.name);
+  const ranPassed = passed.length === 0 ? 'No check passed.' : `Passed: ${passed.join(', ')}.`;
+
+  const failed = failures.map(entry => `${entry.check.name} ${describe(entry.outcome)}`).join('; ');
+  // A check that could not start leaves part of the gate unrun, so the result is
+  // unfinished even when another group failed: a red verdict would read as complete.
+  if (unstarted !== undefined) {
+    return {
+      status: 'incomplete',
+      summary: `${unstarted.check.name} ${describe(unstarted.outcome)}. ${ranPassed} Later checks in its group never ran.${failed === '' ? '' : ` Failed: ${failed}.`}`,
+    };
+  }
+  if (failures.length > 0) return { status: 'red', summary: `${failed}. ${ranPassed} See validation.md.` };
+  if (entries.length === 0) {
+    return { status: 'green', summary: `No checks defined by this project. ${discovery.notes}`.trim() };
+  }
+  return { status: 'green', summary: `Every check passed: ${passed.join(', ')}.` };
+}
+
+mkdirSync(logDir, { recursive: true });
+const greensPath = join(logDir, 'green-trees.json');
+const greens = (existsSync(greensPath) ? JSON.parse(readFileSync(greensPath, 'utf8')) : {}) as Record<
+  string,
+  Result
+>;
+const key = cleanTreeKey();
+const reused = key === undefined ? undefined : greens[key];
+if (reused !== undefined) {
+  note('run-checks: this tree already passed these checks earlier in this run; not running them again.');
+  emit(reused);
 } else {
-  emit({ status: 'green', summary: `Every check passed: ${passed.join(', ')}.` });
+  const result = await runGate();
+  // Recorded only when the gate left the tree as it found it.
+  if (result.status === 'green' && key !== undefined && cleanTreeKey() === key) {
+    writeFileSync(greensPath, JSON.stringify({ ...greens, [key]: result }, null, 2));
+  }
+  emit(result);
 }

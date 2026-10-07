@@ -683,12 +683,24 @@ nodes:
     with:
       detail: "$ci-verdict.output.detail"
       ci: "$discover-ci.output"
+    # A re-run is only for a failure that may not reproduce. A real break never
+    # carries `requested: true`: the schema re-asks that pairing at this node.
     output_format:
-      type: object
-      properties:
-        requested: { type: boolean }
-        reason: { type: string, pattern: '\S' }
-      required: [requested, reason]
+      anyOf:
+        - type: object
+          additionalProperties: false
+          properties:
+            failure: { type: string, enum: [flake, infrastructure] }
+            requested: { type: boolean }
+            reason: { type: string, pattern: '\S' }
+          required: [failure, requested, reason]
+        - type: object
+          additionalProperties: false
+          properties:
+            failure: { type: string, enum: [break, unknown] }
+            requested: { type: boolean, enum: [false] }
+            reason: { type: string, pattern: '\S' }
+          required: [failure, requested, reason]
 
   - id: await-rerun
     depends_on: [ci-rerun]
