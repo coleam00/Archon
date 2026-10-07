@@ -1218,6 +1218,26 @@ async function simulateNode(
       ctx.halted = 'cancelled';
       return;
     }
+    // A child run is its own governance object, so a dry run never simulates it, but
+    // a stub can declare its terminal output like any other node's. The node's own
+    // `with:` bindings still resolve first, so a binding a real launch would fail on
+    // fails here too. A fan-out has no single child output to stub.
+    const childStub = isWorkflowNode(node) && !node.fan_out ? stubFor(node, ctx) : undefined;
+    if (isWorkflowNode(node) && childStub !== undefined) {
+      if (node.with !== undefined) {
+        resolveNodeBindings(node.id, node.with, bindingShellContext(ctx, outputs), ctx.inputs);
+      }
+      const hydrated = completedOutput(node, childStub);
+      outputs.set(node.id, hydrated);
+      ctx.trace.push({
+        nodeId: node.id,
+        nodeType: nodeType(node),
+        state: 'stubbed',
+        output: hydrated.output,
+        ...(iteration ? { iteration } : {}),
+      });
+      return;
+    }
     if (isWorkflowNode(node) || isComposeFanOutNode(node)) {
       recordFailed(
         node,
