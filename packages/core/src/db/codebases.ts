@@ -4,7 +4,7 @@
 import { resolve } from 'node:path';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
-import { pool, getDialect } from './connection';
+import { pool, getDatabase, getDatabaseType, getDialect } from './connection';
 import type { Codebase, CreateCodebaseInput, UpdateCodebaseInput } from '../schemas/codebase';
 import {
   createLogger,
@@ -258,6 +258,13 @@ function nameDerivedLocations(codebase: Codebase): string[] {
 }
 
 /**
+ * Transaction-scoped advisory lock that serializes codebase renames on
+ * PostgreSQL. Distinct from the schema-init keys (1796, 1797) in the Postgres
+ * adapter.
+ */
+const CODEBASE_RENAME_LOCK_KEY = 1798;
+
+/**
  * Change a codebase's display name.
  *
  * The name doubles as the project's storage identity (see
@@ -268,8 +275,11 @@ function nameDerivedLocations(codebase: Codebase): string[] {
  *
  * Names are not UNIQUE in the schema, but `findCodebaseByName` resolves them
  * for `--project` and `/update-project`, so a duplicate is refused too. The
- * duplicate check lives in the UPDATE itself so concurrent renames cannot both
- * claim the same name.
+ * duplicate check lives in the UPDATE itself. On PostgreSQL that is not enough:
+ * under READ COMMITTED two concurrent UPDATEs of different rows each evaluate
+ * NOT EXISTS without seeing the other, so renames also take an advisory lock.
+ * The waiting rename's UPDATE then reads a fresh snapshot that includes the
+ * winner. SQLite serializes writers already.
  */
 export async function renameCodebase(id: string, name: string): Promise<Codebase> {
   const current = await getCodebase(id);
@@ -288,11 +298,16 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
     );
   }
 
-  const result = await pool.query(
-    `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2 ` +
-      'AND NOT EXISTS (SELECT 1 FROM remote_agent_codebases WHERE name = $1 AND id <> $2)',
-    [name, id]
-  );
+  const result = await getDatabase().withTransaction(async query => {
+    if (getDatabaseType() === 'postgresql') {
+      await query('SELECT pg_advisory_xact_lock($1)', [CODEBASE_RENAME_LOCK_KEY]);
+    }
+    return query(
+      `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2 ` +
+        'AND NOT EXISTS (SELECT 1 FROM remote_agent_codebases WHERE name = $1 AND id <> $2)',
+      [name, id]
+    );
+  });
   const renamed = await getCodebase(id);
   if (!renamed) throw new CodebaseNotFoundError(id);
   if ((result.rowCount ?? 0) === 0) throw new CodebaseNameTakenError(name);

@@ -93,6 +93,11 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
       'Runs the store contract in scratch databases on a PostgreSQL service with database creation permission.',
   },
   {
+    command: 'bun test packages/core/src/db/codebase-rename.postgres.integration.test.ts',
+    reason:
+      'Proves that concurrent renames cannot both claim a codebase name under READ COMMITTED, against a live PostgreSQL service.',
+  },
+  {
     command: 'bun run build:web',
     reason: 'Packages the web artifact for the compiled serve smoke, which runs only in CI.',
   },

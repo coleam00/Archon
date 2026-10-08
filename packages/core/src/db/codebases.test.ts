@@ -13,6 +13,10 @@ mock.module('./connection', () => ({
   pool: {
     query: mockQuery,
   },
+  getDatabase: () => ({
+    withTransaction: <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => fn(mockQuery),
+  }),
+  getDatabaseType: () => 'postgresql',
   getDialect: () => mockPostgresDialect,
 }));
 
@@ -609,12 +613,15 @@ describe('codebases', () => {
     test('renames when the storage location stays the same', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([], 1))
         .mockResolvedValueOnce(createQueryResult([{ ...adoCodebase, name: 'qes' }]));
 
       const renamed = await renameCodebase(adoCodebase.id, 'qes');
 
       expect(renamed.name).toBe('qes');
+      // The PostgreSQL rename lock is taken before the conditional UPDATE.
+      expect(mockQuery.mock.calls[1]?.[0]).toBe('SELECT pg_advisory_xact_lock($1)');
       expect(mockQuery).toHaveBeenCalledWith(
         'UPDATE remote_agent_codebases SET name = $1, updated_at = NOW() WHERE id = $2 ' +
           'AND NOT EXISTS (SELECT 1 FROM remote_agent_codebases WHERE name = $1 AND id <> $2)',
@@ -639,6 +646,7 @@ describe('codebases', () => {
       // The conditional UPDATE matches nothing while the codebase still exists.
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([], 0))
         .mockResolvedValueOnce(createQueryResult([adoCodebase]));
 
@@ -650,6 +658,7 @@ describe('codebases', () => {
     test('throws CodebaseNotFoundError when the codebase disappears before the update', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([], 0))
         .mockResolvedValueOnce(createQueryResult([]));
 
