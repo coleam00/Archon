@@ -44,7 +44,7 @@ While you work, run the narrow check instead — `bun run type-check`, `bun run 
 
 **Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
 
-**macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Set `ARCHON_TEST_COMPILED_BINARIES=1` to run them on a Mac anyway. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`.
+**macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Set `ARCHON_TEST_COMPILED_BINARIES=1` to run them on a Mac anyway. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`. One exception: the file-store lock tests compile their probe only under GitHub Actions, on every OS, and skip it everywhere else whatever `ARCHON_TEST_COMPILED_BINARIES` says. The `file-store-primitives-macos` job runs that file on a disposable Mac so the probe is also proved on macOS.
 
 #### What `bun run validate` deliberately leaves out
 
@@ -58,6 +58,7 @@ If you touched what they cover, run them yourself.
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
 | `serve-binary` | compiled CLI and server artifacts; CI runs the build and smoke on Linux and Windows | CI only; no local compilation on macOS |
 | `docs-build` | Node (Astro's CLI does not run under Bun); path-filtered to `packages/docs-web/` | `bun run build:docs` — run it when you change the docs site |
+| `file-store-primitives-macos` | GitHub Actions, which the compiled-binary probe requires; the rest of the file also runs under `validate` | `bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts` runs everything except the compiled probe |
 
 The `serve-binary` CI job builds matching CLI and server executables on Linux and
 Windows, then checks `archon serve` against `/api/health` and the console. The
