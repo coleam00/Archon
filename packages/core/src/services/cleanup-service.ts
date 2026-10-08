@@ -202,6 +202,13 @@ export async function cleanupContainerEnvironments(
       report.skipped.push({ id: row.id, reason });
       continue;
     }
+    if (retainsWorkspace(row.created_by_platform)) {
+      report.skipped.push({
+        id: row.id,
+        reason: `platform '${row.created_by_platform}' retains workspaces`,
+      });
+      continue;
+    }
     // FAIL CLOSED on an ambiguous lookup (H3): a DB error is NOT "no run" — treating
     // it as an orphan would destroy a claimable run's container on a transient blip
     // (violating No-Autonomous-Lifecycle-Mutation). Report + skip, never destroy.

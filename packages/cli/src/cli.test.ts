@@ -1927,6 +1927,34 @@ globalThis.fetch = () => ${entry.pending ? 'new Promise(() => {})' : "Promise.re
 });
 
 describe('receipt policies in the CLI host', () => {
+  it.each(['--version', 'version'])(
+    '%s works with a malformed installed receipt',
+    async command => {
+      const root = mkdtempSync(join(tmpdir(), 'cli-version-receipt-'));
+      const home = join(root, 'home');
+      const file = receiptPath(join(home, 'plugins'), 'owner/broken');
+      mkdirSync(join(home, 'plugins', 'installed', 'owner', 'broken'), { recursive: true });
+      writeFileSync(file, '{invalid json');
+      try {
+        const result = spawnSync(process.execPath, [CLI_ENTRY, command], {
+          cwd: root,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            ARCHON_HOME: home,
+            DATABASE_URL: '',
+            ARCHON_TELEMETRY_DISABLED: '1',
+          },
+        });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain('Archon CLI v');
+        expect(result.stderr).not.toContain(file);
+      } finally {
+        await removeTempTree(root);
+      }
+    }
+  );
+
   it(
     'registers a receipt without executing its binary, then keeps and reports its workspace after removal',
     async () => {

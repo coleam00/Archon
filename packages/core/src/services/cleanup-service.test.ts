@@ -394,6 +394,23 @@ describe('cleanupContainerEnvironments — H3 fail-closed on lookup error', () =
     expect(mockContainerDestroy).toHaveBeenCalledTimes(1);
     expect(report.removed).toEqual(['env-1']);
   });
+
+  test('keeps an old container whose registered platform retains workspaces', async () => {
+    setPlatformPolicies([...ageBasedPolicies, { id: 'matrix-chat', workspaceRetention: 'retain' }]);
+    mockListActiveContainerEnvironments.mockResolvedValueOnce([
+      { ...oldRow, created_by_platform: 'matrix-chat' },
+    ]);
+
+    const report = await cleanupContainerEnvironments(7);
+
+    expect(report).toEqual({
+      removed: [],
+      skipped: [{ id: oldRow.id, reason: "platform 'matrix-chat' retains workspaces" }],
+      errors: [],
+    });
+    expect(mockGetLiveRunOwningEnv).not.toHaveBeenCalled();
+    expect(mockContainerDestroy).not.toHaveBeenCalled();
+  });
 });
 
 describe('cleanup-service', () => {
@@ -2695,6 +2712,38 @@ describe('onConversationClosed', () => {
     // Reset defaults
     mockWorktreeExists.mockResolvedValue(false);
     mockHasUncommittedChanges.mockResolvedValue(false);
+  });
+
+  test('keeps an uninstalled platform workspace and its conversation reference', async () => {
+    setPlatformPolicies([
+      ...ageBasedPolicies,
+      { id: 'removed-chat', workspaceRetention: 'retain' },
+    ]);
+    setPlatformPolicies(ageBasedPolicies);
+    mockLogger.warn.mockClear();
+    mockContainerDestroy.mockClear();
+    const env = makeEnvironment({ created_by_platform: 'removed-chat' });
+    mockGetConversationByPlatformId.mockResolvedValueOnce(
+      makeConversation({ isolation_env_id: env.id, cwd: env.working_path })
+    );
+    mockGetActiveSession.mockResolvedValueOnce(null);
+    mockGetById.mockResolvedValueOnce(env);
+
+    await onConversationClosed('removed-chat', 'thread-1', { merged: true });
+
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    expect(mockGetLiveRunOwningEnv).not.toHaveBeenCalled();
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockContainerDestroy).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      {
+        envId: env.id,
+        reason:
+          "platform 'removed-chat' is not registered; workspace kept (plugin may have been removed)",
+      },
+      'cleanup_skipped'
+    );
   });
 
   test('deactivates session with conversation-closed reason', async () => {

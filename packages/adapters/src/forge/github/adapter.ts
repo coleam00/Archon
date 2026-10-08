@@ -933,7 +933,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     getLog().info({ conversationId, merged }, 'github.isolation_cleanup_started');
 
     try {
-      await onConversationClosed('github', conversationId, { merged });
+      await onConversationClosed(githubPolicy.id, conversationId, { merged });
       getLog().info({ conversationId }, 'github.isolation_cleanup_completed');
     } catch (error) {
       const err = error as Error;
@@ -1187,7 +1187,7 @@ ${userComment}`;
     if (attributedLogin) {
       try {
         const user = await userDb.findOrCreateUserByPlatformIdentity(
-          'github',
+          githubPolicy.id,
           attributedLogin,
           attributedLogin
         );
@@ -1241,7 +1241,11 @@ ${userComment}`;
     // 8. Ensure repo ready (clone if needed, sync if new conversation)
     await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
 
-    const existingConv = await db.getOrCreateConversation('github', conversationId, codebase.id);
+    const existingConv = await db.getOrCreateConversation(
+      githubPolicy.id,
+      conversationId,
+      codebase.id
+    );
     const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
 
     if (needsProjectContext) {
