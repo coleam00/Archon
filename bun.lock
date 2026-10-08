@@ -64,6 +64,7 @@
       },
       "dependencies": {
         "@archon/adapters": "workspace:*",
+        "@archon/chat-contract": "workspace:*",
         "@archon/core": "workspace:*",
         "@archon/forge": "workspace:*",
         "@archon/git": "workspace:*",
@@ -72,7 +73,6 @@
         "@archon/plugin-manifest": "workspace:*",
         "@archon/provider-contract": "workspace:*",
         "@archon/providers": "workspace:*",
-        "@archon/server": "workspace:*",
         "@archon/workflows": "workspace:*",
         "@clack/prompts": "^1.0.0",
         "@hono/zod-openapi": "^1.4.0",
@@ -171,6 +171,7 @@
       "name": "@archon/plugin-manifest",
       "version": "0.11.1",
       "dependencies": {
+        "@archon/chat-contract": "workspace:*",
         "@archon/paths": "workspace:*",
         "@archon/provider-contract": "workspace:*",
         "zod": "^4.4.3",
@@ -237,6 +238,7 @@
         "zod": "^4.4.3",
       },
       "devDependencies": {
+        "@archon/chat-contract": "workspace:*",
         "@types/node": "^22.0.0",
         "@types/pg": "^8.11.0",
       },

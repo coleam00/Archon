@@ -1,8 +1,11 @@
 // @archon-test-isolated
+import { setPlatformPolicies } from '../platforms/registry';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { toBranchName } from '@archon/git';
 import type * as IsolationDb from '../db/isolation-environments';
 import type * as CleanupService from '../services/cleanup-service';
+
+beforeEach(() => setPlatformPolicies([{ id: 'web', workspaceRetention: 'age-based' }]));
 
 // ---------------------------------------------------------------------------
 // Mock modules before importing the module under test
@@ -121,6 +124,20 @@ describe('listEnvironments', () => {
     expect(result.totalEnvironments).toBe(0);
     expect(result.ghostsReconciled).toBe(0);
     expect(mockListByCodebaseWithAge).not.toHaveBeenCalled();
+  });
+
+  test('keeps and reports a missing worktree from an uninstalled chat platform', async () => {
+    const env = makeEnvWithAge({ id: 'removed-chat-env', created_by_platform: 'removed-chat' });
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv()]);
+    mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
+    mockWorktreeExists.mockResolvedValue(false);
+    const result = await listEnvironments();
+    expect(result.ghostsReconciled).toBe(0);
+    expect(result.codebases[0]?.environments[0]?.cleanupSkipReason).toContain(
+      "platform 'removed-chat' is not registered"
+    );
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockWorktreeExists).not.toHaveBeenCalled();
   });
 
   test('marks missing worktree as destroyed and increments ghostsReconciled', async () => {

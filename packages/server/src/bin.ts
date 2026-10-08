@@ -10,12 +10,17 @@ export async function runServerEntry(
 ): Promise<void> {
   const options = parseServerLaunchArgv(argv);
   const cliCommand = env.ARCHON_CLI_COMMAND;
+  const logLevel = env.LOG_LEVEL;
   if (!cliCommand) throw new Error(SERVER_LAUNCH_REQUIRED);
   if (options.cliVersion !== BUNDLED_VERSION) {
     throw new Error(
       `archon-server version ${BUNDLED_VERSION} does not match CLI version ${options.cliVersion}. ` +
         'Run `archon serve --download-only` to fetch the matching server.'
     );
+  }
+  if (logLevel) {
+    const { setLogLevel } = await import('@archon/paths/logger');
+    setLogLevel(logLevel);
   }
   const { startServer } = await loadServer();
   // Application env loading must not replace the launcher-owned CLI command.

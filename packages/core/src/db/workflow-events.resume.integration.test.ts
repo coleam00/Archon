@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { z } from '@hono/zod-openapi';
 import * as paths from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { registerBuiltinProviders } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { WorkflowDeps, WorkflowConfig } from '@archon/workflows/deps';
 import { WORKFLOW_EVENT_TYPES, type IWorkflowStore } from '@archon/workflows/store';
 import { RUN_GRAPH_METADATA_KEY } from '@archon/workflows/schemas/terminal-record';

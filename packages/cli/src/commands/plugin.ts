@@ -46,14 +46,13 @@ import { processProviderRegistration } from '@archon/core/providers/process-regi
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
 import { inspectChatPlugin } from './inspect-chat-plugin';
 import { publishChatPlugin } from './publish-chat-plugin';
-import type { ChatPluginDescriptor } from '@archon/chat-contract/descriptor';
-import { withPluginMutationLock } from './plugin-mutation-lock';
 import {
-  assertProviderRegistrationAllowed,
-  registerBuiltinProviders,
-  registerCommunityProviders,
-  getRegisteredProviders,
-} from '@archon/providers';
+  RESERVED_CHAT_PLATFORMS,
+  type ChatPluginDescriptor,
+} from '@archon/chat-contract/descriptor';
+import { withPluginMutationLock } from './plugin-mutation-lock';
+import { assertProviderRegistrationAllowed, getRegisteredProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
 export interface PluginEnvironment {
   /** `ARCHON_HOME/plugins`, the directory forge discovery scans. */
@@ -297,15 +296,6 @@ async function inspectInstallableProvider(
   assertProviderRegistrationAllowed(registration, registrations);
   return descriptor;
 }
-
-export const RESERVED_CHAT_PLATFORMS: ReadonlyMap<string, string> = new Map([
-  ['web', 'host Web adapter'],
-  ['cli', 'host CLI adapter'],
-  ['api', 'host API surface'],
-  ['github', 'bundled GitHub forge adapter'],
-  ['gitea', 'bundled Gitea forge adapter'],
-  ['gitlab', 'bundled GitLab forge adapter'],
-]);
 
 async function inspectInstallableChat(
   stagedBinary: string,

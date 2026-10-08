@@ -1,3 +1,6 @@
+import * as containerSpawnModule from './container-spawn';
+import { overStreams } from '../test/plugin';
+import { createProvider, descriptor } from './index';
 import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,6 +14,7 @@ const backgroundTempRoots = trackTempRoots();
 
 const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
+  BUNDLED_VERSION: 'test',
   createLogger: mock(() => mockLogger),
 }));
 
@@ -35,7 +39,23 @@ const mockQuery = mock<MockQuery>(async function* (_params) {
 });
 
 // Mock the claude-agent-sdk
+const sdkToolHandlers = new Map<
+  string,
+  (args: Record<string, unknown>) => Promise<{ content: { type: 'text'; text: string }[] }>
+>();
 mock.module('@anthropic-ai/claude-agent-sdk', () => ({
+  tool: (
+    name: string,
+    _description: string,
+    _schema: unknown,
+    handler: (
+      args: Record<string, unknown>
+    ) => Promise<{ content: { type: 'text'; text: string }[] }>
+  ) => {
+    sdkToolHandlers.set(name, handler);
+    return { name, handler };
+  },
+  createSdkMcpServer: ({ name }: { name: string }) => ({ type: 'sdk', name, instance: {} }),
   query: mockQuery,
 }));
 
@@ -3865,7 +3885,8 @@ describe('typed failures (#1797, #3524)', () => {
     expect(chunks.filter(chunk => chunk.type === 'subtask')).toHaveLength(1);
   });
 
-  test('conforms to the provider contract', async () => {
+  test.each([false, true])('conforms to the provider contract (streams: %s)', async remote => {
+    const client = remote ? overStreams(createProvider, descriptor) : createProvider();
     function turn(events: unknown[] | Error): () => AsyncIterable<unknown> {
       return () => {
         mockQuery.mockImplementation(async function* () {
@@ -4134,4 +4155,98 @@ describe('typed failures (#1797, #3524)', () => {
     ]);
     expect(violations).toEqual([]);
   });
+});
+
+test('Claude native tool callbacks and chunks match over streams', async () => {
+  const handler = mock(async (input: Record<string, unknown>) => JSON.stringify(input));
+  const options = {
+    nativeTools: [
+      {
+        name: 'manage_run',
+        description: 'Inspect a run',
+        inputSchema: { properties: { action: { kind: 'string' as const } }, required: ['action'] },
+        handler,
+      },
+    ],
+  };
+  const chunks: MessageChunk[][] = [];
+  for (const provider of [createProvider(), overStreams(createProvider, descriptor)]) {
+    mockQuery.mockImplementation(async function* ({ options }) {
+      expect(options?.mcpServers?.archon).toBeDefined();
+      const result = await sdkToolHandlers.get('manage_run')!({ action: 'inspect' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        session_id: 'tool-session',
+        result: result.content[0].text,
+      };
+    });
+    chunks.push(
+      await Array.fromAsync(provider.sendQuery('inspect', '/workspace', undefined, options))
+    );
+  }
+  expect(chunks[1]).toEqual(chunks[0]);
+  expect(chunks[0]).toContainEqual(
+    expect.objectContaining({ type: 'result', text: '{"action":"inspect"}' })
+  );
+  expect(handler).toHaveBeenCalledTimes(2);
+});
+
+test('Claude container spawn hook receives request environment over streams', async () => {
+  const canary = 'ARCHON_P4_HOST_SECRET';
+  process.env[canary] = 'host-secret';
+  const envs: NodeJS.ProcessEnv[] = [];
+  const hookSpy = spyOn(containerSpawnModule, 'buildContainerSpawn').mockImplementation(
+    () => spawnOptions => {
+      envs.push(spawnOptions.env);
+      throw new Error('fixture-container-hook');
+    }
+  );
+  try {
+    for (const provider of [createProvider(), overStreams(createProvider, descriptor)]) {
+      mockQuery.mockImplementation(async function* ({ options }) {
+        expect(options?.spawnClaudeCodeProcess).toBeDefined();
+        expect(() =>
+          options!.spawnClaudeCodeProcess!({
+            command: 'claude',
+            args: [],
+            env: options?.env ?? {},
+            signal: new AbortController().signal,
+          })
+        ).toThrow('fixture-container-hook');
+        yield { type: 'result', subtype: 'success', session_id: 'container-session' };
+      });
+      await Array.fromAsync(
+        provider.sendQuery('container', '/workspace', undefined, {
+          execContext: { kind: 'container', containerId: 'fixture-container' },
+          env: { ANTHROPIC_API_KEY: 'request-secret', PROJECT_VAR: 'configured' },
+        })
+      );
+    }
+    expect(envs[1]).toEqual(envs[0]);
+    expect(envs[1]).not.toHaveProperty(canary);
+    expect(envs[1]).toMatchObject({
+      ANTHROPIC_API_KEY: 'request-secret',
+      PROJECT_VAR: 'configured',
+    });
+  } finally {
+    hookSpy.mockRestore();
+    delete process.env[canary];
+  }
+});
+
+test('Claude diagnostic hook uses configured binary resolution over streams', async () => {
+  const resolver = spyOn(binaryResolver, 'resolveClaudeBinaryWithSource').mockResolvedValue({
+    path: process.execPath,
+    source: 'config',
+  });
+  try {
+    const request = { assistantConfig: { claudeBinaryPath: process.execPath } };
+    const direct = await createProvider().diagnose(request);
+    expect(await overStreams(createProvider, descriptor).diagnose!(request)).toEqual(direct);
+    expect(direct.checks[0].status).toBe('ok');
+    expect(resolver).toHaveBeenCalledWith(process.execPath);
+  } finally {
+    resolver.mockRestore();
+  }
 });

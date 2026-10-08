@@ -387,6 +387,48 @@ jobs:
         if: always()
         run: docker rm -f archon-smoke || true
 
+  serve-binary:
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            binary: archon-linux-x64
+            server: archon-server-linux-x64
+          - os: windows-latest
+            target: bun-windows-x64
+            binary: archon-windows-x64.exe
+            server: archon-server-windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build web UI
+        run: bun run build:web
+      - name: Build matching server and CLI
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          OUTFILE: dist/${{ matrix.binary }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/serve-web/web"
+          cp -R packages/web/dist/. "$RUNNER_TEMP/serve-web/web/"
+          tar czf archon-web.tar.gz -C "$RUNNER_TEMP/serve-web" web
+          mkdir -p dist
+          bash scripts/build-binaries.sh
+      - name: Smoke-test archon serve
+        shell: bash
+        run: |
+          bun scripts/smoke-serve.ts dist/${{ matrix.binary }} dist/${{ matrix.server }} archon-web.tar.gz
+
   test-suite:
     name: Test Suite
     needs:
@@ -400,6 +442,7 @@ jobs:
         schema-upgrade,
         postgres-parity,
         docker-build,
+        serve-binary,
       ]
     # On a draft the aggregate is skipped with everything else, so the check reads
     # "skipped" rather than a green that claims tests passed. A draft cannot merge, and

@@ -24,7 +24,7 @@ share one process. Run package test scripts to preserve isolation; requested sel
 are forwarded to Bun verbatim and bypass default grouping.
 
 `bun run validate` is the gate. Run it before opening a pull request: it runs every
-check that gates a pull request except the five listed below. A green run means CI's `test`
+check that gates a pull request except the jobs listed below. A green run means CI's `test`
 and `workflow-fixtures` jobs will pass on your OS. CI runs the `static` job on Linux only; a
 green run on another OS predicts it because type-check, lint and format do not depend on the
 OS, and the generated-file checks run on both Linux and Windows. It needs no network and no
@@ -56,8 +56,16 @@ If you touched what they cover, run them yourself.
 | `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
 | `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, and `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
+| `serve-binary` | compiled CLI and server artifacts; CI runs the build and smoke on Linux and Windows | CI only; no local compilation on macOS |
 | `docs-build` | Node (Astro's CLI does not run under Bun); path-filtered to `packages/docs-web/` | `bun run build:docs` — run it when you change the docs site |
 | `file-store-primitives-macos` | GitHub Actions, which the compiled-binary probe requires; the rest of the file also runs under `validate` | `bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts` runs everything except the compiled probe |
+
+The `serve-binary` CI job builds matching CLI and server executables on Linux and
+Windows, then checks `archon serve` against `/api/health` and the console. The
+release workflow runs the same smoke with its release artifacts. These compiled
+checks, and the server-free bundle assertion (including a restored-import
+negative proof), run in CI. Local `check:cli-import-boundary` still checks startup
+and policy import boundaries. Do not compile these binaries locally on macOS.
 
 **Schema changes**: run `bun run check:schema-upgrades` and `bun run check:sqlite-vintages`
 yourself if you touched `migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can
@@ -162,6 +170,7 @@ See [AGENTS.md](./AGENTS.md) for detailed architecture documentation.
 ## Sharing workflows
 
 Publish a workflow pack from your own GitHub repository: add an `archon-plugin.json` with `"kind": "workflow-pack"` and users install it with `archon plugin install owner/repo[/path][@tag]`. The layout and manifest are described in the [installed workflow packs guide](https://archon.diy/guides/global-workflows/#installed-workflow-packs).
+
 
 ## Questions?
 

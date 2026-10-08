@@ -45,11 +45,17 @@ export async function readReceipts(pluginsDir: string): Promise<PluginReceipt[]>
   for (const entry of entries.sort()) {
     if (basename(entry) !== RECEIPT_FILE) continue;
     const file = join(root, entry);
-    let raw: unknown;
+    let contents: string;
     try {
-      raw = JSON.parse(await readFile(file, 'utf8'));
+      contents = await readFile(file, 'utf8');
     } catch (error) {
       throw new Error(`Cannot read plugin receipt ${file}: ${(error as Error).message}`);
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(contents);
+    } catch {
+      throw new Error(`Invalid JSON in plugin receipt ${file}`);
     }
     const parsed = pluginReceiptSchema.safeParse(raw);
     if (!parsed.success) {

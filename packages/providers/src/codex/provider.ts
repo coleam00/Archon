@@ -4,7 +4,7 @@
  */
 import { z } from 'zod';
 import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
-import type { CredentialStatus } from '@archon/provider-contract';
+import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -28,10 +28,12 @@ import {
   type ProviderFailureClass,
 } from '@archon/provider-contract';
 import { failureClassOfThrown, failureResult } from '../shared/failure';
+import { diagnoseBinary } from '../shared/binary-diagnostics';
+import { readCodexSetupEnv, formatCodexSetupDeprecation } from './setup-env';
 import { clampEffort } from '@archon/provider-contract';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
-import { resolveCodexBinary } from './binary-resolver';
+import { resolveCodexBinary, resolveCodexBinaryWithSource } from './binary-resolver';
 import { BUNDLED_VERSION, createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import {
@@ -847,6 +849,25 @@ function failureClassOfStop(error: unknown): ProviderFailureClass {
 // ─── Codex Provider ──────────────────────────────────────────────────────
 
 export class CodexProvider implements IAgentProvider {
+  async diagnose(
+    request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
+  ): Promise<ProviderDiagnostics> {
+    const config = parseCodexConfig(request.assistantConfig ?? {});
+    const diagnostics = await diagnoseBinary('codex-binary', 'Codex binary', () =>
+      resolveCodexBinaryWithSource(config.codexBinaryPath)
+    );
+    const { deprecated } = readCodexSetupEnv(process.env);
+    diagnostics.checks.push({
+      id: 'codex-setup-env',
+      label: 'Codex setup environment',
+      status: deprecated.length ? 'warn' : 'ok',
+      message: deprecated.length
+        ? formatCodexSetupDeprecation(deprecated)
+        : 'No deprecated Codex setup variables',
+    });
+    return diagnostics;
+  }
+
   /**
    * @param spawner starts the app-server process; tests pass a fake.
    * @param shutdownGraceMs each cancel and shutdown wait; tests shorten it.
