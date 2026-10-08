@@ -191,7 +191,7 @@ if (process.argv[2] === 'seed') {
   appendFileSync(${JSON.stringify(join(root, 'user'))}, user.id);
   await closeDatabase();
 } else if (process.argv[2] === 'pause') {
-  const { registerBuiltinProviders } = await import(${source('packages/providers/src/index.ts')});
+  const { registerBuiltinProviders } = await import(${source('packages/providers/src/in-process.ts')});
   const { createCliWorkflowDeps } = await import(${source('packages/cli/src/utils/workflow-deps.ts')});
   const { createCodebase } = await import(${source('packages/core/src/db/codebases.ts')});
   const { getOrCreateConversation } = await import(${source('packages/core/src/db/conversations.ts')});

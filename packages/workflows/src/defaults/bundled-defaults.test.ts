@@ -31,11 +31,8 @@ import {
   isWaitNode,
 } from '../schemas';
 import { findStrictSchemaIssues } from '@archon/provider-contract';
-import {
-  getProviderCapabilities,
-  isRegisteredProvider,
-  registerBuiltinProviders,
-} from '@archon/providers';
+import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { validateStructuredOutput } from '../structured-output';
 
 registerBuiltinProviders();

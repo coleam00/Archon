@@ -17,14 +17,20 @@ export function validateCommand(command: string): string | undefined {
 export async function terminateTree(pid: number): Promise<void> {
   if (process.platform === 'win32') {
     const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
-    await execFileAsync(
-      join(systemRoot, 'System32', 'taskkill.exe'),
-      ['/PID', String(pid), '/T', '/F'],
-      {
-        windowsHide: true,
-        timeout: 5_000,
-      }
-    );
+    try {
+      await execFileAsync(
+        join(systemRoot, 'System32', 'taskkill.exe'),
+        ['/PID', String(pid), '/T', '/F'],
+        {
+          windowsHide: true,
+          timeout: 5_000,
+        }
+      );
+    } catch (error) {
+      // taskkill exits 128 when the process is already gone: the win32 ESRCH. A child can
+      // exit between its caller's liveness check and this call, e.g. on stdin EOF.
+      if ((error as { code?: unknown }).code !== 128) throw error;
+    }
     return;
   }
   try {

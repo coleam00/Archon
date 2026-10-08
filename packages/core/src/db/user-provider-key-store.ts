@@ -6,10 +6,8 @@
  * Two credential kinds: `api_key` (a single bearer string) and `oauth` (an
  * opaque blob minted at login). For `api_key`,
  * `getDecryptedProviderCredential` returns the decrypted bearer directly. For
- * `oauth`, it decrypts the blob, mints/refreshes a usable bearer — via Pi's
- * `getOAuthApiKey` for Pi-driven vendors, or the Archon-owned OpenAI flow
- * (`mintOpenAiOAuthApiKey`, which preserves the `id_token` Pi drops, #1924) —
- * re-saves rotated creds, and returns it (PR-3).
+ * `oauth`, it decrypts the blob, refreshes a usable bearer through core's
+ * subscription flows, and re-saves rotated credentials.
  *
  * (Filename carries a `-store` suffix to satisfy a local secret-guard hook
  * that blocks basenames ending in `key(s).ts` / `token(s).ts`; the table is
@@ -17,10 +15,7 @@
  */
 import { pool, getDialect } from './connection';
 import { createLogger } from '@archon/paths';
-import {
-  getOAuthApiKey,
-  type OAuthCredentials as PiOAuthCredentials,
-} from '@archon/providers/oauth';
+import { mintOAuthApiKey, SubscriptionTokenError } from '../credentials/subscription-oauth';
 import { encryptToken, decryptToken, getEncryptionKey } from '../utils/token-crypto';
 import type { UserProviderKeyRow } from '../schemas/user-provider-key-row';
 import {
@@ -28,7 +23,10 @@ import {
   type OAuthCredentials,
   type ResolvedCredential,
 } from '../credentials/delivery';
-import { piOAuthProviderFor, OPENAI_SUBSCRIPTION_VENDOR } from '../credentials/oauth-providers';
+import {
+  subscriptionOAuthProviderFor,
+  OPENAI_SUBSCRIPTION_VENDOR,
+} from '../credentials/oauth-providers';
 import {
   mintOpenAiOAuthApiKey,
   OpenAiTokenError,
@@ -222,14 +220,7 @@ export async function getStoredCredentialStatus(
   return stored.state === 'usable' ? { state: 'usable', source: 'archon' } : stored;
 }
 
-/**
- * Decrypt + refresh one OAuth credential. Vendor `openai` refreshes through
- * the Archon-owned flow (`mintOpenAiOAuthApiKey`) — Pi's `getOAuthApiKey`
- * would rebuild the blob from its own shape and DROP the `id_token` the Codex
- * CLI requires on every rotation (#1924). Everything else goes through Pi's
- * `getOAuthApiKey`. On rotation, re-save the new blob (with retry; a dead
- * resave means a dead refresh token — see below). Never throws.
- */
+/** Rotated refresh tokens must be saved before a later read needs them again. */
 async function resolveOAuthCredential(
   userId: string,
   provider: string,
@@ -237,20 +228,18 @@ async function resolveOAuthCredential(
   key: Buffer
 ): Promise<StoredCredential> {
   const vendor = normalizeCredentialVendor(provider);
-  const piProvider = vendor === OPENAI_SUBSCRIPTION_VENDOR ? undefined : piOAuthProviderFor(vendor);
-  if (vendor !== OPENAI_SUBSCRIPTION_VENDOR && !piProvider) {
+  const oauthProvider =
+    vendor === OPENAI_SUBSCRIPTION_VENDOR ? undefined : subscriptionOAuthProviderFor(vendor);
+  if (vendor !== OPENAI_SUBSCRIPTION_VENDOR && !oauthProvider) {
     // An oauth row for a provider with no OAuth flow (shouldn't happen — connect guards it).
-    getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_pi_provider');
+    getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_provider');
     return UNREADABLE;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(decryptToken(ciphertext, key));
-  } catch (err) {
-    getLog().error(
-      { err: err as Error, userId, provider },
-      'user_provider_key.oauth_decrypt_failed'
-    );
+  } catch {
+    getLog().error({ userId, provider }, 'user_provider_key.oauth_decrypt_failed');
     return UNREADABLE;
   }
   const creds = typeof parsed === 'object' && parsed !== null ? (parsed as OAuthCredentials) : null;
@@ -265,31 +254,34 @@ async function resolveOAuthCredential(
     );
     return UNREADABLE;
   }
-  let result: { newCredentials: PiOAuthCredentials | OAuthCredentials; apiKey: string } | null;
+  let result: { newCredentials: OAuthCredentials; apiKey: string } | null;
   try {
-    result = piProvider
-      ? await getOAuthApiKey(piProvider.id, {
-          [piProvider.id]: creds as unknown as PiOAuthCredentials,
-        })
+    result = oauthProvider
+      ? await mintOAuthApiKey(oauthProvider, creds)
       : // Assertion to the narrow openai shape: rows under vendor 'openai' are
         // minted exclusively by openai-oauth.ts, which validates every field at
         // write time; mint's runtime guards still tolerate legacy/corrupt rows.
         await mintOpenAiOAuthApiKey(creds as OpenAiOAuthCredentials);
   } catch (err) {
     getLog().error(
-      { err: err as Error, userId, provider },
+      {
+        userId,
+        provider,
+        status:
+          err instanceof OpenAiTokenError || err instanceof SubscriptionTokenError
+            ? err.status
+            : undefined,
+      },
       'user_provider_key.oauth_refresh_failed'
     );
-    if (!(err instanceof OpenAiTokenError)) {
-      // Pi's refresh errors embed the vendor response body, which can carry account
-      // identifiers or issued tokens. The full error stays in the log above only.
+    if (!(err instanceof OpenAiTokenError) && !(err instanceof SubscriptionTokenError)) {
       return {
         state: 'check_failed',
         source: 'archon',
         evidence: "The vendor's token refresh failed.",
       };
     }
-    // Archon's own OpenAI flow reports an HTTP status and a body-free message. Only
+    // Core's token flows report an HTTP status and a body-free message. Only
     // 400 and 401 mean the token endpoint rejected the grant; any other status (a WAF
     // challenge, a moved endpoint, rate limiting, an outage) or no status at all (network,
     // timeout) leaves the credential's health unknown.
@@ -306,7 +298,7 @@ async function resolveOAuthCredential(
       evidence: 'The stored credential produced no access token.',
     };
   }
-  const rawCreds = result.newCredentials as OAuthCredentials;
+  const rawCreds = result.newCredentials;
   // Compare the meaningful fields (not JSON, which is key-order-sensitive → needless
   // writes on a reordered-but-equal blob).
   const rotated =

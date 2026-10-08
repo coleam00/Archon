@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import { validationSourceConfigSchema, workflowValidationConfig } from './validation-config';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import { validateWorkflowResources, type ValidationIssue } from './validator';

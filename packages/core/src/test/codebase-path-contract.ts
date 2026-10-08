@@ -1,13 +1,13 @@
 import { expect } from 'bun:test';
 import { resolve } from 'node:path';
 import { toBranchName } from '@archon/git';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import { quoteCommandArg } from '../utils/command-args';
 import { setPlatformPolicies } from '../platforms/registry';
 import type { IDatabase } from '../db/adapters/types';
 
 export async function verifyCodebasePathContract(db: IDatabase): Promise<void> {
-  setPlatformPolicies([]);
+  setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
   // Registration loads configuration, so the contract registers providers as a host does.
   registerBuiltinProviders();
   registerCommunityProviders();

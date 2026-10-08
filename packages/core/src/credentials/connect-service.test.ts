@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import { createMockQuery, mockPostgresDialect } from '../test/mocks/database';
 
 process.env.TOKEN_ENCRYPTION_KEY = 'a'.repeat(64);

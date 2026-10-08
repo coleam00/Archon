@@ -1,13 +1,16 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import * as git from '@archon/git';
 
+const mockCleanupError = mock<(...args: unknown[]) => void>(() => undefined);
+const mockCleanupInfo = mock<(...args: unknown[]) => void>(() => undefined);
+
 // Mock logger to suppress noisy output
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
     fatal: () => undefined,
-    error: () => undefined,
+    error: mockCleanupError,
     warn: () => undefined,
-    info: () => undefined,
+    info: mockCleanupInfo,
     debug: () => undefined,
     trace: () => undefined,
     child: () => undefined,
@@ -685,6 +688,12 @@ describe('IsolationResolver', () => {
         destroy: async (_envId, options) => {
           destroyCalled = true;
           destroyCalledWithForce = options?.force === true;
+          expect(options).toEqual({
+            canonicalRepoPath: git.toRepoPath('/repos/myrepo'),
+            creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+            branchName: git.toBranchName('new-branch'),
+            force: true,
+          });
           return {
             worktreeRemoved: true,
             branchDeleted: null,
@@ -712,6 +721,45 @@ describe('IsolationResolver', () => {
 
     expect(destroyCalled).toBe(true);
     expect(destroyCalledWithForce).toBe(true);
+  });
+
+  test('incomplete rollback reports the leftover without masking the store failure', async () => {
+    mockCleanupError.mockClear();
+    mockCleanupInfo.mockClear();
+    const resolver = createResolver({
+      provider: {
+        ...makeMockProvider(),
+        destroy: async () => ({
+          worktreeRemoved: true,
+          directoryClean: false,
+          branchDeleted: null,
+          remoteBranchDeleted: null,
+          warnings: ['Retained directory'],
+        }),
+      },
+      store: makeMockStore({
+        create: async () => {
+          throw new Error('DB constraint violation');
+        },
+      }),
+    });
+    await expect(
+      resolver.resolve({
+        existingEnvId: null,
+        codebase: defaultCodebase,
+        hints: { workflowType: 'issue', workflowId: '602' },
+        platformType: 'web',
+      })
+    ).rejects.toThrow('DB constraint violation');
+    expect(mockCleanupError.mock.calls).toContainEqual([
+      expect.objectContaining({
+        err: expect.objectContaining({ message: expect.stringContaining('Retained directory') }),
+      }),
+      'isolation_orphan_cleanup_failed',
+    ]);
+    expect(
+      mockCleanupInfo.mock.calls.some(args => args[1] === 'isolation_orphan_cleanup_completed')
+    ).toBe(false);
   });
 
   test('store.create() failure still rethrows when orphan cleanup also fails', async () => {

@@ -8,13 +8,13 @@ import {
 } from './wire';
 import { descriptor } from './fixtures/provider';
 
-test('descriptors refuse capabilities the wire cannot carry', () => {
-  expect(() =>
+test('descriptors support native tools and refuse unsupported contracts', () => {
+  expect(
     providerPluginDescriptorSchema.parse({
       ...descriptor,
       capabilities: { ...descriptor.capabilities, nativeTools: true },
-    })
-  ).toThrow('nativeTools');
+    }).capabilities.nativeTools
+  ).toBe(true);
   expect(() =>
     providerPluginDescriptorSchema.parse({ ...descriptor, credentials: { kind: 'dynamic' } })
   ).toThrow('kind');
@@ -34,8 +34,12 @@ test('descriptors refuse capabilities the wire cannot carry', () => {
 
 test('session requests reject non-data values and host-owned fields', () => {
   expect(() =>
-    providerSessionRequestSchema.parse({ prompt: '', cwd: '/', env: { KEY: 'secret' } })
-  ).toThrow('env');
+    providerSessionRequestSchema.parse({
+      prompt: '',
+      cwd: '/',
+      abortSignal: new AbortController().signal,
+    })
+  ).toThrow('abortSignal');
   expect(() =>
     providerSessionRequestSchema.parse({ prompt: '', cwd: '/', nodeConfig: { callback: () => {} } })
   ).toThrow();

@@ -196,7 +196,7 @@ Adapters let platforms drive Archon remotely. Each configures via env vars and i
 verified by `doctor`. The web UI is the zero-config surface:
 
 ```bash
-archon serve            # web console; downloads UI on first run (default port 3090)
+archon serve            # web console; downloads the server and UI on first run (default port 3090)
 ```
 
 Set up a chat adapter only when the user actually asks to drive Archon from that

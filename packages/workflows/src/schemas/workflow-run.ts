@@ -893,6 +893,25 @@ export function isApprovalContext(val: unknown): val is ApprovalContext {
 // RunAttention — "what does this run need from outside, if anything"
 // ---------------------------------------------------------------------------
 
+export const TOOL_CALL_ATTENTION_METADATA_KEY = 'tool_call_attention';
+
+export const toolCallAttentionSchema = z
+  .object({
+    streamId: z.string().min(1),
+    nodeId: z.string().min(1),
+    provider: z.string().min(1),
+    toolCallId: z.string().min(1),
+    name: z.string().min(1).max(1024),
+    title: z.string().max(1024).optional(),
+    startedAt: z.iso.datetime(),
+    lastProgressAt: z.iso.datetime(),
+    raisedAt: z.iso.datetime(),
+    thresholdMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+export const toolCallAttentionArraySchema = z.array(toolCallAttentionSchema);
+export type ToolCallAttention = z.infer<typeof toolCallAttentionSchema>;
+
 /** Where a gate's response must be recorded — this run, or the child blocking it. */
 export interface GateAddress {
   /** The run the response is recorded against. NOT always the run that was asked about. */
@@ -907,12 +926,14 @@ export interface GateAddress {
  * run whose gate metadata is unreadable, but must refuse one whose gate type this
  * build does not know — and no caller should tell those apart by matching strings.
  *
- * `malformed_gate`, `unrecognized_gate_type`, and `child_pointer_missing` come from
+ * `malformed_tool_call_attention`, `malformed_gate`, `unrecognized_gate_type`,
+ * and `child_pointer_missing` come from
  * `runAttention` itself. `child_run_missing` and `child_chain_too_deep` can only be
  * produced by a reader that follows a `blocked_on_child` pointer into the database
  * (`waitForRunAttention`, @archon/core); the projection is pure and never does.
  */
 export type RunAttentionUnreadableReason =
+  | 'malformed_tool_call_attention'
   | 'malformed_gate'
   | 'unrecognized_gate_type'
   | 'child_pointer_missing'
@@ -920,11 +941,10 @@ export type RunAttentionUnreadableReason =
   | 'child_chain_too_deep';
 
 /**
- * A run has reached a state it will not leave without someone acting.
+ * Terminal and gate attention, or advisory attention for overdue live tools.
  *
- * `runAttention` returns null while the run is still progressing under its own
- * power, which includes a resolved gate awaiting auto-resume and a `wait:` node
- * whose timer or event has not fired.
+ * `runAttention` returns null for ordinary progress without an advisory, including
+ * a resolved gate awaiting auto-resume and a `wait:` node whose timer or event has not fired.
  *
  * `blocked_on_child` is deliberately NOT an answer to "does someone need to respond".
  * A parent pauses blocked on a child whether that child is sitting on its own gate
@@ -936,6 +956,12 @@ export type RunAttentionUnreadableReason =
  * on that child — and a reader with database access resolves the chain.
  */
 export type RunAttention =
+  | {
+      kind: 'stalled_tool_calls';
+      runId: string;
+      status: 'running';
+      calls: (ToolCallAttention & { elapsedMs: number; stalledForMs: number })[];
+    }
   | { kind: 'terminal'; runId: string; status: RunTerminalStatus; at: Date | null }
   | { kind: 'awaiting_response'; runId: string; respondTo: GateAddress; message: string }
   | {
@@ -966,7 +992,8 @@ function unreadableAttention(
 /**
  * The single derivation of "what does this run need from outside, if anything".
  *
- * Pure: no database, no clock, no I/O. The run ROW is the authority — attention is
+ * No database or I/O. The clock computes display durations only. The run row is
+ * the authority: attention is
  * never derived from the event log, because terminal transitions exist that write no
  * terminal event (`resolveAndCancelApprovalGate` cancels a run while inserting only
  * `approval_received`), and two gate pauses write an unreliable event or none at all.
@@ -977,9 +1004,32 @@ function unreadableAttention(
  * three different orders, and the load-bearing "act on the child, not this run"
  * conclusion survived only inside an error string.
  */
-export function runAttention(run: RunAttentionInput): RunAttention | null {
+export function runAttention(run: RunAttentionInput, now = Date.now()): RunAttention | null {
   if (isTerminalRunStatus(run.status)) {
     return { kind: 'terminal', runId: run.id, status: run.status, at: run.completed_at ?? null };
+  }
+  if (run.status === 'running') {
+    const raw = run.metadata?.[TOOL_CALL_ATTENTION_METADATA_KEY];
+    if (raw === undefined) return null;
+    const parsed = toolCallAttentionArraySchema.safeParse(raw);
+    if (!parsed.success)
+      return unreadableAttention(
+        run.id,
+        'malformed_tool_call_attention',
+        'running with unreadable tool-call attention'
+      );
+    return parsed.data.length === 0
+      ? null
+      : {
+          kind: 'stalled_tool_calls',
+          runId: run.id,
+          status: 'running',
+          calls: parsed.data.map(call => ({
+            ...call,
+            elapsedMs: Math.max(0, now - Date.parse(call.startedAt)),
+            stalledForMs: Math.max(0, now - Date.parse(call.lastProgressAt)),
+          })),
+        };
   }
   if (run.status !== 'paused') return null;
 

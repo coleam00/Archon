@@ -5,7 +5,7 @@ let configured: readonly PlatformPolicy[] | undefined;
 
 /**
  * Replaces the host's whole policy set. Hosts call this before config loading
- * and cleanup; a host with no chat platforms passes `[]`.
+ * and cleanup, including policies for their non-chat surfaces.
  */
 export function setPlatformPolicies(list: readonly PlatformPolicy[]): void {
   const ids = new Set<string>();
@@ -18,9 +18,9 @@ export function setPlatformPolicies(list: readonly PlatformPolicy[]): void {
 }
 
 /**
- * Throws until the host configured policies: guessing an empty set would drop
- * streaming defaults and env overrides from config, and delete retained
- * workspaces in cleanup.
+ * Throws until the host configures policies: an empty fallback would drop
+ * streaming defaults and env overrides, and make cleanup report known platforms
+ * as unregistered.
  */
 export function getRegisteredPlatformPolicies(): readonly PlatformPolicy[] {
   if (!configured) {
@@ -31,19 +31,25 @@ export function getRegisteredPlatformPolicies(): readonly PlatformPolicy[] {
   return configured;
 }
 
-/** Platforms whose workspaces age-based cleanup must keep. */
-export function retainedPlatformIds(): readonly string[] {
-  return getRegisteredPlatformPolicies()
-    .filter(policy => policy.workspaceRetention === 'retain')
-    .map(p => p.id);
+function getPlatformPolicy(platformId: string | null): PlatformPolicy | undefined {
+  return getRegisteredPlatformPolicies().find(policy => policy.id === platformId);
 }
 
 export function retainsWorkspace(platformId: string | null): boolean {
-  const retained = retainedPlatformIds();
-  return platformId !== null && retained.includes(platformId);
+  return getPlatformPolicy(platformId)?.workspaceRetention === 'retain';
 }
 
 /** Test reset: returns the registry to its unconfigured state. */
 export function clearPlatformPolicies(): void {
   configured = undefined;
+}
+
+export type UnknownPlatformReason =
+  `platform '${string}' is not registered; workspace kept (plugin may have been removed)`;
+
+export function unknownPlatformReason(
+  platformId: string | null
+): UnknownPlatformReason | undefined {
+  if (platformId === null || getPlatformPolicy(platformId)) return undefined;
+  return `platform '${platformId}' is not registered; workspace kept (plugin may have been removed)`;
 }

@@ -4,6 +4,7 @@
  * created, with force, and keeps its branch. Runs in its own `bun test`
  * invocation (declared by @archon-test-isolated) because it mock.module's the DB connection.
  */
+import { setPlatformPolicies } from '../platforms/registry';
 import * as gitModule from '@archon/git';
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import {
@@ -38,7 +39,8 @@ mock.module('../db/connection', () => ({
 }));
 const isolationDb = await import('../db/isolation-environments');
 const { claimPendingWorkflowRun } = await import('../db/workflows');
-const { reclaimRunWorktree } = await import('./cleanup-service');
+const { onConversationClosed, reclaimRunWorktree, removeEnvironment } =
+  await import('./cleanup-service');
 
 async function git(path: string, ...args: string[]): Promise<string> {
   const process = Bun.spawn(['git', '-C', path, ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -93,7 +95,75 @@ const request = () => ({
 });
 const status = async () => (await isolationDb.getById(env.id))?.status;
 
+test.each(['replacement', 'partial', 'dirty'] as const)(
+  'conversation close retains references and reports %s cleanup failure',
+  async mode => {
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations
+        (id, platform_type, platform_conversation_id, codebase_id, isolation_env_id, cwd)
+       VALUES ($1, 'github', $1, $2, $3, $4)`,
+      [conversationId, codebaseId, env.id, env.working_path]
+    );
+    if (mode === 'replacement') {
+      await git(repo, 'worktree', 'remove', env.working_path);
+      await git(root, 'clone', '-q', repo, env.working_path);
+    } else if (mode === 'dirty') {
+      await writeFile(join(env.working_path, 'file'), 'operator edits');
+    }
+    const partial =
+      mode === 'partial'
+        ? spyOn(getIsolationProvider(), 'destroy').mockResolvedValue({
+            worktreeRemoved: true,
+            directoryClean: false,
+            branchDeleted: null,
+            remoteBranchDeleted: null,
+            warnings: ['Retained directory'],
+          })
+        : undefined;
+    try {
+      await expect(onConversationClosed('github', conversationId)).rejects.toThrow();
+    } finally {
+      partial?.mockRestore();
+    }
+    const { rows } = await db.query<{ isolation_env_id: string; cwd: string }>(
+      'SELECT isolation_env_id, cwd FROM remote_agent_conversations WHERE id = $1',
+      [conversationId]
+    );
+    expect(rows[0]).toEqual({ isolation_env_id: env.id, cwd: env.working_path });
+    expect(await status()).toBe('active');
+    expect(await readFile(join(env.working_path, 'file'), 'utf8')).toBe(
+      mode === 'dirty' ? 'operator edits' : 'original'
+    );
+  }
+);
+
+test.each(['active', 'destroyed'] as const)(
+  'conversation close clears references after cleanup of a %s environment',
+  async initialStatus => {
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations
+        (id, platform_type, platform_conversation_id, codebase_id, isolation_env_id, cwd)
+       VALUES ($1, 'github', $1, $2, $3, $4)`,
+      [conversationId, codebaseId, env.id, env.working_path]
+    );
+    if (initialStatus === 'destroyed') await removeEnvironment(env.id);
+
+    await onConversationClosed('github', conversationId);
+
+    const { rows } = await db.query<{ isolation_env_id: string | null; cwd: string | null }>(
+      'SELECT isolation_env_id, cwd FROM remote_agent_conversations WHERE id = $1',
+      [conversationId]
+    );
+    expect(rows[0]).toEqual({ isolation_env_id: null, cwd: null });
+    expect(await status()).toBe('destroyed');
+    expect(existsSync(env.working_path)).toBe(false);
+  }
+);
+
 beforeEach(async () => {
+  setPlatformPolicies([]);
   root = track(await realpath(await mkdtemp(join(tmpdir(), 'archon-release-'))));
   repo = join(root, 'repo');
   await initRepo(repo);
@@ -187,6 +257,18 @@ async function useSymlinkedBase(): Promise<void> {
 }
 
 describe('owned worktree release', () => {
+  test('keeps an owned worktree whose originating platform is no longer registered', async () => {
+    await db.query(
+      "UPDATE remote_agent_isolation_environments SET created_by_platform = 'removed-chat' WHERE id = $1",
+      [env.id]
+    );
+    await expect(reclaimRunWorktree(run, store)).rejects.toThrow(
+      "platform 'removed-chat' is not registered"
+    );
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+  });
+
   test('a removal Git abandons halfway is finished, not left unretryable', async () => {
     const locked = join(env.working_path, 'locked');
     await mkdir(locked);
@@ -480,4 +562,49 @@ describe('owned worktree release', () => {
       exec.mockRestore();
     }
   });
+});
+
+test('ordinary cleanup preserves a replacement clone and its active record', async () => {
+  await git(repo, 'worktree', 'remove', env.working_path);
+  await git(root, 'clone', '-q', repo, env.working_path);
+  await writeFile(join(env.working_path, 'operator-file'), 'keep me');
+
+  const error = await removeEnvironment(env.id, { force: true }).catch((error: unknown) => error);
+
+  expect(await readFile(join(env.working_path, 'operator-file'), 'utf8')).toBe('keep me');
+  expect(error).toBeInstanceOf(Error);
+  expect(String(error)).toContain('ownership');
+  expect(await status()).toBe('active');
+  expect(await git(repo, 'branch', '--list', env.branch_name)).toContain(env.branch_name);
+});
+
+test('ordinary cleanup removes a proven checkout and its branch', async () => {
+  const result = await removeEnvironment(env.id);
+  expect(result.worktreeRemoved).toBe(true);
+  expect(result.branchDeleted).toBe(true);
+  expect(existsSync(env.working_path)).toBe(false);
+  expect(await status()).toBe('destroyed');
+  expect(await git(repo, 'branch', '--list', env.branch_name)).toBe('');
+});
+
+test('listing retains a replacement directory without a Git entry', async () => {
+  await git(repo, 'worktree', 'remove', env.working_path);
+  await mkdir(env.working_path);
+  await writeFile(join(env.working_path, 'operator-file'), 'keep me');
+  const { listEnvironments } = await import('../operations/isolation-operations');
+  const result = await listEnvironments();
+  expect(result.codebases.flatMap(codebase => codebase.environments).map(env => env.id)).toContain(
+    env.id
+  );
+  expect(await status()).toBe('active');
+  await expect(removeEnvironment(env.id, { force: true })).rejects.toThrow('ownership');
+  expect(await readFile(join(env.working_path, 'operator-file'), 'utf8')).toBe('keep me');
+});
+
+test('ordinary cleanup removes a proven checkout under a symlinked base', async () => {
+  await useSymlinkedBase();
+  const result = await removeEnvironment(env.id);
+  expect(result.worktreeRemoved).toBe(true);
+  expect(existsSync(env.working_path)).toBe(false);
+  expect(await status()).toBe('destroyed');
 });

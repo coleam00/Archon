@@ -136,7 +136,7 @@ Also runs automatically at the end of `archon setup` (optional).
 
 ### `plugin`
 
-Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Two kinds install: forge plugins and workflow packs.
+Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Forge plugins, provider plugins, chat plugins, and workflow packs install through this command.
 
 ```bash
 archon plugin install coleam00/Archon/plugins/forge-github         # forge: latest release
@@ -149,7 +149,11 @@ archon plugin copy <id>                                             # workflow p
 archon plugin list
 ```
 
-`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the manifest's `compatibility.archon` range, runs before anything is written. Without `@<tag>`, the manifest at the default branch head decides the kind: a workflow pack installs that commit, and a forge plugin installs its latest release, because its executables exist only as release assets. See [Forge operations](/reference/forge/#install-the-github-plugin) for what a forge install downloads and where it writes.
+`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the manifest's `compatibility.archon` range and a provider or chat plugin's staged handshake, runs before installed files or receipts are replaced. Without `@<tag>`, the manifest at the default branch head decides the kind: a workflow pack installs that commit, and a forge, provider, or chat plugin installs its latest release, because its executables exist only as release assets. See [Forge operations](/reference/forge/#install-the-github-plugin) for what a forge install downloads and where it writes.
+
+A provider plugin records its descriptor in the receipt and registers on the next CLI invocation or server restart. A workflow names its descriptor id in `provider:`. See [Provider plugins](/guides/publishing-plugins/#provider-plugins) for executable naming, capabilities, credentials, and the process environment.
+
+A chat plugin records its validated descriptor after an initialization-only handshake. Hosts do not yet load installed chat plugins. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
 
 A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. Nothing updates in the background. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
 
@@ -535,6 +539,8 @@ an identifier and `node_suspended` keeps it active, while `node_completed`, `nod
 `node_skipped_prior_success` remove it. Retries re-add the node in their new start position. This
 is node lifecycle state, not evidence that a process owner is alive.
 
+Tool-call advisories appear in nonverbose text and in the JSON `attention` field. The run remains `running`; every overdue tool shows its node, provider, sanitized command/title, and elapsed/no-progress duration. The default is 30 minutes without reported progress; see [workflow attention settings](/reference/configuration/#workflow-attention-and-continuation-settings).
+
 ### `workflow runs`
 
 List recent runs of **every** status (completed, failed, cancelled, running, paused) for the current project. The project is resolved from `cwd` the same way `workflow run` does. Complements `workflow status` (which is active-only).
@@ -565,7 +571,8 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
   only the nodes that ran.
 - `attention`: what the run needs from outside, if anything: `null`, or an object whose `kind`
   is `terminal`, `awaiting_response` (an approval or response gate), `action_required` (a
-  `wait:` on attention), `blocked_on_child` (the child run is the one to inspect), or `unreadable`.
+  `wait:` on attention), `blocked_on_child` (the child run is the one to inspect), `stalled_tool_calls` (still-running
+  work with overdue provider tools or reported subtasks), or `unreadable`.
   It is read from the run row alone.
 
 The node events for every listed run are read in one query, so the cost does not grow with
@@ -754,9 +761,9 @@ access to the local file as access to the run's input and execution data.
 
 ### `workflow wait`
 
-Block until a run reaches a state it will not leave on its own — it finished, parked
-on a gate awaiting a response, paused for an outside action, or lost its execution
-owner while still non-terminal — then print what it needs. This is the intended
+Block until a run reports attention: it finished, awaits a gate response or outside
+action, has an overdue live tool call, or lost its execution owner while still
+non-terminal. Then print what it needs. This is the intended
 partner of `--detach --json`: take the `runId` from the launch ack and wait on it,
 instead of polling `workflow get` in a loop.
 
@@ -767,6 +774,8 @@ For an action-required wait, the output carries `attention.kind: "action_require
 the authored message, and the paused node id. Complete the action, then run
 `archon workflow resume <run-id>`; use `archon workflow abandon <run-id>` if the run
 should not continue.
+
+An overdue tool returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs` or explicitly cancel if appropriate. This advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
 
 ```bash
 archon workflow wait <run-id>
@@ -782,7 +791,7 @@ its own clock would be answering a question only the run can answer. `--timeout
 
 | Exit | Meaning |
 | --- | --- |
-| `0` | The run said something — it finished (`completed`, `failed`, or `cancelled`), is waiting for a response, needs an outside action, or lost its execution owner. The status is data on stdout. |
+| `0` | The run said something — it finished (`completed`, `failed`, or `cancelled`), is waiting for a response, needs an outside action, has an overdue tool call while still running, or lost its execution owner. The status is data on stdout. |
 | `3` | The timeout passed with the run still live. The `--json` payload carries `observedStatus`. |
 | `1` | The wait itself failed — unknown run id, database unreachable, or output that could not be delivered. |
 
@@ -1180,7 +1189,24 @@ Abandon deletes uncommitted work in that worktree, keeps its branch, and never r
 an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
 how to retry.
 
-Remove stale environments.
+Remove stale environments. Age cleanup uses the originating platform's registered policy.
+Both the CLI and server read chat policies from installed plugin receipts without starting
+the plugins. A receipt supersedes a bundled chat policy with the same platform id.
+
+If an environment names a platform that is no longer registered, cleanup keeps it and
+reports the reason. This also applies to merged branches and missing-path reconciliation:
+removing a plugin must not make its historical workspaces eligible for deletion. `isolation list`
+shows the cleanup skip reason. Rows with no originating platform keep their existing cleanup
+behavior.
+
+Ordinary removal requires a stored creation proof matching
+Archon's marker and Git registration in the expected repository. Replacement
+repositories, adopted checkouts, and older records without proof are retained for
+operator inspection. If Git removal leaves a directory behind, cleanup reports it
+and keeps the environment active; inspect that path before removing it manually.
+
+These ownership checks also apply to `/worktree remove` and `archon complete`;
+`--force` never bypasses them.
 
 ```bash
 # Default: 7 days
@@ -1271,14 +1297,14 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass safety checks
+archon complete feature-auth --force  # bypass uncommitted-change, running-workflow, and open-PR checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip safety checks |
+| `--force` | Skip uncommitted-change, running-workflow, and open-PR checks; ownership checks still apply |
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone
@@ -1294,20 +1320,20 @@ before removing it. Accepts multiple branch names in one call.
 
 ### `serve`
 
-Start the web UI server in the foreground. The same command works from a binary install and from a source checkout. Only the source of the web UI differs.
+Start the web UI server in the foreground. The same command works from a binary install and from a source checkout. The server runs as a child process.
 
-**Binary installs** download a pre-built web UI tarball from the matching GitHub release on first run, verify its SHA-256 checksum, and extract it. Later runs use the cached copy.
+**Binary installs** automatically download the server executable and web UI from the matching GitHub release on first run. The command announces the version, asset and download size, verifies each against the checksum embedded in the CLI, and starts the server. Later runs use the cached artifacts. Non-serve commands need no server installation.
 
-**Source checkouts** serve the web UI you build yourself, at `packages/web/dist`. Run `bun run build:web` from the repo root before your first `archon serve`, and again after frontend changes. Nothing is downloaded, so `--download-only` is refused, and a missing build stops the command with the build command to run instead of serving an empty page.
+**Source checkouts** start `packages/server/src/bin.ts` with Bun and serve the web UI you build yourself, at `packages/web/dist`. Run `bun run build:web` from the repo root before your first `archon serve`, and again after frontend changes. Nothing is downloaded, so `--download-only` is refused, and a missing build stops the command with the build command to run instead of serving an empty page.
 
 ```bash
-# Start web UI server (binary installs download it on first run)
+# Start web UI server (binary installs download the server and UI on first run)
 archon serve
 
 # Override the default port
 archon serve --port 4000
 
-# Download the web UI without starting the server (binary installs only)
+# Download the server and web UI without starting the server (binary installs only)
 archon serve --download-only
 ```
 
@@ -1316,9 +1342,9 @@ archon serve --download-only
 | Flag | Effect |
 |------|--------|
 | `--port <port>` | Override server port (default: 3090, range: 1–65535) |
-| `--download-only` | Download and cache the web UI, then exit without starting the server. Binary installs only |
+| `--download-only` | Download and cache the server and web UI, then exit without starting the server. Binary installs only |
 
-The downloaded web UI is cached at `~/.archon/web-dist/<version>/`. Each version is cached independently, so upgrading the binary automatically downloads the matching web UI.
+The server executable is cached at `~/.archon/server/<version>/` and the web UI at `~/.archon/web-dist/<version>/`. Upgrading the CLI downloads matching artifacts on the next `archon serve`. A failed download installs nothing for that asset and exits non-zero with its URL; retry with `archon serve --download-only`. Docker continues to bundle both.
 
 ### `skill install [path]`
 

@@ -96,7 +96,9 @@ To remove worktrees whose branches have already been merged into your main branc
 archon isolation cleanup --merged
 ```
 
-This also deletes the remote branches — a clean sweep after a round of PRs.
+This also deletes the remote branches of removed worktrees. Workspaces whose originating
+platform is no longer registered are kept and reported, even when their branches are
+merged. Use `archon isolation list` to inspect them.
 
 By default, branches with open or closed-without-merging PRs are skipped to avoid
 accidental deletion. To also clean up abandoned (CLOSED) PRs:

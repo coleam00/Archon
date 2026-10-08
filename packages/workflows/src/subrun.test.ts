@@ -177,7 +177,8 @@ mock.module('fs/promises', () => ({
 }));
 
 // --- Bootstrap provider registry (load-time isRegisteredProvider checks) ---
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 clearRegistry();
 registerBuiltinProviders();
 
@@ -215,6 +216,46 @@ const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 // ---------------------------------------------------------------------------
 
 class InMemoryStore implements IWorkflowStore {
+  admitResourceStart: IWorkflowStore['admitResourceStart'] = async () => {
+    throw new Error('Unexpected admitResourceStart');
+  };
+  drainResourceStarts: IWorkflowStore['drainResourceStarts'] = async () => {
+    throw new Error('Unexpected drainResourceStarts');
+  };
+  acceptStartReceipt: IWorkflowStore['acceptStartReceipt'] = async () => {
+    throw new Error('Unexpected acceptStartReceipt');
+  };
+  getStartReceipt: IWorkflowStore['getStartReceipt'] = async () => {
+    throw new Error('Unexpected getStartReceipt');
+  };
+  listStartReceipts: IWorkflowStore['listStartReceipts'] = async () => {
+    throw new Error('Unexpected listStartReceipts');
+  };
+  listPendingStartBindings: IWorkflowStore['listPendingStartBindings'] = async () => {
+    throw new Error('Unexpected listPendingStartBindings');
+  };
+  getResourceStartRequest: IWorkflowStore['getResourceStartRequest'] = async () => {
+    throw new Error('Unexpected getResourceStartRequest');
+  };
+  listQueuedResourceStartsForHost: IWorkflowStore['listQueuedResourceStartsForHost'] = async () => {
+    throw new Error('Unexpected listQueuedResourceStartsForHost');
+  };
+  withdrawQueuedResourceStart: IWorkflowStore['withdrawQueuedResourceStart'] = async () => {
+    throw new Error('Unexpected withdrawQueuedResourceStart');
+  };
+  claimStartBindingPreparation: IWorkflowStore['claimStartBindingPreparation'] = async () => {
+    throw new Error('Unexpected claimStartBindingPreparation');
+  };
+  completeStartBindingPreparation: IWorkflowStore['completeStartBindingPreparation'] = async () => {
+    throw new Error('Unexpected completeStartBindingPreparation');
+  };
+  failStartBindingPreparation: IWorkflowStore['failStartBindingPreparation'] = async () => {
+    throw new Error('Unexpected failStartBindingPreparation');
+  };
+  resetStartBindingPreparation: IWorkflowStore['resetStartBindingPreparation'] = async () => {
+    throw new Error('Unexpected resetStartBindingPreparation');
+  };
+
   listDueWorkflowContinuations: IWorkflowStore['listDueWorkflowContinuations'] = () => {
     throw new Error('Unexpected listDueWorkflowContinuations');
   };
@@ -536,6 +577,8 @@ class InMemoryStore implements IWorkflowStore {
     this.events.push(data);
     return Promise.resolve();
   };
+
+  setToolCallAttention: IWorkflowStore['setToolCallAttention'] = async () => true;
 
   createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data =>
     this.recordWorkflowEvent(data);

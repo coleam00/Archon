@@ -4,7 +4,8 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm, symlink as fsSymlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { registerBuiltinProviders, registerPiProvider, clearRegistry } from '@archon/providers';
+import { clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, registerPiProvider } from '@archon/providers/in-process';
 
 // Bootstrap provider registry (needed by capability-driven checks in validator).
 // Pi supplies a provider whose mcp capability is false.

@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { providerRegistry, registerBuiltinProviders } from '@archon/providers';
+import { providerRegistry } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { isWorkflowWaitContext, runAttention } from '@archon/workflows/schemas/workflow-run';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
@@ -232,6 +233,9 @@ test('CLI run commands and reusable persistence helpers have no SQL imports or r
 test('origin-free event waits signal and wake through the supplied host without SQL', async () => {
   const root = tempRoots(mkdtempSync(join(tmpdir(), 'archon-continuation-store-')));
   const project = join(root, 'project');
+  delete process.env.ARCHON_USER_ID;
+  delete process.env.USER;
+  delete process.env.USERNAME;
   process.env.ARCHON_HOME = join(root, 'home');
   process.env.ARCHON_TELEMETRY_DISABLED = '1';
   delete process.env.DATABASE_URL;
