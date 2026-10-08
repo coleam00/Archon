@@ -526,8 +526,7 @@ async function main(): Promise<number> {
         // not need project registration, a database lookup, or a git worktree.
         effectiveCwd = cwd;
       } else {
-        // Not a git repo. It may still be a registered FOLDER project (a
-        // multi-repo root or plain ops folder). Consult the DB before rejecting.
+        // A non-git directory may be a registered folder project.
         // Canonicalize through the one shared `default_cwd` canonicalizer, so
         // this lookup asks for exactly the string registration stored. Using a
         // different realpath variant here is what hid every CLI-registered
@@ -539,16 +538,18 @@ async function main(): Promise<number> {
         // (workflow/isolation commands still need to surface a clear error rather
         // than a stack trace) — capture it and, if connection-shaped, report
         // "database unavailable" instead of the misleading "not a git repository".
+        const databaseLookup = await usesDatabaseStore();
         let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
         let gateLookupError: Error | null = null;
         try {
-          if (await usesDatabaseStore()) databaseRouteLoaded = true;
+          if (databaseLookup) databaseRouteLoaded = true;
           const { createCliWorkflowHost } = await import('./utils/workflow-host');
           const host = await createCliWorkflowHost();
           folderCodebase =
             (await host.records.codebases.findCodebaseByDefaultCwd(realCwd)) ??
             (await host.records.codebases.findCodebaseByPathPrefix(realCwd));
         } catch (dbError) {
+          if (!databaseLookup) throw dbError;
           const { InvalidCodebaseDefaultCwdError: invalidCodebaseDefaultCwdError } =
             await import('@archon/core/db/codebase-path');
           if (dbError instanceof invalidCodebaseDefaultCwdError) {

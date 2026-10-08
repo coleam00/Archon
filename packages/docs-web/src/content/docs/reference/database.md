@@ -58,15 +58,15 @@ is limited by the platform's `fsync` guarantees; macOS does not force drive cach
 
 The server refuses file storage because its routes read SQL. Trigger admission is also
 refused until file-backed admission is implemented. Provider concurrency caps
-(`concurrency.providers`) and per-user GitHub credentials require `store: database` and
-fail at startup. Stored per-user provider credentials are refused during run preflight,
+(`concurrency.providers`) require `store: database` and fail at startup.
+Enabling per-user credential modes does not prevent selecting file storage. Stored per-user provider credentials are refused during run preflight,
 before creating a worktree. Environment credentials and the provider's own login work
 normally. Other SQL-only CLI commands, including user and stored credential management,
 require database storage.
 
 ## SQLite (Default - No Setup Required)
 
-Simply **omit the `DATABASE_URL` variable** from your `.env` file. The app will automatically:
+With `store: database` (the default), **omit `DATABASE_URL`** from your `.env` file. The app will automatically:
 - Create a SQLite database at `~/.archon/archon.db`
 - Initialize the schema on first run
 - Use this database for operations with `store: database`

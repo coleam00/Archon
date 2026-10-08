@@ -2,7 +2,8 @@ import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event
 import { expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { generateKeyPairSync } from 'node:crypto';
+import { tmpdir, hostname } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 const roots = trackTempRoots();
 const repo = join(import.meta.dir, '../../../..');
@@ -90,6 +91,14 @@ async function cli(
 }
 test('pause, approve in another process, and resume without any SQL connection', async () => {
   const f = fixture();
+  f.env.GITHUB_APP_ID = '123';
+  f.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
+  f.env.GITHUB_TOKEN = '';
+  f.env.GITHUB_APP_PRIVATE_KEY = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  }).privateKey;
   const started = await cli(f, [
     'workflow',
     'run',
@@ -99,7 +108,7 @@ test('pause, approve in another process, and resume without any SQL connection',
     '--quiet',
   ]);
   expect(started.error).not.toContain('SQL open trap');
-  expect(started.code).toBe(0);
+  expect(started, started.output + started.error).toMatchObject({ code: 0 });
   const listed = await cli(f, ['workflow', 'runs', '--json']);
   expect(listed.code).toBe(0);
   const rows = JSON.parse(listed.output).runs;
@@ -143,11 +152,6 @@ test.each([
     config: 'store: files\nconcurrency:\n  providers:\n    claude: 1\n',
     env: {},
     message: 'concurrency.providers',
-  },
-  {
-    config: 'store: files\n',
-    env: { GITHUB_APP_ID: '123', TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32) },
-    message: 'per-user GitHub',
   },
 ])(
   'file composition refuses $message before SQL',
@@ -206,4 +210,37 @@ try {await startServer();process.exit(1);}catch(error){console.log(error.name+':
   expect(output).toContain('store: database');
   expect(existsSync(f.trap)).toBe(false);
   expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+}, 30000);
+
+test.each(['head', 'codebases'])(
+  'non-git folder lookup preserves malformed %s errors',
+  async member => {
+    const f = fixture();
+    mkdirSync(join(f.home, 'store/host'), { recursive: true });
+    writeFileSync(
+      join(f.home, member === 'head' ? 'store/head.json' : 'store/host/codebases.json'),
+      member === 'head' ? '{"format":99,"seq":0}' : '{'
+    );
+    const result = await cli(f, ['workflow', 'run', 'portable', '--quiet']);
+    expect(result.code).toBe(1);
+    expect(result.output + result.error).not.toContain('Not in a git repository');
+    expect(result.output + result.error).toContain(member === 'head' ? 'Invalid input' : 'JSON');
+    expect(existsSync(f.trap)).toBe(false);
+  },
+  30000
+);
+
+test('non-git folder lookup reports the file lock holder and path', async () => {
+  const f = fixture();
+  const root = join(f.home, 'store');
+  mkdirSync(root, { recursive: true });
+  const owner = { host: hostname(), pid: process.pid, instance: 'test-holder' };
+  writeFileSync(join(root, 'lock'), JSON.stringify(owner));
+  const result = await cli(f, ['workflow', 'run', 'portable', '--quiet']);
+  expect(result.code).toBe(1);
+  expect(result.output + result.error).not.toContain('Not in a git repository');
+  expect(result.output + result.error).toContain(join(root, 'lock'));
+  expect(result.output + result.error).toContain(String(owner.pid));
+  expect(readFileSync(join(root, 'lock'), 'utf8')).toBe(JSON.stringify(owner));
+  expect(existsSync(f.trap)).toBe(false);
 }, 30000);

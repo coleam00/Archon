@@ -25,7 +25,8 @@ Archon supports a layered configuration system with sensible defaults, optional 
 ├── workflows/              # Home-scoped workflows (source: 'global')
 ├── commands/               # Home-scoped commands (source: 'global')
 ├── scripts/                # Home-scoped scripts (runtime: bun | uv)
-├── archon.db               # SQLite database (when DATABASE_URL not set)
+├── store/                  # File workflow data (store: files)
+├── archon.db               # SQLite (store: database, no DATABASE_URL)
 └── config.yaml             # Global configuration (optional)
 ```
 
@@ -62,6 +63,15 @@ Credentials are checked and delivered freshly. The AI record excludes credential
 The last three layers exist only where their setting has a run-time consumer. Archon-managed GitHub and provider credentials remain protected and are injected after user-authored run environment values.
 
 ## Global Configuration
+
+### Workflow store
+
+Set `store: database` (the default) or `store: files` in `~/.archon/config.yaml`.
+With database storage, omitting `DATABASE_URL` selects SQLite at `~/.archon/archon.db`.
+File storage is CLI-only and creates no database file or SQL connection. The server
+refuses it, and setting `DATABASE_URL` together with `store: files` fails at startup.
+Store selection has no environment override and is not a repository setting.
+See [Database and file storage](/reference/database/) for file layout, recovery and limits.
 
 Create `~/.archon/config.yaml` for user-wide preferences:
 
@@ -603,7 +613,7 @@ Signup uses email + password (no email verification by default). **Signup postur
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string (omit to use SQLite) | SQLite at `~/.archon/archon.db` |
+| `DATABASE_URL` | PostgreSQL connection string for `store: database` (omit to use SQLite; incompatible with `store: files`) | SQLite at `~/.archon/archon.db` under `store: database` |
 
 ### Web UI
 
