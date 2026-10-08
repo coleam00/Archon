@@ -44,14 +44,15 @@ is_valid_sha256() {
   printf '%s' "$1" | grep -Eq '^[0-9a-f]{64}$'
 }
 
+compute_sha256() {
+  bun -e 'console.log(new Bun.CryptoHasher("sha256").update(await Bun.file(process.argv[1]).arrayBuffer()).digest("hex"));' "$1"
+}
+
 WEB_DIST_SHA256=""
 if [ -f "archon-web.tar.gz" ]; then
-  # `|| true` is intentional under `set -euo pipefail`: if shasum is missing or
-  # the file is unreadable, we want WEB_DIST_SHA256 to land empty so the
-  # is_valid_sha256 check below can decide between fail-closed (release/CI) and
-  # warn-and-fallback (dev). Without this, pipefail would abort the script
-  # before that policy check ever runs. Don't simplify away.
-  WEB_DIST_SHA256="$(shasum -a 256 archon-web.tar.gz 2>/dev/null | cut -d' ' -f1 || true)"
+  # An unreadable artifact yields an empty hash, so release builds fail closed
+  # while local development retains its existing remote-checksum fallback.
+  WEB_DIST_SHA256="$(compute_sha256 archon-web.tar.gz 2>/dev/null || true)"
   if is_valid_sha256 "$WEB_DIST_SHA256"; then
     echo "Embedded web dist SHA-256: ${WEB_DIST_SHA256}"
   else
@@ -70,6 +71,7 @@ else
   echo "WARNING: archon-web.tar.gz not found — BUNDLED_WEB_DIST_SHA256 will be empty (remote fallback)" >&2
 fi
 
+write_constants() {
 cat > "$BUNDLED_BUILD_FILE" << EOF
 /**
  * Build-time constants embedded into compiled binaries.
@@ -84,7 +86,11 @@ export const BUNDLED_VERSION = '${VERSION}';
 export const BUNDLED_GIT_COMMIT = '${GIT_COMMIT}';
 /** SHA-256 of archon-web.tar.gz, embedded at build time by scripts/build-binaries.sh */
 export const BUNDLED_WEB_DIST_SHA256 = '${WEB_DIST_SHA256}';
+export const BUNDLED_SERVER_SHA256 = '${SERVER_SHA256}';
 EOF
+}
+SERVER_SHA256=''
+write_constants
 
 # Determine which targets to build
 if [ -n "$TARGET" ] && [ -n "$OUTFILE" ]; then
@@ -113,6 +119,8 @@ for target_pair in "${TARGETS[@]}"; do
   IFS=':' read -r target outfile <<< "$target_pair"
   server_asset=$(TARGET="$target" bun -e 'import { serverReleaseAsset } from "./packages/paths/src/server-launch.ts"; console.log(serverReleaseAsset(process.env.TARGET));')
   server_outfile="$(dirname "$outfile")/$server_asset"
+  SERVER_SHA256=''
+  write_constants
   for entry_output in "packages/server/src/bin.ts:$server_outfile" "packages/cli/src/cli.ts:$outfile"; do
     IFS=':' read -r entry output <<< "$entry_output"
     echo "Building $target → $output"
@@ -149,6 +157,14 @@ for target_pair in "${TARGETS[@]}"; do
     fi
 
     echo "  -> $output ($size bytes)"
+    if [ "$entry" = 'packages/server/src/bin.ts' ]; then
+      SERVER_SHA256="$(compute_sha256 "$output" 2>/dev/null || true)"
+      if ! is_valid_sha256 "$SERVER_SHA256"; then
+        echo "ERROR: invalid server SHA-256 for $output — refusing to build CLI" >&2
+        exit 1
+      fi
+      write_constants
+    fi
   done
 done
 

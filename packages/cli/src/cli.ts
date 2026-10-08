@@ -1290,9 +1290,7 @@ async function main(): Promise<number> {
       case 'serve': {
         const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
-        const { serveCommand } = await loadRoute(() => import('./commands/serve'), {
-          database: !downloadOnly,
-        });
+        const { serveCommand } = await import('./commands/serve');
         return await serveCommand({ port: servePort, downloadOnly });
       }
 

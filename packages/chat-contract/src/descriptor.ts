@@ -6,6 +6,20 @@ export const identityPlatformSchema = z
   .min(1)
   .max(32)
   .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
+/**
+ * Identity platforms the host already owns, mapped to their owner for collision
+ * messages. A chat plugin cannot claim one. Each owning package proves its
+ * adapter's platform type is listed here.
+ */
+export const RESERVED_CHAT_PLATFORMS: ReadonlyMap<string, string> = new Map([
+  ['web', 'host Web adapter'],
+  ['cli', 'host CLI adapter'],
+  ['api', 'host API surface'],
+  ['github', 'bundled GitHub forge adapter'],
+  ['gitea', 'bundled Gitea forge adapter'],
+  ['gitlab', 'bundled GitLab forge adapter'],
+]);
+
 const envVarSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
 
 export const chatPluginDescriptorSchema = z.object({

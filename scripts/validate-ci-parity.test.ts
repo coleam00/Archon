@@ -88,6 +88,14 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
       'Runs the store contract in scratch databases on a PostgreSQL service with database creation permission.',
   },
   {
+    command: 'bun run build:web',
+    reason: 'Packages the web artifact for the compiled serve smoke, which runs only in CI.',
+  },
+  {
+    command: 'bun scripts/smoke-serve.ts',
+    reason: 'Needs platform-matched compiled release artifacts; compilation is CI-only.',
+  },
+  {
     command: 'bun run build:docs',
     reason:
       "Astro's CLI runs under Node, not Bun, so a checkout with only Bun cannot build the docs " +
