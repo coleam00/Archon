@@ -456,9 +456,32 @@ describe('file store filesystem primitives', () => {
     failUnlink(candidate => candidate === path, 1);
     const error = await rejection(withFileStoreLock(root, async () => 'committed'));
     expect(error).toBeInstanceOf(FileStoreLockReleaseError);
+    expect((error as FileStoreLockReleaseError).result).toBe('committed');
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(currentProcessOwner);
     expect(await withFileStoreLock(root, async () => 'reclaimed', 100)).toBe('reclaimed');
     expect(await readdir(root)).not.toContain('lock');
+  });
+
+  // Another copy of this module in the process would write the same owner record, so
+  // only a lock this module itself failed to remove may be reclaimed.
+  test('a lock naming this process that this module never stranded is waited on', async () => {
+    const root = await fixture();
+    const path = join(root, 'lock');
+    const record = JSON.stringify(currentProcessOwner);
+    await writeFile(path, record);
+    let entered = false;
+    const error = await rejection(
+      withFileStoreLock(
+        root,
+        async () => {
+          entered = true;
+        },
+        50
+      )
+    );
+    expect(error).toBeInstanceOf(FileStoreLockHeldError);
+    expect(entered).toBe(false);
+    expect(await readFile(path, 'utf8')).toBe(record);
   });
 
   test('a failed release never replaces the operation error', async () => {
@@ -503,6 +526,17 @@ describe('file store filesystem primitives', () => {
     await expect(probeFileStoreFilesystem(root)).rejects.toBeInstanceOf(
       FileStoreUnsupportedFilesystemError
     );
+    // On Windows, EPERM that outlasts the handle retries is reported as itself.
+    unsupported.mockImplementation(() =>
+      Promise.reject(Object.assign(new Error('denied'), { code: 'EPERM' }))
+    );
+    const denied = await rejection(probeFileStoreFilesystem(root));
+    if (process.platform === 'win32') {
+      expect(denied).not.toBeInstanceOf(FileStoreUnsupportedFilesystemError);
+      expect(denied).toMatchObject({ code: 'EPERM' });
+    } else {
+      expect(denied).toBeInstanceOf(FileStoreUnsupportedFilesystemError);
+    }
     unsupported.mockImplementation(() => Promise.reject(injected()));
     const error = await rejection(probeFileStoreFilesystem(root));
     expect(error).not.toBeInstanceOf(FileStoreUnsupportedFilesystemError);
