@@ -177,7 +177,13 @@ function makeApp(
       await fn();
       return { status: 'started' };
     }),
-    getStats: mock(() => ({ active: 0, queued: 0 })),
+    getStats: mock(() => ({
+      active: 0,
+      queuedTotal: 0,
+      queuedByConversation: [] as { conversationId: string; queuedMessages: number }[],
+      maxConcurrent: 10,
+      activeConversationIds: [] as string[],
+    })),
   } as unknown as ConversationLockManager;
   registerApiRoutes(app, webAdapter ?? mockWebAdapter, mockLockManager);
   return app;
@@ -321,10 +327,8 @@ describe('server-side /api/* gate', () => {
 
   test('gate on → /api/health is never blocked by the gate (healthcheck allowlist)', async () => {
     apiGateEnabled = true;
-    // /api/health is registered in startServer, not registerApiRoutes, so it 404s
-    // in this app — but the assertion that matters is it is NOT a 401 (the gate let it through).
     const res = await makeApp().request('/api/health');
-    expect(res.status).not.toBe(401);
+    expect(res.status).toBe(200);
   });
 
   test('gate on + Better Auth session → protected route passes', async () => {
