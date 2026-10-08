@@ -754,7 +754,10 @@ export function createTransactionView(
     },
     failPausedApproval: async (id, approval, error) => {
       const run = structuredClone(runs.get(id));
-      if (run?.status !== 'paused' || !isDeepStrictEqual(run.metadata.approval, approval))
+      if (
+        run?.status !== 'paused' ||
+        !isDeepStrictEqual(run.metadata.approval, JSON.parse(JSON.stringify(approval)))
+      )
         return { failed: false };
       run.status = 'failed';
       run.metadata.error = error;
