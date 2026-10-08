@@ -487,6 +487,6 @@ test('snapshot scope validates portable settings and excludes process environmen
     model: 'openai/gpt',
     enableExtensions: false,
   });
-  expect(parsePiConfigStrict({ env: { API_KEY: 1 } }, 'snapshot')).toEqual({});
+  expect(() => parsePiConfigStrict({ env: { API_KEY: 1 } }, 'snapshot')).toThrow();
   expect(() => parsePiConfigStrict({ model: 'missing-vendor' }, 'snapshot')).toThrow();
 });

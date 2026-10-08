@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { InvalidProviderRunConfigError } from '@archon/provider-contract';
+import { InvalidProviderRunConfigError, normalizedConfigString } from '@archon/provider-contract';
 
 export function assertKnownRunConfigKeys(
   raw: Record<string, unknown>,
@@ -23,7 +23,10 @@ export function normalizeRunConfigString(value: unknown, fieldPath: string): str
   return value.trim();
 }
 
-export const configStringSchema = z.string().regex(/\S/, 'expected a non-blank string');
+export const configStringSchema = normalizedConfigString(
+  z.string().regex(/\S/, 'expected a non-blank string'),
+  'trim'
+);
 
 export function parseConfigSchema<T extends z.ZodType>(
   schema: T,

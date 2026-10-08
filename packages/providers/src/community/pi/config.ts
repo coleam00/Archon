@@ -1,8 +1,8 @@
-import type { PiExtensionPosture } from '@archon/provider-contract';
+import { snapshotConfigSchema, type PiExtensionPosture } from '@archon/provider-contract';
 import type { PiProviderDefaults, ProviderConfigScope } from '../../types';
 import { z } from 'zod';
 import { parseConfigSchema } from '../../shared/run-config';
-import { parsePiModelRef, piModelRefSchema } from './model-ref';
+import { piModelRefSchema } from './model-ref';
 
 export type { PiProviderDefaults };
 
@@ -171,12 +171,12 @@ const portableFields = {
   ...extensionFields,
   nodes: z.record(z.string(), z.strictObject(extensionFields)).optional(),
 };
+const processFields = {
+  env: z.record(z.string(), z.string()).optional(),
+  maxConcurrent: z.number().int().positive().optional(),
+};
 export const configSchemas = {
-  install: z.strictObject({
-    ...portableFields,
-    env: z.record(z.string(), z.string()).optional(),
-    maxConcurrent: z.number().int().positive().optional(),
-  }),
+  install: z.strictObject({ ...portableFields, ...processFields }),
   run: z.strictObject({
     ...portableFields,
     env: z
@@ -186,14 +186,12 @@ export const configSchemas = {
       .never({ error: 'Pi concurrency is initialized once for the process lifetime' })
       .optional(),
   }),
-  snapshot: z.object(portableFields),
+  snapshot: snapshotConfigSchema(portableFields, processFields),
 };
 
 export function parsePiConfigStrict(
   raw: Record<string, unknown>,
   scope: ProviderConfigScope
 ): ParsedPiConfig {
-  const parsed = parsePiConfig(parseConfigSchema(configSchemas[scope], raw));
-  const model = parsed.model === undefined ? undefined : parsePiModelRef(parsed.model);
-  return model === undefined ? parsed : { ...parsed, model: `${model.provider}/${model.modelId}` };
+  return parseConfigSchema(configSchemas[scope], raw);
 }

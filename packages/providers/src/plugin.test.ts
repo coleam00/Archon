@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { connectProvider } from '@archon/provider-contract/plugin';
+import { type ProviderLog, connectProvider } from '@archon/provider-contract/plugin';
 import type { ProviderConfigParser } from '@archon/provider-contract';
 import { descriptor as claude } from './claude/descriptor';
 import { descriptor as codex } from './codex/descriptor';
@@ -105,12 +105,17 @@ for (const { descriptor, path, parse, valid, invalid } of providers) {
     }
   });
 
-  test(`${descriptor.id} source plugin initializes with its descriptor and manifest`, async () => {
+  test(`${descriptor.id} source plugin initializes and forwards filtered logs without corrupting RPC`, async () => {
     const home = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-provider-plugin-')));
     await mkdir(join(home, 'pi'), { recursive: true });
     const child = spawn(
       process.execPath,
-      ['--no-env-file', join(import.meta.dir, path, 'plugin.ts')],
+      [
+        '--no-env-file',
+        '--preload',
+        join(import.meta.dir, 'fixtures/plugin-logging-preload.ts'),
+        join(import.meta.dir, path, 'plugin.ts'),
+      ],
       {
         env: {
           ...process.env,
@@ -124,13 +129,45 @@ for (const { descriptor, path, parse, valid, invalid } of providers) {
     );
     const closed = new Promise<number | null>(resolve => child.once('close', resolve));
     const stderr = new Response(Readable.toWeb(child.stderr)).text();
+    const logs: ProviderLog[] = [];
+    let stdout = '';
+    child.stdout.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
     let client: Awaited<ReturnType<typeof connectProvider>> | undefined;
     try {
-      client = await connectProvider({
-        readable: Readable.toWeb(child.stdout),
-        writable: Writable.toWeb(child.stdin),
-      });
+      client = await connectProvider(
+        {
+          readable: Readable.toWeb(child.stdout),
+          writable: Writable.toWeb(child.stdin),
+        },
+        {
+          onLog: record => {
+            logs.push(record);
+          },
+        }
+      );
       expect(client.descriptor).toEqual(descriptor);
+      for (let call = 0; call < 2; call++) {
+        expect(await client.diagnose({})).toEqual({
+          checks: [{ id: 'fixture', label: 'Fixture', status: 'ok', message: 'Ready' }],
+        });
+      }
+      expect(logs).toEqual(
+        Array.from({ length: 2 }, () => ({
+          level: 'error',
+          msg: 'query_error',
+          bindings: {
+            module: `provider.${descriptor.id === 'pi' ? 'Pi' : descriptor.id === 'claude' ? 'Claude' : 'Codex'}Provider`,
+            count: 2,
+            resultReported: false,
+            failureClass: 'auth',
+          },
+        }))
+      );
+      for (const secret of ['credential-secret', 'message-text', 'token-secret']) {
+        expect(stdout).not.toContain(secret);
+      }
       const manifest: unknown = JSON.parse(
         await readFile(
           resolve(import.meta.dir, `../../../plugins/provider-${descriptor.id}/archon-plugin.json`),

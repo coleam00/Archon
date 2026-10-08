@@ -5,6 +5,7 @@
 import type { CodexProviderDefaults } from '../types';
 import {
   EFFORT_LADDER,
+  snapshotConfigSchema,
   type EffortRung,
   type ProviderConfigScope,
 } from '@archon/provider-contract';
@@ -69,19 +70,19 @@ const fields = {
 export const configSchemas = {
   install: z.strictObject(fields),
   run: z.strictObject(fields),
-  snapshot: z.object({ model: fields.model, modelReasoningEffort: fields.modelReasoningEffort }),
+  snapshot: snapshotConfigSchema(
+    { model: fields.model, modelReasoningEffort: fields.modelReasoningEffort },
+    {
+      webSearchMode: fields.webSearchMode,
+      additionalDirectories: fields.additionalDirectories,
+      codexBinaryPath: fields.codexBinaryPath,
+    }
+  ),
 };
 
 export function parseCodexConfigStrict(
   raw: Record<string, unknown>,
   scope: ProviderConfigScope = 'install'
 ): CodexProviderDefaults {
-  const parsed = parseConfigSchema(configSchemas[scope], raw);
-  return {
-    ...parsed,
-    ...(parsed.model === undefined ? {} : { model: parsed.model.trim() }),
-    ...(!('codexBinaryPath' in parsed) || parsed.codexBinaryPath === undefined
-      ? {}
-      : { codexBinaryPath: parsed.codexBinaryPath.trim() }),
-  };
+  return parseConfigSchema(configSchemas[scope], raw);
 }

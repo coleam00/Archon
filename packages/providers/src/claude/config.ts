@@ -2,7 +2,7 @@
  * Typed config parsing for Claude provider defaults.
  * Validates and narrows the opaque assistantConfig to typed fields.
  */
-import type { ProviderConfigScope } from '@archon/provider-contract';
+import { snapshotConfigSchema, type ProviderConfigScope } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import { parseClaudeSettingSources } from '@archon/paths/skills';
 import type { ClaudeProviderDefaults } from '../types';
@@ -59,19 +59,15 @@ const fields = {
 export const configSchemas = {
   install: z.strictObject(fields),
   run: z.strictObject(fields),
-  snapshot: z.object({ model: fields.model }),
+  snapshot: snapshotConfigSchema(
+    { model: fields.model },
+    { settingSources: fields.settingSources, claudeBinaryPath: fields.claudeBinaryPath }
+  ),
 };
 
 export function parseClaudeConfigStrict(
   raw: Record<string, unknown>,
   scope: ProviderConfigScope = 'install'
 ): ClaudeProviderDefaults {
-  const parsed = parseConfigSchema(configSchemas[scope], raw);
-  return {
-    ...parsed,
-    ...(parsed.model === undefined ? {} : { model: parsed.model.trim() }),
-    ...(!('claudeBinaryPath' in parsed) || parsed.claudeBinaryPath === undefined
-      ? {}
-      : { claudeBinaryPath: parsed.claudeBinaryPath.trim() }),
-  };
+  return parseConfigSchema(configSchemas[scope], raw);
 }

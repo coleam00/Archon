@@ -8,7 +8,7 @@ import { parsePiConfigStrict } from './config';
 const PI_CREDENTIAL_SPECS = descriptor.credentials.specs;
 
 export function registerPiProvider(): void {
-  if (isRegisteredProvider('pi')) return;
+  if (isRegisteredProvider(descriptor.id)) return;
   registerProvider({
     id: descriptor.id,
     ownsUnprefixedModelRefs: descriptor.ownsUnprefixedModelRefs,

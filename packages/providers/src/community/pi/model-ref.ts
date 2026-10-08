@@ -1,11 +1,15 @@
+import { normalizedConfigString } from '@archon/provider-contract';
 import { z } from 'zod';
 
-export const piModelRefSchema = z
-  .string()
-  .regex(
-    /^\s*[a-z][a-z0-9-]*\s*\/\s*\S[\s\S]*$/,
-    "expected a Pi vendor/model reference such as 'minimax/minimax-m3'"
-  );
+export const piModelRefSchema = normalizedConfigString(
+  z
+    .string()
+    .regex(
+      /^\s*[a-z][a-z0-9-]*\s*\/\s*\S[\s\S]*$/,
+      "expected a Pi vendor/model reference such as 'minimax/minimax-m3'"
+    ),
+  'slash-separated'
+);
 
 /**
  * Shape of a parsed Pi model reference.
@@ -28,12 +32,13 @@ export interface PiModelRef {
  * Returns undefined for malformed refs so callers can surface clear errors.
  */
 export function parsePiModelRef(raw: string): PiModelRef | undefined {
-  if (!piModelRefSchema.safeParse(raw).success) return undefined;
-  const value = raw.trim();
+  const parsed = piModelRefSchema.safeParse(raw);
+  if (!parsed.success) return undefined;
+  const value = parsed.data;
   const idx = value.indexOf('/');
 
-  const provider = value.slice(0, idx).trim();
-  const modelId = value.slice(idx + 1).trim();
+  const provider = value.slice(0, idx);
+  const modelId = value.slice(idx + 1);
 
   return { provider, modelId };
 }
