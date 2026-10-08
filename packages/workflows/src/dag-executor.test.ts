@@ -68,13 +68,12 @@ mock.module('@archon/paths', () => ({
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
+import { clearRegistry, getProviderCapabilities } from '@archon/providers';
 import {
   registerBuiltinProviders,
   registerPiProvider,
   registerOpencodeProvider,
-  clearRegistry,
-  getProviderCapabilities,
-} from '@archon/providers';
+} from '@archon/providers/in-process';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { SendQueryOptions } from '@archon/provider-contract';
 import {

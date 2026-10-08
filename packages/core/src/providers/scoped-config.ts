@@ -1,3 +1,8 @@
+import {
+  CONFIG_STRING_NORMALIZATION_KEY,
+  configStringNormalizationSchema,
+  normalizeConfigString,
+} from '@archon/provider-contract';
 import { z } from 'zod';
 
 type JsonSchema = z.core.JSONSchema.BaseSchema | boolean;
@@ -21,9 +26,18 @@ export function scopedConfigSchema(
       throw new Error(`Unresolved config schema reference ${node.$ref}`);
     return resolve(z.union([z.boolean(), z.record(z.string(), z.json())]).parse(referenced));
   };
-  const project = (value: unknown, unresolved: JsonSchema, root = false): unknown => {
+  const project = (
+    value: unknown,
+    unresolved: JsonSchema,
+    root = false,
+    output = false
+  ): unknown => {
     const node = resolve(unresolved);
     if (typeof node !== 'object') return value;
+    const normalization = node[CONFIG_STRING_NORMALIZATION_KEY];
+    if (output && typeof value === 'string' && normalization !== undefined) {
+      return normalizeConfigString(value, configStringNormalizationSchema.parse(normalization));
+    }
     const branches = node.anyOf ?? node.oneOf;
     if (branches) {
       for (const branch of branches) {
@@ -33,14 +47,14 @@ export function scopedConfigSchema(
             .fromJSONSchema({ $defs: schema.$defs, definitions: schema.definitions, ...branch })
             .safeParse(projected).success
         )
-          return projected;
+          return output ? project(projected, branch, root, true) : projected;
       }
       return value;
     }
     if (node.allOf?.length) {
       const members: z.ZodType[] = node.allOf.map(branch =>
         z.preprocess(
-          input => project(input, branch, root),
+          input => project(input, branch, root, output),
           z.fromJSONSchema({ $defs: schema.$defs, definitions: schema.definitions, ...branch })
         )
       );
@@ -51,7 +65,9 @@ export function scopedConfigSchema(
     if (Array.isArray(value)) {
       return value.map((item: unknown, index) => {
         const itemSchema = node.prefixItems?.[index] ?? node.items;
-        return itemSchema && !Array.isArray(itemSchema) ? project(item, itemSchema) : item;
+        return itemSchema && !Array.isArray(itemSchema)
+          ? project(item, itemSchema, false, output)
+          : item;
       });
     }
     if (value === null || typeof value !== 'object' || node.type !== 'object') return value;
@@ -61,21 +77,41 @@ export function scopedConfigSchema(
       child,
     }));
     const strip =
-      (root && snapshot) || (stripUnknownKeys && node.additionalProperties === undefined);
+      (root && snapshot && node.additionalProperties !== false) ||
+      (stripUnknownKeys && node.additionalProperties === undefined);
     return Object.fromEntries(
       Object.entries(value).flatMap(([key, field]) => {
         const property = Object.hasOwn(properties, key) ? properties[key] : undefined;
-        if (property !== undefined) return [[key, project(field, property)]];
+        if (property !== undefined) {
+          const resolved = resolve(property);
+          if (
+            output &&
+            root &&
+            snapshot &&
+            typeof resolved === 'object' &&
+            resolved.writeOnly === true
+          )
+            return [];
+          return [[key, project(field, property, false, output)]];
+        }
         const matching = patterns.filter(({ pattern }) => pattern.test(key));
         if (matching.length > 0)
           return [
-            [key, matching.reduce((projected, { child }) => project(projected, child), field)],
+            [
+              key,
+              matching.reduce(
+                (projected, { child }) => project(projected, child, false, output),
+                field
+              ),
+            ],
           ];
         if (typeof node.additionalProperties === 'object')
-          return [[key, project(field, node.additionalProperties)]];
+          return [[key, project(field, node.additionalProperties, false, output)]];
         return strip ? [] : [[key, field]];
       })
     );
   };
-  return z.preprocess(value => project(value, schema, true), validator);
+  return z
+    .preprocess(value => project(value, schema, true), validator)
+    .transform(value => project(value, schema, true, true));
 }

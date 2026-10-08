@@ -55,7 +55,7 @@ that this work has ended.
 - `claude` — Claude (Anthropic)
 - `codex` — Codex (OpenAI)
 - `opencode` — OpenCode (community) *(community provider, [deprecated](/getting-started/ai-assistants/#deprecated-providers))*
-- `pi` — Pi (community) *(community provider)*
+- `pi` — Pi
 - `copilot` — Copilot (GitHub) *(community provider, [deprecated](/getting-started/ai-assistants/#deprecated-providers))*
 
 ## Capabilities

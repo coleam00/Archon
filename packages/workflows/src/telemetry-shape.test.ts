@@ -1,7 +1,7 @@
 import type { ProviderRegistry } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { registerBuiltinProviders } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { basename } from 'node:path';
 import {
   BUNDLED_COMMANDS,

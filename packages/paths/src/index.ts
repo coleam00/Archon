@@ -78,7 +78,14 @@ export type { DetachedInstallContext, DetachedInstallContextKey } from './detach
 export { loadArchonEnv, isVerboseBoot, getPluginsPath, getArchonEnvNames } from './env-loader';
 
 // Logger
-export { createLogger, setLogLevel, getLogLevel, setLogDestination, rootLogger } from './logger';
+export {
+  createLogger,
+  setLogLevel,
+  getLogLevel,
+  setLogDestination,
+  setLogSink,
+  rootLogger,
+} from './logger';
 export type { Logger } from './logger';
 
 // Build-time constants (rewritten by scripts/build-binaries.sh)

@@ -197,7 +197,7 @@ mock.module('@archon/core/utils/commands', () => ({
 
 import { registerApiRoutes } from './api';
 import { isArchonOwnedAuthPath } from '../auth/config';
-import { registerBuiltinProviders } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 
 // The route validates tier/alias providers against the real registry, which is
 // empty until the server bootstrap registers built-ins — do it here (idempotent).

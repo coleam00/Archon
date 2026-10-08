@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, realpath, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
 const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-assistant-')));
 process.env.ARCHON_HOME = join(root, 'home');

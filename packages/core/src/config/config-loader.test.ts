@@ -32,7 +32,7 @@ mock.module('fs/promises', () => ({
   mkdir: mockFsMkdir,
 }));
 
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 registerBuiltinProviders();
 registerCommunityProviders();
 
