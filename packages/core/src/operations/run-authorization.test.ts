@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { authorizeRunAction, type RunActor } from './run-authorization';
+import type { ChatActor } from '@archon/chat-contract';
 import type { UserRole } from '../schemas/user';
 
 describe('starter or admin run authorization', () => {
@@ -22,3 +23,10 @@ describe('starter or admin run authorization', () => {
     });
   }
 });
+
+type AssertNever<T extends never> = T;
+export type ChatNeverOperator = AssertNever<Extract<ChatActor, { kind: 'operator' }>>;
+export type ChatMatchesRunActor = AssertNever<
+  | Exclude<ChatActor, RunActor>
+  | Exclude<Extract<RunActor, { kind: 'user' } | { kind: 'unidentified' }>, ChatActor>
+>;

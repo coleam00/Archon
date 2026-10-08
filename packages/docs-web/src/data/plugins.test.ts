@@ -162,3 +162,25 @@ test('symlink manifests and paths unsupported by the installer are skipped', asy
     messages.every(message => message.includes('unsupported install path or non-regular manifest'))
   ).toBe(true);
 });
+
+test('catalog accepts a chat manifest and supplies its install command', async () => {
+  const plugins = await discoverPlugins({
+    fetch: async url => {
+      if (url.includes('archived-forge/git/blobs/')) {
+        return Response.json({
+          encoding: 'base64',
+          content: Buffer.from(JSON.stringify({
+            schemaVersion: 1, kind: 'chat', name: 'example-chat', description: 'Example chat',
+            executable: 'archon-chat-example',
+          })).toString('base64'),
+        });
+      }
+      return Response.json(fixtureResponse(url));
+    },
+    log: () => {},
+  });
+  expect(plugins.find(plugin => plugin.id === 'test-author/archived-forge')).toMatchObject({
+    manifest: {kind: 'chat', executable: 'archon-chat-example'},
+    installCommand: 'archon plugin install test-author/archived-forge',
+  });
+});

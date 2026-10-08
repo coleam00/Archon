@@ -49,7 +49,8 @@
     "@octokit/auth-app": "^8.0.0",
     "@octokit/rest": "^22.0.0",
     "pg": "^8.11.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@archon/chat-contract": "workspace:*"
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",

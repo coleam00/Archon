@@ -16,8 +16,8 @@ import {
 } from '@archon/provider-contract';
 import {
   connectProvider,
-  ProviderPluginProtocolError,
-  ProviderPluginRemoteError,
+  PluginProtocolError,
+  PluginRemoteError,
   type ConnectedProvider,
   type ProviderPluginDescriptor,
 } from '@archon/provider-contract/plugin';
@@ -54,15 +54,19 @@ function startProcess(
   // One logger per process, not a module cache: a logger cached by an earlier caller
   // would outlive any test that replaces createLogger to observe these diagnostics.
   const log = createLogger('core.provider-process');
-  const env = buildProviderSubprocessEnv(options);
-  const secrets = collectCredentialValues(
-    env,
-    options.protectedEnvKeys,
-    Object.values(options.env ?? {}).filter(value => value.length >= 8)
-  );
+  const env = buildProviderSubprocessEnv(options.execContext?.kind === 'container' ? {} : options);
+  const secrets = [
+    ...collectCredentialValues(env, options.protectedEnvKeys),
+    ...collectCredentialValues(
+      options.env ?? {},
+      options.protectedEnvKeys,
+      Object.values(options.env ?? {}).filter(value => value.length >= 8)
+    ),
+  ];
   secrets.push(...secrets.map(value => JSON.stringify(value).slice(1, -1)));
   secrets.sort((a, b) => b.length - a.length);
   const redact = (text: string): string => redactCredentialValues(text, secrets);
+  const providerLog = createLogger(`provider.${descriptor.id}`);
   const child = spawn(argv[0], argv.slice(1), {
     detached: process.platform !== 'win32',
     windowsHide: true,
@@ -155,10 +159,19 @@ function startProcess(
   }
   return {
     async connect(): Promise<ConnectedProvider> {
-      const connection = await connectProvider({
-        readable: Readable.toWeb(child.stdout),
-        writable: Writable.toWeb(child.stdin),
-      });
+      const connection = await connectProvider(
+        {
+          readable: Readable.toWeb(child.stdout),
+          writable: Writable.toWeb(child.stdin),
+        },
+        {
+          onLog(record): void {
+            // Plugin text and arbitrary JSON can encode message excerpts or credentials.
+            // Only the validated severity crosses into the host's diagnostic log.
+            providerLog[record.level]({}, 'provider.plugin.log');
+          },
+        }
+      );
       if (!isDeepStrictEqual(connection.descriptor, descriptor)) {
         throw new Error(
           `Provider plugin ${descriptor.id} changed since install; run archon plugin update for this plugin`
@@ -169,7 +182,7 @@ function startProcess(
     async failure(error: unknown): Promise<Error> {
       // EOF does not imply process exit: a provider can close stdout and stay alive.
       if (
-        (error instanceof ProviderPluginProtocolError && error.reason === 'closed') ||
+        (error instanceof PluginProtocolError && error.reason === 'closed') ||
         child.exitCode !== null ||
         child.signalCode !== null ||
         spawnError
@@ -186,11 +199,11 @@ function startProcess(
           child.signalCode,
           evidence()
         );
-      if (error instanceof ProviderPluginRemoteError)
+      if (error instanceof PluginRemoteError)
         return new Error(
           `Provider plugin ${descriptor.id} request failed (RPC ${String(error.code)})`
         );
-      if (error instanceof ProviderPluginProtocolError)
+      if (error instanceof PluginProtocolError)
         return new Error(
           `Provider plugin ${descriptor.id} protocol failed at line ${String(error.line)} (${error.reason})`
         );
@@ -248,6 +261,30 @@ export class ProcessAgentProvider implements IAgentProvider {
       return await (await process.connect()).checkCredential(request);
     } catch (error) {
       request.signal.throwIfAborted();
+      throw await process.failure(error);
+    } finally {
+      await process.dispose(true);
+    }
+  }
+
+  async diagnose(
+    request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
+  ): ReturnType<NonNullable<IAgentProvider['diagnose']>> {
+    const process = startProcess(this.descriptor, this.argv, {});
+    try {
+      return await (await process.connect()).diagnose(request);
+    } catch (error) {
+      throw await process.failure(error);
+    } finally {
+      await process.dispose(true);
+    }
+  }
+
+  async listModels(): ReturnType<NonNullable<IAgentProvider['listModels']>> {
+    const process = startProcess(this.descriptor, this.argv, {});
+    try {
+      return await (await process.connect()).listModels();
+    } catch (error) {
       throw await process.failure(error);
     } finally {
       await process.dispose(true);
