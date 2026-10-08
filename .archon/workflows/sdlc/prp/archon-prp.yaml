@@ -1,0 +1,210 @@
+name: archon-prp
+description: |
+  Take one issue, plan, or request to a pull request with an independent
+  READY TO MERGE review and green CI, in the PRP shape: one owner session plans,
+  implements, opens the PR and makes every correction; fresh read-only
+  reviewers, picked by risk, judge it; CI is waited on durably and its reds are
+  judged by the owner. Never merges. An experimental, smaller alternative to archon-ship.
+
+  Use when: "deliver this issue with archon-prp", "take #123 to a reviewed PR
+  the PRP way", comparing the PRP shape with archon-ship on real work.
+  NOT for: reviewing someone else's PR, merging, or work that needs triage
+  before anyone decides whether to build it (use archon-ship).
+
+requires: [github]
+model: large
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      What to deliver: an issue, plan, document, or free-form request. When
+      empty, the run's trigger message is the target.
+  review_scopes:
+    default: ""
+    description: >-
+      Reviewer scopes to add to the risk-scaled defaults (code, seams, tests,
+      comments, errors, docs, simplify, or all), or an explicit restriction
+      such as "only tests". Empty lets each review pick scopes by risk.
+
+# ready:false is an honest typed ending (blocked plan, open finding, red CI the
+# PR did not cause), never a PR reported as delivered.
+returns: outcome
+outcome_field: ready
+
+# One owner conversation runs plan → implement → finish through named forks;
+# reviewers are fresh. The owner's correction is one pass, not a loop: a
+# loop_group body cannot continue a named session (context.resume is rejected
+# there and a body's session cursor starts empty), so a second round would
+# need an engine primitive this workflow does not invent. What the one pass
+# cannot settle ends as a typed outcome.
+nodes:
+  - id: plan
+    command: plan
+    output_type: plan
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        summary: { type: string }
+      required: [ready, summary]
+
+  - id: implement
+    command: implement
+    depends_on: [plan]
+    when: "$plan.output.ready == true"
+    context: { resume: plan }
+    output_type: implementation
+    output_format:
+      type: object
+      properties:
+        green: { type: boolean }
+        # The PR the owner opened, as the pack's qualified reference. Certified
+        # against the forge and this checkout by the outcome script; a blocked
+        # run reports number 0.
+        pr:
+          type: object
+          properties:
+            repo:
+              type: object
+              properties:
+                host: { type: string }
+                path: { type: string }
+              required: [host, path]
+              additionalProperties: false
+            number: { type: integer }
+            url: { type: string }
+          required: [repo, number, url]
+          additionalProperties: false
+        summary: { type: string }
+      required: [green, pr, summary]
+
+  # Each review is the archon-prp-reviewers block: a coordinator picks scopes by
+  # risk, the selected reviewers run in parallel with fresh contexts, and the
+  # coordinator aggregates and publishes one verdict.
+  - id: review
+    include: archon-prp-reviewers
+    depends_on: [implement]
+    when: "$implement.output.green == true"
+    with:
+      mode: full
+      pr: "$implement.output.pr.url"
+      scopes: "$INPUTS.review_scopes"
+
+  # CI is awaited on the implemented head before the owner's one correction
+  # pass, so that pass sees review findings and CI reds together. The probe
+  # only reports whether anything is still running; what a red means is the
+  # owner's judgment. A pending probe sleeps on the engine's durable wait.
+  - id: checks
+    depends_on: [review]
+    loop_group:
+      max_iterations: 40
+      until_bash: |
+        value=$ci-probe.output.state
+        test "$value" != "pending"
+      nodes:
+        - id: ci-probe
+          script: probe
+          runtime: bun
+          with:
+            pr: { from: "$implement.output.pr" }
+            unstarted: "$LOOP_PREV.ci-probe.output.unstarted"
+          output_format: &ci_state
+            type: object
+            properties:
+              state: { type: string, enum: [pending, concluded] }
+              detail: { type: string }
+              # Consecutive reads with CI configured but nothing registered; the probe
+              # concludes at its bound so the outcome can report ci_missing.
+              unstarted: { type: integer }
+            required: [state, detail, unstarted]
+        - id: ci-pause
+          depends_on: [ci-probe]
+          when: "$ci-probe.output.state == 'pending'"
+          wait:
+            event: checks.complete
+            deadline_ms: 180000
+
+  # Always runs: it is where every review finding and every red check gets its
+  # disposition, and a clean delivery costs one short turn.
+  - id: finish
+    command: finish
+    depends_on: [checks]
+    context: { resume: implement }
+    output_format:
+      type: object
+      properties:
+        changed: { type: boolean }
+        verify: { type: boolean }
+        ci_cause: { type: string, enum: ["", introduced, inherited, environment] }
+        summary: { type: string }
+      required: [changed, verify, ci_cause, summary]
+
+  - id: reverify
+    include: archon-prp-reviewers
+    depends_on: [finish]
+    when: "$review.output.ready == false || $finish.output.verify == true"
+    with:
+      mode: verify
+      pr: "$implement.output.pr.url"
+      scopes: "$INPUTS.review_scopes"
+
+  - id: recheck
+    depends_on: [finish, reverify]
+    trigger_rule: none_failed_min_one_success
+    when: "$finish.output.changed == true"
+    loop_group:
+      max_iterations: 40
+      until_bash: |
+        value=$recheck-probe.output.state
+        test "$value" != "pending"
+      nodes:
+        - id: recheck-probe
+          script: probe
+          runtime: bun
+          with:
+            pr: { from: "$implement.output.pr" }
+            unstarted: "$LOOP_PREV.recheck-probe.output.unstarted"
+          output_format: *ci_state
+        - id: recheck-pause
+          depends_on: [recheck-probe]
+          when: "$recheck-probe.output.state == 'pending'"
+          wait:
+            event: checks.complete
+            deadline_ms: 180000
+
+  - id: outcome
+    script: outcome
+    runtime: bun
+    depends_on: [plan, finish, reverify, recheck]
+    trigger_rule: none_failed_min_one_success
+    with:
+      plan_ready: "$plan.output.ready"
+      plan_summary: "$plan.output.summary"
+      green: { from: "$implement.output.green", if_skipped: null }
+      pr: { from: "$implement.output.pr", if_skipped: null }
+      implement_summary: { from: "$implement.output.summary", if_skipped: null }
+      review_ready: { from: "$review.output.ready", if_skipped: null }
+      reverify_ready: { from: "$reverify.output.ready", if_skipped: null }
+      ci_cause: { from: "$finish.output.ci_cause", if_skipped: null }
+      finish_summary: { from: "$finish.output.summary", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        reason:
+          type: string
+          enum:
+            - delivered
+            - plan_blocked
+            - implement_blocked
+            - review_open
+            - ci_red
+            - ci_red_not_caused
+            - ci_pending
+            - ci_gated
+            - ci_missing
+            - pr_mismatch
+        pr_url: { type: string }
+        summary: { type: string }
+      required: [ready, reason, pr_url, summary]

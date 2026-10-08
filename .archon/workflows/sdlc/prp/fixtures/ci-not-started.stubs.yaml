@@ -1,0 +1,27 @@
+# CI is configured but never starts on the PR (a maintainer's approval or a path
+# filter). The probe concludes at its bound instead of exhausting the loop, the owner
+# has no red to judge, and the run ends with the typed ci_missing outcome.
+plan:
+  ready: true
+  summary: "stub: plan written"
+implement:
+  green: true
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1" }
+  summary: "stub: implemented, validated, PR opened"
+review__prepare: { code: true, seams: true, simplify: false, tests: false, comments: false, errors: false, docs: false, risk: "stub: full risk call", reviewed_head: "stubhead" }
+review__code: "0 findings"
+review__seams: "0 findings"
+review__synthesize:
+  ready: true
+  verdict: "READY TO MERGE"
+  summary: "stub: no findings"
+ci-probe: '{"state":"concluded","detail":"CI is configured but no checks started after 5 reads","unstarted":5}'
+finish:
+  changed: false
+  verify: false
+  ci_cause: ""
+  summary: "stub: no checks ran; nothing to correct"
+outcome: { ready: false, reason: ci_missing, pr_url: "https://github.com/example/repo/pull/1", summary: "stub: CI never started" }
+fixture:
+  expect: completed
+  reached: [checks, finish, outcome]

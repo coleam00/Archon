@@ -1,0 +1,27 @@
+# CI concludes red on a check that also fails on the base branch. The owner judges it
+# inherited and changes nothing; no verify review or second wait runs, and the run
+# ends with a typed not-ready outcome instead of a fix.
+plan:
+  ready: true
+  summary: "stub: plan written"
+implement:
+  green: true
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1" }
+  summary: "stub: implemented, validated, PR opened"
+review__prepare: { code: true, seams: true, simplify: false, tests: false, comments: false, errors: false, docs: false, risk: "stub: full risk call", reviewed_head: "stubhead" }
+review__code: "0 findings"
+review__seams: "0 findings"
+review__synthesize:
+  ready: true
+  verdict: "READY TO MERGE"
+  summary: "stub: no findings"
+ci-probe: '{"state":"concluded","detail":"red: test (failure)","unstarted":0}'
+finish:
+  changed: false
+  verify: false
+  ci_cause: inherited
+  summary: "stub: the failing test also fails on the base branch's latest run"
+outcome: { ready: false, reason: ci_red_not_caused, pr_url: "https://github.com/example/repo/pull/1", summary: "stub: red, inherited" }
+fixture:
+  expect: completed
+  reached: [finish, outcome]

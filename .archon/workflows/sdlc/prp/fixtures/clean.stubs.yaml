@@ -1,0 +1,27 @@
+# Clean delivery: the review is ready, CI concludes green, the owner's finish pass
+# changes nothing, and the run reports delivery. The risk call picks `code` alone, so
+# the seams reviewer carries no stub; neither do reverify or recheck. The fixture
+# fails if any of them runs.
+plan:
+  ready: true
+  summary: "stub: plan written"
+implement:
+  green: true
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1" }
+  summary: "stub: implemented, validated, PR opened"
+review__prepare: { code: true, seams: false, simplify: false, tests: false, comments: false, errors: false, docs: false, risk: "stub: full risk call", reviewed_head: "stubhead" }
+review__code: "0 findings"
+review__synthesize:
+  ready: true
+  verdict: "READY TO MERGE"
+  summary: "stub: no findings"
+ci-probe: '{"state":"concluded","detail":"green: build (success)","unstarted":0}'
+finish:
+  changed: false
+  verify: false
+  ci_cause: ""
+  summary: "stub: nothing to correct"
+outcome: { ready: true, reason: delivered, pr_url: "https://github.com/example/repo/pull/1", summary: "stub: delivered" }
+fixture:
+  expect: completed
+  reached: [plan, implement, review__synthesize, finish, outcome]

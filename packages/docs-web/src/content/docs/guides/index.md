@@ -35,6 +35,7 @@ Archon ships the `sdlc` workflow pack, which covers the software development lif
 | Workflow | What It Does |
 |----------|-------------|
 | `archon-ship` | Triage an issue or request, investigate or plan as needed, then deliver a reviewed PR |
+| `archon-prp` | Experimental: plan, implement, and correct in one owner session, with a fresh review and a durable CI wait |
 | `archon-triage` | Check an issue against the current code and decide what it needs next |
 | `archon-investigate` | Prove the root cause of a bug or open question |
 | `archon-plan` | Turn decided intent into an implementable plan |

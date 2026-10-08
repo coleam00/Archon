@@ -1,0 +1,37 @@
+# The review finds a blocking defect. The owner fixes it in the implementation
+# session's finish pass, a fresh verify review confirms it, CI is awaited again on
+# the corrected head, and the run reports delivery.
+plan:
+  ready: true
+  summary: "stub: plan written"
+implement:
+  green: true
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1" }
+  summary: "stub: implemented, validated, PR opened"
+review__prepare: { code: true, seams: true, simplify: false, tests: false, comments: false, errors: false, docs: false, risk: "stub: full risk call", reviewed_head: "stubhead" }
+review__code: "0 findings"
+review__seams: "0 findings"
+review__synthesize:
+  ready: false
+  verdict: "NEEDS FIXES"
+  summary: "stub: R1 Important open"
+ci-probe: '{"state":"concluded","detail":"green: build (success)","unstarted":0}'
+finish:
+  changed: true
+  verify: true
+  ci_cause: ""
+  summary: "stub: R1 fixed and pushed"
+reverify__prepare: { code: true, seams: true, simplify: false, tests: false, comments: false, errors: false, docs: false, risk: "stub: verify risk call", reviewed_head: "stubhead" }
+reverify__code: "0 findings"
+reverify__seams: "0 findings"
+reverify__synthesize:
+  ready: true
+  verdict: "READY TO MERGE"
+  summary: "stub: R1 FIXED"
+recheck-probe: '{"state":"concluded","detail":"green: build (success)","unstarted":0}'
+outcome: { ready: true, reason: delivered, pr_url: "https://github.com/example/repo/pull/1", summary: "stub: delivered" }
+fixture:
+  expect: completed
+  reached: [review__synthesize, finish, reverify__synthesize, recheck, outcome]
+  resolved-text-contains:
+    reverify__prepare: "Mode: **verify**"

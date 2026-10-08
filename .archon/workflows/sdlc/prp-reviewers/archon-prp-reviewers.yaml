@@ -1,0 +1,112 @@
+name: archon-prp-reviewers
+description: |
+  Building block for archon-prp, not a standalone run: one independent review of a
+  pull request. A coordinator pins the head, runs the repository's validation and
+  picks reviewer scopes by risk; the selected specialist reviewers run in parallel
+  with fresh contexts; the coordinator aggregates their reports, decides severity
+  and the verdict, and publishes one PR comment.
+
+  NOT for: reviewing a PR on its own (use archon-review).
+
+requires: [github]
+model: large
+
+inputs:
+  pr:
+    required: true
+    description: The pull request URL.
+  mode:
+    required: true
+    description: "full: review the whole diff. verify: verify a correction pass against the previous review."
+  scopes:
+    default: ""
+    description: The operator's scope request, if any (added scopes, or a restriction). Empty scales scopes to risk.
+
+returns: synthesize
+
+# The risk call and scope choice are the coordinator's judgment (prepare); each
+# selected scope is one parallel reviewer node in its own role. Every node works
+# in a review checkout prepare creates, never in the owner's checkout.
+nodes:
+  - id: prepare
+    command: prepare
+    context: fresh
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        code: { type: boolean }
+        seams: { type: boolean }
+        simplify: { type: boolean }
+        tests: { type: boolean }
+        comments: { type: boolean }
+        errors: { type: boolean }
+        docs: { type: boolean }
+        risk: { type: string }
+        reviewed_head: { type: string }
+      required: [code, seams, simplify, tests, comments, errors, docs, risk, reviewed_head]
+
+  - id: code
+    command: code
+    depends_on: [prepare]
+    when: "$prepare.output.code == true"
+    context: fresh
+    mutates_checkout: false
+
+  - id: seams
+    command: seams
+    depends_on: [prepare]
+    when: "$prepare.output.seams == true"
+    context: fresh
+    mutates_checkout: false
+
+  - id: simplify
+    command: simplify
+    depends_on: [prepare]
+    when: "$prepare.output.simplify == true"
+    context: fresh
+    mutates_checkout: false
+
+  - id: tests
+    command: tests
+    depends_on: [prepare]
+    when: "$prepare.output.tests == true"
+    context: fresh
+    mutates_checkout: false
+
+  - id: comments
+    command: comments
+    depends_on: [prepare]
+    when: "$prepare.output.comments == true"
+    context: fresh
+    mutates_checkout: false
+
+  - id: errors
+    command: errors
+    depends_on: [prepare]
+    when: "$prepare.output.errors == true"
+    context: fresh
+    mutates_checkout: false
+
+  - id: docs
+    command: docs
+    depends_on: [prepare]
+    when: "$prepare.output.docs == true"
+    context: fresh
+    mutates_checkout: false
+
+  # all_done: a reviewer that failed still reaches aggregation, which reports
+  # REVIEW INCOMPLETE for a selected scope with no report instead of a clean pass.
+  - id: synthesize
+    command: synthesize
+    depends_on: [prepare, code, seams, simplify, tests, comments, errors, docs]
+    trigger_rule: all_done
+    context: fresh
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        verdict: { type: string, enum: [READY TO MERGE, NEEDS FIXES, REVIEW INCOMPLETE] }
+        summary: { type: string }
+      required: [ready, verdict, summary]
