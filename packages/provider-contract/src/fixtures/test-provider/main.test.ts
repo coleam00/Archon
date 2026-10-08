@@ -4,7 +4,7 @@ import { Readable, Writable } from 'node:stream';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { connectProvider, serveProvider, type ProviderLog } from '../../plugin';
 import type { IAgentProvider } from '../../agent-provider';
 import type { ProviderChunk } from '../../events';
@@ -109,19 +109,60 @@ test('test provider conforms and carries identical chunks in process, over strea
   }
 });
 
-test('the test provider is never statically imported outside its fixture directory', async () => {
-  const root = join(import.meta.dir, '../../../../..');
-  for await (const file of new Bun.Glob('packages/*/src/**/*.{ts,tsx}').scan({
+// The tracked TypeScript files under packages/*/src. Reading git's index keeps the listing
+// independent of files other package suites create and delete under packages/*/src while
+// this runs. CI checks out tracked files, so they are the set that has to stay clean.
+function trackedSources(root: string): string[] {
+  const listed = Bun.spawnSync(['git', 'ls-files', '-z', '--', 'packages/*/src/**'], {
     cwd: root,
-    onlyFiles: true,
-  })) {
-    if (file.replaceAll('\\', '/').includes('/fixtures/test-provider/')) continue;
-    const source = await Bun.file(join(root, file)).text();
-    expect(source).not.toMatch(
-      /(?:import|export)[^;]*from\s+['"][^'"]*fixtures\/test-provider[^'"]*['"]/
+  });
+  if (listed.exitCode !== 0)
+    throw new Error(`git ls-files failed in ${root}: ${listed.stderr.toString()}`);
+  return listed.stdout
+    .toString()
+    .split('\0')
+    .filter(file => /\.tsx?$/.test(file));
+}
+
+// Callers read synchronously. One awaited read per file took 11.8 s for ~1700 files on a
+// loaded Windows runner (and hit the 20 s timeout on others); sync reads of the same files
+// took 0.13 s.
+function staticTestProviderImports(files: string[], read: (file: string) => string): string[] {
+  return files.filter(file => {
+    if (file.includes('/fixtures/test-provider/')) return false;
+    const source = read(file);
+    return (
+      /(?:import|export)[^;]*from\s+['"][^'"]*fixtures\/test-provider[^'"]*['"]/.test(source) ||
+      /import\(['"][^'"]*fixtures\/test-provider[^'"]*['"]\)/.test(source)
     );
-    expect(source).not.toMatch(/import\(['"][^'"]*fixtures\/test-provider[^'"]*['"]\)/);
-  }
+  });
+}
+
+test('the test provider is never statically imported outside its fixture directory', () => {
+  const root = join(import.meta.dir, '../../../../..');
+  const files = trackedSources(root);
+  // An empty or wrongly rooted listing would pass the scan below without reading anything.
+  expect(files).toContain(relative(root, import.meta.path).replaceAll('\\', '/'));
+  expect(staticTestProviderImports(files, file => readFileSync(join(root, file), 'utf8'))).toEqual(
+    []
+  );
+});
+
+test('the import scan reports static test-provider imports only outside the fixture directory', () => {
+  const sources: Record<string, string> = {
+    'packages/a/src/static.ts': "import { create } from '../fixtures/test-provider/main';",
+    'packages/a/src/reexport.ts': "export * from './fixtures/test-provider/main';",
+    'packages/a/src/dynamic.ts': "await import('./fixtures/test-provider/main');",
+    'packages/a/src/clean.ts': "import { create } from './provider';",
+    'packages/a/src/fixtures/test-provider/main.test.ts': "import { create } from './main';",
+    'packages/a/src/fixtures/test-provider/nested.ts':
+      "export * from '../../fixtures/test-provider/main';",
+  };
+  expect(staticTestProviderImports(Object.keys(sources), file => sources[file] ?? '')).toEqual([
+    'packages/a/src/static.ts',
+    'packages/a/src/reexport.ts',
+    'packages/a/src/dynamic.ts',
+  ]);
 });
 
 test('native tools, container env and logs have parity in process, over streams and stdio', async () => {
