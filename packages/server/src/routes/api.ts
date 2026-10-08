@@ -364,6 +364,7 @@ import {
   codebaseSchema,
   codebaseIdParamsSchema,
   addCodebaseBodySchema,
+  renameCodebaseBodySchema,
   inspectBaseBranchBodySchema,
   inspectBaseBranchResponseSchema,
   deleteCodebaseResponseSchema,
@@ -829,6 +830,30 @@ const addCodebaseRoute = createRoute({
       description: 'Codebase created',
     },
     400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const renameCodebaseRoute = createRoute({
+  method: 'patch',
+  path: '/api/codebases/{id}',
+  tags: ['Codebases'],
+  summary: 'Rename a codebase',
+  description:
+    'Changes the display name. Refused with 409 when another codebase already uses the name, ' +
+    'or when the new name would move the project storage (worktrees, state, logs, artifacts).',
+  request: {
+    params: codebaseIdParamsSchema,
+    body: { content: { 'application/json': { schema: renameCodebaseBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: codebaseSchema } },
+      description: 'Renamed codebase',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Codebase not found'),
+    409: jsonError('Name already used, or the rename would move project storage'),
     500: jsonError('Server error'),
   },
 });
@@ -3264,6 +3289,27 @@ export function registerApiRoutes(
         500,
         `Failed to add codebase: ${(error as Error).message ?? 'unknown error'}`
       );
+    }
+  });
+
+  // PATCH /api/codebases/:id - Rename a project
+  registerOpenApiRoute(renameCodebaseRoute, async c => {
+    const id = c.req.param('id') ?? '';
+    const { name } = getValidatedBody(c, renameCodebaseBodySchema);
+    try {
+      return c.json(toApiCodebase(await codebaseDb.renameCodebase(id, name)), 200);
+    } catch (error) {
+      if (error instanceof codebaseDb.CodebaseNotFoundError) {
+        return apiError(c, 404, 'Codebase not found');
+      }
+      if (
+        error instanceof codebaseDb.CodebaseNameTakenError ||
+        error instanceof codebaseDb.CodebaseStorageIdentityChangeError
+      ) {
+        return apiError(c, 409, error.message);
+      }
+      getLog().error({ err: error, codebaseId: id }, 'rename_codebase_failed');
+      return apiError(c, 500, 'Failed to rename codebase');
     }
   });
 

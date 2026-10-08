@@ -6,7 +6,14 @@ import { assertAbsoluteDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
 import { pool, getDialect } from './connection';
 import type { Codebase, CreateCodebaseInput, UpdateCodebaseInput } from '../schemas/codebase';
-import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
+import {
+  createLogger,
+  captureCodebaseRegistered,
+  getProjectStoragePaths,
+  isPathInside,
+  resolveProjectStorageKey,
+} from '@archon/paths';
+import { getWorktreeBase, toRepoPath } from '@archon/git';
 
 function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row: T): T {
   assertAbsoluteDefaultCwd(row.default_cwd, row.name);
@@ -184,6 +191,11 @@ export async function updateCodebase(
   const values: (string | null)[] = [];
   let paramIndex = 1;
 
+  if (data.name !== undefined) {
+    updates.push(`name = $${paramIndex++}`);
+    values.push(data.name);
+  }
+
   if (data.default_cwd !== undefined) {
     updates.push(`default_cwd = $${paramIndex++}`);
     values.push(data.default_cwd);
@@ -211,6 +223,80 @@ export async function updateCodebase(
   if ((result.rowCount ?? 0) === 0) {
     throw new CodebaseNotFoundError(target.id);
   }
+}
+
+export class CodebaseNameTakenError extends Error {
+  constructor(public codebaseName: string) {
+    super(`A project named "${codebaseName}" is already registered`);
+    this.name = 'CodebaseNameTakenError';
+  }
+}
+
+export class CodebaseStorageIdentityChangeError extends Error {
+  constructor(
+    public codebaseName: string,
+    public requestedName: string,
+    public currentPath: string,
+    public requestedPath: string
+  ) {
+    super(
+      `Renaming "${codebaseName}" to "${requestedName}" would move its Archon storage ` +
+        `(worktrees, state, logs, artifacts) from ${currentPath} to ${requestedPath}. ` +
+        'Choose a name that keeps the same storage location.'
+    );
+    this.name = 'CodebaseStorageIdentityChangeError';
+  }
+}
+
+/**
+ * Every Archon-managed location derived from a codebase's name. Storage and
+ * worktrees are resolved by separate functions that do not always agree (the
+ * worktree base also reads owner/repo from a path inside the workspaces tree),
+ * so a rename must leave both unchanged.
+ */
+function nameDerivedLocations(codebase: Codebase): string[] {
+  const storageRoot = getProjectStoragePaths(
+    resolveProjectStorageKey(codebase, codebase.default_cwd)
+  ).root;
+  if (codebase.kind === 'folder') return [storageRoot];
+  return [storageRoot, getWorktreeBase(toRepoPath(codebase.default_cwd), codebase.name).base];
+}
+
+/**
+ * Change a codebase's display name.
+ *
+ * The name doubles as the project's storage identity (see
+ * `resolveProjectStorageKey` and `getWorktreeBase`): worktrees, `$STATE_DIR`,
+ * logs and artifacts of future runs live under roots derived from it. A rename
+ * that would change any of them is refused rather than silently splitting the
+ * project across two trees. Names are not UNIQUE in the schema, but `findCodebaseByName` resolves
+ * them for `--project` and `/update-project`, so a duplicate is refused too.
+ */
+export async function renameCodebase(id: string, name: string): Promise<Codebase> {
+  const current = await getCodebase(id);
+  if (!current) throw new CodebaseNotFoundError(id);
+  if (current.name === name) return current;
+
+  const sameName = await findCodebaseByName(name);
+  if (sameName && sameName.id !== id) throw new CodebaseNameTakenError(name);
+
+  const currentPaths = nameDerivedLocations(current);
+  const requestedPaths = nameDerivedLocations({ ...current, name });
+  const moved = currentPaths.findIndex((path, i) => path !== requestedPaths[i]);
+  if (moved !== -1) {
+    throw new CodebaseStorageIdentityChangeError(
+      current.name,
+      name,
+      currentPaths[moved],
+      requestedPaths[moved]
+    );
+  }
+
+  await updateCodebase(current, { name });
+  const renamed = await getCodebase(id);
+  if (!renamed) throw new CodebaseNotFoundError(id);
+  getLog().info({ codebaseId: id, from: current.name, to: name }, 'db.codebase_renamed');
+  return renamed;
 }
 
 export async function listCodebases(): Promise<readonly Codebase[]> {

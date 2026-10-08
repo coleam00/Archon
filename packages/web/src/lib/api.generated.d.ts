@@ -1306,7 +1306,72 @@ export interface paths {
     };
     options?: never;
     head?: never;
-    patch?: never;
+    /**
+     * Rename a codebase
+     * @description Changes the display name. Refused with 409 when another codebase already uses the name, or when the new name would move the project storage (worktrees, state, logs, artifacts).
+     */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['RenameCodebaseBody'];
+        };
+      };
+      responses: {
+        /** @description Renamed codebase */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Codebase'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Name already used, or the rename would move project storage */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
     trace?: never;
   };
   '/api/codebases/base-branch': {
@@ -4046,6 +4111,9 @@ export interface components {
           path: string;
           base_branch?: string | null;
         };
+    RenameCodebaseBody: {
+      name: string;
+    };
     DeleteCodebaseResponse: {
       success: boolean;
     };
