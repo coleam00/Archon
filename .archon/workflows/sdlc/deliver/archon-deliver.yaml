@@ -321,9 +321,10 @@ nodes:
               Accepted work order:
               $INPUTS.work
 
-              When the correction is green, push its commits to the branch this
-              run is on. Push it explicitly by name; do not let git select an
-              upstream. Do not change the PR's draft state or edit the canonical
+              Commit the correction and push its commits to the branch this run
+              is on, whatever its green state: the following review reads the
+              pull request's remote head. Push it explicitly by name; do not let
+              git select an upstream. Do not change the PR's draft state or edit the canonical
               review comment; the following review owns that public verdict.
               Record the exact push target and a read-back of the remote ref in
               implementation.md; never record credentials.
