@@ -117,3 +117,11 @@ export {
   type ProviderDiagnostics,
   type ProviderModelList,
 } from './information';
+
+export {
+  CONFIG_STRING_NORMALIZATION_KEY,
+  configStringNormalizationSchema,
+  normalizeConfigString,
+  normalizedConfigString,
+  snapshotConfigSchema,
+} from './config-schema';

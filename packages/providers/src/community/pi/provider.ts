@@ -1,4 +1,9 @@
-import type { CredentialStatus } from '@archon/provider-contract';
+import { listPiModels } from './model-catalog';
+import type {
+  CredentialStatus,
+  ProviderDiagnostics,
+  ProviderModelList,
+} from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -567,6 +572,59 @@ async function createPiModelRuntime(
  * (no reuse) so concurrent calls don't collide.
  */
 export class PiProvider implements IAgentProvider {
+  async listModels(): Promise<ProviderModelList> {
+    return { models: (await listPiModels()).map(model => ({ id: model.ref, label: model.name })) };
+  }
+
+  async diagnose(
+    request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
+  ): Promise<ProviderDiagnostics> {
+    const checks: ProviderDiagnostics['checks'] = [];
+    try {
+      ensurePiPackageDirShim();
+      await import('@earendil-works/pi-coding-agent');
+      checks.push({ id: 'pi-sdk', label: 'Pi SDK', status: 'ok', message: 'Pi SDK loaded' });
+    } catch (error) {
+      return {
+        checks: [
+          {
+            id: 'pi-sdk',
+            label: 'Pi SDK',
+            status: 'fail',
+            message: `Pi SDK could not load: ${redactCredentialValues(error instanceof Error ? error.message : String(error), collectCredentialValues(process.env))}`,
+            remedy: 'Reinstall the Pi provider',
+          },
+        ],
+      };
+    }
+    const credential = await this.checkCredential({
+      ...request,
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined
+        )
+      ),
+      signal: new AbortController().signal,
+    });
+    checks.push({
+      id: 'pi-credentials',
+      label: 'Pi backend credentials',
+      status:
+        credential.state === 'usable'
+          ? 'ok'
+          : credential.state === 'not_checked'
+            ? 'skip'
+            : credential.state === 'check_failed'
+              ? 'fail'
+              : 'warn',
+      message: `Backend credential status: ${credential.state}${'evidence' in credential ? `: ${credential.evidence}` : ''}`,
+      ...(credential.state === 'usable'
+        ? {}
+        : { remedy: 'Configure a Pi model and its backend credentials' }),
+    });
+    return { checks };
+  }
+
   async resolveCredentialModel(
     request: Parameters<NonNullable<IAgentProvider['resolveCredentialModel']>>[0]
   ): Promise<string> {

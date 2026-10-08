@@ -51,12 +51,8 @@ import {
   type ChatPluginDescriptor,
 } from '@archon/chat-contract/descriptor';
 import { withPluginMutationLock } from './plugin-mutation-lock';
-import {
-  assertProviderRegistrationAllowed,
-  registerBuiltinProviders,
-  registerCommunityProviders,
-  getRegisteredProviders,
-} from '@archon/providers';
+import { assertProviderRegistrationAllowed, getRegisteredProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
 export interface PluginEnvironment {
   /** `ARCHON_HOME/plugins`, the directory forge discovery scans. */

@@ -80,7 +80,8 @@ mock.module('./event-emitter', () => ({
 // Bootstrap provider registry (executor calls isRegisteredProvider at workflow level)
 // ---------------------------------------------------------------------------
 
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 clearRegistry();
 registerBuiltinProviders();
 

@@ -54,12 +54,12 @@ if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
+import { registerProvider } from '@archon/providers';
 import {
   claimPiExtensionProcessError,
   registerBuiltinProviders,
   registerCommunityProviders,
-  registerProvider,
-} from '@archon/providers';
+} from '@archon/providers/in-process';
 import { getPluginsPath } from '@archon/paths';
 import { getVendorCatalog, loadProviderPlugins } from '@archon/core';
 import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';

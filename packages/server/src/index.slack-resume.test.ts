@@ -148,10 +148,12 @@ const mockLoadProviderPlugins = mock(
   async (_pluginsDir: string): Promise<ProviderRegistration[]> => [installedProvider]
 );
 mock.module('@archon/providers', () => ({
+  registerProvider: mockRegisterProvider,
+}));
+mock.module('@archon/providers/in-process', () => ({
   claimPiExtensionProcessError: (): boolean => false,
   registerBuiltinProviders: mockRegisterBuiltinProviders,
   registerCommunityProviders: mockRegisterCommunityProviders,
-  registerProvider: mockRegisterProvider,
 }));
 
 interface TestLogger {

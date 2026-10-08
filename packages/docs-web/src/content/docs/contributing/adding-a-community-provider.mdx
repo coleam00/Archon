@@ -65,10 +65,23 @@ parser, using `z.toJSONSchema(schema, { io: 'input' })` for Zod schemas. Set
 omit `additionalProperties`. Explicit `additionalProperties: false` still rejects
 unknown fields; `true` or a schema preserves allowed fields, including record keys.
 Snapshot projection derives its retained root fields from `snapshot.properties`.
+An explicit `additionalProperties: false` also rejects unknown snapshot fields.
+For snapshots that validate install settings before excluding them, use
+`snapshotConfigSchema(portableFields, localFields)` from `@archon/provider-contract`.
+It generates a strict input schema and marks the local fields `writeOnly: true`;
+newer hosts validate those fields before omitting them from the snapshot output.
+
+JSON Schema does not encode Zod string transforms. Use
+`normalizedConfigString(stringSchema, 'trim')` to trim a config string or
+`normalizedConfigString(stringSchema, 'slash-separated')` to trim the two sides of
+the first slash in a structured reference. These helpers generate the
+`x-archon-normalize` annotation and the matching in-process transform from one
+owner. Scoped process registration applies normalization after validation.
+
 
 Keep `configSchema` as a compatibility superset of every configuration accepted in
 any scope by older hosts, which use that one schema for install, run, and snapshot.
-Older hosts cannot apply scoped snapshot exclusion or recursive stripping. Providers
+Older hosts cannot apply scoped snapshot exclusion, recursive stripping, or these normalization annotations. Providers
 that require those semantics must raise their minimum compatible Archon version to
 one supporting scoped configuration; retaining `configSchema` alone does not provide
 that compatibility.

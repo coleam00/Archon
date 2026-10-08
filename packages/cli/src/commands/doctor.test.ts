@@ -42,7 +42,7 @@ import {
   type ProviderDeps,
 } from './doctor';
 import type { MergedConfig } from '@archon/core';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
 // doctor creates its logger on first use and keeps it; hand it one this file can observe.
 // Module scope, so the spy is in place before any test makes doctor log.
@@ -554,7 +554,7 @@ describe('checkAssistantLogin', () => {
   }
 
   it('checks only the configured Claude assistant and reports not checked', async () => {
-    const { ClaudeProvider } = await import('@archon/providers');
+    const { ClaudeProvider } = await import('@archon/providers/in-process');
     const check = spyOn(ClaudeProvider.prototype, 'checkCredential');
     try {
       const result = await checkAssistantLogin({ DEFAULT_AI_ASSISTANT: 'pi' }, async () => ({
@@ -572,7 +572,7 @@ describe('checkAssistantLogin', () => {
   it('loads the merged default assistant without consulting the Pi login', async () => {
     const core = await import('@archon/core');
     const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers');
+      await import('@archon/providers/in-process');
     registerBuiltinProviders();
     registerCommunityProviders();
     const load = spyOn(core, 'loadConfig').mockResolvedValue(config);
@@ -593,7 +593,7 @@ describe('checkAssistantLogin', () => {
   it('checks a Pi key supplied only by merged assistant config', async () => {
     const core = await import('@archon/core');
     const { registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers');
+      await import('@archon/providers/in-process');
     registerBuiltinProviders();
     registerCommunityProviders();
     const root = mkdtempSync(join(tmpdir(), 'doctor-pi-config-'));
@@ -637,7 +637,7 @@ describe('checkAssistantLogin', () => {
     const core = await import('@archon/core');
     const userDb = await import('@archon/core/db/users');
     const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers');
+      await import('@archon/providers/in-process');
     registerBuiltinProviders();
     registerCommunityProviders();
     const load = spyOn(core, 'loadConfig').mockResolvedValue({ ...config, assistant: 'pi' });
@@ -716,7 +716,7 @@ describe('checkAssistantLogin', () => {
     const core = await import('@archon/core');
     const userDb = await import('@archon/core/db/users');
     const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers');
+      await import('@archon/providers/in-process');
     registerBuiltinProviders();
     registerCommunityProviders();
     const lookupError = new Error('database unreachable');

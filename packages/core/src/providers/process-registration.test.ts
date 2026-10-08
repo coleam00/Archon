@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
 import { InvalidProviderRunConfigError } from '@archon/provider-contract';
 import { processProviderRegistration } from './process-registration';
+import { claudeDescriptor, codexDescriptor, piDescriptor } from '@archon/providers';
+import { parseClaudeConfigStrict } from '@archon/providers/claude/config';
+import { parseCodexConfigStrict } from '@archon/providers/codex/config';
+import { parsePiConfigStrict } from '@archon/providers/pi/config';
 import { descriptor, parseConfig } from './fixtures/process-provider-data';
 const argv = [process.execPath, 'fixture.ts'] as const;
 
@@ -208,3 +212,95 @@ test('scoped projection follows references and pattern-valued objects from a JSO
     });
   }
 });
+
+for (const { descriptor: maintained, raw, canonical, snapshot, discardedInvalid, inProcess } of [
+  {
+    descriptor: claudeDescriptor,
+    inProcess: parseClaudeConfigStrict,
+    raw: { model: '  sonnet  ', claudeBinaryPath: '  /binary  ', settingSources: ['project'] },
+    canonical: { model: 'sonnet', claudeBinaryPath: '/binary', settingSources: ['project'] },
+    snapshot: { model: 'sonnet' },
+    discardedInvalid: { claudeBinaryPath: ' ' },
+  },
+  {
+    descriptor: codexDescriptor,
+    inProcess: parseCodexConfigStrict,
+    raw: {
+      model: '  gpt-5  ',
+      codexBinaryPath: '  /binary  ',
+      modelReasoningEffort: 'high',
+      webSearchMode: 'live',
+      additionalDirectories: [' /repo '],
+    },
+    canonical: {
+      model: 'gpt-5',
+      codexBinaryPath: '/binary',
+      modelReasoningEffort: 'high',
+      webSearchMode: 'live',
+      additionalDirectories: [' /repo '],
+    },
+    snapshot: { model: 'gpt-5', modelReasoningEffort: 'high' },
+    discardedInvalid: { codexBinaryPath: ' ' },
+  },
+  {
+    descriptor: piDescriptor,
+    inProcess: parsePiConfigStrict,
+    raw: {
+      model: '  openrouter / qwen/qwen3-coder  ',
+      enableExtensions: false,
+      nodes: { plan: { interactive: true } },
+      extensionFlags: { label: ' keep spaces ' },
+    },
+    canonical: {
+      model: 'openrouter/qwen/qwen3-coder',
+      enableExtensions: false,
+      nodes: { plan: { interactive: true } },
+      extensionFlags: { label: ' keep spaces ' },
+    },
+    snapshot: {
+      model: 'openrouter/qwen/qwen3-coder',
+      enableExtensions: false,
+      nodes: { plan: { interactive: true } },
+      extensionFlags: { label: ' keep spaces ' },
+    },
+    discardedInvalid: { env: { TOKEN: 1 } },
+  },
+]) {
+  test(`${maintained.id} snapshots reject unknown settings and validate excluded local settings`, () => {
+    const registration = processProviderRegistration(JSON.parse(JSON.stringify(maintained)), argv);
+    for (const invalid of [{ unknown: true }, discardedInvalid]) {
+      expect(() => inProcess(invalid, 'snapshot')).toThrow(InvalidProviderRunConfigError);
+      expect(() => registration.parseConfig(invalid, 'snapshot')).toThrow(
+        InvalidProviderRunConfigError
+      );
+    }
+  });
+
+  test(`${maintained.id} process registration preserves canonical output in every scope`, () => {
+    const registration = processProviderRegistration(JSON.parse(JSON.stringify(maintained)), argv);
+    for (const scope of ['install', 'run', 'snapshot'] as const) {
+      const expected = scope === 'snapshot' ? snapshot : canonical;
+      expect(registration.parseConfig(raw, scope)).toEqual(expected);
+      expect(registration.parseConfig(raw, scope)).toEqual(inProcess(raw, scope));
+      expect(() => registration.parseConfig({ ...raw, unknown: true }, scope)).toThrow(
+        InvalidProviderRunConfigError
+      );
+    }
+    if (maintained.id === piDescriptor.id) {
+      const emptyRecords = { extensionFlags: {}, nodes: { plan: {} } };
+      for (const scope of ['install', 'run', 'snapshot'] as const) {
+        expect(registration.parseConfig(emptyRecords, scope)).toEqual(
+          inProcess(emptyRecords, scope)
+        );
+      }
+      const install = { ...raw, env: { TOKEN: 'private' }, maxConcurrent: 2 };
+      expect(registration.parseConfig(install, 'install')).toEqual({
+        ...canonical,
+        env: { TOKEN: 'private' },
+        maxConcurrent: 2,
+      });
+      expect(registration.parseConfig(install, 'snapshot')).toEqual(snapshot);
+      expect(() => registration.parseConfig(install, 'run')).toThrow(InvalidProviderRunConfigError);
+    }
+  });
+}
