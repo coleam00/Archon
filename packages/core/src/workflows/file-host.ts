@@ -7,8 +7,14 @@ import {
   commit,
   readJson,
   recoverBeforeRead,
+  listRuns,
   FileStoreUnsupportedError,
 } from '@archon/workflows/file-store';
+import {
+  isTerminalRunStatus,
+  RESUMABLE_WORKFLOW_STATUSES,
+  ownedWorktreeSchema,
+} from '@archon/workflows/schemas/workflow-run';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { codebaseRowSchema, type Codebase } from '../schemas/codebase';
@@ -20,6 +26,7 @@ import { createWorkflowOperations } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
+const worktreeReferenceSchema = ownedWorktreeSchema.pick({ envId: true }).loose();
 const codebasesSchema = z.array(
   codebaseRowSchema.extend({
     created_at: z.coerce.date(),
@@ -220,7 +227,27 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       isRunOwnedByThisProcess,
       isRunOwnerAnswering,
       reclaimRunWorktree: async (run, isolation) =>
-        (await import('../services/cleanup-service')).reclaimRunWorktree(run, isolation),
+        (await import('../services/cleanup-service')).reclaimRunWorktree(run, isolation, {
+          getCodebase: id => records.codebases.getCodebase(id),
+          getLiveRunOwningEnv: async id => {
+            const env = await records.isolation.getById(id);
+            const runs = await listRuns(root);
+            return (
+              runs
+                .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
+                .find(
+                  row =>
+                    (!isTerminalRunStatus(row.status) ||
+                      RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
+                    (row.metadata.isolation_env_id === id ||
+                      worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId ===
+                        id ||
+                      (row.codebase_id === env?.codebase_id &&
+                        row.working_path === env?.working_path))
+                ) ?? null
+            );
+          },
+        }),
       reclaimContainerEnv: async (id, isolation) =>
         (await import('../services/cleanup-service')).reclaimContainerEnv(id, isolation),
     }),
