@@ -30,6 +30,9 @@ import {
 } from './commit';
 
 const log = createLogger('file-store');
+const unsupportedTriggerAdmission = async (): Promise<never> => {
+  throw new FileStoreUnsupportedError('trigger admission');
+};
 export interface FileWorkflowStoreOptions {
   root: string;
   getCodebase?: IWorkflowStore['getCodebase'];
@@ -372,45 +375,19 @@ export async function createFileWorkflowStore(
           changes: { documents: { [path]: [...rows.filter(row => row !== prior), next] } },
         };
       }),
-    admitResourceStart: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    drainResourceStarts: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    acceptStartReceipt: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    getStartReceipt: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    listStartReceipts: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    listPendingStartBindings: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    getResourceStartRequest: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    listQueuedResourceStartsForHost: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    withdrawQueuedResourceStart: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    claimStartBindingPreparation: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    completeStartBindingPreparation: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    failStartBindingPreparation: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
-    resetStartBindingPreparation: async () => {
-      throw new FileStoreUnsupportedError('trigger admission');
-    },
+    admitResourceStart: unsupportedTriggerAdmission,
+    drainResourceStarts: unsupportedTriggerAdmission,
+    acceptStartReceipt: unsupportedTriggerAdmission,
+    getStartReceipt: unsupportedTriggerAdmission,
+    listStartReceipts: unsupportedTriggerAdmission,
+    listPendingStartBindings: unsupportedTriggerAdmission,
+    getResourceStartRequest: unsupportedTriggerAdmission,
+    listQueuedResourceStartsForHost: unsupportedTriggerAdmission,
+    withdrawQueuedResourceStart: unsupportedTriggerAdmission,
+    claimStartBindingPreparation: unsupportedTriggerAdmission,
+    completeStartBindingPreparation: unsupportedTriggerAdmission,
+    failStartBindingPreparation: unsupportedTriggerAdmission,
+    resetStartBindingPreparation: unsupportedTriggerAdmission,
   };
   return store;
 }

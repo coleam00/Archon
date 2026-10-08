@@ -5,8 +5,6 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 
 export async function createCliWorkflowHost(executesWorkflow = false): Promise<WorkflowHost> {
   if ((await loadStoreSelection()) === 'files') {
-    const { assertFileStoreConfiguration } = await import('@archon/core/config/store-selection');
-    await assertFileStoreConfiguration();
     if (executesWorkflow) {
       const { initializeWorkflowGitHubAppAuth } =
         await import('@archon/core/workflows/store-adapter');
