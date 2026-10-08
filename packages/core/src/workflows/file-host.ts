@@ -27,7 +27,7 @@ const codebasesSchema = z.array(
     envVars: z.record(z.string(), z.string()).default({}),
   })
 );
-const isolationSchema = z.array(
+export const isolationSchema = z.array(
   z.object({
     id: z.string(),
     codebase_id: z.string(),
@@ -41,7 +41,7 @@ const isolationSchema = z.array(
     created_by_platform: z.string().nullable(),
     created_by_user_id: z.string().nullable(),
     metadata: z.record(z.string(), z.unknown()),
-  } satisfies { [K in keyof IsolationEnvironmentRow]: z.ZodType<IsolationEnvironmentRow[K]> })
+  })
 );
 export async function createFileWorkflowHost(root: string): Promise<WorkflowHost> {
   await assertFileStoreConfiguration();

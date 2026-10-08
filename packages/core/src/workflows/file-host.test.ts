@@ -1,15 +1,20 @@
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, expectTypeOf, test } from 'bun:test';
+import type { z } from 'zod';
+import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { toBranchName } from '@archon/git';
-import { createFileWorkflowHost } from './file-host';
+import { createFileWorkflowHost, isolationSchema } from './file-host';
 import { FileStoreUnsupportedError, commit } from '@archon/workflows/file-store';
 const roots = trackTempRoots();
 const prior = { ...process.env };
 afterEach(() => {
   process.env = { ...prior };
+});
+test('file isolation records conform to the isolation store row', () => {
+  expectTypeOf<z.output<typeof isolationSchema>[number]>().toEqualTypeOf<IsolationEnvironmentRow>();
 });
 test('file host records persist across hosts and released worktrees fence pending claims', async () => {
   const home = roots(await mkdtemp(join(tmpdir(), 'file-host-')));
