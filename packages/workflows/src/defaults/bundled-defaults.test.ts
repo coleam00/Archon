@@ -227,6 +227,10 @@ describe('bundled-defaults', () => {
         expect(content).toContain(
           'where the project has them, its `architecture.md`, its `engineering.md`, and its direction document'
         );
+        // A missing conventions file is absent, not something to hunt the tree for.
+        expect(content).toContain(
+          'treat a file that is not there as absent rather than searching for it'
+        );
         // One boundary decides whether a defect blocks now or becomes a filed issue:
         // anything that touches the change is a finding, only unrelated work is a
         // discovery. Every reviewer states it in the same words.

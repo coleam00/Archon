@@ -8,6 +8,7 @@ const workflowRoot = resolve(import.meta.dir, '../../../../.archon/workflows/sdl
 const triageScript = join(workflowRoot, 'triage', 'scripts', 'verdict.ts');
 const shipOutcomeScript = join(workflowRoot, 'ship', 'scripts', 'outcome.ts');
 const intakeScript = join(workflowRoot, 'lifecycle', 'scripts', 'select-target.py');
+const closeTargetScript = join(workflowRoot, 'lifecycle', 'scripts', 'close-target.py');
 const holdsScript = join(workflowRoot, 'merge-queue', 'scripts', 'publish-holds.ts');
 const publishPrScript = join(workflowRoot, 'pr', 'scripts', 'publish-pr.ts');
 
@@ -41,6 +42,9 @@ else if (args[0] === 'issue' && args[1] === 'edit') {
   state.labels = [...new Map([...state.labels.filter((label:string) => !removed.includes(label.toLowerCase())),...added].map((label:string) => [label.toLowerCase(),label])).values()];
   writeFileSync(statePath, JSON.stringify(state));
 }
+else if (args[0] === 'issue' && args[1] === 'view') console.log(JSON.stringify({state: process.env.GH_ISSUE_STATE ?? 'OPEN'}));
+else if (args[0] === 'issue' && args[1] === 'close') {}
+else if (args[0] === 'pr' && args[1] === 'view') console.log(JSON.stringify({state: JSON.parse(process.env.GH_PR_STATES ?? '{}')[args[2]] ?? 'OPEN'}));
 else if (args[0] === 'issue') {
   // Like gh: the listing is newest first and --limit truncates it.
   const issues = JSON.parse(process.env.GH_ISSUES ?? '[]');
@@ -490,6 +494,82 @@ describe('lifecycle intake dependencies and claims', () => {
     // gh lists newest first; the old script asked for 100 and took the lowest of those.
     const many = Array.from({ length: 150 }, (_, index) => issue(150 - index));
     expect(intake(many)).toMatchObject({ target: 'https://github.com/owner/repo/issues/1' });
+  });
+});
+
+describe('lifecycle closes the issue it worked after a confirmed merge', () => {
+  const pr = 'https://github.com/owner/repo/pull/9';
+  const close = async (
+    target: string,
+    values: Record<string, string> = {}
+  ): Promise<{ output: Record<string, unknown>; calls: string[][] }> => {
+    const log = join(root, `close-${crypto.randomUUID()}.jsonl`);
+    await writeFile(log, '');
+    const result = runPython(closeTargetScript, {
+      INPUTS_TARGET: target,
+      INPUTS_PRS: JSON.stringify([pr]),
+      GH_PR_STATES: JSON.stringify({ [pr]: 'MERGED' }),
+      GH_LOG: log,
+      ...values,
+    });
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    const calls = (await readFile(log, 'utf8'))
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map(line => (JSON.parse(line) as { args: string[] }).args);
+    return { output: JSON.parse(stdout(result)) as Record<string, unknown>, calls };
+  };
+  const closes = (calls: string[][]): string[][] =>
+    calls.filter(args => args[0] === 'issue' && args[1] === 'close');
+
+  test('closes an open issue once its Relates-to pull request merged', async () => {
+    const { output, calls } = await close('https://github.com/owner/repo/issues/4');
+    expect(output).toMatchObject({ closed: true });
+    expect(closes(calls)).toHaveLength(1);
+    expect(closes(calls)[0]?.slice(0, 5)).toEqual(['issue', 'close', '4', '--repo', 'owner/repo']);
+    expect(closes(calls)[0]?.join(' ')).toContain(pr);
+  });
+
+  test('accepts the short reference forms a caller may pass as the target', async () => {
+    for (const [target, issue] of [
+      ['#4', ['4']],
+      ['4', ['4']],
+      ['owner/repo#4', ['4', '--repo', 'owner/repo']],
+    ] as const) {
+      const { output, calls } = await close(target);
+      expect(output).toMatchObject({ closed: true });
+      expect(closes(calls)[0]?.slice(2, 2 + issue.length)).toEqual([...issue]);
+    }
+  });
+
+  test('never closes the issue while any delivered pull request is unmerged', async () => {
+    const other = 'https://github.com/owner/repo/pull/10';
+    const { output, calls } = await close('https://github.com/owner/repo/issues/4', {
+      INPUTS_PRS: JSON.stringify([pr, other]),
+      GH_PR_STATES: JSON.stringify({ [pr]: 'MERGED', [other]: 'OPEN' }),
+    });
+    expect(output).toMatchObject({ closed: false });
+    expect(output.reason).toContain(other);
+    expect(closes(calls)).toHaveLength(0);
+  });
+
+  test('leaves an already closed issue alone', async () => {
+    const { output, calls } = await close('https://github.com/owner/repo/issues/4', {
+      GH_ISSUE_STATE: 'CLOSED',
+    });
+    expect(output).toMatchObject({ closed: false, reason: 'issue is already closed' });
+    expect(closes(calls)).toHaveLength(0);
+  });
+
+  test('a work order, a pull request target or no delivery closes nothing', async () => {
+    for (const target of ['Add a CSV export to the reports page', pr]) {
+      const { output, calls } = await close(target);
+      expect(output).toMatchObject({ closed: false, reason: 'target is not an issue reference' });
+      expect(calls).toHaveLength(0);
+    }
+    const none = await close('#4', { INPUTS_PRS: '[]' });
+    expect(none.output).toMatchObject({ closed: false });
+    expect(none.calls).toHaveLength(0);
   });
 });
 

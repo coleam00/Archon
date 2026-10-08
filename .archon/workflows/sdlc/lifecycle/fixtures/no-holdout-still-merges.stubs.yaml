@@ -159,9 +159,10 @@ merge:
   queued: []
   prior_base_sha: "fixture-base"
   summary: "stub: merged"
+close-target: { closed: true, reason: "stub: closed after merge" }
 fixture:
   expect: completed
-  reached: [runtime__gate-verified, qualify, discoveries, merge]
+  reached: [runtime__gate-verified, qualify, discoveries, merge, close-target]
   resolved-text-contains:
     qualify: 'Configured holdout scenario: ""'
   inputs:

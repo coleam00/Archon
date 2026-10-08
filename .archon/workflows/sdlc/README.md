@@ -153,7 +153,9 @@ direction document. Prompts that write code read both before coding, and every
 review prompt reads them before judging: they are the project's own values, so a
 taste finding cites one of them or is left out, and an owner declines a finding
 by the same standard. The check is conditional on the file existing, so the pack
-stays portable: a repository without one loses nothing. A new pack workflow that
+stays portable: a repository without one loses nothing. Prompts look in the named
+places once and treat a missing file as absent; searching the tree for one costs
+turns and finds nothing. A new pack workflow that
 writes or judges code carries the same line.
 
 ## A node's streams are the operator's channel

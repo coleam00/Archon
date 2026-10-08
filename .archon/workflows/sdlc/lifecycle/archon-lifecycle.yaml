@@ -73,6 +73,13 @@ inputs:
       Forwarded through ship and any repair delivery. The merge queue requires
       validation evidence, so this composition defaults to always; auto limits
       final local validation to fork pull requests.
+  close_target:
+    default: 'true'
+    description: >-
+      "true" closes the target issue after every pull request delivered for it is
+      confirmed merged, when the issue is still open (a `Relates to #N` merge
+      leaves it open, and issues that depend on it would wait forever). "false"
+      leaves the issue for a human.
   deploy:
     default: ''
     description: >-
@@ -270,6 +277,25 @@ nodes:
       required_checks: "$INPUTS.required_checks"
       publish_holds: "$INPUTS.publish_holds"
       evidence: "$selected.output.evidence"
+
+  # A merged `Relates to #N` pull request leaves its issue open, and every issue
+  # that depends on it then waits. This run worked the issue, so once GitHub
+  # confirms its own pull requests merged, the script closes the issue if open.
+  - id: close-target
+    script: close-target
+    runtime: uv
+    mutates_checkout: false
+    depends_on: [intake, selected, merge]
+    when: "$merge.output.merged == true && $INPUTS.close_target == 'true'"
+    with:
+      target: "$intake.output.target"
+      prs: "$selected.output.prs"
+    output_format:
+      type: object
+      properties:
+        closed: { type: boolean }
+        reason: { type: string }
+      required: [closed, reason]
 
   # Merging is not shipping. With deployment inputs set, a confirmed merge rolls
   # the default branch onto the running service and reads the revision back.

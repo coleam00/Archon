@@ -23,6 +23,13 @@ safely unless every state is mapped because it cannot reliably mark all touched 
 explicit targets still work with `{}`. Set `publish=true` to apply the mapped
 triage state. The pack neither requires nor treats an `archon-*` prefix specially.
 
+**Closing the worked issue.** A pull request linked with `Relates to #N` leaves
+issue N open when it merges, so issues that depend on it would wait forever. After
+the merge queue reports a merge, `close-target` reads back from GitHub that every
+pull request delivered for the target merged and that the issue is still open, then
+closes it with a comment naming them. Targets that are not issues are left alone.
+Set `close_target=false` to leave the issue for a human.
+
 Runtime and holdout scenarios are caller-supplied project evidence; a project may
 use its own runtime host or a source-provenance adapter. The workflow requires
 evidence that the system being verified is the delivered revision. An application
