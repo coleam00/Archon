@@ -140,7 +140,6 @@ async function registerProviders(): Promise<void> {
   registerBuiltinProviders();
   registerCommunityProviders();
   const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
-  const { getPluginsPath } = await import('@archon/paths');
   for (const registration of await loadProviderPlugins(getPluginsPath()))
     registerProvider(registration);
   providersRegistered = true;
@@ -150,11 +149,13 @@ async function loadRoute<T>(
   loader: () => Promise<T>,
   options: { providers?: false; database?: boolean } = {}
 ): Promise<T> {
-  const [{ setPlatformPolicies }, { bundledPlatformPolicies }] = await Promise.all([
-    import('@archon/core/platforms/registry'),
-    import('@archon/adapters/platform-policies'),
-  ]);
-  setPlatformPolicies(bundledPlatformPolicies);
+  const [{ setPlatformPolicies }, { defaultPlatformPolicies }, { loadPlatformPolicies }] =
+    await Promise.all([
+      import('@archon/core/platforms/registry'),
+      import('@archon/adapters/platform-policies'),
+      import('@archon/core/platforms/chat-plugins'),
+    ]);
+  setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   if (options.providers !== false) await registerProviders();
   const route = await loader();
   if (options.database) databaseRouteLoaded = true;
@@ -267,9 +268,7 @@ async function main(): Promise<number> {
   if (isVersionRequest(args)) {
     try {
       refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
-      const { versionCommand } = await loadRoute(() => import('./commands/version'), {
-        providers: false,
-      });
+      const { versionCommand } = await import('./commands/version');
       await versionCommand();
       return 0;
     } finally {
@@ -606,9 +605,7 @@ async function main(): Promise<number> {
       }
 
       case 'version': {
-        const { versionCommand } = await loadRoute(() => import('./commands/version'), {
-          providers: false,
-        });
+        const { versionCommand } = await import('./commands/version');
         await versionCommand();
         break;
       }
@@ -1290,9 +1287,7 @@ async function main(): Promise<number> {
       case 'serve': {
         const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
-        const { serveCommand } = await loadRoute(() => import('./commands/serve'), {
-          database: !downloadOnly,
-        });
+        const { serveCommand } = await import('./commands/serve');
         return await serveCommand({ port: servePort, downloadOnly });
       }
 

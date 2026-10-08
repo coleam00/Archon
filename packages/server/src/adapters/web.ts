@@ -2,6 +2,7 @@
  * Web platform adapter implementing IPlatformAdapter with SSE stream management.
  * Bridge between the orchestrator and the React frontend via Server-Sent Events.
  */
+import { webPolicy } from '@archon/adapters/web/policy';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
 import type { PlatformStructuredEvent } from '@archon/workflows/deps';
 import { toolCallDisplayName } from '@archon/provider-contract';
@@ -195,7 +196,7 @@ export class WebAdapter implements IPlatformAdapter {
   }
 
   getPlatformType(): string {
-    return 'web';
+    return webPolicy.id;
   }
 
   async start(): Promise<void> {

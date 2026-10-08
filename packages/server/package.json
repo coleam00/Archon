@@ -29,6 +29,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@archon/chat-contract": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0"
   },

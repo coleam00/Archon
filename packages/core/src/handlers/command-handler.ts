@@ -1396,6 +1396,9 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
             }
             msg += `\n  • ${String(breakdown.active)} active`;
           }
+          for (const env of breakdown.activeEnvs) {
+            if (env.reason) msg += `\n  • ${env.branchName}: ${env.reason}`;
+          }
         } catch (error) {
           // Don't fail status if breakdown fails
           const err = error as Error;

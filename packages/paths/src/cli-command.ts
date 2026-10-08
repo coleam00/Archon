@@ -22,7 +22,7 @@ export function archonCliInvocation(): [string, ...string[]] {
 /**
  * Publish the host command bundled workflow scripts use to call the CLI.
  *
- * The CLI and in-process server publish this at startup; the standalone server
+ * The CLI and source server publish this at startup; the standalone server
  * entry restores the command inherited from its launching CLI. The value is a
  * JSON string array. A container execution does not inherit it: the host's
  * executable path is not assumed to exist there.

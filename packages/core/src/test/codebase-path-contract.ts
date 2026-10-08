@@ -7,7 +7,7 @@ import { setPlatformPolicies } from '../platforms/registry';
 import type { IDatabase } from '../db/adapters/types';
 
 export async function verifyCodebasePathContract(db: IDatabase): Promise<void> {
-  setPlatformPolicies([]);
+  setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
   // Registration loads configuration, so the contract registers providers as a host does.
   registerBuiltinProviders();
   registerCommunityProviders();

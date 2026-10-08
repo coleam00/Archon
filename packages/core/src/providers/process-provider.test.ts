@@ -11,9 +11,14 @@ import { processProviderRegistration } from './process-registration';
 import { descriptor, chunks } from './fixtures/process-provider-data';
 
 const processLog = paths.createLogger('core.provider-process');
+const providerLog = paths.createLogger(`provider.${descriptor.id}`);
 const realCreateLogger = paths.createLogger;
 spyOn(paths, 'createLogger').mockImplementation(module =>
-  module === 'core.provider-process' ? processLog : realCreateLogger(module)
+  module === 'core.provider-process'
+    ? processLog
+    : module === `provider.${descriptor.id}`
+      ? providerLog
+      : realCreateLogger(module)
 );
 
 const fixture = join(import.meta.dir, 'fixtures/process-provider.ts');
@@ -87,31 +92,31 @@ test('process conforms, including real background state and typed failure', asyn
   }
 });
 
-// Windows adds variables it needs to start a process (SYSTEMROOT and others) to a
-// minimal environment, so the child's environment is checked for what the shared
-// builder decides, not for exact equality.
-test.each(['host', 'container'] as const)('process uses the shared %s environment', async kind => {
-  const options = {
-    env: { PROCESS_CANARY: 'request-value' },
-    execContext: kind === 'host' ? { kind } : { kind, containerId: 'test' },
-  };
-  process.env.PROCESS_HOST_CANARY = 'host-value';
-  try {
-    const result = await collect(provider('env').sendQuery('turn', tmpdir(), undefined, options));
-    expect(result[0].type).toBe('result');
-    if (result[0].type !== 'result') throw new Error('missing result');
-    const expected = buildProviderSubprocessEnv(options);
-    const actual = JSON.parse(result[0].text ?? '{}') as Record<string, unknown>;
-    const missing = Object.entries(expected).filter(
-      ([key, value]) => value !== undefined && actual[key] !== value
-    );
-    expect(missing.map(([key]) => key)).toEqual([]);
-    expect(actual.PROCESS_CANARY).toBe('request-value');
-    expect('PROCESS_HOST_CANARY' in actual).toBe(kind === 'host');
-  } finally {
-    delete process.env.PROCESS_HOST_CANARY;
+test.each(['host', 'container'] as const)(
+  'provider receives the %s execution environment',
+  async kind => {
+    const options = {
+      env: { PROCESS_CANARY: 'request-value' },
+      execContext: kind === 'host' ? { kind } : { kind, containerId: 'test' },
+    };
+    process.env.PROCESS_HOST_CANARY = 'host-value';
+    try {
+      const result = await collect(provider('env').sendQuery('turn', tmpdir(), undefined, options));
+      expect(result[0].type).toBe('result');
+      if (result[0].type !== 'result') throw new Error('missing result');
+      const expected = kind === 'container' ? options.env : buildProviderSubprocessEnv(options);
+      const actual = JSON.parse(result[0].text ?? '{}') as Record<string, unknown>;
+      const missing = Object.entries(expected).filter(
+        ([key, value]) => value !== undefined && actual[key] !== value
+      );
+      expect(missing.map(([key]) => key)).toEqual([]);
+      expect(actual.PROCESS_CANARY).toBe('request-value');
+      expect('PROCESS_HOST_CANARY' in actual).toBe(kind === 'host');
+    } finally {
+      delete process.env.PROCESS_HOST_CANARY;
+    }
   }
-});
+);
 
 test(
   'cancel kills the child tree even while the consumer is suspended',
@@ -256,7 +261,7 @@ test('abort while a settled child is closing does not deliver settled', async ()
   }
 });
 
-test.each(['turn', 'credential', 'model'] as const)(
+test.each(['turn', 'credential', 'model', 'diagnose', 'models'] as const)(
   'live transport EOF terminates the %s process',
   async operation => {
     const directory = mkdtempSync(join(tmpdir(), 'archon-provider-eof-'));
@@ -273,7 +278,11 @@ test.each(['turn', 'credential', 'model'] as const)(
           ? collect(runtime.sendQuery('turn', tmpdir()))
           : operation === 'credential'
             ? runtime.checkCredential({ env: {}, signal: new AbortController().signal })
-            : runtime.resolveCredentialModel?.({ cwd: tmpdir() });
+            : operation === 'model'
+              ? runtime.resolveCredentialModel?.({ cwd: tmpdir() })
+              : operation === 'diagnose'
+                ? runtime.diagnose?.({})
+                : runtime.listModels?.();
       await expect(request).rejects.toBeInstanceOf(ProviderPluginExitedError);
       expect(watchdogFired).toBe(false);
       expect(alive(Number(readFileSync(file, 'utf8')))).toBe(false);
@@ -312,6 +321,102 @@ test('credential crash diagnostics withhold short custom credential values', asy
     expect(failure.exitCode).toBe(7);
     expect(failure.message).not.toContain('§');
     expect(JSON.stringify(debug.mock.calls)).not.toContain('§');
+  } finally {
+    debug.mockRestore();
+  }
+});
+
+test('container request env does not replace the plugin host environment', async () => {
+  process.env.PROCESS_HOST_CANARY = 'host-value';
+  try {
+    const result = await collect(
+      provider('plugin-env').sendQuery('turn', tmpdir(), undefined, {
+        execContext: { kind: 'container', containerId: 'test' },
+        env: { PROCESS_CANARY: 'container-value', PATH: 'container-path' },
+      })
+    );
+    expect(result[0].type).toBe('result');
+    if (result[0].type !== 'result') throw new Error('missing result');
+    expect(JSON.parse(result[0].text ?? '{}')).toEqual({
+      host: 'host-value',
+      path: process.env.PATH,
+    });
+  } finally {
+    delete process.env.PROCESS_HOST_CANARY;
+  }
+});
+
+test('provider logs preserve severity and withhold arbitrary content', async () => {
+  const info = spyOn(providerLog, 'info').mockImplementation(() => {});
+  const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
+  const previous = process.env.CONTAINER_TOKEN;
+  process.env.CONTAINER_TOKEN = 'host-credential';
+  try {
+    await collect(
+      provider('logs').sendQuery(
+        'private message container-credential\nsecond private line',
+        tmpdir(),
+        undefined,
+        {
+          execContext: { kind: 'container', containerId: 'test' },
+          env: {
+            CONTAINER_TOKEN: 'container-credential',
+            CUSTOM_AUTH: '§',
+            NUMERIC_TOKEN: '12345678',
+          },
+          systemPrompt: 'private system guidance',
+          protectedEnvKeys: ['CUSTOM_AUTH'],
+        }
+      )
+    );
+    expect(warn.mock.calls).toEqual([[{}, 'provider.plugin.log']]);
+    expect(info.mock.calls).toEqual([]);
+  } finally {
+    info.mockRestore();
+    warn.mockRestore();
+    if (previous === undefined) delete process.env.CONTAINER_TOKEN;
+    else process.env.CONTAINER_TOKEN = previous;
+  }
+});
+
+test('information hooks round-trip through fresh processes and close them', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'archon-provider-information-'));
+  try {
+    const file = join(directory, 'pid');
+    const runtime = provider('record-pid', file);
+    expect(
+      await runtime.diagnose?.({ assistantConfig: { model: 'fixture/model', omitted: undefined } })
+    ).toEqual({
+      checks: [
+        {
+          id: 'config',
+          label: 'Configuration',
+          status: 'ok',
+          message: 'Configuration inspected',
+          remedy: 'Select a model',
+        },
+      ],
+    });
+    const firstPid = Number(readFileSync(file, 'utf8'));
+    expect(alive(firstPid)).toBe(false);
+    expect(await runtime.listModels?.()).toEqual({
+      models: [{ id: 'fixture/model', label: 'Fixture model' }, { id: 'fixture/other' }],
+    });
+    const secondPid = Number(readFileSync(file, 'utf8'));
+    expect(secondPid).not.toBe(firstPid);
+    expect(alive(secondPid)).toBe(false);
+  } finally {
+    await removeTempTree(directory);
+  }
+});
+
+test('diagnostic hook errors withhold plugin prose and stderr', async () => {
+  const debug = spyOn(processLog, 'debug').mockImplementation(() => {});
+  try {
+    await expect(provider('information-crash').diagnose?.({})).rejects.toThrow(
+      'request failed (RPC -32603)'
+    );
+    expect(JSON.stringify(debug.mock.calls)).not.toContain('private message and token');
   } finally {
     debug.mockRestore();
   }

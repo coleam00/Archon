@@ -8,7 +8,7 @@
  * limit. Git's own credential setup applies to its calls; the raw manifest read
  * is unauthenticated, so a private repository cannot be installed.
  *
- * - `kind: forge` or `provider`: the executable comes from the release assets and lands in
+ * - `kind: forge`, `provider`, or `chat`: the executable comes from the release assets and lands in
  *   the plugins directory. No `@tag` means the latest release.
  * - `kind: workflow-pack`: the tag, or the default branch head, is fetched with
  *   git at depth 1 and the plugin directory of that commit becomes one installed
@@ -23,11 +23,11 @@ import {
   pluginReleaseAsset,
   isBinaryReceipt,
   isProviderReceipt,
+  isChatReceipt,
   isPluginPathSegment,
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
   pluginReceiptSchema,
-  type ForgeManifest,
   type ProviderManifest,
   type PluginManifest,
   type PluginReceipt,
@@ -44,6 +44,12 @@ import {
 import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-plugin';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
+import { inspectChatPlugin } from './inspect-chat-plugin';
+import { publishChatPlugin } from './publish-chat-plugin';
+import {
+  RESERVED_CHAT_PLATFORMS,
+  type ChatPluginDescriptor,
+} from '@archon/chat-contract/descriptor';
 import { withPluginMutationLock } from './plugin-mutation-lock';
 import {
   assertProviderRegistrationAllowed,
@@ -79,13 +85,15 @@ interface PluginRef {
  * files are release assets, so it always resolves to a tag; a pack may resolve to the
  * default branch head.
  */
+interface ResolvedBinarySource {
+  kind: Exclude<PluginManifest['kind'], 'workflow-pack'>;
+  tag: string;
+  commit: string;
+  manifest: Exclude<PluginManifest, WorkflowPackManifest>;
+}
+
 type ResolvedSource =
-  | {
-      kind: 'forge' | 'provider';
-      tag: string;
-      commit: string;
-      manifest: ForgeManifest | ProviderManifest;
-    }
+  | ResolvedBinarySource
   | { kind: 'workflow-pack'; tag?: string; commit: string; manifest: WorkflowPackManifest };
 
 function resolved(
@@ -240,7 +248,8 @@ async function resolveSource(
     return resolved(tag, commit, await fetchManifest(ref, commit, rawUrl));
   };
   if (ref.tag) return atTag(ref.tag);
-  if (kind === 'forge' || kind === 'provider') return atTag(await latestReleaseTag(ref, githubUrl));
+  if (kind !== undefined && kind !== 'workflow-pack')
+    return atTag(await latestReleaseTag(ref, githubUrl));
   const commit = await resolveHeadCommit(ref, githubUrl);
   const manifest = await fetchManifest(ref, commit, rawUrl);
   if (manifest.kind !== 'workflow-pack') return atTag(await latestReleaseTag(ref, githubUrl));
@@ -292,9 +301,25 @@ async function inspectInstallableProvider(
   return descriptor;
 }
 
+async function inspectInstallableChat(
+  stagedBinary: string,
+  receipts: readonly PluginReceipt[],
+  id: string
+): Promise<ChatPluginDescriptor> {
+  const descriptor = await inspectChatPlugin(stagedBinary);
+  const owner =
+    RESERVED_CHAT_PLATFORMS.get(descriptor.id) ??
+    receipts.find(
+      receipt =>
+        isChatReceipt(receipt) && receipt.id !== id && receipt.descriptor.id === descriptor.id
+    )?.id;
+  if (owner) throw new Error(`Chat platform ${descriptor.id}: ${id} collides with ${owner}`);
+  return descriptor;
+}
+
 async function installBinaryPlugin(
   ref: PluginRef,
-  source: Extract<ResolvedSource, { kind: 'forge' | 'provider' }>,
+  source: ResolvedBinarySource,
   receipts: PluginReceipt[],
   previous: PluginReceipt | undefined,
   env: PluginEnvironment
@@ -347,7 +372,9 @@ async function installBinaryPlugin(
     const descriptor =
       manifest.kind === 'provider'
         ? await inspectInstallableProvider(stagedBinary, manifest, receipts, ref.id)
-        : undefined;
+        : manifest.kind === 'chat'
+          ? await inspectInstallableChat(stagedBinary, receipts, ref.id)
+          : undefined;
     const receipt = pluginReceiptSchema.parse({
       schemaVersion: 1,
       id: ref.id,
@@ -359,16 +386,29 @@ async function installBinaryPlugin(
       ...(descriptor ? { descriptor } : {}),
     });
     await writeFile(stagedReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
-    // Receipt first: if the binary rename then fails, the receipt still owns the
-    // name and `update` or `remove` can recover. The other order could strand a
-    // binary no receipt owns, which every later install would refuse to replace.
-    await rename(stagedReceipt, receiptFile);
-    await rename(stagedBinary, target);
+    if (manifest.kind === 'chat') {
+      await publishChatPlugin({
+        stagedReceipt,
+        receiptFile,
+        stagedBinary,
+        target,
+        previousFiles:
+          previous && isBinaryReceipt(previous)
+            ? previous.files.map(file => join(env.pluginsDir, file.path))
+            : [],
+      });
+    } else {
+      // Receipt first: if the binary rename then fails, the receipt still owns the
+      // name and `update` or `remove` can recover. The other order could strand a
+      // binary no receipt owns, which every later install would refuse to replace.
+      await rename(stagedReceipt, receiptFile);
+      await rename(stagedBinary, target);
+    }
   } finally {
     await rm(stagedBinary, { force: true });
     await rm(stagedReceipt, { force: true });
   }
-  if (previous && isBinaryReceipt(previous)) {
+  if (manifest.kind !== 'chat' && previous && isBinaryReceipt(previous)) {
     for (const file of previous.files) {
       if (file.path !== fileName) await rm(join(env.pluginsDir, file.path), { force: true });
     }
@@ -679,8 +719,6 @@ async function installPlugin(
     throw new Error(`${ref.id} is not installed. Use: archon plugin install ${ref.id}`);
   }
 
-  // Every check below runs before anything is written, so any failure leaves
-  // the previous install exactly as it was.
   const source = await resolveSource(ref, previous?.manifest.kind, env);
   if (previous && previous.manifest.kind !== source.kind) {
     throw new Error(

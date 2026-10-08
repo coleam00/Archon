@@ -59,6 +59,7 @@ export async function isolationListCommand(): Promise<void> {
       console.log(`  ${env.branch_name ?? env.workflow_id}`);
       console.log(`    Path: ${env.working_path}`);
       console.log(`    Type: ${env.workflow_type} | Platform: ${platform} | Last activity: ${age}`);
+      if (env.cleanupSkipReason) console.log(`    Cleanup skipped: ${env.cleanupSkipReason}`);
     }
   }
 
@@ -99,9 +100,17 @@ export async function isolationListCommand(): Promise<void> {
  */
 export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
   // Reconcile ghosts via the operations layer
-  const { ghostsReconciled } = await listEnvironments();
+  const { ghostsReconciled, codebases } = await listEnvironments();
   if (ghostsReconciled > 0) {
     console.log(`Reconciled ${String(ghostsReconciled)} ghost environment(s) (missing from disk).`);
+  }
+
+  for (const codebase of codebases) {
+    for (const env of codebase.environments) {
+      if (env.cleanupSkipReason) {
+        console.log(`Skipped: ${env.branch_name ?? env.workflow_id} (${env.cleanupSkipReason})`);
+      }
+    }
   }
 
   console.log(`Finding environments with no activity for ${String(daysStale)}+ days...`);
