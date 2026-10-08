@@ -572,11 +572,17 @@ export class IsolationResolver {
       if (!isolatedEnv.metadata.adopted) {
         // Clean up the orphaned worktree — best-effort, don't mask the original error
         try {
-          await this.provider.destroy(isolatedEnv.workingPath, {
+          const result = await this.provider.destroy(isolatedEnv.workingPath, {
             canonicalRepoPath: canonicalPath,
+            creationId: isolatedEnv.metadata.creationId,
             branchName: isolatedEnv.branchName,
             force: true,
           });
+          if (!result.worktreeRemoved || !result.directoryClean) {
+            throw new Error(
+              `Worktree cleanup incomplete at ${isolatedEnv.workingPath}: ${result.warnings.join('; ')}`
+            );
+          }
           getLog().info(
             { worktreePath: isolatedEnv.workingPath },
             'isolation_orphan_cleanup_completed'

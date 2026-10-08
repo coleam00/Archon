@@ -44,7 +44,12 @@ export function clearPlatformPolicies(): void {
   configured = undefined;
 }
 
-export function unknownPlatformReason(platformId: string | null): string | undefined {
+export type UnknownPlatformReason =
+  `platform '${string}' is not registered; workspace kept (plugin may have been removed)`;
+
+export function unknownPlatformReason(
+  platformId: string | null
+): UnknownPlatformReason | undefined {
   if (platformId === null || getPlatformPolicy(platformId)) return undefined;
   return `platform '${platformId}' is not registered; workspace kept (plugin may have been removed)`;
 }
