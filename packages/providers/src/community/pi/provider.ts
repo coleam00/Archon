@@ -573,7 +573,19 @@ async function createPiModelRuntime(
  */
 export class PiProvider implements IAgentProvider {
   async listModels(): Promise<ProviderModelList> {
-    return { models: (await listPiModels()).map(model => ({ id: model.ref, label: model.name })) };
+    return {
+      models: (await listPiModels()).map(model => ({
+        id: model.ref,
+        label: model.name,
+        details: {
+          provider: model.provider,
+          modelId: model.id,
+          reasoning: model.reasoning,
+          cost: model.cost,
+          contextWindow: model.contextWindow,
+        },
+      })),
+    };
   }
 
   async diagnose(

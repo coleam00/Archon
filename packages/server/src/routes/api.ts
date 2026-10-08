@@ -1,3 +1,5 @@
+import { getAgentProvider } from '@archon/core/services/provider-admission';
+import { missingProviderMessage } from '@archon/provider-contract';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 /**
  * REST API routes for the Archon Web UI.
@@ -419,7 +421,7 @@ import {
 } from './schemas/user-ai-prefs.schemas';
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
-import { listPiModels, introspectOpencodeCredentials } from '@archon/providers/in-process';
+import { introspectOpencodeCredentials } from '@archon/providers/in-process';
 import { messageSchema } from './schemas/conversation.schemas';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import {
@@ -2184,9 +2186,7 @@ export function registerApiRoutes(
     entry: { provider: string; model: string; effort?: EffortLevel }
   ): string | null {
     if (!isRegisteredProvider(entry.provider)) {
-      return `Unknown provider '${entry.provider}' for ${label}. Available: ${getProviderInfoList()
-        .map(p => p.id)
-        .join(', ')}`;
+      return `${label}: ${missingProviderMessage(providerRegistry, entry.provider)}`;
     }
     if (entry.effort !== undefined) {
       const validEfforts = validEffortsForProvider(providerRegistry, entry.provider);
@@ -2284,13 +2284,7 @@ export function registerApiRoutes(
     if ('error' in web) return web.error;
     const { provider, model } = getValidatedBody(c, updateUserDefaultBodySchema);
     if (provider !== null && !isRegisteredProvider(provider)) {
-      return apiError(
-        c,
-        400,
-        `Unknown provider '${provider}'. Available: ${getProviderInfoList()
-          .map(p => p.id)
-          .join(', ')}`
-      );
+      return apiError(c, 400, missingProviderMessage(providerRegistry, provider));
     }
     if (provider === null && typeof model === 'string') {
       return apiError(c, 400, 'Cannot set a default model without a default provider');
@@ -5121,13 +5115,7 @@ export function registerApiRoutes(
       const updates: Partial<GlobalConfig> = {};
       if (body.assistant !== undefined) {
         if (!isRegisteredProvider(body.assistant)) {
-          return apiError(
-            c,
-            400,
-            `Unknown provider '${body.assistant}'. Available: ${getProviderInfoList()
-              .map(p => p.id)
-              .join(', ')}`
-          );
+          return apiError(c, 400, missingProviderMessage(providerRegistry, body.assistant));
         }
         updates.defaultAssistant = body.assistant;
       }
@@ -5139,9 +5127,7 @@ export function registerApiRoutes(
           return apiError(
             c,
             400,
-            `Unknown provider(s) in assistants: ${unknownProviders.join(', ')}. Available: ${getProviderInfoList()
-              .map(p => p.id)
-              .join(', ')}`
+            unknownProviders.map(id => missingProviderMessage(providerRegistry, id)).join('; ')
           );
         }
         updates.assistants = body.assistants;
@@ -5242,10 +5228,27 @@ export function registerApiRoutes(
   // GET /api/providers/pi/models - Pi model catalog (best-effort hint; [] on failure)
   registerOpenApiRoute(getPiModelsRoute, async c => {
     try {
-      return c.json({ models: await listPiModels() });
+      const catalog = await getAgentProvider('pi').listModels?.({
+        signal: AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(10_000)]),
+      });
+      const models = (catalog?.models ?? []).flatMap(model =>
+        model.details
+          ? [
+              {
+                ref: model.id,
+                provider: model.details.provider,
+                id: model.details.modelId,
+                name: model.label ?? model.id,
+                reasoning: model.details.reasoning,
+                cost: model.details.cost,
+                contextWindow: model.details.contextWindow,
+              },
+            ]
+          : []
+      );
+      return c.json({ models });
     } catch (error) {
-      // listPiModels already degrades internally; this belt-and-suspenders
-      // keeps the documented "never errors" contract at the route boundary.
+      // Model hints are best-effort; failure must not block the settings page.
       getLog().warn({ err: error }, 'providers.pi_models_list_failed');
       return c.json({ models: [] });
     }

@@ -289,7 +289,7 @@ export interface IAgentProvider {
   diagnose?(request: {
     assistantConfig?: SendQueryOptions['assistantConfig'];
   }): Promise<ProviderDiagnostics>;
-  listModels?(): Promise<ProviderModelList>;
+  listModels?(request: { signal: AbortSignal }): Promise<ProviderModelList>;
 
   resolveCredentialModel?(request: {
     model?: string;

@@ -139,7 +139,9 @@ export async function serveProvider(
     const provider = options.create(log);
     if (!provider.listModels)
       throw new PluginRemoteError(-32601, 'Provider does not support listModels');
-    return providerModelListSchema.parse(await provider.listModels());
+    return providerModelListSchema.parse(
+      await provider.listModels({ signal: new AbortController().signal })
+    );
   });
   try {
     await rpc.done;

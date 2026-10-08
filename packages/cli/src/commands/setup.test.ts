@@ -143,6 +143,15 @@ ARCHON_CODEX_ACCOUNT_ID=account1
   });
 
   describe('generateEnvContent', () => {
+    it('does not write a default when no assistant was selected', () => {
+      const content = generateEnvContent({
+        ai: { claude: false, codex: false, pi: false, defaultAssistant: undefined },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+      expect(content).not.toContain('DEFAULT_AI_ASSISTANT=');
+    });
+
     it('should generate valid .env content for SQLite configuration', () => {
       const content = generateEnvContent({
         ai: {

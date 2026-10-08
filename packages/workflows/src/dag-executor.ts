@@ -1,3 +1,4 @@
+import { gateReworkNode } from './gate-rework';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
 import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
@@ -192,7 +193,11 @@ import {
   type LoopWithCompiledCommand,
   type IncludeCommandContent,
 } from './compiled-command';
-import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
+import {
+  assistantModelDefaults,
+  resolveNodeModel,
+  resolveNodeModelScope,
+} from './node-model-resolution';
 import {
   logNodeComplete,
   logExecOutput,
@@ -1626,7 +1631,7 @@ export function substituteLoopPrevRefs(
 async function resolveNodeProviderAndModel(
   providers: ProviderRegistry,
   node: DagNode,
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   workflowModel: string | undefined,
   config: WorkflowConfig,
   platform: IWorkflowPlatform,
@@ -1705,16 +1710,7 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  const descriptor = providers.get(provider);
-  if (!descriptor) {
-    throw new Error(
-      `Node '${node.id}': unknown provider '${provider}'. ` +
-        `Registered: ${providers
-          .list()
-          .map(p => p.id)
-          .join(', ')}`
-    );
-  }
+  const descriptor = requireProvider(providers, provider);
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = descriptor.capabilities;
@@ -4224,7 +4220,7 @@ function findLoopGroupTerminalSuspendNode(
 async function executeLoopGroupNode(
   ctx: RunLayersContext,
   node: LoopGroupNode,
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
   workflowPreset: ModelAliasPreset | undefined,
@@ -4293,7 +4289,7 @@ async function executeLoopGroupBody(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   execution: NodeExecutionRecord,
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
   workflowPreset: ModelAliasPreset | undefined,
@@ -7113,16 +7109,6 @@ async function executeWaitNode(
   };
 }
 
-function gateReworkNode(node: GateNode, prompt: string): AgentNode {
-  return {
-    id: `${node.id}:on_reject`,
-    kind: 'agent',
-    source: { kind: 'inline', prompt },
-    ...(node.depends_on ? { depends_on: node.depends_on } : {}),
-    ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
-  };
-}
-
 /**
  * Execute an approval node — pauses workflow for human review.
  * On rejection resume (when on_reject is configured): runs the on_reject prompt via AI,
@@ -9261,7 +9247,7 @@ interface RunInputs {
   runChildWorkflow?: RunChildWorkflowFn;
   workflowRun: WorkflowRun;
   config: WorkflowConfig;
-  workflowProvider: string;
+  workflowProvider: string | undefined;
   workflowModel: string | undefined;
   aiProfile?: ResolvedAiProfile;
   workflowPreset?: ModelAliasPreset;
@@ -10075,28 +10061,43 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 // Resolve provider and model for the group: both are forwarded to body
                 // AI nodes as their defaults. The group itself never calls sendQuery, so
                 // the resolved SendQueryOptions are not needed here.
+                const groupScope = resolveNodeModelScope(
+                  node,
+                  {
+                    provider: ctx.workflowProvider,
+                    model: ctx.workflowModel,
+                    preset: ctx.workflowPreset,
+                    tier: ctx.workflowLevelOptions.workflowTier,
+                    effort: ctx.workflowLevelOptions.effort,
+                    providerOrigin: 'workflow',
+                  },
+                  assistantModelDefaults(ctx.config),
+                  ctx.aiProfile
+                );
                 const {
                   provider: loopGroupProvider,
                   model: loopGroupModel,
                   tier: loopGroupTier,
                   preset: loopGroupPreset,
-                } = await resolveNodeProviderAndModel(
-                  providers,
-                  node,
-                  ctx.workflowProvider,
-                  ctx.workflowModel,
-                  ctx.config,
-                  ctx.platform,
-                  ctx.conversationId,
-                  ctx.workflowRun.id,
-                  ctx.cwd,
-                  ctx.workflowLevelOptions,
-                  ctx.aiProfile,
-                  ctx.workflowPreset,
-                  resolveAiConfigText,
-                  ctx.warnedProviderConflicts,
-                  ctx.execContext
-                );
+                } = groupScope.provider === undefined
+                  ? groupScope
+                  : await resolveNodeProviderAndModel(
+                      providers,
+                      node,
+                      ctx.workflowProvider,
+                      ctx.workflowModel,
+                      ctx.config,
+                      ctx.platform,
+                      ctx.conversationId,
+                      ctx.workflowRun.id,
+                      ctx.cwd,
+                      ctx.workflowLevelOptions,
+                      ctx.aiProfile,
+                      ctx.workflowPreset,
+                      resolveAiConfigText,
+                      ctx.warnedProviderConflicts,
+                      ctx.execContext
+                    );
 
                 const output = await executeLoopGroupNode(
                   ctx,
@@ -10733,7 +10734,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
  */
 export function visitProviderInvokingNodes(
   nodes: readonly (DagNode | IncludeDirective)[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile: ResolvedAiProfile | undefined,
   visit: (node: DagNode, provider: string) => void
 ): void {
@@ -10755,8 +10756,20 @@ export function visitProviderInvokingNodes(
     if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node) || isWaitNode(node))
       continue;
     if (isLoopGroupNode(node)) {
-      const groupProvider = resolve(node);
-      visit(node, groupProvider);
+      const groupProvider = resolveNodeModelScope(
+        node,
+        {
+          provider: workflowProvider,
+          providerOrigin: 'workflow',
+          model: undefined,
+          preset: undefined,
+          tier: undefined,
+          effort: undefined,
+        },
+        {},
+        aiProfile
+      ).provider;
+      if (groupProvider !== undefined) visit(node, groupProvider);
       visitProviderInvokingNodes(node.loop_group.nodes, groupProvider, aiProfile, visit);
       continue;
     }
@@ -10783,7 +10796,7 @@ export function visitProviderInvokingNodes(
 export function collectContainerIncompatibleProviders(
   providers: ProviderRegistry,
   nodes: readonly DagNode[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile?: ResolvedAiProfile
 ): Set<string> {
   const incompatible = new Set<string>();
@@ -10837,7 +10850,7 @@ export interface ScopedCapabilityMismatch {
 export function collectScopedCapabilityMismatches(
   providers: ProviderRegistry,
   nodes: readonly DagNode[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile?: ResolvedAiProfile
 ): ScopedCapabilityMismatch[] {
   const mismatches: ScopedCapabilityMismatch[] = [];
@@ -10885,7 +10898,7 @@ export type StrictSchemaViolation = StrictSchemaIssue & {
 export function collectStrictSchemaViolations(
   providers: ProviderRegistry,
   nodes: readonly (DagNode | IncludeDirective)[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile?: ResolvedAiProfile
 ): StrictSchemaViolation[] {
   const violations: StrictSchemaViolation[] = [];

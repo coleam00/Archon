@@ -485,7 +485,7 @@ Environment variables override all other configuration. They are organized by ca
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
-| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `pi`, or `copilot`. | `claude` |
+| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id. | Only registered provider, otherwise unset |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
@@ -729,11 +729,13 @@ commands:
 
 ### Minimal Setup (Using Defaults)
 
-No configuration needed. Archon works out of the box with:
+Archon uses these defaults without configuration:
 
 - `~/.archon/` for all managed files
-- Claude as default AI assistant
+- The only registered provider as default AI assistant, otherwise no default
 - Platform-appropriate streaming modes
+
+With multiple providers, select a default with `archon setup`, `defaultAssistant` in global config, `assistant` in project config, or `DEFAULT_AI_ASSISTANT`. A run that needs an unset default fails before creating a worktree; workflows can select providers explicitly.
 
 ### Custom AI Preference
 

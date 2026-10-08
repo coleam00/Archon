@@ -16135,7 +16135,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       string,
       unknown
     >;
-    expect(nodeFailedData.error).toContain("unknown provider 'claud'");
+    expect(nodeFailedData.error).toContain("Unknown provider: 'claud'");
   });
 
   it('failure message names the failing node instead of generic summary', async () => {
@@ -32894,7 +32894,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
     };
   }
 
-  const collapseConfig: WorkflowConfig = {
+  const collapseConfig: WorkflowConfig & { assistant: string } = {
     assistant: 'claude',
     assistants: { claude: { model: 'claude-default' }, codex: { model: 'codex-default' } },
     commands: {},

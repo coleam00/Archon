@@ -408,7 +408,7 @@ describe('validateWorkflowResources — portable model refs', () => {
     );
   });
 
-  test('bundled workflow accepts tiers and literal models', async () => {
+  test('bundled workflow accepts tiers and literal models with a configured default', async () => {
     await createCommandFile('my-command');
     const workflow = {
       ...makeWorkflow('test', [
@@ -430,6 +430,7 @@ describe('validateWorkflowResources — portable model refs', () => {
 
     const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry, {
       workflowSource: 'bundled',
+      assistant: 'codex',
     });
 
     expect(issues.some(i => i.field === 'model')).toBe(false);

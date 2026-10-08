@@ -115,7 +115,7 @@ export function spellWorkflowCommand(surface: WorkflowCommandSurface, command: s
 
 export interface WorkflowConfig {
   /** Default assistant provider (validated against provider registry at runtime) */
-  assistant: string;
+  assistant: string | undefined;
   baseBranch?: string;
   remote?: string;
   docsPath?: string;

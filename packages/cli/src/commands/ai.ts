@@ -1,3 +1,4 @@
+import { missingProviderMessage } from '@archon/provider-contract';
 /**
  * `archon ai` — per-user AI-provider credentials AND install-wide model config.
  *
@@ -354,7 +355,7 @@ function validateEntryInputs(
   effort: string | undefined
 ): effort is EffortRung | undefined {
   if (!isRegisteredProvider(provider)) {
-    console.error(`Unknown provider '${provider}'. Available: ${registeredProvidersList()}.`);
+    console.error(missingProviderMessage(providerRegistry, provider));
     return false;
   }
   if (effort !== undefined && !isEffortRung(effort)) {
@@ -716,7 +717,7 @@ export async function aiDefaultCommand(
     return 1;
   }
   if (!isRegisteredProvider(provider)) {
-    console.error(`Unknown provider '${provider}'. Available: ${registeredProvidersList()}.`);
+    console.error(missingProviderMessage(providerRegistry, provider));
     return 1;
   }
   try {

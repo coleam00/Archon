@@ -292,6 +292,12 @@ const commandHelp: HelpEntry[] = [
     description: 'Install archon-cli into .claude/skills and .agents/skills',
   },
   {
+    command: 'provider',
+    subcommand: 'install',
+    spec: 'provider install <id...>',
+    description: 'Install maintained providers matching this Archon release',
+  },
+  {
     command: 'plugin',
     subcommand: 'install',
     spec: 'plugin install <owner/repo[/path][@tag]>',

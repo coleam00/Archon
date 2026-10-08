@@ -54,26 +54,12 @@ if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
-import { registerProvider } from '@archon/providers';
-import {
-  claimPiExtensionProcessError,
-  registerBuiltinProviders,
-  registerCommunityProviders,
-} from '@archon/providers/in-process';
 import { getPluginsPath } from '@archon/paths';
-import { getVendorCatalog, loadProviderPlugins } from '@archon/core';
+import { registerHostProviders } from '@archon/core/providers/register-host-providers';
 import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
 import { CODEX_BOOT_CHECKED, readCodexBootAuth } from './boot/codex-auth-posture';
 
-// Bootstrap provider registry before any provider lookups
-registerBuiltinProviders();
-registerCommunityProviders();
-for (const registration of await loadProviderPlugins(getPluginsPath()))
-  registerProvider(registration);
-// Fail fast at boot (not on first API request) if any registration declares a
-// credential vendor the delivery map can't deliver — that's a provider bug
-// that must block startup, not surface as a runtime 500 (#1955).
-getVendorCatalog();
+await registerHostProviders();
 
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import { serveWebUi } from './static-cache';
@@ -217,40 +203,15 @@ function createMessageErrorHandler(
   };
 }
 
-/**
- * Handles unhandled promise rejections from the process.
- *
- * Exported for testability. Filters specifically for SDK cleanup races
- * ("Operation aborted" when the PostToolUse hook writes to a closed pipe after
- * a DAG node abort). Those are logged at error level but do not exit the process.
- * An error whose stack names an extension loaded by a running Pi turn is handed
- * back to that node; when several running turns loaded it, each of them fails. Every other rejection is logged at fatal level and exits after
- * queued telemetry flushes (bounded, so still Fail Fast).
- */
 export function handleUnhandledRejection(reason: unknown): void {
-  if (claimPiExtensionProcessError(reason)) return;
-  const message = (reason instanceof Error ? reason.message : String(reason)).toLowerCase();
-  // SDK cleanup race: PostToolUse hook writes to a closed pipe after a DAG node
-  // abort. Safe to absorb — these are transient artifacts, not application bugs.
-  if (message.includes('operation aborted')) {
-    getLog().error({ reason }, 'unhandled_rejection.sdk_cleanup_race');
-    return;
-  }
-  // All other unhandled rejections are unexpected — crash loudly so they are
-  // not silently swallowed (CLAUDE.md: "Fail Fast + Explicit Errors").
   getLog().fatal({ reason }, 'unhandled_rejection.fatal');
   void exitAfterTelemetryFlush(1);
 }
 
-/**
- * Handles exceptions that escape detached Pi extension callbacks. Errors whose
- * stacks do not identify an active extension retain the fatal process fallback.
- */
 export function handleUncaughtException(
   error: Error,
   origin?: NodeJS.UncaughtExceptionOrigin
 ): void {
-  if (claimPiExtensionProcessError(error)) return;
   getLog().fatal({ err: error, origin }, 'uncaught_exception.fatal');
   void exitAfterTelemetryFlush(1);
 }

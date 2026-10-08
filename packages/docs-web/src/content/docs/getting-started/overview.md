@@ -115,7 +115,7 @@ Follow the browser flow to log in. This stores credentials globally — no API k
 
 ## Step 3: Create Your .env File
 
-> **Required for Web UI / server mode. Optional for CLI-only usage** — the CLI uses your existing Claude authentication by default.
+> **Required for Web UI / server mode. Optional for CLI-only usage** — when Claude is selected, the CLI uses your existing Claude authentication.
 
 ```bash
 cp .env.example .env
@@ -136,7 +136,7 @@ That's it. Everything else has sensible defaults:
 
 - **Database:** SQLite at `~/.archon/archon.db` (auto-created, zero setup)
 - **Port:** 3090 for the API server, 5173 for the Web UI dev server
-- **AI assistant:** Claude (default)
+- **AI assistant:** Claude, selected by `DEFAULT_AI_ASSISTANT=claude` in the copied `.env.example`. Without a configured default, Archon selects only a sole registered provider; with multiple providers, run `archon setup` or configure the default explicitly.
 
 > **Why two GitHub token variables?** `GH_TOKEN` is used by the GitHub CLI (`gh`), and `GITHUB_TOKEN` is used by Archon's GitHub adapter. Set them to the same value.
 

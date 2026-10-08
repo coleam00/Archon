@@ -43,6 +43,17 @@ beforeAll(() => {
     displayName: 'Admission fake',
     builtIn: false,
     factory: () => ({
+      async diagnose() {
+        return {
+          checks: [
+            { id: this.getType(), label: 'Provider', status: 'ok' as const, message: 'Ready' },
+          ],
+        };
+      },
+      async listModels({ signal }) {
+        signal.throwIfAborted();
+        return { models: [{ id: `${this.getType()}/model` }] };
+      },
       async resolveCredentialModel(request): Promise<string> {
         return `${this.getType()}/${request.model ?? 'default'}`;
       },
@@ -537,6 +548,24 @@ test('forwards the provider-owned credential model resolver with its receiver', 
   expect(await provider.resolveCredentialModel?.({ cwd: root, model: 'selected' })).toBe(
     `${PROVIDER}/selected`
   );
+  expect(calls).toHaveLength(0);
+  expect(await holderCount()).toBe(0);
+});
+
+test('forwards provider diagnostics and model listing without acquiring capacity', async () => {
+  const provider = getAgentProvider(PROVIDER);
+  expect(await provider.diagnose?.({})).toEqual({
+    checks: [{ id: PROVIDER, label: 'Provider', status: 'ok', message: 'Ready' }],
+  });
+  expect(await provider.listModels?.({ signal: new AbortController().signal })).toEqual({
+    models: [{ id: `${PROVIDER}/model` }],
+  });
+  const controller = new AbortController();
+  controller.abort(new Error('cancelled'));
+  const error = await provider
+    .listModels?.({ signal: controller.signal })
+    .catch((cause: unknown) => cause);
+  expect(error).toEqual(new Error('cancelled'));
   expect(calls).toHaveLength(0);
   expect(await holderCount()).toBe(0);
 });

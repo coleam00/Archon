@@ -3731,8 +3731,22 @@ describe('PiProvider', () => {
     expect(diagnostics.checks.map(check => check.status)).toEqual(['ok', 'ok']);
     expect(await remote.diagnose!(request)).toEqual(diagnostics);
     expect(JSON.stringify(diagnostics)).not.toContain('p4-backend-secret');
-    const models = { models: [{ id: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' }] };
+    const models = {
+      models: [
+        {
+          id: 'google/gemini-2.5-pro',
+          label: 'google/gemini-2.5-pro',
+          details: {
+            provider: 'google',
+            modelId: 'gemini-2.5-pro',
+            reasoning: false,
+            cost: { input: 0, output: 0 },
+            contextWindow: 128_000,
+          },
+        },
+      ],
+    };
     expect(await direct.listModels()).toEqual(models);
-    expect(await remote.listModels!()).toEqual(models);
+    expect(await remote.listModels!({ signal: new AbortController().signal })).toEqual(models);
   });
 });

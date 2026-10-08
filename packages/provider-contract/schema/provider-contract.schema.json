@@ -1865,6 +1865,45 @@
               },
               "label": {
                 "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string"
+                  },
+                  "modelId": {
+                    "type": "string"
+                  },
+                  "reasoning": {
+                    "type": "boolean"
+                  },
+                  "cost": {
+                    "type": "object",
+                    "properties": {
+                      "input": {
+                        "type": "number"
+                      },
+                      "output": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "input",
+                      "output"
+                    ]
+                  },
+                  "contextWindow": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "modelId",
+                  "reasoning",
+                  "cost",
+                  "contextWindow"
+                ]
               }
             },
             "required": [

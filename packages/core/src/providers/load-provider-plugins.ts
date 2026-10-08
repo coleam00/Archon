@@ -1,18 +1,52 @@
 import { join } from 'node:path';
-import { isProviderReceipt } from '@archon/plugin-manifest';
+import { FIRST_PARTY_PLUGIN_REPO, isProviderReceipt } from '@archon/plugin-manifest';
 import { readReceipts, receiptPath } from '@archon/plugin-manifest/store';
-import type { ProviderRegistration } from '@archon/provider-contract';
+import {
+  isMaintainedProvider,
+  providerVersionMismatchMessage,
+  type ProviderRegistration,
+} from '@archon/provider-contract';
+import { BUNDLED_VERSION, createLogger } from '@archon/paths';
+import { markProviderUnavailable } from '@archon/providers';
 import { processProviderRegistration } from './process-registration';
 
-export async function loadProviderPlugins(pluginsDir: string): Promise<ProviderRegistration[]> {
+export async function loadProviderPlugins(
+  pluginsDir: string,
+  options: { maintained?: 'source' | 'bundled' | 'installed'; version?: string } = {}
+): Promise<ProviderRegistration[]> {
   const receipts = await readReceipts(pluginsDir).catch((error: unknown) => {
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}. Run archon plugin update <id> or archon plugin remove <id>`
     );
   });
-  return receipts.filter(isProviderReceipt).map(receipt => {
+  const registrations: ProviderRegistration[] = [];
+  for (const receipt of receipts.filter(isProviderReceipt)) {
     try {
       const descriptor = receipt.descriptor;
+      if (isMaintainedProvider(descriptor.id)) {
+        if (options.maintained === 'source') {
+          createLogger('core.provider-plugins').warn(
+            { receipt: receiptPath(pluginsDir, receipt.id) },
+            'provider.receipt_skipped_source'
+          );
+          continue;
+        }
+        if (options.maintained === 'bundled') continue;
+        if (
+          receipt.id.toLowerCase() !==
+          `${FIRST_PARTY_PLUGIN_REPO}/plugins/provider-${descriptor.id}`.toLowerCase()
+        ) {
+          throw new Error('maintained provider receipt is not first-party');
+        }
+        const version = options.version ?? BUNDLED_VERSION;
+        if (descriptor.version !== version) {
+          markProviderUnavailable(
+            descriptor.id,
+            providerVersionMismatchMessage(descriptor.id, descriptor.version, version)
+          );
+          continue;
+        }
+      }
       if (receipt.manifest.executable !== `archon-provider-${descriptor.id}`) {
         throw new Error('descriptor id does not match the manifest executable');
       }
@@ -20,11 +54,15 @@ export async function loadProviderPlugins(pluginsDir: string): Promise<ProviderR
         [receipt.manifest.executable, `${receipt.manifest.executable}.exe`].includes(file.path)
       );
       if (!executable) throw new Error('receipt does not own its executable');
-      return processProviderRegistration(descriptor, [join(pluginsDir, executable.path)]);
-    } catch {
+      registrations.push(
+        processProviderRegistration(descriptor, [join(pluginsDir, executable.path)])
+      );
+    } catch (error) {
       throw new Error(
-        `Invalid provider plugin receipt ${receiptPath(pluginsDir, receipt.id)}. Run archon plugin update ${receipt.id} or archon plugin remove ${receipt.id}`
+        `Invalid provider plugin receipt ${receiptPath(pluginsDir, receipt.id)}. Run archon plugin update ${receipt.id} or archon plugin remove ${receipt.id}`,
+        { cause: error }
       );
     }
-  });
+  }
+  return registrations;
 }

@@ -1,3 +1,5 @@
+export const FIRST_PARTY_PLUGIN_REPO = 'coleam00/Archon';
+
 /**
  * The shared distribution contract for Archon plugins: the author-owned
  * `archon-plugin.json` manifest and the local install receipt.

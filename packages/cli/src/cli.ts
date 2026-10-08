@@ -48,7 +48,7 @@ if (inheritedInstallContext) {
 // `utils/safe-console.ts` for the underlying shim, and #2400 for the full
 // rationale.
 import { installPipeSafeConsole } from './utils/safe-console';
-import { exitWithDrain, withDrainedExit } from './utils/exit-with-drain';
+import { withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import {
   rejectConfigOnContinue,
@@ -94,54 +94,12 @@ import { publishArchonCliCommand } from '@archon/paths/cli-command';
 publishArchonCliCommand();
 
 let providersRegistered = false;
-let providerProcessErrorHandlersInstalled = false;
 let databaseRouteLoaded = false;
-
-function installProviderProcessErrorHandlers(
-  claimPiExtensionProcessError: (reason: unknown) => boolean
-): void {
-  if (providerProcessErrorHandlersInstalled) return;
-  providerProcessErrorHandlersInstalled = true;
-
-  const exitForUnhandledError = (
-    reason: unknown,
-    event: 'unhandled_rejection' | 'uncaught_exception',
-    origin?: NodeJS.UncaughtExceptionOrigin
-  ): void => {
-    getLog().fatal({ reason, origin }, `${event}.fatal`);
-    void shutdownTelemetry()
-      .catch((error: unknown) => {
-        getLog().error({ err: error }, 'telemetry_shutdown_failed');
-      })
-      .then(() => exitWithDrain(1));
-  };
-
-  process.on('unhandledRejection', reason => {
-    if (!claimPiExtensionProcessError(reason)) {
-      exitForUnhandledError(reason, 'unhandled_rejection');
-    }
-  });
-  process.on('uncaughtException', (error, origin) => {
-    if (!claimPiExtensionProcessError(error)) {
-      exitForUnhandledError(error, 'uncaught_exception', origin);
-    }
-  });
-}
 
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
-  const {
-    claimPiExtensionProcessError,
-    registerBuiltinProviders,
-    registerCommunityProviders,
-    registerProvider,
-  } = await import('@archon/providers/in-process');
-  installProviderProcessErrorHandlers(claimPiExtensionProcessError);
-  registerBuiltinProviders();
-  registerCommunityProviders();
-  const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
-  for (const registration of await loadProviderPlugins(getPluginsPath()))
-    registerProvider(registration);
+  const { registerHostProviders } = await import('@archon/core/providers/register-host-providers');
+  await registerHostProviders();
   providersRegistered = true;
 }
 
@@ -452,6 +410,16 @@ async function main(): Promise<number> {
           'Use: archon workflow run <name> --adopt <run-id> <input>\n' +
           'Find a prior run id with: archon workflow runs --open (or workflow get <run-id>)'
       );
+    }
+    if (command === 'provider') {
+      const { providerCommand } = await loadRoute(() => import('./commands/provider'), {
+        providers: false,
+      });
+      return await providerCommand(subcommand, positionals.slice(2), {
+        pluginsDir: getPluginsPath(),
+        archonVersion: BUNDLED_VERSION,
+        projectDir: cwd,
+      });
     }
     if (command === 'plugin') {
       const { pluginCommand } = await loadRoute(() => import('./commands/plugin'), {

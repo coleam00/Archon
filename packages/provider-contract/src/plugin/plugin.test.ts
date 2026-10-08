@@ -683,7 +683,7 @@ test('information hooks return all diagnostic states and optional model labels',
       expect(
         await client.diagnose({ assistantConfig: { nested: { enabled: true, unset: undefined } } })
       ).toEqual({ checks });
-      expect(await client.listModels()).toEqual({
+      expect(await client.listModels({ signal: new AbortController().signal })).toEqual({
         models: [{ id: 'one', label: 'One' }, { id: 'two' }],
       });
     }
@@ -692,7 +692,10 @@ test('information hooks return all diagnostic states and optional model labels',
 
 test('absent information hooks report unsupported rather than successful empty results', async () => {
   await withProvider(fixtureProvider(), async client => {
-    for (const call of [() => client.diagnose({}), () => client.listModels()]) {
+    for (const call of [
+      () => client.diagnose({}),
+      () => client.listModels({ signal: new AbortController().signal }),
+    ]) {
       try {
         await call();
         throw new Error('accepted absent hook');
@@ -721,7 +724,7 @@ test('client rejects malformed successful information responses from an independ
   try {
     for (const [call, field] of [
       [() => client.diagnose({}), 'label'],
-      [() => client.listModels(), 'id'],
+      [() => client.listModels({ signal: new AbortController().signal }), 'id'],
     ] as const) {
       try {
         await call();

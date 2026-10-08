@@ -1,8 +1,8 @@
+import { missingProviderMessage } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import {
-  getRegisteredProviders,
   getRegistration,
   InvalidProviderRunConfigError,
   isRegisteredProvider,
@@ -85,13 +85,8 @@ function validationError(error: { issues: { path: PropertyKey[]; message: string
 
 function assertRegisteredProvider(provider: string, path: string): void {
   if (isRegisteredProvider(provider)) return;
-  const available = getRegisteredProviders()
-    .map(entry => entry.id)
-    .sort()
-    .join(', ');
   throw new Error(
-    `Invalid run config at '${path}': unknown provider '${provider}'.` +
-      (available ? ` Available: ${available}.` : ' No providers are registered.')
+    `Invalid run config at '${path}': ${missingProviderMessage(providerRegistry, provider)}`
   );
 }
 
@@ -101,16 +96,6 @@ function normalizePreset(path: string, preset: ModelAliasPreset): ModelAliasPres
   } catch (error) {
     if (!(error instanceof RunModelPresetValidationError)) throw error;
     const issuePath = `${path}.${error.issue.field}`;
-    if (error.issue.kind === 'unknown-provider') {
-      const available = getRegisteredProviders()
-        .map(entry => entry.id)
-        .sort()
-        .join(', ');
-      throw new Error(
-        `Invalid run config at '${issuePath}': unknown provider '${error.issue.provider}'.` +
-          (available ? ` Available: ${available}.` : ' No providers are registered.')
-      );
-    }
     throw new Error(`Invalid run config at '${issuePath}': ${error.message}.`);
   }
 }

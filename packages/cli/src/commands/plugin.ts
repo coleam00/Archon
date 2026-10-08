@@ -19,6 +19,7 @@ import { chmod, cp, lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises
 import { dirname, join } from 'node:path';
 import { execFileAsync, findRepoRoot } from '@archon/git';
 import {
+  FIRST_PARTY_PLUGIN_REPO,
   describeIssues,
   pluginReleaseAsset,
   isBinaryReceipt,
@@ -43,6 +44,7 @@ import {
 } from '@archon/plugin-manifest/store';
 import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-plugin';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
+import { isMaintainedProvider, providerVersionMismatchMessage } from '@archon/provider-contract';
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
 import { inspectChatPlugin } from './inspect-chat-plugin';
 import { publishChatPlugin } from './publish-chat-plugin';
@@ -279,18 +281,32 @@ async function inspectInstallableProvider(
   stagedBinary: string,
   manifest: ProviderManifest,
   receipts: readonly PluginReceipt[],
-  id: string
+  id: string,
+  version: string
 ): Promise<ProviderPluginDescriptor> {
   const descriptor = await inspectProviderPlugin(stagedBinary);
   if (manifest.executable !== `archon-provider-${descriptor.id}`) {
     throw new Error(`Provider plugin ${id}: descriptor id must match ${manifest.executable}`);
+  }
+  const maintained = isMaintainedProvider(descriptor.id);
+  if (
+    maintained &&
+    id.toLowerCase() !==
+      `${FIRST_PARTY_PLUGIN_REPO}/plugins/provider-${descriptor.id}`.toLowerCase()
+  ) {
+    throw new Error(
+      `Provider '${descriptor.id}' installs only from ${FIRST_PARTY_PLUGIN_REPO}/plugins/provider-${descriptor.id}. Nothing was installed.`
+    );
+  }
+  if (maintained && descriptor.version !== version) {
+    throw new Error(providerVersionMismatchMessage(descriptor.id, descriptor.version, version));
   }
   const registration = processProviderRegistration(descriptor, [stagedBinary]);
   registerBuiltinProviders();
   registerCommunityProviders();
   const installed = receipts.filter(isProviderReceipt).filter(receipt => receipt.id !== id);
   const registrations = [
-    ...getRegisteredProviders(),
+    ...getRegisteredProviders().filter(provider => !maintained || provider.id !== descriptor.id),
     ...installed.map(receipt => processProviderRegistration(receipt.descriptor, [stagedBinary])),
   ];
   assertProviderRegistrationAllowed(registration, registrations);
@@ -367,7 +383,13 @@ async function installBinaryPlugin(
     await chmod(stagedBinary, 0o755);
     const descriptor =
       manifest.kind === 'provider'
-        ? await inspectInstallableProvider(stagedBinary, manifest, receipts, ref.id)
+        ? await inspectInstallableProvider(
+            stagedBinary,
+            manifest,
+            receipts,
+            ref.id,
+            env.archonVersion
+          )
         : manifest.kind === 'chat'
           ? await inspectInstallableChat(stagedBinary, receipts, ref.id)
           : undefined;
@@ -701,7 +723,7 @@ async function installPack(
 
 async function installPlugin(
   ref: PluginRef,
-  mode: 'install' | 'update',
+  mode: 'install' | 'update' | 'replace',
   env: PluginEnvironment
 ): Promise<void> {
   const receipts = await readReceipts(env.pluginsDir);
@@ -729,6 +751,12 @@ async function installPlugin(
     const packReceipt = previous && !isBinaryReceipt(previous) ? previous : undefined;
     await installPack(ref, source, receipts, packReceipt, env);
   }
+}
+
+export async function replacePlugin(ref: string, env: PluginEnvironment): Promise<void> {
+  await withPluginMutationLock(env.pluginsDir, () =>
+    installPlugin(parsePluginRef(ref), 'replace', env)
+  );
 }
 
 async function removePlugin(ref: PluginRef, env: PluginEnvironment): Promise<void> {

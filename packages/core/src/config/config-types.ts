@@ -376,7 +376,7 @@ export interface RepoConfig {
  */
 export interface MergedConfig {
   botName: string;
-  assistant: string;
+  assistant: string | undefined;
   assistants: AssistantDefaults;
   /**
    * Merged aliases (repo > global). Used by buildAiProfile at execution time.
@@ -448,7 +448,7 @@ export interface MergedConfig {
  */
 export interface SafeConfig {
   botName: string;
-  assistant: string;
+  assistant: string | undefined;
   assistants: ProviderDefaultsMap;
   streaming: PlatformStreaming;
   concurrency: {

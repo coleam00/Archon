@@ -2,6 +2,52 @@ import { z } from 'zod';
 import type { IAgentProvider } from './agent-provider';
 import type { ProviderCapabilities } from './capabilities';
 
+export const MAINTAINED_PROVIDER_IDS = ['claude', 'codex', 'pi'] as const;
+
+export function isMaintainedProvider(id: string): id is (typeof MAINTAINED_PROVIDER_IDS)[number] {
+  return MAINTAINED_PROVIDER_IDS.some(provider => provider === id);
+}
+
+function unknownProviderMessage(id: string, registered: readonly string[]): string {
+  return isMaintainedProvider(id)
+    ? `Provider '${id}' is not installed. Install it with: archon provider install ${id}`
+    : `Unknown provider: '${id}'. Available: ${registered.join(', ')}`;
+}
+
+export function missingProviderMessage(registry: ProviderRegistry, id: string): string {
+  return (
+    registry.unavailable?.(id) ??
+    unknownProviderMessage(
+      id,
+      registry.list().map(provider => provider.id)
+    )
+  );
+}
+
+export const NO_DEFAULT_PROVIDER_MESSAGE =
+  "No default provider: set 'defaultAssistant' in ~/.archon/config.yaml or run archon setup";
+
+export function noDefaultProviderMessage(registry: ProviderRegistry): string {
+  return registry.list().length === 0
+    ? `No providers installed. Run: archon provider install <${MAINTAINED_PROVIDER_IDS.join('|')}>`
+    : NO_DEFAULT_PROVIDER_MESSAGE;
+}
+
+export class NoDefaultProviderError extends Error {
+  constructor(registry?: ProviderRegistry) {
+    super(registry ? noDefaultProviderMessage(registry) : NO_DEFAULT_PROVIDER_MESSAGE);
+    this.name = 'NoDefaultProviderError';
+  }
+}
+
+export function providerVersionMismatchMessage(
+  id: string,
+  installed: string,
+  current: string
+): string {
+  return `Provider '${id}' is installed at ${installed} but this CLI is ${current}. Run: archon provider install ${id}`;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
@@ -124,9 +170,10 @@ export interface ProviderRegistration {
 export class UnknownProviderError extends Error {
   constructor(
     public readonly requestedProvider: string,
-    public readonly registeredProviders: string[]
+    public readonly registeredProviders: string[],
+    reason?: string
   ) {
-    super(`Unknown provider: '${requestedProvider}'. Available: ${registeredProviders.join(', ')}`);
+    super(reason ?? unknownProviderMessage(requestedProvider, registeredProviders));
     this.name = 'UnknownProviderError';
   }
 }
@@ -146,6 +193,7 @@ export class InvalidProviderRunConfigError extends Error {
 export type ProviderDescriptor = Omit<ProviderRegistration, 'factory'>;
 
 export interface ProviderRegistry {
+  unavailable?(id: string): string | undefined;
   get(id: string): ProviderDescriptor | undefined;
   list(): readonly ProviderDescriptor[];
 }
@@ -155,7 +203,8 @@ export function requireProvider(registry: ProviderRegistry, id: string): Provide
   if (!provider)
     throw new UnknownProviderError(
       id,
-      registry.list().map(entry => entry.id)
+      registry.list().map(entry => entry.id),
+      missingProviderMessage(registry, id)
     );
   return provider;
 }

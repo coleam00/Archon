@@ -319,3 +319,5 @@ export { authorizeRunAction, RunActionForbiddenError } from './operations/run-au
 export { processProviderRegistration } from './providers/process-registration';
 
 export { loadProviderPlugins } from './providers/load-provider-plugins';
+
+export { registerHostProviders } from './providers/register-host-providers';

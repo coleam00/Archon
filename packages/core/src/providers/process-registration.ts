@@ -2,6 +2,7 @@ import { normalizeCredentialVendor } from '@archon/providers';
 import { z } from 'zod';
 import {
   InvalidProviderRunConfigError,
+  isMaintainedProvider,
   type ProviderRegistration,
   type ProviderDefaults,
 } from '@archon/provider-contract';
@@ -42,7 +43,7 @@ export function processProviderRegistration(
     id: descriptor.id,
     displayName: descriptor.displayName,
     capabilities: descriptor.capabilities,
-    builtIn: false,
+    builtIn: isMaintainedProvider(descriptor.id),
     ...(descriptor.ownsUnprefixedModelRefs ? { ownsUnprefixedModelRefs: true } : {}),
     credentials: {
       ...descriptor.credentials,
