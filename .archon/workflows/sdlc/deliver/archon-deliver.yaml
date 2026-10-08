@@ -192,10 +192,8 @@ nodes:
   - id: classify
     command: classify-review-scope
     # This workflow declares no top-level model, so every AI node here names its
-    # own tier. The classifier picks the review depth from the change's risk as
-    # well as the two conditional lenses, and an under-read risk skips reviewers,
-    # so it gets the medium tier.
-    model: medium
+    # own tier. Choosing between two booleans off a diff is small-tier work.
+    model: small
     depends_on: [review-policy]
     mutates_checkout: false
     output_type: review-scope
