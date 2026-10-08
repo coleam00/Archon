@@ -61,6 +61,8 @@ export {
   findCommandFiles,
   getWebDistDir,
   getSourceWebDistDir,
+  getSourceServerEntry,
+  getServerDistDir,
 } from './archon-paths';
 export type { ProjectStorageKey, ProjectStoragePaths } from './archon-paths';
 
@@ -92,6 +94,7 @@ export {
   BUNDLED_VERSION,
   BUNDLED_GIT_COMMIT,
   BUNDLED_WEB_DIST_SHA256,
+  BUNDLED_SERVER_SHA256,
 } from './bundled-build';
 
 // Compiled CLI discovery manifest

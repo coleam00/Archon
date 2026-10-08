@@ -4,6 +4,7 @@
  * created, with force, and keeps its branch. Runs in its own `bun test`
  * invocation (declared by @archon-test-isolated) because it mock.module's the DB connection.
  */
+import { setPlatformPolicies } from '../platforms/registry';
 import * as gitModule from '@archon/git';
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import {
@@ -94,6 +95,7 @@ const request = () => ({
 const status = async () => (await isolationDb.getById(env.id))?.status;
 
 beforeEach(async () => {
+  setPlatformPolicies([]);
   root = track(await realpath(await mkdtemp(join(tmpdir(), 'archon-release-'))));
   repo = join(root, 'repo');
   await initRepo(repo);
@@ -187,6 +189,18 @@ async function useSymlinkedBase(): Promise<void> {
 }
 
 describe('owned worktree release', () => {
+  test('keeps an owned worktree whose originating platform is no longer registered', async () => {
+    await db.query(
+      "UPDATE remote_agent_isolation_environments SET created_by_platform = 'removed-chat' WHERE id = $1",
+      [env.id]
+    );
+    await expect(reclaimRunWorktree(run, store)).rejects.toThrow(
+      "platform 'removed-chat' is not registered"
+    );
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+  });
+
   test('a removal Git abandons halfway is finished, not left unretryable', async () => {
     const locked = join(env.working_path, 'locked');
     await mkdir(locked);

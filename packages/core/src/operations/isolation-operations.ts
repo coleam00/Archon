@@ -3,6 +3,7 @@
  *
  * CLI and command-handler are thin formatting adapters over these functions.
  */
+import { getRegisteredPlatformPolicies, unknownPlatformReason } from '../platforms/registry';
 import { createLogger } from '@archon/paths';
 import { toWorktreePath, worktreeExists } from '@archon/git';
 import * as isolationDb from '../db/isolation-environments';
@@ -24,7 +25,9 @@ export interface CodebaseEnvironments {
   codebaseId: string;
   repositoryUrl: string | null;
   defaultCwd: string;
-  environments: readonly Awaited<ReturnType<typeof isolationDb.listByCodebaseWithAge>>[number][];
+  environments: readonly (Awaited<ReturnType<typeof isolationDb.listByCodebaseWithAge>>[number] & {
+    cleanupSkipReason?: string;
+  })[];
 }
 
 export interface EnvironmentListData {
@@ -54,12 +57,16 @@ async function reconcileGhosts(
   envs: readonly {
     id: string;
     working_path: string;
-    branch_name: string | null;
-    workflow_id: string;
+    created_by_platform: string | null;
   }[]
 ): Promise<number> {
   let reconciled = 0;
   for (const env of envs) {
+    const reason = unknownPlatformReason(env.created_by_platform);
+    if (reason) {
+      getLog().warn({ envId: env.id, reason }, 'isolation.cleanup_skipped');
+      continue;
+    }
     try {
       const exists = await worktreeExists(toWorktreePath(env.working_path));
       if (!exists) {
@@ -124,6 +131,7 @@ function extractCodebases(
  * Reconciles ghost entries (worktree missing on disk) before returning.
  */
 export async function listEnvironments(): Promise<EnvironmentListData> {
+  getRegisteredPlatformPolicies();
   const allActive = await isolationDb.listAllActiveWithCodebase();
   const codebases = extractCodebases(allActive);
 
@@ -152,7 +160,10 @@ export async function listEnvironments(): Promise<EnvironmentListData> {
       codebaseId: codebase.id,
       repositoryUrl: codebase.repository_url,
       defaultCwd: codebase.default_cwd,
-      environments: liveEnvs,
+      environments: liveEnvs.map(env => {
+        const reason = unknownPlatformReason(env.created_by_platform);
+        return reason ? { ...env, cleanupSkipReason: reason } : env;
+      }),
     });
     totalEnvironments += liveEnvs.length;
   }
@@ -169,6 +180,7 @@ export async function cleanupStaleEnvironments(
   mainPath: string
 ): Promise<CleanupOperationResult> {
   // First reconcile ghost entries
+  getRegisteredPlatformPolicies();
   const allActive = await isolationDb.listAllActiveWithCodebase();
   const codebaseEnvs = allActive.filter(e => e.codebase_id === codebaseId);
   await reconcileGhosts(codebaseEnvs);

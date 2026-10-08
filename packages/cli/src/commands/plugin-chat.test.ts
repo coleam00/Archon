@@ -15,12 +15,12 @@ import { isChatReceipt, pluginReleaseAsset, type ChatManifest } from '@archon/pl
 import { readReceipts, receiptPath, packTreePath } from '@archon/plugin-manifest/store';
 import { loadProviderPlugins } from '@archon/core/providers/load-provider-plugins';
 import { listInstalledPacks } from '@archon/workflows/workflow-source';
-import { WebAdapter } from '@archon/server/src/adapters/web';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { GitHubAdapter } from '@archon/adapters';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
-import { pluginCommand, RESERVED_CHAT_PLATFORMS, type PluginEnvironment } from './plugin';
+import { RESERVED_CHAT_PLATFORMS } from '@archon/chat-contract/descriptor';
+import { pluginCommand, type PluginEnvironment } from './plugin';
 
 const windows = process.platform === 'win32';
 const enabled = !windows || (!!process.env.CI && !skipCompiledBinaryTests());
@@ -439,8 +439,9 @@ integration('chat receipts do not interfere with provider and pack discovery', a
   expect(discovered.packs.map(pack => pack.record?.id)).toEqual(['owner/pack']);
 });
 
+// The server owns WebAdapter and proves its identity in its own adapter tests.
 test('reserved identities conform to bundled adapters', () => {
-  for (const adapter of [WebAdapter, CLIAdapter, GitHubAdapter, GiteaAdapter, GitLabAdapter]) {
+  for (const adapter of [CLIAdapter, GitHubAdapter, GiteaAdapter, GitLabAdapter]) {
     expect(RESERVED_CHAT_PLATFORMS.get(adapter.prototype.getPlatformType())).toBeDefined();
   }
   expect([...RESERVED_CHAT_PLATFORMS.keys()].sort()).toEqual([

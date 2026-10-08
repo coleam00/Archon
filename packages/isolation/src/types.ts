@@ -382,7 +382,7 @@ export interface WorktreeStatusBreakdown {
   active: number;
   mergedEnvs: { id: string; branchName: string }[];
   staleEnvs: { id: string; branchName: string; daysInactive: number }[];
-  activeEnvs: { id: string; branchName: string }[];
+  activeEnvs: { id: string; branchName: string; reason?: string }[];
 }
 
 // --- Store Types ---

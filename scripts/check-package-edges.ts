@@ -47,8 +47,10 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   // Server hosts the engine and platform adapters.
   server: {
     runtime: ['adapters', 'core', 'git', 'paths', 'provider-contract', 'providers', 'workflows'],
+    // Proves the Web adapter's identity against the reserved chat platforms.
+    test: ['chat-contract'],
   },
-  // CLI composes local services and can launch the server.
+  // CLI composes local services and launches the server executable.
   cli: {
     runtime: [
       'adapters',
@@ -61,7 +63,6 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
       'plugin-manifest',
       'provider-contract',
       'providers',
-      'server',
       'workflows',
     ],
   },

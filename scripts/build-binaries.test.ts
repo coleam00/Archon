@@ -10,7 +10,8 @@ const script = resolve(import.meta.dir, 'build-binaries.sh');
 function runBuild(
   failServer = false,
   target = 'bun-linux-x64',
-  outfile = 'dist/archon-linux-x64'
+  outfile = 'dist/archon-linux-x64',
+  invalidServerHash = false
 ): { builds: string[] } {
   const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-binary-build-')));
   mkdirSync(join(root, 'packages/paths/src'), { recursive: true });
@@ -33,7 +34,12 @@ function runBuild(
       `
       bun() {
         if [ "$1" = 'run' ]; then return 0; fi
-        if [ "$1" = '-e' ]; then "$BUILD_TEST_BUN" "$@"; return $?; fi
+        if [ "$1" = '-e' ]; then
+          case "\${3:-}" in
+            dist/archon-server-*) if [ "$INVALID_SERVER_HASH" = 'true' ]; then return 0; fi ;;
+          esac
+          "$BUILD_TEST_BUN" "$@"; return $?
+        fi
         [ "$1" = 'build' ] || return 90
         printf '%s\\n' "$*" >> builds.txt
         cat packages/paths/src/bundled-build.ts >> constants.txt
@@ -44,8 +50,7 @@ function runBuild(
         dd if=/dev/zero of="$output" bs=1 count=1 seek=1000000 2>/dev/null
       }
       git() { return 0; }
-      shasum() { printf '%s  %s\\n' "$BUILD_TEST_WEB_SHA256" 'archon-web.tar.gz'; }
-      export -f bun git shasum
+      export -f bun git
       bash ./build-binaries.sh
     `,
     ],
@@ -58,19 +63,28 @@ function runBuild(
         TARGET: target,
         OUTFILE: outfile,
         BUILD_TEST_BUN: process.execPath.replaceAll('\\', '/'),
-        BUILD_TEST_WEB_SHA256: new Bun.CryptoHasher('sha256').update('web fixture').digest('hex'),
         FAIL_SERVER: String(failServer),
+        INVALID_SERVER_HASH: String(invalidServerHash),
       },
       stdout: 'pipe',
       stderr: 'pipe',
     }
   );
   const output = result.stdout.toString() + result.stderr.toString();
-  expect(result.exitCode, output).toBe(failServer ? 42 : 0);
+  expect(result.exitCode, output).toBe(failServer ? 42 : invalidServerHash ? 1 : 0);
   const constants = readFileSync(join(root, 'constants.txt'), 'utf8');
-  expect(constants.match(/BUNDLED_VERSION = '1.2.3'/g)).toHaveLength(failServer ? 1 : 2);
-  expect(constants.match(/BUNDLED_GIT_COMMIT = 'abcdef12'/g)).toHaveLength(failServer ? 1 : 2);
+  expect(constants.match(/BUNDLED_VERSION = '1.2.3'/g)).toHaveLength(
+    failServer || invalidServerHash ? 1 : 2
+  );
+  expect(constants.match(/BUNDLED_GIT_COMMIT = 'abcdef12'/g)).toHaveLength(
+    failServer || invalidServerHash ? 1 : 2
+  );
   expect(constants).toContain('BUNDLED_IS_BINARY = true');
+  expect(constants).toContain("BUNDLED_SERVER_SHA256 = ''");
+  if (!failServer && !invalidServerHash)
+    expect(constants).toContain(
+      `BUNDLED_SERVER_SHA256 = '${new Bun.CryptoHasher('sha256').update(new Uint8Array(1000001)).digest('hex')}'`
+    );
   return {
     builds: readFileSync(join(root, 'builds.txt'), 'utf8').trim().split('\n'),
   };
@@ -96,4 +110,9 @@ test('server build failure stops the release before building the CLI', () => {
   const result = runBuild(true);
   expect(result.builds).toHaveLength(1);
   expect(result.builds[0]).toContain('packages/server/src/bin.ts');
+});
+
+test('invalid server checksum stops the release before building the CLI', () => {
+  const result = runBuild(false, 'bun-linux-x64', 'dist/archon-linux-x64', true);
+  expect(result.builds).toHaveLength(1);
 });
