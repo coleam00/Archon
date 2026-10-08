@@ -1,6 +1,6 @@
 /**
- * Detects the moment a run starts needing the operator — paused on a human gate,
- * or finished — so the console can alert once per transition (#1699).
+ * Detects new run attention: gates, overdue tools, and terminal states. The console
+ * alerts once per occurrence (#1699).
  *
  * The dashboard stream only says "run X changed". Its payloads are not a reliable
  * transition log: the in-process emitter and the DB poller both deliver the same
@@ -11,22 +11,24 @@
  */
 import type { Run } from '../primitives/run';
 
-type AttentionState = 'waiting' | 'completed' | 'failed' | 'cancelled';
+type AttentionState = readonly string[];
 
-type RunState = Pick<Run, 'status' | 'approval' | 'wait'>;
+type RunState = Pick<Run, 'status' | 'approval' | 'wait' | 'toolCallAttention'>;
 
 /**
  * A paused run needs a human only on an approval gate or an attention wait; a run
  * paused on an event or a scheduled time resumes on its own.
  */
-function attentionState(run: RunState): AttentionState | null {
+function attentionState(run: RunState): AttentionState {
   switch (run.status) {
     case 'running':
-      return null;
+      return (run.toolCallAttention ?? []).map(call =>
+        JSON.stringify([call.streamId, call.toolCallId, call.raisedAt])
+      );
     case 'paused':
-      return run.approval != null || run.wait?.kind === 'attention' ? 'waiting' : null;
+      return run.approval != null || run.wait?.kind === 'attention' ? ['waiting'] : [];
     default:
-      return run.status;
+      return [run.status];
   }
 }
 
@@ -60,7 +62,7 @@ export function watchRunAttention(
   source: RunAttentionSource,
   handlers: RunAttentionHandlers
 ): RunAttentionWatcher {
-  const known = new Map<string, AttentionState | null>();
+  const known = new Map<string, AttentionState>();
   const dirty = new Set<string>();
   let seed: 'pending' | 'loading' | 'done' = 'pending';
   let failing = false;
@@ -83,7 +85,7 @@ export function watchRunAttention(
   // unseeded run already waiting or finished would alert as new on its next event.
   async function loadSeed(): Promise<void> {
     seed = 'loading';
-    const loaded = new Map<string, AttentionState | null>();
+    const loaded = new Map<string, AttentionState>();
     try {
       let offset = 0;
       let page: RunPage;
@@ -127,7 +129,7 @@ export function watchRunAttention(
         const next = attentionState(run);
         const previous = known.get(runId);
         known.set(runId, next);
-        if (next !== null && next !== previous) handlers.onAttention(run);
+        if (next.some(occurrence => !previous?.includes(occurrence))) handlers.onAttention(run);
       }
     } finally {
       pumping = false;

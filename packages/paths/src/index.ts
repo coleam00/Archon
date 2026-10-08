@@ -61,6 +61,8 @@ export {
   findCommandFiles,
   getWebDistDir,
   getSourceWebDistDir,
+  getSourceServerEntry,
+  getServerDistDir,
 } from './archon-paths';
 export type { ProjectStorageKey, ProjectStoragePaths } from './archon-paths';
 
@@ -76,7 +78,14 @@ export type { DetachedInstallContext, DetachedInstallContextKey } from './detach
 export { loadArchonEnv, isVerboseBoot, getPluginsPath, getArchonEnvNames } from './env-loader';
 
 // Logger
-export { createLogger, setLogLevel, getLogLevel, setLogDestination, rootLogger } from './logger';
+export {
+  createLogger,
+  setLogLevel,
+  getLogLevel,
+  setLogDestination,
+  setLogSink,
+  rootLogger,
+} from './logger';
 export type { Logger } from './logger';
 
 // Build-time constants (rewritten by scripts/build-binaries.sh)
@@ -85,6 +94,7 @@ export {
   BUNDLED_VERSION,
   BUNDLED_GIT_COMMIT,
   BUNDLED_WEB_DIST_SHA256,
+  BUNDLED_SERVER_SHA256,
 } from './bundled-build';
 
 // Compiled CLI discovery manifest

@@ -20,18 +20,30 @@
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
     "@archon/providers": "workspace:*",
-    "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",
     "@archon/forge": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "dotenv": "^17.2.3",
-    "@archon/plugin-manifest": "workspace:*"
+    "@archon/plugin-manifest": "workspace:*",
+    "@archon/chat-contract": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
   },
   "testGroups": [
+    [
+      "src/commands/plugin-chat.test.ts"
+    ],
+    [
+      "src/commands/inspect-chat-plugin.test.ts"
+    ],
+    [
+      "src/commands/publish-chat-plugin.test.ts"
+    ],
+    [
+      "src/commands/workflow-provider-plugin.integration.spec.ts"
+    ],
     [
       "src/commands/version.test.ts",
       "src/commands/setup.test.ts",
@@ -54,6 +66,12 @@
     ],
     [
       "src/commands/serve.test.ts"
+    ],
+    [
+      "src/commands/serve-binary.test.ts"
+    ],
+    [
+      "src/commands/serve-source.integration.spec.ts"
     ],
     [
       "src/commands/ai.test.ts"
@@ -132,6 +150,9 @@
     ],
     [
       "src/commands/user.test.ts"
+    ],
+    [
+      "src/commands/trigger-store.integration.spec.ts"
     ],
     [
       "src/commands/workflow-store.integration.spec.ts"

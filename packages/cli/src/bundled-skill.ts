@@ -3,8 +3,8 @@
  *
  * Bun's `with { type: 'text' }` imports are hand-maintained (no glob imports at
  * compile time) — every file of the skill must be listed here and in the export
- * map below. `scripts/check-bundled-skill.ts` verifies this file covers every
- * file on disk under .claude/skills/archon-cli/; run it after adding or removing
+ * map below. `scripts/check-bundled-skill.ts` verifies the exported map keys
+ * match the files on disk under .claude/skills/archon-cli/; run it after adding or removing
  * any skill file.
  */
 import router from '../../../.claude/skills/archon-cli/SKILL.md' with { type: 'text' };

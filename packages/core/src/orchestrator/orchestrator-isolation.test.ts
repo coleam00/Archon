@@ -1,10 +1,7 @@
 // @archon-test-isolated
 import { buildAiProfile } from '@archon/workflows/model-validation';
-import {
-  providerRegistry,
-  registerBuiltinProviders,
-  registerCommunityProviders,
-} from '@archon/providers';
+import { providerRegistry } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 mock.module('../workflows/branch-launch-source', () => ({
   withBranchLaunchSource: async (
     _repo: string,

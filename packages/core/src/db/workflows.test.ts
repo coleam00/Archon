@@ -1908,7 +1908,12 @@ describe('workflows database', () => {
       expect(updateParams).toEqual([
         'workflow-run-123',
         1,
-        JSON.stringify({ error: null, stop_reason: null, continuation_retry_at: null }),
+        JSON.stringify({
+          tool_call_attention: null,
+          error: null,
+          stop_reason: null,
+          continuation_retry_at: null,
+        }),
       ]);
       // Third call: SELECT
       const [selectQuery, selectParams] = mockQuery.mock.calls[2] as [string, unknown[]];
@@ -1955,7 +1960,12 @@ describe('workflows database', () => {
       expect(updateParams).toEqual([
         'workflow-run-123',
         1,
-        JSON.stringify({ error: null, stop_reason: null, continuation_retry_at: null }),
+        JSON.stringify({
+          tool_call_attention: null,
+          error: null,
+          stop_reason: null,
+          continuation_retry_at: null,
+        }),
       ]);
     });
 

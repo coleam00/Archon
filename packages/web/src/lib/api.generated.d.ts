@@ -437,15 +437,6 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
-        /** @description OAuth callback port still held by a previous login attempt — retry shortly */
-        503: {
-          headers: {
-            [name: string]: unknown;
-          };
-          content: {
-            'application/json': components['schemas']['Error'];
-          };
-        };
       };
     };
     delete?: never;
@@ -4586,6 +4577,21 @@ export interface components {
       agents_total: number | null;
     };
     WorkflowRunMetadata: {
+      tool_call_attention?: {
+        streamId: string;
+        nodeId: string;
+        provider: string;
+        toolCallId: string;
+        name: string;
+        title?: string;
+        /** Format: date-time */
+        startedAt: string;
+        /** Format: date-time */
+        lastProgressAt: string;
+        /** Format: date-time */
+        raisedAt: string;
+        thresholdMs: number;
+      }[];
       approval?: {
         nodeId: string;
         pauseId?: string;

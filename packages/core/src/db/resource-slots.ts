@@ -1,3 +1,4 @@
+import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-start-store';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
  *
@@ -11,11 +12,11 @@
  * Holder kinds and their liveness:
  * - `run`: a workflow run, live until the run is terminal or gone.
  * - `attempt`: one provider attempt, released by its owner when the provider stream
- *   has closed, or here when its owner process is provably gone (`process-owner.ts`).
+ *   has closed, or here when its owner process is provably gone (`@archon/paths/process-owner`).
  */
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType } from './connection';
-import { isOwnerProvablyGone, type ProcessOwner } from './process-owner';
+import { isOwnerProvablyGone, type ProcessOwner } from '@archon/paths/process-owner';
 
 export type TransactionQuery = Parameters<
   Parameters<ReturnType<typeof getDatabase>['withTransaction']>[0]
@@ -26,18 +27,7 @@ export type ResourceSlotHolder =
   | { kind: 'run'; id: string }
   | { kind: 'attempt'; id: string; owner: ProcessOwner };
 
-export class ResourceSlotCapacityConflictError extends Error {
-  constructor(
-    public readonly resource: string,
-    public readonly configured: number,
-    public readonly requested: number
-  ) {
-    super(
-      `Resource '${resource}' has capacity ${String(configured)}; a request declared ${String(requested)}. Every binding for one resource must declare the same capacity.`
-    );
-    this.name = 'ResourceSlotCapacityConflictError';
-  }
-}
+export { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-start-store';
 
 const terminalList = TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ');
 

@@ -5,8 +5,6 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join, relative } from 'node:path';
-import { testTimeout } from '@archon/paths/test-utils';
-import { ROUTING_PROBE } from '../.archon/scripts/__tests__/routing-probe';
 import { planRequestedRuns } from './repo-tests';
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -179,20 +177,23 @@ describe('repo-tests exit codes', () => {
     expect(exitCode).toBe(0);
   });
 
-  test(
-    'bun run test .archon/scripts/ executes the directory tests',
-    async () => {
-      // The directory argument is what routes. Filtering to the probe test keeps bun
-      // from running the directory's subprocess suites, which outlast any fixed budget
-      // on a Windows runner; the probe passing proves the route ran that directory.
-      const child = Bun.spawn(['bun', 'run', 'test', '.archon/scripts/', '-t', ROUTING_PROBE], {
-        cwd: REPO_ROOT,
-        stdout: 'ignore',
-        stderr: 'ignore',
-      });
+  test('bun run test .archon/scripts/ executes the directory tests', () => {
+    // `bun test` exits non-zero when `-t` matches nothing it collected, so a zero exit
+    // proves the directory selector reached a test inside it. The filter keeps the run to
+    // one cheap test instead of the whole directory, and the exit code reads the same
+    // whether or not Bun quiets its console output for an agent caller.
+    const { exitCode } = Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        'test',
+        '.archon/scripts/',
+        '-t',
+        'the tier consumers read their supplied policy',
+      ],
+      { cwd: REPO_ROOT, stdout: 'ignore', stderr: 'ignore' }
+    );
 
-      expect(await child.exited).toBe(0);
-    },
-    testTimeout(60_000)
-  );
+    expect(exitCode).toBe(0);
+  });
 });

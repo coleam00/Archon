@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import * as bundledBuild from '../packages/paths/src/bundled-build';
 
 const repoRoot = join(import.meta.dir, '..');
 const CLI_ENTRY = join(repoRoot, 'packages/cli/src/cli.ts');
@@ -60,6 +61,67 @@ function buildImportGraph(entry: string, outdir: string): BuildMetafile {
   return JSON.parse(readFileSync(metafilePath, 'utf8')) as BuildMetafile;
 }
 
+function forbiddenBundleInput(input: string): boolean {
+  const internal = repositoryInput(input);
+  if (internal?.startsWith('packages/server/')) return true;
+  if (internal?.startsWith('packages/adapters/')) {
+    return (
+      internal !== 'packages/adapters/src/platform-policies.ts' && !internal.endsWith('/policy.ts')
+    );
+  }
+  // Shared runtime schemas use @hono/zod-openapi. Its empty Hono wrappers are
+  // permitted; removing them requires the separate SDK schema work (#3647).
+  return /(?:^|[/\\])node_modules[/\\](?:better-auth|@better-auth[/\\][^/\\]+|@slack[/\\][^/\\]+|discord\.js|@discordjs[/\\][^/\\]+|grammy|telegramify-markdown)(?:[/\\]|$)/.test(
+    input
+  );
+}
+
+async function serverBundleInputs(restoreServerImport = false): Promise<string[]> {
+  const result = await Bun.build({
+    entrypoints: [CLI_ENTRY],
+    target: 'bun',
+    minify: true,
+    metafile: true,
+    plugins: [
+      {
+        name: 'prove-cli-bundle-boundary',
+        setup(build): void {
+          // Release builds rewrite this module before bundling. Inspect that mode,
+          // including branches the source-checkout constants would eliminate.
+          build.onLoad({ filter: /packages[/\\]paths[/\\]src[/\\]bundled-build\.ts$/ }, () => ({
+            contents: Object.entries({ ...bundledBuild, BUNDLED_IS_BINARY: true })
+              .map(([name, value]) => `export const ${name} = ${JSON.stringify(value)};`)
+              .join('\n'),
+            loader: 'ts',
+          }));
+          if (restoreServerImport) {
+            build.onLoad(
+              { filter: /packages[/\\]cli[/\\]src[/\\]commands[/\\]serve\.ts$/ },
+              async args => ({
+                contents: `${await Bun.file(args.path).text()}\nconst server = await import('@archon/server'); await server.startServer();`,
+                loader: 'ts',
+              })
+            );
+          }
+        },
+      },
+    ],
+  });
+  if (!result.success || !result.metafile)
+    throw new Error(
+      `CLI bundle build failed: ${result.logs.map(message => message.message).join('\n')}`
+    );
+  const forbidden: string[] = [];
+  for (const output of Object.values(result.metafile.outputs)) {
+    for (const [input, contribution] of Object.entries(output.inputs)) {
+      if (contribution.bytesInOutput > 0 && forbiddenBundleInput(input)) {
+        forbidden.push(`${input}: ${contribution.bytesInOutput} bytes`);
+      }
+    }
+  }
+  return forbidden.sort();
+}
+
 const buildDir = mkdtempSync(join(tmpdir(), 'archon-cli-import-graph-'));
 try {
   const metafile = buildImportGraph(CLI_ENTRY, join(buildDir, 'cli'));
@@ -113,11 +175,37 @@ try {
         input === 'packages/adapters/src/platform-policies.ts' ||
         (input.startsWith('packages/adapters/src/') && input.endsWith('/policy.ts')) ||
         input.startsWith('packages/core/src/platforms/') ||
+        input === 'packages/core/src/workflows/headless-policy.ts' ||
         input === 'packages/core/src/schemas/user.ts'
     ),
     'Platform policy bootstrap imports an implementation outside its declaration boundary'
   );
   console.log('CLI startup and detached handoff import boundaries pass.');
+  if (process.env.CI) {
+    const forbidden = await serverBundleInputs();
+    assert.deepEqual(
+      forbidden,
+      [],
+      `CLI bundle contains server or chat code:\n${forbidden.join('\n')}`
+    );
+    const restored = await serverBundleInputs(true);
+    assert.ok(
+      restored.some(input => repositoryInput(input)?.startsWith('packages/server/')),
+      'Restored server import escaped the bundle check'
+    );
+    assert.ok(
+      restored.some(input => input.includes('better-auth')),
+      'Negative proof did not include auth'
+    );
+    assert.ok(
+      restored.some(input => input.includes('discord.js')),
+      'Negative proof did not include chat'
+    );
+    console.log(`Expected rejection with server import restored:\n${restored.join('\n')}`);
+    console.log('CLI server-free bundle boundary passes, including its negative proof.');
+  } else {
+    console.log('Server-free bundle proof runs in CI; local startup boundaries passed.');
+  }
 } finally {
   await removeTempTree(buildDir);
 }

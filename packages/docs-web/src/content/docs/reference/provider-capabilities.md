@@ -27,6 +27,10 @@ strict contracts fail closed. In particular, a node naming `mcp:`, `skills:` or
 starts, and `context.resume` rejects an explicitly unsupported provider at load
 time and an implicitly resolved one at runtime.
 
+Installed provider plugins declare capabilities in their install-time descriptor.
+The CLI and server register them alongside these bundled providers; they are not
+columns in this generated table. The same pre-spend capability checks apply.
+
 Reporting flags describe SDK fields that Archon translates into execution results.
 Supported does not guarantee that every result reports a value or that usage includes
 all nested agents. Unsupported fields remain absent; Archon does not estimate cost,
@@ -51,7 +55,7 @@ that this work has ended.
 - `claude` — Claude (Anthropic)
 - `codex` — Codex (OpenAI)
 - `opencode` — OpenCode (community) *(community provider, [deprecated](/getting-started/ai-assistants/#deprecated-providers))*
-- `pi` — Pi (community) *(community provider)*
+- `pi` — Pi
 - `copilot` — Copilot (GitHub) *(community provider, [deprecated](/getting-started/ai-assistants/#deprecated-providers))*
 
 ## Capabilities

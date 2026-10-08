@@ -32,7 +32,7 @@ mock.module('fs/promises', () => ({
   mkdir: mockFsMkdir,
 }));
 
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 registerBuiltinProviders();
 registerCommunityProviders();
 
@@ -194,6 +194,19 @@ ${field}:
         ];
         expect(event).toBe('config_load_error');
         expect(err.message).toMatch(new RegExp(`${field}\\..*thinking.*effort:`));
+      }
+    );
+
+    test.each([0, 60000])('accepts tool attention policy %s at config ingress', async threshold => {
+      mockFsReadFile.mockResolvedValue(`workflows:\n  toolCallAttentionMs: ${threshold}\n`);
+      expect((await loadGlobalConfig()).workflows?.toolCallAttentionMs).toBe(threshold);
+    });
+
+    test.each([-1, 1.5])(
+      'rejects invalid tool attention policy %s at config ingress',
+      async threshold => {
+        mockFsReadFile.mockResolvedValue(`workflows:\n  toolCallAttentionMs: ${threshold}\n`);
+        expect(await loadGlobalConfig()).toEqual({});
       }
     );
 
@@ -454,6 +467,7 @@ recommendedWorkflows: "archon-plan"
       expect(config.streaming.streamtest).toBe('stream');
       expect(config.concurrency.maxConversations).toBe(10);
       expect(config.workflows).toEqual({
+        toolCallAttentionMs: 1800000,
         autoResumeOnQuotaReset: false,
         quotaMaxAttempts: 1,
         quotaDeadlineMs: 86_400_000,
@@ -463,11 +477,13 @@ recommendedWorkflows: "archon-plan"
     test('merges global and repo quota continuation policy per field', async () => {
       mockFsReadFile.mockResolvedValueOnce(`
 workflows:
+  toolCallAttentionMs: 60000
   autoResumeOnQuotaReset: true
   quotaFallbackDelayMs: 3600000
   quotaMaxAttempts: 2
 `).mockResolvedValueOnce(`
 workflows:
+  toolCallAttentionMs: 0
   quotaMaxAttempts: 3
   quotaDeadlineMs: 43200000
 `);
@@ -475,6 +491,7 @@ workflows:
       const config = await loadConfig('/test/repo');
 
       expect(config.workflows).toEqual({
+        toolCallAttentionMs: 0,
         autoResumeOnQuotaReset: true,
         quotaFallbackDelayMs: 3_600_000,
         quotaMaxAttempts: 3,

@@ -1,6 +1,7 @@
+import { createSqlWorkflowHost } from '../sql-host';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { registerBuiltinProviders } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import {
   prepareWorkflowSource,
@@ -174,7 +175,7 @@ await import(${JSON.stringify(resolve(import.meta.dir, '../../../../cli/src/cli.
       const result = await startAdmittedResourceStart({
         requestId: admitted.requestId,
         hostId: 'author-host',
-        engine,
+        host: { ...createSqlWorkflowHost(deps), engine },
         createPlatform: () => platform,
       });
       if (!result.success) throw new Error(JSON.stringify(result));

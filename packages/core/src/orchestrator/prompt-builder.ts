@@ -131,7 +131,12 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
   // Nothing needs a person: a resolved gate awaiting resume, a durable `wait:`, or a
   // run that already finished. Offering any of those to the agent invites a second
   // decision the operations reject.
-  if (attention === null || attention.kind === 'terminal') return '';
+  if (
+    attention === null ||
+    attention.kind === 'terminal' ||
+    attention.kind === 'stalled_tool_calls'
+  )
+    return '';
 
   if (attention.kind === 'unreadable') {
     // Paused, but the gate cannot be described — unreadable metadata, or a gate type

@@ -1,11 +1,8 @@
 // @archon-test-isolated
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
-import {
-  getProviderCapabilities,
-  providerRegistry,
-  registerBuiltinProviders,
-} from '@archon/providers';
+import { getProviderCapabilities, providerRegistry } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import { createWorkflowStore } from '../workflows/store-adapter';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';

@@ -40,6 +40,11 @@ const DEPENDENCY_INSTALL = 'bun install';
  */
 const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
   {
+    command: 'bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts',
+    reason:
+      'Its compiled-binary probe runs only under GitHub Actions, because local compilation can stall macOS syspolicyd; the rest of the file also runs under validate.',
+  },
+  {
     command: 'bun scripts/should-run-test-suite.ts',
     reason: 'Decides whether the suite runs at all. CI plumbing, not a repository check.',
   },
@@ -86,6 +91,14 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
       'bun test packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts',
     reason:
       'Runs the store contract in scratch databases on a PostgreSQL service with database creation permission.',
+  },
+  {
+    command: 'bun run build:web',
+    reason: 'Packages the web artifact for the compiled serve smoke, which runs only in CI.',
+  },
+  {
+    command: 'bun scripts/smoke-serve.ts',
+    reason: 'Needs platform-matched compiled release artifacts; compilation is CI-only.',
   },
   {
     command: 'bun run build:docs',

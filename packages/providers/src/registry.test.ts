@@ -1,3 +1,8 @@
+import {
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  registerInProcessProviders,
+} from './in-process';
 import { describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import * as paths from '@archon/paths';
 import {
@@ -9,8 +14,6 @@ import {
   getRegisteredProviders,
   getProviderInfoList,
   isRegisteredProvider,
-  registerBuiltinProviders,
-  registerCommunityProviders,
   clearRegistry,
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
@@ -363,12 +366,12 @@ describe('registry', () => {
   });
 
   describe('registerPiProvider (community provider)', () => {
-    test('registers pi with builtIn: false', () => {
+    test('registers pi with builtIn: true', () => {
       registerPiProvider();
       const reg = getRegistration('pi');
       expect(reg.id).toBe('pi');
-      expect(reg.displayName).toBe('Pi (community)');
-      expect(reg.builtIn).toBe(false);
+      expect(reg.displayName).toBe('Pi');
+      expect(reg.builtIn).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -401,11 +404,11 @@ describe('registry', () => {
       expect(caps.sandbox).toBe(false);
     });
 
-    test('appears in getProviderInfoList with builtIn: false', () => {
+    test('appears in getProviderInfoList with builtIn: true', () => {
       registerPiProvider();
       const info = getProviderInfoList().find(p => p.id === 'pi');
       expect(info).toBeDefined();
-      expect(info?.builtIn).toBe(false);
+      expect(info?.builtIn).toBe(true);
     });
 
     test('does not collide with built-ins', () => {
@@ -551,4 +554,25 @@ describe('credential vendor mapping', () => {
   test('OpenCode has no stored-credential mapping', () => {
     expect(getRegistration('opencode').credentials.vendorFor('anthropic/claude')).toBeUndefined();
   });
+});
+
+test('in-process registration includes maintained and transition providers and agrees with their factories', () => {
+  clearRegistry();
+  registerInProcessProviders();
+  registerInProcessProviders();
+  expect(
+    getRegisteredProviders()
+      .map(provider => provider.id)
+      .sort()
+  ).toEqual(['claude', 'codex', 'copilot', 'opencode', 'pi']);
+  for (const registration of getRegisteredProviders()) {
+    const provider = registration.factory();
+    expect(provider.getType()).toBe(registration.id);
+    expect(provider.getCapabilities()).toEqual(registration.capabilities);
+  }
+  expect(
+    getRegisteredProviders()
+      .filter(provider => provider.builtIn)
+      .map(provider => provider.id)
+  ).toEqual(['claude', 'codex', 'pi']);
 });

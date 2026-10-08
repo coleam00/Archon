@@ -1,8 +1,8 @@
-import type { ProviderPluginIO } from '../rpc';
+import type { PluginIO } from '../rpc';
 
 export function streamPair(observe?: (side: 'host' | 'provider', value: Uint8Array) => void): {
-  host: ProviderPluginIO;
-  provider: ProviderPluginIO;
+  host: PluginIO;
+  provider: PluginIO;
 } {
   function stream(side: 'host' | 'provider'): TransformStream<Uint8Array, Uint8Array> {
     return new TransformStream({

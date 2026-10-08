@@ -39,6 +39,8 @@ export const statusLabel: Record<RunStatus, string> = {
  * default.
  */
 export function runStatusLabel(run: Run): string {
+  if (run.status === 'running' && run.toolCallAttention?.length)
+    return 'Running · tool call needs attention';
   if (run.status === 'failed') {
     const stopReason = run.stopReason;
     if (stopReason?.reason !== 'process_terminated') return statusLabel.failed;

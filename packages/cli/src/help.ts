@@ -283,7 +283,7 @@ const commandHelp: HelpEntry[] = [
   {
     command: 'serve',
     spec: 'serve',
-    description: 'Start the web UI server (binary installs download it on first run)',
+    description: 'Start the web UI server (binary installs download server and UI on first run)',
   },
   {
     command: 'skill',
@@ -296,7 +296,7 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'install',
     spec: 'plugin install <owner/repo[/path][@tag]>',
     description:
-      'Install a plugin from GitHub (default: forge plugins the latest release, workflow packs the default branch)',
+      'Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)',
   },
   {
     command: 'plugin',
@@ -820,7 +820,7 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--download-only',
-    description: 'Download web UI without starting the server',
+    description: 'Download server and web UI without starting the server',
     owners: [{ command: 'serve' }],
   },
   {

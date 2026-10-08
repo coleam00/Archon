@@ -130,11 +130,18 @@ function installProviderProcessErrorHandlers(
 
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
-  const { claimPiExtensionProcessError, registerBuiltinProviders, registerCommunityProviders } =
-    await import('@archon/providers');
+  const {
+    claimPiExtensionProcessError,
+    registerBuiltinProviders,
+    registerCommunityProviders,
+    registerProvider,
+  } = await import('@archon/providers/in-process');
   installProviderProcessErrorHandlers(claimPiExtensionProcessError);
   registerBuiltinProviders();
   registerCommunityProviders();
+  const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
+  for (const registration of await loadProviderPlugins(getPluginsPath()))
+    registerProvider(registration);
   providersRegistered = true;
 }
 
@@ -142,11 +149,13 @@ async function loadRoute<T>(
   loader: () => Promise<T>,
   options: { providers?: false; database?: boolean } = {}
 ): Promise<T> {
-  const [{ setPlatformPolicies }, { bundledPlatformPolicies }] = await Promise.all([
-    import('@archon/core/platforms/registry'),
-    import('@archon/adapters/platform-policies'),
-  ]);
-  setPlatformPolicies(bundledPlatformPolicies);
+  const [{ setPlatformPolicies }, { defaultPlatformPolicies }, { loadPlatformPolicies }] =
+    await Promise.all([
+      import('@archon/core/platforms/registry'),
+      import('@archon/adapters/platform-policies'),
+      import('@archon/core/platforms/chat-plugins'),
+    ]);
+  setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   if (options.providers !== false) await registerProviders();
   const route = await loader();
   if (options.database) databaseRouteLoaded = true;
@@ -259,9 +268,7 @@ async function main(): Promise<number> {
   if (isVersionRequest(args)) {
     try {
       refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
-      const { versionCommand } = await loadRoute(() => import('./commands/version'), {
-        providers: false,
-      });
+      const { versionCommand } = await import('./commands/version');
       await versionCommand();
       return 0;
     } finally {
@@ -572,23 +579,33 @@ async function main(): Promise<number> {
 
     switch (command) {
       case 'trigger': {
-        const { triggerCommand } = await loadRoute(() => import('./commands/trigger'), {
-          database: true,
-        });
-        await triggerCommand(subcommand, positionals.slice(2), {
-          config: typeof values.config === 'string' ? values.config : undefined,
-          host: typeof values.host === 'string' ? values.host : undefined,
-          owner: typeof values.owner === 'string' ? values.owner : undefined,
-          limit: typeof values.limit === 'string' ? values.limit : undefined,
-          yes: values.yes === true,
-        });
+        const { triggerCommand, spawnAdmitted } = await loadRoute(
+          () => import('./commands/trigger'),
+          {
+            database: true,
+          }
+        );
+        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+        const host = createSqlWorkflowHost(createCliWorkflowDeps());
+        await triggerCommand(
+          host,
+          subcommand,
+          positionals.slice(2),
+          {
+            config: typeof values.config === 'string' ? values.config : undefined,
+            host: typeof values.host === 'string' ? values.host : undefined,
+            owner: typeof values.owner === 'string' ? values.owner : undefined,
+            limit: typeof values.limit === 'string' ? values.limit : undefined,
+            yes: values.yes === true,
+          },
+          (requestId, hostId) => spawnAdmitted(host, requestId, hostId)
+        );
         break;
       }
 
       case 'version': {
-        const { versionCommand } = await loadRoute(() => import('./commands/version'), {
-          providers: false,
-        });
+        const { versionCommand } = await import('./commands/version');
         await versionCommand();
         break;
       }
@@ -1270,9 +1287,7 @@ async function main(): Promise<number> {
       case 'serve': {
         const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
-        const { serveCommand } = await loadRoute(() => import('./commands/serve'), {
-          database: !downloadOnly,
-        });
+        const { serveCommand } = await import('./commands/serve');
         return await serveCommand({ port: servePort, downloadOnly });
       }
 

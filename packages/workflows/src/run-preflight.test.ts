@@ -1,6 +1,6 @@
 import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import type { CredentialStatus, ProviderDefaultsMap } from '@archon/provider-contract';
 import type {
   ClaudeProviderDefaults,

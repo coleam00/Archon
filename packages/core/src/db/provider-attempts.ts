@@ -15,7 +15,11 @@ import {
   lockConfiguredResourceSlot,
   removeResourceSlotHolder,
 } from './resource-slots';
-import { currentProcessOwner, isOwnerProvablyGone, type ProcessOwner } from './process-owner';
+import {
+  currentProcessOwner,
+  isOwnerProvablyGone,
+  type ProcessOwner,
+} from '@archon/paths/process-owner';
 
 export function providerResourceKey(provider: string): string {
   return `${PROVIDER_RESOURCE_PREFIX}${provider}`;
