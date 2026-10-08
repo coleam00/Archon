@@ -86,7 +86,8 @@ import {
   SlackWorkflowBridge,
 } from '@archon/adapters';
 import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
-import { loadPlatformPolicies } from '@archon/core/platforms/chat-plugins';
+import { loadPlatformPolicies, loadChatPlugins } from '@archon/core/platforms/chat-plugins';
+import { createChatHost } from './chat-host/runtime';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { telegramPolicy } from '@archon/adapters/chat/telegram/policy';
 import { slackPolicy } from '@archon/adapters/chat/slack/policy';
@@ -114,7 +115,6 @@ import {
   handleMessage,
   pool,
   ConversationLockManager,
-  classifyAndFormatError,
   startCleanupScheduler,
   stopCleanupScheduler,
   getDbNotificationListener,
@@ -130,9 +130,6 @@ import {
   type GitHubAuth,
   type IGitHubAppAuthProvider,
 } from '@archon/core';
-import type { IPlatformAdapter } from '@archon/core';
-import type { IdentityPlatform } from '@archon/core';
-import * as userDb from '@archon/core/db/users';
 import * as workflowDb from '@archon/core/db/workflows';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
@@ -162,61 +159,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/**
- * Resolve a platform-native user identifier (Slack U-id, Telegram chat id,
- * Discord snowflake) to an Archon user UUID via auto-create-on-first-sight.
- *
- * Contract: NEVER THROWS. On any failure, warn-log and return undefined so
- * message handling proceeds (writes user_id = NULL on the conversation/run
- * row). This invariant is load-bearing — message processing across three
- * adapters depends on it. Covered by resolve-user-id.test.ts.
- *
- * Exported for testability.
- */
-export async function resolveUserId(
-  platform: IdentityPlatform,
-  platformUserId: string | number | undefined,
-  displayName: string | undefined
-): Promise<string | undefined> {
-  if (platformUserId === undefined || platformUserId === '') {
-    return undefined;
-  }
-  try {
-    const user = await userDb.findOrCreateUserByPlatformIdentity(
-      platform,
-      String(platformUserId),
-      displayName
-    );
-    return user.id;
-  } catch (err) {
-    getLog().warn(
-      { err: err as Error, platform, platformUserId: String(platformUserId) },
-      'server.user_resolve_failed'
-    );
-    return undefined;
-  }
-}
-
-/**
- * Creates an error handler for message processing failures.
- * Logs the error and attempts to send a user-friendly message to the platform.
- */
-function createMessageErrorHandler(
-  platform: string,
-  adapter: IPlatformAdapter,
-  conversationId: string
-): (error: unknown) => Promise<void> {
-  return async (error: unknown): Promise<void> => {
-    getLog().error({ err: error, platform, conversationId }, 'message_processing_failed');
-    try {
-      const userMessage = classifyAndFormatError(error as Error, adapter);
-      await adapter.sendMessage(conversationId, userMessage);
-    } catch (sendError) {
-      getLog().error({ err: sendError, platform, conversationId }, 'error_message_send_failed');
-    }
-  };
-}
-
+import { resolveUserId, createMessageErrorHandler } from './chat-host/inbound';
 /**
  * Handles unhandled promise rejections from the process.
  *
@@ -447,6 +390,23 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Must be a live reference because Telegram starts after the HTTP listener begins
   // accepting requests, so a snapshot taken at registration time would miss it.
   const activePlatforms: string[] = ['Web'];
+  const chatPlugins = opts.skipPlatformAdapters ? [] : await loadChatPlugins(getPluginsPath());
+  const installedChatIds = new Set(chatPlugins.map(plugin => plugin.descriptor.id));
+  const chatHost = createChatHost(
+    chatPlugins,
+    config.streaming,
+    lockManager,
+    workflowPlatforms,
+    activePlatforms
+  );
+  for (const plugin of chatPlugins) {
+    getLog().info(
+      { plugin: plugin.descriptor.id },
+      defaultPlatformPolicies.some(policy => policy.id === plugin.descriptor.id)
+        ? 'chat.plugin.registered_superseding_bundled_adapter'
+        : 'chat.plugin.registered'
+    );
+  }
 
   // Platform adapters (skipped in CLI serve mode or when not configured)
   let github: GitHubAdapter | null = null;
@@ -564,7 +524,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     }
 
     // Initialize Discord adapter (conditional)
-    if (process.env.DISCORD_BOT_TOKEN) {
+    if (!installedChatIds.has(discordPolicy.id) && process.env.DISCORD_BOT_TOKEN) {
       const discordStreamingMode = (process.env[discordPolicy.streaming.envVar] ??
         discordPolicy.streaming.defaultMode) as 'stream' | 'batch';
       discord = new DiscordAdapter(process.env.DISCORD_BOT_TOKEN, discordStreamingMode);
@@ -650,7 +610,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     }
 
     // Initialize Slack adapter (conditional)
-    if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
+    if (
+      !installedChatIds.has(slackPolicy.id) &&
+      process.env.SLACK_BOT_TOKEN &&
+      process.env.SLACK_APP_TOKEN
+    ) {
       const slackStreamingMode = (process.env[slackPolicy.streaming.envVar] ??
         slackPolicy.streaming.defaultMode) as 'stream' | 'batch';
       slack = new SlackAdapter(
@@ -998,7 +962,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)
   let telegram: TelegramAdapter | null = null;
-  if (!opts.skipPlatformAdapters && process.env.TELEGRAM_BOT_TOKEN) {
+  if (
+    !opts.skipPlatformAdapters &&
+    !installedChatIds.has(telegramPolicy.id) &&
+    process.env.TELEGRAM_BOT_TOKEN
+  ) {
     const streamingMode = (process.env[telegramPolicy.streaming.envVar] ??
       telegramPolicy.streaming.defaultMode) as 'stream' | 'batch';
     telegram = new TelegramAdapter(process.env.TELEGRAM_BOT_TOKEN, streamingMode);
@@ -1035,10 +1003,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('telegram_adapter_skipped');
   }
 
-  // Continuations can execute only after every credential provider and platform
-  // adapter is initialized. Web background runs execute against a hidden worker
-  // conversation but deliver to their visible parent; other runs use their owning
-  // conversation directly.
+  // Web background runs execute against a hidden worker conversation but deliver
+  // to their visible parent; other runs use their owning conversation directly.
   startWorkflowContinuationScheduler(
     createSqlWorkflowHost(),
     run => workflowResumeTargetForRun(run, workflowPlatforms),
@@ -1061,6 +1027,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         getLog().error({ err: e }, 'shutdown_flush_failed');
       })
       .then(async () => {
+        try {
+          await chatHost.stop();
+        } catch (error) {
+          getLog().error({ err: error }, 'chat_host_stop_error');
+        }
         // Stop adapters (these should not throw, but be defensive)
         try {
           telegram?.stop();
@@ -1098,6 +1069,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
+  chatHost.start();
 
   // Guard against SDK cleanup races and hand stack-attested Pi extension
   // failures back to the Pi turns that loaded that extension. When a DAG node is aborted,

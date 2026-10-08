@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { receiptPath } from '@archon/plugin-manifest/store';
-import { chatPluginPolicies, loadPlatformPolicies } from './chat-plugins';
+import { chatPluginPolicies, loadPlatformPolicies, loadChatPlugins } from './chat-plugins';
 import type { PlatformPolicy } from './types';
 
 const trackRoot = trackTempRoots();
@@ -95,4 +95,27 @@ test('receipt policies replace defaults and follow the remaining defaults in ord
     { id: 'matrix-chat', ...receipt.descriptor.policy },
   ]);
   expect(defaults[1]).toEqual({ id: 'matrix-chat', workspaceRetention: 'age-based' });
+});
+
+test('chat runtime loading uses the receipt executable and rejects missing ownership or duplicate platform ids', async () => {
+  const dir = trackRoot(await mkdtemp(join(tmpdir(), 'chat-runtime-')));
+  expect(await loadChatPlugins(dir)).toEqual([]);
+  const file = receiptPath(dir, receipt.id);
+  await mkdir(dirname(file), { recursive: true });
+  const executable = receipt.manifest.executable + (process.platform === 'win32' ? '.exe' : '');
+  const installed = { ...receipt, files: [{ path: executable, sha256: 'b'.repeat(64) }] };
+  await writeFile(file, JSON.stringify(installed));
+  expect(await loadChatPlugins(dir)).toEqual([
+    { descriptor: receipt.descriptor, argv: [join(dir, executable)] },
+  ]);
+  await writeFile(
+    file,
+    JSON.stringify({ ...installed, files: [{ path: 'other', sha256: 'b'.repeat(64) }] })
+  );
+  await expect(loadChatPlugins(dir)).rejects.toThrow('does not own its executable');
+  await writeFile(file, JSON.stringify(installed));
+  const duplicate = receiptPath(dir, 'other/fixture');
+  await mkdir(dirname(duplicate), { recursive: true });
+  await writeFile(duplicate, JSON.stringify({ ...installed, id: 'other/fixture' }));
+  await expect(loadChatPlugins(dir)).rejects.toThrow('Duplicate installed chat platform');
 });
