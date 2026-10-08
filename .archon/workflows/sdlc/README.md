@@ -44,16 +44,13 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-The ready mark comes once the work is done, before CI is waited on, because a
-project whose CI skips drafts only starts it then; it refuses a head that does not
-merge cleanly into the freshly fetched base. The final certification,
-`confirm-ready`, re-reads checks for the recorded qualified PR itself after the
-single CI wait. It converts the PR back to draft on pending, red, gated and unknown
-checks, any failed read, any check `discover-ci` expected that never registered,
-and a CI fix whose review did not converge, because a failed or empty observation is
-not evidence that no CI gates the merge. A red PR never stays ready. Every ready and
-draft write reads the state back afterwards, because a successful exit is not proof
-the state changed.
+Whether CI is green is judgment, so one agent node (`ci`) makes it once the work is
+done: it reads whatever CI the project has, waits on running checks itself, and
+answers green, red with the root cause, or blocked with what CI waits for. The ready
+mark follows only a green answer, and it refuses a head that does not merge cleanly
+into the freshly fetched base, so a red PR is never made ready. The ready write
+reads the state back afterwards, because a successful exit is not proof the state
+changed.
 
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is
@@ -89,8 +86,7 @@ An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
 request, `push-head` pushes each fix pass's commits, `publish-pr-body` applies the
 resync, `publish-review` upserts the one marked review comment, `flip-ready` marks it
-ready once the work is done, `mark-draft` and `confirm-ready` put it back in draft
-when CI stays red, and `file-discoveries` files each discovery the review accepted as
+ready once CI is green, and `file-discoveries` files each discovery the review accepted as
 a tracker issue, reusing an open issue the matching agent found for it. The forge
 contract has no issue operation yet, so that one — like triage's labels — goes
 through `gh` whichever source the run selected. Each acts on the values the agent

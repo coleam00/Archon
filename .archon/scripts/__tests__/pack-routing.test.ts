@@ -1,33 +1,14 @@
 /**
  * Small deterministic steps of the delivery tail whose fixtures stub them: the
- * late-CI attention route, the investigation's derived outcome, and ship's terminal
- * report. Run as the engine runs them, from their bound inputs.
+ * investigation's derived outcome and the deliver and ship terminal reports. Run as
+ * the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
 import { LENSES } from '../../workflows/sdlc/.shared/review-lenses';
-import { runPackScript } from './deliver-checks-harness';
+import { PR_URL, forgePrRecord, runPackScript } from './deliver-checks-harness';
 
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
-
-describe('ci-attention-route', () => {
-  const route = (red: string, postFix = ''): { attention: boolean; red_cause: string } =>
-    JSON.parse(
-      runPackScript('deliver/scripts/ci-attention-route', {
-        inputs: { INPUTS_RED_CAUSE: red, INPUTS_POST_FIX_CAUSE: postFix },
-      }).stdout
-    ) as { attention: boolean; red_cause: string };
-
-  it('routes red the change is not shown to cause to the operator, unavailable evidence included', () => {
-    expect(route('inherited')).toEqual({ attention: true, red_cause: 'inherited' });
-    expect(route('unavailable')).toEqual({ attention: true, red_cause: 'unavailable' });
-    expect(route('')).toEqual({ attention: false, red_cause: '' });
-  });
-
-  it('routes on the cause classified after the CI fix when there is one', () => {
-    expect(route('', 'environment')).toEqual({ attention: true, red_cause: 'environment' });
-  });
-});
 
 describe('investigate verdict', () => {
   it.each([
@@ -58,6 +39,7 @@ describe("ship's terminal outcome", () => {
         INPUTS_INV_SUMMARY: 'null',
         INPUTS_PLAN_SUMMARY: 'null',
         INPUTS_DELIVERED: 'null',
+        INPUTS_DELIVERY: 'null',
         TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
         ...inputs,
       },
@@ -104,9 +86,53 @@ describe("ship's terminal outcome", () => {
     expect(outcome({}).summary).toStartWith('No delivery needed: triage summary');
   });
 
-  it('reports a delivered pull request', () => {
-    const result = outcome({ INPUTS_ROUTE: 'deliver', INPUTS_CONTRACT: 'READY', INPUTS_DELIVERED: 'https://x/pull/1' });
-    expect(result).toEqual({ delivered: true, summary: 'https://x/pull/1' });
+  it("reports deliver's own outcome, ready or not", () => {
+    const deliver = { INPUTS_ROUTE: 'deliver', INPUTS_CONTRACT: 'READY' };
+    expect(outcome({ ...deliver, INPUTS_DELIVERED: 'true', INPUTS_DELIVERY: 'https://x/pull/1' })).toEqual({
+      delivered: true,
+      summary: 'https://x/pull/1',
+    });
+    expect(outcome({ ...deliver, INPUTS_DELIVERED: 'false', INPUTS_DELIVERY: 'Not ready, red: lint' })).toEqual({
+      delivered: false,
+      summary: 'Not ready, red: lint',
+    });
+  });
+});
+
+describe("deliver's terminal outcome", () => {
+  const outcome = (inputs: Record<string, string>): { ready: boolean; pr_url: string; summary: string } => {
+    const run = runPackScript('deliver/scripts/outcome', {
+      inputs: {
+        INPUTS_PR: JSON.stringify(forgePrRecord()),
+        INPUTS_PR_URL: 'null',
+        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
+        ...inputs,
+      },
+      artifacts: { 'listing.json': EMPTY_LISTING },
+    });
+    expect(run.code).toBe(0);
+    return JSON.parse(run.stdout) as { ready: boolean; pr_url: string; summary: string };
+  };
+
+  it('reports the flipped pull request as ready on green', () => {
+    expect(outcome({ INPUTS_STATE: 'green', INPUTS_CI_SUMMARY: 'all passed', INPUTS_PR_URL: PR_URL })).toEqual({
+      ready: true,
+      pr_url: PR_URL,
+      summary: PR_URL,
+    });
+  });
+
+  it('reports red as not ready, with the root cause', () => {
+    const result = outcome({ INPUTS_STATE: 'red', INPUTS_CI_SUMMARY: 'lint fails in src/a.ts' });
+    expect(result.ready).toBe(false);
+    expect(result.pr_url).toBe(PR_URL);
+    expect(result.summary).toStartWith('Not ready, red: lint fails in src/a.ts');
+  });
+
+  it('reports CI with no result as not ready, never as red', () => {
+    const result = outcome({ INPUTS_STATE: 'blocked', INPUTS_CI_SUMMARY: 'awaits approval' });
+    expect(result.ready).toBe(false);
+    expect(result.summary).toStartWith('Not ready, CI has no result: awaits approval');
   });
 });
 

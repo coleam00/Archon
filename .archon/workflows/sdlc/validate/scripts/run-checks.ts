@@ -18,16 +18,6 @@
  * - `green`: every declared check ran and exited 0. No declared checks is green only
  *   because `discover` judged that the project defines none; its notes say so.
  *
- * A clean tree that already passed these exact checks in this run is not gated again.
- * `always_run` re-executes this node on every resume, so a resume after a fix reads a
- * fresh verdict; but a delivery's durable CI waits also resume the run, every few
- * minutes, and re-running a long gate on an unchanged tree each time bought nothing.
- * Only green is reused: red and incomplete can clear without a tree change (a freed
- * port, a restored service), and the operator's resume after one runs the gate again.
- * The reused result is the recorded one, byte for byte, so nothing downstream reads
- * it as changed. The key is the tracked tree, so a reused green cannot see gitignored
- * state (installed dependencies, build output) that changed since it was recorded.
- *
  * No timer lives here. The node's `timeout:` is the only one, and the engine stops
  * this script with SIGTERM when it expires. The handler below then stops the
  * running check's whole process tree, records the stop, and re-raises the signal
@@ -35,11 +25,9 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { git } from '../../.shared/git.ts';
-import { artifactsDir, emit, note, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, text } from '../../.shared/io.ts';
 import { projectEnvironment } from '../../.shared/node-env.ts';
 
 interface Check {
@@ -206,16 +194,6 @@ interface Result {
   summary: string;
 }
 
-/** This tree and check list, or undefined when the tree is dirty or not a git checkout. */
-function cleanTreeKey(): string | undefined {
-  const status = git('status', '--porcelain');
-  const tree = git('rev-parse', 'HEAD^{tree}');
-  if (status.code !== 0 || status.stdout !== '' || tree.code !== 0) return undefined;
-  return createHash('sha256')
-    .update(`${tree.stdout}\n${JSON.stringify(discovery.checks)}`)
-    .digest('hex');
-}
-
 async function runGate(): Promise<Result> {
   const stoppedGroups = new Set<string>();
   for (const entry of entries) {
@@ -249,21 +227,4 @@ async function runGate(): Promise<Result> {
 }
 
 mkdirSync(logDir, { recursive: true });
-const greensPath = join(logDir, 'green-trees.json');
-const greens = (existsSync(greensPath) ? JSON.parse(readFileSync(greensPath, 'utf8')) : {}) as Record<
-  string,
-  Result
->;
-const key = cleanTreeKey();
-const reused = key === undefined ? undefined : greens[key];
-if (reused !== undefined) {
-  note('run-checks: this tree already passed these checks earlier in this run; not running them again.');
-  emit(reused);
-} else {
-  const result = await runGate();
-  // Recorded only when the gate left the tree as it found it.
-  if (result.status === 'green' && key !== undefined && cleanTreeKey() === key) {
-    writeFileSync(greensPath, JSON.stringify({ ...greens, [key]: result }, null, 2));
-  }
-  emit(result);
-}
+emit(await runGate());

@@ -1,8 +1,9 @@
 /**
  * One return for every legitimate terminal result of the routed fix chain.
  *
- * Delivery is accepted when the deliver branch actually ran and handed back the
- * pull request it confirmed ready. Every other completion reports, in the producing node's
+ * Delivery is accepted when the deliver branch ran and reported its pull request
+ * ready; a delivery that ended not ready reports deliver's own reason. Every other
+ * completion reports, in the producing node's
  * own words, why nothing was delivered — and says plainly when requested work was
  * not done, so a completed run that shipped nothing never reads as a success it is
  * not. `delivered` is this workflow's authored outcome: an honest "no work is owed"
@@ -14,7 +15,7 @@
  * - INPUTS_INV_VERDICT / INPUTS_INV_SUMMARY: the investigation's verdict and
  *   summary, or "null" when it did not run.
  * - INPUTS_PLAN_SUMMARY: the planner's summary, or "null" when it did not run.
- * - INPUTS_DELIVERED: `$deliver.output.pr_url`, the confirmed ready URL, or "null"
+ * - INPUTS_DELIVERED / INPUTS_DELIVERY: deliver's `ready` and `summary`, or "null"
  *   when the deliver branch was skipped.
  *
  * A failed delivery cannot reach this node: the failure cascades an
@@ -41,6 +42,7 @@ const invVerdict = optional(process.env.INPUTS_INV_VERDICT);
 const invSummary = optional(process.env.INPUTS_INV_SUMMARY);
 const planSummary = optional(process.env.INPUTS_PLAN_SUMMARY);
 const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
+const delivery = text(process.env.INPUTS_DELIVERY);
 
 function stopped(): { readonly text: string; readonly report: string } {
   if (route === 'no_action') {
@@ -69,6 +71,6 @@ if (delivered === 'null') {
     summary: `${stop.text.trim()}\nReport: ${artifacts}/${stop.report}` + caveats(artifacts, { listingFile }),
   });
 } else {
-  // Deliver ran, so the record it returned is the report.
-  emit({ delivered: true, summary: delivered + caveats(artifacts, { listingFile }) });
+  // Deliver ran, so its outcome is the report; its summary already carries the caveats.
+  emit({ delivered: delivered === 'true', summary: delivery });
 }

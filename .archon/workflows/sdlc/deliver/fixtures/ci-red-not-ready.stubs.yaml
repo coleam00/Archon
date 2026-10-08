@@ -1,6 +1,7 @@
-# Dry-run fixture: discover-ci expects a check an external CI posts, and it has not
-# registered when the probe reads. The probe reports pending rather than concluding
-# on silence, and the run waits for it instead of confirming the ready claim.
+# Dry-run fixture: CI is red on the delivered head, so the pull request is never
+# marked ready and the run completes not ready with the root cause (--exec-code, so
+# the real outcome script reports it). flip-ready carries no stub: reaching it would
+# execute the real script and fail this fixture.
 impl__implement:
   done: true
   green: true
@@ -11,7 +12,6 @@ gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summar
 pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
 pr__synced: { recorded: true }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-discover-ci: { expected_checks: ["ci/circleci: test"], logs_reachable: false, evidence: "stub: CircleCI posts ci/circleci: test, required by branch protection" }
 review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
 review__coverage: { full: true, errors: false, docs: false, lenses: [seams, code, tests, simplify] }
 review__scope:
@@ -41,13 +41,7 @@ review__publish:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
 gate-ready: '{"ready":"true"}'
-ci-probe: '{"state":"pending","detail":"expected check(s) not registered yet: ci/circleci: test"}'
-ci-settle: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
-ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
-ci-attention-route: '{"attention":false,"red_cause":""}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/2", flipped_at: null }
-confirm-ready: { pr_url: "https://github.com/example/repo/pull/2" }
-outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
+ci: { state: red, summary: "stub: lint fails in src/feature.ts:12, a file this pull request adds", evidence: "stub: the lint job log on the head commit" }
 review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
@@ -63,5 +57,6 @@ match-discoveries: { matches: [] }
 fork: '{"fork":false}'
 publish-pr-body: {}
 fixture:
-  expect: paused
-  reached: [flip-ready, discover-ci, ci-probe]
+  expect: completed
+  reached: [ci, outcome]
+exec-code: true

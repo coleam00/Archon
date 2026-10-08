@@ -17,7 +17,6 @@ gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summar
 pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
 pr__synced: { recorded: true }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
 review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
 review__coverage: { full: true, errors: true, docs: false, lenses: [seams, code, tests, simplify, errors] }
 review__scope:
@@ -84,12 +83,9 @@ sync-pr-body: { body: null, summary: "stub: the body is still accurate" }
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
 gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":"","head":null}'
-ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
-ci-settle: '{"state":"concluded","detail":"all 2 check(s) green"}'
-ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/1", flipped_at: null }
-confirm-ready: { pr_url: "https://github.com/example/repo/pull/1" }
-outcome: { pr_url: "https://github.com/example/repo/pull/1", summary: "https://github.com/example/repo/pull/1" }
+ci: { state: green, summary: "stub: every check that gates a merge passed", evidence: "stub: gh pr checks on the head commit" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/1" }
+outcome: { ready: true, pr_url: "https://github.com/example/repo/pull/1", summary: "https://github.com/example/repo/pull/1" }
 review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full

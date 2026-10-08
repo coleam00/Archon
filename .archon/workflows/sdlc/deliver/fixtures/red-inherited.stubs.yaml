@@ -1,12 +1,11 @@
 # Dry-run fixture: red the change cannot have caused passes BOTH green gates, and
-# the run rides to the durable CI wait (--exec-code, so both real gate scripts
-# decide).
+# the run rides to the CI check (--exec-code, so both real gate scripts decide).
 #
 # An inherited base break survives the whole tail: implement meets it, and so does
 # the project gate after review, because nobody fixed the base meanwhile. Neither
 # gate refuses it — the pull request's own CI is what decides, and it is red there
-# too, so `ci-probe` reports pending and the run suspends at `ci-pause` rather than
-# dying locally. That pause is the intended terminus: resume once the base is fixed.
+# too, so the run completes not ready with the root cause. flip-ready carries no
+# stub: reaching it would execute the real script and fail this fixture.
 impl__implement:
   done: true
   green: false
@@ -18,7 +17,6 @@ impl__assert-changed: "3 files changed"
 pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
 pr__synced: { recorded: true }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
 review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
@@ -61,13 +59,12 @@ validate__run: { status: red, summary: "stub: a check in the project gate failed
 validate__classify:
   red_cause: inherited
   summary: "stub: the same inherited break, still red on the base"
-ci-probe: '{"state":"pending","detail":"stub: 1 check still running"}'
 file-discoveries: '{"records":[]}'
 match-discoveries: { matches: [] }
 fork: '{"fork":true}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/6", flipped_at: null }
+ci: { state: red, summary: "stub: test (ubuntu) fails in src/db.test.ts; the base fails the same way, so the break is inherited", evidence: "stub: the failing job log and the base branch run" }
 publish-pr-body: {}
 fixture:
-  expect: paused
-  reached: [pr__prepare, review__synthesize, gate-validated, ci-probe]
+  expect: completed
+  reached: [pr__prepare, review__synthesize, gate-validated, ci, outcome]
 exec-code: true

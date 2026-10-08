@@ -3,12 +3,10 @@ description: |
   The delivery tail, autonomous on its green path: implement the work, gate on
   green, simplify it before anything is public, bring the branch up to date and
   open a draft PR, review it at the depth its risk earns, correct the findings
-  the owner judges worth fixing, file discoveries as issues, mark the PR ready,
-  then wait on CI once. Red is re-run, classified, and fixed or answered with a
-  repaired base at most once; red that stays unresolved puts the PR back in draft
-  and pauses for the operator. A red PR never stays ready. There is no in-run
-  approval gate — the human gate is PR review and merge on GitHub, outside the
-  run.
+  the owner judges worth fixing, file discoveries as issues, then check CI: green
+  marks the PR ready, and red ends the run not ready with the root cause. A red PR
+  is never marked ready. There is no in-run approval gate — the human gate is PR
+  review and merge on GitHub, outside the run.
 
   Use when: decided work should become a reviewed, ready-to-merge PR —
   "deliver this plan", "take this to a PR", "build and ship this".
@@ -20,9 +18,8 @@ description: |
 # truthfully with the PR still draft and the canonical report carrying the open
 # findings. Every commit that ships is read by a review round that judges structure
 # as well as correctness: the first round's simplify lens (or the focused reviewer)
-# reads the implementation and the structure correction, each recheck reads its
-# correction, and a CI fix gets a continuation review of its own before the ready
-# claim is confirmed.
+# reads the implementation and the structure correction, and each recheck reads its
+# correction.
 
 requires: [github]
 
@@ -53,22 +50,11 @@ inputs:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
 
-# The returns node is what a composed dependency on this workflow resolves to,
-# and what a caller's binding of this workflow's output reads. Both must mean
-# "the delivery finished": the certified ready state is the delivery's proof,
-# where the pr node's record exists from the moment of creation even when
-# everything after it dies. Returning confirm-ready makes a failed confirmation
-# block a composing caller's terminal node, an earlier death hand it a null, and
-# a success hand it the read-back-verified URL — never a stale record presented
-# as a delivery. The deliberate cost: when the confirmation itself FAILS, the
-# composing tail's terminal node is blocked, so its caveat and discovery
-# surfacing is skipped along with the false delivery claim — the operator gets
-# the confirmation's own error, which names the recovery. Truthful failure beats a lying report. The
-# engine's terminal record does not close that gap: it is assembled when the run
-# reaches a terminal status and read back from outside, so no node of this run
-# can compose from it, and it carries no discoveries or red causes of its own.
-# What it does supply the operator is the node that actually failed.
-returns: confirm-ready
+# A composed caller reads the outcome: ready with the pull request's URL, or not
+# ready with why. Not ready is a valid completion, like `delivered: false` in the
+# callers; a delivery that broke fails instead, naming the node that failed.
+returns: outcome
+outcome_field: ready
 
 nodes:
   - id: impl
@@ -177,26 +163,6 @@ nodes:
         risks: { type: string, minLength: 1 }
       required: [risks]
 
-  # What CI this project has, which checks gate a merge of this pull request, and
-  # whether their logs are readable from here: project facts an agent discovers
-  # once per delivery, beside the review. The CI waits and the ready confirmation
-  # act on this record deterministically; no script names a CI system or a check.
-  - id: discover-ci
-    command: discover-ci
-    model: small
-    depends_on: [pr]
-    mutates_checkout: false
-    with:
-      pr: "$pr.output"
-    output_type: ci-facts
-    output_format:
-      type: object
-      properties:
-        expected_checks: { type: array, items: { type: string, pattern: '\S' } }
-        logs_reachable: { type: boolean }
-        evidence: { type: string, pattern: '\S' }
-      required: [expected_checks, logs_reachable, evidence]
-
   - id: classify
     command: classify-review-scope
     # This workflow declares no top-level model, so every AI node here names its
@@ -262,8 +228,8 @@ nodes:
   # bound would need runtime-parameterized composition, which the language
   # deliberately does not have — the flat bound buys the same outcome.
   #
-  # Corrections are driven by the review and local validation alone. CI is
-  # waited on once, after the pull request is marked ready (await-checks below).
+  # Corrections are driven by the review and local validation alone; CI is read
+  # once, after them (the ci node below).
   # The review's verdict is certified at its producer: `action` is an enum the
   # engine enforces on synthesize, so it routes here unvalidated. A verdict that
   # contradicts itself (`ready: true` with `correct`) cannot mislead this graph,
@@ -424,9 +390,9 @@ nodes:
             required: [title, issue]
       required: [records]
 
-  # The final local gate runs only where it is the sole check before the ready mark: a
-  # fork's CI waits for a maintainer's approval. Otherwise the implementation
-  # already ran the project's gate on this head and CI runs it again.
+  # The final local gate runs only on a fork, whose CI can wait for a maintainer's
+  # approval. Otherwise the implementation already ran the project's gate on this
+  # head and CI runs it again.
   - id: fork
     script: is-fork
     runtime: bun
@@ -504,8 +470,7 @@ nodes:
     output_format: { type: object }
 
   # Final local gate, fork pull requests only: the project's own checks via the
-  # validate package, the one validation before the ready mark when CI is
-  # maintainer-gated.
+  # validate package, because a fork's CI can wait on a maintainer's approval.
   - id: validate
     include: archon-validate
     depends_on: [fork]
@@ -514,12 +479,11 @@ nodes:
   # The third gate on the same script, for the same reason: a local gate that
   # refuses every red refuses red the change did not cause, and the base break
   # this branch inherited is exactly the red that survives to here. Introduced red
-  # still stops the run. Inherited or environment red proceeds to await-checks,
-  # where the pull request's own CI decides — an inherited break is red there
-  # too, is classified once more by the convergence pass below, and pauses for
-  # explicit operator action, with the pull request back in draft. A validation that
-  # did not finish (`incomplete`) also stops the run, reported as unfinished
-  # rather than red, so resuming is the action.
+  # still stops the run. Inherited or environment red proceeds to the ci node,
+  # where the pull request's own CI decides: an inherited break is red there too,
+  # and the pull request stays draft. A validation that did not finish
+  # (`incomplete`) also stops the run, reported as unfinished rather than red, so
+  # resuming is the action.
   - id: gate-validated
     script: gate-green
     runtime: bun
@@ -534,569 +498,55 @@ nodes:
       summary: "$validate.output.summary"
       stage: "The project gate"
 
-  # The work is done: review converged and the local gate is green for the tree.
-  # The pull request is marked ready now, before CI is waited on, because a project
-  # whose CI skips drafts only starts it here. confirm-ready at the end converts it
-  # back to draft unless CI is green on the final head: a red pull request never
-  # stays ready.
+  # Whether CI is green on the delivered head is this agent's judgment, waiting
+  # included: it reads whatever CI the project has and waits for running checks
+  # itself. It never writes. flip-ready marks the pull request ready only on a
+  # green answer, so a red pull request is never made ready.
+  - id: ci
+    command: check-ci
+    model: medium
+    mutates_checkout: false
+    depends_on: [publish-pr-body]
+    with:
+      pr: "$pr.output"
+    output_format:
+      type: object
+      properties:
+        state: { type: string, enum: [green, red, blocked] }
+        summary: { type: string, pattern: '\S' }
+        evidence: { type: string, pattern: '\S' }
+      required: [state, summary, evidence]
+
   - id: flip-ready
     script: flip-ready
     runtime: bun
-    output_format:
-      type: object
-      properties:
-        pr_url: { type: string, minLength: 1 }
-        flipped_at: { type: [string, 'null'] }
-      required: [pr_url, flipped_at]
-    with:
-      pr:
-        from: "$pr.output"
-    # publish-pr-body runs after every gate and the resync, and is skipped when a
-    # gate failed. discover-ci is named so the flip never runs without the CI facts
-    # confirm-ready binds: after the flip, nothing may fail before the draft
-    # conversion can.
-    depends_on: [publish-pr-body, discover-ci]
-
-  # CI wait, durably. The probe classifies check state once; a pending state
-  # routes into the engine's `wait:` node, which suspends the run and
-  # releases the worker slot. A concluded check signals the wait and the
-  # continuation scheduler resumes it; the five-minute deadline preserves
-  # progress when no webhook arrives. Red is a reported state here, never a
-  # body failure: the probe declares it, the loop exits as concluded, and the
-  # convergence pass below owns what red means. A concluded probe skips the
-  # pause and `until_bash` ends the loop with zero wasted wait. The probe waits
-  # for every check discover-ci expects, so silence is pending, never a pass.
-  # 13 iterations bound the watch at ~60 minutes of CI time — exhausting it
-  # fails the run, and confirm-ready puts the PR back in draft.
-  - id: await-checks
-    loop_group:
-      max_iterations: 13
-      # Red counts as done here; ci-verdict classifies a concluded red, and
-      # confirm-ready refuses any non-green state regardless.
-      until_bash: |
-        value=$ci-probe.output.state
-        test "$value" != "pending"
-      nodes:
-        - id: ci-probe
-          script: check-ci
-          runtime: bun
-          with:
-            pr:
-              from: "$pr.output"
-            expected:
-              from: "$discover-ci.output.expected_checks"
-            flipped_at:
-              from: "$flip-ready.output.flipped_at"
-          timeout: 120000
-          output_format: &ci_state
-            type: object
-            properties:
-              state: { type: string, enum: [pending, concluded, red] }
-              detail: { type: string }
-            required: [state, detail]
-        - id: ci-pause
-          wait:
-            event: checks.complete
-            deadline_ms: 300000
-          when: $ci-probe.output.state == 'pending'
-          depends_on: [ci-probe]
-    depends_on: [flip-ready, discover-ci]
-
-  # Late-red convergence. Review convergence and CI conclusion race: a
-  # branch-introduced failure can conclude after the last recheck, the wait
-  # exits on any non-pending state, and confirm-ready's only moves are keeping
-  # the PR ready on green or putting it back in draft. The pass below is the bounded route between them:
-  # re-run once when warranted, classify, correct, re-await, and classify again.
-  # It sits after the wait because loop completion is computed externally (see
-  # await-checks) and a DAG has no back-edges.
-  - id: ci-settle
-    script: check-ci
-    runtime: bun
-    with:
-      pr:
-        from: "$pr.output"
-      expected:
-        from: "$discover-ci.output.expected_checks"
-      flipped_at:
-        from: "$flip-ready.output.flipped_at"
-    timeout: 120000
-    depends_on: [await-checks]
-    output_format: *ci_state
-
-  # A check can register after the probe that ended the wait concluded (a ready
-  # run starting late, a workflow chained on another). Pending here goes back to
-  # the same wait (probe, wake-up, five-minute deadline and 13-iteration ceiling as
-  # await-checks) instead of reaching the ready confirmation, which would read it
-  # as not green and put the pull request back in draft.
-  - id: await-late-checks
-    depends_on: [ci-settle]
-    when: "$ci-settle.output.state == 'pending'"
-    loop_group:
-      max_iterations: 13
-      until_bash: |
-        value=$late-probe.output.state
-        test "$value" != "pending"
-      nodes:
-        - id: late-probe
-          script: check-ci
-          runtime: bun
-          with:
-            pr:
-              from: "$pr.output"
-            expected:
-              from: "$discover-ci.output.expected_checks"
-            flipped_at:
-              from: "$flip-ready.output.flipped_at"
-          timeout: 120000
-          output_format: *ci_state
-        - id: late-pause
-          wait:
-            event: checks.complete
-            deadline_ms: 300000
-          when: $late-probe.output.state == 'pending'
-          depends_on: [late-probe]
-
-  - id: ci-verdict
-    script: check-ci
-    runtime: bun
-    with:
-      pr:
-        from: "$pr.output"
-      expected:
-        from: "$discover-ci.output.expected_checks"
-      flipped_at:
-        from: "$flip-ready.output.flipped_at"
-    timeout: 120000
-    depends_on: [ci-settle, await-late-checks]
-    trigger_rule: none_failed_min_one_success
-    output_format: *ci_state
-
-  # Whether a red deserves one re-run before anyone attributes it is judgment; the
-  # re-run itself is rerun-failed's. A re-run comes before classification, so its
-  # result is evidence the classifier reads like any other.
-  - id: ci-rerun
-    command: rerun-ci
-    model: small
-    mutates_checkout: false
-    depends_on: [ci-verdict]
-    when: "$ci-verdict.output.state == 'red'"
-    with:
-      detail: "$ci-verdict.output.detail"
-      ci: "$discover-ci.output"
-    output_format:
-      type: object
-      properties:
-        failure: { type: string, enum: [flake, infrastructure, break, unknown] }
-        requested: { type: boolean }
-        reason: { type: string, pattern: '\S' }
-      required: [failure, requested, reason]
-
-  # The agent decides; this re-runs, and only a failure that may not reproduce: a
-  # break or unknown failure never reaches it, whatever `requested` says.
-  - id: rerun-failed
-    script: rerun-failed
-    runtime: bun
-    depends_on: [ci-rerun]
-    when: "$ci-rerun.output.requested == true && $ci-rerun.output.failure == 'flake' || $ci-rerun.output.requested == true && $ci-rerun.output.failure == 'infrastructure'"
+    depends_on: [ci]
+    when: "$ci.output.state == 'green'"
     with:
       pr: "$pr.output"
-    timeout: 120000
-    output_format:
-      type: object
-      properties:
-        requested: { type: boolean }
-        detail: { type: string }
-      required: [requested, detail]
-
-  - id: await-rerun
-    depends_on: [rerun-failed]
-    when: "$rerun-failed.output.requested == true"
-    loop_group:
-      max_iterations: 13
-      until_bash: |
-        value=$rerun-probe.output.state
-        test "$value" != "pending"
-      nodes:
-        - id: rerun-probe
-          script: check-ci
-          runtime: bun
-          with:
-            pr:
-              from: "$pr.output"
-            expected:
-              from: "$discover-ci.output.expected_checks"
-            flipped_at:
-              from: "$flip-ready.output.flipped_at"
-          timeout: 120000
-          output_format: *ci_state
-        - id: rerun-pause
-          wait:
-            event: checks.complete
-            deadline_ms: 300000
-          when: $rerun-probe.output.state == 'pending'
-          depends_on: [rerun-probe]
-
-  # The state the classifier judges: the re-run's conclusion, or the first
-  # verdict's again when nothing was re-run.
-  - id: ci-reverdict
-    script: check-ci
-    runtime: bun
-    with:
-      pr:
-        from: "$pr.output"
-      expected:
-        from: "$discover-ci.output.expected_checks"
-      flipped_at:
-        from: "$flip-ready.output.flipped_at"
-    timeout: 120000
-    depends_on: [ci-verdict, ci-rerun, rerun-failed, await-rerun]
-    trigger_rule: none_failed_min_one_success
-    when: "$ci-verdict.output.state == 'red'"
-    output_format: *ci_state
-
-  # What caused a concluded red is decided before anyone fixes or waits on it.
-  # An agent reads the logs and reports where each failure lives, the base
-  # commit's result, and the re-run's; ci-cause holds its claim to that evidence
-  # against the changed files git reports. A failure in a file the PR changes is
-  # never inherited, so it always reaches the correction pass.
-  - id: ci-changed
-    script: changed-files
-    runtime: bun
-    depends_on: [ci-reverdict]
-    when: "$ci-reverdict.output.state == 'red'"
-    with:
-      pr:
-        from: "$pr.output"
-    output_format:
-      type: object
-      properties:
-        files: { type: array, items: { type: string } }
-      required: [files]
-
-  - id: ci-classify
-    command: classify-ci-red
-    model: small
-    mutates_checkout: false
-    depends_on: [ci-reverdict]
-    when: "$ci-reverdict.output.state == 'red'"
-    with:
-      detail: "$ci-reverdict.output.detail"
-      ci: "$discover-ci.output"
-    output_format: &ci_claim
-      type: object
-      properties:
-        failing_checks: { type: array, items: { type: string } }
-        failing_paths: { type: array, items: { type: string } }
-        base: { type: string, enum: [fails, passes, unknown] }
-        rerun: { type: string, enum: [fails, passes, cancelled, not_rerun] }
-        claim: { type: string, enum: [introduced, inherited, environment, unavailable] }
-        evidence: { type: string, minLength: 1 }
-      required: [failing_checks, failing_paths, base, rerun, claim, evidence]
-
-  - id: ci-cause
-    script: ci-cause
-    runtime: bun
-    depends_on: [ci-changed, ci-classify]
-    output_type: ci-cause
-    with:
-      changed: "$ci-changed.output"
-      failing_checks: "$ci-classify.output.failing_checks"
-      failing_paths: "$ci-classify.output.failing_paths"
-      base: "$ci-classify.output.base"
-      rerun: "$ci-classify.output.rerun"
-      claim: "$ci-classify.output.claim"
-      evidence: "$ci-classify.output.evidence"
-    output_format:
-      type: object
-      properties:
-        cause: { type: string, enum: [introduced, inherited, environment, unavailable] }
-        evidence: { type: string, minLength: 1 }
-      required: [cause, evidence]
-
-  # The one CI correction pass: introduced red is fixed at its cause, and
-  # inherited red is answered by merging the repaired base. Its commits are
-  # pushed and CI is waited on once more before the ready claim is confirmed; a fix (not a base
-  # merge) also gets a continuation review (ci-recheck below).
-  - id: ci-fix
-    include: archon-implement
-    depends_on: [ci-cause]
-    when: "$ci-cause.output.cause == 'introduced' || $ci-cause.output.cause == 'inherited'"
-    with:
-      work: >-
-        CI concluded non-green on this pull request's final head, classified
-        as $ci-cause.output.cause:
-
-        $ci-cause.output.evidence
-
-        The failing checks:
-
-        $ci-reverdict.output.detail
-
-        When the cause is introduced, fix it at the cause. If the failure is
-        outside this pull request's changed code and does not reproduce,
-        declare green: false with that evidence; never change unrelated code to
-        turn a check green, and never weaken a test. When the cause is
-        inherited, merge the latest base into this branch with a normal merge
-        commit; if the base still fails the same way, declare green: false with
-        red_cause inherited and that evidence, and change nothing else. Commit
-        the result; the workflow pushes it. Do not change the PR's draft state
-        or edit the canonical review comment.
-
-        Accepted work order, for scope only — do not reopen it:
-        $INPUTS.work
-
-  # The same gate, same script, with ci-cause's decision as the cause: an
-  # introduced red the correction left red refuses loudly; red the change is not
-  # shown to cause skipped the correction, passes with its evidence recorded,
-  # and routes to the explicit action wait below.
-  - id: gate-ci-fix
-    script: gate-green
-    runtime: bun
-    # Every gate that passes red leaves the cause as its own typed artifact;
-    # readers find them by type under nodes/, never through one shared file.
-    output_type: green-gate
-    output_format: *green_gate
-    depends_on: [ci-cause, ci-fix]
-    trigger_rule: none_failed_min_one_success
-    with:
-      green: { from: "$ci-fix.output.green", if_skipped: "false" }
-      red_cause: "$ci-cause.output.cause"
-      summary: "$ci-cause.output.evidence"
-      stage: "The CI correction"
-
-  - id: push-ci-fix
-    script: push-head
-    runtime: bun
-    depends_on: [gate-ci-fix]
-    when: "$ci-cause.output.cause == 'introduced' || $ci-cause.output.cause == 'inherited'"
-    with:
-      pr: "$pr.output"
-
-  # A CI fix is written after the review converged, so its commits get a review
-  # round of their own: a continuation over the canonical report that judges the
-  # fix's correctness and structure. Skipped when no fix ran, when the pass only
-  # merged the base, or when it changed nothing. A blocking finding puts the PR
-  # back in draft (confirm-ready) and stops the run with the report public; there
-  # is no second correction loop after CI.
-  - id: ci-delta-scope
-    script: delta-scope
-    runtime: bun
-    depends_on: [push-ci-fix]
-    when: "$ci-cause.output.cause == 'introduced'"
-    output_type: ci-fix-delta
-    with:
-      since: "$ci-fix.execution.checkoutStart"
-    output_format:
-      type: object
-      properties:
-        moved: { type: boolean }
-      required: [moved]
-
-  - id: ci-recheck
-    include: archon-review
-    depends_on: [ci-delta-scope]
-    when: "$ci-delta-scope.output.moved == true"
-    with:
-      scope: "$pr.output"
-      prior_report: "$ARTIFACTS_DIR/review/report.md"
-      work_order: "$INPUTS.work"
-      tier: "$classify.output.tier"
-      errors: "$resolve-scope.output.errors"
-      docs: "$classify.output.docs"
-
-  # The readiness gate's script on the CI fix's review: only `none` passes. Its
-  # typed record exists only when that review converged, which is how confirm-ready
-  # knows without binding a node that may have failed.
-  - id: gate-ci-recheck
-    script: gate-ready
-    runtime: bun
-    depends_on: [ci-recheck]
-    output_type: ci-fix-review
-    output_format: { type: object }
-    with:
-      review_action: "$ci-recheck.output.action"
-      correction_action: ""
-
-  # The re-wait after a pushed correction: same probe, webhook wake-up,
-  # five-minute deadline fallback, and ceiling as await-checks. When no fix ran,
-  # nothing was pushed and this exits in one probe before the action route below.
-  - id: await-fix-checks
-    loop_group:
-      max_iterations: 13
-      until_bash: |
-        value=$fix-ci-probe.output.state
-        test "$value" != "pending"
-      nodes:
-        - id: fix-ci-probe
-          script: check-ci
-          runtime: bun
-          with:
-            pr:
-              from: "$pr.output"
-            expected:
-              from: "$discover-ci.output.expected_checks"
-            flipped_at:
-              from: "$flip-ready.output.flipped_at"
-          timeout: 120000
-          output_format: *ci_state
-        - id: fix-ci-pause
-          wait:
-            event: checks.complete
-            deadline_ms: 300000
-          when: $fix-ci-probe.output.state == 'pending'
-          depends_on: [fix-ci-probe]
-    depends_on: [gate-ci-fix, ci-delta-scope, gate-ci-recheck]
-    trigger_rule: none_failed_min_one_success
-
-  # A red after the CI fix is classified again before anything acts on it. There
-  # is no second fix: introduced red refuses at the gate, and red the fix is not
-  # shown to have caused passes there to the operator's pause below.
-  - id: fix-verdict
-    script: check-ci
-    runtime: bun
-    with:
-      pr:
-        from: "$pr.output"
-      expected:
-        from: "$discover-ci.output.expected_checks"
-      flipped_at:
-        from: "$flip-ready.output.flipped_at"
-    timeout: 120000
-    depends_on: [await-fix-checks]
-    when: "$ci-cause.output.cause == 'introduced' || $ci-cause.output.cause == 'inherited'"
-    output_format: *ci_state
-
-  - id: fix-classify
-    command: classify-ci-red
-    model: small
-    mutates_checkout: false
-    depends_on: [fix-verdict]
-    when: "$fix-verdict.output.state == 'red'"
-    with:
-      detail: "$fix-verdict.output.detail"
-      ci: "$discover-ci.output"
-    output_format: *ci_claim
-
-  - id: gate-fix-result
-    script: gate-green
-    runtime: bun
-    output_type: green-gate
-    output_format: *green_gate
-    depends_on: [fix-classify]
-    with:
-      green: "false"
-      red_cause: "$fix-classify.output.claim"
-      summary: "$fix-classify.output.evidence"
-      stage: "The CI correction's result"
-
-  # Late red that the branch did not introduce needs a person, not another
-  # autonomous correction. Preserve the draft PR and the recorded refusal,
-  # then probe once per explicit resume until the operator has rerun the check.
-  # The post-fix cause, when one was classified, is the current one.
-  - id: ci-attention-route
-    script: ci-attention-route
-    runtime: bun
-    depends_on: [ci-verdict, gate-ci-fix, await-fix-checks, gate-fix-result]
-    trigger_rule: none_failed_min_one_success
-    with:
-      red_cause: { from: "$gate-ci-fix.output.red_cause", if_skipped: "" }
-      post_fix_cause: { from: "$gate-fix-result.output.red_cause", if_skipped: "" }
-    output_format:
-      type: object
-      properties:
-        attention: { type: boolean }
-        red_cause: { type: string }
-      required: [attention, red_cause]
-
-  # Red the run could not resolve: the pull request goes back to draft before the
-  # run pauses for the operator.
-  - id: mark-draft
-    script: mark-draft
-    runtime: bun
-    depends_on: [ci-attention-route]
-    when: "$ci-attention-route.output.attention == true"
-    with:
-      pr: "$pr.output"
-
-  - id: ci-attention
-    depends_on: [mark-draft]
-    when: "$ci-attention-route.output.attention == true"
-    loop_group:
-      max_iterations: 13
-      until_bash: |
-        value=$attention-ci-probe.output.state
-        test "$value" = "concluded"
-      nodes:
-        - id: attention-ci-probe
-          script: check-ci
-          runtime: bun
-          with:
-            pr:
-              from: "$pr.output"
-            expected:
-              from: "$discover-ci.output.expected_checks"
-            flipped_at:
-              from: "$flip-ready.output.flipped_at"
-          timeout: 120000
-          output_format: *ci_state
-        - id: attention-ci-pause
-          wait:
-            attention: >-
-              CI remains non-green for pull request
-              #$pr.output.number after Archon classified the failure as
-              $ci-attention-route.output.red_cause:
-              $attention-ci-probe.output.detail
-              Re-run the failing check, then resume this run.
-          when: "$attention-ci-probe.output.state != 'concluded'"
-          depends_on: [attention-ci-probe]
-
-  # A barrier that settles once the CI path has, however it ended: a failed step
-  # there must still reach the confirmation below.
-  - id: ci-settled
-    bash: "true"
-    depends_on: [ci-verdict, ci-attention-route, ci-attention, gate-ci-fix, gate-fix-result, gate-ci-recheck]
-    trigger_rule: all_done
-
-  # The ready claim is certified on the final head: CI green, every expected check
-  # present, and the CI fix's review converged — or the pull request goes back to
-  # draft and this refuses. It runs however the CI path ended (ci-settled), so a
-  # failed step there still leaves no red pull request ready, and it is skipped
-  # when the early flip never happened, so nothing here can mark ready a pull
-  # request the delivery never finished.
-  - id: confirm-ready
-    script: confirm-ready
-    runtime: bun
     output_format:
       type: object
       properties:
         pr_url: { type: string, minLength: 1 }
       required: [pr_url]
-    with:
-      pr: "$pr.output"
-      expected:
-        from: "$discover-ci.output.expected_checks"
-      flipped_at:
-        from: "$flip-ready.output.flipped_at"
-    depends_on: [flip-ready, ci-settled]
 
-  # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts).
-  # confirm-ready owns the final ready claim and stops there; composing
-  # the text its reader receives is separate work, and a named script keeps it out
-  # of a bash body.
-  #
-  # No `outcome_field:` here, unlike the other tails. It would need a two-valued
-  # boolean on this workflow's `returns:` node, and delivery has none: confirm-ready
-  # refuses rather than reporting a false verdict, so the field could only ever be
-  # a constant. The run's lifecycle status already carries that fact.
+  # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts):
+  # ready with the pull request's URL, or not ready with the CI agent's reason. A
+  # failed flip blocks this join, so the run reports the node that failed.
   - id: outcome
     script: outcome
     runtime: bun
+    depends_on: [ci, flip-ready]
+    trigger_rule: none_failed_min_one_success
     with:
-      pr_url: "$confirm-ready.output.pr_url"
-    depends_on: [confirm-ready]
+      pr: "$pr.output"
+      state: "$ci.output.state"
+      ci_summary: "$ci.output.summary"
+      pr_url: { from: "$flip-ready.output.pr_url", if_skipped: null }
     output_format:
       type: object
       properties:
-        pr_url: { type: string }
+        ready: { type: boolean }
+        pr_url: { type: string, minLength: 1 }
         summary: { type: string }
-      required: [pr_url, summary]
+      required: [ready, pr_url, summary]

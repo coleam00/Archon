@@ -108,9 +108,9 @@ nodes:
     trigger_rule: none_failed_min_one_success
 
   # One return for every legitimate terminal result. Negative advisory verdicts
-  # complete with the report that explains them; delivery is reported from the
-  # confirmed ready URL the deliver branch returned (bound with if_skipped, so a
-  # skipped confirmation arrives as null) — see scripts/outcome.ts.
+  # complete with the report that explains them; a delivery is reported from the
+  # deliver branch's own outcome, ready or not (bound with if_skipped, so a skipped
+  # branch arrives as null) — see scripts/outcome.ts.
   #
   # The advisory producers are bound with if_skipped: a route that never ran them
   # reads null. Two dependencies carry the whole graph. `deliver` depends on every spend
@@ -134,7 +134,8 @@ nodes:
       inv_verdict: { from: "$inv.output.verdict", if_skipped: null }
       inv_summary: { from: "$inv.output.summary", if_skipped: null }
       plan_summary: { from: "$planned.output.summary", if_skipped: null }
-      delivered: { from: "$deliver.output.pr_url", if_skipped: null }
+      delivered: { from: "$deliver.output.ready", if_skipped: null }
+      delivery: { from: "$deliver.output.summary", if_skipped: null }
     output_format:
       type: object
       properties:

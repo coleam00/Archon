@@ -5,7 +5,7 @@
  *
  * The other pack tests fake the CLI's answers. This one proves the pieces agree:
  * a delivery creates a draft pull request, updates its body, upserts the same
- * review comment across rounds, flips ready, reads checks and restores draft, and none of
+ * review comment across rounds, flips ready and restores draft, and none of
  * those steps calls `gh`.
  */
 import { describe, expect, it } from 'bun:test';
@@ -129,7 +129,7 @@ process.exitCode = await forgeCommand(
 }
 
 describe('the forge opt-in delivers through plugin operations', () => {
-  it('creates a draft, resyncs its body, upserts one review comment, flips ready, reads checks and restores draft', () => {
+  it('creates a draft, resyncs its body, upserts one review comment, flips ready and restores draft', () => {
     const host = forgeHost();
     const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {
       const run = runPackScript(relative, {
@@ -206,18 +206,9 @@ describe('the forge opt-in delivers through plugin operations', () => {
     // 4. The second round edits the same comment rather than adding one.
     review(ROUND_TWO, true);
 
-    // 5. The ready flip, then the CI probe reads the plugin's checks.
+    // 5. The ready flip.
     const flipped = through('deliver/scripts/flip-ready', { inputs: { INPUTS_PR: created.stdout } });
-    const flip = JSON.parse(flipped.stdout) as { pr_url: unknown; flipped_at: string };
-    expect(flip.pr_url).toEqual(record.url);
-    expect(Number.isNaN(Date.parse(flip.flipped_at))).toBe(false);
-    const probed = through('deliver/scripts/check-ci', {
-      inputs: { INPUTS_PR: created.stdout, INPUTS_FLIPPED_AT: flip.flipped_at },
-    });
-    expect(JSON.parse(probed.stdout)).toEqual({
-      state: 'concluded',
-      detail: `all 1 observed check(s) green at ${HEAD_SHA}`,
-    });
+    expect(JSON.parse(flipped.stdout)).toEqual({ pr_url: record.url });
 
     const drafted = through('../../scripts/__tests__/mark-pr-draft');
     expect(JSON.parse(drafted.stdout)).toMatchObject({ is_draft: true, state: 'open' });

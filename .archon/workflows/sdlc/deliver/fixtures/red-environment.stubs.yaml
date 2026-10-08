@@ -15,7 +15,6 @@ impl__assert-changed: "3 files changed"
 pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
 pr__synced: { recorded: true }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
 review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
@@ -87,17 +86,14 @@ sync-pr-body: { body: null, summary: "stub: the body is still accurate" }
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: the contention cleared; full gate green" }
 gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":"","head":null}'
-ci-probe: '{"state":"concluded","detail":"all checks green"}'
-ci-settle: '{"state":"concluded","detail":"all checks green"}'
-ci-verdict: '{"state":"concluded","detail":"all checks green"}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/7", flipped_at: null }
-confirm-ready: { pr_url: "https://github.com/example/repo/pull/7" }
-outcome: { pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
+ci: { state: green, summary: "stub: every check that gates a merge passed", evidence: "stub: gh pr checks on the head commit" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }
+outcome: { ready: true, pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
 file-discoveries: '{"records":[]}'
 match-discoveries: { matches: [] }
 fork: '{"fork":true}'
 push-fix: "push-head: fixture-branch is at fixturehead"
 fixture:
   expect: completed
-  reached: [gate-correction-green, flip-ready, confirm-ready]
+  reached: [gate-correction-green, flip-ready, outcome]
 exec-code: true

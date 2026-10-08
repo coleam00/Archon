@@ -1,16 +1,7 @@
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect } from 'bun:test';
-import { spawnSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { dirname, join } from 'path';
-import { removeTempTree } from '@archon/paths/test-utils';
-import {
-  fakeGhPreload,
-  forgePrRecord,
-  gitCheckout,
-  type GhFake,
-} from '../../../../.archon/scripts/__tests__/deliver-checks-harness';
+import { existsSync, readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
 import {
   isBinaryBuild,
   BUNDLED_COMMANDS,
@@ -381,10 +372,6 @@ describe('bundled-defaults', () => {
       expect(unreviewed).toEqual([]);
     });
 
-    // Delivery waits on CI once, before the flip, on the final head. Only a check
-    // that registers after that wait concluded, a re-run, or the one CI fix earns
-    // another wait, and the operator's attention loop waits for an explicit re-run;
-    // nothing reads or waits on CI earlier in the run.
     // OpenAI Structured Outputs (the Codex provider's path) accepts only an object at a
     // schema's root, so a root union or scalar ends the node on every call there. A
     // decision with variants nests its union under a property instead.
@@ -413,74 +400,46 @@ describe('bundled-defaults', () => {
       expect(offenders).toEqual([]);
     });
 
-    it('archon-deliver waits on CI only before the flip', () => {
+    // CI is judged once, by one agent node after the work is done, which waits on
+    // running checks itself: the graph has no engine wait and no loop around CI.
+    // The ready mark follows only a green verdict.
+    it('archon-deliver judges CI in one agent node and marks ready only on green', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],
         'archon-deliver.yaml',
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-      const waiting = parsed.workflow.nodes
-        .filter(
-          node =>
-            node.kind === 'loop_group' &&
-            node.loop_group.nodes.some(
-              body => body.kind === 'wait' || ('script' in body && body.script === 'check-ci')
-            )
-        )
-        .map(node => node.id);
-      expect(waiting).toEqual([
-        'await-checks',
-        'await-late-checks',
-        'await-rerun',
-        'await-fix-checks',
-        'ci-attention',
-      ]);
-      const corrections = parsed.workflow.nodes.find(node => node.id === 'corrections');
+      const nodes = parsed.workflow.nodes;
+      const node = (id: string) => nodes.find(candidate => candidate.id === id);
+      const waits = nodes.flatMap(candidate =>
+        candidate.kind === 'loop_group'
+          ? candidate.loop_group.nodes.filter(body => body.kind === 'wait')
+          : candidate.kind === 'wait'
+            ? [candidate]
+            : []
+      );
+      expect(waits).toEqual([]);
+      const corrections = node('corrections');
       if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
-      expect(corrections.loop_group.nodes.map(node => node.id)).toEqual([
+      expect(corrections.loop_group.nodes.map(body => body.id)).toEqual([
         'fix',
         'gate-correction-green',
         'push-fix',
         'recheck',
       ]);
-    });
-
-    it('marks ready once the work is done, and certifies or drafts it after the CI wait', () => {
-      // publish-pr-body runs after every gate and is skipped when one failed; the
-      // single CI wait follows the flip. confirm-ready runs however the CI path ended
-      // (ci-settled is all_done), so it may bind only values that exist once the flip
-      // ran: the PR record, discover-ci's facts, which the flip waits on, and the
-      // flip's own time. A
-      // binding to a failed CI-path node would fail it before it drafts the PR.
-      // That the gates really block is proved by execution: deliver's validate-red*
-      // fixtures fail at the gate and never reach the flip.
-      const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-deliver'],
-        'archon-deliver.yaml',
-        providerRegistry
-      );
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-      const node = (id: string) => parsed.workflow?.nodes.find(candidate => candidate.id === id);
-      expect(node('flip-ready')?.depends_on).toEqual(['publish-pr-body', 'discover-ci']);
+      expect(node('ci')?.depends_on).toEqual(['publish-pr-body']);
       expect(node('publish-pr-body')?.depends_on).toEqual([
         'fork',
         'gate-validated',
         'sync-pr-body',
       ]);
-      expect(node('await-checks')?.depends_on).toEqual(['flip-ready', 'discover-ci']);
-      expect(node('ci-settled')?.trigger_rule).toBe('all_done');
-      expect(node('confirm-ready')?.depends_on).toEqual(['flip-ready', 'ci-settled']);
-      expect(node('confirm-ready')?.trigger_rule).toBeUndefined();
-      const confirm = node('confirm-ready');
-      expect(confirm && 'with' in confirm ? Object.keys(confirm.with ?? {}) : []).toEqual([
-        'pr',
-        'expected',
-        'flipped_at',
-      ]);
-      expect(node('mark-draft')?.depends_on).toEqual(['ci-attention-route']);
-      expect(node('ci-attention')?.depends_on).toEqual(['mark-draft']);
-      expect(parsed.workflow.returns).toBe('confirm-ready');
+      expect(node('flip-ready')).toMatchObject({
+        depends_on: ['ci'],
+        when: "$ci.output.state == 'green'",
+      });
+      expect(parsed.workflow.returns).toBe('outcome');
+      expect(parsed.workflow.outcome_field).toBe('ready');
     });
 
     // Reviewers create scratch trees under the run, where the workflow removes them;
@@ -711,22 +670,21 @@ describe('bundled-defaults', () => {
       }
     });
 
-    // A resume after a fix must re-derive the verdict from the current tree (#3092), so
-    // the gate runner is always_run. Discovery is not: every durable CI wait in a
-    // delivery resumes the run, and a re-run discover agent would hand the runner a new
-    // check list and re-run the whole gate on every wake. The runner itself reuses a
-    // green it recorded for the same clean tree (scripts/sdlc-validation-run.test.ts).
-    it('archon-validate re-runs only its gate runner on resume (#3092)', () => {
+    it('archon-validate re-discovers and re-runs the checks on resume (#3092)', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-validate'],
         'archon-validate.yaml',
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-      const alwaysRun = parsed.workflow.nodes
-        .filter(node => 'always_run' in node && node.always_run === true)
-        .map(node => node.id);
-      expect(alwaysRun).toEqual(['compare', 'run']);
+
+      for (const id of ['discover', 'run']) {
+        const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
+        if (node === undefined || !('always_run' in node)) {
+          throw new Error(`archon-validate has no executable ${id} node carrying always_run`);
+        }
+        expect(node.always_run).toBe(true);
+      }
     });
 
     // Replaces the deleted scripts/output-format-strict.test.ts, which guarded this
@@ -853,17 +811,7 @@ describe('bundled-defaults', () => {
         kind: 'exec',
         runtime: 'bun',
         script: 'flip-ready',
-        with: { pr: { from: '$pr.output' } },
-      });
-      const confirm = parsedDelivery.workflow.nodes.find(node => node.id === 'confirm-ready');
-      expect(confirm).toMatchObject({
-        kind: 'exec',
-        runtime: 'bun',
-        script: 'confirm-ready',
-        with: {
-          pr: '$pr.output',
-          expected: { from: '$discover-ci.output.expected_checks' },
-        },
+        with: { pr: '$pr.output' },
       });
       expect(deliver).not.toContain('git remote get-url origin');
       // A command node reads its node-local `with:` map through `$INPUTS.<name>`,
@@ -953,130 +901,6 @@ describe('bundled-defaults', () => {
         BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesizeCommand).not.toContain('gh pr comment');
       expect(synthesizeCommand).not.toContain('gh api');
-    });
-
-    it('uses check events as wake-ups while retaining bounded probes and deadlines', () => {
-      const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-deliver'],
-        'archon-deliver.yaml',
-        providerRegistry
-      );
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-
-      for (const [groupId, probeId, pauseId] of [
-        ['await-checks', 'ci-probe', 'ci-pause'],
-        ['await-fix-checks', 'fix-ci-probe', 'fix-ci-pause'],
-      ] as const) {
-        const group = parsed.workflow.nodes.find(node => node.id === groupId);
-        if (group?.kind !== 'loop_group') throw new Error(`${groupId} is not a loop group`);
-        expect(group.loop_group.max_iterations).toBe(13);
-        expect(group.loop_group.until_bash?.trim()).toBe(
-          `value=$${probeId}.output.state\ntest "$value" != "pending"`
-        );
-
-        const probeIndex = group.loop_group.nodes.findIndex(node => node.id === probeId);
-        const pauseIndex = group.loop_group.nodes.findIndex(node => node.id === pauseId);
-        expect(probeIndex).toBeGreaterThanOrEqual(0);
-        expect(pauseIndex).toBeGreaterThan(probeIndex);
-        const pause = group.loop_group.nodes[pauseIndex];
-        if (pause?.kind !== 'wait') throw new Error(`${pauseId} is not a wait node`);
-        expect(pause.wait).toEqual({ event: 'checks.complete', deadline_ms: 300000 });
-        expect(pause.wait).not.toHaveProperty('duration_ms');
-        expect(pause.depends_on).toEqual([probeId]);
-        expect(pause.when).toBe(`$${probeId}.output.state == 'pending'`);
-      }
-    });
-  });
-
-  // A binary install executes the shipped copies of the deliver check scripts, so
-  // these run the bundled pack rather than the source tree. The full matrix for
-  // both sources lives in .archon/scripts/__tests__; this pins the default and
-  // the loud opt-in failure on what actually ships.
-  describe('deliver check source (bundled pack)', () => {
-    const runShipped = async (
-      script: 'check-ci' | 'confirm-ready',
-      options: { source?: string; checks?: GhFake['checks'] }
-    ): Promise<{ code: number; stdout: string; stderr: string; gh: string[] }> => {
-      const root = mkdtempSync(join(tmpdir(), 'archon-bundled-checks-'));
-      try {
-        for (const [path, content] of Object.entries(BUNDLED_SCRIPT_PACKS.sdlc!.files)) {
-          mkdirSync(dirname(join(root, 'sdlc', path)), { recursive: true });
-          writeFileSync(join(root, 'sdlc', path), content);
-        }
-        const ghLog = join(root, 'gh.log');
-        const preload = join(root, 'fake-gh.ts');
-        writeFileSync(preload, fakeGhPreload({ checks: options.checks ?? 'fail' }, ghLog));
-        const listing = join(root, 'typed-artifacts.json');
-        writeFileSync(listing, JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }));
-        const run = spawnSync(
-          process.execPath,
-          ['--preload', preload, join(root, 'sdlc', 'deliver', 'scripts', `${script}.ts`)],
-          {
-            // A draft is marked ready only after a merge check in a real checkout.
-            cwd: script === 'confirm-ready' ? gitCheckout() : root,
-            encoding: 'utf8',
-            env: {
-              ...process.env,
-              INPUTS_PR: JSON.stringify(forgePrRecord()),
-              INPUTS_EXPECTED: '[]',
-              ARTIFACTS_DIR: root,
-              TYPED_ARTIFACTS_FILE: listing,
-              ARCHON_SDLC_FORGE: options.source ?? '',
-              ARCHON_CLI_COMMAND: '',
-            },
-          }
-        );
-        return {
-          code: run.status ?? -1,
-          stdout: run.stdout,
-          stderr: run.stderr,
-          gh: existsSync(ghLog) ? readFileSync(ghLog, 'utf8').split('\n').filter(Boolean) : [],
-        };
-      } finally {
-        await removeTempTree(root);
-      }
-    };
-
-    it('reads checks through gh by default', async () => {
-      const probe = await runShipped('check-ci', {
-        checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }],
-      });
-      expect(probe.code).toBe(0);
-      expect(JSON.parse(probe.stdout)).toEqual({
-        state: 'red',
-        detail: 'non-green checks: build (failure)',
-      });
-      expect(probe.gh[0]).toBe(
-        'pr checks 42 --repo ghe.example.com/example/repo --json name,state,completedAt'
-      );
-
-      const confirm = await runShipped('confirm-ready', {
-        checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
-      });
-      expect(confirm.code).toBe(0);
-      expect(confirm.gh).toContain('pr ready 42 --repo ghe.example.com/example/repo');
-    });
-
-    it('puts the pull request back in draft when the default gh read fails', async () => {
-      const confirm = await runShipped('confirm-ready', { checks: 'fail' });
-      expect(confirm.code).not.toBe(0);
-      expect(confirm.stderr).toContain('confirm-ready: the pull request is back in draft');
-      expect(confirm.stderr).toContain('could not read check state');
-      expect(confirm.gh.some(call => call.startsWith('pr ready') && !call.includes('--undo'))).toBe(
-        false
-      );
-    });
-
-    it('fails loudly when the forge source is selected but unavailable', async () => {
-      for (const script of ['check-ci', 'confirm-ready'] as const) {
-        const run = await runShipped(script, {
-          source: 'forge',
-          checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
-        });
-        expect(run.code).not.toBe(0);
-        expect(run.stderr).toContain('ARCHON_CLI_COMMAND is not set');
-        expect(run.gh).toEqual([]);
-      }
     });
   });
 

@@ -9,8 +9,7 @@
  *
  * The correction loop completes for either `none` or `replan`; only `none` is ready.
  * A replan fails here with the canonical report intact, which is why the loop's own
- * completion cannot be the gate. Before the ready mark the PR is still a draft; on the
- * CI fix's review, after it, confirm-ready converts it back.
+ * completion cannot be the gate. The PR is still a draft here.
  */
 
 import { refuse, report, text } from '../../.shared/io.ts';

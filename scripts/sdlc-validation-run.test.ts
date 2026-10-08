@@ -214,67 +214,6 @@ function result(bindings: { comparison?: unknown; run?: unknown; classification?
   return { exitCode: out.exitCode, output: stdout === '' ? null : JSON.parse(stdout) };
 }
 
-describe('run-checks on a resume', () => {
-  // A delivery's durable CI waits resume the run every few minutes, and `run` is
-  // always_run; an unchanged tree must not run the gate again on each wake.
-  function repo(): { cwd: string; artifacts: string; counter: string } {
-    const f = checkout();
-    const git = (...args: string[]): void => {
-      const done = Bun.spawnSync(['git', ...args], { cwd: f.cwd, stdout: 'pipe', stderr: 'pipe' });
-      if (done.exitCode !== 0) throw new Error(done.stderr.toString());
-    };
-    git('init', '-q');
-    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'base');
-    return { ...f, counter: join(f.artifacts, '..', 'runs.txt') };
-  }
-  const counted = (counter: string, exit = 0): Check => ({
-    name: 'gate',
-    argv: sh(`echo run >> '${counter}'; exit ${String(exit)}`),
-  });
-  const runs = (counter: string): number =>
-    existsSync(counter) ? readFileSync(counter, 'utf8').trim().split('\n').length : 0;
-
-  it('reuses a green for the same clean tree and checks, byte for byte, without running the gate', () => {
-    const f = repo();
-    const first = run(f, [counted(f.counter)]);
-    const second = run(f, [counted(f.counter)]);
-    expect(first.output).toEqual({ status: 'green', summary: 'Every check passed: gate.' });
-    expect(second.output).toEqual(first.output);
-    expect(runs(f.counter)).toBe(1);
-    expect(second.stderr).toContain('not running them again');
-  });
-
-  it('runs the gate again when the tree changed, the checks changed, or the last result was red', () => {
-    const f = repo();
-    run(f, [counted(f.counter)]);
-    Bun.spawnSync(
-      [
-        'bash',
-        '-c',
-        'echo change > file && git add file && git -c user.name=t -c user.email=t@t commit -q -m change',
-      ],
-      { cwd: f.cwd }
-    );
-    run(f, [counted(f.counter)]);
-    expect(runs(f.counter)).toBe(2);
-    run(f, [counted(f.counter), { name: 'lint', argv: sh('exit 0') }]);
-    expect(runs(f.counter)).toBe(3);
-
-    const red = repo();
-    run(red, [counted(red.counter, 1)]);
-    run(red, [counted(red.counter, 1)]);
-    expect(runs(red.counter)).toBe(2);
-  });
-
-  it('never reuses a green for a dirty tree', () => {
-    const f = repo();
-    Bun.spawnSync(['bash', '-c', 'echo wip > wip.txt'], { cwd: f.cwd });
-    run(f, [counted(f.counter)]);
-    run(f, [counted(f.counter)]);
-    expect(runs(f.counter)).toBe(2);
-  });
-});
-
 describe("the gate's environment", () => {
   it("names exactly the engine's exec-node contract", () => {
     expect([...NODE_CONTRACT_ENV].sort()).toEqual([...EXEC_NODE_ENVIRONMENT_NAMES].sort());

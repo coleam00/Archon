@@ -253,7 +253,7 @@ describe('three-tree project gate evidence', () => {
   });
 
   it('keeps interaction out of every shared accepted-red route', () => {
-    expect(PASSES_RED).toEqual(['inherited', 'environment', 'unavailable']);
+    expect(PASSES_RED).toEqual(['inherited', 'environment']);
     expect(passesRed('interaction')).toBe(false);
     expect(passesRed('')).toBe(false);
   });
@@ -364,17 +364,5 @@ describe('the green gate on a validation that did not finish', () => {
     const result = gate('', 'the plan names a file that does not exist');
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('stopped on a blocker it declared: the plan names a file');
-  });
-});
-
-it('does not route an interaction red cause to the accepted-red attention wait', () => {
-  const root = join(import.meta.dir, '..', '.archon/workflows/sdlc/deliver/scripts');
-  const route = Bun.spawnSync([process.execPath, join(root, 'ci-attention-route.ts')], {
-    env: { ...process.env, INPUTS_RED_CAUSE: 'interaction' },
-  });
-  expect(route.exitCode).toBe(0);
-  expect(JSON.parse(route.stdout.toString())).toEqual({
-    attention: false,
-    red_cause: 'interaction',
   });
 });

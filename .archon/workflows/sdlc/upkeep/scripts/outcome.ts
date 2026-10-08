@@ -1,16 +1,16 @@
 /**
  * One return for every legitimate terminal result of the upkeep chain.
  *
- * A no_action assessment completes with the report that explains it; a delivered
- * update is accepted when the deliver branch actually ran and handed back the pull
- * request it opened. `delivered` is this workflow's authored outcome: the run
- * succeeded either way, and whether an update shipped is a separate fact.
+ * A no_action assessment completes with the report that explains it; an update is
+ * delivered when the deliver branch ran and reported its pull request ready, and
+ * otherwise reports deliver's own reason. `delivered` is this workflow's authored
+ * outcome: the run succeeded either way, and whether an update shipped is a
+ * separate fact.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_ACTION / INPUTS_SUMMARY: the assessment's verdict.
- * - INPUTS_DELIVERED: `$deliver.output.pr_url`, the confirmed ready URL, or "null"
- *   when the deliver branch was skipped (no_action). The value is validated at the
- *   producer, so nothing here re-reads it for URL shape.
+ * - INPUTS_DELIVERED / INPUTS_DELIVERY: deliver's `ready` and `summary`, or "null"
+ *   when the deliver branch was skipped (no_action).
  *
  * A failed delivery cannot reach this node: the failure
  * cascades an `upstream_failed` skip that blocks this join, and the run's terminal
@@ -24,7 +24,6 @@ const artifacts = artifactsDir();
 const listingFile = process.env.TYPED_ARTIFACTS_FILE;
 const action = text(process.env.INPUTS_ACTION);
 const summary = text(process.env.INPUTS_SUMMARY);
-const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
 
 if (action === 'no_action') {
   emit({
@@ -34,6 +33,9 @@ if (action === 'no_action') {
       caveats(artifacts, { listingFile }),
   });
 } else {
-  // Deliver ran, so the record it returned is the report.
-  emit({ delivered: true, summary: delivered + caveats(artifacts, { listingFile }) });
+  // Deliver ran, so its outcome is the report; its summary already carries the caveats.
+  emit({
+    delivered: text(process.env.INPUTS_DELIVERED) === 'true',
+    summary: text(process.env.INPUTS_DELIVERY),
+  });
 }

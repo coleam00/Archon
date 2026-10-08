@@ -30,7 +30,6 @@ deliver__review__publish:
   findings_summary: "stub: no open findings"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
-ci-probe: '{"state":"concluded","detail":"all checks green"}'
 deliver__review-policy: { risks: "fixture-owned-policy" }
 deliver__classify:
   tier: full
@@ -49,16 +48,13 @@ exec-code: true
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":"","head":null}'
-deliver__ci-settle: '{"state":"concluded","detail":"all checks green"}'
-deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__publish-pr-body: {}
-deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/7", flipped_at: null }
-deliver__confirm-ready: { pr_url: "https://github.com/example/repo/pull/7" }
-deliver__outcome: { pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
+deliver__ci: { state: green, summary: "stub: every check that gates a merge passed", evidence: "stub: gh pr checks on the head commit" }
+deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }
+deliver__outcome: { ready: true, pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
 deliver__pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
 deliver__pr__synced: { recorded: true }
 deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-deliver__discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
 deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
 deliver__review__coverage: { full: true, errors: false, docs: false, lenses: [seams, code, tests, simplify] }
 deliver__review__scope:

@@ -5,15 +5,13 @@
  * The fake `gh` is a preload that replaces `Bun.spawnSync` for `gh` argv only, so
  * it behaves the same on every platform. It keeps one mutable pull request and
  * one comment list, so a write and the read-back that follows it see the same
- * state — which is what makes an unverified write observable here at all. The
- * preload also makes the registration grace instant.
+ * state — which is what makes an unverified write observable here at all.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import type { ChecksObservation } from '../../../packages/forge/src/operations';
 
 export const PACK = resolve(import.meta.dir, '../../workflows/sdlc');
 export const SCRIPTS = join(PACK, 'deliver/scripts');
@@ -22,22 +20,6 @@ export const PR = { repo: { host: 'ghe.example.com', path: 'example/repo' }, num
 export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 
 const trackTempRoot = trackTempRoots();
-
-/**
- * One row of `gh pr checks --json name,state,bucket,completedAt`, as gh 2.92 prints it.
- * `state` is a check run's conclusion once it completes, its status before
- * that, or a commit status's own state; `bucket` is gh's collapse of `state`
- * (cli/cli pkg/cmd/pr/checks/aggregate.go).
- */
-export interface GhCheckRow {
-  readonly name: string;
-  readonly state: string;
-  readonly bucket: 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel';
-  /** When the check concluded; gh prints the zero time for one still running. */
-  readonly completedAt?: string;
-  /** The check's page: a GitHub Actions job links into its workflow run. */
-  readonly link?: string;
-}
 
 /** One row of `gh api .../issues/<n>/comments`. */
 export interface GhCommentRow {
@@ -59,19 +41,6 @@ export interface GhPr {
 export interface GhFake {
   readonly issueLabels?: readonly string[];
   readonly repositoryLabels?: readonly string[];
-  /**
-   * What `gh pr checks --json` knows about each check; the fake prints only the
-   * fields the reader requests. 'fail' prints no document and exits 1.
-   */
-  readonly checks?: readonly GhCheckRow[] | 'fail';
-  /** `statusCheckRollup | length`; 'fail' exits 1. */
-  readonly rollup?: number | 'fail';
-  /** Workflow runs for the head commit that concluded `action_required`; 'fail' exits 1. */
-  readonly approvalRuns?: number | 'fail';
-  /** stderr for a refused `gh run rerun`; omit for a re-run that is accepted. */
-  readonly rerunFail?: string;
-  /** The same, for one workflow run id only. */
-  readonly rerunFailFor?: Readonly<Record<string, string>>;
   /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
   readonly readyFail?: string;
   /** The pull request every `gh pr view`/`gh pr list` read reports. */
@@ -134,13 +103,12 @@ export interface ScriptRun {
 
 /**
  * A Bun preload that fakes `gh` for one script run and logs every gh argv to
- * `ghLog`. Shared with the bundled-pack test so both fake the same boundary.
+ * `ghLog`.
  */
-export function fakeGhPreload(fake: GhFake, ghLog: string): string {
+function fakeGhPreload(fake: GhFake, ghLog: string): string {
   return `import { appendFileSync, readFileSync } from 'node:fs';
 const fake = ${JSON.stringify(fake)};
 const original = Bun.spawnSync.bind(Bun);
-Object.defineProperty(Bun, 'sleepSync', { value: () => {} });
 const pr = {
   number: 42, title: 'A title', body: 'A body', isDraft: true, state: 'OPEN',
   headRefName: 'feature', headRefOid: 'deadbeef', baseRefName: 'dev',
@@ -206,18 +174,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       return result(0, issueUrl(number));
     }
   }
-  if (text.startsWith('pr checks')) {
-    if (fake.checks === undefined || fake.checks === 'fail')
-      return result(1, '', fake.checks === 'fail' ? 'HTTP 502' : 'no checks reported');
-    const fields = argv[argv.indexOf('--json') + 1].split(',');
-    const rows = fake.checks.map(check => Object.fromEntries(fields.map(field => [field, check[field]])));
-    // gh exits 1 on a failing bucket and 8 on a pending one, and prints the document either way.
-    const code = fake.checks.some(check => check.bucket === 'fail') ? 1
-      : fake.checks.some(check => check.bucket === 'pending') ? 8 : 0;
-    return result(code, JSON.stringify(rows));
-  }
-  if (text.includes('statusCheckRollup'))
-    return fake.rollup === 'fail' || fake.rollup === undefined ? result(1, '', 'HTTP 502') : result(0, String(fake.rollup));
   // Real gh refuses this combination before any request (gh 2.92).
   if (argv.includes('--slurp') && (argv.includes('--jq') || argv.includes('--template')))
     return result(1, '', 'the \`--slurp\` option is not supported with \`--jq\` or \`--template\`');
@@ -254,8 +210,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (text.startsWith('api')) {
     const endpoint = argv.find(part => part.startsWith('repos/'));
     if (endpoint === undefined) return result(95, '', 'unexpected gh api call');
-    if (endpoint.includes('/actions/runs?head_sha='))
-      return fake.approvalRuns === 'fail' ? result(1, '', 'HTTP 502') : result(0, String(fake.approvalRuns ?? 0));
     // gh api names its host with --hostname and its repository in the endpoint.
     const apiHost = argv[argv.indexOf('--hostname') + 1];
     const apiPath = endpoint.split('/').slice(1, 3).join('/');
@@ -276,10 +230,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       else comments.push({ id, body });
     }
     return result(0, JSON.stringify({ id, body, html_url: url(id) }));
-  }
-  if (text.startsWith('run rerun')) {
-    const refused = fake.rerunFailFor?.[argv[3]] ?? fake.rerunFail;
-    return refused ? result(1, '', refused) : result(0);
   }
   return result(95, '', 'unexpected gh call');
 } });
@@ -403,12 +353,11 @@ else {
 }
 
 export function runDeliverScript(
-  script: 'check-ci' | 'flip-ready' | 'confirm-ready' | 'mark-draft' | 'rerun-failed',
+  script: 'flip-ready',
   options: ScriptOptions = {}
 ): ScriptRun {
   // A ready mark checks mergeability against the base in a real checkout.
-  const merges = script === 'flip-ready' || script === 'confirm-ready';
-  const cwd = options.cwd ?? (merges ? gitCheckout() : undefined);
+  const cwd = options.cwd ?? gitCheckout();
   return runPackScript(`deliver/scripts/${script}`, { ...options, cwd });
 }
 
@@ -453,53 +402,6 @@ export function gitCheckout(
     git(work, 'checkout', '-q', 'feature');
   }
   return work;
-}
-
-type ForgeState = 'none' | 'pending' | 'green' | 'red' | 'gated' | 'unknown';
-
-/** A `checks.state` response in the forge wire shape, one unit per named state. */
-export function forgeResponse(
-  units: readonly {
-    name: string;
-    state: Exclude<ForgeState, 'none'>;
-    /** The re-run group the plugin reports for this unit, when it can re-run it. */
-    rerun?: { id: string; attempt: number } | null;
-  }[],
-  options: { revision?: string; required?: typeof units | null; approvalPending?: boolean | null } = {}
-): string {
-  const set = (list: typeof units): Pick<ChecksObservation, 'units' | 'summary'> => {
-    const counts = { total: list.length, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 };
-    for (const unit of list) counts[unit.state]++;
-    const state =
-      (['red', 'gated', 'unknown', 'pending', 'green'] as const).find(key => counts[key] > 0) ??
-      'none';
-    return {
-      units: list.map(unit => ({
-        unit: { kind: 'check', id: unit.name, name: unit.name },
-        nativeState: unit.state,
-        phase: unit.state === 'pending' ? 'running' : 'completed',
-        nativeResult: unit.state,
-        result: unit.state === 'green' ? 'success' : unit.state === 'pending' ? null : 'failure',
-        state: unit.state,
-        ...(unit.rerun === undefined ? {} : { rerun: unit.rerun }),
-      })),
-      summary: { state, counts },
-    };
-  };
-  return JSON.stringify({
-    operationId: 'op-checks',
-    ok: true,
-    result: {
-      op: 'checks.state',
-      value: {
-        ref: PR,
-        revision: options.revision ?? 'deadbeef',
-        ...set(units),
-        approvalPending: options.approvalPending,
-        required: options.required ? set(options.required) : null,
-      },
-    },
-  });
 }
 
 /** A verified pull-request record in the forge wire shape. */

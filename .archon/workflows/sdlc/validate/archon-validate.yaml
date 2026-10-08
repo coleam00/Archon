@@ -72,16 +72,11 @@ nodes:
   # shell tool has a per-call time limit that a project's gate can outlast, and a
   # script node runs for as long as its own `timeout:` allows. Judging why a
   # check failed is judgement again, so only a red run reaches an agent.
-  #
-  # In ordinary validation only `run` re-executes on a resume (always_run): the verdict is what a
-  # fix changes. The discovered check list is reused, so an unchanged tree keys to
-  # the same recorded green and a wake of a later wait re-runs nothing. That holds
-  # within one include of this workflow; a separate include (archon-pr's revalidate)
-  # discovers the checks again.
   - id: discover
     command: discover-checks
     depends_on: [mode]
     when: "$mode.output.comparison == false"
+    always_run: true
     output_format:
       type: object
       properties:
@@ -107,8 +102,7 @@ nodes:
   # `$ARTIFACTS_DIR/validation.md`. Green and "didn't finish" are read from those
   # exit statuses, never from a clock. The timeout is sized for a slow gate on a
   # loaded machine. When it stops the gate anyway, the node is skipped and
-  # `result` reports `incomplete`. A clean tree that already passed the same checks
-  # in this run reuses that green instead of running the gate again.
+  # `result` reports `incomplete`.
   - id: run
     script: run-checks
     runtime: bun

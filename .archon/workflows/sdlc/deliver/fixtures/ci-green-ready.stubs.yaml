@@ -1,7 +1,6 @@
-# Dry-run fixture: CI that skips drafts. At the ready flip the draft's runs are all
-# skipped and the ready runs start seconds later, so a check concluded during the
-# first wait can still be followed by checks that register. The settle read finds
-# them running and waits again; the pull request stays ready once they conclude.
+# Dry-run fixture: CI is green on the delivered head, so flip-ready marks the pull
+# request ready and the run completes ready (--exec-code, so the real outcome script
+# reports it; flip-ready is stubbed because it writes to the forge).
 impl__implement:
   done: true
   green: true
@@ -9,10 +8,9 @@ impl__implement:
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":"","head":null}'
-pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: merged the latest base; no conflicts" }
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
 pr__synced: { recorded: true }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
 review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
 review__coverage: { full: true, errors: false, docs: false, lenses: [seams, code, tests, simplify] }
 review__scope:
@@ -42,17 +40,8 @@ review__publish:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
 gate-ready: '{"ready":"true"}'
-# The race from a project whose CI skips drafts: the probe right after the flip
-# saw only the draft's runs and ended the wait; by the settle read the ready
-# runs had registered. That goes back to a wait, never to the ready confirmation.
-ci-probe: '{"state":"concluded","detail":"all 9 observed check(s) green; skipped (non-blocking): changes, test (ubuntu-latest)"}'
-ci-settle: '{"state":"pending","detail":"2 check(s) running"}'
-late-probe: '{"state":"concluded","detail":"all 9 observed check(s) green"}'
-ci-verdict: '{"state":"concluded","detail":"all 9 observed check(s) green"}'
-ci-attention-route: '{"attention":false,"red_cause":""}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/2", flipped_at: "2026-10-06T07:23:35.000Z" }
-confirm-ready: { pr_url: "https://github.com/example/repo/pull/2" }
-outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
+ci: { state: green, summary: "stub: every check that gates a merge passed", evidence: "stub: gh pr checks on the head commit" }
+flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
@@ -69,5 +58,5 @@ fork: '{"fork":false}'
 publish-pr-body: {}
 fixture:
   expect: completed
-  reached: [flip-ready, ci-probe, ci-settle, late-probe, ci-verdict, confirm-ready]
+  reached: [ci, flip-ready, outcome]
 exec-code: true
