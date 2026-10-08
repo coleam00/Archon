@@ -48,7 +48,9 @@
     "./container-context": "./src/container-context.ts",
     "./structured-output": "./src/structured-output.ts",
     "./dag-resume-snapshot": "./src/dag-resume-snapshot.ts",
-    "./store-conformance": "./src/store-conformance.ts"
+    "./store-conformance": "./src/store-conformance.ts",
+    "./file-store": "./src/file-store/index.ts",
+    "./provider-event-reader": "./src/provider-event-reader.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",

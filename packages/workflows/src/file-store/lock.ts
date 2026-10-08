@@ -81,7 +81,7 @@ const windowsHandleCodes = ['EPERM', 'EBUSY', 'EACCES'];
  * link, rename and unlink of a shared lock or store file retries those codes a
  * bounded number of times; the retry never changes what the operation decides.
  */
-async function retryWindowsHandles<T>(
+export async function retryFileStoreHandles<T>(
   operation: string,
   path: string,
   attempt: () => Promise<T>
@@ -104,12 +104,12 @@ async function retryWindowsHandles<T>(
 }
 
 export async function renameReplacing(source: string, target: string): Promise<number> {
-  const { retries } = await retryWindowsHandles('rename', target, () => rename(source, target));
+  const { retries } = await retryFileStoreHandles('rename', target, () => rename(source, target));
   return retries;
 }
 
 async function remove(path: string): Promise<void> {
-  await retryWindowsHandles('unlink', path, async () => {
+  await retryFileStoreHandles('unlink', path, async () => {
     try {
       await unlink(path);
     } catch (error) {
@@ -146,7 +146,7 @@ async function writeOwner(path: string): Promise<void> {
 }
 
 async function readOwner(path: string): Promise<ProcessOwner | null> {
-  const { value: contents } = await retryWindowsHandles('read', path, async () => {
+  const { value: contents } = await retryFileStoreHandles('read', path, async () => {
     try {
       return await readFile(path, 'utf8');
     } catch (error) {
@@ -183,7 +183,7 @@ function sameOwner(a: ProcessOwner, b: ProcessOwner): boolean {
 }
 
 async function tryLink(source: string, target: string): Promise<boolean> {
-  const { value } = await retryWindowsHandles('link', target, async () => {
+  const { value } = await retryFileStoreHandles('link', target, async () => {
     try {
       await link(source, target);
       return true;
@@ -292,7 +292,7 @@ export async function probeFileStoreFilesystem(root: string): Promise<void> {
   try {
     await writeOwner(source);
     try {
-      await retryWindowsHandles('link', target, () => link(source, target));
+      await retryFileStoreHandles('link', target, () => link(source, target));
     } catch (error) {
       if (unsupportedLinkCodes.some(code => hasCode(error, code))) {
         throw new FileStoreUnsupportedFilesystemError(root, error);
