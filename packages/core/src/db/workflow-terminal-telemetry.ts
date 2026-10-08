@@ -1,6 +1,6 @@
-import { captureWorkflowTerminal, createLogger, isTelemetryDisabled } from '@archon/paths';
+import { createLogger, isTelemetryDisabled } from '@archon/paths';
 import {
-  buildRunTerminalTelemetry,
+  reportRunTerminalTelemetry,
   RUN_TELEMETRY_EVENT_TYPES,
   type RunTelemetryEvent,
 } from '@archon/workflows/run-terminal-telemetry';
@@ -42,12 +42,7 @@ export async function reportRunTerminal(runId: string): Promise<void> {
       [runId, ...RUN_TELEMETRY_EVENT_TYPES]
     );
     const usage = await getDagResumeSnapshot(runId);
-    const telemetry = buildRunTerminalTelemetry({
-      run: normalizeWorkflowRun(run),
-      events: events.rows,
-      usage: { costUsd: usage.costUsd, tokens: usage.tokens },
-    });
-    if (telemetry) captureWorkflowTerminal(telemetry);
+    reportRunTerminalTelemetry(normalizeWorkflowRun(run), events.rows, usage);
   } catch (error) {
     getLog().warn(
       { err: error as Error, workflowRunId: runId },

@@ -1,3 +1,4 @@
+import { foldActiveNodeIds } from './store';
 import { readFile } from 'node:fs/promises';
 import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
@@ -11,6 +12,7 @@ import { nodeCostScope, DEFERRED_NODE_USAGE_EVENT_TYPE } from './node-record-ser
 import type { NodeExecutionMetadata } from './schemas/node-execution';
 import {
   DURABLE_WORKFLOW_EVENT_TYPES,
+  NODE_STATE_EVENT_TYPES,
   type DagResumeSnapshot,
   type PersistedNodeOutput,
 } from './store';
@@ -228,9 +230,8 @@ export async function foldDagResumeSnapshot(
       continue;
     }
     if (row.event_type !== 'fan_out_instances') {
-      if (row.event_type === 'node_started' || row.event_type === 'node_suspended')
-        unresolvedNodeStarts.add(row.step_name);
-      else unresolvedNodeStarts.delete(row.step_name);
+      const nodeStateType = NODE_STATE_EVENT_TYPES.find(type => type === row.event_type);
+      if (nodeStateType) foldActiveNodeIds(unresolvedNodeStarts, row.step_name, nodeStateType);
       // Every later node state supersedes reusable success, even when that row
       // carries no output (or its data cannot be recovered). Only success restores it.
       completedNodeOutputs.delete(row.step_name);

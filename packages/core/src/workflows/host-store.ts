@@ -28,7 +28,7 @@ export interface IWorkflowHostStore {
       platform: IdentityPlatform,
       id: string,
       displayName?: string
-    ): Promise<User>;
+    ): Promise<User | null>;
   };
   conversations: {
     getConversationById(id: string): Promise<Conversation | null>;

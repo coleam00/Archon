@@ -210,6 +210,7 @@ export interface WorkflowDeps {
    * false/absent, no per-user provider env is injected and chats/runs keep
    * the shared process-global keys.
    */
+  credentialStore?: 'database' | 'files';
   isPerUserProviderKeysEnabled?: () => boolean;
   /**
    * Optional: resolve the required connected provider credentials into a

@@ -117,6 +117,7 @@ export interface ContainerConfig {
 }
 
 export interface GlobalConfig {
+  store?: 'database' | 'files';
   /**
    * Bot display name (shown in messages)
    * @default 'Archon'

@@ -1,3 +1,4 @@
+import { FileStoreUnsupportedError } from './file-store/errors';
 import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
@@ -472,4 +473,24 @@ test('AI-only inheritance uses the new actor and refuses conflicting adoption in
       modelOverrideLayer: { kind: 'raw', overrides: {} },
     })
   ).rejects.toThrow('Cannot override AI configuration');
+});
+
+test('files reject stored per-user credential reads, while native credentials and script-only runs work', async () => {
+  const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+  const files = { ...deps, credentialStore: 'files' as const };
+  const ai = makeTestResolvedWorkflow({ name: 'ai' });
+  const prepared = await prepareRunAiConfiguration(files, ai, '/p', { userId: 'origin' });
+  const refused = assertRunCredentials(files, prepared);
+  await expect(refused).rejects.toBeInstanceOf(FileStoreUnsupportedError);
+  await expect(refused).rejects.toThrow('store: database');
+  expect(deps.getUserProviderCredentialStatus).not.toHaveBeenCalled();
+  expect(checkCredential).not.toHaveBeenCalled();
+  await assertRunCredentials(files, await prepareRunAiConfiguration(files, ai, '/p'));
+  expect(checkCredential).toHaveBeenCalledTimes(1);
+  const shell = makeTestResolvedWorkflow({ name: 'shell', nodes: [{ id: 'shell', bash: 'true' }] });
+  await assertRunCredentials(
+    files,
+    await prepareRunAiConfiguration(files, shell, '/p', { userId: 'origin' })
+  );
+  expect(deps.getUserProviderCredentialStatus).not.toHaveBeenCalled();
 });

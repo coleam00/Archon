@@ -162,6 +162,9 @@
     ],
     [
       "src/commands/workflow-launch-config.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-file-store.integration.spec.ts"
     ]
   ]
 }

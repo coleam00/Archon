@@ -185,8 +185,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       # The compiled probe never skips under GitHub Actions, so it runs, and must pass, here.
-      - name: Prove file store primitives, including a compiled binary
-        run: bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts
+      - name: Prove file store lifecycle and primitives, including a compiled binary
+        run: bun run --cwd packages/workflows test src/file-store
+      - name: Prove database-free CLI lifecycle
+        run: bun run --cwd packages/cli test src/commands/workflow-file-store.integration.spec.ts
 
   static:
     needs: changes
