@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { receiptPath } from '@archon/plugin-manifest/store';
-import { chatPluginPolicies } from './chat-plugins';
+import { chatPluginPolicies, loadPlatformPolicies } from './chat-plugins';
+import type { PlatformPolicy } from './types';
 
 const trackRoot = trackTempRoots();
 const receipt = {
@@ -75,4 +76,23 @@ test('invalid receipts name their path and repair commands without echoing conte
     expect(message).toContain('archon plugin remove');
     expect(message).not.toContain('SECRET_TOKEN_AND_MESSAGE');
   }
+});
+
+test('receipt policies replace defaults and follow the remaining defaults in order', async () => {
+  const dir = trackRoot(await mkdtemp(join(tmpdir(), 'composed-chat-policies-')));
+  const defaults: readonly PlatformPolicy[] = [
+    { id: 'cli', workspaceRetention: 'age-based' },
+    { id: 'matrix-chat', workspaceRetention: 'age-based' },
+    { id: 'web', workspaceRetention: 'age-based' },
+  ];
+  expect(await loadPlatformPolicies(dir, defaults)).toEqual([...defaults]);
+  const file = receiptPath(dir, receipt.id);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify(receipt));
+  expect(await loadPlatformPolicies(dir, defaults)).toEqual([
+    defaults[0],
+    defaults[2],
+    { id: 'matrix-chat', ...receipt.descriptor.policy },
+  ]);
+  expect(defaults[1]).toEqual({ id: 'matrix-chat', workspaceRetention: 'age-based' });
 });

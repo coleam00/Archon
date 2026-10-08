@@ -14,3 +14,12 @@ export async function chatPluginPolicies(pluginsDir: string): Promise<PlatformPo
     ...descriptor.policy,
   }));
 }
+
+export async function loadPlatformPolicies(
+  pluginsDir: string,
+  defaults: readonly PlatformPolicy[]
+): Promise<PlatformPolicy[]> {
+  const chatPolicies = await chatPluginPolicies(pluginsDir);
+  const chatIds = new Set(chatPolicies.map(policy => policy.id));
+  return [...defaults.filter(policy => !chatIds.has(policy.id)), ...chatPolicies];
+}

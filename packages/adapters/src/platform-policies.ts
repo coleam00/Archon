@@ -1,4 +1,7 @@
 import type { PlatformPolicy } from '@archon/core/platforms/types';
+import { apiPolicy } from '@archon/core/workflows/headless-policy';
+import { cliPolicy } from './cli/policy';
+import { webPolicy } from './web/policy';
 import { telegramPolicy } from './chat/telegram/policy';
 import { slackPolicy } from './chat/slack/policy';
 import { discordPolicy } from './community/chat/discord/policy';
@@ -13,4 +16,11 @@ export const bundledPlatformPolicies: readonly PlatformPolicy[] = [
   githubPolicy,
   giteaPolicy,
   gitlabPolicy,
+];
+
+export const defaultPlatformPolicies: readonly PlatformPolicy[] = [
+  cliPolicy,
+  webPolicy,
+  apiPolicy,
+  ...bundledPlatformPolicies,
 ];

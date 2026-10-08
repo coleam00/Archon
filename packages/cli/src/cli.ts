@@ -149,29 +149,13 @@ async function loadRoute<T>(
   loader: () => Promise<T>,
   options: { providers?: false; database?: boolean } = {}
 ): Promise<T> {
-  const [
-    { setPlatformPolicies },
-    { bundledPlatformPolicies },
-    { chatPluginPolicies },
-    { cliPolicy },
-    { webPolicy },
-    { apiPolicy },
-  ] = await Promise.all([
-    import('@archon/core/platforms/registry'),
-    import('@archon/adapters/platform-policies'),
-    import('@archon/core/platforms/chat-plugins'),
-    import('@archon/adapters/cli/policy'),
-    import('@archon/adapters/web/policy'),
-    import('@archon/core/workflows/headless-policy'),
-  ]);
-  const chatPolicies = await chatPluginPolicies(getPluginsPath());
-  setPlatformPolicies([
-    cliPolicy,
-    webPolicy,
-    apiPolicy,
-    ...bundledPlatformPolicies.filter(policy => !chatPolicies.some(chat => chat.id === policy.id)),
-    ...chatPolicies,
-  ]);
+  const [{ setPlatformPolicies }, { defaultPlatformPolicies }, { loadPlatformPolicies }] =
+    await Promise.all([
+      import('@archon/core/platforms/registry'),
+      import('@archon/adapters/platform-policies'),
+      import('@archon/core/platforms/chat-plugins'),
+    ]);
+  setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   if (options.providers !== false) await registerProviders();
   const route = await loader();
   if (options.database) databaseRouteLoaded = true;

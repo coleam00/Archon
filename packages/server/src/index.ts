@@ -85,11 +85,8 @@ import {
   SlackAdapter,
   SlackWorkflowBridge,
 } from '@archon/adapters';
-import { bundledPlatformPolicies } from '@archon/adapters/platform-policies';
-import { chatPluginPolicies } from '@archon/core/platforms/chat-plugins';
-import { cliPolicy } from '@archon/adapters/cli/policy';
-import { webPolicy } from '@archon/adapters/web/policy';
-import { apiPolicy } from '@archon/core/workflows/headless-policy';
+import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
+import { loadPlatformPolicies } from '@archon/core/platforms/chat-plugins';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { telegramPolicy } from '@archon/adapters/chat/telegram/policy';
 import { slackPolicy } from '@archon/adapters/chat/slack/policy';
@@ -280,14 +277,7 @@ export interface ServerOptions {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
-  const chatPolicies = await chatPluginPolicies(getPluginsPath());
-  setPlatformPolicies([
-    webPolicy,
-    cliPolicy,
-    apiPolicy,
-    ...bundledPlatformPolicies.filter(policy => !chatPolicies.some(chat => chat.id === policy.id)),
-    ...chatPolicies,
-  ]);
+  setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.

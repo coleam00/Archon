@@ -113,6 +113,7 @@ try {
         input === 'packages/adapters/src/platform-policies.ts' ||
         (input.startsWith('packages/adapters/src/') && input.endsWith('/policy.ts')) ||
         input.startsWith('packages/core/src/platforms/') ||
+        input === 'packages/core/src/workflows/headless-policy.ts' ||
         input === 'packages/core/src/schemas/user.ts'
     ),
     'Platform policy bootstrap imports an implementation outside its declaration boundary'
