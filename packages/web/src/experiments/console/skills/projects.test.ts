@@ -1,5 +1,10 @@
 import { afterEach, expect, test } from 'bun:test';
-import { addProjectByPath, addProjectByUrl, inspectProjectBaseBranch } from './projects';
+import {
+  addProjectByPath,
+  addProjectByUrl,
+  inspectProjectBaseBranch,
+  renameProject,
+} from './projects';
 import { toProject } from '../primitives/project';
 import type { components } from '../../../lib/api.generated';
 
@@ -56,4 +61,27 @@ test('inspection uses the typed read-only API and preserves unknown defaults and
     }) as typeof fetch;
     expect(await inspectProjectBaseBranch({ path: '/repo' })).toEqual(result);
   }
+});
+
+test('rename sends the new name to the typed PATCH endpoint and returns the renamed project', async () => {
+  const requests: { url: string; method: string | undefined; body: unknown }[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({
+      url: String(input),
+      method: init?.method,
+      body: JSON.parse(String(init?.body)) as unknown,
+    });
+    return Promise.resolve(
+      new Response(JSON.stringify({ ...raw, name: 'qes' }), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+  }) as typeof fetch;
+
+  const project = await renameProject('project', 'qes');
+
+  expect(project.name).toBe('qes');
+  expect(requests).toEqual([
+    { url: '/api/codebases/project', method: 'PATCH', body: { name: 'qes' } },
+  ]);
 });

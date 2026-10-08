@@ -4,6 +4,7 @@ import { join, sep, resolve } from 'node:path';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
 import { quoteCommandArg } from '../utils/command-args';
+import { getArchonWorkspacesPath } from '@archon/paths';
 
 const mockQuery = createMockQuery();
 
@@ -12,6 +13,10 @@ mock.module('./connection', () => ({
   pool: {
     query: mockQuery,
   },
+  getDatabase: () => ({
+    withTransaction: <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => fn(mockQuery),
+  }),
+  getDatabaseType: () => 'postgresql',
   getDialect: () => mockPostgresDialect,
 }));
 
@@ -26,8 +31,11 @@ import {
   findCodebaseByPathPrefix,
   findCodebaseByName,
   updateCodebase,
+  renameCodebase,
   deleteCodebase,
   CodebaseNotFoundError,
+  CodebaseNameTakenError,
+  CodebaseStorageIdentityChangeError,
   InvalidCodebaseDefaultCwdError,
   listCodebases,
   listCodebaseRegistrations,
@@ -590,6 +598,112 @@ describe('codebases', () => {
       await updateCodebase(mockCodebase, {});
 
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('renameCodebase', () => {
+    // A remote-derived name that parseOwnerRepo rejects resolves storage from the
+    // checkout basename, exactly like a bare name does — so this rename is safe.
+    const adoCodebase: Codebase = {
+      ...mockCodebase,
+      name: '_git/QUIBIQ%20EDI%20Service',
+      default_cwd: '/home/user/code/qes',
+    };
+
+    test('renames when the storage location stays the same', async () => {
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([adoCodebase]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([], 1))
+        .mockResolvedValueOnce(createQueryResult([{ ...adoCodebase, name: 'qes' }]));
+
+      const renamed = await renameCodebase(adoCodebase.id, 'qes');
+
+      expect(renamed.name).toBe('qes');
+      // The PostgreSQL rename lock is taken before the conditional UPDATE.
+      expect(mockQuery.mock.calls[1]?.[0]).toBe('SELECT pg_advisory_xact_lock($1)');
+      expect(mockQuery).toHaveBeenCalledWith(
+        'UPDATE remote_agent_codebases SET name = $1, updated_at = NOW() WHERE id = $2 ' +
+          'AND NOT EXISTS (SELECT 1 FROM remote_agent_codebases WHERE name = $1 AND id <> $2)',
+        ['qes', adoCodebase.id]
+      );
+    });
+
+    test('returns the codebase unchanged when the name is the same', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
+
+      expect(await renameCodebase(mockCodebase.id, mockCodebase.name)).toEqual(mockCodebase);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test('throws CodebaseNotFoundError for an unknown id', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await expect(renameCodebase('missing', 'qes')).rejects.toBeInstanceOf(CodebaseNotFoundError);
+    });
+
+    test('rejects a name another codebase already uses', async () => {
+      // The conditional UPDATE matches nothing while the codebase still exists.
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([adoCodebase]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([], 0))
+        .mockResolvedValueOnce(createQueryResult([adoCodebase]));
+
+      await expect(renameCodebase(adoCodebase.id, 'qes')).rejects.toBeInstanceOf(
+        CodebaseNameTakenError
+      );
+    });
+
+    test('throws CodebaseNotFoundError when the codebase disappears before the update', async () => {
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([adoCodebase]))
+        .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([], 0))
+        .mockResolvedValueOnce(createQueryResult([]));
+
+      await expect(renameCodebase(adoCodebase.id, 'qes')).rejects.toBeInstanceOf(
+        CodebaseNotFoundError
+      );
+    });
+
+    test('rejects a rename that would move the repo storage location', async () => {
+      const github = { ...mockCodebase, name: 'user/repo' };
+      mockQuery.mockResolvedValueOnce(createQueryResult([github]));
+
+      const error = await renameCodebase(github.id, 'repo').catch(e => e);
+
+      expect(error).toBeInstanceOf(CodebaseStorageIdentityChangeError);
+      expect(error.message).toContain(join('user', 'repo'));
+      expect(error.message).toContain(join('_local', 'test-project'));
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test('rejects a rename that would move worktrees even when storage stays put', async () => {
+      // A clone lives under the workspaces tree; with an unparseable name its
+      // worktree base comes from that path, while storage falls back to
+      // `_local/<basename>`. Renaming to that fallback keeps storage but
+      // would move worktrees.
+      const clone: Codebase = {
+        ...adoCodebase,
+        default_cwd: join(getArchonWorkspacesPath(), '_git', 'qes', 'source'),
+      };
+      mockQuery.mockResolvedValueOnce(createQueryResult([clone]));
+
+      const error = await renameCodebase(clone.id, '_local/source').catch(e => e);
+
+      expect(error).toBeInstanceOf(CodebaseStorageIdentityChangeError);
+      expect(error.message).toContain(join('_git', 'qes', 'worktrees'));
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test('rejects a rename that would move the folder storage location', async () => {
+      const folder: Codebase = { ...mockCodebase, kind: 'folder', name: 'Client Ops' };
+      mockQuery.mockResolvedValueOnce(createQueryResult([folder]));
+
+      await expect(renameCodebase(folder.id, 'Other Ops')).rejects.toBeInstanceOf(
+        CodebaseStorageIdentityChangeError
+      );
     });
   });
 

@@ -42,6 +42,17 @@ export async function addProjectByPath(
   return toProject(raw);
 }
 
+export async function renameProject(id: string, name: string): Promise<Project> {
+  const raw = await requestJson<Parameters<typeof toProject>[0]>(
+    `/api/codebases/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ name } satisfies components['schemas']['RenameCodebaseBody']),
+    }
+  );
+  return toProject(raw);
+}
+
 export async function removeProject(id: string): Promise<void> {
   await requestJson(`/api/codebases/${encodeURIComponent(id)}`, {
     method: 'DELETE',

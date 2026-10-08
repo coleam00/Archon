@@ -28,6 +28,13 @@ type MockCodebase = Omit<typeof MOCK_CODEBASE, 'repository_url'> & {
 };
 const mockListCodebases = mock(async () => [] as MockCodebase[]);
 const mockDeleteCodebase = mock(async (_id: string) => {});
+const mockRenameCodebase = mock(async (_id: string, _name: string) => ({
+  ...MOCK_CODEBASE,
+  name: _name,
+}));
+class CodebaseNotFoundError extends Error {}
+class CodebaseNameTakenError extends Error {}
+class CodebaseStorageIdentityChangeError extends Error {}
 const mockCloneRepository = mock(async (_url: string) => ({
   codebaseId: 'clone-uuid-1',
   alreadyExisted: false,
@@ -141,6 +148,10 @@ mock.module('@archon/core/db/codebases', () => ({
   listCodebases: mockListCodebases,
   getCodebase: mockGetCodebase,
   deleteCodebase: mockDeleteCodebase,
+  renameCodebase: mockRenameCodebase,
+  CodebaseNotFoundError,
+  CodebaseNameTakenError,
+  CodebaseStorageIdentityChangeError,
 }));
 
 mock.module('@archon/core/db/isolation-environments', () => ({
@@ -390,6 +401,91 @@ describe('GET /api/codebases/:id', () => {
 
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Failed to get codebase');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: PATCH /api/codebases/:id
+// ---------------------------------------------------------------------------
+
+describe('PATCH /api/codebases/:id', () => {
+  beforeEach(() => {
+    mockRenameCodebase.mockReset();
+  });
+
+  async function patchName(body: unknown, id = 'codebase-uuid-1'): Promise<Response> {
+    return makeApp().request(`/api/codebases/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  test('renames the codebase and returns it', async () => {
+    mockRenameCodebase.mockImplementationOnce(async (_id, name) => ({ ...MOCK_CODEBASE, name }));
+
+    const response = await patchName({ name: '  qes  ' });
+
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { name: string }).name).toBe('qes');
+    expect(mockRenameCodebase).toHaveBeenCalledWith('codebase-uuid-1', 'qes');
+  });
+
+  test('returns 400 for an empty name', async () => {
+    const response = await patchName({ name: '   ' });
+
+    expect(response.status).toBe(400);
+    expect(mockRenameCodebase).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 for a name longer than 255 characters', async () => {
+    const response = await patchName({ name: 'x'.repeat(256) });
+
+    expect(response.status).toBe(400);
+    expect(mockRenameCodebase).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 when the codebase does not exist', async () => {
+    mockRenameCodebase.mockImplementationOnce(async () => {
+      throw new CodebaseNotFoundError('Codebase unknown-id not found');
+    });
+
+    const response = await patchName({ name: 'qes' }, 'unknown-id');
+
+    expect(response.status).toBe(404);
+  });
+
+  test('returns 409 when another codebase uses the name', async () => {
+    mockRenameCodebase.mockImplementationOnce(async () => {
+      throw new CodebaseNameTakenError('A project named "qes" is already registered');
+    });
+
+    const response = await patchName({ name: 'qes' });
+
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toContain('already registered');
+  });
+
+  test('returns 409 when the rename would move project storage', async () => {
+    mockRenameCodebase.mockImplementationOnce(async () => {
+      throw new CodebaseStorageIdentityChangeError('would move its Archon storage');
+    });
+
+    const response = await patchName({ name: 'repo' });
+
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toContain('storage');
+  });
+
+  test('returns 500 when the DB throws', async () => {
+    mockRenameCodebase.mockImplementationOnce(async () => {
+      throw new Error('connection refused');
+    });
+
+    const response = await patchName({ name: 'qes' });
+
+    expect(response.status).toBe(500);
+    expect(((await response.json()) as { error: string }).error).toBe('Failed to rename codebase');
   });
 });
 

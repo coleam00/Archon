@@ -4,9 +4,16 @@
 import { resolve } from 'node:path';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
-import { pool, getDialect } from './connection';
+import { pool, getDatabase, getDatabaseType, getDialect } from './connection';
 import type { Codebase, CreateCodebaseInput, UpdateCodebaseInput } from '../schemas/codebase';
-import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
+import {
+  createLogger,
+  captureCodebaseRegistered,
+  getProjectStoragePaths,
+  isPathInside,
+  resolveProjectStorageKey,
+} from '@archon/paths';
+import { getWorktreeBase, toRepoPath } from '@archon/git';
 
 function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row: T): T {
   assertAbsoluteDefaultCwd(row.default_cwd, row.name);
@@ -211,6 +218,101 @@ export async function updateCodebase(
   if ((result.rowCount ?? 0) === 0) {
     throw new CodebaseNotFoundError(target.id);
   }
+}
+
+export class CodebaseNameTakenError extends Error {
+  constructor(public codebaseName: string) {
+    super(`A project named "${codebaseName}" is already registered`);
+    this.name = 'CodebaseNameTakenError';
+  }
+}
+
+export class CodebaseStorageIdentityChangeError extends Error {
+  constructor(
+    public codebaseName: string,
+    public requestedName: string,
+    public currentPath: string,
+    public requestedPath: string
+  ) {
+    super(
+      `Renaming "${codebaseName}" to "${requestedName}" would move its Archon storage ` +
+        `(worktrees, state, logs, artifacts) from ${currentPath} to ${requestedPath}. ` +
+        'Choose a name that keeps the same storage location.'
+    );
+    this.name = 'CodebaseStorageIdentityChangeError';
+  }
+}
+
+/**
+ * Every Archon-managed location derived from a codebase's name. Storage and
+ * worktrees are resolved by separate functions that do not always agree (the
+ * worktree base also reads owner/repo from a path inside the workspaces tree),
+ * so a rename must leave both unchanged.
+ */
+function nameDerivedLocations(codebase: Codebase): string[] {
+  const storageRoot = getProjectStoragePaths(
+    resolveProjectStorageKey(codebase, codebase.default_cwd)
+  ).root;
+  if (codebase.kind === 'folder') return [storageRoot];
+  return [storageRoot, getWorktreeBase(toRepoPath(codebase.default_cwd), codebase.name).base];
+}
+
+/**
+ * Transaction-scoped advisory lock that serializes codebase renames on
+ * PostgreSQL. Distinct from the schema-init keys (1796, 1797) in the Postgres
+ * adapter.
+ */
+const CODEBASE_RENAME_LOCK_KEY = 1798;
+
+/**
+ * Change a codebase's display name.
+ *
+ * The name doubles as the project's storage identity (see
+ * `resolveProjectStorageKey` and `getWorktreeBase`): worktrees, `$STATE_DIR`,
+ * logs and artifacts of future runs live under roots derived from it. A rename
+ * that would change any of them is refused rather than silently splitting the
+ * project across two trees.
+ *
+ * Names are not UNIQUE in the schema, but `findCodebaseByName` resolves them
+ * for `--project` and `/update-project`, so a duplicate is refused too. The
+ * duplicate check lives in the UPDATE itself. On PostgreSQL that is not enough:
+ * under READ COMMITTED two concurrent UPDATEs of different rows each evaluate
+ * NOT EXISTS without seeing the other, so renames also take an advisory lock.
+ * The waiting rename's UPDATE then reads a fresh snapshot that includes the
+ * winner. SQLite serializes writers already.
+ */
+export async function renameCodebase(id: string, name: string): Promise<Codebase> {
+  const current = await getCodebase(id);
+  if (!current) throw new CodebaseNotFoundError(id);
+  if (current.name === name) return current;
+
+  const currentPaths = nameDerivedLocations(current);
+  const requestedPaths = nameDerivedLocations({ ...current, name });
+  const moved = currentPaths.findIndex((path, i) => path !== requestedPaths[i]);
+  if (moved !== -1) {
+    throw new CodebaseStorageIdentityChangeError(
+      current.name,
+      name,
+      currentPaths[moved],
+      requestedPaths[moved]
+    );
+  }
+
+  const result = await getDatabase().withTransaction(async query => {
+    if (getDatabaseType() === 'postgresql') {
+      await query('SELECT pg_advisory_xact_lock($1)', [CODEBASE_RENAME_LOCK_KEY]);
+    }
+    return query(
+      `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2 ` +
+        'AND NOT EXISTS (SELECT 1 FROM remote_agent_codebases WHERE name = $1 AND id <> $2)',
+      [name, id]
+    );
+  });
+  const renamed = await getCodebase(id);
+  if (!renamed) throw new CodebaseNotFoundError(id);
+  if ((result.rowCount ?? 0) === 0) throw new CodebaseNameTakenError(name);
+  getLog().info({ codebaseId: id, from: current.name, to: name }, 'db.codebase_renamed');
+  return renamed;
 }
 
 export async function listCodebases(): Promise<readonly Codebase[]> {
