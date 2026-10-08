@@ -94,8 +94,8 @@ import { publishArchonCliCommand } from '@archon/paths/cli-command';
 publishArchonCliCommand();
 
 let providersRegistered = false;
-let providerProcessErrorHandlersInstalled = false;
 let databaseRouteLoaded = false;
+let providerProcessErrorHandlersInstalled = false;
 
 function installProviderProcessErrorHandlers(
   claimPiExtensionProcessError: (reason: unknown) => boolean
@@ -130,18 +130,13 @@ function installProviderProcessErrorHandlers(
 
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
-  const {
-    claimPiExtensionProcessError,
-    registerBuiltinProviders,
-    registerCommunityProviders,
-    registerProvider,
-  } = await import('@archon/providers/in-process');
-  installProviderProcessErrorHandlers(claimPiExtensionProcessError);
-  registerBuiltinProviders();
-  registerCommunityProviders();
-  const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
-  for (const registration of await loadProviderPlugins(getPluginsPath()))
-    registerProvider(registration);
+  const { registerHostProviders } = await import('@archon/core/providers/register-host-providers');
+  if (BUNDLED_IS_BINARY) {
+    const { claimPiExtensionProcessError } =
+      await import('@archon/providers/pi/extension-error-broker');
+    installProviderProcessErrorHandlers(claimPiExtensionProcessError);
+  }
+  await registerHostProviders();
   providersRegistered = true;
 }
 
@@ -452,6 +447,16 @@ async function main(): Promise<number> {
           'Use: archon workflow run <name> --adopt <run-id> <input>\n' +
           'Find a prior run id with: archon workflow runs --open (or workflow get <run-id>)'
       );
+    }
+    if (command === 'provider') {
+      const { providerCommand } = await loadRoute(() => import('./commands/provider'), {
+        providers: false,
+      });
+      return await providerCommand(subcommand, positionals.slice(2), {
+        pluginsDir: getPluginsPath(),
+        archonVersion: BUNDLED_VERSION,
+        projectDir: cwd,
+      });
     }
     if (command === 'plugin') {
       const { pluginCommand } = await loadRoute(() => import('./commands/plugin'), {

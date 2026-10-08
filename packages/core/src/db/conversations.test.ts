@@ -27,7 +27,7 @@ describe('conversations', () => {
   });
 
   describe('getOrCreateConversation', () => {
-    const mergedConfig = (assistant: string) =>
+    const mergedConfig = (assistant: string | undefined) =>
       ({ assistant }) as Awaited<ReturnType<typeof configLoader.loadConfig>>;
     let loadConfigSpy: ReturnType<typeof spyOn>;
 
@@ -125,9 +125,6 @@ describe('conversations', () => {
       expect(loadConfigSpy).not.toHaveBeenCalled();
     });
 
-    // Harvested from PR #1826 (credit: @EugeneChan00) — the configured default
-    // assistant chain (config > DEFAULT_AI_ASSISTANT env > first built-in, all
-    // owned by loadConfig) must reach new conversations without a codebase.
     test('resolves the configured default assistant when no codebase is scoped', async () => {
       loadConfigSpy.mockResolvedValueOnce(mergedConfig('codex'));
 
@@ -157,6 +154,16 @@ describe('conversations', () => {
 
       await expect(getOrCreateConversation('web', 'web-new-chat')).rejects.toThrow(
         'config unavailable'
+      );
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test('an unset default refuses conversation creation before inserting a database row', async () => {
+      loadConfigSpy.mockResolvedValueOnce(mergedConfig(undefined));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await expect(getOrCreateConversation('web', 'web-new-chat')).rejects.toThrow(
+        /No (default provider|providers installed)/
       );
       expect(mockQuery).toHaveBeenCalledTimes(1);
     });

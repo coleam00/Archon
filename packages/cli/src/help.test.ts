@@ -224,6 +224,7 @@ Commands:
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (binary installs download server and UI on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
+  provider install <id...>   Install maintained providers matching this Archon release
   plugin install <owner/repo[/path][@tag]>
                              Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
   plugin update <id>[@tag]   Reinstall an installed plugin at a tag, or its latest release or default branch

@@ -1,7 +1,9 @@
 import { normalizeCredentialVendor } from '@archon/providers';
+import { parsePiModelRef } from '@archon/providers/pi/model-ref';
 import { z } from 'zod';
 import {
   InvalidProviderRunConfigError,
+  isMaintainedProvider,
   type ProviderRegistration,
   type ProviderDefaults,
 } from '@archon/provider-contract';
@@ -42,14 +44,20 @@ export function processProviderRegistration(
     id: descriptor.id,
     displayName: descriptor.displayName,
     capabilities: descriptor.capabilities,
-    builtIn: false,
+    builtIn: isMaintainedProvider(descriptor.id),
     ...(descriptor.ownsUnprefixedModelRefs ? { ownsUnprefixedModelRefs: true } : {}),
     credentials: {
       ...descriptor.credentials,
       vendorFor(model): string | undefined {
         if (specs.length === 1) return specs[0].vendor;
         const prefix =
-          model === undefined ? undefined : normalizeCredentialVendor(model.split('/')[0]);
+          model === undefined
+            ? undefined
+            : normalizeCredentialVendor(
+                descriptor.id === 'pi'
+                  ? (parsePiModelRef(model)?.provider ?? '')
+                  : model.split('/')[0]
+              );
         return specs.find(spec => spec.vendor === prefix)?.vendor;
       },
     },

@@ -4,12 +4,18 @@
  * attempt-holder liveness rule, and cross-process exclusion.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { getRegistration, isRegisteredProvider, registerProvider } from '@archon/providers';
+import {
+  piDescriptor,
+  getRegistration,
+  isRegisteredProvider,
+  registerProvider,
+} from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { MessageChunk, ProviderAdmissionEvent, SendQueryOptions } from '@archon/providers';
 import { closeDatabase, getDatabase, resetDatabase } from '../db/connection';
@@ -22,6 +28,7 @@ import {
 } from '../db/provider-attempts';
 import { currentProcessOwner } from '@archon/paths/process-owner';
 import { ProviderConcurrencyConfigError } from '../config/provider-concurrency';
+import { processProviderRegistration } from '../providers/process-registration';
 import { getAgentProvider, ProviderAdmissionAbortedError } from './provider-admission';
 
 const PROVIDER = 'admission-fake';
@@ -35,6 +42,17 @@ let calls: (SendQueryOptions | undefined)[] = [];
 
 beforeAll(() => {
   registerBuiltinProviders();
+  const piArgv = [
+    process.execPath,
+    '--no-env-file',
+    join(import.meta.dir, '../providers/fixtures/process-provider.ts'),
+    'pi-gated',
+  ] as const;
+  registerProvider({
+    ...processProviderRegistration(piDescriptor, piArgv),
+    factory: () =>
+      processProviderRegistration(piDescriptor, [...piArgv, join(root, 'turn')]).factory(),
+  });
   if (isRegisteredProvider(PROVIDER)) return;
   const claude = getRegistration('claude');
   registerProvider({
@@ -43,6 +61,17 @@ beforeAll(() => {
     displayName: 'Admission fake',
     builtIn: false,
     factory: () => ({
+      async diagnose() {
+        return {
+          checks: [
+            { id: this.getType(), label: 'Provider', status: 'ok' as const, message: 'Ready' },
+          ],
+        };
+      },
+      async listModels({ signal }) {
+        signal.throwIfAborted();
+        return { models: [{ id: `${this.getType()}/model` }] };
+      },
       async resolveCredentialModel(request): Promise<string> {
         return `${this.getType()}/${request.model ?? 'default'}`;
       },
@@ -540,3 +569,83 @@ test('forwards the provider-owned credential model resolver with its receiver', 
   expect(calls).toHaveLength(0);
   expect(await holderCount()).toBe(0);
 });
+
+test('forwards provider diagnostics and model listing without acquiring capacity', async () => {
+  const provider = getAgentProvider(PROVIDER);
+  expect(await provider.diagnose?.({})).toEqual({
+    checks: [{ id: PROVIDER, label: 'Provider', status: 'ok', message: 'Ready' }],
+  });
+  expect(await provider.listModels?.({ signal: new AbortController().signal })).toEqual({
+    models: [{ id: `${PROVIDER}/model` }],
+  });
+  const controller = new AbortController();
+  controller.abort(new Error('cancelled'));
+  const error = await provider
+    .listModels?.({ signal: controller.signal })
+    .catch((cause: unknown) => cause);
+  expect(error).toEqual(new Error('cancelled'));
+  expect(calls).toHaveLength(0);
+  expect(await holderCount()).toBe(0);
+});
+
+test.each([{ pi: 1 }, { pi: 1, host: 2 }, { pi: 2, host: 1 }])(
+  'Pi maxConcurrent $pi with host cap $host serializes real plugin processes and releases an aborted waiter',
+  async ({ pi, host }) => {
+    await writeFile(
+      join(root, 'config.yaml'),
+      `assistants:\n  pi:\n    maxConcurrent: ${pi}\n${host === undefined ? '' : `concurrency:\n  providers:\n    pi: ${host}\n`}`
+    );
+    const cleanup = new AbortController();
+    const options = { assistantConfig: { maxConcurrent: pi }, abortSignal: cleanup.signal };
+    const first = getAgentProvider('pi', POLL_MS).sendQuery('first', root, undefined, options);
+    const secondWaiting = waitingEvent();
+    const secondRun = getAgentProvider('pi', POLL_MS).sendQuery('second', root, undefined, {
+      abortSignal: cleanup.signal,
+      onAdmission: secondWaiting.onAdmission,
+    });
+    const waiting = waitingEvent();
+    const abort = new AbortController();
+    const cancelled = getAgentProvider('pi', POLL_MS).sendQuery('cancelled', root, undefined, {
+      ...options,
+      abortSignal: abort.signal,
+      onAdmission: waiting.onAdmission,
+    });
+    const pending: Promise<unknown>[] = [];
+    try {
+      expect((await first.next()).value).toEqual({ type: 'agent_message_chunk', text: 'started' });
+      const nextSecond = secondRun.next();
+      const cancelledNext = cancelled.next();
+      pending.push(
+        nextSecond.catch(() => undefined),
+        cancelledNext.catch(() => undefined)
+      );
+      expect(
+        await Promise.race([
+          secondWaiting.reached.then(() => 'waiting'),
+          nextSecond.then(() => 'started'),
+        ])
+      ).toBe('waiting');
+      await waiting.reached;
+      expect(existsSync(join(root, 'turn.second.pid'))).toBe(false);
+      expect(existsSync(join(root, 'turn.cancelled.pid'))).toBe(false);
+      abort.abort();
+      await expect(cancelledNext).rejects.toThrow(ProviderAdmissionAbortedError);
+      await writeFile(join(root, 'turn.first.release'), 'release');
+      await drain(first);
+      expect((await nextSecond).value).toEqual({ type: 'agent_message_chunk', text: 'started' });
+      await writeFile(join(root, 'turn.second.release'), 'release');
+      await drain(secondRun);
+      const rows = await listProviderAttemptHolders();
+      expect(rows).toEqual([]);
+    } finally {
+      cleanup.abort();
+      abort.abort();
+      await Promise.all(pending);
+      await Promise.allSettled([
+        first.return(undefined),
+        secondRun.return(undefined),
+        cancelled.return(undefined),
+      ]);
+    }
+  }
+);

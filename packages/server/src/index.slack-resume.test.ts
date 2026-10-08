@@ -12,7 +12,6 @@ import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowResumeTarget } from './services/workflow-resume-service';
-import { providerCapabilitiesSchema, type ProviderRegistration } from '@archon/provider-contract';
 
 let pluginsDir: string;
 let expectedSlackRetention: 'age-based' | 'retain' = 'age-based';
@@ -124,36 +123,9 @@ mock.module('@archon/paths/env-loader', () => ({ loadArchonEnv: (): void => unde
 mock.module('@archon/paths/cli-command', () => ({
   publishArchonCliCommand: (): void => undefined,
 }));
-const mockRegisterBuiltinProviders = mock((): void => undefined);
-const mockRegisterCommunityProviders = mock((): void => undefined);
-const mockRegisterProvider = mock((_registration: ProviderRegistration): void => undefined);
-const installedProvider: ProviderRegistration = {
-  id: 'installed-provider',
-  displayName: 'Installed provider',
-  builtIn: false,
-  capabilities: providerCapabilitiesSchema.parse({
-    ...Object.fromEntries(Object.keys(providerCapabilitiesSchema.shape).map(key => [key, false])),
-    backgroundWork: 'none',
-    sessionFork: undefined,
-    knownToolNames: undefined,
-    renamedTools: undefined,
-  }),
-  credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
-  parseConfig: raw => raw,
-  factory: () => {
-    throw new Error('Boot must not spawn the installed provider');
-  },
-};
-const mockLoadProviderPlugins = mock(
-  async (_pluginsDir: string): Promise<ProviderRegistration[]> => [installedProvider]
-);
-mock.module('@archon/providers', () => ({
-  registerProvider: mockRegisterProvider,
-}));
-mock.module('@archon/providers/in-process', () => ({
-  claimPiExtensionProcessError: (): boolean => false,
-  registerBuiltinProviders: mockRegisterBuiltinProviders,
-  registerCommunityProviders: mockRegisterCommunityProviders,
+const mockRegisterHostProviders = mock(async (): Promise<void> => undefined);
+mock.module('@archon/core/providers/register-host-providers', () => ({
+  registerHostProviders: mockRegisterHostProviders,
 }));
 
 interface TestLogger {
@@ -210,13 +182,6 @@ class MockConversationLockManager {
 }
 
 mock.module('@archon/core', () => ({
-  loadProviderPlugins: mockLoadProviderPlugins,
-  getVendorCatalog: (): object => {
-    expect(mockLoadProviderPlugins).toHaveBeenCalledWith(pluginsDir);
-    expect(mockRegisterProvider).toHaveBeenCalledTimes(1);
-    expect(mockRegisterProvider.mock.calls[0]?.[0]).toBe(installedProvider);
-    return {};
-  },
   handleMessage: async (): Promise<void> => undefined,
   pool: {
     query: async (): Promise<object> => ({}),
@@ -230,6 +195,7 @@ mock.module('@archon/core', () => ({
   stopCleanupScheduler: (): void => undefined,
   getDbNotificationListener: (): null => null,
   loadConfig: async (): Promise<{ botName: string }> => {
+    expect(mockRegisterHostProviders).toHaveBeenCalledTimes(1);
     expect(
       getRegisteredPlatformPolicies()
         .map(policy => policy.id)
@@ -429,8 +395,7 @@ describe('Slack workflow resume composition', () => {
     try {
       const { startServer } = await import('./index');
       await startServer({ port: 12345, skipPlatformAdapters: true });
-      expect(mockRegisterBuiltinProviders).toHaveBeenCalledTimes(1);
-      expect(mockRegisterCommunityProviders).toHaveBeenCalledTimes(1);
+      expect(mockRegisterHostProviders).toHaveBeenCalledTimes(1);
       expect(retainsWorkspace('telegram')).toBe(true);
     } finally {
       serveSpy.mockRestore();

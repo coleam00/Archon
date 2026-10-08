@@ -234,7 +234,11 @@ const mockModelRegistryConstruct = mock(
 // `authStorage.getApiKey(...)` continue to assert against the same call shape
 // (just on the runtime object now).
 const mockModelRuntimeCreate = mock(
-  async (_options?: { authPath?: string; modelsPath?: string }): Promise<MockModelRuntime> => ({
+  async (_options?: {
+    authPath?: string;
+    modelsPath?: string;
+    signal?: AbortSignal;
+  }): Promise<MockModelRuntime> => ({
     checkAuth: mockCheckAuth,
     getModels: () => [createMockModel('google', 'gemini-2.5-pro')],
     setRuntimeApiKey: mockSetRuntimeApiKey,
@@ -3722,6 +3726,45 @@ describe('PiProvider', () => {
     }
   });
 
+  test.each(['direct', 'transport'] as const)(
+    'Pi %s model listing propagates in-flight cancellation without caching an empty catalog',
+    async mode => {
+      const started = Promise.withResolvers<AbortSignal>();
+      const runtimeCancelled = Promise.withResolvers<void>();
+      mockModelRuntimeCreate.mockImplementationOnce(async options => {
+        const signal = options?.signal;
+        if (!signal) throw new Error('catalog signal missing');
+        started.resolve(signal);
+        return await new Promise<MockModelRuntime>((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              runtimeCancelled.resolve();
+              reject(signal.reason);
+            },
+            { once: true }
+          );
+        });
+      });
+      const direct = createProvider();
+      const abort = new AbortController();
+      if (mode === 'direct') {
+        const pending = direct.listModels({ signal: abort.signal });
+        expect(await started.promise).toBe(abort.signal);
+        abort.abort(new Error('catalog deadline'));
+        await expect(pending).rejects.toThrow('catalog deadline');
+      } else {
+        const remote = overStreams(createProvider, descriptor);
+        const pending = remote.listModels!({ signal: abort.signal });
+        await started.promise;
+        abort.abort(new Error('catalog deadline'));
+        await expect(pending).rejects.toThrow('catalog deadline');
+      }
+      await runtimeCancelled.promise;
+      expect(mockModelRuntimeCreate).toHaveBeenCalledTimes(1);
+    }
+  );
+
   test('Pi information hooks preserve backend status and model lists over streams', async () => {
     process.env.GEMINI_API_KEY = 'p4-backend-secret';
     const request = { assistantConfig: { model: 'google/gemini-2.5-pro' } };
@@ -3731,8 +3774,22 @@ describe('PiProvider', () => {
     expect(diagnostics.checks.map(check => check.status)).toEqual(['ok', 'ok']);
     expect(await remote.diagnose!(request)).toEqual(diagnostics);
     expect(JSON.stringify(diagnostics)).not.toContain('p4-backend-secret');
-    const models = { models: [{ id: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' }] };
-    expect(await direct.listModels()).toEqual(models);
-    expect(await remote.listModels!()).toEqual(models);
+    const models = {
+      models: [
+        {
+          id: 'google/gemini-2.5-pro',
+          label: 'google/gemini-2.5-pro',
+          details: {
+            provider: 'google',
+            modelId: 'gemini-2.5-pro',
+            reasoning: false,
+            cost: { input: 0, output: 0 },
+            contextWindow: 128_000,
+          },
+        },
+      ],
+    };
+    expect(await direct.listModels({ signal: new AbortController().signal })).toEqual(models);
+    expect(await remote.listModels!({ signal: new AbortController().signal })).toEqual(models);
   });
 });

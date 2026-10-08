@@ -68,7 +68,9 @@ test('test provider conforms and carries identical chunks in process, over strea
       expect(await provider.diagnose?.({ assistantConfig: { model: 'fixture/model' } })).toEqual(
         await create().diagnose?.({ assistantConfig: { model: 'fixture/model' } })
       );
-      expect(await provider.listModels?.()).toEqual(await create().listModels?.());
+      expect(await provider.listModels?.({ signal: new AbortController().signal })).toEqual(
+        await create().listModels?.({ signal: new AbortController().signal })
+      );
       expect(
         await Array.fromAsync(
           provider.sendQuery('structured', import.meta.dir, 'previous-session', {

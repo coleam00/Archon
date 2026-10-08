@@ -99,7 +99,7 @@ describe('workflow run config', () => {
   it('rejects model settings that cannot execute or survive resume', () => {
     expect(() =>
       parseWorkflowRunConfig({ assistant: 'not-registered' }, { kind: 'http', label: 'inline' })
-    ).toThrow("Invalid run config at 'assistant': unknown provider 'not-registered'");
+    ).toThrow("Invalid run config at 'assistant': Unknown provider: 'not-registered'");
     expect(() =>
       parseWorkflowRunConfig(
         { aliases: { planner: { provider: 'claude', model: 'opus' } } },

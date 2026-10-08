@@ -30,10 +30,9 @@ import {
   substituteWorkflowVariables,
 } from './executor-shared';
 import {
-  resolveNodeModel,
+  resolveNodeModelScope,
   resolveWorkflowModelScope,
   assistantModelDefaults,
-  type NodeModelResolution,
   type WorkflowModelScope,
 } from './node-model-resolution';
 import type { ResolvedAiProfile } from './model-validation';
@@ -371,7 +370,7 @@ const dryRunNodeTypeSchema = z.enum([
  * would be ~54 redundant lines in a 27-node workflow. Legibility instead of redundancy.
  */
 const dryRunResolutionSchema = z.object({
-  provider: z.string(),
+  provider: z.string().optional(),
   model: z.string().optional(),
   effort: effortLevelSchema.optional(),
   /** Where each value came from — 'node', 'model ref', 'workflow', 'assistant config', … */
@@ -653,12 +652,7 @@ function resolutionFor(node: DagNode, ctx: DryRunContext): DryRunResolution | un
   if (type !== 'command' && type !== 'prompt' && type !== 'loop' && type !== 'loop_group') {
     return undefined;
   }
-  const resolved: NodeModelResolution = resolveNodeModel(
-    node,
-    ctx.scope,
-    ctx.assistantModels,
-    ctx.aiProfile
-  );
+  const resolved = resolveNodeModelScope(node, ctx.scope, ctx.assistantModels, ctx.aiProfile);
   return {
     provider: resolved.provider,
     ...(resolved.model !== undefined ? { model: resolved.model } : {}),
@@ -1035,7 +1029,12 @@ async function simulateLoopGroup(
   // workflow-level effort and options — stays as it is. Reporting fields that describe
   // where the inherited model came from travel with it, or a body node would be
   // attributed to a tier it did not resolve through.
-  const groupResolution = resolveNodeModel(node, ctx.scope, ctx.assistantModels, ctx.aiProfile);
+  const groupResolution = resolveNodeModelScope(
+    node,
+    ctx.scope,
+    ctx.assistantModels,
+    ctx.aiProfile
+  );
   const bodyScope: WorkflowModelScope = {
     ...ctx.scope,
     provider: groupResolution.provider,
@@ -1497,7 +1496,7 @@ export async function dryRunWorkflow(options: {
     toleratedMissingStubs: new Set<string>(),
     scope: resolveWorkflowModelScope(
       options.workflow,
-      options.config?.assistant ?? 'claude',
+      options.config?.assistant,
       assistantModels,
       options.aiProfile
     ),

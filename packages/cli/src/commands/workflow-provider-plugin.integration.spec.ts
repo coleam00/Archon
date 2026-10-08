@@ -9,9 +9,10 @@ import type { ProviderManifest } from '@archon/plugin-manifest';
 import { readReceipts } from '@archon/plugin-manifest/store';
 import { loadProviderPlugins } from '@archon/core/providers/load-provider-plugins';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
+import { codexDescriptor } from '@archon/providers';
 import { parseProviderRunModel } from '@archon/provider-contract';
 import { checkAssistantLogin } from './doctor';
-import { pluginCommand, type PluginEnvironment } from './plugin';
+import { pluginCommand, replacePlugin, type PluginEnvironment } from './plugin';
 
 const tempRoot = trackTempRoots();
 const ID = 'owner/repo';
@@ -99,16 +100,18 @@ beforeAll(async () => {
           status: 302,
           headers: { location: '/owner/repo/releases/tag/v1' },
         });
-      const gitPath = /^\/owner\/repo\.git\/(.+)$/.exec(path);
+      const gitPath = /^\/(?:owner\/repo|coleam00\/Archon)\.git\/(.+)$/.exec(path);
       if (gitPath) {
         const file = Bun.file(join(repo, '.git', gitPath[1]));
         return (await file.exists()) ? new Response(file) : new Response(null, { status: 404 });
       }
-      const raw = /^\/raw\/owner\/repo\/([a-f0-9]{40})(?:\/alternate)?\/archon-plugin.json$/.exec(
-        path
-      );
+      const raw =
+        /^\/raw\/(?:owner\/repo|coleam00\/Archon)\/([a-f0-9]{40})(?:\/alternate|\/plugins\/provider-codex)?\/archon-plugin.json$/.exec(
+          path
+        );
       if (raw) return Response.json(manifests.get(raw[1]));
-      const release = /^\/owner\/repo\/releases\/download\/([^/]+)\/(.+)$/.exec(path);
+      const release =
+        /^\/(?:owner\/repo|coleam00\/Archon)\/releases\/download\/([^/]+)\/(.+)$/.exec(path);
       const bytes = release && assets.get(release[1]);
       if (release && bytes) {
         const manifest = manifests.get(commits.get(release[1]) ?? '');
@@ -304,7 +307,10 @@ test('invalid provider initialize, ids, capabilities and vendors preserve the pr
       executableId: descriptor.id,
       error: 'descriptor id must match',
     },
-    { descriptor: { ...descriptor, id: 'claude' }, error: 'already registered' },
+    {
+      descriptor: { ...descriptor, id: 'claude' },
+      error: 'installs only from coleam00/Archon/plugins/provider-claude',
+    },
     {
       descriptor: { ...descriptor, credentials: { kind: 'dynamic' } },
       error: 'failed initialize',
@@ -350,6 +356,12 @@ test('invalid provider initialize, ids, capabilities and vendors preserve the pr
     expect(rejected.code).toBe(1);
     expect(rejected.err).toContain(scenario.error);
     expect(await snapshot(env.pluginsDir)).toEqual(before);
+    if (scenario.descriptor.id === 'claude') {
+      const fresh = await environment();
+      expect((await plugin(fresh, 'install', [`${ID}@invalid`])).code).toBe(1);
+      expect(await readReceipts(fresh.pluginsDir)).toEqual([]);
+      expect(await snapshot(fresh.pluginsDir)).toEqual({});
+    }
   }
   assets.set('invalid', new TextEncoder().encode('broken executable'));
   expect(await pluginCommand('update', [`${ID}@invalid`], env)).toBe(1);
@@ -425,3 +437,58 @@ test('a process holding the install lock excludes competing install, update and 
   expect((await spawnMutation('remove', ID))[0]).toBe(0);
   expect(await readReceipts(env.pluginsDir)).toEqual([]);
 }, 120_000);
+
+test('first-party install enforces version match and can replace an existing provider', async () => {
+  const env = { ...(await environment()), archonVersion: '0.13.0' };
+  const commit = commits.get('invalid');
+  if (!commit) throw new Error('missing fixture commit');
+  const manifest = manifests.get(commit);
+  if (!manifest) throw new Error('missing fixture manifest');
+  const previousAsset = assets.get('invalid');
+  const descriptorFile = join(root, 'first-party-descriptor.json');
+  try {
+    manifests.set(commit, { ...manifest, executable: 'archon-provider-codex' });
+    assets.set(
+      'invalid',
+      await runnable(
+        `const descriptor = await Bun.file(${JSON.stringify(descriptorFile)}).json(); for await (const line of console) { const request = JSON.parse(line); console.log(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{protocolVersion:1,agentCapabilities:{_meta:{archon:descriptor}},authMethods:[]}})); }`,
+        'first-party-provider'
+      )
+    );
+    const fixtureDescriptor = providerPluginDescriptorSchema.parse({
+      protocol: 1,
+      id: 'codex',
+      displayName: 'Fixture Codex',
+      version: '0.12.0',
+      capabilities: codexDescriptor.capabilities,
+      credentials: { kind: 'static', specs: [] },
+      configSchema: { type: 'object' },
+    });
+    await writeFile(descriptorFile, JSON.stringify(fixtureDescriptor));
+    const ref = 'coleam00/Archon/plugins/provider-codex@invalid';
+    const failure: unknown = await replacePlugin(ref, env).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toHaveProperty(
+      'message',
+      expect.stringContaining('archon provider install codex')
+    );
+    expect(await readReceipts(env.pluginsDir)).toEqual([]);
+    expect(await snapshot(env.pluginsDir)).toEqual({});
+    await writeFile(
+      descriptorFile,
+      JSON.stringify({ ...fixtureDescriptor, version: env.archonVersion })
+    );
+    await replacePlugin(ref, env);
+    expect((await readReceipts(env.pluginsDir))[0]).toMatchObject({
+      descriptor: { id: 'codex', version: '0.13.0' },
+    });
+    await writeFile(descriptorFile, JSON.stringify({ ...fixtureDescriptor, version: '0.14.0' }));
+    await replacePlugin(ref, { ...env, archonVersion: '0.14.0' });
+    expect((await readReceipts(env.pluginsDir))[0]).toMatchObject({
+      descriptor: { id: 'codex', version: '0.14.0' },
+    });
+  } finally {
+    manifests.set(commit, manifest);
+    if (previousAsset) assets.set('invalid', previousAsset);
+  }
+}, 60_000);

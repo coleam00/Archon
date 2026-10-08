@@ -863,7 +863,7 @@ nodes:
       expect(result.workflows).toHaveLength(0);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].errorType).toBe('validation_error');
-      expect(result.errors[0].error).toContain("Unknown provider 'claud'");
+      expect(result.errors[0].error).toContain("Unknown provider: 'claud'");
     });
 
     it('should accept any model string with a known provider (SDK validates at run time)', () => {
@@ -9547,5 +9547,7 @@ nodes:
     'registry.yaml',
     providers
   );
-  expect(result.error?.error).toBe("Unknown provider 'claude'. Registered: custom");
+  expect(result.error?.error).toBe(
+    "Provider 'claude' is not installed. Install it with: archon provider install claude"
+  );
 });

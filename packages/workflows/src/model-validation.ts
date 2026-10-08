@@ -13,7 +13,13 @@
  * tiers → global aliases → repo aliases) and then handed to `resolveModelSpec()`
  * per call.
  */
-import { type ProviderRegistry, parseProviderRunModel } from '@archon/provider-contract';
+import {
+  type ProviderRegistry,
+  parseProviderRunModel,
+  missingProviderMessage,
+  NoDefaultProviderError,
+  isMaintainedProvider,
+} from '@archon/provider-contract';
 
 import tierDefaults from './defaults/tier-defaults.json';
 import { EFFORT_LEVELS } from './schemas/dag-node';
@@ -118,7 +124,7 @@ function assertValidPersistedPreset(
 }
 
 export type RunModelPresetValidationIssue =
-  | { kind: 'unknown-provider'; provider: string; field: 'provider' }
+  | { kind: 'unknown-provider'; provider: string; field: 'provider'; reason: string }
   | { kind: 'invalid-model'; provider: string; model: string; reason: string; field: 'model' }
   | { kind: 'unsupported-effort'; provider: string; effort: string; field: 'effort' }
   | {
@@ -132,7 +138,7 @@ export type RunModelPresetValidationIssue =
 function runModelPresetValidationMessage(issue: RunModelPresetValidationIssue): string {
   switch (issue.kind) {
     case 'unknown-provider':
-      return `resolved to unknown provider '${issue.provider}'`;
+      return issue.reason;
     case 'invalid-model':
       return `has invalid ${issue.provider} model '${issue.model}': ${issue.reason}`;
     case 'unsupported-effort':
@@ -167,6 +173,7 @@ export function normalizeStrictRunModelPreset(
     throw new RunModelPresetValidationError({
       kind: 'unknown-provider',
       provider: preset.provider,
+      reason: missingProviderMessage(providers, preset.provider),
       field: 'provider',
     });
   }
@@ -261,13 +268,13 @@ export interface BuildAiProfileOptions {
  * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
  */
 export function buildAiProfile(
-  defaultProvider: string,
+  defaultProvider: string | undefined,
   options: BuildAiProfileOptions = {}
 ): ResolvedAiProfile {
   const aliases: Record<string, ModelAliasPreset> = {};
 
-  const tierEntries = TIER_DEFAULTS[defaultProvider];
-  if (tierEntries) {
+  const tierEntries = defaultProvider === undefined ? undefined : TIER_DEFAULTS[defaultProvider];
+  if (tierEntries && defaultProvider !== undefined) {
     for (const tier of TIER_NAMES) {
       const entry = tierEntries[tier];
       if (entry) {
@@ -362,7 +369,7 @@ function resolveRunOverrideSpec(
 
   const prefix = spec.slice(0, slash);
   const remainder = spec.slice(slash + 1);
-  if (providers.get(prefix)) {
+  if (providers.get(prefix) || isMaintainedProvider(prefix)) {
     if (remainder.length === 0) {
       throw new Error(`Model override '${targetName}' has an empty model id.`);
     }
@@ -588,6 +595,7 @@ export function resolveTierWithFallback(
     const preset = profile.aliases[candidate];
     if (preset) return { preset, matchedTier: candidate };
   }
+  if (profile.defaultProvider === undefined) throw new NoDefaultProviderError();
   throw new TierResolutionError(
     `Tier '${tier}' has no configured preset and no built-in default for provider '${profile.defaultProvider}'. ` +
       'Built-in tier defaults exist only for claude and codex; every other provider must configure its own. ' +

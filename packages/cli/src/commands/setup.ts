@@ -162,12 +162,10 @@ interface SetupConfig {
     piApiKey?: string;
     /** Canonical env var name for the chosen Pi backend, e.g. 'ANTHROPIC_API_KEY' */
     piApiKeyEnvVar?: string;
-    defaultAssistant: string;
+    defaultAssistant: string | undefined;
     /** True when defaultAssistant came from an actual user selection — gates
      *  the config.yaml write in writeInstallDefaults. Left unset on the
-     *  no-assistant early return and in 'add' mode, where defaultAssistant is
-     *  a registry fallback that must never clobber an existing config.yaml
-     *  defaultAssistant. */
+     *  no-assistant early return and in 'add' mode, preserving the saved default. */
     defaultAssistantSelected?: boolean;
     /** Default CHAT model for the default assistant — written to
      *  ~/.archon/config.yaml as `assistants.<defaultAssistant>.model` (#1999).
@@ -737,9 +735,8 @@ async function collectDefaultChatModel(provider: string): Promise<string | undef
  * so a stale config.yaml defaultAssistant from an earlier `archon ai default`
  * would otherwise silently override the wizard's fresh selection.
  *
- * Gated on `defaultAssistantSelected`: the 'add'-mode / no-assistant registry
- * fallback must never clobber an existing config.yaml value. Non-fatal on
- * failure — the env write has already succeeded, so warn + log instead of
+ * Gated on `defaultAssistantSelected`: 'add' mode and a no-assistant result
+ * must preserve an existing config.yaml value. Non-fatal on failure — the env write has already succeeded, so warn + log instead of
  * aborting setup. Returns true when the config was written.
  *
  * The `write` parameter is injected in tests (same convention as
@@ -749,7 +746,7 @@ export async function writeInstallDefaults(
   ai: SetupConfig['ai'],
   write: (provider: string, model?: string) => Promise<void> = setInstallDefault
 ): Promise<boolean> {
-  if (!ai.defaultAssistantSelected) return false;
+  if (!ai.defaultAssistantSelected || ai.defaultAssistant === undefined) return false;
   try {
     await write(ai.defaultAssistant, ai.defaultModel);
     return true;
@@ -1179,7 +1176,7 @@ After upgrading, run 'archon setup' again.`,
       claude: false,
       codex: false,
       pi: false,
-      defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
+      defaultAssistant: undefined,
     };
   }
 
@@ -1242,9 +1239,7 @@ After upgrading, run 'archon setup' again.`,
     }
   }
 
-  // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
-  // Default to first registered built-in provider rather than hardcoding 'claude'.
-  let defaultAssistant = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
+  let defaultAssistant: string | undefined;
 
   // `hasPi` may have been cleared above by a failed module check, so build the
   // selectedProviders list AFTER the Pi block.
@@ -1283,7 +1278,7 @@ After upgrading, run 'archon setup' again.`,
   // (#1999). Pi is excluded: its model was already chosen in collectPiConfig
   // and is written by writeHomePiModelConfig.
   let defaultModel: string | undefined;
-  if (selectedProviders.length > 0 && defaultAssistant !== 'pi') {
+  if (defaultAssistant !== undefined && defaultAssistant !== 'pi') {
     defaultModel = await collectDefaultChatModel(defaultAssistant);
   }
 
@@ -1706,7 +1701,8 @@ export function generateEnvContent(config: SetupConfig): string {
 
   // Default AI Assistant
   lines.push('# Default AI Assistant');
-  lines.push(`DEFAULT_AI_ASSISTANT=${config.ai.defaultAssistant}`);
+  if (config.ai.defaultAssistant !== undefined)
+    lines.push(`DEFAULT_AI_ASSISTANT=${config.ai.defaultAssistant}`);
   lines.push('');
 
   // GitHub
@@ -2255,7 +2251,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
         pi: existing?.hasPi ?? false,
-        defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
+        defaultAssistant: undefined,
       },
       platforms: {
         github: existing?.platforms.github ?? false,
@@ -2362,7 +2358,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
   // Model tiers: confirm built-in defaults (claude/codex) or point providers
   // without built-ins at the owning config surfaces before anything runs.
-  await confirmModelTiers(config.ai.defaultAssistant);
+  if (config.ai.defaultAssistant !== undefined) await confirmModelTiers(config.ai.defaultAssistant);
 
   // Tell the operator exactly what happened — especially that <repo>/.env was
   // NOT touched, because prior versions wrote there and this is the biggest
@@ -2485,7 +2481,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
   const summaryLines = [
     `AI: ${aiConfigured.length > 0 ? aiConfigured.join(', ') : 'None configured'}`,
-    `Default: ${config.ai.defaultAssistant}${config.ai.defaultModel ? ` (chat model: ${config.ai.defaultModel})` : ''}`,
+    `Default: ${config.ai.defaultAssistant ?? 'unset'}${config.ai.defaultModel ? ` (chat model: ${config.ai.defaultModel})` : ''}`,
     `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None (CLI + skill only)'}`,
     '',
     `File written (${scope} scope):`,

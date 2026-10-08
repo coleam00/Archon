@@ -41,7 +41,7 @@ export const resolvedRunModelOverridesSchema = z.object({
 export type ResolvedRunModelOverrides = z.infer<typeof resolvedRunModelOverridesSchema>;
 
 export const resolvedAiProfileSchema = z.object({
-  defaultProvider: z.string(),
+  defaultProvider: z.string().optional(),
   aliases: rawAliasesConfigSchema,
 });
 

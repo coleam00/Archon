@@ -563,6 +563,17 @@ export function getSourceWebDistDir(): string {
   return join(getSourceRepoRoot(), 'packages', 'web', 'dist');
 }
 
+export function getSourceProviderEntry(id: string): string {
+  return join(
+    getSourceRepoRoot(),
+    'packages',
+    'providers',
+    'src',
+    ...(id === 'pi' ? ['community', 'pi'] : [id]),
+    'plugin.ts'
+  );
+}
+
 export function getSourceServerEntry(): string {
   return join(getSourceRepoRoot(), 'packages', 'server', 'src', 'bin.ts');
 }

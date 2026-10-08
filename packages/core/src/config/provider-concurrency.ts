@@ -1,5 +1,6 @@
 /**
- * Install-wide provider concurrency caps (`concurrency.providers.<id>` in
+ * Install-wide provider concurrency caps (`concurrency.providers.<id>` and Pi
+ * `assistants.pi.maxConcurrent` in
  * `~/.archon/config.yaml`).
  *
  * Read fresh at every provider attempt, so lowering a cap takes effect for the next
@@ -10,22 +11,28 @@
 import { readFile } from 'fs/promises';
 import { z } from 'zod';
 import { getArchonConfigPath } from '@archon/paths';
+import { configSchemas as piConfigSchemas } from '@archon/providers/pi/config';
 import { isRegisteredProvider } from '@archon/providers';
 
 export class ProviderConcurrencyConfigError extends Error {
   constructor(configPath: string, detail: string) {
     super(
       `Invalid provider concurrency config in '${configPath}': ${detail}. ` +
-        'Provider attempts are refused until concurrency.providers is fixed.'
+        'Provider attempts are refused until the provider cap is fixed.'
     );
     this.name = 'ProviderConcurrencyConfigError';
   }
 }
 
-// Only the cap path is strict; every other key belongs to the ordinary config loader.
+// Only cap paths are strict; every other key belongs to the ordinary config loader.
 // `.nullish()`: YAML reads an empty `concurrency:` or `providers:` key as null, which
 // means no caps, not an invalid config.
 const configSchema = z.looseObject({
+  assistants: z
+    .looseObject({
+      pi: z.looseObject({ maxConcurrent: piConfigSchemas.install.shape.maxConcurrent }).nullish(),
+    })
+    .nullish(),
   concurrency: z
     .looseObject({ providers: z.record(z.string(), z.number().int().min(1)).nullish() })
     .nullish(),
@@ -56,6 +63,8 @@ export async function loadProviderConcurrencyCaps(): Promise<ReadonlyMap<string,
     throw new ProviderConcurrencyConfigError(configPath, detail);
   }
   const caps = new Map(Object.entries(result.data.concurrency?.providers ?? {}));
+  const piCap = result.data.assistants?.pi?.maxConcurrent;
+  if (piCap !== undefined) caps.set('pi', Math.min(caps.get('pi') ?? piCap, piCap));
   const unknown = [...caps.keys()].filter(id => !isRegisteredProvider(id));
   if (unknown.length > 0) {
     throw new ProviderConcurrencyConfigError(

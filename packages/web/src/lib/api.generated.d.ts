@@ -5537,7 +5537,7 @@ export interface components {
     };
     SafeConfig: {
       botName: string;
-      assistant: string;
+      assistant?: string;
       assistants: {
         [key: string]: components['schemas']['ProviderDefaults'];
       };

@@ -2030,7 +2030,7 @@ describe('executeWorkflow', () => {
           'test message',
           { conversationId: 'db-conv-1' }
         )
-      ).rejects.toThrow(/unknown provider 'claud'/);
+      ).rejects.toThrow(/Unknown provider: 'claud'/);
     });
   });
 
@@ -2400,11 +2400,11 @@ describe('executeWorkflow', () => {
           { conversationId: 'db-conv-1' },
           { preCreatedRun, priorCompletedNodes: new Map() }
         )
-      ).rejects.toThrow(/unknown provider 'removed-provider'/);
+      ).rejects.toThrow(/Unknown provider: 'removed-provider'/);
 
       expect(failRun).toHaveBeenCalledWith(
         'resume-removed-provider-run',
-        expect.stringContaining("unknown provider 'removed-provider'")
+        expect.stringContaining("Unknown provider: 'removed-provider'")
       );
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
     });

@@ -34,11 +34,15 @@ function workflowSourceFiles(paths: string[]): string[] {
     .sort();
 }
 
-async function validateCorpus(cwd: string): Promise<{ findings: Finding[]; files: string[] }> {
+async function validateCorpus(
+  cwd: string,
+  defaultAssistant?: string
+): Promise<{ findings: Finding[]; files: string[] }> {
   const configPath = join(cwd, '.archon/config.yaml');
   const config = validationSourceConfigSchema.parse(
     (await Bun.file(configPath).exists()) ? Bun.YAML.parse(await readFile(configPath, 'utf8')) : {}
   );
+  config.assistant ??= defaultAssistant;
   const workflowRoot = join(cwd, '.archon/workflows');
   const files = workflowSourceFiles(
     await Array.fromAsync(new Bun.Glob('**/*.{yaml,yml}').scan(workflowRoot))
@@ -91,7 +95,7 @@ async function validateCorpus(cwd: string): Promise<{ findings: Finding[]; files
 }
 
 test('repository workflows have no errors or unsafe shell output references', async () => {
-  const { findings, files } = await validateCorpus(repo);
+  const { findings, files } = await validateCorpus(repo, 'claude');
   expect(files.length).toBeGreaterThan(0);
   expect(files.some(file => file.startsWith('sdlc/'))).toBe(true);
   expect(findings).toEqual([]);

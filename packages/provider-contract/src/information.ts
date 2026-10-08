@@ -14,6 +14,20 @@ export const providerDiagnosticsSchema = z.object({
 export type ProviderDiagnostics = z.infer<typeof providerDiagnosticsSchema>;
 
 export const providerModelListSchema = z.object({
-  models: z.array(z.object({ id: z.string(), label: z.string().optional() })),
+  models: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string().optional(),
+      details: z
+        .object({
+          provider: z.string(),
+          modelId: z.string(),
+          reasoning: z.boolean(),
+          cost: z.object({ input: z.number(), output: z.number() }),
+          contextWindow: z.number(),
+        })
+        .optional(),
+    })
+  ),
 });
 export type ProviderModelList = z.infer<typeof providerModelListSchema>;

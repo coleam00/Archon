@@ -1,3 +1,4 @@
+import { requireProvider } from '@archon/provider-contract';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import type { OwnedWorktree, WorkflowRunOrigin } from './schemas/workflow-run';
 import {
@@ -2094,15 +2095,7 @@ export async function executeWorkflow(
     }
   }
 
-  if (!deps.providers.get(resolvedProvider)) {
-    throw new Error(
-      `Workflow '${workflow.name}': unknown provider '${resolvedProvider}'. ` +
-        `Registered: ${deps.providers
-          .list()
-          .map(p => p.id)
-          .join(', ')}`
-    );
-  }
+  if (resolvedProvider !== undefined) requireProvider(deps.providers, resolvedProvider);
 
   getLog().info(
     {

@@ -280,10 +280,12 @@ export class ProcessAgentProvider implements IAgentProvider {
     }
   }
 
-  async listModels(): ReturnType<NonNullable<IAgentProvider['listModels']>> {
-    const process = startProcess(this.descriptor, this.argv, {});
+  async listModels(
+    request: Parameters<NonNullable<IAgentProvider['listModels']>>[0]
+  ): ReturnType<NonNullable<IAgentProvider['listModels']>> {
+    const process = startProcess(this.descriptor, this.argv, {}, request.signal);
     try {
-      return await (await process.connect()).listModels();
+      return await (await process.connect()).listModels(request);
     } catch (error) {
       throw await process.failure(error);
     } finally {

@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { providerCapabilitiesSchema } from '@archon/provider-contract';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
 import {
+  maintainedProviderPluginId,
+  isMaintainedProviderPlugin,
   forgeManifestSchema,
   type ChatManifest,
   type ChatReceipt,
@@ -285,3 +287,14 @@ describe('chat manifests and receipts', () => {
     }
   });
 });
+
+test.each(['claude', 'codex', 'pi'] as const)(
+  'maintained %s install refs and receipt identity share one resolver',
+  id => {
+    const pluginId = maintainedProviderPluginId(id);
+    expect(pluginId).toBe(`coleam00/Archon/plugins/provider-${id}`);
+    expect(isMaintainedProviderPlugin(pluginId.toUpperCase(), id)).toBe(true);
+    expect(isMaintainedProviderPlugin(`other/Archon/plugins/provider-${id}`, id)).toBe(false);
+    expect(isMaintainedProviderPlugin(`${pluginId}/extra`, id)).toBe(false);
+  }
+);

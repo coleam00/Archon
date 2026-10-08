@@ -1,4 +1,8 @@
-import { expect, test } from 'bun:test';
+// @archon-test-isolated
+import * as paths from '@archon/paths';
+import { clearRegistry, providerRegistry } from '@archon/providers';
+import { requireProvider } from '@archon/provider-contract';
+import { afterEach, expect, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -71,5 +75,52 @@ test('invalid descriptors, executable identities and delivery rules name the rec
     if (!('protocol' in value.descriptor) || value.descriptor.protocol !== 1) {
       await expect(readReceipts(dir)).rejects.toThrow(`Invalid plugin receipt ${file}`);
     }
+  }
+});
+
+afterEach(() => clearRegistry());
+
+test('stale first-party providers are unavailable with the versioned install command', async () => {
+  const dir = tempRoot(await mkdtemp(join(tmpdir(), 'provider-stale-')));
+  const firstPartyId = 'coleam00/Archon/plugins/provider-claude';
+  const file = receiptPath(dir, firstPartyId);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...receipt,
+      id: firstPartyId,
+      manifest: { ...receipt.manifest, executable: 'archon-provider-claude' },
+      files: [{ path: 'archon-provider-claude', sha256: 'b'.repeat(64) }],
+      descriptor: { ...descriptor, id: 'claude', version: '0.12.0' },
+    })
+  );
+  expect(await loadProviderPlugins(dir, { version: '0.13.0' })).toEqual([]);
+  expect(() => requireProvider(providerRegistry, 'claude')).toThrow(
+    "Provider 'claude' is installed at 0.12.0 but this CLI is 0.13.0. Run: archon provider install claude"
+  );
+});
+
+test('source registration skips maintained receipts and warns with the receipt path', async () => {
+  const dir = tempRoot(await mkdtemp(join(tmpdir(), 'provider-source-')));
+  const file = receiptPath(dir, id);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(
+    file,
+    JSON.stringify({
+      ...receipt,
+      manifest: { ...receipt.manifest, executable: 'archon-provider-claude' },
+      descriptor: { ...descriptor, id: 'claude' },
+    })
+  );
+  const logger = paths.createLogger('test');
+  const warning = spyOn(logger, 'warn').mockImplementation(() => undefined);
+  const loggerFactory = spyOn(paths, 'createLogger').mockReturnValue(logger);
+  try {
+    expect(await loadProviderPlugins(dir, { maintained: 'source' })).toEqual([]);
+    expect(warning).toHaveBeenCalledWith({ receipt: file }, 'provider.receipt_skipped_source');
+  } finally {
+    loggerFactory.mockRestore();
+    warning.mockRestore();
   }
 });

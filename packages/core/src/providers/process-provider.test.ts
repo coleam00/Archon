@@ -282,7 +282,7 @@ test.each(['turn', 'credential', 'model', 'diagnose', 'models'] as const)(
               ? runtime.resolveCredentialModel?.({ cwd: tmpdir() })
               : operation === 'diagnose'
                 ? runtime.diagnose?.({})
-                : runtime.listModels?.();
+                : runtime.listModels?.({ signal: new AbortController().signal });
       await expect(request).rejects.toBeInstanceOf(ProviderPluginExitedError);
       expect(watchdogFired).toBe(false);
       expect(alive(Number(readFileSync(file, 'utf8')))).toBe(false);
@@ -399,7 +399,7 @@ test('information hooks round-trip through fresh processes and close them', asyn
     });
     const firstPid = Number(readFileSync(file, 'utf8'));
     expect(alive(firstPid)).toBe(false);
-    expect(await runtime.listModels?.()).toEqual({
+    expect(await runtime.listModels?.({ signal: new AbortController().signal })).toEqual({
       models: [{ id: 'fixture/model', label: 'Fixture model' }, { id: 'fixture/other' }],
     });
     const secondPid = Number(readFileSync(file, 'utf8'));
@@ -421,3 +421,25 @@ test('diagnostic hook errors withhold plugin prose and stderr', async () => {
     debug.mockRestore();
   }
 });
+
+test(
+  'a caller cancellation stops a stalled model-list process by its recorded PID',
+  async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'archon-models-cancel-'));
+    const file = join(directory, 'pid');
+    const abort = new AbortController();
+    const runtime = provider('hung-models', file);
+    try {
+      const pending = runtime.listModels?.({ signal: abort.signal });
+      for (let attempt = 0; attempt < 200 && !existsSync(file); attempt++) await Bun.sleep(10);
+      expect(existsSync(file)).toBe(true);
+      abort.abort(new Error('model list cancelled'));
+      await expect(pending).rejects.toThrow();
+      expect(alive(Number(readFileSync(file, 'utf8')))).toBe(false);
+    } finally {
+      abort.abort();
+      await removeTempTree(directory);
+    }
+  },
+  testTimeout(18_000)
+);
