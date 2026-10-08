@@ -66,6 +66,14 @@ const mockWorkflowResumeTargetForRun = mock(
 );
 const mockResumeWorkflowRunFromServer = mock(async (): Promise<boolean> => true);
 
+const hostedPlugins: string[][] = [];
+mock.module('./chat-host/runtime', () => ({
+  createChatHost: (installed: { descriptor: { id: string } }[]) => {
+    hostedPlugins.push(installed.map(plugin => plugin.descriptor.id));
+    return { start: () => {}, stop: async () => {} };
+  },
+}));
+
 let capturedResume: SlackWorkflowResume | undefined;
 let slackAdapterInstance: MockSlackAdapter | undefined;
 
@@ -192,6 +200,7 @@ mock.module('@archon/paths', () => ({
   shutdownTelemetry: async (): Promise<void> => undefined,
   captureArchonStarted: (): void => undefined,
   captureArchonActive: (): void => undefined,
+  captureApprovalResolved: (): void => undefined,
   getSourceWebDistDir: (): string => '/tmp/web-dist',
 }));
 
@@ -338,6 +347,9 @@ mock.module('./services/resource-start-hosting', () => ({
 const workflowHost = {} as import('@archon/core/workflows/host-store').WorkflowHost;
 mock.module('@archon/core/workflows/sql-host', () => ({
   createSqlWorkflowHost: () => workflowHost,
+  createSqlWorkflowOperations: () => {
+    throw new Error('No plugin action expected during boot');
+  },
 }));
 
 mock.module('./services/workflow-resume-service', () => ({
@@ -481,6 +493,55 @@ describe('Slack workflow resume composition', () => {
           streaming: { defaultMode: 'stream', envVar: 'FIXTURE_STREAMING_MODE' },
         },
       ]);
+    } finally {
+      serveSpy.mockRestore();
+      await unlink(file);
+      expectedSlackRetention = 'age-based';
+    }
+  });
+
+  test('an installed Slack receipt supersedes the bundled adapter and its bridge at boot', async () => {
+    const file = join(pluginsDir, 'installed', 'owner', 'chat-fixture', 'receipt.json');
+    await mkdir(dirname(file), { recursive: true });
+    const executable = 'archon-chat-fixture' + (process.platform === 'win32' ? '.exe' : '');
+    await writeFile(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: 'owner/chat-fixture',
+        manifest: {
+          schemaVersion: 1,
+          kind: 'chat',
+          name: 'fixture',
+          description: 'Fixture',
+          executable: 'archon-chat-fixture',
+        },
+        tag: 'v1',
+        commit: 'a'.repeat(40),
+        installedAt: new Date(0).toISOString(),
+        files: [{ path: executable, sha256: 'b'.repeat(64) }],
+        descriptor: {
+          protocol: 'archon-chat/1',
+          id: 'slack',
+          displayName: 'Fixture',
+          version: '1',
+          capabilities: { defaultWorkflowDispatch: 'background' },
+          policy: { workspaceRetention: 'retain' },
+        },
+      })
+    );
+    capturedResume = undefined;
+    slackAdapterInstance = undefined;
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 12345,
+    })) as unknown as typeof Bun.serve);
+    try {
+      expectedSlackRetention = 'retain';
+      const { startServer } = await import('./index');
+      await startServer({ port: 12345 });
+      expect(hostedPlugins.at(-1)).toEqual(['slack']);
+      expect(capturedResume).toBeUndefined();
+      expect(slackAdapterInstance).toBeUndefined();
     } finally {
       serveSpy.mockRestore();
       await unlink(file);

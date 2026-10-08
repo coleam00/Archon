@@ -45,7 +45,7 @@ mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: findOrCreate,
 }));
 
-import { resolveUserId } from './index';
+import { resolveUserId } from './chat-host/inbound';
 
 describe('resolveUserId', () => {
   beforeEach(() => {
@@ -96,7 +96,8 @@ describe('resolveUserId', () => {
     const failedCall = warnCalls.find(c => c.evt === 'server.user_resolve_failed');
     expect(failedCall).toBeDefined();
     expect(failedCall?.obj).toHaveProperty('platform', 'telegram');
-    expect(failedCall?.obj).toHaveProperty('platformUserId', '999');
+    expect(failedCall?.obj).not.toHaveProperty('platformUserId');
+    expect(failedCall?.obj).not.toHaveProperty('err');
     // Confirm we did NOT use a per-platform event name (would collide with the
     // GitHub adapter's own `github.user_resolve_failed` event).
     expect(warnCalls.find(c => c.evt === 'telegram.user_resolve_failed')).toBeUndefined();
