@@ -891,7 +891,7 @@ async function resolveCliUserRecordId(host: WorkflowHost): Promise<string | unde
       cliId,
       cliId
     );
-    return cliUser.id;
+    return cliUser?.id;
   } catch (error) {
     getLog().warn({ err: error as Error, cliId }, 'cli.user_identity_resolve_failed');
     return undefined;
@@ -964,7 +964,8 @@ async function assertCliWorkflowRequirementsMet(
         cliId,
         cliId
       );
-      githubConnected = Boolean(await host.deps.getUserGithubToken?.(cliUser.id));
+      githubConnected =
+        cliUser !== null && Boolean(await host.deps.getUserGithubToken?.(cliUser.id));
     } catch (error) {
       getLog().warn({ err: error as Error, cliId }, 'cli.requirement_gate_user_resolve_failed');
     }
@@ -984,7 +985,7 @@ async function resolveCliDryRunAiPrefs(
       cliId,
       cliId
     );
-    return (await host.deps.getUserAiPrefs?.(cliUser.id)) ?? {};
+    return cliUser ? ((await host.deps.getUserAiPrefs?.(cliUser.id)) ?? {}) : {};
   } catch (error) {
     getLog().warn({ err: error as Error, cliId }, 'cli.dry_run_user_ai_prefs_resolve_failed');
     return {};

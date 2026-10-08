@@ -145,6 +145,11 @@ async function registerProviders(): Promise<void> {
   providersRegistered = true;
 }
 
+async function usesDatabaseStore(): Promise<boolean> {
+  const { loadStoreSelection } = await import('@archon/core/config/store-selection');
+  return (await loadStoreSelection()) === 'database';
+}
+
 async function loadRoute<T>(
   loader: () => Promise<T>,
   options: { providers?: false; database?: boolean } = {}
@@ -157,9 +162,16 @@ async function loadRoute<T>(
     ]);
   setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   if (options.providers !== false) await registerProviders();
-  const route = await loader();
-  if (options.database) databaseRouteLoaded = true;
-  return route;
+  if (options.database) {
+    const { loadStoreSelection } = await import('@archon/core/config/store-selection');
+    if ((await loadStoreSelection()) === 'files') {
+      const { FileStoreUnsupportedError: fileStoreUnsupportedError } =
+        await import('@archon/workflows/file-store');
+      throw new fileStoreUnsupportedError('this SQL-only CLI command');
+    }
+    databaseRouteLoaded = true;
+  }
+  return loader();
 }
 
 /** True when `path` exists and is a directory (used to validate `--workflow-source`). */
@@ -395,6 +407,14 @@ async function main(): Promise<number> {
   if (showUpdateNotice) void checkForUpdate(BUNDLED_VERSION);
 
   try {
+    if (command === 'workflow' || command === 'trigger') {
+      await registerProviders();
+      if (!(await usesDatabaseStore())) {
+        const { assertFileStoreConfiguration } =
+          await import('@archon/core/config/store-selection');
+        await assertFileStoreConfiguration();
+      }
+    }
     const detachedRunConfigPayload = values['internal-detached-run-config'];
     if (
       command === 'workflow' &&
@@ -425,13 +445,12 @@ async function main(): Promise<number> {
       const schedule = subcommand === 'wake' && positionals[2] === 'schedule';
       const { workflowContinuationCommand, workflowWakeScheduleCommand } = await loadRoute(
         () => import('./commands/workflow-continuations'),
-        schedule ? { providers: false } : { database: true }
+        schedule ? { providers: false } : { database: await usesDatabaseStore() }
       );
       if (schedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
-      const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
-      const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+      const { createCliWorkflowHost } = await import('./utils/workflow-host');
       return await workflowContinuationCommand(
-        createSqlWorkflowHost(createCliWorkflowDeps()),
+        await createCliWorkflowHost(true),
         subcommand,
         positionals.slice(2),
         values
@@ -522,16 +541,17 @@ async function main(): Promise<number> {
         // "database unavailable" instead of the misleading "not a git repository".
         let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
         let gateLookupError: Error | null = null;
-        let codebaseDb: typeof import('@archon/core/db/codebases') | undefined;
         try {
-          codebaseDb = await loadRoute(() => import('@archon/core/db/codebases'), {
-            database: true,
-          });
+          if (await usesDatabaseStore()) databaseRouteLoaded = true;
+          const { createCliWorkflowHost } = await import('./utils/workflow-host');
+          const host = await createCliWorkflowHost();
           folderCodebase =
-            (await codebaseDb.findCodebaseByDefaultCwd(realCwd)) ??
-            (await codebaseDb.findCodebaseByPathPrefix(realCwd));
+            (await host.records.codebases.findCodebaseByDefaultCwd(realCwd)) ??
+            (await host.records.codebases.findCodebaseByPathPrefix(realCwd));
         } catch (dbError) {
-          if (codebaseDb && dbError instanceof codebaseDb.InvalidCodebaseDefaultCwdError) {
+          const { InvalidCodebaseDefaultCwdError: invalidCodebaseDefaultCwdError } =
+            await import('@archon/core/db/codebase-path');
+          if (dbError instanceof invalidCodebaseDefaultCwdError) {
             return await fail(jsonFlag, dbError.message);
           }
           gateLookupError = dbError as Error;
@@ -582,12 +602,11 @@ async function main(): Promise<number> {
         const { triggerCommand, spawnAdmitted } = await loadRoute(
           () => import('./commands/trigger'),
           {
-            database: true,
+            database: await usesDatabaseStore(),
           }
         );
-        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
-        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
-        const host = createSqlWorkflowHost(createCliWorkflowDeps());
+        const { createCliWorkflowHost } = await import('./utils/workflow-host');
+        const host = await createCliWorkflowHost(true);
         await triggerCommand(
           host,
           subcommand,
@@ -694,20 +713,16 @@ async function main(): Promise<number> {
           workflowEventEmitCommand,
           isValidEventType,
         } = await loadRoute(() => import('./commands/workflow'), {
-          database: true,
+          database: await usesDatabaseStore(),
         });
-        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        const { createCliWorkflowHost } = await import('./utils/workflow-host');
         // The host's deps capture GitHub App auth when built, so commands that can
         // execute a workflow initialize it first. A misconfigured App fails here,
         // before any run row exists; query commands stay usable without it.
         const executesWorkflow = ['run', 'resume', 'approve', 'reject', 'respond'].includes(
           subcommand ?? ''
         );
-        const workflowHost = createSqlWorkflowHost(
-          executesWorkflow
-            ? (await import('./utils/workflow-deps')).createCliWorkflowDeps()
-            : undefined
-        );
+        const workflowHost = await createCliWorkflowHost(executesWorkflow);
         switch (subcommand) {
           case 'list': {
             const workflowName = positionals[2];

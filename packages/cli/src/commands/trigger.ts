@@ -112,6 +112,7 @@ export async function triggerCommand(
     if (!cliId)
       throw new Error('Could not determine your CLI identity. Set ARCHON_USER_ID or $USER.');
     const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+    if (!user) throw new Error('Trigger identities require store: database');
     await writeJsonLine({ runAsUserId: user.id, cliIdentity: cliId });
     return;
   }

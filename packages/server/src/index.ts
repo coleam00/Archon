@@ -277,6 +277,12 @@ export interface ServerOptions {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
+  const { loadStoreSelection } = await import('@archon/core/config/store-selection');
+  if ((await loadStoreSelection()) === 'files') {
+    const { FileStoreUnsupportedError: fileStoreUnsupportedError } =
+      await import('@archon/workflows/file-store');
+    throw new fileStoreUnsupportedError('the server (server routes read SQL)');
+  }
   setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by

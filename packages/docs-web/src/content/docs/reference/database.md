@@ -1,6 +1,6 @@
 ---
 title: Database
-description: Database setup, schema overview, and migration guide for SQLite and PostgreSQL backends.
+description: Persistence selection and database setup for files, SQLite, and PostgreSQL.
 category: reference
 area: database
 audience: [developer, operator]
@@ -11,12 +11,65 @@ sidebar:
 
 Archon supports two database backends: **SQLite** (default, zero setup) and **PostgreSQL** (optional, for cloud/advanced deployments). The database backend is selected automatically based on whether the `DATABASE_URL` environment variable is set.
 
+## File storage for CLI workflows
+
+Database storage remains the default. For a CLI-only install, opt into file storage in
+`~/.archon/config.yaml` (or `$ARCHON_HOME/config.yaml`):
+
+```yaml
+store: files
+```
+
+Use `store: database` or remove the key to return to database storage. `DATABASE_URL`
+together with `store: files` is refused because it selects two stores. Switching stores
+starts a separate, empty history; Archon does not import existing data. Returning to the
+previous store reveals its existing history again.
+
+File storage supports workflow runs, approval, resume, events, node sessions, codebases
+and isolation records without creating `archon.db`. It stores records under
+`$ARCHON_HOME/store`:
+
+```text
+head.json                format version and commit sequence
+intent.json              pending commit, present during writes or crash recovery
+runs/<id>/log.jsonl       append-only run records, events and event retractions
+runs/<id>/run.json        derived snapshot, rebuilt when missing or behind the log
+runs/<id>/node-sessions.json
+node-sessions/<hash>.json
+host/codebases.json       project records with per-project envVars
+host/isolation.json      isolation records
+```
+
+Every write uses one store-wide lock and a recoverable intent. The next writer or a
+reader that sees an intent redoes the committed operation exactly once. A torn final
+log line is ignored by readers and truncated only under the lock by the next writer.
+Committed lines are never rewritten; cancellation recovery appends event retractions.
+Run cleanup can delete a terminal run's entire directory.
+
+Use a local filesystem that supports hard links. Network filesystems are unsupported.
+The lock records its host, PID and process instance. Archon breaks it only when its owner
+is provably gone. A live or unprovable owner produces `FileStoreLockHeldError` with the
+owner and path. Inspect the named process before manually removing a lock. A stranded
+`lock.break` needs operator inspection; time alone never proves ownership has ended.
+
+The intent and file synchronization protect against process crashes. Power-loss durability
+is limited by the platform's `fsync` guarantees; macOS does not force drive caches with
+`fsync`, and Windows does not support directory `fsync` through this API.
+
+The server refuses file storage because its routes read SQL. Trigger admission is also
+refused until file-backed admission is implemented. Provider concurrency caps
+(`concurrency.providers`) and per-user GitHub credentials require `store: database` and
+fail at startup. Stored per-user provider credentials are refused during run preflight,
+before creating a worktree. Environment credentials and the provider's own login work
+normally. Other SQL-only CLI commands, including user and stored credential management,
+require database storage.
+
 ## SQLite (Default - No Setup Required)
 
 Simply **omit the `DATABASE_URL` variable** from your `.env` file. The app will automatically:
 - Create a SQLite database at `~/.archon/archon.db`
 - Initialize the schema on first run
-- Use this database for all operations
+- Use this database for operations with `store: database`
 
 **Pros:**
 - Zero configuration required

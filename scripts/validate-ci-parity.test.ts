@@ -40,9 +40,14 @@ const DEPENDENCY_INSTALL = 'bun install';
  */
 const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
   {
-    command: 'bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts',
+    command: 'bun run --cwd packages/workflows test src/file-store',
     reason:
-      'Its compiled-binary probe runs only under GitHub Actions, because local compilation can stall macOS syspolicyd; the rest of the file also runs under validate.',
+      'Its compiled-binary probe runs only under GitHub Actions, because local compilation can stall macOS syspolicyd; the remaining file-store tests also run under validate.',
+  },
+  {
+    command: 'bun run --cwd packages/cli test src/commands/workflow-file-store.integration.spec.ts',
+    reason:
+      'Proves the file-backed process lifecycle on macOS; the same test runs under validate and its Linux/Windows CI jobs, which cannot prove macOS filesystem behavior.',
   },
   {
     command: 'bun scripts/should-run-test-suite.ts',

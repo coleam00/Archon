@@ -202,12 +202,16 @@ export function initializeWorkflowGitHubAppAuth(
  * Create the canonical WorkflowDeps for the workflow engine.
  * Single construction point — avoids duplicating the wiring across callers.
  */
-export function createWorkflowDeps(): Omit<WorkflowDeps, 'loadConfig'> & {
+export function createWorkflowDeps(
+  store: IWorkflowStore = createWorkflowStore(),
+  credentialStore: 'database' | 'files' = 'database'
+): Omit<WorkflowDeps, 'loadConfig'> & {
   loadConfig: typeof loadMergedConfig;
 } {
   const provider = registeredGitHubAppAuthProvider;
   return {
-    store: createWorkflowStore(),
+    store,
+    credentialStore,
     providers: providerRegistry,
     getAgentProvider,
     loadConfig: loadMergedConfig,
@@ -222,90 +226,100 @@ export function createWorkflowDeps(): Omit<WorkflowDeps, 'loadConfig'> & {
     // Per-user token policy (PR-C): when per-user mode is on, route a run's
     // gh/git through the originating user's personal token (decrypted, refreshed
     // on read), or scrub the org/bot token when they haven't connected.
-    isPerUserGitHubEnabled: () => isPerUserGitHubEnabled(),
-    getUserGithubAuthor,
-    getUserGithubToken: async (userId: string): Promise<string | undefined> => {
-      try {
-        return (await getDecryptedAccessToken(userId)) ?? undefined;
-      } catch (err) {
-        getLog().warn({ err: err as Error, userId }, 'workflow_deps.user_token_resolve_failed');
-        return undefined;
-      }
-    },
-    // Deliver only this graph's vendors. A failed connected credential must not
-    // disappear and allow the provider to use another account.
-    // Exact decrypted values travel
-    // beside that bag only so the workflow subprocess boundary can scrub echoed
-    // file-delivered credentials without knowing provider-specific file shapes.
-    isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
-    getUserProviderCredentialStatus: async (userId, vendor): Promise<CredentialStatus> => {
-      const [row] = await requiredCredentialRows(userId, [vendor]);
-      return row
-        ? getStoredCredentialStatus(userId, row.provider)
-        : { state: 'not_connected', source: 'archon' };
-    },
-    getUserProviderEnv: async (
-      userId: string,
-      artifactsDir: string,
-      vendors: readonly string[],
-      connectedVendors: readonly string[]
-    ): Promise<{
-      env: Record<string, string>;
-      files: { path: string; contents: string }[];
-      protectedValues: string[];
-    }> => {
-      const rows = await requiredCredentialRows(userId, vendors);
-      for (const vendor of connectedVendors) {
-        if (!rows.some(row => row.vendor === vendor)) {
-          throw new StoredCredentialDeliveryError(vendor, {
-            state: 'not_connected',
-            source: 'archon',
-          });
+    ...(credentialStore === 'database'
+      ? {
+          isPerUserGitHubEnabled: () => isPerUserGitHubEnabled(),
+          getUserGithubAuthor,
+          getUserGithubToken: async (userId: string): Promise<string | undefined> => {
+            try {
+              return (await getDecryptedAccessToken(userId)) ?? undefined;
+            } catch (err) {
+              getLog().warn(
+                { err: err as Error, userId },
+                'workflow_deps.user_token_resolve_failed'
+              );
+              return undefined;
+            }
+          },
+          // Deliver only this graph's vendors. A failed connected credential must not
+          // disappear and allow the provider to use another account.
+          // Exact decrypted values travel
+          // beside that bag only so the workflow subprocess boundary can scrub echoed
+          // file-delivered credentials without knowing provider-specific file shapes.
+          isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
+          getUserProviderCredentialStatus: async (userId, vendor): Promise<CredentialStatus> => {
+            const [row] = await requiredCredentialRows(userId, [vendor]);
+            return row
+              ? getStoredCredentialStatus(userId, row.provider)
+              : { state: 'not_connected', source: 'archon' };
+          },
+          getUserProviderEnv: async (
+            userId: string,
+            artifactsDir: string,
+            vendors: readonly string[],
+            connectedVendors: readonly string[]
+          ): Promise<{
+            env: Record<string, string>;
+            files: { path: string; contents: string }[];
+            protectedValues: string[];
+          }> => {
+            const rows = await requiredCredentialRows(userId, vendors);
+            for (const vendor of connectedVendors) {
+              if (!rows.some(row => row.vendor === vendor)) {
+                throw new StoredCredentialDeliveryError(vendor, {
+                  state: 'not_connected',
+                  source: 'archon',
+                });
+              }
+            }
+            const creds = [];
+            for (const { vendor, provider } of rows) {
+              const stored = await getDecryptedProviderCredential(userId, provider);
+              if (stored.state === 'usable') creds.push({ provider, cred: stored.credential });
+              else throw new StoredCredentialDeliveryError(vendor, stored);
+            }
+            const env: Record<string, string> = {};
+            const files: { path: string; contents: string }[] = [];
+            const protectedValues = new Set<string>();
+            for (const { provider, cred } of creds) {
+              const result = deliverCredential(provider, cred, { artifactsDir });
+              Object.assign(env, result.env);
+              if (result.files) files.push(...result.files);
+              if (cred.kind === 'api_key') {
+                protectedValues.add(cred.apiKey);
+              } else {
+                protectedValues.add(cred.oauthApiKey);
+                collectOAuthCredentialValues(cred.rawCreds, protectedValues);
+              }
+            }
+            // Aggregate Pi auth.json (the user's keys + subscriptions) so a `pi` node
+            // consumes them via AuthStorage(authPath) without moving Pi's home. Needs
+            // a real artifactsDir (file delivery); the chat path is env-only.
+            if (artifactsDir) {
+              const piAuthJson = buildPiAuthJson(creds);
+              if (piAuthJson) {
+                const piAuthPath = join(artifactsDir, PI_AUTH_JSON_RELATIVE_PATH);
+                files.push({ path: piAuthPath, contents: piAuthJson });
+                env[PI_AUTH_PATH_ENV] = piAuthPath;
+              }
+            }
+            return { env, files, protectedValues: [...protectedValues] };
+          },
+          // Per-user AI prefs (Phase 3): personal tiers/aliases/default-provider,
+          // folded into buildAiProfile as the highest-precedence layer. Non-throwing —
+          // a DB failure means the run falls back to install-wide config.
+          getUserAiPrefs: async (userId: string): Promise<UserAiPrefs> => {
+            try {
+              return await getUserAiPrefs(userId);
+            } catch (err) {
+              getLog().warn(
+                { err: err as Error, userId },
+                'workflow_deps.user_ai_prefs_resolve_failed'
+              );
+              return {};
+            }
+          },
         }
-      }
-      const creds = [];
-      for (const { vendor, provider } of rows) {
-        const stored = await getDecryptedProviderCredential(userId, provider);
-        if (stored.state === 'usable') creds.push({ provider, cred: stored.credential });
-        else throw new StoredCredentialDeliveryError(vendor, stored);
-      }
-      const env: Record<string, string> = {};
-      const files: { path: string; contents: string }[] = [];
-      const protectedValues = new Set<string>();
-      for (const { provider, cred } of creds) {
-        const result = deliverCredential(provider, cred, { artifactsDir });
-        Object.assign(env, result.env);
-        if (result.files) files.push(...result.files);
-        if (cred.kind === 'api_key') {
-          protectedValues.add(cred.apiKey);
-        } else {
-          protectedValues.add(cred.oauthApiKey);
-          collectOAuthCredentialValues(cred.rawCreds, protectedValues);
-        }
-      }
-      // Aggregate Pi auth.json (the user's keys + subscriptions) so a `pi` node
-      // consumes them via AuthStorage(authPath) without moving Pi's home. Needs
-      // a real artifactsDir (file delivery); the chat path is env-only.
-      if (artifactsDir) {
-        const piAuthJson = buildPiAuthJson(creds);
-        if (piAuthJson) {
-          const piAuthPath = join(artifactsDir, PI_AUTH_JSON_RELATIVE_PATH);
-          files.push({ path: piAuthPath, contents: piAuthJson });
-          env[PI_AUTH_PATH_ENV] = piAuthPath;
-        }
-      }
-      return { env, files, protectedValues: [...protectedValues] };
-    },
-    // Per-user AI prefs (Phase 3): personal tiers/aliases/default-provider,
-    // folded into buildAiProfile as the highest-precedence layer. Non-throwing —
-    // a DB failure means the run falls back to install-wide config.
-    getUserAiPrefs: async (userId: string): Promise<UserAiPrefs> => {
-      try {
-        return await getUserAiPrefs(userId);
-      } catch (err) {
-        getLog().warn({ err: err as Error, userId }, 'workflow_deps.user_ai_prefs_resolve_failed');
-        return {};
-      }
-    },
+      : { isPerUserProviderKeysEnabled: () => true }),
   };
 }
