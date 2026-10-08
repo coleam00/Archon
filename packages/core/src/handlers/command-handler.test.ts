@@ -447,7 +447,7 @@ mock.module('../services/cleanup-service', () => ({
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupStaleWorktrees: mockCleanupStaleWorktrees,
   getWorktreeStatusBreakdown: mock(() =>
-    Promise.resolve({ total: 0, active: 0, merged: 0, stale: 0 })
+    Promise.resolve({ total: 0, active: 0, merged: 0, stale: 0, activeEnvs: [] })
   ),
 }));
 

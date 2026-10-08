@@ -27,6 +27,7 @@
     "./state/*": "./src/state/*.ts",
     "./schemas": "./src/schemas/index.ts",
     "./schemas/*": "./src/schemas/*.ts",
+    "./platforms/chat-plugins": "./src/platforms/chat-plugins.ts",
     "./platforms/registry": "./src/platforms/registry.ts",
     "./platforms/types": "./src/platforms/types.ts",
     "./handlers/clone": "./src/handlers/clone.ts",

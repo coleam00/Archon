@@ -2,6 +2,7 @@
  * CLI adapter for stdout output
  * Implements IPlatformAdapter to allow workflow execution via command line
  */
+import { cliPolicy } from '@archon/adapters/cli/policy';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
 import { createLogger } from '@archon/paths';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
@@ -66,7 +67,7 @@ export class CLIAdapter implements IPlatformAdapter {
   }
 
   getPlatformType(): string {
-    return 'cli';
+    return cliPolicy.id;
   }
 
   formatWorkflowCommand(command: string): string {
