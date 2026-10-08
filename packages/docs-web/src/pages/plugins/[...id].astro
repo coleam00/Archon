@@ -11,6 +11,6 @@ const { plugin } = Astro.props;
 <StarlightPage frontmatter={{ title: plugin.manifest.name, description: plugin.manifest.description }}>
   <p><a href="/plugins/">All plugins</a></p>
   <PluginMetadata plugin={plugin} />
-  <p>This manifest was read at the indexed commit. Install resolves the current default branch for workflow packs, or the latest GitHub release for forge and provider plugins. Use <code>@tag</code> to choose a version.</p>
+  <p>This manifest was read at the indexed commit. Install resolves the current default branch for workflow packs, or the latest GitHub release for forge, provider, and chat plugins. Use <code>@tag</code> to choose a version.</p>
   <p>Listing does not execute or review plugin code. Inspect the source and README before installing.</p>
 </StarlightPage>

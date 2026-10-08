@@ -3,7 +3,7 @@ import { z } from 'zod';
 import document from '../../schema/provider-contract.schema.json';
 import { credentialSpecSchema } from '../registration';
 import { descriptor } from './fixtures/provider';
-import { promptRequestSchema } from './wire';
+import { promptRequestSchema, providerSessionRequestSchema } from './wire';
 
 function publishedSchema(name: string): z.ZodType {
   // JSON imports widen literal schema keywords such as type to string.
@@ -46,6 +46,30 @@ test('published prompt request enforces the same single text block as the owner'
   for (const prompt of [[], [text], [text, text]]) {
     const value = { sessionId: 'session', prompt };
     expect(schema.safeParse(value).success).toBe(promptRequestSchema.safeParse(value).success);
+  }
+});
+
+test('published native tool enum values enforce the same non-empty list as the owner', () => {
+  expect(
+    document.$defs.ProviderSessionRequest.properties.nativeTools.items.properties.inputSchema
+      .properties.properties.additionalProperties.oneOf[1]
+  ).toMatchObject({ properties: { values: { minItems: 1 } } });
+  const schema = publishedSchema('ProviderSessionRequest');
+  for (const values of [[], ['inspect'], ['inspect', 'update']]) {
+    const value = {
+      prompt: 'turn',
+      cwd: '/',
+      nativeTools: [
+        {
+          name: 'host',
+          description: 'Host tool',
+          inputSchema: { properties: { action: { kind: 'enum', values } }, required: ['action'] },
+        },
+      ],
+    };
+    expect(schema.safeParse(value).success).toBe(
+      providerSessionRequestSchema.safeParse(value).success
+    );
   }
 });
 

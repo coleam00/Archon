@@ -4,6 +4,8 @@ import { providerCapabilitiesSchema } from '@archon/provider-contract';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
 import {
   forgeManifestSchema,
+  type ChatManifest,
+  type ChatReceipt,
   pluginReleaseAsset,
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
@@ -201,15 +203,85 @@ test('provider receipts validate the owned descriptor contract', () => {
     }),
   };
   expect(pluginReceiptSchema.parse(JSON.parse(JSON.stringify(receipt)))).toEqual(receipt);
+  expect(
+    pluginReceiptSchema.safeParse({
+      ...receipt,
+      descriptor: {
+        ...receipt.descriptor,
+        capabilities: { ...receipt.descriptor.capabilities, nativeTools: true },
+      },
+    }).success
+  ).toBe(true);
   for (const descriptor of [
     { id: 'example' },
     { ...receipt.descriptor, protocol: 2 },
     { ...receipt.descriptor, credentials: { kind: 'dynamic' } },
-    {
-      ...receipt.descriptor,
-      capabilities: { ...receipt.descriptor.capabilities, nativeTools: true },
-    },
   ]) {
     expect(pluginReceiptSchema.safeParse({ ...receipt, descriptor }).success).toBe(false);
   }
+});
+
+describe('chat manifests and receipts', () => {
+  const chat: ChatManifest = {
+    schemaVersion: 1,
+    kind: 'chat',
+    name: 'example-chat',
+    description: 'Example chat',
+    executable: 'archon-chat-example',
+  };
+  const descriptor: ChatReceipt['descriptor'] = {
+    protocol: 'archon-chat/1',
+    id: 'slack',
+    displayName: 'Example',
+    version: '1',
+    capabilities: { defaultWorkflowDispatch: 'background', resultFooter: true, runEvents: true },
+    policy: { workspaceRetention: 'retain', streaming: { defaultMode: 'batch', envVar: 'STREAM' } },
+    allowlist: { envVar: 'ALLOWED' },
+    workflowCommand: { prefix: '/workflow ' },
+  };
+  const receipt: ChatReceipt = {
+    schemaVersion: 1,
+    id: 'owner/repo',
+    manifest: chat,
+    descriptor,
+    tag: 'v1',
+    commit: 'a'.repeat(40),
+    installedAt: '2026-10-07T00:00:00.000Z',
+    files: [{ path: 'archon-chat-example.exe', sha256: 'a'.repeat(64) }],
+  };
+
+  test('accepts chat executables and rejects wrong prefixes, traversal and manifest exe suffixes', () => {
+    expect(pluginManifestSchema.parse(chat)).toEqual(chat);
+    for (const executable of [
+      'archon-forge-example',
+      '../archon-chat-example',
+      'archon-chat-example.exe',
+      'archon-chat-Example',
+    ]) {
+      expect(pluginManifestSchema.safeParse({ ...chat, executable }).success).toBe(false);
+    }
+  });
+
+  test('receipts round-trip and narrow as chat and binary receipts', async () => {
+    const { isChatReceipt, isBinaryReceipt, isProviderReceipt } = await import('./index');
+    const parsed = pluginReceiptSchema.parse(JSON.parse(JSON.stringify(receipt)));
+    expect(parsed).toEqual(receipt);
+    expect(isChatReceipt(parsed)).toBe(true);
+    expect(isBinaryReceipt(parsed)).toBe(true);
+    expect(isProviderReceipt(parsed)).toBe(false);
+  });
+
+  test('rejects missing or invalid owned descriptors', () => {
+    for (const invalid of [
+      undefined,
+      {},
+      { ...descriptor, id: '../slack' },
+      { ...descriptor, protocol: 'archon-chat/2' },
+      { ...descriptor, policy: { workspaceRetention: 'delete' } },
+    ]) {
+      expect(pluginReceiptSchema.safeParse({ ...receipt, descriptor: invalid }).success).toBe(
+        false
+      );
+    }
+  });
 });

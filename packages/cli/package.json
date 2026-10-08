@@ -25,12 +25,22 @@
     "@archon/forge": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "dotenv": "^17.2.3",
-    "@archon/plugin-manifest": "workspace:*"
+    "@archon/plugin-manifest": "workspace:*",
+    "@archon/chat-contract": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
   },
   "testGroups": [
+    [
+      "src/commands/plugin-chat.test.ts"
+    ],
+    [
+      "src/commands/inspect-chat-plugin.test.ts"
+    ],
+    [
+      "src/commands/publish-chat-plugin.test.ts"
+    ],
     [
       "src/commands/workflow-provider-plugin.integration.spec.ts"
     ],
