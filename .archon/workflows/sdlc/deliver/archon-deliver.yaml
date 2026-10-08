@@ -270,7 +270,9 @@ nodes:
               Accepted work order:
               $INPUTS.work
 
-              Commit the correction; the workflow pushes it. Do not change the
+              Commit the correction and push it to the pull request's head
+              branch, $pr.output.head, naming the branch explicitly: never let
+              git pick an upstream, and never force-push. Do not change the
               PR's draft state or edit the canonical review comment; the
               following review owns that public verdict.
 
@@ -291,15 +293,6 @@ nodes:
             summary: "$fix.output.summary"
             stage: "The correction"
 
-        # Agents commit; this pushes, by name, and reads the remote back, so a
-        # review round never starts on a head the pull request does not have.
-        - id: push-fix
-          script: push-head
-          runtime: bun
-          depends_on: [gate-correction-green]
-          with:
-            pr: "$pr.output"
-
         - id: recheck
           include: archon-review
           with:
@@ -311,7 +304,7 @@ nodes:
             tier: "$classify.output.tier"
             errors: "$resolve-scope.output.errors"
             docs: "$classify.output.docs"
-          depends_on: [push-fix]
+          depends_on: [gate-correction-green]
 
   # none_failed_min_one_success joins the mutually exclusive paths as bound
   # values: the

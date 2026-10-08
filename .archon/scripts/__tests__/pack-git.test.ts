@@ -1,6 +1,6 @@
 /**
  * The pack's git steps, against real repositories: which remote holds a repository
- * (by URL, never by name), the push the workflow owns, the base-sync verification,
+ * (by URL, never by name), publish-pr's push, the base-sync verification,
  * and reviewer scratch cleanup.
  */
 import { describe, expect, it } from 'bun:test';
@@ -36,11 +36,12 @@ describe('remote identity', () => {
   });
 });
 
-describe('push-head', () => {
+// pushHead is publish-pr's push; a driver runs it alone against real git remotes.
+describe('pushHead', () => {
   it('pushes to the remote that holds the head repository, whatever it is named, and reads it back', () => {
     const cwd = gitCheckout();
     git(cwd, 'remote', 'add', 'origin', 'https://github.com/someone/fork.git');
-    const run = runPackScript('deliver/scripts/push-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
+    const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
     expect(run.code).toBe(0);
     expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/feature').split(/\s+/)[0]).toBe(git(cwd, 'rev-parse', 'HEAD'));
   });
@@ -50,7 +51,7 @@ describe('push-head', () => {
     git(cwd, 'push', '-q', 'upstream', 'feature');
     git(cwd, 'commit', '-q', '--allow-empty', '-m', 'local');
     git(cwd, 'checkout', '-q', '--detach', 'HEAD~2');
-    const run = runPackScript('deliver/scripts/push-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
+    const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('refused');
   });
@@ -58,7 +59,7 @@ describe('push-head', () => {
   it('refuses when two remotes claim the same repository', () => {
     const cwd = gitCheckout();
     git(cwd, 'remote', 'add', 'mirror', `git@${PR.repo.host}:${PR.repo.path}.git`);
-    const run = runPackScript('deliver/scripts/push-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
+    const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('ambiguous');
   });

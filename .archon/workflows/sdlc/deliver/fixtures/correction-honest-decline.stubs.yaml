@@ -94,7 +94,6 @@ file-discoveries: '{"records":[]}'
 match-discoveries: { matches: [] }
 sync-pr-body: { body: null, summary: "stub: the body is still accurate" }
 fork: '{"fork":true}'
-push-fix: "push-head: fixture-branch is at fixturehead"
 ci: { state: red, summary: "stub: test (ubuntu) fails in src/db.test.ts; the base fails the same way, so the break is inherited", evidence: "stub: the failing job log and the base branch run" }
 publish-pr-body: {}
 fixture:

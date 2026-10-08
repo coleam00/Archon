@@ -425,7 +425,6 @@ describe('bundled-defaults', () => {
       expect(corrections.loop_group.nodes.map(body => body.id)).toEqual([
         'fix',
         'gate-correction-green',
-        'push-fix',
         'recheck',
       ]);
       expect(node('ci')?.depends_on).toEqual(['publish-pr-body']);

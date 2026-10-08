@@ -88,8 +88,7 @@ outcome: { ready: true, pr_url: "https://github.com/example/repo/pull/7", summar
 file-discoveries: '{"records":[]}'
 match-discoveries: { matches: [] }
 fork: '{"fork":true}'
-push-fix: "push-head: fixture-branch is at fixturehead"
 fixture:
   expect: completed
-  reached: [fix__implement, gate-correction-green, push-fix, recheck__publish, flip-ready, outcome]
+  reached: [fix__implement, gate-correction-green, recheck__publish, flip-ready, outcome]
 exec-code: true

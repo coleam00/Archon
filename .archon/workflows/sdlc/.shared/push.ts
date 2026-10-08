@@ -1,9 +1,9 @@
 /**
  * Push the checkout's HEAD to a pull request's head branch, and prove it landed.
  *
- * Agents commit; this pushes. The push names its target explicitly — the head
- * repository's remote (found by URL, ./remote.ts) and the head branch — so git never
- * picks an upstream. It never forces: a remote that moved refuses, and the refusal is
+ * This is publish-pr's push of the branch a pull request opens from. It names its
+ * target explicitly — the head repository's remote (found by URL, ./remote.ts) and
+ * the head branch — so git never picks an upstream. It never forces: a remote that moved refuses, and the refusal is
  * the evidence. A fork head no local remote names is pushed by its HTTPS URL, which
  * its author permits only when they allowed maintainer edits; the forge enforces that.
  * After the push, the remote ref is read back and must equal HEAD.

@@ -84,7 +84,7 @@ forge source is for host execution: a container execution receives neither
 
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
-request, `push-head` pushes each fix pass's commits, `publish-pr-body` applies the
+request, `publish-pr-body` applies the
 resync, `publish-review` upserts the one marked review comment, `flip-ready` marks it
 ready once CI is green, and `file-discoveries` files each discovery the review accepted as
 a tracker issue, reusing an open issue the matching agent found for it. The forge
@@ -93,8 +93,10 @@ through `gh` whichever source the run selected. Each acts on the values the agen
 before it declared in its typed output, which the engine certified, writes through
 the selected source, and fails unless the result reads back — so "the write
 failed" and "the write may have landed" stay different outcomes, in the pack as in
-the forge contract. No agent pushes, and no script reads an agent-written file to
-find out what to write.
+the forge contract. The one exception is a correction: the fix agent pushes its own
+commit to the pull request's branch, and the review that follows refuses to publish
+unless the pull request's remote head is the commit it reviewed. No script reads an
+agent-written file to find out what to write.
 
 Which remote holds a repository is decided by its configured URL, never by the
 remote's name (`.shared/remote.ts`), so a fork checkout whose `origin` is the fork

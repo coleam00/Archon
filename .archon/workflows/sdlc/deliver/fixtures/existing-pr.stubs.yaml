@@ -51,7 +51,6 @@ fix__implement:
   summary: "stub: finding fixed, pushed to feat/existing-42"
 fix__assert-changed: "1 file changed"
 gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":"","head":null}'
-push-fix: "push-head: fixture-branch is at fixturehead"
 recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy"}'
 recheck__coverage: { full: false, errors: false, docs: false, lenses: [] }
 recheck__scope:
