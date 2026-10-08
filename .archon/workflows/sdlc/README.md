@@ -59,12 +59,12 @@ that was already true when the node started.
 
 ## Forge source
 
-One switch selects the source for every pull-request and check read and write
-this pack makes; issue writes go through `gh` either way (see below).
-[`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected;
-[`.shared/checks.ts`](.shared/checks.ts) owns the check read and its gate policy,
-and [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes. Both
-return the same shapes from either source, so one policy classifies both:
+One switch selects the source for every pull-request read and write this pack
+makes; issue writes go through `gh` either way (see below). CI is read by the
+`ci` agent node, not through this switch.
+[`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected, and
+[`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes, returning
+the same shapes from either source:
 
 - **`gh` (default).** The GitHub CLI, acting on the recorded qualified PR. This
   needs only the authenticated `gh` the pack has always used.

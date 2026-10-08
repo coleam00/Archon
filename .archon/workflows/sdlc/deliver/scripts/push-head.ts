@@ -1,8 +1,8 @@
 /**
  * Push a correction's commits to the pull request's head branch and read it back.
  *
- * The fix passes commit and stop; this owns the push, so a review round or a CI
- * wait never starts on a head the pull request does not have. See
+ * The fix passes commit and stop; this owns the push, so a review round or the CI
+ * check never starts on a head the pull request does not have. See
  * ../../.shared/push.ts for how the target is chosen and verified.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
