@@ -46,7 +46,10 @@ import { processProviderRegistration } from '@archon/core/providers/process-regi
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
 import { inspectChatPlugin } from './inspect-chat-plugin';
 import { publishChatPlugin } from './publish-chat-plugin';
-import type { ChatPluginDescriptor } from '@archon/chat-contract/descriptor';
+import {
+  RESERVED_CHAT_PLATFORMS,
+  type ChatPluginDescriptor,
+} from '@archon/chat-contract/descriptor';
 import { withPluginMutationLock } from './plugin-mutation-lock';
 import {
   assertProviderRegistrationAllowed,
@@ -297,15 +300,6 @@ async function inspectInstallableProvider(
   assertProviderRegistrationAllowed(registration, registrations);
   return descriptor;
 }
-
-export const RESERVED_CHAT_PLATFORMS: ReadonlyMap<string, string> = new Map([
-  ['web', 'host Web adapter'],
-  ['cli', 'host CLI adapter'],
-  ['api', 'host API surface'],
-  ['github', 'bundled GitHub forge adapter'],
-  ['gitea', 'bundled Gitea forge adapter'],
-  ['gitlab', 'bundled GitLab forge adapter'],
-]);
 
 async function inspectInstallableChat(
   stagedBinary: string,
