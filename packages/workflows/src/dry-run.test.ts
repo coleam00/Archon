@@ -2061,6 +2061,21 @@ describe('dryRunWorkflow', () => {
     expect(result.trace[0]).toMatchObject({ nodeId: 'child', state: 'failed' });
   });
 
+  test('a --default-stubs placeholder never stands in for a child workflow run', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'parent',
+      nodes: [{ id: 'child', workflow: 'other' }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      defaultStubs: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
+  });
+
   test('a fan-out child workflow node cannot be stubbed and still fails loud', async () => {
     const workflow = makeTestWorkflow({
       name: 'parent',

@@ -1219,10 +1219,15 @@ async function simulateNode(
       return;
     }
     // A child run is its own governance object, so a dry run never simulates it, but
-    // a stub can declare its terminal output like any other node's. The node's own
-    // `with:` bindings still resolve first, so a binding a real launch would fail on
-    // fails here too. A fan-out has no single child output to stub.
-    const childStub = isWorkflowNode(node) && !node.fan_out ? stubFor(node, ctx) : undefined;
+    // an authored stub can declare its terminal output like any other node's. A
+    // --default-stubs placeholder cannot stand in for a whole child run, so only an
+    // authored stub counts. The node's own `with:` bindings still resolve first, so a
+    // binding a real launch would fail on fails here too. A fan-out has no single
+    // child output to stub.
+    const childStub =
+      isWorkflowNode(node) && !node.fan_out && Object.hasOwn(ctx.stubs, node.id)
+        ? stubFor(node, ctx)
+        : undefined;
     if (isWorkflowNode(node) && childStub !== undefined) {
       if (node.with !== undefined) {
         resolveNodeBindings(node.id, node.with, bindingShellContext(ctx, outputs), ctx.inputs);
