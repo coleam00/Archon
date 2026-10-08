@@ -26,7 +26,7 @@ import {
   releaseProviderAttemptHolder,
   tryAdmitProviderAttempt,
 } from '../db/provider-attempts';
-import { currentProcessOwner } from '../db/process-owner';
+import { currentProcessOwner } from '@archon/paths/process-owner';
 import { ProviderConcurrencyConfigError } from '../config/provider-concurrency';
 import { processProviderRegistration } from '../providers/process-registration';
 import { getAgentProvider, ProviderAdmissionAbortedError } from './provider-admission';

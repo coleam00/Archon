@@ -202,6 +202,8 @@ export interface DestroyOptions {
 }
 
 export interface WorktreeDestroyOptions extends DestroyOptions {
+  /** Expected creation proof; required to remove a present checkout outside guarded release. */
+  creationId?: string;
   /**
    * Remove a checkout Archon created, with force, after proving its creation ID.
    * `beforeRemove` runs while the checkout is locked against adoption; throwing
@@ -215,7 +217,7 @@ export interface WorktreeDestroyOptions extends DestroyOptions {
    * the lock may pass this — for anyone else, a lock means "not yours".
    */
   removeLocked?: boolean;
-  /** Required for branch cleanup if worktree path doesn't exist */
+  /** Expected repository; required for present-checkout removal and absent-path branch cleanup. */
   canonicalRepoPath?: RepoPath;
   /** Delete the remote branch (best-effort, e.g., after PR merge) */
   deleteRemoteBranch?: boolean;
