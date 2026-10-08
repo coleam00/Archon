@@ -62,7 +62,18 @@ test.each(['crash', 'retry'])(
   '%s restarts with capped exponential backoff',
   async mode => {
     records.length = 0;
-    const { supervisor, pids } = await fixture(mode);
+    const { supervisor, pids, live } = await fixture(mode);
+    if (mode === 'crash') {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await until(live);
+        await expect(
+          supervisor.request(connection =>
+            connection.send({ conversationId: 'thread', text: 'hello' })
+          )
+        ).rejects.toBeInstanceOf(ChatPluginUnavailableError);
+        await until(async () => (await pids()).length >= attempt + 2);
+      }
+    }
     await until(async () => (await pids()).length >= 4);
     await supervisor.stop();
     const delays = records

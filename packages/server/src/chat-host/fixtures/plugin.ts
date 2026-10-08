@@ -25,7 +25,6 @@ await serveChat({
     console.error('SECRET_TOKEN USER_MESSAGE');
     if (mode === 'nonretry') throw new ChatStartError('SECRET_TOKEN USER_MESSAGE', false);
     if (mode === 'retry') throw new ChatStartError('SECRET_TOKEN USER_MESSAGE', true);
-    if (mode === 'crash') setTimeout(() => process.exit(1), 20);
     if (['descendant', 'orphan-eof', 'orphan-crash'].includes(mode)) {
       const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
         stdio: 'ignore',
@@ -37,6 +36,7 @@ await serveChat({
     }
   },
   async send() {
+    if (mode === 'crash') process.exit(1);
     if (mode === 'senderror') throw new Error('SECRET_TOKEN USER_MESSAGE');
     if (mode === 'hang') await new Promise(() => undefined);
   },
