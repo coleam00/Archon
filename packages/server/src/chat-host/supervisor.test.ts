@@ -24,7 +24,7 @@ afterEach(async () => {
   records.length = 0;
 });
 async function until(check: () => boolean | Promise<boolean>) {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + testTimeout(10_000);
   while (!(await check())) {
     if (Date.now() > deadline) throw new Error('Condition did not become true');
     await new Promise(resolve => setTimeout(resolve, 10));
@@ -48,7 +48,7 @@ async function fixture(mode: string, args: string[] = []) {
       graceMs: 50,
       backoffMs: 20,
       maxBackoffMs: 80,
-      requestTimeoutMs: process.platform === 'win32' ? 3000 : 500,
+      requestTimeoutMs: 500,
     }
   );
   running.push(supervisor);
@@ -58,23 +58,21 @@ async function fixture(mode: string, args: string[] = []) {
   return { supervisor, live: () => live, pids, file };
 }
 
-test(
-  'crashes and retryable starts restart with capped exponential backoff',
-  async () => {
-    for (const mode of ['crash', 'retry']) {
-      records.length = 0;
-      const { supervisor, pids } = await fixture(mode);
-      await until(async () => (await pids()).length >= 4);
-      await supervisor.stop();
-      const delays = records
-        .filter(record => record.includes('restart_scheduled'))
-        .map(record => JSON.parse(record).data.delayMs);
-      expect(delays.slice(0, 3)).toEqual([20, 40, 80]);
-      expect(records.join('\n')).not.toContain('SECRET_TOKEN');
-      expect(records.join('\n')).not.toContain('USER_MESSAGE');
-    }
+test.each(['crash', 'retry'])(
+  '%s restarts with capped exponential backoff',
+  async mode => {
+    records.length = 0;
+    const { supervisor, pids } = await fixture(mode);
+    await until(async () => (await pids()).length >= 4);
+    await supervisor.stop();
+    const delays = records
+      .filter(record => record.includes('restart_scheduled'))
+      .map(record => JSON.parse(record).data.delayMs);
+    expect(delays.slice(0, 3)).toEqual([20, 40, 80]);
+    expect(records.join('\n')).not.toContain('SECRET_TOKEN');
+    expect(records.join('\n')).not.toContain('USER_MESSAGE');
   },
-  testTimeout(15_000)
+  testTimeout(25_000)
 );
 
 test(
@@ -226,4 +224,17 @@ test.skipIf(process.platform !== 'win32')(
     await supervisor.stop();
   },
   testTimeout(5000)
+);
+
+test(
+  'send deadlines do not bound subprocess initialization',
+  async () => {
+    const { supervisor, live, pids } = await fixture('slow-bootstrap');
+    await until(live);
+    expect(await pids()).toHaveLength(1);
+    await supervisor.request(connection =>
+      connection.send({ conversationId: 'thread', text: 'hello' })
+    );
+  },
+  testTimeout(15_000)
 );

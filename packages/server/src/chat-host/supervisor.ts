@@ -24,6 +24,8 @@ export interface SupervisorOptions {
   maxBackoffMs?: number;
 }
 
+const BOOTSTRAP_TIMEOUT_MS = 30_000;
+
 class ChatRequestTimeoutError extends Error {}
 
 async function withTimeout<T>(operation: Promise<T>, ms: number): Promise<T> {
@@ -188,16 +190,13 @@ export class ChatSupervisor implements ChatConnection {
               },
               descriptor
             ),
-            this.options.requestTimeoutMs ?? 30_000
+            BOOTSTRAP_TIMEOUT_MS
           ),
           spawnFailure,
         ]);
         this.register(connection);
         this.connection = connection;
-        await Promise.race([
-          withTimeout(connection.start(), this.options.requestTimeoutMs ?? 30_000),
-          spawnFailure,
-        ]);
+        await Promise.race([withTimeout(connection.start(), BOOTSTRAP_TIMEOUT_MS), spawnFailure]);
         if (!this.stopping) {
           this.sendTimeouts = 0;
           this.onLive(true);
