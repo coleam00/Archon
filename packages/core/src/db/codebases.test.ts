@@ -567,17 +567,6 @@ describe('codebases', () => {
       );
     });
 
-    test('updates name', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await updateCodebase(mockCodebase, { name: 'renamed' });
-
-      expect(mockQuery).toHaveBeenCalledWith(
-        'UPDATE remote_agent_codebases SET name = $1, updated_at = NOW() WHERE id = $2',
-        ['renamed', 'codebase-123']
-      );
-    });
-
     test('throws CodebaseNotFoundError when codebase not found', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
@@ -620,7 +609,6 @@ describe('codebases', () => {
     test('renames when the storage location stays the same', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
-        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([], 1))
         .mockResolvedValueOnce(createQueryResult([{ ...adoCodebase, name: 'qes' }]));
 
@@ -628,7 +616,8 @@ describe('codebases', () => {
 
       expect(renamed.name).toBe('qes');
       expect(mockQuery).toHaveBeenCalledWith(
-        'UPDATE remote_agent_codebases SET name = $1, updated_at = NOW() WHERE id = $2',
+        'UPDATE remote_agent_codebases SET name = $1, updated_at = NOW() WHERE id = $2 ' +
+          'AND NOT EXISTS (SELECT 1 FROM remote_agent_codebases WHERE name = $1 AND id <> $2)',
         ['qes', adoCodebase.id]
       );
     });
@@ -647,28 +636,38 @@ describe('codebases', () => {
     });
 
     test('rejects a name another codebase already uses', async () => {
+      // The conditional UPDATE matches nothing while the codebase still exists.
       mockQuery
         .mockResolvedValueOnce(createQueryResult([adoCodebase]))
-        .mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, id: 'other', name: 'qes' }]));
+        .mockResolvedValueOnce(createQueryResult([], 0))
+        .mockResolvedValueOnce(createQueryResult([adoCodebase]));
 
       await expect(renameCodebase(adoCodebase.id, 'qes')).rejects.toBeInstanceOf(
         CodebaseNameTakenError
       );
-      expect(mockQuery).toHaveBeenCalledTimes(2);
+    });
+
+    test('throws CodebaseNotFoundError when the codebase disappears before the update', async () => {
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([adoCodebase]))
+        .mockResolvedValueOnce(createQueryResult([], 0))
+        .mockResolvedValueOnce(createQueryResult([]));
+
+      await expect(renameCodebase(adoCodebase.id, 'qes')).rejects.toBeInstanceOf(
+        CodebaseNotFoundError
+      );
     });
 
     test('rejects a rename that would move the repo storage location', async () => {
       const github = { ...mockCodebase, name: 'user/repo' };
-      mockQuery
-        .mockResolvedValueOnce(createQueryResult([github]))
-        .mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([github]));
 
       const error = await renameCodebase(github.id, 'repo').catch(e => e);
 
       expect(error).toBeInstanceOf(CodebaseStorageIdentityChangeError);
       expect(error.message).toContain(join('user', 'repo'));
       expect(error.message).toContain(join('_local', 'test-project'));
-      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
 
     test('rejects a rename that would move worktrees even when storage stays put', async () => {
@@ -680,22 +679,18 @@ describe('codebases', () => {
         ...adoCodebase,
         default_cwd: join(getArchonWorkspacesPath(), '_git', 'qes', 'source'),
       };
-      mockQuery
-        .mockResolvedValueOnce(createQueryResult([clone]))
-        .mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([clone]));
 
       const error = await renameCodebase(clone.id, '_local/source').catch(e => e);
 
       expect(error).toBeInstanceOf(CodebaseStorageIdentityChangeError);
       expect(error.message).toContain(join('_git', 'qes', 'worktrees'));
-      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
 
     test('rejects a rename that would move the folder storage location', async () => {
       const folder: Codebase = { ...mockCodebase, kind: 'folder', name: 'Client Ops' };
-      mockQuery
-        .mockResolvedValueOnce(createQueryResult([folder]))
-        .mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([folder]));
 
       await expect(renameCodebase(folder.id, 'Other Ops')).rejects.toBeInstanceOf(
         CodebaseStorageIdentityChangeError

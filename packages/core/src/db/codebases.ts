@@ -191,11 +191,6 @@ export async function updateCodebase(
   const values: (string | null)[] = [];
   let paramIndex = 1;
 
-  if (data.name !== undefined) {
-    updates.push(`name = $${paramIndex++}`);
-    values.push(data.name);
-  }
-
   if (data.default_cwd !== undefined) {
     updates.push(`default_cwd = $${paramIndex++}`);
     values.push(data.default_cwd);
@@ -269,16 +264,17 @@ function nameDerivedLocations(codebase: Codebase): string[] {
  * `resolveProjectStorageKey` and `getWorktreeBase`): worktrees, `$STATE_DIR`,
  * logs and artifacts of future runs live under roots derived from it. A rename
  * that would change any of them is refused rather than silently splitting the
- * project across two trees. Names are not UNIQUE in the schema, but `findCodebaseByName` resolves
- * them for `--project` and `/update-project`, so a duplicate is refused too.
+ * project across two trees.
+ *
+ * Names are not UNIQUE in the schema, but `findCodebaseByName` resolves them
+ * for `--project` and `/update-project`, so a duplicate is refused too. The
+ * duplicate check lives in the UPDATE itself so concurrent renames cannot both
+ * claim the same name.
  */
 export async function renameCodebase(id: string, name: string): Promise<Codebase> {
   const current = await getCodebase(id);
   if (!current) throw new CodebaseNotFoundError(id);
   if (current.name === name) return current;
-
-  const sameName = await findCodebaseByName(name);
-  if (sameName && sameName.id !== id) throw new CodebaseNameTakenError(name);
 
   const currentPaths = nameDerivedLocations(current);
   const requestedPaths = nameDerivedLocations({ ...current, name });
@@ -292,9 +288,14 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
     );
   }
 
-  await updateCodebase(current, { name });
+  const result = await pool.query(
+    `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2 ` +
+      'AND NOT EXISTS (SELECT 1 FROM remote_agent_codebases WHERE name = $1 AND id <> $2)',
+    [name, id]
+  );
   const renamed = await getCodebase(id);
   if (!renamed) throw new CodebaseNotFoundError(id);
+  if ((result.rowCount ?? 0) === 0) throw new CodebaseNameTakenError(name);
   getLog().info({ codebaseId: id, from: current.name, to: name }, 'db.codebase_renamed');
   return renamed;
 }
