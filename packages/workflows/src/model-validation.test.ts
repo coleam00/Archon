@@ -5,7 +5,7 @@ import {
 } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import { describe, expect, test } from 'bun:test';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
 import {
   applyResolvedRunModelOverrides,

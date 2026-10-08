@@ -476,7 +476,7 @@ describe('resolvePiExtensionSettings', () => {
   });
 });
 
-test('snapshot scope validates but excludes process environment and concurrency', () => {
+test('snapshot scope validates portable settings and excludes process environment and concurrency', () => {
   const raw = {
     model: 'openai/gpt',
     env: { API_KEY: 'secret' },
@@ -487,5 +487,6 @@ test('snapshot scope validates but excludes process environment and concurrency'
     model: 'openai/gpt',
     enableExtensions: false,
   });
-  expect(() => parsePiConfigStrict({ env: { API_KEY: 1 } }, 'snapshot')).toThrow();
+  expect(parsePiConfigStrict({ env: { API_KEY: 1 } }, 'snapshot')).toEqual({});
+  expect(() => parsePiConfigStrict({ model: 'missing-vendor' }, 'snapshot')).toThrow();
 });

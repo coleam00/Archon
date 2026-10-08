@@ -29,7 +29,7 @@
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
 import { buildProviderSubprocessEnv } from '@archon/provider-contract';
-import type { CredentialStatus } from '@archon/provider-contract';
+import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
   query,
   type Options,
@@ -70,7 +70,11 @@ import {
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
-import { resolveClaudeBinaryPath, pathKind } from './binary-resolver';
+import {
+  resolveClaudeBinaryPath,
+  resolveClaudeBinaryWithSource,
+  pathKind,
+} from './binary-resolver';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import {
   SessionSpendLedger,
@@ -83,6 +87,7 @@ import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
 import { closeOpenToolCalls } from '../shared/tool-calls';
 import { ClassifiedProviderError } from '../shared/failure';
+import { diagnoseBinary } from '../shared/binary-diagnostics';
 import {
   buildClaudePluginSettings,
   buildPluginListCommand,
@@ -1584,6 +1589,15 @@ async function* streamClaudeMessages(
  * - classifyClaudeThrownError: typed failure for an error thrown by the SDK
  */
 export class ClaudeProvider implements IAgentProvider {
+  async diagnose(
+    request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
+  ): Promise<ProviderDiagnostics> {
+    const config = parseClaudeConfig(request.assistantConfig ?? {});
+    return diagnoseBinary('claude-binary', 'Claude binary', () =>
+      resolveClaudeBinaryWithSource(config.claudeBinaryPath)
+    );
+  }
+
   async checkCredential(): Promise<CredentialStatus> {
     return { state: 'not_checked', source: 'native' };
   }

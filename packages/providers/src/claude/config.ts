@@ -6,11 +6,8 @@ import type { ProviderConfigScope } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import { parseClaudeSettingSources } from '@archon/paths/skills';
 import type { ClaudeProviderDefaults } from '../types';
-import {
-  assertKnownRunConfigKeys,
-  invalidRunConfigValue,
-  normalizeRunConfigString,
-} from '../shared/run-config';
+import { z } from 'zod';
+import { configStringSchema, parseConfigSchema } from '../shared/run-config';
 
 // Re-export so consumers can import the type from either location
 export type { ClaudeProviderDefaults } from '../types';
@@ -52,34 +49,29 @@ export function parseClaudeConfig(raw: Record<string, unknown>): ClaudeProviderD
   return result;
 }
 
-/** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
+const fields = {
+  model: configStringSchema.optional(),
+  settingSources: z
+    .array(z.enum(['project', 'user'], { error: "expected 'project' or 'user'" }))
+    .optional(),
+  claudeBinaryPath: configStringSchema.optional(),
+};
+export const configSchemas = {
+  install: z.strictObject(fields),
+  run: z.strictObject(fields),
+  snapshot: z.object({ model: fields.model }),
+};
+
 export function parseClaudeConfigStrict(
   raw: Record<string, unknown>,
   scope: ProviderConfigScope = 'install'
 ): ClaudeProviderDefaults {
-  assertKnownRunConfigKeys(raw, ['model', 'settingSources', 'claudeBinaryPath']);
-  const model = normalizeRunConfigString(raw.model, 'model');
-  const claudeBinaryPath = normalizeRunConfigString(raw.claudeBinaryPath, 'claudeBinaryPath');
-  if (raw.settingSources !== undefined) {
-    if (!Array.isArray(raw.settingSources)) {
-      invalidRunConfigValue('settingSources', "an array containing only 'project' or 'user'");
-    }
-    const invalidIndex = raw.settingSources.findIndex(
-      source => source !== 'project' && source !== 'user'
-    );
-    if (invalidIndex >= 0) {
-      invalidRunConfigValue(`settingSources.${invalidIndex}`, "'project' or 'user'");
-    }
-  }
-  const parsed = parseClaudeConfig(raw);
-  if (scope === 'snapshot') {
-    return {
-      ...(model === undefined ? {} : { model }),
-    };
-  }
+  const parsed = parseConfigSchema(configSchemas[scope], raw);
   return {
     ...parsed,
-    ...(model === undefined ? {} : { model }),
-    ...(claudeBinaryPath === undefined ? {} : { claudeBinaryPath }),
+    ...(parsed.model === undefined ? {} : { model: parsed.model.trim() }),
+    ...(!('claudeBinaryPath' in parsed) || parsed.claudeBinaryPath === undefined
+      ? {}
+      : { claudeBinaryPath: parsed.claudeBinaryPath.trim() }),
   };
 }

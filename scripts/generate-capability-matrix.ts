@@ -14,8 +14,8 @@
  * ignored-capability warnings — makes a capability change a `bun run validate`
  * failure until the docs are regenerated.
  *
- * Source of truth: the provider registry (registerBuiltinProviders +
- * registerCommunityProviders → getRegisteredProviders). The factories stay lazy,
+ * Source of truth: the provider registry (registerInProcessProviders →
+ * getRegisteredProviders). The factories stay lazy,
  * so no provider is instantiated; we only read the static capability metadata.
  *
  * Usage:
@@ -29,12 +29,8 @@
  */
 import { readFile, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
-import {
-  registerBuiltinProviders,
-  registerCommunityProviders,
-  getRegisteredProviders,
-  DEPRECATED_PROVIDERS_DOCS_PATH,
-} from '@archon/providers';
+import { getRegisteredProviders, DEPRECATED_PROVIDERS_DOCS_PATH } from '@archon/providers';
+import { registerInProcessProviders } from '@archon/providers/in-process';
 import type { ProviderCapabilities, ProviderRegistration } from '@archon/providers';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
@@ -306,8 +302,7 @@ function buildMarkdown(providers: ProviderRegistration[], caveats: ResolvedCavea
 }
 
 async function main(): Promise<void> {
-  registerBuiltinProviders();
-  registerCommunityProviders();
+  registerInProcessProviders();
   const providers = getRegisteredProviders();
   if (providers.length === 0) {
     throw new Error('No providers registered — registry bootstrap failed.');

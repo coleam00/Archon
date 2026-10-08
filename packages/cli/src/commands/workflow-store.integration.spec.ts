@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { providerRegistry, registerBuiltinProviders } from '@archon/providers';
+import { providerRegistry } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { isWorkflowWaitContext, runAttention } from '@archon/workflows/schemas/workflow-run';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';

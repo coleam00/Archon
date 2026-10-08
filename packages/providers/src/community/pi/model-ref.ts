@@ -1,7 +1,16 @@
+import { z } from 'zod';
+
+export const piModelRefSchema = z
+  .string()
+  .regex(
+    /^\s*[a-z][a-z0-9-]*\s*\/\s*\S[\s\S]*$/,
+    "expected a Pi vendor/model reference such as 'minimax/minimax-m3'"
+  );
+
 /**
  * Shape of a parsed Pi model reference.
  * Pi's catalog is large and fast-moving, so Archon does syntactic validation
- * only at registration time and defers catalog lookup to `getModel()` at
+ * when reading config and defers catalog lookup to the SDK at
  * query time.
  */
 export interface PiModelRef {
@@ -19,15 +28,12 @@ export interface PiModelRef {
  * Returns undefined for malformed refs so callers can surface clear errors.
  */
 export function parsePiModelRef(raw: string): PiModelRef | undefined {
+  if (!piModelRefSchema.safeParse(raw).success) return undefined;
   const value = raw.trim();
   const idx = value.indexOf('/');
-  if (idx <= 0 || idx === value.length - 1) return undefined;
 
   const provider = value.slice(0, idx).trim();
   const modelId = value.slice(idx + 1).trim();
-
-  if (!/^[a-z][a-z0-9-]*$/.test(provider)) return undefined;
-  if (modelId.length === 0) return undefined;
 
   return { provider, modelId };
 }

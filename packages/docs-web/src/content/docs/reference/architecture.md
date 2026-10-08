@@ -403,7 +403,7 @@ export class YourAssistantProvider implements IAgentProvider {
 }
 ```
 
-**3. Register via the typed registry:** `packages/providers/src/registry.ts`
+**3. Register in process:** `packages/providers/src/in-process.ts`
 
 Built-in providers are registered by `registerBuiltinProviders()`:
 
@@ -420,12 +420,14 @@ export function registerBuiltinProviders(): void {
     // ...existing entries
   ];
   for (const entry of builtins) {
-    if (!registry.has(entry.id)) registry.set(entry.id, entry);
+    if (!isRegisteredProvider(entry.id)) registerProvider(entry);
   }
 }
 ```
 
 The host process (CLI or server) calls `registerBuiltinProviders()` and `registerCommunityProviders()`, then loads installed provider receipts through `loadProviderPlugins()` and registers each result before loading config or workflows and creating the credential catalog. Core does not register providers. The host supplies the read-only `ProviderRegistry` to workflow parsing, discovery and validation, and through `WorkflowDeps.providers` for execution. The port exposes provider metadata without factories; provider instances still pass through host admission.
+
+`@archon/providers` exports SDK-free registry functions and maintained-provider descriptors. SDK consumers and tests can import `registerInProcessProviders()` from `@archon/providers/in-process` to register all maintained and transition providers. Each maintained provider also exports `createProvider` and `descriptor` from `@archon/providers/claude`, `@archon/providers/codex`, or `@archon/providers/pi`; the corresponding `/plugin` entry serves it over stdio when executed. Hosts still use the in-process registration functions.
 
 The bundled transition providers use `registerCommunityProviders()` (same file). New community providers use the external process-plugin path described in the [community provider guide](../contributing/adding-a-community-provider/). Hosts reconstruct their registrations from installed receipts; the server must restart after install, update or removal.
 
@@ -1365,7 +1367,7 @@ This checklist is for **built-in** providers only. For community providers (`bui
 - [ ] Handle session creation and resumption
 - [ ] Declare `ProviderCapabilities` honestly — under-declare rather than over-promise
 - [ ] Implement error handling and retry classification (see Claude/Codex patterns)
-- [ ] Register in `registerBuiltinProviders()` at `packages/providers/src/registry.ts`
+- [ ] Register in `@archon/providers/in-process`, with an SDK-free descriptor and an executable plugin entry
 - [ ] Add environment variables to `.env.example`
 - [ ] Test session persistence across restarts
 - [ ] Test plan-to-execute transition (new session)

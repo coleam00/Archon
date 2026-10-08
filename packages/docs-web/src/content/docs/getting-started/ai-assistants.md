@@ -383,7 +383,7 @@ Pi is included as a dependency of `@archon/providers` — no separate install ne
 
 ### Quick setup via wizard
 
-Run `archon setup` and select **Pi (community)** in the AI assistant multiselect. The wizard prompts for your preferred backend and API key, writes the key to `~/.archon/.env`, and writes the model ref to `~/.archon/config.yaml` automatically.
+Run `archon setup` and select **Pi** in the AI assistant multiselect. The wizard prompts for your preferred backend and API key, writes the key to `~/.archon/.env`, and writes the model ref to `~/.archon/config.yaml` automatically.
 
 ### Authenticate
 

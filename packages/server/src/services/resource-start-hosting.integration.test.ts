@@ -3,7 +3,7 @@ import { getOrCreateConversation } from '@archon/core/db/conversations';
 import { listMessages } from '@archon/core/db/messages';
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { execFileSync } from 'node:child_process';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import { saveUserProviderKey } from '@archon/core/db/user-provider-key-store';
 import { getWorkflowRun } from '@archon/core/db/workflows';
 import { execFileAsync } from '@archon/git';

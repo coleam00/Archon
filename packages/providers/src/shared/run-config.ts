@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { InvalidProviderRunConfigError } from '@archon/provider-contract';
 
 export function assertKnownRunConfigKeys(
@@ -22,6 +23,23 @@ export function normalizeRunConfigString(value: unknown, fieldPath: string): str
   return value.trim();
 }
 
-export function isConfigRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
+export const configStringSchema = z.string().regex(/\S/, 'expected a non-blank string');
+
+export function parseConfigSchema<T extends z.ZodType>(
+  schema: T,
+  raw: Record<string, unknown>
+): z.output<T> {
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const path = [
+      ...issue.path,
+      ...(issue.code === 'unrecognized_keys' ? [issue.keys[0]] : []),
+    ].join('.');
+    throw new InvalidProviderRunConfigError(
+      path,
+      issue.code === 'unrecognized_keys' ? 'unknown provider setting' : issue.message
+    );
+  }
+  return parsed.data;
 }

@@ -26,8 +26,8 @@ mock.module('@github/copilot-sdk', () => {
 });
 
 test('registering and instantiating the Copilot provider does not eagerly load the SDK', async () => {
-  const { clearRegistry, getAgentProvider, registerCommunityProviders } =
-    await import('../../registry');
+  const { clearRegistry, getAgentProvider } = await import('../../registry');
+  const { registerCommunityProviders } = await import('../../in-process');
 
   clearRegistry();
   registerCommunityProviders();

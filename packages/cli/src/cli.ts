@@ -135,7 +135,7 @@ async function registerProviders(): Promise<void> {
     registerBuiltinProviders,
     registerCommunityProviders,
     registerProvider,
-  } = await import('@archon/providers');
+  } = await import('@archon/providers/in-process');
   installProviderProcessErrorHandlers(claimPiExtensionProcessError);
   registerBuiltinProviders();
   registerCommunityProviders();

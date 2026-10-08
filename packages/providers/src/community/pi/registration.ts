@@ -2,29 +2,20 @@ import { normalizeCredentialVendor } from '../../credential-catalog';
 import { parsePiModelRef } from './model-ref';
 import { isRegisteredProvider, registerProvider } from '../../registry';
 
-import { PI_CAPABILITIES } from './capabilities';
+import { descriptor } from './descriptor';
+import { createProvider } from './index';
 import { parsePiConfigStrict } from './config';
-import { PI_CREDENTIAL_SPECS } from './pi-vendor-map.generated';
-import { PiProvider } from './provider';
+const PI_CREDENTIAL_SPECS = descriptor.credentials.specs;
 
-/**
- * Register the Pi community provider.
- *
- * Idempotent — safe to call multiple times, so process entrypoints (CLI,
- * server, config-loader) can each call it without coordination. Kept
- * separate from `registerBuiltinProviders()` because `builtIn: false` is
- * load-bearing: Pi validates the Phase 2 community-provider seam and must
- * not be conflated with core providers until it's explicitly promoted.
- */
 export function registerPiProvider(): void {
   if (isRegisteredProvider('pi')) return;
   registerProvider({
-    id: 'pi',
-    ownsUnprefixedModelRefs: true,
-    displayName: 'Pi (community)',
-    factory: () => new PiProvider(),
-    capabilities: PI_CAPABILITIES,
-    builtIn: false,
+    id: descriptor.id,
+    ownsUnprefixedModelRefs: descriptor.ownsUnprefixedModelRefs,
+    displayName: descriptor.displayName,
+    factory: createProvider,
+    capabilities: descriptor.capabilities,
+    builtIn: true,
     parseConfig: parsePiConfigStrict,
     // Generated from the installed pi-ai SDK — see generate:pi-vendor-map.
     credentials: {
