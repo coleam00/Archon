@@ -11,6 +11,7 @@ import { buildProviderSubprocessEnv } from '@archon/provider-contract';
 import { terminateTree, validateCommand } from '@archon/paths/plugin-process';
 import { createLogger } from '@archon/paths';
 import { ChatPluginUnavailableError, type ChatConnection } from './platform';
+import { windowsJobCommand } from './windows-job';
 
 export type InstalledChatPlugin = Awaited<
   ReturnType<typeof import('@archon/core/platforms/chat-plugins').loadChatPlugins>
@@ -120,7 +121,8 @@ export class ChatSupervisor implements ChatConnection {
     let failures = 0;
     while (!this.stopping) {
       let retryable = true;
-      const child = spawn(argv[0], argv.slice(1), {
+      const command = process.platform === 'win32' ? windowsJobCommand(argv) : argv;
+      const child = spawn(command[0], command.slice(1), {
         detached: process.platform !== 'win32',
         windowsHide: true,
         env: buildProviderSubprocessEnv({}),
@@ -143,12 +145,12 @@ export class ChatSupervisor implements ChatConnection {
       });
       const closed = new Promise<void>(resolve =>
         child.once('close', () => {
-          exited = true;
           resolve();
         })
       );
       const ended = new Promise<void>(resolve =>
         child.once('exit', () => {
+          exited = true;
           resolve();
         })
       );
@@ -156,7 +158,7 @@ export class ChatSupervisor implements ChatConnection {
       this.dispose = (): Promise<void> =>
         (disposal ??= (async (): Promise<void> => {
           child.stdin.end();
-          // Always sweep the POSIX group: descendants may outlive their parent and pipes.
+          // POSIX groups survive their leader; Windows descendants belong to the launcher job.
           await Promise.race([
             closed,
             new Promise<void>(resolve => {
@@ -166,11 +168,14 @@ export class ChatSupervisor implements ChatConnection {
               });
             }),
           ]);
-          if (pid !== undefined && (!exited || process.platform !== 'win32'))
-            await terminateTree(pid);
-          child.stdin.destroy();
-          child.stdout.destroy();
-          child.stderr.destroy();
+          try {
+            if (pid !== undefined && (!exited || process.platform !== 'win32'))
+              await terminateTree(pid);
+          } finally {
+            child.stdin.destroy();
+            child.stdout.destroy();
+            child.stderr.destroy();
+          }
           await closed;
         })());
       try {

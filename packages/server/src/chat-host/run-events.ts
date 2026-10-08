@@ -94,7 +94,7 @@ export function subscribeChatRunEvents(plugins: ReadonlyMap<string, ChatSupervis
       .then(async () => {
         if (stopped) return;
         const run = await workflowDb.getWorkflowRun(event.runId);
-        const id = run?.conversation_id ?? run?.parent_conversation_id;
+        const id = run?.parent_conversation_id ?? run?.conversation_id;
         if (!id) return;
         const conversation = await conversationDb.getConversationById(id);
         if (!conversation?.platform_conversation_id) return;

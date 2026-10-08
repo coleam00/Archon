@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
+import { terminateTree } from '@archon/paths/plugin-process';
 import { descriptor } from './fixtures/descriptor';
 import type { ConnectedChat } from '@archon/chat-contract';
 import { ChatPluginUnavailableError } from './platform';
@@ -29,7 +30,7 @@ async function until(check: () => boolean | Promise<boolean>) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
-async function fixture(mode: string) {
+async function fixture(mode: string, args: string[] = []) {
   const root = await mkdtemp(join(tmpdir(), 'chat-process-'));
   roots.push(root);
   const file = join(root, 'pids');
@@ -37,19 +38,24 @@ async function fixture(mode: string) {
   const supervisor = new ChatSupervisor(
     {
       descriptor,
-      argv: [process.execPath, join(import.meta.dir, 'fixtures/plugin.ts'), mode, file],
+      argv: [process.execPath, join(import.meta.dir, 'fixtures/plugin.ts'), mode, file, ...args],
     },
     () => {},
     value => {
       live = value;
     },
-    { graceMs: 50, backoffMs: 20, maxBackoffMs: 80, requestTimeoutMs: 500 }
+    {
+      graceMs: 50,
+      backoffMs: 20,
+      maxBackoffMs: 80,
+      requestTimeoutMs: process.platform === 'win32' ? 3000 : 500,
+    }
   );
   running.push(supervisor);
   supervisor.start();
   const pids = async () =>
     (await readFile(file, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean);
-  return { supervisor, live: () => live, pids };
+  return { supervisor, live: () => live, pids, file };
 }
 
 test(
@@ -172,3 +178,52 @@ test('remote send errors expose only the typed RPC code, never plugin prose', as
   expect(records.join('\n')).not.toContain('SECRET_TOKEN');
   expect(records.join('\n')).not.toContain('USER_MESSAGE');
 });
+
+test.skipIf(process.platform !== 'win32')(
+  'Windows owns descendants after plugin stdin exit and crash',
+  async () => {
+    for (const mode of ['orphan-eof', 'orphan-crash']) {
+      const { supervisor, pids } = await fixture(mode);
+      await until(async () => (await pids()).length >= 2);
+      const ids = (await pids()).slice(0, 2).map(value => Number(value.replace('child:', '')));
+      try {
+        if (mode === 'orphan-crash') {
+          await until(() => records.some(record => record.includes('restart_scheduled')));
+        }
+        await supervisor.stop();
+        await until(() =>
+          ids.every(pid => {
+            try {
+              process.kill(pid, 0);
+              return false;
+            } catch (error) {
+              return (error as NodeJS.ErrnoException).code === 'ESRCH';
+            }
+          })
+        );
+      } finally {
+        await Promise.all(ids.map(terminateTree));
+      }
+      records.length = 0;
+    }
+  },
+  testTimeout(15_000)
+);
+
+test.skipIf(process.platform !== 'win32')(
+  'Windows launcher preserves executable arguments literally',
+  async () => {
+    const args = [
+      '',
+      'space and Unicode æ',
+      'embedded " quote',
+      'trailing\\',
+      "'; $env:USERPROFILE; $(exit 7)",
+    ];
+    const { supervisor, live, file } = await fixture('arguments', args);
+    await until(live);
+    expect(JSON.parse(await readFile(`${file}.args`, 'utf8'))).toEqual(args);
+    await supervisor.stop();
+  },
+  testTimeout(5000)
+);

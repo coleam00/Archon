@@ -1027,9 +1027,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         getLog().error({ err: e }, 'shutdown_flush_failed');
       })
       .then(async () => {
-        // Stop adapters (these should not throw, but be defensive)
         try {
           await chatHost.stop();
+        } catch (error) {
+          getLog().error({ err: error }, 'chat_host_stop_error');
+        }
+        // Stop adapters (these should not throw, but be defensive)
+        try {
           telegram?.stop();
           discord?.stop();
           // Detach Slack workflow bridge BEFORE stopping the adapter so a
