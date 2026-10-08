@@ -1,3 +1,7 @@
+import { spyOn } from 'bun:test';
+import * as binaryResolver from './binary-resolver';
+import { overStreams } from '../test/plugin';
+import { createProvider, descriptor } from './index';
 import { describe, test, expect, mock, beforeEach, beforeAll, afterAll } from 'bun:test';
 import { mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -52,7 +56,7 @@ function providerWith(script: FakeTurnScript | (() => FakeTurnScript) = {}): {
   server: ReturnType<typeof createFakeAppServer>;
 } {
   const server = createFakeAppServer(typeof script === 'function' ? script : () => script);
-  return { provider: new CodexProvider(server), server };
+  return { provider: createProvider(server), server };
 }
 
 async function run(
@@ -105,7 +109,7 @@ async function fakeBinary(): Promise<string> {
 }
 
 // Notification ordering and item shapes from the 0.160.0 #3728 probe, with fixture IDs.
-function backgroundCase(agent: boolean): ProviderBackgroundCase {
+function backgroundCase(agent: boolean, remote = false): ProviderBackgroundCase {
   const bg = {
     ...command('exec-1', 'sleep 20'),
     source: 'unifiedExecStartup' as const,
@@ -127,7 +131,8 @@ function backgroundCase(agent: boolean): ProviderBackgroundCase {
         ],
         completion: null,
       });
-      for await (const chunk of provider.sendQuery('p', '/workspace')) {
+      const client = remote ? overStreams(() => provider, descriptor) : provider;
+      for await (const chunk of client.sendQuery('p', '/workspace')) {
         yield chunk;
         if (chunk.type === 'result') {
           expect(server.processes[0].stdinEnded).toBe(false);
@@ -1382,16 +1387,19 @@ describe('CodexProvider', () => {
       expect(result.failure?.class).toBe('unknown');
     });
 
-    test('conforms to the provider contract', async () => {
+    test.each([false, true])('conforms to the provider contract (streams: %s)', async remote => {
       const turn =
         (script: FakeTurnScript, options?: SendQueryOptions) => (): AsyncIterable<MessageChunk> =>
-          providerWith(script).provider.sendQuery('p', '/workspace', undefined, options);
+          (remote
+            ? overStreams(() => providerWith(script).provider, descriptor)
+            : providerWith(script).provider
+          ).sendQuery('p', '/workspace', undefined, options);
       const failed = (info: CodexErrorInfo, message: string): FakeTurnScript => ({
         completion: { status: 'failed', error: turnError(info, message) },
       });
       const violations = await runProviderConformance({
         capabilities: new CodexProvider().getCapabilities(),
-        backgroundCases: [backgroundCase(true), backgroundCase(false)],
+        backgroundCases: [backgroundCase(true, remote), backgroundCase(false, remote)],
         turns: [
           { name: 'completed turn', run: turn({ notifications: [agentMessage('hi')] }) },
           {
@@ -1454,7 +1462,10 @@ describe('CodexProvider', () => {
           name: 'forked thread',
           source: 'existing-thread',
           run: () =>
-            providerWith().provider.sendQuery('p', '/workspace', 'existing-thread', {
+            (remote
+              ? overStreams(() => providerWith().provider, descriptor)
+              : providerWith().provider
+            ).sendQuery('p', '/workspace', 'existing-thread', {
               forkSession: true,
             }),
         },
@@ -1476,22 +1487,26 @@ describe('CodexProvider', () => {
             name: 'process exits mid-turn',
             expected: 'transient',
             evidence: 'exited',
-            run: turn({
-              notifications: [itemStarted(command('cmd-1', 'sleep 60'))],
-              exitCode: 137,
-            }),
+            run: () =>
+              providerWith({
+                notifications: [itemStarted(command('cmd-1', 'sleep 60'))],
+                exitCode: 137,
+              }).provider.sendQuery('p', '/workspace'),
           },
           {
             name: 'binary that exits before answering',
             expected: 'misconfigured',
             evidence: 'stdin is not a terminal',
-            run: turn({ startupFailure: { code: 1, stderr: 'Error: stdin is not a terminal' } }),
+            run: () =>
+              providerWith({
+                startupFailure: { code: 1, stderr: 'Error: stdin is not a terminal' },
+              }).provider.sendQuery('p', '/workspace'),
           },
           {
             name: 'binary missing at spawn',
             expected: 'misconfigured',
             evidence: 'ENOENT',
-            run: turn({ spawnError: 'ENOENT' }),
+            run: () => providerWith({ spawnError: 'ENOENT' }).provider.sendQuery('p', '/workspace'),
           },
         ])
       ).toEqual([]);
@@ -1578,4 +1593,39 @@ describe('CodexProvider', () => {
       expect(server.processes).toHaveLength(0);
     });
   });
+});
+
+test('Codex streams carry identical chunks from the in-process factory', async () => {
+  const create = () =>
+    createProvider(createFakeAppServer(() => ({ notifications: [agentMessage('same answer')] })));
+  const direct = await Array.fromAsync(create().sendQuery('parity', '/workspace'));
+  const remote = await Array.fromAsync(
+    overStreams(create, descriptor).sendQuery('parity', '/workspace')
+  );
+  expect(remote).toEqual(direct);
+  expect(direct).toContainEqual(
+    expect.objectContaining({ type: 'agent_message_chunk', text: 'same answer' })
+  );
+});
+
+test('Codex diagnostics carry binary resolution and legacy setup posture without token values', async () => {
+  const resolver = spyOn(binaryResolver, 'resolveCodexBinaryWithSource').mockResolvedValue({
+    path: process.execPath,
+    source: 'config',
+  });
+  const previous = process.env.CODEX_ID_TOKEN;
+  process.env.CODEX_ID_TOKEN = 'p4-legacy-token-secret';
+  try {
+    const request = { assistantConfig: { codexBinaryPath: process.execPath } };
+    const direct = await createProvider().diagnose(request);
+    expect(await overStreams(createProvider, descriptor).diagnose!(request)).toEqual(direct);
+    expect(direct.checks.map(check => check.status)).toEqual(['ok', 'warn']);
+    expect(direct.checks[1].message).toContain('CODEX_ID_TOKEN -> ARCHON_CODEX_ID_TOKEN');
+    expect(JSON.stringify(direct)).not.toContain(process.env.CODEX_ID_TOKEN);
+    expect(resolver).toHaveBeenCalledWith(process.execPath);
+  } finally {
+    resolver.mockRestore();
+    if (previous === undefined) delete process.env.CODEX_ID_TOKEN;
+    else process.env.CODEX_ID_TOKEN = previous;
+  }
 });

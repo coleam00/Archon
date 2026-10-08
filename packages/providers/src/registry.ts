@@ -4,25 +4,15 @@
  * Typed registry where each entry is a ProviderRegistration record (factory + metadata).
  * Replaces the hardcoded factory switch from Phase 1.
  *
- * Bootstrap: callers must call registerBuiltinProviders() at process entrypoints
+ * Bootstrap: callers must register their providers at process entrypoints
  * (server startup, CLI init) before any provider lookups.
  */
-import { singleVendorCatalog } from './credential-catalog';
 import type {
   IAgentProvider,
   ProviderCapabilities,
   ProviderRegistration,
   ProviderInfo,
 } from './types';
-import { ClaudeProvider } from './claude/provider';
-import { CodexProvider } from './codex/provider';
-import { parseClaudeConfigStrict } from './claude/config';
-import { parseCodexConfigStrict } from './codex/config';
-import { CLAUDE_CAPABILITIES } from './claude/capabilities';
-import { CODEX_CAPABILITIES } from './codex/capabilities';
-import { registerCopilotProvider } from './community/copilot/registration';
-import { registerOpencodeProvider } from './community/opencode/registration';
-import { registerPiProvider } from './community/pi/registration';
 import { createLogger } from '@archon/paths';
 import {
   EFFORT_LADDER,
@@ -147,56 +137,6 @@ export function getProviderInfoList(): ProviderInfo[] {
  */
 export function isRegisteredProvider(id: string): boolean {
   return registry.has(id);
-}
-
-/**
- * Register built-in providers (Claude, Codex). Idempotent — skips already-registered IDs.
- * Must be called at process entrypoints (server, CLI) before any provider lookups.
- */
-export function registerBuiltinProviders(): void {
-  const builtins: ProviderRegistration[] = [
-    {
-      id: 'claude',
-      displayName: 'Claude (Anthropic)',
-      factory: () => new ClaudeProvider(),
-      capabilities: CLAUDE_CAPABILITIES,
-      builtIn: true,
-      parseConfig: parseClaudeConfigStrict,
-      credentials: singleVendorCatalog({
-        vendor: 'anthropic',
-        displayName: 'Anthropic',
-        kinds: ['api_key', 'subscription'],
-      }),
-    },
-    {
-      id: 'codex',
-      displayName: 'Codex (OpenAI)',
-      factory: () => new CodexProvider(),
-      capabilities: CODEX_CAPABILITIES,
-      builtIn: true,
-      parseConfig: parseCodexConfigStrict,
-      credentials: singleVendorCatalog({
-        // Subscription (ChatGPT) login runs Archon's own PKCE flow —
-        // see @archon/core credentials/openai-oauth.ts (#1924).
-        vendor: 'openai',
-        displayName: 'OpenAI',
-        kinds: ['api_key', 'subscription'],
-      }),
-    },
-  ];
-
-  for (const entry of builtins) {
-    if (!registry.has(entry.id)) {
-      registerProvider(entry);
-    }
-  }
-}
-
-/** Register the remaining bundled providers; new community providers install as plugins. */
-export function registerCommunityProviders(): void {
-  registerOpencodeProvider();
-  registerPiProvider();
-  registerCopilotProvider();
 }
 
 /** @internal Test-only — clears the registry. Not for production use. */

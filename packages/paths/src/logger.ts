@@ -52,6 +52,11 @@ function getInitialLevel(): string {
 export type LogDestination = 'stdout' | 'stderr';
 
 let destination: LogDestination = 'stdout';
+let logSink: ((line: string) => void) | undefined;
+
+export function setLogSink(sink: ((line: string) => void) | undefined): void {
+  logSink = sink;
+}
 const streams: Partial<Record<LogDestination, DestinationStream>> = {};
 
 /**
@@ -109,6 +114,10 @@ function buildLogger(): Logger {
     { level: getInitialLevel() },
     {
       write(line: string): void {
+        if (logSink) {
+          logSink(line);
+          return;
+        }
         const stream = (streams[destination] ??= buildStream(destination));
         stream.write(line);
       },

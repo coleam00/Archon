@@ -44,7 +44,7 @@ loadArchonEnv(process.cwd());
 // Workflow scripts started by this server call back into the CLI through the
 // same host command the CLI publishes for its own runs.
 import { publishArchonCliCommand } from '@archon/paths/cli-command';
-publishArchonCliCommand();
+if (!BUNDLED_IS_BINARY) publishArchonCliCommand();
 
 // Smart default: fall back to Claude Code's built-in OAuth (`claude /login`)
 // ONLY for solo installs with no explicit credentials. Per-user installs
@@ -54,12 +54,12 @@ if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
+import { registerProvider } from '@archon/providers';
 import {
   claimPiExtensionProcessError,
   registerBuiltinProviders,
   registerCommunityProviders,
-  registerProvider,
-} from '@archon/providers';
+} from '@archon/providers/in-process';
 import { getPluginsPath } from '@archon/paths';
 import { getVendorCatalog, loadProviderPlugins } from '@archon/core';
 import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
@@ -85,7 +85,8 @@ import {
   SlackAdapter,
   SlackWorkflowBridge,
 } from '@archon/adapters';
-import { bundledPlatformPolicies } from '@archon/adapters/platform-policies';
+import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
+import { loadPlatformPolicies } from '@archon/core/platforms/chat-plugins';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { telegramPolicy } from '@archon/adapters/chat/telegram/policy';
 import { slackPolicy } from '@archon/adapters/chat/slack/policy';
@@ -276,7 +277,7 @@ export interface ServerOptions {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
-  setPlatformPolicies(bundledPlatformPolicies);
+  setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.

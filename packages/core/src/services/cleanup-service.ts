@@ -9,7 +9,11 @@ import {
   WorktreeLeftoverError,
   type IIsolationStore,
 } from '@archon/isolation';
-import { retainedPlatformIds, retainsWorkspace } from '../platforms/registry';
+import {
+  getRegisteredPlatformPolicies,
+  unknownPlatformReason,
+  retainsWorkspace,
+} from '../platforms/registry';
 import * as isolationEnvDb from '../db/isolation-environments';
 import * as conversationDb from '../db/conversations';
 import * as sessionDb from '../db/sessions';
@@ -128,6 +132,11 @@ export interface ContainerCleanupReport {
  * placeholder config is unused by `destroy` (see CLEANUP_PLACEHOLDER_CONTAINER_CONFIG).
  */
 export async function reclaimContainerEnv(envId: string, store: IIsolationStore): Promise<void> {
+  const env = await store.getById(envId);
+  if (env) {
+    const reason = unknownPlatformReason(env.created_by_platform);
+    if (reason) throw new Error(reason);
+  }
   const backend = new ContainerBackend({
     store,
     config: CLEANUP_PLACEHOLDER_CONTAINER_CONFIG,
@@ -177,6 +186,7 @@ export async function listContainerEnvironments(): Promise<readonly ContainerEnv
 export async function cleanupContainerEnvironments(
   daysStale = STALE_THRESHOLD_DAYS
 ): Promise<ContainerCleanupReport> {
+  getRegisteredPlatformPolicies();
   const report: ContainerCleanupReport = { removed: [], skipped: [], errors: [] };
   const rows = await isolationEnvDb.listActiveContainerEnvironments();
   if (rows.length === 0) return report;
@@ -187,6 +197,18 @@ export async function cleanupContainerEnvironments(
   });
 
   for (const row of rows) {
+    const reason = unknownPlatformReason(row.created_by_platform);
+    if (reason) {
+      report.skipped.push({ id: row.id, reason });
+      continue;
+    }
+    if (retainsWorkspace(row.created_by_platform)) {
+      report.skipped.push({
+        id: row.id,
+        reason: `platform '${row.created_by_platform}' retains workspaces`,
+      });
+      continue;
+    }
     // FAIL CLOSED on an ambiguous lookup (H3): a DB error is NOT "no run" — treating
     // it as an orphan would destroy a claimable run's container on a transient blip
     // (violating No-Autonomous-Lifecycle-Mutation). Report + skip, never destroy.
@@ -282,6 +304,12 @@ export async function onConversationClosed(
     return;
   }
 
+  const reason = unknownPlatformReason(env.created_by_platform);
+  if (reason) {
+    getLog().warn({ envId, reason }, 'cleanup_skipped');
+    return;
+  }
+
   // Live work is the only lock — the same rule the merged cleanup sweep follows.
   // Historical conversations referencing this env are data, not locks. This must
   // read before the null-out below: a top-level run attaches to its env ONLY
@@ -361,6 +389,9 @@ export async function removeEnvironment(
     getLog().debug({ envId }, 'env_already_destroyed');
     return { ...noopResult, skippedReason: 'already destroyed' };
   }
+
+  const reason = unknownPlatformReason(env.created_by_platform);
+  if (reason) return { ...noopResult, skippedReason: reason };
 
   // Get canonical repo path from codebase for branch cleanup
   let canonicalRepoPath: RepoPath | undefined;
@@ -571,9 +602,8 @@ function skipReasonFor(verdict: Exclude<MergeVerdict, 'reclaimable'>): string | 
  * 2. Find and remove stale environments
  */
 export async function runScheduledCleanup(): Promise<CleanupReport> {
-  // Merged and path-missing removals run before the retention check, so an
-  // unconfigured host must fail before the sweep starts, not partway through it.
-  retainedPlatformIds();
+  // Fail before any sweep can mutate rows, even when there are no environments.
+  getRegisteredPlatformPolicies();
   getLog().info('cleanup_started');
   const report: CleanupReport = { removed: [], skipped: [], errors: [], sessionsDeleted: 0 };
 
@@ -590,6 +620,11 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
       try {
         // Skip if already processing or destroyed
         if (env.status !== 'active') continue;
+        const reason = unknownPlatformReason(env.created_by_platform);
+        if (reason) {
+          report.skipped.push({ id: env.id, reason });
+          continue;
+        }
 
         // Check if path still exists
         const pathExists = await worktreeExists(toWorktreePath(env.working_path));
@@ -790,6 +825,7 @@ export async function getWorktreeStatusBreakdown(
   codebaseId: string,
   mainRepoPath: string
 ): Promise<WorktreeStatusBreakdown> {
+  getRegisteredPlatformPolicies();
   const environments = await isolationEnvDb.listByCodebaseWithAge(codebaseId);
 
   const repoPath = toRepoPath(mainRepoPath);
@@ -806,6 +842,12 @@ export async function getWorktreeStatusBreakdown(
   const { remoteMainRef } = await resolveRepoGitContext(repoPath, mainRepoPath);
 
   for (const env of environments) {
+    const reason = unknownPlatformReason(env.created_by_platform);
+    if (reason) {
+      breakdown.active++;
+      breakdown.activeEnvs.push({ id: env.id, branchName: env.branch_name, reason });
+      continue;
+    }
     const retained = retainsWorkspace(env.created_by_platform);
 
     // Check if merged (treat as not-merged on unexpected errors)
@@ -860,9 +902,15 @@ export async function cleanupStaleWorktrees(
   _mainRepoPath: string
 ): Promise<CleanupOperationResult> {
   const result: CleanupOperationResult = { removed: [], skipped: [] };
+  getRegisteredPlatformPolicies();
   const environments = await isolationEnvDb.listByCodebaseWithAge(codebaseId);
 
   for (const env of environments) {
+    const reason = unknownPlatformReason(env.created_by_platform);
+    if (reason) {
+      result.skipped.push({ branchName: env.branch_name, reason });
+      continue;
+    }
     if (retainsWorkspace(env.created_by_platform)) continue;
 
     // Check if stale
@@ -901,6 +949,7 @@ export async function cleanupMergedWorktrees(
   mainRepoPath: string,
   options: { includeClosed?: boolean } = {}
 ): Promise<MergedCleanupResult> {
+  getRegisteredPlatformPolicies();
   const environments = await isolationEnvDb.listByCodebase(codebaseId);
   const repoPath = toRepoPath(mainRepoPath);
   const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
@@ -909,6 +958,11 @@ export async function cleanupMergedWorktrees(
   const prStateCache = new Map<string, PrLookup>();
 
   for (const env of environments) {
+    const reason = unknownPlatformReason(env.created_by_platform);
+    if (reason) {
+      result.skipped.push({ branchName: env.branch_name, reason });
+      continue;
+    }
     let verdict: MergeVerdict;
     try {
       verdict = await judgeBranchForRemoval({
@@ -970,7 +1024,7 @@ export async function cleanupMergedWorktrees(
  */
 export function startCleanupScheduler(): void {
   // Fail at host startup rather than in a timer callback hours later.
-  retainedPlatformIds();
+  getRegisteredPlatformPolicies();
   if (cleanupIntervalId) {
     getLog().warn('scheduler_already_running');
     return;
@@ -1050,6 +1104,8 @@ async function reclaimOwnedWorktree(
   ) {
     return refuse('creation proof does not match its isolation record');
   }
+  const reason = unknownPlatformReason(env.created_by_platform);
+  if (reason) return refuse(reason);
   const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
   if (!codebase) return refuse('canonical repository is unavailable');
   const repo = toRepoPath(codebase.default_cwd);

@@ -283,7 +283,7 @@ const commandHelp: HelpEntry[] = [
   {
     command: 'serve',
     spec: 'serve',
-    description: 'Start the web UI server (binary installs download it on first run)',
+    description: 'Start the web UI server (binary installs download server and UI on first run)',
   },
   {
     command: 'skill',
@@ -820,7 +820,7 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--download-only',
-    description: 'Download web UI without starting the server',
+    description: 'Download server and web UI without starting the server',
     owners: [{ command: 'serve' }],
   },
   {

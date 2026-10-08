@@ -38,6 +38,19 @@ export interface ConnectedChat {
   close(): Promise<void>;
 }
 
+async function initialize(rpc: PluginRpc): Promise<ChatPluginDescriptor> {
+  return rpc.parse(chatPluginDescriptorSchema, await rpc.request('initialize', {}));
+}
+
+export async function inspectChat(io: PluginIO): Promise<ChatPluginDescriptor> {
+  const rpc = new PluginRpc(io);
+  try {
+    return await initialize(rpc);
+  } finally {
+    await rpc.close();
+  }
+}
+
 export async function connectChat(
   io: PluginIO,
   expectedDescriptor: ChatPluginDescriptor
@@ -59,7 +72,7 @@ export async function connectChat(
   });
   let descriptor: ChatPluginDescriptor;
   try {
-    descriptor = rpc.parse(chatPluginDescriptorSchema, await rpc.request('initialize', {}));
+    descriptor = await initialize(rpc);
     if (!isDeepStrictEqual(descriptor, expected))
       throw rpc.error('descriptor changed since install; update this plugin');
   } catch (error) {

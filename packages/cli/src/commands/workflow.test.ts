@@ -129,7 +129,7 @@ import {
 
 beforeAll(async () => {
   const { registerBuiltinProviders, registerCommunityProviders } =
-    await import('@archon/providers');
+    await import('@archon/providers/in-process');
   registerBuiltinProviders();
   registerCommunityProviders();
 });

@@ -1,10 +1,7 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeAll, afterEach } from 'bun:test';
-import {
-  registerBuiltinProviders,
-  registerCommunityProviders,
-  getRegisteredProviders,
-} from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import { getRegisteredProviders } from '@archon/providers';
 import {
   getVendorCatalog,
   listConnectableVendors,

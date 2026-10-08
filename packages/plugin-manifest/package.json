@@ -15,7 +15,8 @@
   "dependencies": {
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@archon/chat-contract": "workspace:*"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

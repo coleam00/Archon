@@ -1,9 +1,12 @@
 import { z } from 'zod';
 import {
   executionContextSchema,
+  nativeToolInputSchema,
+  type NativeTool,
   systemPromptInputSchema,
   type SendQueryOptions,
 } from '../agent-provider';
+import { providerDiagnosticsSchema, providerModelListSchema } from '../information';
 import { providerCapabilitiesSchema } from '../capabilities';
 import { credentialStatusSchema } from '../credential-status';
 import type { AssertNever } from '../effort';
@@ -19,20 +22,31 @@ export const providerPluginDescriptorSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/),
   displayName: z.string().min(1),
   version: z.string().min(1),
-  capabilities: providerCapabilitiesSchema.extend({ nativeTools: z.literal(false) }),
+  capabilities: providerCapabilitiesSchema,
   credentials: z.object({ kind: z.literal('static'), specs: z.array(credentialSpecSchema) }),
   configSchema: z.record(z.string(), z.json()),
+  config: z
+    .object({
+      install: z.record(z.string(), z.json()),
+      run: z.record(z.string(), z.json()),
+      snapshot: z.record(z.string(), z.json()),
+      stripUnknownKeys: z.literal(true).optional(),
+    })
+    .optional(),
   ownsUnprefixedModelRefs: z.literal(true).optional(),
 });
 export type ProviderPluginDescriptor = z.infer<typeof providerPluginDescriptorSchema>;
 
 export const HOST_ONLY_REQUEST_KEYS = [
   'abortSignal',
-  'nativeTools',
   'onAdmission',
-  'env',
 ] as const satisfies readonly (keyof SendQueryOptions)[];
 const configSchema = z.record(z.string(), z.json());
+export const nativeToolSpecSchema = z.object({
+  name: z.string().min(1),
+  description: z.string(),
+  inputSchema: nativeToolInputSchema,
+});
 export const providerSessionRequestSchema = z.strictObject({
   prompt: z.string(),
   cwd: z.string().min(1),
@@ -48,6 +62,8 @@ export const providerSessionRequestSchema = z.strictObject({
   nodeConfig: configSchema.optional(),
   assistantConfig: configSchema.optional(),
   execContext: executionContextSchema.optional(),
+  nativeTools: z.array(nativeToolSpecSchema).optional(),
+  env: z.record(z.string(), z.string()).optional(),
 });
 export type ProviderSessionRequest = z.infer<typeof providerSessionRequestSchema>;
 export type RequestOptionCoverage = AssertNever<
@@ -62,14 +78,17 @@ export type RequestOptionNames = AssertNever<
     keyof SendQueryOptions | 'prompt' | 'cwd' | 'resumeSessionId'
   >
 >;
+type WireOptions = Omit<SendQueryOptions, 'nativeTools'> & {
+  nativeTools?: Omit<NativeTool, 'handler'>[];
+};
 export type RequestOptionTypes = AssertNever<
   {
-    [K in keyof SendQueryOptions]: K extends keyof ProviderSessionRequest
-      ? ProviderSessionRequest[K] extends SendQueryOptions[K]
+    [K in keyof WireOptions]: K extends keyof ProviderSessionRequest
+      ? ProviderSessionRequest[K] extends WireOptions[K]
         ? never
         : K
       : never;
-  }[keyof SendQueryOptions] &
+  }[keyof WireOptions] &
     string
 >;
 
@@ -104,6 +123,19 @@ export const cancelNotificationSchema = z.object({ sessionId: z.string().min(1) 
 export const chunkNotificationSchema = cancelNotificationSchema.extend({
   chunk: providerChunkSchema,
 });
+export const toolCallRequestSchema = cancelNotificationSchema.extend({
+  name: z.string().min(1),
+  input: z.record(z.string(), z.json()),
+});
+export const toolCallResponseSchema = z.object({ text: z.string() });
+export const logNotificationSchema = z.object({
+  level: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']),
+  msg: z.string(),
+  bindings: z.record(z.string(), z.json()),
+});
+export type ProviderLog = z.infer<typeof logNotificationSchema>;
+export type ProviderLogSink = (record: ProviderLog) => Promise<void>;
+
 export const checkCredentialRequestSchema = z.object({
   model: z.string().optional(),
   assistantConfig: configSchema.optional(),
@@ -112,6 +144,11 @@ export const resolveCredentialModelRequestSchema = checkCredentialRequestSchema.
   cwd: z.string().min(1),
 });
 export const resolveCredentialModelResponseSchema = z.object({ model: z.string().optional() });
+
+export const diagnoseRequestSchema = z.object({
+  assistantConfig: configSchema.optional(),
+});
+export const listModelsRequestSchema = z.object({});
 
 // ACP requires a stopReason even when the provider cannot report one. This response
 // is lifecycle acknowledgement only; the host's result comes from the unchanged chunk.
@@ -133,8 +170,15 @@ export const providerPluginWireSchemas = {
   ProviderPromptResponse: promptResponseSchema,
   ProviderCancelNotification: cancelNotificationSchema,
   ProviderChunkNotification: chunkNotificationSchema,
+  ProviderToolCallRequest: toolCallRequestSchema,
+  ProviderToolCallResponse: toolCallResponseSchema,
+  ProviderLogNotification: logNotificationSchema,
   ProviderCheckCredentialRequest: checkCredentialRequestSchema,
   ProviderCheckCredentialResponse: credentialStatusSchema,
   ProviderResolveCredentialModelRequest: resolveCredentialModelRequestSchema,
   ProviderResolveCredentialModelResponse: resolveCredentialModelResponseSchema,
+  ProviderDiagnoseRequest: diagnoseRequestSchema,
+  ProviderDiagnoseResponse: providerDiagnosticsSchema,
+  ProviderListModelsRequest: listModelsRequestSchema,
+  ProviderListModelsResponse: providerModelListSchema,
 };

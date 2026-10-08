@@ -177,7 +177,8 @@ mock.module('fs/promises', () => ({
 }));
 
 // --- Bootstrap provider registry (load-time isRegisteredProvider checks) ---
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 clearRegistry();
 registerBuiltinProviders();
 

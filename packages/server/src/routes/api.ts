@@ -417,12 +417,8 @@ import {
   updateUserDefaultBodySchema,
 } from './schemas/user-ai-prefs.schemas';
 import { mapDeviceFlowErrorToPollStatus } from './auth-poll-status';
-import {
-  getProviderInfoList,
-  isRegisteredProvider,
-  listPiModels,
-  introspectOpencodeCredentials,
-} from '@archon/providers';
+import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import { listPiModels, introspectOpencodeCredentials } from '@archon/providers/in-process';
 import { messageSchema } from './schemas/conversation.schemas';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import {

@@ -13,7 +13,7 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   // Forge contracts; fixtures use paths' test cleanup helpers.
   forge: { runtime: ['paths'] },
   // Plugin manifest vocabulary.
-  'plugin-manifest': { runtime: ['paths', 'provider-contract'] },
+  'plugin-manifest': { runtime: ['chat-contract', 'paths', 'provider-contract'] },
   // External providers can depend on the contract without pulling in implementations.
   'provider-contract': { runtime: [] },
   'chat-contract': { runtime: ['provider-contract'] },
@@ -47,11 +47,14 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   // Server hosts the engine and platform adapters.
   server: {
     runtime: ['adapters', 'core', 'git', 'paths', 'provider-contract', 'providers', 'workflows'],
+    // Proves the Web adapter's identity against the reserved chat platforms.
+    test: ['chat-contract'],
   },
-  // CLI composes local services and can launch the server.
+  // CLI composes local services and launches the server executable.
   cli: {
     runtime: [
       'adapters',
+      'chat-contract',
       'core',
       'forge',
       'git',
@@ -60,7 +63,6 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
       'plugin-manifest',
       'provider-contract',
       'providers',
-      'server',
       'workflows',
     ],
   },

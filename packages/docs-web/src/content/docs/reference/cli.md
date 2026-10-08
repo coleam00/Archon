@@ -136,7 +136,7 @@ Also runs automatically at the end of `archon setup` (optional).
 
 ### `plugin`
 
-Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Forge plugins, provider plugins, and workflow packs install through this command.
+Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Forge plugins, provider plugins, chat plugins, and workflow packs install through this command.
 
 ```bash
 archon plugin install coleam00/Archon/plugins/forge-github         # forge: latest release
@@ -149,9 +149,11 @@ archon plugin copy <id>                                             # workflow p
 archon plugin list
 ```
 
-`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the manifest's `compatibility.archon` range and a provider's staged handshake, runs before installed files or receipts are replaced. Without `@<tag>`, the manifest at the default branch head decides the kind: a workflow pack installs that commit, and a forge or provider plugin installs its latest release, because its executables exist only as release assets. See [Forge operations](/reference/forge/#install-the-github-plugin) for what a forge install downloads and where it writes.
+`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the manifest's `compatibility.archon` range and a provider or chat plugin's staged handshake, runs before installed files or receipts are replaced. Without `@<tag>`, the manifest at the default branch head decides the kind: a workflow pack installs that commit, and a forge, provider, or chat plugin installs its latest release, because its executables exist only as release assets. See [Forge operations](/reference/forge/#install-the-github-plugin) for what a forge install downloads and where it writes.
 
 A provider plugin records its descriptor in the receipt and registers on the next CLI invocation or server restart. A workflow names its descriptor id in `provider:`. See [Provider plugins](/guides/publishing-plugins/#provider-plugins) for executable naming, capabilities, credentials, and the process environment.
+
+A chat plugin records its validated descriptor after an initialization-only handshake. Hosts do not yet load installed chat plugins. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
 
 A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. Nothing updates in the background. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
 
@@ -1187,7 +1189,15 @@ Abandon deletes uncommitted work in that worktree, keeps its branch, and never r
 an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
 how to retry.
 
-Remove stale environments.
+Remove stale environments. Age cleanup uses the originating platform's registered policy.
+Both the CLI and server read chat policies from installed plugin receipts without starting
+the plugins. A receipt supersedes a bundled chat policy with the same platform id.
+
+If an environment names a platform that is no longer registered, cleanup keeps it and
+reports the reason. This also applies to merged branches and missing-path reconciliation:
+removing a plugin must not make its historical workspaces eligible for deletion. `isolation list`
+shows the cleanup skip reason. Rows with no originating platform keep their existing cleanup
+behavior.
 
 ```bash
 # Default: 7 days
@@ -1301,20 +1311,20 @@ before removing it. Accepts multiple branch names in one call.
 
 ### `serve`
 
-Start the web UI server in the foreground. The same command works from a binary install and from a source checkout. Only the source of the web UI differs.
+Start the web UI server in the foreground. The same command works from a binary install and from a source checkout. The server runs as a child process.
 
-**Binary installs** download a pre-built web UI tarball from the matching GitHub release on first run, verify its SHA-256 checksum, and extract it. Later runs use the cached copy.
+**Binary installs** automatically download the server executable and web UI from the matching GitHub release on first run. The command announces the version, asset and download size, verifies each against the checksum embedded in the CLI, and starts the server. Later runs use the cached artifacts. Non-serve commands need no server installation.
 
-**Source checkouts** serve the web UI you build yourself, at `packages/web/dist`. Run `bun run build:web` from the repo root before your first `archon serve`, and again after frontend changes. Nothing is downloaded, so `--download-only` is refused, and a missing build stops the command with the build command to run instead of serving an empty page.
+**Source checkouts** start `packages/server/src/bin.ts` with Bun and serve the web UI you build yourself, at `packages/web/dist`. Run `bun run build:web` from the repo root before your first `archon serve`, and again after frontend changes. Nothing is downloaded, so `--download-only` is refused, and a missing build stops the command with the build command to run instead of serving an empty page.
 
 ```bash
-# Start web UI server (binary installs download it on first run)
+# Start web UI server (binary installs download the server and UI on first run)
 archon serve
 
 # Override the default port
 archon serve --port 4000
 
-# Download the web UI without starting the server (binary installs only)
+# Download the server and web UI without starting the server (binary installs only)
 archon serve --download-only
 ```
 
@@ -1323,9 +1333,9 @@ archon serve --download-only
 | Flag | Effect |
 |------|--------|
 | `--port <port>` | Override server port (default: 3090, range: 1–65535) |
-| `--download-only` | Download and cache the web UI, then exit without starting the server. Binary installs only |
+| `--download-only` | Download and cache the server and web UI, then exit without starting the server. Binary installs only |
 
-The downloaded web UI is cached at `~/.archon/web-dist/<version>/`. Each version is cached independently, so upgrading the binary automatically downloads the matching web UI.
+The server executable is cached at `~/.archon/server/<version>/` and the web UI at `~/.archon/web-dist/<version>/`. Upgrading the CLI downloads matching artifacts on the next `archon serve`. A failed download installs nothing for that asset and exits non-zero with its URL; retry with `archon serve --download-only`. Docker continues to bundle both.
 
 ### `skill install [path]`
 

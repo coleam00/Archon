@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { gitlabPolicy } from './policy';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
@@ -144,7 +145,7 @@ export class GitLabAdapter implements IPlatformAdapter {
   }
 
   getPlatformType(): string {
-    return 'gitlab';
+    return gitlabPolicy.id;
   }
 
   async start(): Promise<void> {
@@ -597,7 +598,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     getLog().info({ conversationId, merged }, 'gitlab.isolation_cleanup_started');
 
     try {
-      await onConversationClosed('gitlab', conversationId, { merged });
+      await onConversationClosed(gitlabPolicy.id, conversationId, { merged });
       getLog().info({ conversationId }, 'gitlab.isolation_cleanup_completed');
     } catch (error) {
       const err = error as Error;
@@ -680,7 +681,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     if (senderUsername) {
       try {
         const user = await userDb.findOrCreateUserByPlatformIdentity(
-          'gitlab',
+          gitlabPolicy.id,
           senderUsername,
           senderUsername
         );
@@ -710,7 +711,11 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       // 10. Ensure repo ready
       await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
 
-      const existingConv = await db.getOrCreateConversation('gitlab', conversationId, codebase.id);
+      const existingConv = await db.getOrCreateConversation(
+        gitlabPolicy.id,
+        conversationId,
+        codebase.id
+      );
       const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
 
       if (needsProjectContext) {

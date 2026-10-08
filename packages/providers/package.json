@@ -20,7 +20,18 @@
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
     "./community/opencode/runtime": "./src/community/opencode/runtime.ts",
     "./errors": "./src/errors.ts",
-    "./registry": "./src/registry.ts"
+    "./registry": "./src/registry.ts",
+    "./claude/plugin": "./src/claude/plugin.ts",
+    "./claude/descriptor": "./src/claude/descriptor.ts",
+    "./claude": "./src/claude/index.ts",
+    "./codex/plugin": "./src/codex/plugin.ts",
+    "./codex/descriptor": "./src/codex/descriptor.ts",
+    "./codex": "./src/codex/index.ts",
+    "./pi/plugin": "./src/community/pi/plugin.ts",
+    "./pi/config": "./src/community/pi/config.ts",
+    "./pi/descriptor": "./src/community/pi/descriptor.ts",
+    "./pi": "./src/community/pi/index.ts",
+    "./in-process": "./src/in-process.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -201,6 +212,12 @@
     ],
     [
       "src/community/pi/credential-check.test.ts"
+    ],
+    [
+      "src/plugin.test.ts"
+    ],
+    [
+      "src/shared/plugin-logging.test.ts"
     ]
   ]
 }
