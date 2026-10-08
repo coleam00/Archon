@@ -10727,7 +10727,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
 
 /**
  * Walk every node (including loop_group bodies) that can invoke a provider.
- * bash/script/cancel nodes are skipped (deterministic, no provider). An approval
+ * Execution and coordination nodes are skipped (no direct provider call). An approval
  * node counts only when it has an `on_reject` reprompt (the one AI turn it can
  * spawn). For each visited node the resolved provider is passed to `visit`.
  * Unknown providers are passed through — the caller decides how to handle them.
@@ -10753,7 +10753,14 @@ export function visitProviderInvokingNodes(
       aiProfile
     ).provider;
   for (const node of nodes) {
-    if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node) || isWaitNode(node))
+    if (
+      isIncludeDirective(node) ||
+      isExecNode(node) ||
+      isHaltNode(node) ||
+      isWaitNode(node) ||
+      node.kind === 'workflow' ||
+      node.kind === 'compose_fan_out'
+    )
       continue;
     if (isLoopGroupNode(node)) {
       const groupProvider = resolveNodeModelScope(

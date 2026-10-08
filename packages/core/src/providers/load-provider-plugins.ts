@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { FIRST_PARTY_PLUGIN_REPO, isProviderReceipt } from '@archon/plugin-manifest';
+import { isMaintainedProviderPlugin, isProviderReceipt } from '@archon/plugin-manifest';
 import { readReceipts, receiptPath } from '@archon/plugin-manifest/store';
 import {
   isMaintainedProvider,
@@ -32,10 +32,7 @@ export async function loadProviderPlugins(
           continue;
         }
         if (options.maintained === 'bundled') continue;
-        if (
-          receipt.id.toLowerCase() !==
-          `${FIRST_PARTY_PLUGIN_REPO}/plugins/provider-${descriptor.id}`.toLowerCase()
-        ) {
+        if (!isMaintainedProviderPlugin(receipt.id, descriptor.id)) {
           throw new Error('maintained provider receipt is not first-party');
         }
         const version = options.version ?? BUNDLED_VERSION;

@@ -743,3 +743,51 @@ test('client rejects malformed successful information responses from an independ
     await peer.close();
   }
 });
+
+test('an in-flight model list abort leaves the shared connection usable after a late reply', async () => {
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const replied = Promise.withResolvers<void>();
+  let requestId: string | number | undefined;
+  await withProvider(
+    fixtureProvider({
+      async listModels() {
+        started.resolve();
+        await release.promise;
+        return { models: [{ id: 'late-model' }] };
+      },
+    }),
+    async client => {
+      const abort = new AbortController();
+      const pending = client.listModels({ signal: abort.signal });
+      await started.promise;
+      abort.abort(new Error('catalog cancelled'));
+      try {
+        const outcome = await Promise.race([
+          pending.then(
+            () => 'models returned',
+            (error: unknown) => error
+          ),
+          client.resolveCredentialModel({ cwd: '/' }).then(() => 'next RPC finished'),
+        ]);
+        expect(outcome).toEqual(new Error('catalog cancelled'));
+      } finally {
+        release.resolve();
+      }
+      await replied.promise;
+      expect(await client.resolveCredentialModel({ cwd: '/' })).toBe('credential-model');
+      expect(await collect(client.sendQuery('turn', '/'))).toEqual(chunks);
+    },
+    (side, bytes) => {
+      const message = rpcMessageSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
+      if (
+        side === 'host' &&
+        'method' in message &&
+        'id' in message &&
+        message.method === '_archon/list_models'
+      )
+        requestId = message.id;
+      if (side === 'provider' && 'result' in message && message.id === requestId) replied.resolve();
+    }
+  );
+});

@@ -56,6 +56,7 @@ if (shouldDefaultClaudeGlobalAuth(process.env)) {
 
 import { getPluginsPath } from '@archon/paths';
 import { registerHostProviders } from '@archon/core/providers/register-host-providers';
+import { claimPiExtensionProcessError } from '@archon/providers/pi/extension-error-broker';
 import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
 import { CODEX_BOOT_CHECKED, readCodexBootAuth } from './boot/codex-auth-posture';
 
@@ -204,6 +205,7 @@ function createMessageErrorHandler(
 }
 
 export function handleUnhandledRejection(reason: unknown): void {
+  if (BUNDLED_IS_BINARY && claimPiExtensionProcessError(reason)) return;
   getLog().fatal({ reason }, 'unhandled_rejection.fatal');
   void exitAfterTelemetryFlush(1);
 }
@@ -212,6 +214,7 @@ export function handleUncaughtException(
   error: Error,
   origin?: NodeJS.UncaughtExceptionOrigin
 ): void {
+  if (BUNDLED_IS_BINARY && claimPiExtensionProcessError(error)) return;
   getLog().fatal({ err: error, origin }, 'uncaught_exception.fatal');
   void exitAfterTelemetryFlush(1);
 }

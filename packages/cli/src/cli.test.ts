@@ -2060,3 +2060,55 @@ describe('receipt policies in the CLI host', () => {
     testTimeout(60_000)
   );
 });
+
+describe('retained Pi process-error routing', () => {
+  it.each(['unhandledRejection', 'uncaughtException'] as const)(
+    'routes %s to the extension turn without exiting the CLI',
+    async event => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-cli-pi-error-'));
+      const preload = join(root, 'preload.ts');
+      writeFileSync(
+        preload,
+        `
+import { mock } from 'bun:test';
+const bundledPath = ${JSON.stringify(join(repoRoot, 'packages/paths/src/bundled-build.ts'))};
+const bundled = await import(bundledPath);
+mock.module(bundledPath, () => ({ ...bundled, BUNDLED_IS_BINARY: true }));
+mock.module('@archon/core/providers/register-host-providers', () => ({ registerHostProviders: async () => {} }));
+const { beginPiExtensionTurn } = await import(${JSON.stringify(join(repoRoot, 'packages/providers/src/community/pi/extension-error-broker.ts'))});
+mock.module(${JSON.stringify(join(repoRoot, 'packages/cli/src/commands/ai.ts'))}, () => ({
+  aiListCommand: async () => {
+    const turn = beginPiExtensionTurn(['/extensions/review.ts']);
+    const error = new Error('extension callback failed');
+    error.stack = 'Error: extension callback failed\\n    at callback (/extensions/review.ts:12:3)';
+    try {
+      process.emit('${event}', error${event === 'unhandledRejection' ? ', Promise.resolve()' : ", 'uncaughtException'"});
+      try { turn.throwIfFailed(); } catch (failure) {
+        if (failure === error) { console.log('extension turn failed; host alive'); return 0; }
+        throw failure;
+      }
+      throw new Error('extension error was not routed');
+    } finally { turn.close(); }
+  },
+}));
+`
+      );
+      try {
+        const result = spawnSync(
+          process.execPath,
+          ['--no-env-file', '--preload', preload, CLI_ENTRY, 'ai', 'list'],
+          {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            timeout: testTimeout(10_000),
+            env: { ...process.env, ARCHON_HOME: root, ARCHON_TELEMETRY_DISABLED: '1' },
+          }
+        );
+        expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 0 });
+        expect(result.stdout).toContain('extension turn failed; host alive');
+      } finally {
+        await removeTempTree(root);
+      }
+    }
+  );
+});

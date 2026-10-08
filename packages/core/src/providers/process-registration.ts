@@ -1,4 +1,5 @@
 import { normalizeCredentialVendor } from '@archon/providers';
+import { parsePiModelRef } from '@archon/providers/pi/model-ref';
 import { z } from 'zod';
 import {
   InvalidProviderRunConfigError,
@@ -50,7 +51,13 @@ export function processProviderRegistration(
       vendorFor(model): string | undefined {
         if (specs.length === 1) return specs[0].vendor;
         const prefix =
-          model === undefined ? undefined : normalizeCredentialVendor(model.split('/')[0]);
+          model === undefined
+            ? undefined
+            : normalizeCredentialVendor(
+                descriptor.id === 'pi'
+                  ? (parsePiModelRef(model)?.provider ?? '')
+                  : model.split('/')[0]
+              );
         return specs.find(spec => spec.vendor === prefix)?.vendor;
       },
     },

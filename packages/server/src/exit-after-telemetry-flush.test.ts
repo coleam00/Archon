@@ -1,3 +1,4 @@
+import { beginPiExtensionTurn } from '@archon/providers/pi/extension-error-broker';
 import { describe, expect, mock, spyOn, test } from 'bun:test';
 
 const order: string[] = [];
@@ -14,6 +15,7 @@ const logger = {
   },
 };
 mock.module('@archon/paths', () => ({
+  BUNDLED_IS_BINARY: true,
   createLogger: () => logger,
   logArchonPaths: noop,
   validateAppDefaultsPaths: noop,
@@ -81,3 +83,26 @@ describe('exitAfterTelemetryFlush', () => {
     }
   });
 });
+
+test.each(['unhandledRejection', 'uncaughtException'] as const)(
+  'retained Pi routes %s to its extension turn before fatal fallback',
+  event => {
+    const turn = beginPiExtensionTurn(['/extensions/review.ts']);
+    const error = new Error('extension callback failed');
+    error.stack = 'Error: extension callback failed\n    at callback (/extensions/review.ts:12:3)';
+    const exitSpy = spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('host exited');
+    });
+    order.length = 0;
+    try {
+      if (event === 'unhandledRejection') handleUnhandledRejection(error);
+      else handleUncaughtException(error, 'uncaughtException');
+      expect(() => turn.throwIfFailed()).toThrow(error);
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(order).toEqual([]);
+    } finally {
+      turn.close();
+      exitSpy.mockRestore();
+    }
+  }
+);

@@ -2,8 +2,8 @@
  * The provider-attempt admission seam. Every provider Archon calls comes from this
  * `getAgentProvider`; lint forbids importing the registry's unadmitted one elsewhere.
  *
- * With no `concurrency.providers.<id>` cap the provider is returned behavior-for-
- * behavior: no database access and no waiting. With a cap, each `sendQuery` takes one
+ * Without a provider cap or Pi `maxConcurrent`, queries run unchanged: no database
+ * access and no waiting. With a cap, each `sendQuery` takes one
  * slot before the provider starts and gives it back only after the provider's own
  * stream has closed, so an aborted attempt keeps its slot until the provider has
  * actually stopped. Waiting for a slot is an abortable in-process poll.
@@ -17,6 +17,7 @@ import type {
   ProviderAdmissionEvent,
   SendQueryOptions,
 } from '@archon/providers';
+import { parsePiConfig } from '@archon/providers/pi/config';
 import { loadProviderConcurrencyCaps } from '../config/provider-concurrency';
 import { releaseProviderAttempt, tryAdmitProviderAttempt } from '../db/provider-attempts';
 
@@ -82,7 +83,17 @@ class ProviderSlot {
           getLog().info({ provider: this.provider, attemptId }, 'provider_admission.wait_aborted');
         throw new ProviderAdmissionAbortedError(this.provider);
       }
-      const capacity = (await loadProviderConcurrencyCaps()).get(this.provider);
+      const installCap = (await loadProviderConcurrencyCaps()).get(this.provider);
+      const piCap =
+        this.provider === 'pi'
+          ? parsePiConfig(this.options?.assistantConfig ?? {}).maxConcurrent
+          : undefined;
+      const capacity =
+        installCap === undefined
+          ? piCap
+          : piCap === undefined
+            ? installCap
+            : Math.min(installCap, piCap);
       if (capacity === undefined) return false;
       this.capacity = capacity;
       const { admitted, live } = await tryAdmitProviderAttempt({

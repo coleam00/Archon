@@ -237,7 +237,7 @@ Key configuration options:
 | Option | Env Override | Default |
 |--------|--------------|---------|
 | `ARCHON_HOME` | `ARCHON_HOME` | `~/.archon` |
-| Default AI Assistant | `DEFAULT_AI_ASSISTANT` | `claude` |
+| Default AI Assistant | `DEFAULT_AI_ASSISTANT` | Only registered provider, otherwise unset |
 | Telegram Streaming | `TELEGRAM_STREAMING_MODE` | `stream` |
 | Discord Streaming | `DISCORD_STREAMING_MODE` | `batch` |
 | Slack Streaming | `SLACK_STREAMING_MODE` | `batch` |

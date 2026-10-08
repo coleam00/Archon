@@ -19,7 +19,8 @@ import { chmod, cp, lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises
 import { dirname, join } from 'node:path';
 import { execFileAsync, findRepoRoot } from '@archon/git';
 import {
-  FIRST_PARTY_PLUGIN_REPO,
+  isMaintainedProviderPlugin,
+  maintainedProviderPluginId,
   describeIssues,
   pluginReleaseAsset,
   isBinaryReceipt,
@@ -288,14 +289,11 @@ async function inspectInstallableProvider(
   if (manifest.executable !== `archon-provider-${descriptor.id}`) {
     throw new Error(`Provider plugin ${id}: descriptor id must match ${manifest.executable}`);
   }
-  const maintained = isMaintainedProvider(descriptor.id);
-  if (
-    maintained &&
-    id.toLowerCase() !==
-      `${FIRST_PARTY_PLUGIN_REPO}/plugins/provider-${descriptor.id}`.toLowerCase()
-  ) {
+  const providerId = descriptor.id;
+  const maintained = isMaintainedProvider(providerId);
+  if (maintained && !isMaintainedProviderPlugin(id, providerId)) {
     throw new Error(
-      `Provider '${descriptor.id}' installs only from ${FIRST_PARTY_PLUGIN_REPO}/plugins/provider-${descriptor.id}. Nothing was installed.`
+      `Provider '${descriptor.id}' installs only from ${maintainedProviderPluginId(providerId)}. Nothing was installed.`
     );
   }
   if (maintained && descriptor.version !== version) {

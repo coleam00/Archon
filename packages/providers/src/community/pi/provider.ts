@@ -572,9 +572,11 @@ async function createPiModelRuntime(
  * (no reuse) so concurrent calls don't collide.
  */
 export class PiProvider implements IAgentProvider {
-  async listModels(): Promise<ProviderModelList> {
+  async listModels(
+    request: Parameters<NonNullable<IAgentProvider['listModels']>>[0]
+  ): Promise<ProviderModelList> {
     return {
-      models: (await listPiModels()).map(model => ({
+      models: (await listPiModels(request.signal)).map(model => ({
         id: model.ref,
         label: model.name,
         details: {
