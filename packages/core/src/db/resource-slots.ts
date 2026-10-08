@@ -12,7 +12,7 @@ import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-st
  * Holder kinds and their liveness:
  * - `run`: a workflow run, live until the run is terminal or gone.
  * - `attempt`: one provider attempt, released by its owner when the provider stream
- *   has closed, or here when its owner process is provably gone (`process-owner.ts`).
+ *   has closed, or here when its owner process is provably gone (`@archon/paths/process-owner`).
  */
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType } from './connection';

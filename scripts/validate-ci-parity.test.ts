@@ -42,7 +42,7 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
   {
     command: 'bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts',
     reason:
-      'Proves macOS compiled-binary filesystem behavior on a disposable CI host; local compilation can stall syspolicyd.',
+      'Its compiled-binary probe runs only under GitHub Actions, because local compilation can stall macOS syspolicyd; the rest of the file also runs under validate.',
   },
   {
     command: 'bun scripts/should-run-test-suite.ts',

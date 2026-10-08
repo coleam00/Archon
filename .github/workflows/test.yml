@@ -184,9 +184,8 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      # The compiled probe never skips under GitHub Actions, so this job fails without it.
       - name: Prove file store primitives, including a compiled binary
-        env:
-          ARCHON_TEST_COMPILED_BINARIES: '1'
         run: bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts
 
   static:
