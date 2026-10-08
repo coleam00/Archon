@@ -159,3 +159,47 @@ test('terminal chat statuses conform exactly to engine terminal statuses', () =>
     expect(new Set(terminal.shape.status.options)).toEqual(new Set(statuses));
   }
 });
+
+test('a stalled plugin does not delay run events for another plugin', async () => {
+  const delivered: ChatRunEvent[] = [];
+  const make = (id: string, runEvent: ConnectedChat['runEvent']) => {
+    const supervisor = new ChatSupervisor(
+      { descriptor: { ...descriptor, id }, argv: [process.execPath] },
+      () => {},
+      () => {}
+    );
+    supervisor.runEvent = runEvent;
+    return supervisor;
+  };
+  const plugins = new Map([
+    ['fixture-chat', make('fixture-chat', () => new Promise<void>(() => {}))],
+    [
+      'other-chat',
+      make('other-chat', async event => {
+        delivered.push(event);
+      }),
+    ],
+  ]);
+  const unsubscribe = subscribeChatRunEvents(plugins);
+  try {
+    const stalled = await createRun('fixture-chat');
+    const healthy = await createRun('other-chat');
+    const emitter = getWorkflowEventEmitter();
+    for (const run of [stalled, stalled, healthy]) {
+      emitter.emit({
+        type: 'node_started',
+        runId: run.id,
+        nodeId: 'node',
+        nodeName: 'Node',
+      });
+    }
+    const deadline = Date.now() + 2000;
+    while (delivered.length < 1) {
+      if (Date.now() > deadline) throw new Error('Healthy plugin was blocked');
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    expect(delivered.map(event => event.runId)).toEqual([healthy.id]);
+  } finally {
+    unsubscribe();
+  }
+});

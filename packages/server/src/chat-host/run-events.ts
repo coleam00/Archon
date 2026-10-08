@@ -86,11 +86,17 @@ export function subscribeChatRunEvents(plugins: ReadonlyMap<string, ChatSupervis
   const log = createLogger('server.chat-events');
   const emitter = getWorkflowEventEmitter();
   let stopped = false;
-  let pending = Promise.resolve();
+  // Routing reads the DB in emission order; delivery runs on one chain per
+  // plugin so a stalled plugin's runEvent never delays another plugin's events.
+  let routing = Promise.resolve();
+  const deliveries = new Map<string, Promise<void>>();
   const unsubscribe = emitter.subscribe(event => {
     const projected = projectRunEvent(event, event.runId);
     if (!projected) return;
-    pending = pending
+    const fail = (): void => {
+      log.warn({ eventType: event.type }, 'chat.run_event_failed');
+    };
+    routing = routing
       .then(async () => {
         if (stopped) return;
         const run = await workflowDb.getWorkflowRun(event.runId);
@@ -98,7 +104,8 @@ export function subscribeChatRunEvents(plugins: ReadonlyMap<string, ChatSupervis
         if (!id) return;
         const conversation = await conversationDb.getConversationById(id);
         if (!conversation?.platform_conversation_id) return;
-        const plugin = plugins.get(conversation.platform_type);
+        const platform = conversation.platform_type;
+        const plugin = plugins.get(platform);
         if (!plugin?.plugin.descriptor.capabilities.runEvents) return;
         if (projected.type === 'workflow_started')
           projected.conversationId = conversation.platform_conversation_id;
@@ -108,11 +115,14 @@ export function subscribeChatRunEvents(plugins: ReadonlyMap<string, ChatSupervis
           if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0)
             projected.totalCostUsd = cost;
         }
-        if (!stopped) await plugin.runEvent(projected);
+        const delivery = (deliveries.get(platform) ?? Promise.resolve())
+          .then(async () => {
+            if (!stopped) await plugin.runEvent(projected);
+          })
+          .catch(fail);
+        deliveries.set(platform, delivery);
       })
-      .catch(() => {
-        log.warn({ eventType: event.type }, 'chat.run_event_failed');
-      });
+      .catch(fail);
   });
   return () => {
     stopped = true;
