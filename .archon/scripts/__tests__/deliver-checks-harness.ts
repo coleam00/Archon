@@ -5,15 +5,13 @@
  * The fake `gh` is a preload that replaces `Bun.spawnSync` for `gh` argv only, so
  * it behaves the same on every platform. It keeps one mutable pull request and
  * one comment list, so a write and the read-back that follows it see the same
- * state — which is what makes an unverified write observable here at all. The
- * preload also makes the registration grace instant.
+ * state — which is what makes an unverified write observable here at all.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import type { ChecksObservation } from '../../../packages/forge/src/operations';
 
 export const PACK = resolve(import.meta.dir, '../../workflows/sdlc');
 export const SCRIPTS = join(PACK, 'deliver/scripts');
@@ -22,18 +20,6 @@ export const PR = { repo: { host: 'ghe.example.com', path: 'example/repo' }, num
 export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 
 const trackTempRoot = trackTempRoots();
-
-/**
- * One row of `gh pr checks --json name,state,bucket`, as gh 2.92 prints it.
- * `state` is a check run's conclusion once it completes, its status before
- * that, or a commit status's own state; `bucket` is gh's collapse of `state`
- * (cli/cli pkg/cmd/pr/checks/aggregate.go).
- */
-export interface GhCheckRow {
-  readonly name: string;
-  readonly state: string;
-  readonly bucket: 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel';
-}
 
 /** One row of `gh api .../issues/<n>/comments`. */
 export interface GhCommentRow {
@@ -55,15 +41,6 @@ export interface GhPr {
 export interface GhFake {
   readonly issueLabels?: readonly string[];
   readonly repositoryLabels?: readonly string[];
-  /**
-   * What `gh pr checks --json` knows about each check; the fake prints only the
-   * fields the reader requests. 'fail' prints no document and exits 1.
-   */
-  readonly checks?: readonly GhCheckRow[] | 'fail';
-  /** `statusCheckRollup | length`; 'fail' exits 1. */
-  readonly rollup?: number | 'fail';
-  /** Active Actions workflow count, printed one id per line; 'fail' exits 1. */
-  readonly workflows?: number | 'fail';
   /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
   readonly readyFail?: string;
   /** The pull request every `gh pr view`/`gh pr list` read reports. */
@@ -76,6 +53,18 @@ export interface GhFake {
   readonly writeFail?: string;
   /** Drop the write instead of applying it, so the read-back disagrees. */
   readonly writeLost?: boolean;
+  /** Existing tracker issues; `issue create` appends to them. */
+  readonly issues?: readonly GhIssue[];
+}
+
+/** One tracker issue the fake gh knows. */
+export interface GhIssue {
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  readonly state: 'OPEN' | 'CLOSED';
+  /** A pull request, which `gh issue view` also resolves by number. */
+  readonly pull?: boolean;
 }
 
 export type ForgeFake =
@@ -106,30 +95,31 @@ export interface ScriptRun {
   readonly forge: readonly string[];
   /** Every JSON request body the fake CLI was handed through `--data-file`. */
   readonly forgeRequests: readonly string[];
+  /** Every issue the fake gh created, in order. */
+  readonly createdIssues: readonly GhIssue[];
   /** The run's artifact directory, for a script that writes one. */
   readonly artifacts: string;
 }
 
 /**
  * A Bun preload that fakes `gh` for one script run and logs every gh argv to
- * `ghLog`. Shared with the bundled-pack test so both fake the same boundary.
+ * `ghLog`.
  */
-export function fakeGhPreload(fake: GhFake, ghLog: string): string {
+function fakeGhPreload(fake: GhFake, ghLog: string): string {
   return `import { appendFileSync, readFileSync } from 'node:fs';
 const fake = ${JSON.stringify(fake)};
 const original = Bun.spawnSync.bind(Bun);
-Object.defineProperty(Bun, 'sleepSync', { value: () => {} });
 const pr = {
   number: 42, title: 'A title', body: 'A body', isDraft: true, state: 'OPEN',
   headRefName: 'feature', headRefOid: 'deadbeef', baseRefName: 'dev',
   maintainerCanModify: null, ...(fake.pr ?? {}),
 };
 let comments = (fake.comments ?? []).map(row => ({ ...row }));
+const issues = (fake.issues ?? []).map(row => ({ ...row }));
 let exists = fake.noOpenPr !== true;
 let nextId = 900;
 const labels = new Set(fake.repositoryLabels ?? ['operator', 'archon-blocked', 'area']);
 let issueLabels = [...(fake.issueLabels ?? ['operator', 'archon-blocked'])];
-let issueTitle = '';
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[0] !== 'gh') return original(argv, settings);
   const text = argv.slice(1).join(' ');
@@ -162,24 +152,28 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     }
     return result(0);
   }
-  if (text.startsWith('issue create')) {
-    if (fake.writeFail) return result(1, '', fake.writeFail);
-    issueTitle = fake.writeLost ? 'different' : argv[argv.indexOf('--title') + 1];
-    return result(0, 'https://' + host + '/' + path + '/issues/7');
+  if (text.startsWith('issue ')) {
+    const issueUrl = (n) => 'https://' + host + '/' + path + '/issues/' + String(n);
+    if (text.startsWith('issue view')) {
+      const wanted = Number(argv[3].split('/').pop());
+      const row = issues.find(candidate => candidate.number === wanted);
+      if (row === undefined) return result(1, '', 'GraphQL: Could not resolve to an issue');
+      const url = row.pull ? issueUrl(row.number).replace('/issues/', '/pull/') : issueUrl(row.number);
+      return result(0, JSON.stringify({ title: row.title, state: row.state, url }));
+    }
+    if (text.startsWith('issue create')) {
+      if (fake.writeFail) return result(1, '', fake.writeFail);
+      const number = 100 + issues.length;
+      issues.push({
+        number,
+        title: fake.writeLost ? 'different' : argv[argv.indexOf('--title') + 1],
+        body: readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8'),
+        state: 'OPEN',
+      });
+      appendFileSync(${JSON.stringify(ghLog)} + '.issues', JSON.stringify(issues[issues.length - 1]) + '\\n');
+      return result(0, issueUrl(number));
+    }
   }
-  if (text.startsWith('issue view')) return result(0, JSON.stringify({ title: issueTitle }));
-  if (text.startsWith('pr checks')) {
-    if (fake.checks === undefined || fake.checks === 'fail')
-      return result(1, '', fake.checks === 'fail' ? 'HTTP 502' : 'no checks reported');
-    const fields = argv[argv.indexOf('--json') + 1].split(',');
-    const rows = fake.checks.map(check => Object.fromEntries(fields.map(field => [field, check[field]])));
-    // gh exits 1 on a failing bucket and 8 on a pending one, and prints the document either way.
-    const code = fake.checks.some(check => check.bucket === 'fail') ? 1
-      : fake.checks.some(check => check.bucket === 'pending') ? 8 : 0;
-    return result(code, JSON.stringify(rows));
-  }
-  if (text.includes('statusCheckRollup'))
-    return fake.rollup === 'fail' || fake.rollup === undefined ? result(1, '', 'HTTP 502') : result(0, String(fake.rollup));
   // Real gh refuses this combination before any request (gh 2.92).
   if (argv.includes('--slurp') && (argv.includes('--jq') || argv.includes('--template')))
     return result(1, '', 'the \`--slurp\` option is not supported with \`--jq\` or \`--template\`');
@@ -211,15 +205,11 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const listed = exists && pr.state === 'OPEN' && pr.headRefName === argv[argv.indexOf('--head') + 1];
     return result(0, JSON.stringify(listed ? [project()] : []));
   }
+  if (text.startsWith('pr view') && argv.includes('--jq')) return result(0, String(pr.headRefOid));
   if (text.startsWith('pr view')) return result(0, JSON.stringify(project()));
   if (text.startsWith('api')) {
     const endpoint = argv.find(part => part.startsWith('repos/'));
     if (endpoint === undefined) return result(95, '', 'unexpected gh api call');
-    if (endpoint.includes('/actions/workflows'))
-      return fake.workflows === 'fail' || fake.workflows === undefined
-        ? result(1, '', 'HTTP 404')
-        // With --paginate, gh applies --jq to each page; the fake prints one id per active workflow.
-        : result(0, Array.from({ length: fake.workflows }, (_, index) => index + 1 + '\\n').join(''));
     // gh api names its host with --hostname and its repository in the endpoint.
     const apiHost = argv[argv.indexOf('--hostname') + 1];
     const apiPath = endpoint.split('/').slice(1, 3).join('/');
@@ -282,10 +272,16 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
   const preload = join(root, 'preload.ts');
   writeFileSync(preload, fakeGhPreload(options.gh ?? {}, ghLog));
 
+  // The engine hands every exec node a typed-artifact listing; an empty one by default.
+  const listing = join(root, 'typed-artifacts.json');
+  writeFileSync(listing, JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }));
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    INPUTS_PR: JSON.stringify(PR),
+    INPUTS_PR: JSON.stringify(forgePrRecord()),
+    INPUTS_EXPECTED: '[]',
     ARTIFACTS_DIR: artifacts,
+    TYPED_ARTIFACTS_FILE: listing,
     ARCHON_SDLC_FORGE: options.source ?? '',
     ARCHON_CLI_COMMAND: '',
     ...Object.fromEntries(
@@ -351,56 +347,61 @@ else {
     gh: lines(ghLog),
     forge: lines(forgeLog),
     forgeRequests: lines(requestLog),
+    createdIssues: lines(`${ghLog}.issues`).map(line => JSON.parse(line) as GhIssue),
     artifacts,
   };
 }
 
 export function runDeliverScript(
-  script: 'check-ci' | 'ci-note' | 'flip-ready',
+  script: 'flip-ready',
   options: ScriptOptions = {}
 ): ScriptRun {
-  return runPackScript(`deliver/scripts/${script}`, options);
+  // A ready mark checks mergeability against the base in a real checkout.
+  const cwd = options.cwd ?? gitCheckout();
+  return runPackScript(`deliver/scripts/${script}`, { ...options, cwd });
 }
 
-type ForgeState = 'none' | 'pending' | 'green' | 'red' | 'gated' | 'unknown';
+function git(cwd: string, ...args: string[]): string {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
+  return result.stdout.trim();
+}
 
-/** A `checks.state` response in the forge wire shape, one unit per named state. */
-export function forgeResponse(
-  units: readonly { name: string; state: Exclude<ForgeState, 'none'> }[],
-  options: { revision?: string; required?: typeof units | null; approvalPending?: boolean | null } = {}
+/**
+ * A checkout on a feature branch whose remote, named `upstream` and configured with
+ * the recorded repository's URL, is a local bare repository (`url.insteadOf`), so a
+ * script finds the remote by URL and fetches the base without a network. With
+ * `conflict`, the base has since changed the same line the feature changed. `track`
+ * owns the temp root's removal; by default it is removed after the current test.
+ */
+export function gitCheckout(
+  options: { readonly conflict?: boolean } = {},
+  track: (root: string) => string = trackTempRoot
 ): string {
-  const set = (list: typeof units): Pick<ChecksObservation, 'units' | 'summary'> => {
-    const counts = { total: list.length, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 };
-    for (const unit of list) counts[unit.state]++;
-    const state =
-      (['red', 'gated', 'unknown', 'pending', 'green'] as const).find(key => counts[key] > 0) ??
-      'none';
-    return {
-      units: list.map(unit => ({
-        unit: { kind: 'check', id: unit.name, name: unit.name },
-        nativeState: unit.state,
-        phase: unit.state === 'pending' ? 'running' : 'completed',
-        nativeResult: unit.state,
-        result: unit.state === 'green' ? 'success' : unit.state === 'pending' ? null : 'failure',
-        state: unit.state,
-      })),
-      summary: { state, counts },
-    };
-  };
-  return JSON.stringify({
-    operationId: 'op-checks',
-    ok: true,
-    result: {
-      op: 'checks.state',
-      value: {
-        ref: PR,
-        revision: options.revision ?? 'deadbeef',
-        ...set(units),
-        approvalPending: options.approvalPending,
-        required: options.required ? set(options.required) : null,
-      },
-    },
-  });
+  const root = track(mkdtempSync(join(tmpdir(), 'archon-pack-git-')));
+  const bare = join(root, 'remote.git');
+  const work = join(root, 'work');
+  spawnSync('git', ['init', '-q', '--bare', '-b', 'dev', bare]);
+  spawnSync('git', ['init', '-q', '-b', 'dev', work]);
+  git(work, 'config', 'user.email', 'test@example.com');
+  git(work, 'config', 'user.name', 'Test');
+  git(work, 'remote', 'add', 'upstream', `https://${PR.repo.host}/${PR.repo.path}.git`);
+  git(work, 'config', `url.${bare}.insteadOf`, `https://${PR.repo.host}/${PR.repo.path}.git`);
+  writeFileSync(join(work, 'a.txt'), 'base\n');
+  git(work, 'add', 'a.txt');
+  git(work, 'commit', '-q', '-m', 'base');
+  git(work, 'push', '-q', 'upstream', 'dev');
+  git(work, 'checkout', '-q', '-b', 'feature');
+  writeFileSync(join(work, 'a.txt'), 'feature\n');
+  git(work, 'commit', '-q', '-am', 'feature');
+  if (options.conflict === true) {
+    git(work, 'checkout', '-q', 'dev');
+    writeFileSync(join(work, 'a.txt'), 'moved base\n');
+    git(work, 'commit', '-q', '-am', 'base moved');
+    git(work, 'push', '-q', 'upstream', 'dev');
+    git(work, 'checkout', '-q', 'feature');
+  }
+  return work;
 }
 
 /** A verified pull-request record in the forge wire shape. */

@@ -42,3 +42,14 @@ nodes:
         # owner to judge.
         findings: { type: boolean }
       required: [findings]
+
+  # Scratch worktrees the lens tried mutations in are removed by the workflow,
+  # whether the lens succeeded or failed. Only this lens's directory: inside a
+  # review round, sibling lenses may still be using theirs.
+  - id: prune-scratch
+    script: prune-scratch
+    runtime: bun
+    depends_on: [simplify]
+    trigger_rule: all_done
+    with:
+      lens: simplify

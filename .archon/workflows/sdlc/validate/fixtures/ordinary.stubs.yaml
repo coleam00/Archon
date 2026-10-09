@@ -3,8 +3,8 @@
 # has no stub, is never reached.
 discover:
   checks:
-    - { name: "types", argv: ["bun", "-e", "console.log('types passed')"] }
-    - { name: "tests", argv: ["bun", "-e", "console.log('tests passed')"] }
+    - { name: "types", argv: ["bun", "-e", "console.log('types passed')"], group: "gate" }
+    - { name: "tests", argv: ["bun", "-e", "console.log('tests passed')"], group: "gate" }
   notes: "stub: the project's checks"
 fixture:
   expect: completed

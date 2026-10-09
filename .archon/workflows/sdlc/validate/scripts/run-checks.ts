@@ -3,14 +3,18 @@
  *
  * Every exit status lands in `$ARTIFACTS_DIR/validation.md`, rewritten after each
  * check so the record is current if the node is stopped. Each check's full output
- * goes to its own log under `$ARTIFACTS_DIR/validation/`. The first failing check
- * ends the run: later checks are recorded as never run, which is how the project's
- * own aggregate gates behave.
+ * goes to its own log under `$ARTIFACTS_DIR/validation/`. Checks belong to groups
+ * the discovering agent declared: independent gates are separate groups. Within a
+ * group the first failing check ends that group — later ones are recorded as never
+ * run, which is how a project's own aggregate gate behaves — but every group runs,
+ * so one gate's failure never hides another's result. A project with one gate has
+ * one group and behaves exactly as a single ordered chain.
  *
  * The status is read from exit statuses alone:
- * - `red`: a check ran and exited non-zero, or was killed by a signal it did not
- *   get from this script. `classify` judges why.
- * - `incomplete`: no check failed, but one could not be started.
+ * - `red`: every check that should run did, and one exited non-zero or was killed by
+ *   a signal it did not get from this script. `classify` judges why.
+ * - `incomplete`: a check could not be started, so part of the gate never ran; any
+ *   check that did fail is named in the summary.
  * - `green`: every declared check ran and exited 0. No declared checks is green only
  *   because `discover` judged that the project defines none; its notes say so.
  *
@@ -29,6 +33,7 @@ import { projectEnvironment } from '../../.shared/node-env.ts';
 interface Check {
   name: string;
   argv: string[];
+  group: string;
 }
 
 export interface Discovery {
@@ -88,12 +93,14 @@ function tail(path: string): string {
 }
 
 function render(entries: readonly Entry[]): void {
+  const groups = new Set(entries.map(entry => entry.check.group)).size;
   const lines = ['# Validation', ''];
   if (discovery.notes.trim() !== '') lines.push(discovery.notes.trim(), '');
   if (entries.length === 0) lines.push('The project defines no checks, so none ran.', '');
   for (const [index, entry] of entries.entries()) {
     const seconds = entry.seconds === null ? '' : ` after ${entry.seconds.toFixed(0)}s`;
-    lines.push(`## ${String(index + 1)}. ${entry.check.name}`, '');
+    const group = groups > 1 ? ` (group: ${entry.check.group})` : '';
+    lines.push(`## ${String(index + 1)}. ${entry.check.name}${group}`, '');
     lines.push(`\`${entry.check.argv.join(' ')}\` ${describe(entry.outcome)}${seconds}.`);
     const kind = entry.outcome.kind;
     if (kind === 'failed' || kind === 'stopped' || kind === 'not-started') {
@@ -182,36 +189,42 @@ function runOne(entry: Entry): Promise<void> {
   });
 }
 
+interface Result {
+  status: 'green' | 'red' | 'incomplete';
+  summary: string;
+}
+
+async function runGate(): Promise<Result> {
+  const stoppedGroups = new Set<string>();
+  for (const entry of entries) {
+    if (stoppedGroups.has(entry.check.group)) continue;
+    await runOne(entry);
+    if (entry.outcome.kind !== 'passed') stoppedGroups.add(entry.check.group);
+  }
+  render(entries);
+
+  const failures = entries.filter(entry => entry.outcome.kind === 'failed');
+  const unstarted = entries.find(entry => entry.outcome.kind === 'not-started');
+  const passed = entries
+    .filter(entry => entry.outcome.kind === 'passed')
+    .map(entry => entry.check.name);
+  const ranPassed = passed.length === 0 ? 'No check passed.' : `Passed: ${passed.join(', ')}.`;
+
+  const failed = failures.map(entry => `${entry.check.name} ${describe(entry.outcome)}`).join('; ');
+  // A check that could not start leaves part of the gate unrun, so the result is
+  // unfinished even when another group failed: a red verdict would read as complete.
+  if (unstarted !== undefined) {
+    return {
+      status: 'incomplete',
+      summary: `${unstarted.check.name} ${describe(unstarted.outcome)}. ${ranPassed} Later checks in its group never ran.${failed === '' ? '' : ` Failed: ${failed}.`}`,
+    };
+  }
+  if (failures.length > 0) return { status: 'red', summary: `${failed}. ${ranPassed} See validation.md.` };
+  if (entries.length === 0) {
+    return { status: 'green', summary: `No checks defined by this project. ${discovery.notes}`.trim() };
+  }
+  return { status: 'green', summary: `Every check passed: ${passed.join(', ')}.` };
+}
+
 mkdirSync(logDir, { recursive: true });
-for (const entry of entries) {
-  await runOne(entry);
-  if (entry.outcome.kind !== 'passed') break;
-}
-render(entries);
-
-const failed = entries.find(entry => entry.outcome.kind === 'failed');
-const unstarted = entries.find(entry => entry.outcome.kind === 'not-started');
-const passed = entries
-  .filter(entry => entry.outcome.kind === 'passed')
-  .map(entry => entry.check.name);
-const ranPassed =
-  passed.length === 0 ? 'No check passed before it.' : `Passed first: ${passed.join(', ')}.`;
-
-if (failed !== undefined) {
-  emit({
-    status: 'red',
-    summary: `${failed.check.name} ${describe(failed.outcome)}. ${ranPassed} See validation.md.`,
-  });
-} else if (unstarted !== undefined) {
-  emit({
-    status: 'incomplete',
-    summary: `${unstarted.check.name} ${describe(unstarted.outcome)}. ${ranPassed} Later checks never ran.`,
-  });
-} else if (entries.length === 0) {
-  emit({
-    status: 'green',
-    summary: `No checks defined by this project. ${discovery.notes}`.trim(),
-  });
-} else {
-  emit({ status: 'green', summary: `Every check passed: ${passed.join(', ')}.` });
-}
+emit(await runGate());

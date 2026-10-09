@@ -55,7 +55,7 @@ nodes:
     depends_on: [triage]
     when: "$triage.output.route == 'investigate'"
 
-  # These three route markers form one join into delivery. Expected negative
+  # These route markers form one join into delivery. Expected negative
   # judgments skip their marker; contract failures inside the advisory package
   # still fail normally. That keeps "not ready to build" distinct from "the
   # workflow failed to execute" without weakening the spend boundary.
@@ -64,10 +64,17 @@ nodes:
     depends_on: [triage]
     when: "$triage.output.route == 'deliver'"
 
+  # An open pull request already carries the outcome: delivery continues it,
+  # syncing its branch with the base by merge, instead of opening another.
+  - id: gate-continue
+    bash: echo '{"gate":"continue"}'
+    depends_on: [triage]
+    when: "$triage.output.route == 'continue'"
+
   - id: gate-rooted
     bash: echo '{"gate":"rooted"}'
     depends_on: [inv]
-    when: "$inv.output.rooted == true"
+    when: "$inv.output.verdict == 'rooted'"
 
   - id: planned
     include: archon-plan
@@ -93,17 +100,21 @@ nodes:
         first. When present, plan.md or investigation.md is the detailed work
         order and must be read in full; triage.md records which path produced it
         and which source assumptions were corrected. On the direct route,
-        triage.md itself is the verified work order.
-    depends_on: [gate-direct, gate-rooted, gate-planned]
+        triage.md itself is the verified work order. When triage.md routes this
+        run to continue an open pull request, the work is to finish that pull
+        request.
+      pull_request: "$triage.output.pull_request"
+    depends_on: [gate-direct, gate-continue, gate-rooted, gate-planned]
     trigger_rule: none_failed_min_one_success
 
   # One return for every legitimate terminal result. Negative advisory verdicts
-  # complete with the report that explains them; delivery is reported from the
-  # flip's certified URL the deliver branch returned (bound with if_skipped, so a
-  # skipped flip arrives as null) — see scripts/outcome.ts.
+  # complete with the report that explains them; a delivery is reported from the
+  # deliver branch's own outcome, ready or not (bound with if_skipped, so a skipped
+  # branch arrives as null) — see scripts/outcome.ts.
   #
-  # Two dependencies carry the whole graph. `deliver` depends on all three spend
-  # gates, which depend on triage, inv and planned in turn, so nothing this node
+  # The advisory producers are bound with if_skipped: a route that never ran them
+  # reads null. Two dependencies carry the whole graph. `deliver` depends on every spend
+  # gate, which depend on triage, inv and planned in turn, so nothing this node
   # reports on can settle after it. `triage` is named because
   # none_failed_min_one_success needs one completed dependency, and on the no_action
   # route `deliver` is the skipped one.
@@ -117,8 +128,14 @@ nodes:
     trigger_rule: none_failed_min_one_success
     with:
       route: "$triage.output.route"
+      contract: "$triage.output.contract"
+      blocked_reason: "$triage.output.blocked_reason"
       summary: "$triage.output.summary"
-      delivered: { from: "$deliver.output.pr_url", if_skipped: null }
+      inv_verdict: { from: "$inv.output.verdict", if_skipped: null }
+      inv_summary: { from: "$inv.output.summary", if_skipped: null }
+      plan_summary: { from: "$planned.output.summary", if_skipped: null }
+      delivered: { from: "$deliver.output.ready", if_skipped: null }
+      delivery: { from: "$deliver.output.summary", if_skipped: null }
     output_format:
       type: object
       properties:

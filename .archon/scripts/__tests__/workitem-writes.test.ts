@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -11,19 +12,31 @@ import {
 const inputs = {
   INPUTS_ITEM: JSON.stringify({ repo: PR.repo, number: 7 }),
   INPUTS_PUBLISH: 'true',
-  INPUTS_CONTRACT: 'READY',
-  INPUTS_ROUTE: 'direct',
+  INPUTS_DECISION: JSON.stringify({ contract: 'READY', route: 'deliver', design_first: false }),
   INPUTS_COMPLEXITY: 'small',
-  INPUTS_DESIGN_FIRST: 'false',
   INPUTS_SUMMARY: 'Ready',
-  INPUTS_BLOCKED_REASON: '',
-  INPUTS_BLOCKED_BY: '[]',
   INPUTS_AREA_LABELS: '["area","nonexistent"]',
-  INPUTS_PROPOSED_EDITS: '{"title":"","body":""}',
   INPUTS_REPORT: '{"path":"triage.md"}',
 };
-const record = { title: 'Discovery', claim: 'Claim', evidence: ['file:3'], relation: 'unrelated' };
-const discoveries = { INPUTS_PR: JSON.stringify(forgePrRecord()) };
+const record = {
+  title: 'Discovery',
+  claim: 'Claim',
+  evidence: ['file:3'],
+  relation: 'unrelated',
+  source_nodes: ['review'],
+};
+const discoveries = {
+  INPUTS_PR: JSON.stringify(forgePrRecord()),
+  INPUTS_INITIAL: JSON.stringify([record]),
+  INPUTS_FINAL: 'null',
+  INPUTS_MATCHES: '[]',
+};
+/** file-discoveries' resume ledger: issue URL by repository, title and claim. */
+const ledgerKey = createHash('sha256')
+  .update(`${PR.repo.host}/${PR.repo.path}\n${record.title}\n${record.claim}`)
+  .digest('hex');
+const ledger = (artifacts: string): Record<string, string> =>
+  JSON.parse(readFileSync(join(artifacts, 'discoveries-filed.json'), 'utf8')) as Record<string, string>;
 
 test('default gh triage applies wanted labels and default discovery persists read-back URL', () => {
   const triage = runPackScript('triage/scripts/verdict', { inputs });
@@ -35,16 +48,11 @@ test('default gh triage applies wanted labels and default discovery persists rea
   expect(triage.forge).toEqual([]);
   expect(triage.gh.some(call => call.includes('--hostname ghe.example.com'))).toBe(true);
   expect(triage.gh.some(call => call.startsWith('label create nonexistent'))).toBe(false);
-  const discovery = runPackScript('deliver/scripts/file-discoveries', {
-    inputs: discoveries,
-    artifacts: { 'discoveries.json': JSON.stringify([record]) },
-  });
+  const discovery = runPackScript('deliver/scripts/file-discoveries', { inputs: discoveries });
   expect({ code: discovery.code, stderr: discovery.stderr }).toMatchObject({ code: 0 });
   expect(discovery.gh).toHaveLength(2);
   expect(discovery.forge).toEqual([]);
-  expect(
-    JSON.parse(readFileSync(join(discovery.artifacts, 'discoveries.json'), 'utf8'))[0].issue
-  ).toBe(JSON.parse(discovery.stdout).issues[0]);
+  expect(ledger(discovery.artifacts)[ledgerKey]).toBe(JSON.parse(discovery.stdout).records[0].issue);
 });
 
 test('unpublished and non-tracker triage never invoke either transport', () => {
@@ -103,7 +111,6 @@ test('forge failures preserve unknown outcome evidence and never fall back or re
     const run = runPackScript(script, {
       source: 'forge',
       inputs: { ...inputs, ...discoveries },
-      artifacts: { 'discoveries.json': JSON.stringify([record]) },
       forge: { kind: 'fake', response: forgeFailure(op, 'outcome_unknown', 'response lost') },
     });
     expect(run.code).not.toBe(0);
@@ -114,12 +121,13 @@ test('forge failures preserve unknown outcome evidence and never fall back or re
   }
 });
 
-test('filed sidecar records resume without a write and invalid source cannot fall back', () => {
-  const saved = { ...record, issue: 'https://tracker.example/items/1' };
+test('ledgered records resume without a write and invalid source cannot fall back', () => {
   const resumed = runPackScript('deliver/scripts/file-discoveries', {
     source: 'forge',
     inputs: discoveries,
-    artifacts: { 'discoveries.json': JSON.stringify([saved]) },
+    artifacts: {
+      'discoveries-filed.json': JSON.stringify({ [ledgerKey]: 'https://tracker.example/items/1' }),
+    },
   });
   expect(resumed.code).toBe(0);
   expect(resumed.gh).toEqual([]);
@@ -127,7 +135,6 @@ test('filed sidecar records resume without a write and invalid source cannot fal
   const invalid = runPackScript('deliver/scripts/file-discoveries', {
     source: 'invalid',
     inputs: discoveries,
-    artifacts: { 'discoveries.json': JSON.stringify([record]) },
   });
   expect(invalid.code).not.toBe(0);
   expect(invalid.gh).toEqual([]);
@@ -138,12 +145,9 @@ test('default gh discovery retains URL even when read-back disagrees', () => {
   const run = runPackScript('deliver/scripts/file-discoveries', {
     gh: { writeLost: true },
     inputs: discoveries,
-    artifacts: { 'discoveries.json': JSON.stringify([record]) },
   });
   expect(run.code).not.toBe(0);
-  expect(
-    JSON.parse(readFileSync(join(run.artifacts, 'discoveries.json'), 'utf8'))[0].issue
-  ).toContain('/issues/7');
+  expect(ledger(run.artifacts)[ledgerKey]).toContain('/issues/');
 });
 
 test('default triage preserves inherited-property labels and accepts them as area labels', () => {

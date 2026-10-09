@@ -1,8 +1,8 @@
 # Dry-run fixture: the other half of `docs: auto` — the scope node finds no shipped-doc
 # change, so the docs lens stays off. It has no stub, so a regression that runs it anyway
 # fails the run instead of passing quietly.
-mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
-coverage: { full: true }
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
+coverage: { full: true, errors: false, docs: false, lenses: [seams, code, tests, simplify] }
 scope:
   docs: false
   # A standalone review of the working diff: no pull request to publish to.
@@ -17,11 +17,15 @@ synthesize:
   action: none
   findings_summary: "stub: clean, docs lens skipped"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 publish:
   ready: true
   action: none
   findings_summary: "stub: clean, docs lens skipped"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+lens-status: { required: [seams, code, tests, simplify], completed: [seams, code, tests, simplify], missing: [] }
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed
   reached: [code, seams, simplify__simplify, tests]

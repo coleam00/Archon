@@ -26,9 +26,9 @@ When a prior report is provided, treat its claims like any inherited analysis: v
 
 ## Decide, don't defer
 
-Name the design decisions the work actually contains, choose, and record why — including the strongest alternative and the concrete reason it lost. A plan that defers its central decision is not a plan. Prefer the smallest coherent approach: no speculative abstraction, no capability without a current caller, deletion of superseded machinery over addition beside it, and a rewrite over a patch when it is clearly simpler and no riskier. If the path grows complicated while you plan it, step back and reconsider the approach rather than elaborating the first idea.
+Name the design decisions the work actually contains, choose, and record why — including the strongest alternative and the concrete reason it lost. The smallest design that meets the outcome is always among the alternatives, and it is rejected only with evidence from the code, never on a premise you did not check. A plan that defers its central decision is not a plan. Prefer the smallest coherent approach: no speculative abstraction, no capability without a current caller, deletion of superseded machinery over addition beside it, and a rewrite over a patch when it is clearly simpler and no riskier. If the path grows complicated while you plan it, step back and reconsider the approach rather than elaborating the first idea.
 
-The one thing you do not decide is missing intent. When the work genuinely cannot be planned without information only its owner has — a product choice, an unstated constraint — stop there: declare `ready: false` and name exactly what is missing. Never fill an intent gap with a guess.
+The one thing you do not decide is missing intent. When the work genuinely cannot be planned without information only its owner has — a product choice, an unstated constraint — stop there: declare `ready: false` and name exactly what is missing. Never fill an intent gap with a guess. A plan that needs new persisted state, or a changed operator or API surface, that the work's contract does not name is such a gap: declare `ready: false` and name it.
 
 ## The plan
 

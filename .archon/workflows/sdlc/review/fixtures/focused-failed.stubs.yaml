@@ -1,4 +1,4 @@
-mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
 focused: { full_review: "invalid boolean", reason: "stub: lifecycle ownership" }
 scope:
   docs: false
@@ -11,16 +11,20 @@ synthesize:
   action: correct
   findings_summary: "stub: focused coverage failed"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 publish:
   ready: false
   action: correct
   findings_summary: "stub: focused coverage failed"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+lens-status: { required: [seams, focused], completed: [seams], missing: [focused] }
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   inputs: { tier: focused }
   expect: failed
   fail-node: focused
   reached: [seams, synthesize, publish]
   resolved-text-contains:
-    synthesize: 'a report without its completed artifact is incomplete coverage'
+    synthesize: 'the enabled lenses that did not complete are'
 exec-code: true

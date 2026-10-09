@@ -98,9 +98,9 @@ nodes:
     when: "$assess.output.action == 'update'"
 
   # One return for every legitimate terminal result: a no_action assessment
-  # completes with its report path; a delivered update is reported from the
-  # flip's certified URL the deliver branch returned (if_skipped binding, so a
-  # skipped flip arrives as null).
+  # completes with its report path; an update is reported from the deliver
+  # branch's own outcome, ready or not (if_skipped binding, so a skipped branch
+  # arrives as null).
   #
   # A failed delivery cascades an `upstream_failed` skip that blocks this join,
   # so the run's terminal record names the node that failed.
@@ -112,7 +112,8 @@ nodes:
     with:
       action: "$assess.output.action"
       summary: "$assess.output.summary"
-      delivered: { from: "$deliver.output.pr_url", if_skipped: null }
+      delivered: { from: "$deliver.output.ready", if_skipped: null }
+      delivery: { from: "$deliver.output.summary", if_skipped: null }
     output_format:
       type: object
       properties:

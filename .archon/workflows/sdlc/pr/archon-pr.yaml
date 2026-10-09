@@ -2,8 +2,9 @@ name: archon-pr
 description: |
   Open a pull request for the committed work on the current branch — draft by
   default when composed, template-aware, with the body built from the run's
-  artifacts. Verifies by reading the created PR back. Never sweeps unrelated
-  changes and never force-pushes.
+  artifacts. Brings the branch up to date with its base by merge first, gates
+  the merged tree once (a merge that turned it red gets one correction, then the
+  operator), then pushes and verifies by reading the created PR back. Never sweeps unrelated changes, never rebases and never force-pushes.
 
   Use when: committed work on a branch needs a PR — "open a PR", "create a
   draft PR for this branch".
@@ -16,34 +17,191 @@ inputs:
   draft:
     default: "true"
     description: '"true" opens the PR as a draft; anything else opens it ready for review.'
+  pull_request:
+    default: ""
+    description: The number of an open pull request to continue, as the caller resolved it; empty or `null` when it names none.
 
 returns: publish
 
 nodes:
-  # The agent establishes the target, writes the body, pushes, and decides
-  # whether this work already has a pull request. It performs no forge write:
-  # publish below owns that, so the same intent is published the same way
-  # whichever source the run selected.
-  - id: pr
+  # The agent judges: which repository the work is proposed to, the base, whether
+  # the run continues an existing pull request, how to merge the latest base in,
+  # and what the title and body say. It performs no push and no forge write.
+  - id: prepare
     command: pr
     output_type: pull-request-intent
     output_format:
       type: object
       properties:
-        intent: { type: string }
-      required: [intent]
+        repo: &repo
+          type: object
+          properties:
+            host: { type: string, pattern: '\S' }
+            path: { type: string, pattern: '\S' }
+          required: [host, path]
+        head_repo: *repo
+        head: { type: string, pattern: '\S' }
+        base: { type: string, pattern: '\S' }
+        existing: { type: [integer, 'null'], minimum: 1 }
+        title: { type: string, pattern: '\S' }
+        body:
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [pr-body.md] }
+          required: [type, run_id, path]
+        # Paths the agent could not merge with confidence; empty after a clean merge.
+        conflicts: { type: array, items: { type: string } }
+        summary: { type: string }
+      required: [repo, head_repo, head, base, existing, title, body, conflicts, summary]
 
-  # This is the durable ownership record for every later public action in
-  # delivery and inbound forge event. Consumers use this qualified identity,
+  # Holds the merge to its invariants and answers one question: is a green gate
+  # already recorded for this exact tree? A merge that changed nothing keeps the
+  # implementation's recorded green; a new tree is gated once below.
+  - id: synced
+    script: verify-sync
+    runtime: bun
+    depends_on: [prepare]
+    with:
+      repo: { from: "$prepare.output.repo" }
+      base: "$prepare.output.base"
+      conflicts: { from: "$prepare.output.conflicts" }
+      summary: "$prepare.output.summary"
+    output_format:
+      type: object
+      properties:
+        recorded: { type: boolean }
+      required: [recorded]
+
+  - id: validate
+    include: archon-validate
+    depends_on: [synced]
+    when: "$synced.output.recorded == false"
+
+  # A merged tree the project gate calls introduced red, after a merge that
+  # brought the base in, gets one correction before anything is pushed: two sides
+  # that each passed can still break each other (both add the same key, one renames
+  # what the other calls). Every other verdict goes straight to the gate.
+  - id: gate
+    script: gate-green
+    runtime: bun
+    output_type: green-gate
+    output_format: &green_gate
+      type: object
+      properties:
+        gate: { type: string, enum: [green] }
+        red_cause: { type: string }
+        stage: { type: string }
+        summary: { type: string }
+        head: { type: [string, 'null'] }
+      required: [gate, red_cause, stage, summary, head]
+    depends_on: [validate]
+    when: "$validate.output.red_cause != 'introduced'"
+    with:
+      green: "$validate.output.green"
+      red_cause: "$validate.output.red_cause"
+      summary: "$validate.output.summary"
+      stage: "The merged tree"
+
+  - id: merge-fix
+    include: archon-implement
+    depends_on: [validate]
+    when: "$validate.output.red_cause == 'introduced'"
+    with:
+      work: >-
+        This branch's work was green before the latest base was merged into it.
+        The merged tree's project gate is now red:
+
+        $validate.output.summary
+
+        Fix the merged tree so the intent of both sides survives: what this
+        branch changes and what the base changed. Never revert or drop either
+        side's change to turn the gate green, and never weaken a test. When the
+        failure is not the combination's (it fails the same way without the
+        merge), declare green: false with that evidence and change nothing.
+        Commit the fix; the workflow pushes it.
+
+  # Whether the corrected tree still needs a person: the gate's own decision, read
+  # without refusing, so one round that did not reach green pauses instead of
+  # throwing away the delivery.
+  - id: merge-fix-route
+    script: merge-fix-route
+    runtime: bun
+    depends_on: [merge-fix]
+    with:
+      green: "$merge-fix.output.green"
+      red_cause: "$merge-fix.output.red_cause"
+      summary: "$merge-fix.output.summary"
+    output_format:
+      type: object
+      properties:
+        attention: { type: boolean }
+      required: [attention]
+
+  - id: merge-fix-gate
+    script: gate-green
+    runtime: bun
+    output_type: green-gate
+    output_format: *green_gate
+    depends_on: [merge-fix-route]
+    when: "$merge-fix-route.output.attention == false"
+    with:
+      green: "$merge-fix.output.green"
+      red_cause: "$merge-fix.output.red_cause"
+      summary: "$merge-fix.output.summary"
+      stage: "The merged tree after its correction"
+
+  # One autonomous round is the bound. The operator fixes the merged tree on the
+  # branch (committed, not pushed) and resumes; that tree is gated once more, and
+  # red there refuses.
+  - id: merge-attention
+    depends_on: [merge-fix-route]
+    when: "$merge-fix-route.output.attention == true"
+    wait:
+      attention: >-
+        The tree after merging $prepare.output.base into $prepare.output.head is
+        still red after one correction: $merge-fix.output.summary
+        Fix it on the branch with both sides' changes intact, commit without
+        pushing, then resume this run.
+
+  - id: revalidate
+    include: archon-validate
+    depends_on: [merge-attention]
+
+  - id: regate
+    script: gate-green
+    runtime: bun
+    output_type: green-gate
+    output_format: *green_gate
+    depends_on: [revalidate]
+    with:
+      green: "$revalidate.output.green"
+      red_cause: "$revalidate.output.red_cause"
+      summary: "$revalidate.output.summary"
+      stage: "The merged tree after the operator's correction"
+
+  # The durable ownership record for every later public action in delivery and
+  # inbound forge event. It pushes the branch, then opens the pull request, or
+  # reuses the one this work already has; consumers use this qualified identity,
   # never gh's ambient branch lookup.
   - id: publish
     script: publish-pr
     runtime: bun
     timeout: 30000
     retry: { max_attempts: 2, delay_ms: 20000 }
-    depends_on: [pr]
+    depends_on: [synced, gate, merge-fix-gate, regate]
+    trigger_rule: none_failed_min_one_success
     with:
-      intent: "$pr.output.intent"
+      repo: { from: "$prepare.output.repo" }
+      head_repo: { from: "$prepare.output.head_repo" }
+      head: "$prepare.output.head"
+      base: "$prepare.output.base"
+      existing: { from: "$prepare.output.existing" }
+      title: "$prepare.output.title"
+      body: "$ARTIFACTS_DIR/pr-body.md"
+      draft: "$INPUTS.draft"
+      pull_request: "$INPUTS.pull_request"
     output_type: pull-request
     output_format:
       type: object

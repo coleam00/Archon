@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import { validationSourceConfigSchema, workflowValidationConfig } from './validation-config';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -65,37 +65,53 @@ async function validateCorpus(cwd: string): Promise<{ findings: Finding[]; files
     issue: { level: 'error', field: error.errorType, message: error.error },
   }));
   const checkedFiles = new Set(findings.map(finding => finding.file));
-  for (const { workflow, source } of discovered.workflows) {
-    const file = fileByName.get(workflow.name);
-    // Bundled workflows also appear when validating scratch projects.
-    if (file === undefined) continue;
-    checkedFiles.add(file);
-    const issues = await validateWorkflowResources(
-      workflow,
-      cwd,
-      providerRegistry,
-      {
-        ...workflowValidationConfig(config),
-        workflowSource: source,
-      },
-      config.assistant
-    );
-    findings.push(
-      ...issues
+  // Workflows validate independently; most of each one's cost is resource lookups
+  // on disk, so they run concurrently rather than one after another.
+  const validated = await Promise.all(
+    discovered.workflows.map(async ({ workflow, source }) => {
+      const file = fileByName.get(workflow.name);
+      // Bundled workflows also appear when validating scratch projects.
+      if (file === undefined) return [];
+      checkedFiles.add(file);
+      const issues = await validateWorkflowResources(
+        workflow,
+        cwd,
+        providerRegistry,
+        {
+          ...workflowValidationConfig(config),
+          workflowSource: source,
+        },
+        config.assistant
+      );
+      return issues
         .filter(issue => issue.level === 'error' || issue.code === 'shell_output_ref')
-        .map(issue => ({ file, issue }))
-    );
-  }
+        .map(issue => ({ file, issue }));
+    })
+  );
+  findings.push(...validated.flat());
   expect(files.filter(file => !checkedFiles.has(file))).toEqual([]);
   return { findings, files };
 }
 
-test('repository workflows have no errors or unsafe shell output references', async () => {
-  const { findings, files } = await validateCorpus(repo);
-  expect(files.length).toBeGreaterThan(0);
-  expect(files.some(file => file.startsWith('sdlc/'))).toBe(true);
-  expect(findings).toEqual([]);
-});
+// Validating the whole corpus costs about 14 ms per workflow file on an idle
+// machine (50 files: ~0.7 s, measured 2026-10-07), mostly the expanded SDLC
+// pack's resource checks, and grows with every workflow added. CI runs it beside
+// the rest of the suite several times slower, where the default 5 s timed out, so
+// the bound scales with the corpus at 200 ms per file (never under the Windows
+// floor, through testTimeout).
+const corpusFiles = workflowSourceFiles(
+  Array.from(new Bun.Glob('**/*.{yaml,yml}').scanSync(join(repo, '.archon/workflows')))
+);
+test(
+  'repository workflows have no errors or unsafe shell output references',
+  async () => {
+    const { findings, files } = await validateCorpus(repo);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some(file => file.startsWith('sdlc/'))).toBe(true);
+    expect(findings).toEqual([]);
+  },
+  testTimeout(Math.max(5_000, corpusFiles.length * 200))
+);
 
 test('corpus inventory excludes fixtures and identifies SDLC sources with either path separator', () => {
   const paths = [

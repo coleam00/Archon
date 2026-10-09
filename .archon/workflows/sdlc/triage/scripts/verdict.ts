@@ -1,13 +1,11 @@
 /**
  * Validate the triage verdict before it routes work, and apply its labels.
  *
- * The prompt judges; this boundary verifies what a schema cannot. Each field's type
- * and vocabulary — the contract, route, and complexity enums, the item and edit
- * shapes, the report pointer — were certified by the engine on the node that
- * produced them, so nothing here re-checks membership. What remains is the relations
- * between fields: only a READY contract carries an engineering route, design-first
- * is a READY item routed to plan, only NEEDS_CONTRACT_WORK proposes edits, only
- * BLOCKED names blockers, and blockers are qualified URLs. The pack's own labels
+ * The prompt judges; the triage node's schema admits only legal decisions (one
+ * branch per contract verdict, each carrying only its own fields), so an illegal
+ * combination is re-asked at that node rather than refused here. This flattens the
+ * decision into the fields every caller reads and checks what a schema cannot:
+ * design-first is a READY item routed to plan, and blockers are qualified URLs. The pack's own labels
  * derive from the declared fields here rather than being chosen by the model, and
  * only when the run was launched with publish=true and the target is a tracker
  * issue does this verify the item's identity on the tracker, apply the labels, and
@@ -195,14 +193,26 @@ function apply(item: Item, wanted: string[], area: string[]): string[] {
   return [...new Set([...wanted, ...areaPresent])].sort();
 }
 
+/** One branch of the triage decision, as the node's schema admits it. */
+type Decision =
+  | { contract: 'READY'; route: 'investigate' | 'plan' | 'deliver'; design_first: boolean }
+  | { contract: 'READY'; route: 'continue'; pull_request: number }
+  | { contract: 'NEEDS_CONTRACT_WORK'; proposed_edits: Edits }
+  | { contract: 'BLOCKED'; blocked_reason: string; blocked_by: string[] }
+  | { contract: 'NO_ACTION' };
+
 function main(): void {
-  const contract = text(process.env.INPUTS_CONTRACT) as Contract;
-  const route = text(process.env.INPUTS_ROUTE);
+  const decision = bound(process.env.INPUTS_DECISION) as Decision;
+  const contract: Contract = decision.contract;
+  const route = 'route' in decision ? decision.route : 'no_action';
+  const designFirst = 'design_first' in decision && decision.design_first;
+  const edits: Edits = 'proposed_edits' in decision ? decision.proposed_edits : { title: '', body: '' };
+  const blockedReason = 'blocked_reason' in decision ? decision.blocked_reason : '';
+  const blockedBy = 'blocked_by' in decision ? decision.blocked_by : [];
+  const pullRequest = 'pull_request' in decision ? decision.pull_request : null;
   const complexity = text(process.env.INPUTS_COMPLEXITY) as Complexity;
-  const designFirst = text(process.env.INPUTS_DESIGN_FIRST) === 'true';
   const publish = text(process.env.INPUTS_PUBLISH) === 'true';
   const summary = text(process.env.INPUTS_SUMMARY);
-  const blockedReason = text(process.env.INPUTS_BLOCKED_REASON);
   const area = bound(process.env.INPUTS_AREA_LABELS) as string[];
   const boundItem = record(bound(process.env.INPUTS_ITEM));
   const repo = record(boundItem?.repo);
@@ -225,43 +235,18 @@ function main(): void {
     boundItem.number === 0
       ? undefined
       : { repo: { host: repo.host, path: repo.path }, number: boundItem.number };
-  const edits = bound(process.env.INPUTS_PROPOSED_EDITS) as Edits;
-  const blockedBy = bound(process.env.INPUTS_BLOCKED_BY) as string[];
   const report = bound(process.env.INPUTS_REPORT);
 
   const invalid = (message: string): void => {
     refuse(`invalid triage verdict: ${message}`);
   };
 
-  if ((contract === 'READY') !== (route !== 'no_action')) {
-    invalid(
-      `only a READY contract carries an engineering route: got contract=${contract} route=${route}`
-    );
-    return;
-  }
   if (designFirst && route !== 'plan') {
     invalid(`design_first requires route=plan, got route=${route}`);
     return;
   }
-  const proposes = edits.title.trim() !== '' && edits.body.trim() !== '';
-  if (contract === 'NEEDS_CONTRACT_WORK' && !proposes) {
-    invalid('NEEDS_CONTRACT_WORK requires a proposed title and body');
-    return;
-  }
-  if (contract !== 'NEEDS_CONTRACT_WORK' && (edits.title !== '' || edits.body !== '')) {
-    invalid('only NEEDS_CONTRACT_WORK proposes edits');
-    return;
-  }
   if (!blockedBy.every(isQualifiedUrl)) {
     invalid('blocked_by must be a list of fully qualified http(s) URLs');
-    return;
-  }
-  if (contract === 'BLOCKED' && trimmed(blockedReason) === '') {
-    invalid('BLOCKED requires a blocked_reason');
-    return;
-  }
-  if (contract !== 'BLOCKED' && (blockedReason !== '' || blockedBy.length > 0)) {
-    invalid('only BLOCKED names a blocker');
     return;
   }
   if (trimmed(summary) === '') {
@@ -294,6 +279,7 @@ function main(): void {
   emit({
     contract,
     route,
+    pull_request: pullRequest,
     ready: contract === 'READY',
     design_first: designFirst,
     complexity,

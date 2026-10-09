@@ -8,8 +8,8 @@
  * them as facts and decides.
  *
  * The correction loop completes for either `none` or `replan`; only `none` is ready.
- * A replan fails here with the draft PR and the canonical report intact, which is why
- * the loop's own completion cannot be the gate.
+ * A replan fails here with the canonical report intact, which is why the loop's own
+ * completion cannot be the gate. The PR is still a draft here.
  */
 
 import { refuse, report, text } from '../../.shared/io.ts';
@@ -24,7 +24,7 @@ if (reviewAction === 'none' || (reviewAction === 'correct' && correctionAction =
     'replan required: the review found work no correction inside the accepted work ' +
       'order can complete because its correction crosses an explicit boundary or ' +
       'materially redefines the accepted work. ' +
-      'The pull request remains draft; see the canonical review ' +
+      'The pull request does not stay ready; see the canonical review ' +
       'report and discovery artifacts.'
   );
 } else {

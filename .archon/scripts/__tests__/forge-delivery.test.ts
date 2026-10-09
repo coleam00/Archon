@@ -5,10 +5,11 @@
  *
  * The other pack tests fake the CLI's answers. This one proves the pieces agree:
  * a delivery creates a draft pull request, updates its body, upserts the same
- * review comment across rounds, reads checks, flips ready and restores draft, and none of
+ * review comment across rounds, flips ready and restores draft, and none of
  * those steps calls `gh`.
  */
 import { describe, expect, it } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -16,6 +17,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   forgePrRecord,
   PR,
+  gitCheckout,
   runPackScript,
   type ScriptOptions,
   type ScriptRun,
@@ -29,7 +31,11 @@ const GITHUB_PLUGIN = join(REPO_ROOT, 'packages/adapters/src/forge/github/plugin
 const FAKE_GITHUB = join(import.meta.dir, 'fake-github-fetch.ts');
 
 const MARKER = '<!-- archon-review-report -->';
-const HEAD_SHA = 'feedface00000000000000000000000000000000';
+// A real checkout whose recorded remote is a local bare repository: publish-pr pushes
+// it before it creates, and flip-ready merges it against the base.
+const CHECKOUT = gitCheckout();
+const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: CHECKOUT, encoding: 'utf8' }).stdout.trim();
+const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const OPENING_BODY = 'Opening body: the change adds a guard.';
 const RESYNCED_BODY = 'Resynced body: the change adds a guard and its test.';
 const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
@@ -123,10 +129,11 @@ process.exitCode = await forgeCommand(
 }
 
 describe('the forge opt-in delivers through plugin operations', () => {
-  it('creates a draft, resyncs its body, upserts one review comment, reads checks, flips ready and restores draft', () => {
+  it('creates a draft, resyncs its body, upserts one review comment, flips ready and restores draft', () => {
     const host = forgeHost();
     const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {
       const run = runPackScript(relative, {
+        cwd: CHECKOUT,
         ...options,
         source: 'forge',
         forge: { kind: 'command', argv: host.argv },
@@ -153,6 +160,8 @@ describe('the forge opt-in delivers through plugin operations', () => {
           INPUTS_ACTION: ready ? 'none' : 'correct',
           INPUTS_SUMMARY: 'summary',
           INPUTS_REPORT_POINTER: JSON.stringify({ path: 'review/report.md' }),
+          INPUTS_DISCOVERIES: '[]',
+          INPUTS_MISSING: '[]',
         },
         artifacts: { 'report.md': report },
       });
@@ -160,20 +169,18 @@ describe('the forge opt-in delivers through plugin operations', () => {
 
     // 1. The draft pull request.
     const created = through('pr/scripts/publish-pr', {
-      inputs: { INPUTS_INTENT: '{ARTIFACTS}/pr-intent.json' },
-      artifacts: {
-        'pr-intent.json': JSON.stringify({
-          repo: PR.repo,
-          headRepo: PR.repo,
-          head: 'feature',
-          headRevision: HEAD_SHA,
-          base: 'dev',
-          title: 'Add a guard',
-          bodyPath: '{ARTIFACTS}/pr-body.md',
-          draft: true,
-        }),
-        'pr-body.md': OPENING_BODY,
+      inputs: {
+        INPUTS_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD: 'feature',
+        INPUTS_BASE: 'dev',
+        INPUTS_EXISTING: 'null',
+        INPUTS_TITLE: 'Add a guard',
+        INPUTS_BODY: '{ARTIFACTS}/pr-body.md',
+        INPUTS_DRAFT: 'true',
+        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       },
+      artifacts: { 'pr-body.md': OPENING_BODY, 'listing.json': EMPTY_LISTING },
     });
     const record = JSON.parse(created.stdout) as Record<string, unknown>;
     expect(record).toMatchObject({ number: 42, is_draft: true, head_revision: HEAD_SHA });
@@ -188,18 +195,19 @@ describe('the forge opt-in delivers through plugin operations', () => {
     const current = JSON.parse(read.stdout) as { body: string };
     expect(readFileSync(current.body, 'utf8')).toBe(OPENING_BODY);
     through('deliver/scripts/publish-pr-body', {
-      inputs: { INPUTS_PR: created.stdout, INPUTS_INTENT: '{ARTIFACTS}/intent.json' },
-      artifacts: {
-        'intent.json': JSON.stringify({ change: true, bodyPath: '{ARTIFACTS}/final.md' }),
-        'final.md': RESYNCED_BODY,
+      inputs: {
+        INPUTS_PR: created.stdout,
+        INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'final.md' }),
+        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       },
+      artifacts: { 'final.md': RESYNCED_BODY, 'listing.json': EMPTY_LISTING },
     });
 
     // 4. The second round edits the same comment rather than adding one.
     review(ROUND_TWO, true);
 
-    // 5. The ready flip reads checks, then flips.
-    const flipped = through('deliver/scripts/flip-ready');
+    // 5. The ready flip.
+    const flipped = through('deliver/scripts/flip-ready', { inputs: { INPUTS_PR: created.stdout } });
     expect(JSON.parse(flipped.stdout)).toEqual({ pr_url: record.url });
 
     const drafted = through('../../scripts/__tests__/mark-pr-draft');
@@ -210,7 +218,9 @@ describe('the forge opt-in delivers through plugin operations', () => {
     const state = github();
     expect(state.pulls).toHaveLength(1);
     expect(state.pulls[0]).toMatchObject({ draft: true, body: RESYNCED_BODY });
-    expect(state.comments).toEqual([{ id: 900, body: `${MARKER}\n${ROUND_TWO}` }]);
+    expect(state.comments).toEqual([
+      { id: 900, body: `${MARKER}\nReviewed commit: \`${HEAD_SHA}\`\n\n${ROUND_TWO}` },
+    ]);
     const writes = state.calls.filter(call => !call.startsWith('GET '));
     expect(writes.map(call => call.replace(/\?.*$/, ''))).toEqual([
       `POST https://${FAKE_HOST}/api/v3/repos/example/repo/pulls`,
@@ -238,15 +248,10 @@ for (const other of [false, true]) {
     const inputs = {
       INPUTS_ITEM: JSON.stringify({ repo, number: 7 }),
       INPUTS_PUBLISH: 'true',
-      INPUTS_CONTRACT: 'READY',
-      INPUTS_ROUTE: 'direct',
+      INPUTS_DECISION: JSON.stringify({ contract: 'READY', route: 'deliver', design_first: false }),
       INPUTS_COMPLEXITY: 'small',
-      INPUTS_DESIGN_FIRST: 'false',
       INPUTS_SUMMARY: 'Ready',
-      INPUTS_BLOCKED_REASON: '',
-      INPUTS_BLOCKED_BY: '[]',
       INPUTS_AREA_LABELS: JSON.stringify(['area', 'nonexistent', 'constructor']),
-      INPUTS_PROPOSED_EDITS: '{"title":"","body":""}',
       INPUTS_REPORT: '{"path":"triage.md"}',
     };
     const options = { source: 'forge', forge: { kind: 'command' as const, argv: host.argv } };
@@ -267,16 +272,24 @@ for (const other of [false, true]) {
     const discovery = (runId: string): ScriptRun =>
       runPackScript('deliver/scripts/file-discoveries', {
         ...options,
-        inputs: { INPUTS_PR: JSON.stringify(forgePrRecord({ repo })), WORKFLOW_ID: runId },
-        artifacts: { 'discoveries.json': JSON.stringify([{ ...record, source_nodes: [runId] }]) },
+        inputs: {
+          INPUTS_PR: JSON.stringify(forgePrRecord({ repo })),
+          INPUTS_INITIAL: JSON.stringify([record]),
+          INPUTS_FINAL: 'null',
+          INPUTS_MATCHES: '[]',
+          WORKFLOW_ID: runId,
+        },
       });
+    // Two runs, two empty ledgers: the second create is recovered by its body marker.
     const first = discovery('first');
     const second = discovery('second');
     for (const result of [first, second]) {
       expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
       expect(result.gh).toEqual([]);
-      const saved = JSON.parse(readFileSync(join(result.artifacts, 'discoveries.json'), 'utf8'));
-      expect(saved[0].issue).toBe(JSON.parse(result.stdout).issues[0]);
+      const saved = JSON.parse(
+        readFileSync(join(result.artifacts, 'discoveries-filed.json'), 'utf8')
+      ) as Record<string, string>;
+      expect(Object.values(saved)).toEqual([JSON.parse(result.stdout).records[0].issue]);
     }
     expect(JSON.parse(first.stdout)).toEqual(JSON.parse(second.stdout));
     const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as {

@@ -7,65 +7,67 @@
 # Run with --default-stubs --exec-code.
 #
 # `outcome` is deliberately unstubbed: the real script runs and must report pull
-# request 2 from the delivered flip value alone. The exec workspace is a DETACHED
+# request 2 from the confirmed ready value alone. The exec workspace is a DETACHED
 # worktree, so there is no current branch for an ambient pull request lookup to
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
 triage__triage:
-  contract: READY
-  route: investigate
-  design_first: false
+  decision: { contract: READY, route: investigate, design_first: false }
   complexity: risky
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
-  proposed_edits: { title: "", body: "" }
-  blocked_reason: ""
-  blocked_by: []
   summary: "stub: current evidence leaves the causal chain unresolved"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 inv__investigate:
-  rooted: true
+  verdict: rooted
   summary: "stub: cause established — report at investigation.md"
   report: { type: archon_artifact, run_id: "fixture-run", path: "investigation.md" }
 gate-rooted: '{"gate":"rooted"}'
-deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
+deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":"","head":null}'
 deliver__impl__assert-changed: "3 files changed"
-deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-deliver__pr__pr: { intent: "/fixture/pr-intent.json" }
+deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":"","head":null}'
+deliver__pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
+deliver__pr__synced: { recorded: true }
 deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-ci-probe: '{"state":"concluded","detail":"all checks passed"}'
-deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
+deliver__publish-pr-body: {}
+deliver__ci: { state: green, summary: "stub: every check that gates a merge passed", evidence: "stub: gh pr checks on the head commit" }
 deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
-deliver__outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
-deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
+deliver__outcome: { ready: true, pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
+deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 deliver__validate__run: { status: green, summary: "stub: project gate green" }
 deliver__impl__implement:
   done: true
   green: true
   red_cause: ""
   summary: "stub: fix built per the investigation, checks green"
-deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"deliver__review__mode","invocation":{"loopPath":[]}}}'
-deliver__review__coverage: { full: true }
+deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
+deliver__review__coverage: { full: true, errors: false, docs: false, lenses: [seams, code, tests, simplify] }
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
 deliver__review__code: "0 findings"
 deliver__review__simplify__simplify: { findings: false }
+deliver__review__simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 deliver__review__seams: "0 findings"
 deliver__shape__simplify: { findings: false }
+deliver__shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 deliver__review__tests: "0 findings"
 deliver__review__review-complete: "settled"
+deliver__review__lens-status: { required: [seams, code, tests, simplify], completed: [seams, code, tests, simplify], missing: [] }
+deliver__review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 deliver__review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no open findings"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 deliver__review__publish:
   ready: true
   action: none
   findings_summary: "stub: no open findings"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 deliver__gate-ready: '{"ready":"true"}'
 deliver__review-policy: { risks: "fixture-owned-policy" }
 deliver__classify:
@@ -77,7 +79,8 @@ deliver__classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 deliver__resolve-scope: '{"errors":"false"}'
-deliver__file-discoveries: '{"issues":[]}'
+deliver__file-discoveries: '{"records":[]}'
+deliver__match-discoveries: { matches: [] }
 deliver__fork: '{"fork":true}'
 fixture:
   expect: completed

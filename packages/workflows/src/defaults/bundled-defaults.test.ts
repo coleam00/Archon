@@ -1,14 +1,7 @@
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect } from 'bun:test';
-import { spawnSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { dirname, join } from 'path';
-import { removeTempTree } from '@archon/paths/test-utils';
-import {
-  fakeGhPreload,
-  type GhFake,
-} from '../../../../.archon/scripts/__tests__/deliver-checks-harness';
+import { existsSync, readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
 import {
   isBinaryBuild,
   BUNDLED_COMMANDS,
@@ -176,8 +169,11 @@ describe('bundled-defaults', () => {
       }
 
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
-      expect(synthesize).toContain('$ARTIFACTS_DIR/discoveries.json');
+      // The accepted records travel as the verdict's certified `discoveries`; the
+      // markdown copy is for a human reader, and no second JSON file exists.
+      expect(synthesize).toContain('- `discoveries`: the accepted discovery records');
       expect(synthesize).toContain('$ARTIFACTS_DIR/discoveries.md');
+      expect(synthesize).not.toContain('discoveries.json');
       expect(synthesize).toContain('An `unrelated` record never affects readiness');
       expect(synthesize).toContain(
         'If you are an agent reading this: open discoveries.md and surface each discovery to your human.'
@@ -188,8 +184,7 @@ describe('bundled-defaults', () => {
     // fails on unresolved dependencies unless the prompt that creates it installs them.
     it('every SDLC prompt that creates a scratch worktree installs its dependencies', () => {
       const creators = Object.entries(BUNDLED_COMMANDS).filter(
-        ([key, content]) =>
-          key.includes(':sdlc:') && content.includes('git worktree add --detach "$(mktemp -d)"')
+        ([key, content]) => key.includes(':sdlc:') && content.includes('git worktree add --detach')
       );
       expect(creators.length).toBeGreaterThan(0);
       for (const [key, content] of creators) {
@@ -377,94 +372,86 @@ describe('bundled-defaults', () => {
       expect(unreviewed).toEqual([]);
     });
 
-    it('archon-deliver delegates the optional CI read timeout to the engine', () => {
+    // OpenAI Structured Outputs (the Codex provider's path) accepts only an object at a
+    // schema's root, so a root union or scalar ends the node on every call there. A
+    // decision with variants nests its union under a property instead.
+    it('every bundled output_format has a plain object at its root', () => {
+      const offenders: string[] = [];
+      const visit = (workflow: string, nodes: readonly unknown[]): void => {
+        for (const node of nodes as Record<string, unknown>[]) {
+          const format = node.output_format as Record<string, unknown> | undefined;
+          if (
+            format !== undefined &&
+            (format.type !== 'object' ||
+              'anyOf' in format ||
+              'oneOf' in format ||
+              'allOf' in format)
+          ) {
+            offenders.push(`${workflow}:${String(node.id)}`);
+          }
+          const group = node.loop_group as { nodes?: unknown[] } | undefined;
+          if (group?.nodes) visit(workflow, group.nodes);
+        }
+      };
+      for (const [name, source] of Object.entries(BUNDLED_WORKFLOWS)) {
+        const raw = Bun.YAML.parse(source) as { nodes?: unknown[] };
+        visit(name, raw.nodes ?? []);
+      }
+      expect(offenders).toEqual([]);
+    });
+
+    // CI is judged once, by one agent node after the work is done, which waits on
+    // running checks itself: the graph has no engine wait and no loop around CI.
+    // The ready mark follows only a green verdict.
+    it('archon-deliver judges CI in one agent node and marks ready only on green', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],
         'archon-deliver.yaml',
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-
-      const corrections = parsed.workflow.nodes.find(node => node.id === 'corrections');
-      expect(corrections?.kind).toBe('loop_group');
+      const nodes = parsed.workflow.nodes;
+      const node = (id: string) => nodes.find(candidate => candidate.id === id);
+      const waits = nodes.flatMap(candidate =>
+        candidate.kind === 'loop_group'
+          ? candidate.loop_group.nodes.filter(body => body.kind === 'wait')
+          : candidate.kind === 'wait'
+            ? [candidate]
+            : []
+      );
+      expect(waits).toEqual([]);
+      const corrections = node('corrections');
       if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
-
-      const ciNote = corrections.loop_group.nodes.find(node => node.id === 'ci-note');
-      expect(ciNote?.kind).toBe('exec');
-      if (ciNote?.kind !== 'exec') throw new Error('ci-note is not executable');
-      expect(ciNote).toMatchObject({
-        runtime: 'bun',
-        timeout: 45_000,
-        on_timeout: 'skip',
-        with: { pr: { from: '$pr.output' } },
-      });
-      expect(ciNote.script).not.toContain('mktemp');
-      expect(ciNote.script).not.toContain('GH_PID');
-      expect(ciNote.script).not.toContain('WATCHDOG');
-
-      const ciEvidence = corrections.loop_group.nodes.find(node => node.id === 'ci-evidence');
-      expect(ciEvidence?.kind).toBe('exec');
-      if (ciEvidence?.kind !== 'exec') throw new Error('ci-evidence is not executable');
-      expect(ciEvidence).toMatchObject({
-        runtime: 'bun',
-        depends_on: ['ci-note'],
-        trigger_rule: 'all_done',
-        with: {
-          note: {
-            from: '$ci-note.output',
-            if_skipped:
-              'No CI evidence is available for this round (the check read timed out). Proceed on the review findings alone.',
-          },
-        },
-      });
-
-      const fix = corrections.loop_group.nodes.find(node => node.id === 'fix');
-      expect(fix?.depends_on).toEqual(['ci-evidence']);
-    });
-
-    it('flip-ready names only what it needs, and never loses a gate to a longer chain', () => {
-      // The flip used to name ten ancestors because a failure propagated exactly one
-      // hop: a join that named only the tail of a chain never saw the chain's gates
-      // fail. Failure-cascade skips carry `upstream_failed` across every hop now, so
-      // the list is the four the flip actually needs. gate-validated, gate-ready and
-      // validate are reachable through ci-verdict; ci-verdict stays because the rule
-      // needs one successful dependency, and a clean-review delivery has no other.
-      // That the cascade really blocks is proved by execution, not by this list —
-      // deliver's validate-red* and late-red-unconverged fixtures expect the gate
-      // itself as the failed node and never reach the flip.
-      const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-deliver'],
-        'archon-deliver.yaml',
-        providerRegistry
-      );
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-      const flipReady = parsed.workflow.nodes.find(node => node.id === 'flip-ready');
-      expect(flipReady?.depends_on).toEqual([
-        'ci-verdict',
-        'ci-attention-route',
-        'ci-attention',
-        'publish-pr-body',
+      expect(corrections.loop_group.nodes.map(body => body.id)).toEqual([
+        'fix',
+        'gate-correction-green',
+        'recheck',
       ]);
-      expect(flipReady?.trigger_rule).toBe('none_failed_min_one_success');
+      expect(node('ci')?.depends_on).toEqual(['publish-pr-body']);
+      expect(node('publish-pr-body')?.depends_on).toEqual([
+        'fork',
+        'gate-validated',
+        'sync-pr-body',
+      ]);
+      expect(node('flip-ready')).toMatchObject({
+        depends_on: ['ci'],
+        when: "$ci.output.state == 'green'",
+      });
+      expect(parsed.workflow.returns).toBe('outcome');
+      expect(parsed.workflow.outcome_field).toBe('ready');
     });
 
-    it('synthesis requires the review-lens membership declared by the graph', () => {
-      const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-review'],
-        'archon-review.yaml',
-        providerRegistry
-      );
-      if (!parsed.workflow) throw new Error('archon-review did not parse');
-      const lenses = parsed.workflow.nodes
-        .filter(node => 'output_type' in node && node.output_type === 'review-lens')
-        .map(node => node.id)
-        .sort();
-      const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
-      const membership = synthesize.match(
-        /Require completed artifacts for every enabled specialist: `review-lens` for (.+?), and `structure-review` for simplify\./
-      );
-      if (!membership) throw new Error('synthesis has no specialist completion inventory');
-      expect(membership[1].split(/, | and /).sort()).toEqual(lenses);
+    // Reviewers create scratch trees under the run, where the workflow removes them;
+    // a tree outside it would outlive a lens that died.
+    it('every SDLC scratch worktree lives under the run and is removed by the workflow', () => {
+      for (const [key, content] of Object.entries(BUNDLED_COMMANDS)) {
+        if (!key.includes(':sdlc:') || !content.includes('git worktree add --detach')) continue;
+        expect({ key, underRun: content.includes('mktemp -d "$ARTIFACTS_DIR/scratch/') }).toEqual({
+          key,
+          underRun: true,
+        });
+        expect(content).not.toContain('removed when you are done');
+      }
     });
 
     it('the errors lens probes the complete independent-work blast radius', () => {
@@ -533,7 +520,7 @@ describe('bundled-defaults', () => {
       expect(validateStructuredOutput({ docs: false, pr: {} }, scopeSchema).valid).toBe(false);
       expect(parsed.workflow.inputs?.docs?.default).toBe('auto');
       const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
-      expect(docs?.when).toContain("$INPUTS.docs == 'auto' && $scope.output.docs == true");
+      expect(docs?.when).toBe('$coverage.output.docs == true');
 
       const specialists = ['seams', 'code', 'tests', 'focused', 'simplify', 'errors', 'docs'];
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
@@ -566,7 +553,7 @@ describe('bundled-defaults', () => {
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
       expect(synthesize?.kind).toBe('agent');
       if (synthesize?.kind !== 'agent') throw new Error('synthesize is not an agent');
-      expect(synthesize.depends_on).toEqual(['scope', 'review-complete']);
+      expect(synthesize.depends_on).toEqual(['scope', 'review-complete', 'lens-status']);
       expect(synthesize.trigger_rule).toBeUndefined();
       expect(synthesize.output_format).toMatchObject({
         properties: {
@@ -823,7 +810,7 @@ describe('bundled-defaults', () => {
         kind: 'exec',
         runtime: 'bun',
         script: 'flip-ready',
-        with: { pr: { from: '$pr.output' } },
+        with: { pr: '$pr.output' },
       });
       expect(deliver).not.toContain('git remote get-url origin');
       // A command node reads its node-local `with:` map through `$INPUTS.<name>`,
@@ -839,7 +826,7 @@ describe('bundled-defaults', () => {
       // the write whichever forge source the run selected.
       const prParsed = parseWorkflow(pr, 'archon-pr.yaml', providerRegistry);
       if (prParsed.workflow === null) throw new Error(prParsed.error.error);
-      const prNode = prParsed.workflow.nodes.find(node => node.id === 'pr');
+      const prNode = prParsed.workflow.nodes.find(node => node.id === 'prepare');
       expect(prNode?.kind).toBe('agent');
       const publish = prParsed.workflow.nodes.find(node => node.id === 'publish');
       expect(publish).toMatchObject({ kind: 'exec', runtime: 'bun', script: 'publish-pr' });
@@ -876,7 +863,7 @@ describe('bundled-defaults', () => {
         kind: 'exec',
         runtime: 'bun',
         script: 'publish-pr-body',
-        with: { pr: '$pr.output', intent: '$sync-pr-body.output.intent' },
+        with: { pr: '$pr.output', body: { from: '$sync-pr-body.output.body' } },
       });
       // Composition once dropped that binding while materializing the command body
       // and then reported both names as missing caller inputs, so archon-deliver
@@ -913,122 +900,6 @@ describe('bundled-defaults', () => {
         BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesizeCommand).not.toContain('gh pr comment');
       expect(synthesizeCommand).not.toContain('gh api');
-    });
-
-    it('uses check events as wake-ups while retaining bounded probes and deadlines', () => {
-      const parsed = parseWorkflow(
-        BUNDLED_WORKFLOWS['archon-deliver'],
-        'archon-deliver.yaml',
-        providerRegistry
-      );
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-
-      for (const [groupId, probeId, pauseId] of [
-        ['await-checks', 'ci-probe', 'ci-pause'],
-        ['await-fix-checks', 'fix-ci-probe', 'fix-ci-pause'],
-      ] as const) {
-        const group = parsed.workflow.nodes.find(node => node.id === groupId);
-        if (group?.kind !== 'loop_group') throw new Error(`${groupId} is not a loop group`);
-        expect(group.loop_group.max_iterations).toBe(13);
-        expect(group.loop_group.until_bash?.trim()).toBe(
-          `value=$${probeId}.output.state\ntest "$value" != "pending"`
-        );
-
-        const probeIndex = group.loop_group.nodes.findIndex(node => node.id === probeId);
-        const pauseIndex = group.loop_group.nodes.findIndex(node => node.id === pauseId);
-        expect(probeIndex).toBeGreaterThanOrEqual(0);
-        expect(pauseIndex).toBeGreaterThan(probeIndex);
-        const pause = group.loop_group.nodes[pauseIndex];
-        if (pause?.kind !== 'wait') throw new Error(`${pauseId} is not a wait node`);
-        expect(pause.wait).toEqual({ event: 'checks.complete', deadline_ms: 300000 });
-        expect(pause.wait).not.toHaveProperty('duration_ms');
-        expect(pause.depends_on).toEqual([probeId]);
-        expect(pause.when).toBe(`$${probeId}.output.state == 'pending'`);
-      }
-    });
-  });
-
-  // A binary install executes the shipped copies of the deliver check scripts, so
-  // these run the bundled pack rather than the source tree. The full matrix for
-  // both sources lives in .archon/scripts/__tests__; this pins the default and
-  // the loud opt-in failure on what actually ships.
-  describe('deliver check source (bundled pack)', () => {
-    const runShipped = async (
-      script: 'check-ci' | 'flip-ready',
-      options: { source?: string; checks?: GhFake['checks'] }
-    ): Promise<{ code: number; stdout: string; stderr: string; gh: string[] }> => {
-      const root = mkdtempSync(join(tmpdir(), 'archon-bundled-checks-'));
-      try {
-        for (const [path, content] of Object.entries(BUNDLED_SCRIPT_PACKS.sdlc!.files)) {
-          mkdirSync(dirname(join(root, 'sdlc', path)), { recursive: true });
-          writeFileSync(join(root, 'sdlc', path), content);
-        }
-        const ghLog = join(root, 'gh.log');
-        const preload = join(root, 'fake-gh.ts');
-        writeFileSync(preload, fakeGhPreload({ checks: options.checks ?? 'fail' }, ghLog));
-        const run = spawnSync(
-          process.execPath,
-          ['--preload', preload, join(root, 'sdlc', 'deliver', 'scripts', `${script}.ts`)],
-          {
-            cwd: root,
-            encoding: 'utf8',
-            env: {
-              ...process.env,
-              INPUTS_PR: JSON.stringify({
-                repo: { host: 'github.com', path: 'owner/repo' },
-                number: 42,
-              }),
-              ARCHON_SDLC_FORGE: options.source ?? '',
-              ARCHON_CLI_COMMAND: '',
-            },
-          }
-        );
-        return {
-          code: run.status ?? -1,
-          stdout: run.stdout,
-          stderr: run.stderr,
-          gh: existsSync(ghLog) ? readFileSync(ghLog, 'utf8').split('\n').filter(Boolean) : [],
-        };
-      } finally {
-        await removeTempTree(root);
-      }
-    };
-
-    it('reads checks through gh by default', async () => {
-      const probe = await runShipped('check-ci', {
-        checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }],
-      });
-      expect(probe.code).toBe(0);
-      expect(JSON.parse(probe.stdout)).toEqual({
-        state: 'red',
-        detail: 'non-green checks: build (failure)',
-      });
-      expect(probe.gh[0]).toBe('pr checks 42 --repo github.com/owner/repo --json name,state');
-
-      const flip = await runShipped('flip-ready', {
-        checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
-      });
-      expect(flip.code).toBe(0);
-      expect(flip.gh).toContain('pr ready 42 --repo github.com/owner/repo');
-    });
-
-    it('refuses the ready flip when the default gh read fails', async () => {
-      const flip = await runShipped('flip-ready', { checks: 'fail' });
-      expect(flip.code).not.toBe(0);
-      expect(flip.stderr).toContain('flip-ready: could not read check state');
-      expect(flip.gh.some(call => call.startsWith('pr ready'))).toBe(false);
-    });
-
-    it('fails loudly when the forge source is selected but unavailable', async () => {
-      for (const script of ['check-ci', 'flip-ready'] as const) {
-        const run = await runShipped(script, {
-          source: 'forge',
-          checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
-        });
-        expect(run.code).not.toBe(0);
-        expect(run.stderr).toContain('ARCHON_CLI_COMMAND is not set');
-        expect(run.gh).toEqual([]);
-      }
     });
   });
 

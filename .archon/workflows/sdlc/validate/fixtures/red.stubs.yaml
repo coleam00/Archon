@@ -2,7 +2,7 @@
 # reaches classify. Validation itself completes; the red verdict is its result.
 discover:
   checks:
-    - { name: "tests", argv: ["bun", "-e", "console.error('1 test failed'); process.exitCode = 1"] }
+    - { name: "tests", argv: ["bun", "-e", "console.error('1 test failed'); process.exitCode = 1"], group: "gate" }
   notes: "stub: the project's test command"
 classify:
   red_cause: introduced

@@ -17,15 +17,15 @@ export function passesRed(cause: string): boolean {
 }
 
 /**
- * The refusal for a verdict declared `incomplete`: some checks never ran and none that
- * ran failed. It is not red, so it never says so — a reader sent hunting for a failure
- * that does not exist loses the real action, which is to let validation finish. Every
+ * The refusal for a verdict declared `incomplete`: some checks never ran, so the gate
+ * has no complete answer. A check that did fail is named in the summary, but the
+ * action is still to let validation finish: a partial red is not a verdict. Every
  * gate that reads a verdict refuses this cause with this one message.
  */
 export function unfinishedValidation(stage: string, summary: string): string {
   return (
-    `${stage}: validation didn't finish. Not every check ran, and none that ran ` +
-    `failed.${summary === '' ? '' : ` ${summary}`} Resume the run once whatever ` +
+    `${stage}: validation didn't finish. Not every check ran.` +
+    `${summary === '' ? '' : ` ${summary}`} Resume the run once whatever ` +
     'stopped it is cleared, so validation can finish. An unfinished validation ' +
     'never passes this gate.'
   );

@@ -1,101 +1,95 @@
 /**
- * Publish the prepared pull request and record its verified identity.
+ * Push the branch, then publish the pull request and record its verified identity.
  *
- * The preceding node judges: it establishes the target, writes the body, pushes
- * the branch, and names the pull request the run was launched onto when there is
- * one. This node owns the public write and proves it landed, through whichever
- * source the run selected.
+ * The preceding nodes judged the target and the text and proved the merged tree; this
+ * node owns the two writes and proves each landed, through whichever source the run
+ * selected. The push comes first and refuses on any failure (./.shared/push.ts), so a
+ * pull request is never created for a head the remote does not have.
  *
- * Whether this work already has a pull request is decided here, not in a prompt:
- * an open pull request for the recorded head IS the pull request, and a second
- * one is never opened for it.
+ * Whether this work already has a pull request is decided here, not in a prompt: an
+ * open pull request for the recorded head IS the pull request, and a second one is
+ * never opened for it. A run continuing a named pull request pushes to that pull
+ * request's head by merge only — the push never forces, so a head that is not an
+ * ancestor of this commit refuses.
+ *
+ * Red a gate let through is disclosed at the top of the published body from the
+ * gates' own typed records (./.shared/report.ts), not transcribed by the agent.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_INTENT: path to the JSON intent the preparing node wrote.
+ * - INPUTS_REPO / INPUTS_HEAD_REPO: `{host, path}` of the base and head repositories.
+ * - INPUTS_HEAD / INPUTS_BASE: the head and base branch names.
+ * - INPUTS_EXISTING: the pull request this run continues, or `null`.
+ * - INPUTS_PULL_REQUEST: the number the caller resolved for it, or empty or `null`.
+ * - INPUTS_TITLE: the title.
+ * - INPUTS_BODY: the certified body file.
+ * - INPUTS_DRAFT: `true` opens a draft.
  */
 
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createPr, findOpenPrByHead, viewPr, type CreatePrIntent } from '../../.shared/pr.ts';
+import { join } from 'node:path';
+import { createPr, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
   forgeSource,
-  record,
   sameRepo,
   type PrRecord,
   type QualifiedPr,
 } from '../../.shared/forge.ts';
-import { emit, note, refuse, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { pushHead } from '../../.shared/push.ts';
+import { writePublishedBody } from '../../.shared/report.ts';
 
-function repo(value: unknown, field: string): QualifiedPr['repo'] {
-  const parsed = record(value);
-  if (
-    typeof parsed?.host !== 'string' ||
-    parsed.host.trim() === '' ||
-    typeof parsed.path !== 'string' ||
-    parsed.path.trim() === ''
-  ) {
-    throw new Error(`the PR intent's ${field} must name a host and an owner/repo path`);
-  }
-  return { host: parsed.host, path: parsed.path };
-}
-
-function required(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error(`the PR intent's ${field} must be a non-empty string`);
-  }
-  return value;
-}
+type Repo = QualifiedPr['repo'];
 
 function publish(): PrRecord {
   const source = forgeSource();
-  const intentPath = text(process.env.INPUTS_INTENT);
-  const intent = record(JSON.parse(readFileSync(intentPath, 'utf8')));
-  if (!intent) throw new Error('the PR intent must be a JSON object');
-  const base = repo(intent.repo, 'repo');
-  const headRepo = intent.headRepo === undefined ? base : repo(intent.headRepo, 'headRepo');
-  const head = required(intent.head, 'head');
+  const repo = JSON.parse(text(process.env.INPUTS_REPO)) as Repo;
+  const headRepo = JSON.parse(text(process.env.INPUTS_HEAD_REPO)) as Repo;
+  const head = text(process.env.INPUTS_HEAD);
+  const existing = nullableJson(process.env.INPUTS_EXISTING) as number | null;
+  const artifacts = artifactsDir();
 
-  // The run was launched onto an existing pull request: it names the number, and
-  // its draft state belongs to its author, not to this run's draft input.
-  if (intent.existing !== undefined) {
-    if (typeof intent.existing !== 'number' || !Number.isInteger(intent.existing)) {
-      throw new Error("the PR intent's existing must be the pull request number");
-    }
-    const view = viewPr({ repo: base, number: intent.existing }, source);
+  const named = nullableJson(process.env.INPUTS_PULL_REQUEST) as number | null;
+  if (named !== null && existing !== named) {
+    throw new Error(
+      `the caller named pull request ${String(named)} to continue, but prepare declared ${String(existing ?? 'none')}`
+    );
+  }
+
+  // A continued pull request's head is checked before the push, which would
+  // otherwise land on whatever branch prepare declared.
+  if (existing !== null) {
+    const view = viewPr({ repo, number: existing }, source);
     const observedHead = view.pr.head_repo;
     if (view.pr.head !== head || observedHead === null || !sameRepo(observedHead, headRepo)) {
       throw new Error(
-        `pull request ${String(intent.existing)} has head ${String(view.pr.head_repo?.path)}:${view.pr.head}, not the recorded ${headRepo.path}:${head}`
+        `pull request ${String(existing)} has head ${String(view.pr.head_repo?.path)}:${view.pr.head}, not the recorded ${headRepo.path}:${head}`
       );
     }
-    return view.pr;
   }
 
-  const existing = findOpenPrByHead(base, headRepo, head, source);
-  if (existing) {
-    note(`publish-pr: ${existing.pr.url} already has this head, so no pull request was opened.`);
-    return existing.pr;
+  const headRevision = pushHead({ repo, head_repo: headRepo, head });
+
+  // The run continues a named pull request: its draft state belongs to its author.
+  if (existing !== null) return viewPr({ repo, number: existing }, source).pr;
+
+  const open = findOpenPrByHead(repo, headRepo, head, source);
+  if (open) {
+    note(`publish-pr: ${open.pr.url} already has this head, so no pull request was opened.`);
+    return open.pr;
   }
-  if (typeof intent.draft !== 'boolean') throw new Error("the PR intent's draft must be a boolean");
-  const createIntent: CreatePrIntent = {
-    repo: base,
-    headRepo,
-    head,
-    headRevision: required(intent.headRevision, 'headRevision'),
-    base: required(intent.base, 'base'),
-    title: required(intent.title, 'title'),
-    bodyPath: required(intent.bodyPath, 'bodyPath'),
-    draft: intent.draft,
-  };
-  readFileSync(createIntent.bodyPath, 'utf8');
-  // Killing the script cannot cancel a submitted forge write. Keep this claim
-  // beside the durable intent even after success: a retry may only reconcile it.
-  const claimPath = `${intentPath}.create-started`;
+
+  const bodyPath = writePublishedBody(
+    artifacts,
+    process.env.TYPED_ARTIFACTS_FILE,
+    readFileSync(text(process.env.INPUTS_BODY), 'utf8')
+  );
+
+  // Killing the script cannot cancel a submitted forge write. Keep this claim even
+  // after success: a retry may only reconcile it.
+  const claimPath = join(artifacts, 'pr-create-started');
   try {
-    writeFileSync(claimPath, JSON.stringify({ repo: base, headRepo, head }), {
-      flag: 'wx',
-      mode: 0o600,
-    });
+    writeFileSync(claimPath, JSON.stringify({ repo, headRepo, head }), { flag: 'wx', mode: 0o600 });
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
       throw new Error(
@@ -105,10 +99,22 @@ function publish(): PrRecord {
     throw error;
   }
   try {
-    return createPr(createIntent, source);
+    return createPr(
+      {
+        repo,
+        headRepo,
+        head,
+        headRevision,
+        base: text(process.env.INPUTS_BASE),
+        title: text(process.env.INPUTS_TITLE),
+        bodyPath,
+        draft: trimmed(process.env.INPUTS_DRAFT) === 'true',
+      },
+      source
+    );
   } catch (error) {
-    // A forge refusal is definite: no write was sent, so the claim would only
-    // block a retry. Every other failure may have left a pull request behind.
+    // A forge refusal is definite: no write was sent, so the claim would only block
+    // a retry. Every other failure may have left a pull request behind.
     if (error instanceof ForgeOperationError && error.mutation?.outcome === 'refused') {
       unlinkSync(claimPath);
     }

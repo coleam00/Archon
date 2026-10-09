@@ -20,10 +20,11 @@ function artifactsDir(): string {
   return dir;
 }
 
-/** A gate's typed artifact as the engine writes it: the result under nodes/ and its sidecar. */
-function gate(
+/** A typed artifact as the engine writes it: the result under nodes/ and its sidecar. */
+function typed(
   dir: string,
   stem: string,
+  outputType: string,
   producedAt: string,
   result: Record<string, unknown> | string
 ): void {
@@ -35,13 +36,22 @@ function gate(
     join(dir, 'nodes', `${stem}.meta.json`),
     JSON.stringify({
       nodeId: stem,
-      outputType: 'green-gate',
+      outputType,
       path: `nodes/${stem}.md`,
       runId: 'run',
       producedAt,
       size: 1,
     })
   );
+}
+
+function gate(
+  dir: string,
+  stem: string,
+  producedAt: string,
+  result: Record<string, unknown> | string
+): void {
+  typed(dir, stem, 'green-gate', producedAt, result);
 }
 
 /** The report as a tail composes it: with the engine listing this node received. */
@@ -97,7 +107,7 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
     const dir = artifactsDir();
     gate(dir, 'gate-green', '2026-09-10T09:00:00.000Z', 'not json');
     const text = await report(dir);
-    expect(text).toContain("could not read the gate's record");
+    expect(text).toContain('could not read this green-gate record');
     expect(text).toContain(join(dir, 'nodes', 'gate-green.md'));
   });
 
@@ -183,30 +193,47 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
 });
 
 describe('discoveries', () => {
-  // Delivery writes each filed issue's URL back onto its record. A record with one is
-  // on the tracker; only an unfiled record still needs an agent to relay it.
-  it('links filed discoveries and asks for a relay only while one is unfiled', async () => {
-    const dir = artifactsDir();
-    const filed = { title: 'Stale mock type', relation: 'unrelated', issue: 'https://x/issues/7' };
-    writeFileSync(join(dir, 'discoveries.json'), JSON.stringify([filed]));
-    const allFiled = await report(dir);
-    expect(allFiled).toContain('- Stale mock type — https://x/issues/7');
-    expect(allFiled).not.toContain('If you are an agent reading this');
-
-    writeFileSync(
-      join(dir, 'discoveries.json'),
-      JSON.stringify([filed, { title: 'Flaky timeout', relation: 'unrelated' }])
-    );
-    const oneUnfiled = await report(dir);
-    expect(oneUnfiled).toContain('- Flaky timeout\n');
-    expect(oneUnfiled).toContain('If you are an agent reading this');
+  const record = (title: string) => ({
+    title,
+    claim: `${title} is real`,
+    evidence: ['a.ts:1'],
+    relation: 'unrelated',
+    source_nodes: ['seams'],
   });
 
-  it('reports a consolidated file that is not an array with its path', async () => {
+  it('lists filed discoveries with their issues and asks for no relay', async () => {
     const dir = artifactsDir();
-    writeFileSync(join(dir, 'discoveries.json'), '{}');
+    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+      discoveries: [record('Stale mock type')],
+    });
+    typed(dir, 'file-discoveries', 'discovery-filing', '2026-09-10T10:00:00.000Z', {
+      issues: ['https://x/issues/7'],
+      records: [{ title: 'Stale mock type', issue: 'https://x/issues/7' }],
+    });
     const text = await report(dir);
-    expect(text).toContain('is not a JSON array of records');
-    expect(text).toContain(join(dir, 'discoveries.json'));
+    expect(text).toContain('- Stale mock type — https://x/issues/7');
+    expect(text).not.toContain('If you are an agent reading this');
+  });
+
+  it("lists the latest verdict's unfiled discoveries with the relay", async () => {
+    const dir = artifactsDir();
+    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+      discoveries: [record('Old')],
+    });
+    typed(dir, 'recheck__publish', 'review-report', '2026-09-10T10:00:00.000Z', {
+      discoveries: [record('Flaky timeout')],
+    });
+    const text = await report(dir);
+    expect(text).toContain('- Flaky timeout [unrelated]');
+    expect(text).not.toContain('- Old');
+    expect(text).toContain('If you are an agent reading this');
+  });
+
+  it('says nothing when the final verdict recorded no discoveries', async () => {
+    const dir = artifactsDir();
+    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+      discoveries: [],
+    });
+    expect(await report(dir)).toBe('');
   });
 });

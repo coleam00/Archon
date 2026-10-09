@@ -15,13 +15,16 @@ import { writeFileSync } from 'node:fs';
 import { viewPr } from '../../.shared/pr.ts';
 import { forgeSource, parsePrRecord } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text } from '../../.shared/io.ts';
+import { withoutRedCauseBlock } from '../../.shared/report.ts';
 
 try {
   const source = forgeSource();
   const pr = parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)));
   const view = viewPr(pr, source);
   const path = join(artifactsDir(), 'pr-body-current.md');
-  writeFileSync(path, view.body);
+  // The red-cause block is rebuilt from the gates' records on publish, so the
+  // judging node reads the body without it.
+  writeFileSync(path, withoutRedCauseBlock(view.body));
   emit({ body: path, url: view.pr.url });
 } catch (error) {
   refuse(`read-pr-body: ${error instanceof Error ? error.message : String(error)}`);

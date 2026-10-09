@@ -49,50 +49,6 @@ export interface PrRecord extends QualifiedPr {
   readonly maintainer_can_modify: boolean | null;
 }
 
-// This standalone boundary is checked against @archon/forge by forge-contract.test.ts.
-export const CHECK_STATES = ['none', 'pending', 'green', 'red', 'gated', 'unknown'] as const;
-export type CheckState = (typeof CHECK_STATES)[number];
-
-/**
- * How a concluded check's result gates: @archon/forge's `concludedCheckStates`,
- * which the forge plugins classify through. The gh reader in ./checks.ts uses
- * this copy so both sources classify a GitHub conclusion the same way.
- */
-export const CONCLUDED_CHECK_STATES = {
-  success: 'green',
-  neutral: 'green',
-  skipped: 'green',
-  action_required: 'gated',
-  failure: 'red',
-  cancelled: 'red',
-  timed_out: 'red',
-  stale: 'red',
-  startup_failure: 'red',
-  unknown: 'unknown',
-} as const satisfies Record<string, Exclude<CheckState, 'none' | 'pending'>>;
-
-export interface CheckUnit {
-  readonly unit: { readonly name: string };
-  readonly phase: 'pending' | 'running' | 'completed' | 'unknown';
-  readonly result: string | null;
-  readonly state: Exclude<CheckState, 'none'>;
-}
-
-export interface RerunGroup {
-  readonly id: string;
-  readonly attempt: number;
-}
-export interface ForgeCheckUnit extends CheckUnit {
-  readonly unit: {
-    readonly kind: 'check' | 'commit_status';
-    readonly id: string;
-    readonly name: string;
-  };
-  readonly rerun?: RerunGroup | null;
-}
-export interface ForgeCheckSet extends CheckSet {
-  readonly units: readonly ForgeCheckUnit[];
-}
 export interface MergeRequest {
   readonly ref: QualifiedPr;
   readonly method: 'merge' | 'squash';
@@ -110,20 +66,6 @@ export interface MergeResult extends Omit<MergeRequest, 'ref'> {
   readonly pr: PrRecord;
   readonly enforcedConditions: readonly (keyof MergeRequest['conditions'])[];
   readonly landed: Landed;
-}
-export interface SelectedCheck {
-  readonly unit: ForgeCheckUnit['unit'];
-  readonly rerun: RerunGroup | null;
-}
-export interface RerunRequest {
-  readonly ref: QualifiedPr;
-  readonly revision: string;
-  readonly units: readonly SelectedCheck[];
-}
-export interface RerunResult extends RerunRequest {
-  readonly target: QualifiedPr;
-  readonly outcome: 'applied';
-  readonly changed: true;
 }
 export interface ReviewItem {
   readonly kind: 'review' | 'review_comment';
@@ -154,23 +96,6 @@ export interface MutationFailure {
     readonly conditions: MergeRequest['conditions'];
     readonly landed?: Landed;
   };
-  readonly rerun?: {
-    readonly revision: string;
-    readonly requested: readonly SelectedCheck[];
-    readonly observed: readonly SelectedCheck[];
-  };
-}
-
-export interface CheckSet {
-  readonly units: readonly CheckUnit[];
-  readonly summary: { readonly state: CheckState };
-}
-
-export interface ChecksObservation extends ForgeCheckSet {
-  readonly approvalPending?: boolean | null;
-  readonly ref: QualifiedPr;
-  readonly revision: string;
-  readonly required: ForgeCheckSet | null;
 }
 
 /**
@@ -367,136 +292,16 @@ function parseCommand(value: string | undefined): readonly string[] {
   return parsed as string[];
 }
 
-function parseUnit(value: unknown): ForgeCheckUnit | undefined {
-  const item = record(value);
-  const unit = record(item?.unit);
-  const states: readonly CheckState[] = CHECK_STATES.filter(state => state !== 'none');
-  const phases = ['pending', 'running', 'completed', 'unknown'] as const;
-  if (
-    (unit?.kind !== 'check' && unit?.kind !== 'commit_status') ||
-    typeof unit.id !== 'string' ||
-    unit.id === '' ||
-    typeof unit?.name !== 'string' ||
-    unit.name === '' ||
-    !states.includes(item?.state as CheckState) ||
-    !phases.includes(item?.phase as (typeof phases)[number]) ||
-    !(typeof item?.result === 'string' || item?.result === null)
-  )
-    return undefined;
-  let rerun: RerunGroup | null | undefined;
-  if (item.rerun === null) rerun = null;
-  else if (item.rerun !== undefined) {
-    const group = record(item.rerun);
-    if (
-      !group ||
-      typeof group.id !== 'string' ||
-      group.id === '' ||
-      typeof group.attempt !== 'number' ||
-      !Number.isInteger(group.attempt) ||
-      group.attempt <= 0
-    )
-      return undefined;
-    rerun = { id: group.id, attempt: group.attempt };
-  }
-  return {
-    unit: { kind: unit.kind, id: unit.id, name: unit.name },
-    ...(rerun === undefined ? {} : { rerun }),
-    phase: item.phase as CheckUnit['phase'],
-    result: item.result,
-    state: item.state as CheckUnit['state'],
-  };
-}
-
-function parseSet(value: unknown): ForgeCheckSet | undefined {
-  const set = record(value);
-  const summary = record(set?.summary);
-  const states: readonly CheckState[] = CHECK_STATES;
-  if (!Array.isArray(set?.units) || !states.includes(summary?.state as CheckState))
-    return undefined;
-  const units = set.units.map(parseUnit);
-  if (units.some(unit => unit === undefined)) return undefined;
-  return { units: units as ForgeCheckUnit[], summary: { state: summary?.state as CheckState } };
-}
-
 function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
   return left.number === right.number && sameRepo(left.repo, right.repo);
 }
 
-/** Invoke `archon forge checks` and validate only the fields pack policy consumes. */
-export function readChecks(ref: QualifiedPr): ChecksObservation {
-  const command = parseCommand(process.env.ARCHON_CLI_COMMAND);
-  const result = Bun.spawnSync(
-    [...command, 'forge', 'checks', '--json', '--data', JSON.stringify({ ref })],
-    {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    }
-  );
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(result.stdout.toString());
-  } catch {
-    if (result.exitCode !== 0)
-      throw new Error(`forge check read failed: ${result.stderr.toString().trim()}`);
-    throw new Error('forge check read returned invalid JSON');
-  }
-  const response = record(parsed);
-  if (response?.ok === false) {
-    const error = record(response.error);
-    throw new Error(
-      `forge check read failed: ${typeof error?.message === 'string' ? error.message : 'unknown error'}`
-    );
-  }
-  if (result.exitCode !== 0) {
-    const detail = result.stderr.toString().trim();
-    throw new Error(`forge check read failed${detail === '' ? '' : `: ${detail}`}`);
-  }
-  const resultBody = record(response?.result);
-  const value = record(resultBody?.value);
-  const observedRef = record(value?.ref);
-  const observedRepo = record(observedRef?.repo);
-  const observed =
-    observedRepo && typeof observedRef?.number === 'number'
-      ? { repo: { host: observedRepo.host, path: observedRepo.path }, number: observedRef.number }
-      : undefined;
-  const full = parseSet(value);
-  const required = value?.required === null ? null : parseSet(value?.required);
-  if (
-    typeof response?.operationId !== 'string' ||
-    response.operationId === '' ||
-    response.ok !== true ||
-    resultBody?.op !== 'checks.state' ||
-    !(
-      value?.approvalPending === undefined ||
-      value.approvalPending === null ||
-      typeof value.approvalPending === 'boolean'
-    ) ||
-    typeof value?.revision !== 'string' ||
-    value.revision === '' ||
-    !observed ||
-    typeof observed.repo.host !== 'string' ||
-    typeof observed.repo.path !== 'string' ||
-    !samePr(ref, observed as QualifiedPr) ||
-    !full ||
-    (value?.required !== null && !required)
-  ) {
-    throw new Error('forge check read returned an unexpected response shape or target');
-  }
-  return {
-    ref,
-    revision: value.revision,
-    approvalPending: value.approvalPending,
-    units: full.units,
-    summary: full.summary,
-    required: required ?? null,
-  };
-}
-
-export function preferredChecks(observation: ChecksObservation): CheckSet {
-  return observation.required ?? observation;
-}
-
+/**
+ * The URL of the issue a `workitem.create` filed or recovered. A recovered issue
+ * (`changed: false`, found by its marker) counts only while it is open: a closed one
+ * was settled by a maintainer, and reporting it as filed would leave this record
+ * unpublished.
+ */
 export function parseCreatedWorkItem(value: unknown, repo: QualifiedPr['repo']): string {
   const result = record(value);
   const item = record(result?.workitem);
@@ -511,6 +316,9 @@ export function parseCreatedWorkItem(value: unknown, repo: QualifiedPr['repo']):
     (item.state !== 'open' && item.state !== 'closed')
   )
     throw new Error('forge returned an invalid created work item');
+  if (item.state !== 'open') {
+    throw new Error(`forge recovered ${item.url}, which is closed, instead of filing an open issue`);
+  }
   return item.url;
 }
 export function readWorkItemLabels(ref: QualifiedPr): string[] {

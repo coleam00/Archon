@@ -84,8 +84,7 @@ nodes:
         # The previous round's reviewed commit; empty on a first round.
         cursor: { type: string }
         risks: { type: string, minLength: 1 }
-        execution: { type: object }
-      required: [continuation, head, cursor, risks, execution]
+      required: [continuation, head, cursor, risks]
 
   - id: scope
     command: review-scope
@@ -169,11 +168,17 @@ nodes:
       continuation: "$mode.output.continuation"
       tier: "$INPUTS.tier"
       focused: { from: "$focused.output", if_skipped: null }
+      errors: "$INPUTS.errors"
+      docs: "$INPUTS.docs"
+      scope_docs: "$scope.output.docs"
     output_format:
       type: object
       properties:
         full: { type: boolean }
-      required: [full]
+        errors: { type: boolean }
+        docs: { type: boolean }
+        lenses: { type: array, items: { type: string } }
+      required: [full, errors, docs, lenses]
 
   # Structure is judged on every full-tier change, never selected for one; the
   # focused reviewer carries a machinery check instead. The charter lives in its
@@ -192,16 +197,16 @@ nodes:
     command: review-errors
     context: fresh
     mutates_checkout: false
-    depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.errors == 'true'"
+    depends_on: [coverage]
+    when: "$coverage.output.errors == true"
 
   - id: docs
     output_type: review-lens
     command: review-docs
     context: fresh
     mutates_checkout: false
-    depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.docs == 'true' || $mode.output.continuation == false && $INPUTS.docs == 'auto' && $scope.output.docs == true"
+    depends_on: [coverage]
+    when: "$coverage.output.docs == true"
 
   # all_done lets this barrier settle after input-disabled lenses, every skipped
   # continuation lens, or a lens whose retries were exhausted. The deciding
@@ -212,11 +217,31 @@ nodes:
     depends_on: [coverage, seams, code, tests, focused, simplify, errors, docs]
     trigger_rule: all_done
 
+  # Which enabled lenses did not complete is computed, not asked of the deciding
+  # agent: a lens completed exactly when the engine published its typed artifact.
+  # A continuation round enables none, so its list is empty.
+  - id: lens-status
+    script: lens-status
+    runtime: bun
+    depends_on: [scope, review-complete]
+    with:
+      continuation: "$mode.output.continuation"
+      tier: "$INPUTS.tier"
+      errors: "$INPUTS.errors"
+      docs: "$INPUTS.docs"
+      scope_docs: "$scope.output.docs"
+    output_format:
+      type: object
+      properties:
+        required: { type: array, items: { type: string } }
+        completed: { type: array, items: { type: string } }
+        missing: { type: array, items: { type: string } }
+      required: [required, completed, missing]
+
   # A failed specialist (a provider stream dying mid-review, say) must not kill
-  # the review: synthesize detects the missing
-  # report for an ENABLED lens and forces ready:false naming the gap, so
-  # degradation is disclosed, never silent, and the correction loop's recheck is
-  # the retry. `ready` is a real boolean — the load-bearing field a composing
+  # the review: lens-status names every enabled lens that did not complete,
+  # synthesize reports the gap, and publish refuses a ready verdict while one is
+  # missing, so degradation is disclosed, never silent. `ready` is a real boolean — the load-bearing field a composing
   # loop terminates on. Full reviews receive complete lens files; continuation
   # reviews receive the complete prior report and correction delta.
   #
@@ -238,7 +263,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     output_type: review-report
-    depends_on: [scope, review-complete]
+    depends_on: [scope, review-complete, lens-status]
     output_format: &review_verdict
       type: object
       properties:
@@ -259,7 +284,20 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [review/report.md] }
           required: [type, run_id, path]
-      required: [ready, action, findings_summary, report]
+        # Work this review proved but the change does not do. Delivery files each
+        # record as an issue; the human-readable copy is discoveries.md.
+        discoveries:
+          type: array
+          items:
+            type: object
+            properties:
+              title: { type: string, pattern: '\S' }
+              claim: { type: string, pattern: '\S' }
+              evidence: { type: array, items: { type: string }, minItems: 1 }
+              relation: { type: string, enum: [unrelated, scope_conflict, note] }
+              source_nodes: { type: array, items: { type: string }, minItems: 1 }
+            required: [title, claim, evidence, relation, source_nodes]
+      required: [ready, action, findings_summary, report, discoveries]
 
   # The reviewer judges and writes the report; this node owns the one public
   # write, so every round edits the same marked comment instead of appending
@@ -280,5 +318,18 @@ nodes:
       action: "$synthesize.output.action"
       summary: "$synthesize.output.findings_summary"
       report_pointer: "$synthesize.output.report"
+      discoveries: { from: "$synthesize.output.discoveries" }
+      missing: { from: "$lens-status.output.missing" }
     output_type: review-report
     output_format: *review_verdict
+
+  # Reviewers' scratch worktrees are removed by the workflow once every lens and
+  # the deciding agent have settled, whether they succeeded or failed.
+  - id: prune-scratch
+    script: prune-scratch
+    runtime: bun
+    depends_on: [synthesize]
+    trigger_rule: all_done
+    with:
+      lens: ""
+
