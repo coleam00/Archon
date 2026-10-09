@@ -49,7 +49,8 @@ When nothing needed changing, write `$ARTIFACTS_DIR/pr-body-intent.json` as
 Otherwise write the **complete** intended body — not a patch — to
 `$ARTIFACTS_DIR/pr-body-final.md`, then write
 `$ARTIFACTS_DIR/pr-body-intent.json` as
-`{"change": true, "bodyPath": "$ARTIFACTS_DIR/pr-body-final.md"}`.
+`{"change": true, "bodyPath": "$ARTIFACTS_DIR/pr-body-final.md"}`, using a JSON
+serializer rather than writing it by hand, so a Windows path's backslashes are escaped.
 
 Return only `{"intent": "$ARTIFACTS_DIR/pr-body-intent.json"}`, and report in
 your own words which claims you corrected, or that the body was already accurate.

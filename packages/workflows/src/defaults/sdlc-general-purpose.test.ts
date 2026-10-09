@@ -1043,4 +1043,66 @@ describe('pull request publication from a synthetic review branch', () => {
     expect(result.stderr?.toString()).not.toContain('JSON Parse error');
     expect(calls).toContain('"list"');
   });
+
+  test('a hand-written intent with single-backslash Windows paths creates from the contract body', async () => {
+    // The live shape: an agent wrote bodyPath as C:\Users\...\north-star-godot\...\pr-body.md
+    // by hand. JSON reads \U as an invalid escape (the run failed) and \n as a newline.
+    const artifacts = await mkdtemp(join(root, 'publish-pr-win-'));
+    const intent = join(artifacts, 'pr-intent.json');
+    const body = join(artifacts, 'pr-body.md');
+    const log = join(artifacts, 'gh.jsonl');
+    await writeFile(body, 'A body\n');
+    await writeFile(
+      intent,
+      String.raw`{"repo":{"host":"github.com","path":"owner/repo"},"head":"feature/notes","headRevision":"deadbeef","base":"dev","title":"A \"quoted\" title","bodyPath":"C:\Users\someone\.archon\workspaces\owner\north-star\artifacts\runs\abc/pr-body.md","draft":true}`
+    );
+    const result = Bun.spawnSync([process.execPath, publishPrScript], {
+      env: env({ INPUTS_INTENT: intent, ARCHON_SDLC_FORGE: 'gh', GH_LOG: log }),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(result.stderr?.toString()).not.toContain('JSON Parse error');
+    const calls = (await readFile(log, 'utf8'))
+      .split('\n')
+      .filter(Boolean)
+      .map(line => (JSON.parse(line) as { args: string[] }).args);
+    const create = calls.find(args => args[0] === 'pr' && args[1] === 'create');
+    expect(create).toBeDefined();
+    // The body comes from the path the contract fixes, beside the intent; valid
+    // escapes in the agent's other strings keep their meaning.
+    expect(create?.[create.indexOf('--body-file') + 1]).toBe(body);
+    expect(create?.[create.indexOf('--title') + 1]).toBe('A "quoted" title');
+  });
+});
+
+describe('agent-written JSON', () => {
+  const load = async () =>
+    (await import(join(workflowRoot, '.shared', 'agent-json.ts'))) as {
+      parseAgentJson: (raw: string) => unknown;
+    };
+
+  test('strict JSON, a byte-order mark, and invalid escapes all parse; valid escapes keep their meaning', async () => {
+    const { parseAgentJson } = await load();
+    expect(parseAgentJson('{"a":1}')).toEqual({ a: 1 });
+    expect(parseAgentJson('﻿{"a":1}')).toEqual({ a: 1 });
+    expect(parseAgentJson(String.raw`{"p":"C:\Users\x\.cache"}`)).toEqual({
+      p: String.raw`C:\Users\x\.cache`,
+    });
+    expect(
+      parseAgentJson(String.raw`{"q":"say \"hi\"","b":"a\\b","u":"\u00e9","p":"D:\work"}`)
+    ).toEqual({
+      q: 'say "hi"',
+      b: String.raw`a\b`,
+      u: 'é',
+      p: String.raw`D:\work`,
+    });
+    // \u followed by non-hex is an invalid escape too.
+    expect(parseAgentJson(String.raw`{"p":"C:\users\me"}`)).toEqual({ p: String.raw`C:\users\me` });
+  });
+
+  test('JSON that is broken for another reason still fails with the strict error', async () => {
+    const { parseAgentJson } = await load();
+    expect(() => parseAgentJson('{"a":')).toThrow();
+    expect(() => parseAgentJson(String.raw`{"p":"C:\Users"`)).toThrow();
+  });
 });

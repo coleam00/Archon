@@ -53,7 +53,7 @@ Write `$ARTIFACTS_DIR/pr-intent.json` with exactly these fields:
 - `draft`: `true` or `false` as a JSON boolean, from `$INPUTS.draft`;
 - `existing`: the pull request number this run was launched onto, as a JSON integer — omit this field entirely otherwise.
 
-The file must contain no credential and no raw remote URL.
+The file must contain no credential and no raw remote URL. Write it with a JSON serializer, never by hand: a Windows path such as `C:\Users\...` written by hand leaves backslashes JSON cannot read.
 
 Also write `$ARTIFACTS_DIR/pr-action.md` with `REPO_HOST`, `REPO_PATH`, the recorded branch, the explicit push target, and the push result. This is the durable action evidence for what you did; the publishing node records what it did with the intent.
 

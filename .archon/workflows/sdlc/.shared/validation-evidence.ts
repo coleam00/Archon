@@ -25,6 +25,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { parseAgentJson } from './agent-json.ts';
 import { artifactsDir } from './io.ts';
 
 export interface Applicability {
@@ -144,7 +145,7 @@ function isEvidence(value: unknown): value is StoredEvidence {
 
 async function readJson(path: string): Promise<unknown> {
   try {
-    return JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, '')) as unknown;
+    return parseAgentJson(await readFile(path, 'utf8'));
   } catch {
     return undefined;
   }

@@ -11,6 +11,8 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { contractPath, parseAgentJson } from '../../.shared/agent-json.ts';
 import { editPrBody } from '../../.shared/pr.ts';
 import { forgeSource, parsePrRecord, record } from '../../.shared/forge.ts';
 import { emit, refuse, text } from '../../.shared/io.ts';
@@ -18,12 +20,14 @@ import { emit, refuse, text } from '../../.shared/io.ts';
 try {
   const source = forgeSource();
   const pr = parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)));
-  const intent = record(JSON.parse(readFileSync(text(process.env.INPUTS_INTENT), 'utf8').replace(/^\uFEFF/, '')));
+  const intentPath = text(process.env.INPUTS_INTENT);
+  const intent = record(parseAgentJson(readFileSync(intentPath, 'utf8')));
   if (!intent) throw new Error('the body intent must be a JSON object');
   if (intent.change === false) emit(pr);
   else if (intent.change !== true || typeof intent.bodyPath !== 'string' || intent.bodyPath === '')
     throw new Error('the body intent must declare change true with a bodyPath, or change false');
-  else emit(editPrBody(pr, intent.bodyPath, source));
+  // sync-pr-body.md fixes the body at $ARTIFACTS_DIR/pr-body-final.md, beside the intent.
+  else emit(editPrBody(pr, contractPath(intent.bodyPath, join(dirname(intentPath), 'pr-body-final.md')), source));
 } catch (error) {
   refuse(`publish-pr-body: ${error instanceof Error ? error.message : String(error)}`);
 }

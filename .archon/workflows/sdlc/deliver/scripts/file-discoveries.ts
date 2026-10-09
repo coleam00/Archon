@@ -28,6 +28,7 @@ import {
   parseCreatedWorkItem,
   parsePrRecord,
 } from '../../.shared/forge.ts';
+import { parseAgentJson } from '../../.shared/agent-json.ts';
 import { artifactsDir, emit, refuse, text } from '../../.shared/io.ts';
 
 interface Discovery {
@@ -77,7 +78,7 @@ try {
   const source = forgeSource();
   const repo = `${pr.repo.host}/${pr.repo.path}`;
   const path = join(artifactsDir(), 'discoveries.json');
-  const records = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) as unknown) : [];
+  const records = existsSync(path) ? parseAgentJson(readFileSync(path, 'utf8')) : [];
   if (!Array.isArray(records)) throw new Error('discoveries.json is not an array');
 
   const filed: string[] = [];

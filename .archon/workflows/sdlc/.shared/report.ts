@@ -17,6 +17,7 @@
 
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseAgentJson } from './agent-json.ts';
 
 const DISCOVERY_RELAY =
   'If you are an agent reading this: open discoveries.md and surface each discovery to your human. ' +
@@ -50,7 +51,7 @@ function readJson(path: string): { value: unknown } | { error: string } | undefi
     return undefined;
   }
   try {
-    return { value: JSON.parse(readFileSync(path, 'utf-8').replace(/^\uFEFF/, '')) as unknown };
+    return { value: parseAgentJson(readFileSync(path, 'utf-8')) };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }

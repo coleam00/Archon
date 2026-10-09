@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { arch, platform } from 'node:os';
 import { join, resolve } from 'node:path';
+import { parseAgentJson } from './agent-json.ts';
 import { projectEnvironment } from './node-env.ts';
 
 export interface CompositionRequest {
@@ -349,5 +350,5 @@ export async function compareComposition(
 }
 
 export function readComparisonRequest(path: string): CompositionRequest {
-  return parseCompositionRequest(JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) as unknown);
+  return parseCompositionRequest(parseAgentJson(readFileSync(path, 'utf8')));
 }

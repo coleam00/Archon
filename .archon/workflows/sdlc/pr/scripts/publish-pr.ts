@@ -15,6 +15,8 @@
  */
 
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { contractPath, parseAgentJson } from '../../.shared/agent-json.ts';
 import { createPr, findOpenPrByHead, viewPr, type CreatePrIntent } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
@@ -52,7 +54,7 @@ function required(value: unknown, field: string): string {
 function publish(): PrRecord {
   const source = forgeSource();
   const intentPath = text(process.env.INPUTS_INTENT);
-  const intent = record(JSON.parse(readFileSync(intentPath, 'utf8').replace(/^\uFEFF/, '')));
+  const intent = record(parseAgentJson(readFileSync(intentPath, 'utf8')));
   if (!intent) throw new Error('the PR intent must be a JSON object');
   const base = repo(intent.repo, 'repo');
   const headRepo = intent.headRepo === undefined ? base : repo(intent.headRepo, 'headRepo');
@@ -96,7 +98,8 @@ function publish(): PrRecord {
     headRevision: required(intent.headRevision, 'headRevision'),
     base: required(intent.base, 'base'),
     title: required(intent.title, 'title'),
-    bodyPath: required(intent.bodyPath, 'bodyPath'),
+    // pr.md fixes the body at $ARTIFACTS_DIR/pr-body.md, beside the intent.
+    bodyPath: contractPath(required(intent.bodyPath, 'bodyPath'), join(dirname(intentPath), 'pr-body.md')),
     draft: intent.draft,
   };
   readFileSync(createIntent.bodyPath, 'utf8').replace(/^\uFEFF/, '');
