@@ -219,6 +219,8 @@ nodes:
           with:
             action: execute
             gate: "$gate.output"
+            # The gate already enforced it; bound here because the script is shared.
+            path_policy: "$path-policy.output"
             mode: "$INPUTS.mode"
             approval: { from: "$approval.output", if_skipped: null }
             request: "$refresh.output"
