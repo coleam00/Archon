@@ -124,9 +124,11 @@ nodes:
       validation_context: "$INPUTS.validation_context"
       final_validation: "$INPUTS.final_validation"
 
+  # Binding the delivered pull request is facts (the delivery's certified URL, gh,
+  # git HEAD, this run's review and validation reports), so a script owns it.
   - id: candidate
-    command: bind-delivered-pr
-    context: fresh
+    script: bind-delivered-pr
+    runtime: uv
     mutates_checkout: false
     depends_on: [ship]
     with:
@@ -137,6 +139,7 @@ nodes:
         delivered: { type: boolean }
         prs: { type: array, items: { type: string } }
         head: { type: string }
+        reason: { type: string }
       required: [delivered, prs, head]
 
   - id: runtime
@@ -187,8 +190,8 @@ nodes:
         or create another PR. Independently review every correction.
 
   - id: repaired-candidate
-    command: bind-delivered-pr
-    context: fresh
+    script: bind-delivered-pr
+    runtime: uv
     mutates_checkout: false
     depends_on: [repair]
     when: "$qualify.output.repair == true"
@@ -200,6 +203,7 @@ nodes:
         delivered: { type: boolean }
         prs: { type: array, items: { type: string } }
         head: { type: string }
+        reason: { type: string }
       required: [delivered, prs, head]
 
   - id: runtime-retry

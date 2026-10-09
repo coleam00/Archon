@@ -9,6 +9,8 @@ const triageScript = join(workflowRoot, 'triage', 'scripts', 'verdict.ts');
 const shipOutcomeScript = join(workflowRoot, 'ship', 'scripts', 'outcome.ts');
 const intakeScript = join(workflowRoot, 'lifecycle', 'scripts', 'select-target.py');
 const closeTargetScript = join(workflowRoot, 'lifecycle', 'scripts', 'close-target.py');
+const bindScript = join(workflowRoot, 'lifecycle', 'scripts', 'bind-delivered-pr.py');
+const refreshScript = join(workflowRoot, 'merge-queue', 'scripts', 'refresh-merge.py');
 const holdsScript = join(workflowRoot, 'merge-queue', 'scripts', 'publish-holds.ts');
 const publishPrScript = join(workflowRoot, 'pr', 'scripts', 'publish-pr.ts');
 
@@ -26,6 +28,11 @@ beforeAll(async () => {
     `import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 const payloadText = await Bun.stdin.text();
+const fakeView = process.env.GH_PR_VIEW;
+const mergeSeqFile = process.env.GH_MERGE_SEQ_FILE;
+const fakeBaseSha = process.env.GH_BASE_SHA ?? '';
+const fakeBehindBy = process.env.GH_BEHIND_BY ?? '0';
+const apiEndpoint = args.find((value: string) => value.startsWith('repos/')) ?? '';
 if (process.env.GH_LOG) appendFileSync(process.env.GH_LOG, JSON.stringify({args,payload:payloadText ? JSON.parse(payloadText) : null}) + '\\n');
 const statePath = process.env.GH_STATE;
 const readState = () => statePath ? JSON.parse(readFileSync(statePath, 'utf8')) : {labels:[],available:[],comments:[]};
@@ -44,7 +51,19 @@ else if (args[0] === 'issue' && args[1] === 'edit') {
 }
 else if (args[0] === 'issue' && args[1] === 'view') console.log(JSON.stringify({state: process.env.GH_ISSUE_STATE ?? 'OPEN'}));
 else if (args[0] === 'issue' && args[1] === 'close') {}
+else if (args[0] === 'pr' && args[1] === 'view' && fakeView) {
+  // A full pull request record; GH_MERGE_SEQ_FILE replays mergeStateStatus reads in order.
+  const view = JSON.parse(fakeView);
+  if (mergeSeqFile) {
+    const seq = JSON.parse(readFileSync(mergeSeqFile, 'utf8')) as string[];
+    view.mergeStateStatus = seq.length > 1 ? seq.shift() : seq[0];
+    writeFileSync(mergeSeqFile, JSON.stringify(seq));
+  }
+  console.log(JSON.stringify(view));
+}
 else if (args[0] === 'pr' && args[1] === 'view') console.log(JSON.stringify({state: JSON.parse(process.env.GH_PR_STATES ?? '{}')[args[2]] ?? 'OPEN'}));
+else if (args[0] === 'api' && apiEndpoint.includes('/branches/')) console.log(fakeBaseSha);
+else if (args[0] === 'api' && apiEndpoint.includes('/compare/')) console.log(fakeBehindBy);
 else if (args[0] === 'issue') {
   // Like gh: the listing is newest first and --limit truncates it.
   const issues = JSON.parse(process.env.GH_ISSUES ?? '[]');
@@ -101,12 +120,14 @@ function env(values: Record<string, string>): Record<string, string> {
 
 function runPython(
   script: string,
-  values: Record<string, string>
+  values: Record<string, string>,
+  cwd?: string
 ): ReturnType<typeof Bun.spawnSync> {
   return Bun.spawnSync(['uv', 'run', '--no-project', script], {
     env: env(values),
     stdout: 'pipe',
     stderr: 'pipe',
+    ...(cwd ? { cwd } : {}),
   });
 }
 
@@ -570,6 +591,215 @@ describe('lifecycle closes the issue it worked after a confirmed merge', () => {
     const none = await close('#4', { INPUTS_PRS: '[]' });
     expect(none.output).toMatchObject({ closed: false });
     expect(none.calls).toHaveLength(0);
+  });
+});
+
+describe('lifecycle binds the delivered pull request from facts', () => {
+  const url = 'https://github.com/owner/repo/pull/9';
+  let repo: string;
+  let artifacts: string;
+  let head: string;
+
+  const git = (...args: string[]): string => {
+    const out = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe' });
+    if (out.exitCode !== 0) throw new Error(out.stderr.toString());
+    return out.stdout.toString().trim();
+  };
+
+  beforeAll(async () => {
+    repo = join(root, 'bind-repo');
+    artifacts = join(root, 'bind-artifacts');
+    await mkdir(join(artifacts, 'review'), { recursive: true });
+    await mkdir(repo);
+    git('init', '-q', '-b', 'main');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'one'
+    );
+    git('checkout', '-q', '-b', 'archon/task-9');
+    head = git('rev-parse', 'HEAD');
+    await writeFile(join(artifacts, 'review', 'report.md'), 'ready');
+    await writeFile(join(artifacts, 'validation.md'), 'green');
+  });
+
+  const bind = (delivery: unknown, view: Record<string, unknown> = {}, dir?: string) => {
+    const result = runPython(
+      bindScript,
+      {
+        INPUTS_DELIVERY: JSON.stringify(delivery),
+        ARTIFACTS_DIR: dir ?? artifacts,
+        GH_PR_VIEW: JSON.stringify({
+          state: 'OPEN',
+          isDraft: false,
+          isCrossRepository: false,
+          headRefName: 'archon/task-9',
+          headRefOid: head,
+          ...view,
+        }),
+      },
+      repo
+    );
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    return JSON.parse(stdout(result)) as Record<string, unknown>;
+  };
+
+  test("binds ship's certified pull request at this checkout's head", () => {
+    expect(bind({ delivered: true, summary: `${url} plus caveats` })).toMatchObject({
+      delivered: true,
+      prs: [url],
+      head,
+    });
+  });
+
+  test("accepts a repair delivery's pr_url", () => {
+    expect(bind({ pr_url: url })).toMatchObject({ delivered: true, prs: [url], head });
+  });
+
+  test('a declined or empty delivery binds nothing', () => {
+    expect(bind({ delivered: false, summary: 'No delivery needed' })).toMatchObject({
+      delivered: false,
+      prs: [],
+    });
+    expect(bind({ delivered: true, summary: 'shipped, trust me' })).toMatchObject({
+      delivered: false,
+    });
+  });
+
+  test('a pull request that does not match this checkout is not delivered', () => {
+    for (const view of [
+      { headRefOid: 'f'.repeat(40) },
+      { headRefName: 'someone-else' },
+      { isDraft: true },
+      { state: 'CLOSED' },
+      { isCrossRepository: true },
+    ]) {
+      expect(bind({ delivered: true, summary: url }, view)).toMatchObject({
+        delivered: false,
+        prs: [],
+      });
+    }
+  });
+
+  test('missing review or validation reports from this run are not delivery', async () => {
+    const empty = join(root, 'bind-empty-artifacts');
+    await mkdir(empty, { recursive: true });
+    expect(bind({ delivered: true, summary: url }, {}, empty)).toMatchObject({
+      delivered: false,
+    });
+  });
+});
+
+describe('merge refresh reads the facts for the next planned merge', () => {
+  const plan = {
+    repository: 'owner/repo',
+    base: 'main',
+    base_sha: 'base1',
+    method: 'squash',
+    pull_requests: [
+      { number: 7, url: 'https://github.com/owner/repo/pull/7', head_sha: 'h7' },
+      { number: 8, url: 'https://github.com/owner/repo/pull/8', head_sha: 'h8' },
+    ],
+    evidence: [],
+    reasons: [],
+  };
+  let artifacts: string;
+
+  beforeAll(async () => {
+    artifacts = join(root, 'refresh-artifacts');
+    await mkdir(artifacts, { recursive: true });
+    await writeFile(join(artifacts, 'merge-plan.json'), JSON.stringify(plan));
+  });
+
+  const refresh = (
+    view: Record<string, unknown>,
+    values: Record<string, string> = {}
+  ): Record<string, unknown> => {
+    const result = runPython(refreshScript, {
+      ARTIFACTS_DIR: artifacts,
+      INPUTS_PREVIOUS: '',
+      GH_BASE_SHA: 'base1',
+      REFRESH_UNKNOWN_WAIT_S: '0',
+      GH_PR_VIEW: JSON.stringify({
+        state: 'OPEN',
+        isDraft: false,
+        isCrossRepository: false,
+        baseRefName: 'main',
+        headRefOid: 'h7',
+        mergeStateStatus: 'CLEAN',
+        ...view,
+      }),
+      ...values,
+    });
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    return JSON.parse(stdout(result)) as Record<string, unknown>;
+  };
+
+  test('authorizes the first planned merge while nothing moved', () => {
+    expect(refresh({})).toEqual(
+      expect.objectContaining({
+        authorized: true,
+        repository: 'owner/repo',
+        number: 7,
+        head_sha: 'h7',
+        method: 'squash',
+      })
+    );
+  });
+
+  test('holds when the base, the head or mergeability changed', () => {
+    expect(refresh({}, { GH_BASE_SHA: 'moved' })).toMatchObject({ authorized: false });
+    expect(refresh({ headRefOid: 'other' })).toMatchObject({ authorized: false });
+    expect(refresh({ baseRefName: 'develop' })).toMatchObject({ authorized: false });
+    for (const status of ['DIRTY', 'BEHIND', 'DRAFT']) {
+      expect(refresh({ mergeStateStatus: status })).toMatchObject({ authorized: false });
+    }
+    expect(refresh({ isDraft: true })).toMatchObject({ authorized: false });
+    expect(refresh({ isCrossRepository: true })).toMatchObject({ authorized: false });
+    expect(refresh({ state: 'MERGED' })).toMatchObject({ authorized: false });
+  });
+
+  test("re-reads GitHub's lazily computed mergeability before deciding", async () => {
+    const seq = join(root, 'merge-seq.json');
+    await writeFile(seq, JSON.stringify(['UNKNOWN', 'UNKNOWN', 'CLEAN']));
+    expect(refresh({}, { GH_MERGE_SEQ_FILE: seq })).toMatchObject({ authorized: true });
+    await writeFile(seq, JSON.stringify(['UNKNOWN']));
+    expect(refresh({}, { GH_MERGE_SEQ_FILE: seq, REFRESH_UNKNOWN_READS: '2' })).toMatchObject({
+      authorized: false,
+    });
+  });
+
+  test('after a merge, the next pull request must already contain the new base', () => {
+    const previous = JSON.stringify({
+      urls: ['https://github.com/owner/repo/pull/7'],
+      prior_base_sha: 'base2',
+    });
+    const next = { headRefOid: 'h8' };
+    const values = { INPUTS_PREVIOUS: previous, GH_BASE_SHA: 'base2' };
+    expect(refresh(next, { ...values, GH_BEHIND_BY: '1' })).toMatchObject({ authorized: false });
+    expect(refresh(next, { ...values, GH_BEHIND_BY: '0' })).toMatchObject({
+      authorized: true,
+      number: 8,
+      head_sha: 'h8',
+    });
+    // The base moved again since our own merge: hold.
+    expect(refresh(next, { ...values, GH_BASE_SHA: 'base3' })).toMatchObject({
+      authorized: false,
+    });
+  });
+
+  test('nothing is authorized once every planned pull request merged', () => {
+    const previous = JSON.stringify({
+      urls: plan.pull_requests.map(entry => entry.url),
+      prior_base_sha: 'base3',
+    });
+    expect(refresh({}, { INPUTS_PREVIOUS: previous })).toMatchObject({ authorized: false });
   });
 });
 

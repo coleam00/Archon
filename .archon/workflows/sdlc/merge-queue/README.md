@@ -5,9 +5,12 @@
 `required_checks`, and `publish_holds=false|true`. Evidence
 may be an empty array when validation and review are GitHub-only; file-backed
 entries bind an exact path and SHA-256 and are rechecked before merge authorization.
-Authorized hold comments use the assessment-time evidence snapshot. It uses two medium command agents with a native
-approval node between them. GitHub operations and CI inspection use gh inside
-those nodes, with explicit repository and expected head identity.
+Authorized hold comments use the assessment-time evidence snapshot. One medium
+command agent assesses the batch (review credibility, ordering, evidence), and a
+native approval node follows it. Everything after that is facts, so scripts own it:
+`refresh-merge` re-reads each planned pull request and the live base branch with
+gh before each merge, and `merge-action` checks that request against the approved
+plan and performs the write with the expected head pinned.
 
 Whether CI is required is a fact, so the `ci-policy` script reads it and no agent
 decides it. It reads the base branch's protection and rulesets with gh, then the

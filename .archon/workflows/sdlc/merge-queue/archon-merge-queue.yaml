@@ -150,9 +150,13 @@ nodes:
       max_iterations: 5
       fresh_context: true
       nodes:
+        # Fresh merge facts are gh reads, so a script owns them; merge-action
+        # still checks the request against the approved plan before writing.
         - id: refresh
-          command: merge-approved-prs
-          context: fresh
+          script: refresh-merge
+          runtime: uv
+          with:
+            previous: "$LOOP_PREV.execute.output"
           output_format:
             type: object
             properties:
