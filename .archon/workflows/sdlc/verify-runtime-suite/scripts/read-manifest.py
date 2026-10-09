@@ -8,7 +8,7 @@ import sys
 
 def read_manifest():
     path = Path(os.environ["INPUTS_MANIFEST"]).resolve(strict=True)
-    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(manifest, dict):
         raise ValueError("manifest must be an object")
     cases = manifest.get("cases")

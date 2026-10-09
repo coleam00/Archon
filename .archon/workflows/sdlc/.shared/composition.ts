@@ -349,5 +349,5 @@ export async function compareComposition(
 }
 
 export function readComparisonRequest(path: string): CompositionRequest {
-  return parseCompositionRequest(JSON.parse(readFileSync(path, 'utf8')) as unknown);
+  return parseCompositionRequest(JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) as unknown);
 }

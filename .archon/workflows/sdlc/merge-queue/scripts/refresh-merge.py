@@ -48,7 +48,7 @@ def emit(authorized: bool, summary: str, entry: dict | None = None, plan: dict |
 
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", newline="\n")
-    with open(os.path.join(os.environ["ARTIFACTS_DIR"], "merge-plan.json"), encoding="utf-8") as handle:
+    with open(os.path.join(os.environ["ARTIFACTS_DIR"], "merge-plan.json"), encoding="utf-8-sig") as handle:
         plan = json.load(handle)
     previous = json.loads(os.environ.get("INPUTS_PREVIOUS", "") or "null") or {}
     merged = [url for url in previous.get("urls") or [] if isinstance(url, str)]

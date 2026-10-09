@@ -50,7 +50,7 @@ function readJson(path: string): { value: unknown } | { error: string } | undefi
     return undefined;
   }
   try {
-    return { value: JSON.parse(readFileSync(path, 'utf-8')) as unknown };
+    return { value: JSON.parse(readFileSync(path, 'utf-8').replace(/^\uFEFF/, '')) as unknown };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }

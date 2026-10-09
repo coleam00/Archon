@@ -18,7 +18,7 @@ def boolean(value, name):
 
 
 def report_text(artifacts, name):
-    text = (artifacts / name).read_text(encoding="utf-8").strip()
+    text = (artifacts / name).read_text(encoding="utf-8-sig").strip()
     if not text:
         raise ValueError(f"missing evidence: {name} is empty")
     return text

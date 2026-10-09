@@ -26,7 +26,7 @@ def main() -> int:
     if not os.path.isfile(path):
         return fail(f"scenario file not found: {path}")
 
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, "r", encoding="utf-8-sig") as handle:
         raw = handle.read()
 
     try:

@@ -18,7 +18,7 @@ def fail(message):
 
 def load_discoveries(path):
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             records = json.load(f)
     except (OSError, ValueError) as err:
         fail(f"resolve-input: could not read discovery_artifact as JSON ({err}).")

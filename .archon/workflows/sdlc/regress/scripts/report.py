@@ -18,17 +18,17 @@ def boolean(value, name):
 
 
 def report_text(artifacts, name):
-    text = (artifacts / name).read_text(encoding="utf-8").strip()
+    text = (artifacts / name).read_text(encoding="utf-8-sig").strip()
     if not text:
         raise ValueError(f"missing evidence: {name} is empty")
     return text
 
 
 def report(artifacts):
-    route_result = json.loads((artifacts / "regression-route.json").read_text(encoding="utf-8"))
+    route_result = json.loads((artifacts / "regression-route.json").read_text(encoding="utf-8-sig"))
     revision = os.environ["INPUTS_REVISION"]
     for phase in ("before", "checked", "after"):
-        record = json.loads((artifacts / f"regression-{phase}.json").read_text(encoding="utf-8"))
+        record = json.loads((artifacts / f"regression-{phase}.json").read_text(encoding="utf-8-sig"))
         if record != {"expected": revision, "head": revision, "tracked_clean": True, "untracked": []}:
             raise ValueError(f"invalid {phase} identity evidence")
     validation = report_text(artifacts, "validation.md")

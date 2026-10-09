@@ -36,9 +36,9 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     sys.stderr.reconfigure(encoding="utf-8", newline="\n")
     directory = os.path.join(os.environ["ARTIFACTS_DIR"], "discoveries")
-    with open(os.path.join(directory, "context.json"), encoding="utf-8") as f:
+    with open(os.path.join(directory, "context.json"), encoding="utf-8-sig") as f:
         context = json.load(f)
-    with open(os.path.join(directory, "normalized.json"), encoding="utf-8") as f:
+    with open(os.path.join(directory, "normalized.json"), encoding="utf-8-sig") as f:
         normalized = json.load(f)
     try:
         entries = json.loads(os.environ["INPUTS_REVALIDATION"])

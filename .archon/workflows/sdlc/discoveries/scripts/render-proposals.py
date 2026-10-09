@@ -54,11 +54,11 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     sys.stderr.reconfigure(encoding="utf-8", newline="\n")
     artifacts = os.environ["ARTIFACTS_DIR"]
-    with open(os.path.join(artifacts, "discoveries", "normalized.json"), encoding="utf-8") as f:
+    with open(os.path.join(artifacts, "discoveries", "normalized.json"), encoding="utf-8-sig") as f:
         normalized = json.load(f)
-    with open(os.path.join(artifacts, "discoveries", "context.json"), encoding="utf-8") as f:
+    with open(os.path.join(artifacts, "discoveries", "context.json"), encoding="utf-8-sig") as f:
         context = json.load(f)
-    with open(os.path.join(artifacts, "evidence-check.json"), encoding="utf-8") as f:
+    with open(os.path.join(artifacts, "evidence-check.json"), encoding="utf-8-sig") as f:
         evidence = indexed(json.load(f), len(normalized), "evidence check")
     try:
         searches = indexed(json.loads(os.environ["INPUTS_SEARCH_RESULTS"]), len(normalized), "search")

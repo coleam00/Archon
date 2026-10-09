@@ -77,7 +77,7 @@ try {
   const source = forgeSource();
   const repo = `${pr.repo.host}/${pr.repo.path}`;
   const path = join(artifactsDir(), 'discoveries.json');
-  const records = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as unknown) : [];
+  const records = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) as unknown) : [];
   if (!Array.isArray(records)) throw new Error('discoveries.json is not an array');
 
   const filed: string[] = [];

@@ -27,7 +27,7 @@ def assess():
         return result("malformed", reason, candidate)
 
     try:
-        report = json.loads(Path(os.environ["INPUTS_REPORT_PATH"]).read_text(encoding="utf-8"))
+        report = json.loads(Path(os.environ["INPUTS_REPORT_PATH"]).read_text(encoding="utf-8-sig"))
     except (FileNotFoundError, UnicodeError, json.JSONDecodeError):
         return malformed("report is missing or is not valid UTF-8 JSON")
     if not isinstance(report, dict):

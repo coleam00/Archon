@@ -18,7 +18,7 @@ import { emit, refuse, text } from '../../.shared/io.ts';
 try {
   const source = forgeSource();
   const pr = parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)));
-  const intent = record(JSON.parse(readFileSync(text(process.env.INPUTS_INTENT), 'utf8')));
+  const intent = record(JSON.parse(readFileSync(text(process.env.INPUTS_INTENT), 'utf8').replace(/^\uFEFF/, '')));
   if (!intent) throw new Error('the body intent must be a JSON object');
   if (intent.change === false) emit(pr);
   else if (intent.change !== true || typeof intent.bodyPath !== 'string' || intent.bodyPath === '')

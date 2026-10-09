@@ -144,7 +144,7 @@ function isEvidence(value: unknown): value is StoredEvidence {
 
 async function readJson(path: string): Promise<unknown> {
   try {
-    return JSON.parse(await readFile(path, 'utf8')) as unknown;
+    return JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, '')) as unknown;
   } catch {
     return undefined;
   }
@@ -152,7 +152,7 @@ async function readJson(path: string): Promise<unknown> {
 
 async function readReport(path: string): Promise<string | undefined> {
   try {
-    const content = await readFile(path, 'utf8');
+    const content = (await readFile(path, 'utf8')).replace(/^\uFEFF/, '');
     return content.trim().length > 0 ? content : undefined;
   } catch {
     return undefined;

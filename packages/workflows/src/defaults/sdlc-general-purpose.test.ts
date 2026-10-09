@@ -794,6 +794,16 @@ describe('merge refresh reads the facts for the next planned merge', () => {
     });
   });
 
+  test('a merge plan written with a UTF-8 byte order mark still reads', async () => {
+    const bomArtifacts = join(root, 'refresh-bom-artifacts');
+    await mkdir(bomArtifacts, { recursive: true });
+    await writeFile(join(bomArtifacts, 'merge-plan.json'), '﻿' + JSON.stringify(plan));
+    expect(refresh({}, { ARTIFACTS_DIR: bomArtifacts })).toMatchObject({
+      authorized: true,
+      number: 7,
+    });
+  });
+
   test('nothing is authorized once every planned pull request merged', () => {
     const previous = JSON.stringify({
       urls: plan.pull_requests.map(entry => entry.url),
@@ -969,7 +979,10 @@ describe('merge hold is a claim the shared review settles', () => {
 });
 
 describe('pull request publication from a synthetic review branch', () => {
-  async function publishFrom(head: string): Promise<{
+  async function publishFrom(
+    head: string,
+    prefix = ''
+  ): Promise<{
     result: ReturnType<typeof Bun.spawnSync>;
     calls: string;
   }> {
@@ -980,15 +993,16 @@ describe('pull request publication from a synthetic review branch', () => {
     await writeFile(body, 'A body\n');
     await writeFile(
       intent,
-      JSON.stringify({
-        repo: { host: 'github.com', path: 'owner/repo' },
-        head,
-        headRevision: 'deadbeef',
-        base: 'dev',
-        title: 'A title',
-        bodyPath: body,
-        draft: true,
-      })
+      prefix +
+        JSON.stringify({
+          repo: { host: 'github.com', path: 'owner/repo' },
+          head,
+          headRevision: 'deadbeef',
+          base: 'dev',
+          title: 'A title',
+          bodyPath: body,
+          draft: true,
+        })
     );
     const result = Bun.spawnSync([process.execPath, publishPrScript], {
       env: env({ INPUTS_INTENT: intent, ARCHON_SDLC_FORGE: 'gh', GH_LOG: log }),
@@ -1020,6 +1034,13 @@ describe('pull request publication from a synthetic review branch', () => {
   test('an ordinary branch still reaches the forge lookup', async () => {
     const { result, calls } = await publishFrom('feature/pr-12-review-notes');
     expect(result.stderr?.toString()).not.toContain('synthetic review branch');
+    expect(calls).toContain('"list"');
+  });
+
+  test('an intent written with a UTF-8 byte order mark still publishes', async () => {
+    // PowerShell's ConvertTo-Json | Set-Content writes a BOM; a live run failed on it.
+    const { result, calls } = await publishFrom('feature/notes', '﻿');
+    expect(result.stderr?.toString()).not.toContain('JSON Parse error');
     expect(calls).toContain('"list"');
   });
 });

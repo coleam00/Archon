@@ -29,7 +29,7 @@ def main() -> int:
     if not path.is_file():
         fail("the planner wrote no backlog.json")
     try:
-        tickets = json.loads(path.read_text(encoding="utf-8"))
+        tickets = json.loads(path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as error:
         fail(f"backlog.json is not valid JSON: {error}")
     if not isinstance(tickets, list):

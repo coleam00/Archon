@@ -52,7 +52,7 @@ function required(value: unknown, field: string): string {
 function publish(): PrRecord {
   const source = forgeSource();
   const intentPath = text(process.env.INPUTS_INTENT);
-  const intent = record(JSON.parse(readFileSync(intentPath, 'utf8')));
+  const intent = record(JSON.parse(readFileSync(intentPath, 'utf8').replace(/^\uFEFF/, '')));
   if (!intent) throw new Error('the PR intent must be a JSON object');
   const base = repo(intent.repo, 'repo');
   const headRepo = intent.headRepo === undefined ? base : repo(intent.headRepo, 'headRepo');
@@ -99,7 +99,7 @@ function publish(): PrRecord {
     bodyPath: required(intent.bodyPath, 'bodyPath'),
     draft: intent.draft,
   };
-  readFileSync(createIntent.bodyPath, 'utf8');
+  readFileSync(createIntent.bodyPath, 'utf8').replace(/^\uFEFF/, '');
   // Killing the script cannot cancel a submitted forge write. Keep this claim
   // beside the durable intent even after success: a retry may only reconcile it.
   const claimPath = `${intentPath}.create-started`;
