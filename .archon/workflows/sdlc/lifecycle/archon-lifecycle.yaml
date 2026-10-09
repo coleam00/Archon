@@ -54,6 +54,12 @@ inputs:
     description: >-
       Forwarded to the merge queue. In approve or auto mode, "true" publishes
       hold comments; preview remains read-only and merging remains separately gated.
+  protected_paths:
+    default: ''
+    description: >-
+      Forwarded to the merge queue: comma-separated root-anchored path patterns a
+      pull request may not change (a match holds it for a human). Empty protects
+      nothing.
   discovery_publication:
     default: preview
     description: preview, approve, or auto for discovered adjacent work.
@@ -280,6 +286,7 @@ nodes:
       merge_method: "$INPUTS.merge_method"
       required_checks: "$INPUTS.required_checks"
       publish_holds: "$INPUTS.publish_holds"
+      protected_paths: "$INPUTS.protected_paths"
       evidence: "$selected.output.evidence"
 
   # A merged `Relates to #N` pull request leaves its issue open, and every issue

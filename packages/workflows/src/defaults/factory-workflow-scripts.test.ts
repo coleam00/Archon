@@ -12,6 +12,7 @@ setDefaultTimeout(60_000);
 const workflowRoot = resolve(import.meta.dir, '../../../../.archon/workflows/sdlc');
 const mergeScript = join(workflowRoot, 'merge-queue', 'scripts', 'merge-action.ts');
 const ciPolicyScript = join(workflowRoot, 'merge-queue', 'scripts', 'ci-policy.ts');
+const pathPolicyScript = join(workflowRoot, 'merge-queue', 'scripts', 'path-policy.ts');
 const captureScript = join(workflowRoot, 'verify-runtime', 'scripts', 'capture-command.ts');
 const finishScript = join(workflowRoot, 'verify-runtime', 'scripts', 'finish-attempt.py');
 const gateScript = join(workflowRoot, 'verify-runtime', 'scripts', 'gate-verified.py');
@@ -827,6 +828,253 @@ describe('required-check policy script', () => {
       requirement: 'required',
       checks_state: 'unknown',
     });
+  });
+});
+
+describe('protected-path policy script', () => {
+  const pr = 'https://github.test/owner/repo/pull/17';
+  const head = 'head-17';
+  const filesPath = 'api --paginate repos/owner/repo/pulls/17/files?per_page=100';
+  const listing = (files: Array<string | [string, string]>) =>
+    files
+      .map(file =>
+        JSON.stringify(
+          typeof file === 'string'
+            ? { filename: file, previous_filename: null }
+            : { filename: file[0], previous_filename: file[1] }
+        )
+      )
+      .join('\n') + '\n';
+
+  async function paths(
+    protectedPaths: string,
+    files: Array<string | [string, string]>,
+    overrides: Record<string, { stdout?: string; exit?: number }> = {},
+    prs: string[] = [pr]
+  ): Promise<{ policy: Record<string, unknown>; calls: string[][] }> {
+    const dir = await mkdtemp(join(root, 'path-policy-'));
+    const fixture = join(dir, 'gh.json');
+    const log = join(dir, 'gh.jsonl');
+    await writeFile(
+      fixture,
+      JSON.stringify({
+        'pr view 17 --repo owner/repo': {
+          stdout: JSON.stringify({ headRefOid: head, changedFiles: files.length }),
+        },
+        [filesPath]: { stdout: listing(files) },
+        ...overrides,
+      })
+    );
+    const result = run(pathPolicyScript, {
+      INPUTS_PRS: JSON.stringify(prs),
+      INPUTS_PROTECTED_PATHS: protectedPaths,
+      GH_FIXTURE: fixture,
+      GH_LOG: log,
+      PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+    });
+    expect(result.exitCode).toBe(0);
+    let calls: string[][] = [];
+    try {
+      calls = (await readFile(log, 'utf8'))
+        .split('\n')
+        .filter(Boolean)
+        .map(line => JSON.parse(line) as string[]);
+    } catch {
+      calls = [];
+    }
+    return { policy: JSON.parse(stdout(result)) as Record<string, unknown>, calls };
+  }
+
+  const governance =
+    'MISSION.md,engineering.md,docs/ART-DIRECTION.md,harness/**,.factory/**,factory/';
+
+  test('holds a PR that changes a protected file and names the files', async () => {
+    const { policy } = await paths(governance, ['game/Main.cs', 'engineering.md', 'MISSION.md']);
+    expect(policy).toMatchObject({
+      state: 'protected',
+      heads: [{ pr, head_sha: head }],
+      matches: [{ pr, head_sha: head, files: ['MISSION.md', 'engineering.md'] }],
+    });
+    expect(policy.reason).toBe(
+      `${pr} changes protected paths MISSION.md, engineering.md; a human must make this change`
+    );
+  });
+
+  test('clears a PR that touches no protected path, and records the head it checked', async () => {
+    const { policy } = await paths(governance, [
+      'game/Main.cs',
+      'sim/NorthStar.Sim/Tick.cs',
+      'docs/visual/target/plaza-wide.png',
+      'sub/MISSION.md',
+      'engineering.md.bak',
+      'harnessed/x.cs',
+    ]);
+    expect(policy).toMatchObject({
+      state: 'clear',
+      heads: [{ pr, head_sha: head }],
+      matches: [],
+      reason: '',
+    });
+  });
+
+  test('glob semantics: anchored, * in one segment, ** across segments, trailing / is a directory', async () => {
+    const cases: Array<[string, string, boolean]> = [
+      ['harness/**', 'harness/END-TO-END.md', true],
+      ['harness/**', 'harness/deep/nested/file.json', true],
+      ['harness/**', 'game/harness/file.cs', false],
+      ['factory/', 'factory/consumer.py', true],
+      ['factory/', 'factory/a/b.py', true],
+      ['/MISSION.md', 'MISSION.md', true],
+      ['docs/*.md', 'docs/north-star.prd.md', true],
+      ['docs/*.md', 'docs/visual/notes.md', false],
+      ['**/*.gdshader', 'game/art/shaders/fire.gdshader', true],
+      ['**/*.gdshader', 'fire.gdshader', true],
+      ['docs/?.md', 'docs/a.md', true],
+      ['docs/?.md', 'docs/ab.md', false],
+      ['a.b', 'axb', false],
+    ];
+    for (const [pattern, file, protects] of cases) {
+      const { policy } = await paths(pattern, [file]);
+      expect([pattern, file, policy.state]).toEqual([
+        pattern,
+        file,
+        protects ? 'protected' : 'clear',
+      ]);
+    }
+  });
+
+  test('a rename out of a protected path is a change to it', async () => {
+    const { policy } = await paths('MISSION.md', [['docs/MISSION-old.md', 'MISSION.md']]);
+    expect(policy).toMatchObject({
+      state: 'protected',
+      matches: [{ files: ['MISSION.md'] }],
+    });
+  });
+
+  test('reads every page of changed files, and a short listing is unknown', async () => {
+    const many = Array.from({ length: 250 }, (_, index) => `game/file${index}.cs`);
+    const { policy, calls } = await paths('MISSION.md', [...many, 'MISSION.md']);
+    expect(policy).toMatchObject({ state: 'protected', matches: [{ files: ['MISSION.md'] }] });
+    expect(calls.some(call => call.includes('--paginate'))).toBe(true);
+
+    const short = await paths('MISSION.md', ['game/a.cs'], {
+      'pr view 17 --repo owner/repo': {
+        stdout: JSON.stringify({ headRefOid: head, changedFiles: 3001 }),
+      },
+    });
+    expect(short.policy).toMatchObject({ state: 'unknown' });
+    expect(short.policy.reason).toContain('listed 1 of 3001');
+  });
+
+  test('nothing declared protects nothing and reads nothing', async () => {
+    for (const declared of ['', 'none', '  ']) {
+      const { policy, calls } = await paths(declared, ['MISSION.md']);
+      expect(policy).toMatchObject({ state: 'not_applicable', heads: [], matches: [] });
+      expect(calls).toEqual([]);
+    }
+  });
+
+  test('an unreadable PR, file list or declaration is unknown, never clear', async () => {
+    expect(
+      (await paths('MISSION.md', [], { 'pr view 17 --repo owner/repo': { stdout: '', exit: 1 } }))
+        .policy
+    ).toMatchObject({
+      state: 'unknown',
+      reason: expect.stringContaining('could not read pull request'),
+    });
+    expect(
+      (await paths('MISSION.md', [], { [filesPath]: { stdout: '', exit: 1 } })).policy
+    ).toMatchObject({ state: 'unknown', reason: expect.stringContaining('could not list') });
+    expect((await paths('MISSION.md', [], { [filesPath]: { stdout: '{' } })).policy).toMatchObject({
+      state: 'unknown',
+      reason: expect.stringContaining('could not parse'),
+    });
+    expect((await paths('MISSION.md, ,harness/**', ['a.cs'])).policy).toMatchObject({
+      state: 'unknown',
+      reason: expect.stringContaining('protected_paths must be'),
+    });
+    expect((await paths('MISSION.md', ['a.cs'], {}, ['not a url'])).policy).toMatchObject({
+      state: 'unknown',
+    });
+  });
+});
+
+describe('merge gate enforces the protected-path policy', () => {
+  async function gateWith(pathPolicy: unknown): Promise<Record<string, unknown>> {
+    const { artifacts, content } = await mergeFixture();
+    const env: Record<string, string> = {
+      ARTIFACTS_DIR: artifacts,
+      INPUTS_ACTION: 'gate',
+      INPUTS_ASSESSMENT: JSON.stringify(assessment(content)),
+      INPUTS_CI_POLICY: JSON.stringify({ requirement: 'none', checks_state: 'not_applicable' }),
+      INPUTS_MERGE_METHOD: 'squash',
+    };
+    if (pathPolicy !== undefined) {
+      env.INPUTS_PATH_POLICY =
+        typeof pathPolicy === 'string' ? pathPolicy : JSON.stringify(pathPolicy);
+    }
+    const result = run(mergeScript, env);
+    expect(result.exitCode).toBe(0);
+    return JSON.parse(stdout(result)) as Record<string, unknown>;
+  }
+  const url = 'https://github.test/owner/repo/pull/17';
+
+  test('a protected change holds even when the assessment says eligible', async () => {
+    expect(
+      await gateWith({
+        state: 'protected',
+        heads: [{ pr: url, head_sha: 'head-17' }],
+        matches: [{ pr: url, head_sha: 'head-17', files: ['MISSION.md'] }],
+        reason: `${url} changes protected path MISSION.md; a human must make this change`,
+      })
+    ).toMatchObject({
+      ready: false,
+      summary: expect.stringContaining('protected paths changed'),
+    });
+  });
+
+  test('clear merges only when it checked the planned head', async () => {
+    expect(
+      await gateWith({
+        state: 'clear',
+        heads: [{ pr: url, head_sha: 'head-17' }],
+        matches: [],
+        reason: '',
+      })
+    ).toMatchObject({ ready: true });
+    expect(
+      await gateWith({
+        state: 'clear',
+        heads: [{ pr: url, head_sha: 'older' }],
+        matches: [],
+        reason: '',
+      })
+    ).toMatchObject({
+      ready: false,
+      summary: expect.stringContaining('not checked at the planned head'),
+    });
+    expect(await gateWith({ state: 'clear', heads: [], matches: [], reason: '' })).toMatchObject({
+      ready: false,
+    });
+  });
+
+  test('not applicable passes; unknown, empty or malformed holds; an unwired caller is unaffected', async () => {
+    expect(
+      await gateWith({ state: 'not_applicable', heads: [], matches: [], reason: '' })
+    ).toMatchObject({
+      ready: true,
+    });
+    for (const policy of [
+      { state: 'unknown', reason: 'could not list' },
+      '',
+      '{"state":"maybe"}',
+    ]) {
+      expect(await gateWith(policy)).toMatchObject({
+        ready: false,
+        summary: expect.stringContaining('protected-path policy is unknown'),
+      });
+    }
+    expect(await gateWith(undefined)).toMatchObject({ ready: true });
   });
 });
 

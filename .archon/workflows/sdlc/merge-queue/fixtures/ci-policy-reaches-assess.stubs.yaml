@@ -12,6 +12,12 @@ ci-policy:
       check: "tests"
       state: "passing"
   reason: ""
+path-policy:
+  state: "not_applicable"
+  patterns: []
+  heads: []
+  matches: []
+  reason: ""
 assess:
   summary: "stub: batch eligible"
   eligible: true

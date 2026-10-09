@@ -1,0 +1,72 @@
+# Dry-run fixture: the scripted protected-path policy finds a governance file in
+# the PR, the assess agent is told which files and that a human must make the
+# change, and the gate (which reads the same output) holds; nothing merges.
+ci-policy:
+  requirement: "required"
+  source: "declared"
+  checks: ["tests"]
+  checks_state: "passing"
+  results:
+    - pr: "https://github.com/example/app/pull/7"
+      head_sha: "0123456789abcdef0123456789abcdef01234567"
+      check: "tests"
+      state: "passing"
+  reason: ""
+path-policy:
+  state: "protected"
+  patterns: ["MISSION.md", "harness/**"]
+  heads:
+    - pr: "https://github.com/example/app/pull/7"
+      head_sha: "0123456789abcdef0123456789abcdef01234567"
+  matches:
+    - pr: "https://github.com/example/app/pull/7"
+      head_sha: "0123456789abcdef0123456789abcdef01234567"
+      files: ["MISSION.md"]
+  reason: "https://github.com/example/app/pull/7 changes protected path MISSION.md; a human must make this change"
+assess:
+  summary: "stub: protected path changed"
+  eligible: false
+  method: "squash"
+  validation_verified: true
+  review_verified: true
+  plan_digest: "fixture"
+  holds:
+    - pr_url: "https://github.com/example/app/pull/7"
+      head_sha: "0123456789abcdef0123456789abcdef01234567"
+      action: "hold"
+      reasons: ["changes protected path MISSION.md; a human must make this change"]
+publish-holds:
+  published: true
+  updated: ["https://github.com/example/app/pull/7"]
+  summary: "stub: hold published"
+gate:
+  ready: false
+  summary: "protected paths changed: https://github.com/example/app/pull/7 changes protected path MISSION.md; a human must make this change"
+  method: "squash"
+  plan_digest: "fixture"
+refresh:
+  authorized: false
+  repository: "example/app"
+  number: 7
+  head_sha: "0123456789abcdef0123456789abcdef01234567"
+  method: "squash"
+  summary: "stub: gate not ready"
+execute:
+  done: true
+  merged: false
+  urls: []
+  queued: []
+  prior_base_sha: ""
+  summary: "merge is not authorized"
+fixture:
+  expect: completed
+  reached: [ci-policy, path-policy, assess, gate]
+  resolved-text-contains:
+    assess: 'a human must make this change'
+  inputs:
+    prs: '["https://github.com/example/app/pull/7"]'
+    mode: "auto"
+    merge_method: "squash"
+    required_checks: "tests"
+    protected_paths: "MISSION.md,harness/**"
+    publish_holds: "true"

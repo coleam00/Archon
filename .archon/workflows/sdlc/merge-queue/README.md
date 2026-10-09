@@ -2,7 +2,7 @@
 
 `archon-merge-queue` accepts `prs` (1-5 explicit PR URLs), optional `evidence`,
 `merge_method` (`merge|squash|rebase`), `mode=preview|approve|auto`,
-`required_checks`, and `publish_holds=false|true`. Evidence
+`required_checks`, `protected_paths`, and `publish_holds=false|true`. Evidence
 may be an empty array when validation and review are GitHub-only; file-backed
 entries bind an exact path and SHA-256 and are rechecked before merge authorization.
 Authorized hold comments use the assessment-time evidence snapshot. One medium
@@ -21,6 +21,18 @@ check names. Checks GitHub enforces are always added to a declaration. An undecl
 policy GitHub will not report is `unknown` and holds, with a reason naming the
 input to set; it is never assumed to be `none`. The gate merges only when the
 policy is `none`, or `required` with every required check passing.
+
+Whether a pull request changes a protected path is also a fact, so the
+`path-policy` script reads it. `protected_paths` is a comma-separated list of path
+patterns anchored at the repository root (`*` and `?` stay in one segment, `**`
+spans segments, a trailing `/` covers a directory). The script lists each PR's
+changed files with gh (every page, renames included, and a listing shorter than
+GitHub's changed-file count is `unknown`). Any match is `protected`: the assess
+agent records a hold naming the files and saying a human must make that change,
+and the gate refuses the batch whatever the assessment says. `clear` merges only
+when it was read at the head the merge plan pins. Empty protects nothing. This
+exists because review is not a guard for governance files: a reviewed delivery
+once rewrote one and merged unflagged.
 
 Approval covers the recorded batch. Auto explicitly authorizes that batch without
 a human pause, subject to repository guidance. Processing is sequential. Changed

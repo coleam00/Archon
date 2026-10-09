@@ -6,13 +6,17 @@ Requested merge method: $INPUTS.merge_method
 Mode: $INPUTS.mode
 Hold-comment publication requested: $INPUTS.publish_holds
 Required-check policy and results (read by a script): $INPUTS.ci_policy
+Protected-path policy and matches (read by a script): $INPUTS.path_policy
 Keep the checkout and GitHub unchanged. A later deterministic node owns any hold
 comment publication. Read project guidance and use gh with an explicit repository. Require 1-5 distinct same-repository PRs targeting one base.
 Reject ambiguous identity, forks, drafts, closed PRs, conflicts, or unresolved
 review findings. Read PR bodies, review comments and status checks for the current
 head. The required-check policy above is a fact the workflow already established
 and the gate enforces: do not re-derive whether CI is required, and do not record
-a hold for CI that policy does not require. Require independent review and actual
+a hold for CI that policy does not require. The protected-path policy is the same
+kind of fact: when its state is `protected`, the batch is not eligible, and each
+matching PR gets `action=hold` with a reason naming the protected files and saying
+that a human must make that change (the PR's next commit can drop those edits). Require independent review and actual
 validation evidence, including project-required runtime checks. A passing or
 absent check is not evidence of validation, and a failing check is evidence
 against it. Read the supplied reports in full and

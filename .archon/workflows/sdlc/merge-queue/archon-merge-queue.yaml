@@ -33,6 +33,14 @@ inputs:
     description: >-
       In approve or auto mode, "true" publishes evidence-backed hold comments.
       Preview is always read-only. This does not authorize merging.
+  protected_paths:
+    default: ''
+    description: >-
+      Comma-separated path patterns no pull request in this batch may change
+      (governance files, the project's own judge). Anchored at the repository
+      root; `*` stays in one segment, `**` spans segments, a trailing `/` covers a
+      directory. A match holds the PR: a human must make that change. Empty or
+      "none" protects nothing.
 returns: merge
 nodes:
   - id: ci-policy
@@ -62,12 +70,47 @@ nodes:
         reason: { type: string }
       required: [requirement, source, checks, checks_state, results, reason]
 
+  # Protected paths are a fact about each PR's changed files, so a script reads
+  # them and the gate enforces the answer; review is not relied on to notice.
+  - id: path-policy
+    script: path-policy
+    runtime: bun
+    mutates_checkout: false
+    with:
+      prs: "$INPUTS.prs"
+      protected_paths: "$INPUTS.protected_paths"
+    output_format:
+      type: object
+      properties:
+        state: { type: string, enum: [not_applicable, clear, protected, unknown] }
+        patterns: { type: array, items: { type: string } }
+        heads:
+          type: array
+          items:
+            type: object
+            properties:
+              pr: { type: string }
+              head_sha: { type: string }
+            required: [pr, head_sha]
+        matches:
+          type: array
+          items:
+            type: object
+            properties:
+              pr: { type: string }
+              head_sha: { type: string }
+              files: { type: array, items: { type: string } }
+            required: [pr, head_sha, files]
+        reason: { type: string }
+      required: [state, patterns, heads, matches, reason]
+
   - id: assess
     command: assess-merge-queue
     context: fresh
-    depends_on: [ci-policy]
+    depends_on: [ci-policy, path-policy]
     with:
       ci_policy: "$ci-policy.output"
+      path_policy: "$path-policy.output"
       prs: "$INPUTS.prs"
       evidence: "$INPUTS.evidence"
       merge_method: "$INPUTS.merge_method"
@@ -114,11 +157,12 @@ nodes:
   - id: gate
     script: merge-action
     runtime: bun
-    depends_on: [ci-policy, assess, publish-holds]
+    depends_on: [ci-policy, path-policy, assess, publish-holds]
     with:
       action: gate
       assessment: "$assess.output"
       ci_policy: "$ci-policy.output"
+      path_policy: "$path-policy.output"
       merge_method: "$INPUTS.merge_method"
     output_format: &gate-result
       type: object

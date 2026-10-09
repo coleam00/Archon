@@ -118,6 +118,35 @@ function evidenceReasons(value: JsonObject): string[] {
   return reasons;
 }
 
+// A caller that wires no path policy (INPUTS_PATH_POLICY absent) has no protected
+// paths. A wired policy merges only when it found no protected change at exactly
+// the heads the plan pins; anything unread is unknown and holds.
+function pathPolicyReasons(planValue: JsonObject): string[] {
+  if (process.env.INPUTS_PATH_POLICY === undefined) return [];
+  const policy = object(input('path_policy'));
+  const reason = typeof policy.reason === 'string' ? policy.reason : '';
+  if (policy.state === 'not_applicable') return [];
+  if (policy.state === 'protected') return [`protected paths changed: ${reason}`];
+  if (policy.state !== 'clear') {
+    return [`protected-path policy is unknown${reason ? `: ${reason}` : ''}`];
+  }
+  const checked = new Map<string, string>();
+  for (const item of Array.isArray(policy.heads) ? policy.heads : []) {
+    const head = object(item);
+    if (typeof head.pr === 'string' && typeof head.head_sha === 'string') {
+      checked.set(head.pr, head.head_sha);
+    }
+  }
+  const entries = Array.isArray(planValue.pull_requests) ? planValue.pull_requests : [];
+  const unchecked = entries
+    .map(object)
+    .filter(entry => checked.get(String(entry.url)) !== entry.head_sha)
+    .map(entry => String(entry.url));
+  return unchecked.length > 0
+    ? [`protected paths were not checked at the planned head of ${unchecked.join(', ')}`]
+    : [];
+}
+
 function gate(): void {
   const assessment = object(input('assessment'));
   const current = plan();
@@ -143,6 +172,7 @@ function gate(): void {
   } else if (policy.requirement !== 'none') {
     reasons.push(`required CI policy is unknown${policyReason ? `: ${policyReason}` : ''}`);
   }
+  reasons.push(...pathPolicyReasons(current.value));
   if (assessment.validation_verified !== true) reasons.push('independent validation is not verified');
   if (assessment.review_verified !== true) reasons.push('independent review is not verified');
   reasons.push(...evidenceReasons(current.value));

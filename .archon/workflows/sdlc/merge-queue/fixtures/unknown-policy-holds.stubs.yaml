@@ -7,6 +7,12 @@ ci-policy:
   checks_state: "unknown"
   results: []
   reason: "GitHub did not report the required checks for example/app@main: rulesets (HTTP 403). Declare them with the required_checks input"
+path-policy:
+  state: "not_applicable"
+  patterns: []
+  heads: []
+  matches: []
+  reason: ""
 assess:
   summary: "stub: review and validation verified"
   eligible: true
