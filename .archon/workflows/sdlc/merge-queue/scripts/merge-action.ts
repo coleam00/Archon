@@ -160,9 +160,10 @@ function gate(): void {
   if (!requestedMethodMatches(method)) {
     reasons.push('requested merge method does not match the assessed plan');
   }
-  if (assessment.plan_digest !== current.digest) {
-    reasons.push('merge plan digest does not match the assessed file');
-  }
+  // The gate seals the plan: its digest of the file, taken here right after the
+  // assessment, is what approval and execution bind to. The agent's own digest is
+  // not compared: a model transcribing 64 hex characters is not a fact (seen live:
+  // two characters miscopied held a correct, fully verified PR).
   const policy = object(input('ci_policy'));
   const policyReason = typeof policy.reason === 'string' ? policy.reason : '';
   if (policy.requirement === 'required') {

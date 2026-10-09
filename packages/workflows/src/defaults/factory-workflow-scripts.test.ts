@@ -195,6 +195,24 @@ describe('merge action boundary', () => {
     });
   });
 
+  test('the gate seals the plan itself; an agent digest, empty or miscopied, decides nothing', async () => {
+    const { artifacts, content } = await mergeFixture();
+    const real = digest(content);
+    // Seen live: the agent returned this digest with two characters miscopied.
+    const miscopied = `${real.slice(0, 28)}d${real.slice(28, 40)}${real[41] === 'd' ? 'c' : 'd'}${real.slice(42, 63)}`;
+    for (const claimed of ['', miscopied, real]) {
+      const result = run(mergeScript, {
+        ARTIFACTS_DIR: artifacts,
+        INPUTS_ACTION: 'gate',
+        INPUTS_ASSESSMENT: JSON.stringify(assessment(content, { plan_digest: claimed })),
+        INPUTS_CI_POLICY: JSON.stringify({ requirement: 'none', checks_state: 'not_applicable' }),
+        INPUTS_PATH_POLICY: JSON.stringify({ state: 'not_applicable' }),
+        INPUTS_MERGE_METHOD: 'squash',
+      });
+      expect(JSON.parse(stdout(result))).toMatchObject({ ready: true, plan_digest: real });
+    }
+  });
+
   test('holds an invalid plan, changed evidence, and explicit method mismatch at the gate', async () => {
     const invalid = await mergeFixture();
     delete invalid.plan.pull_requests;

@@ -47,8 +47,8 @@ compares the live head against it to detect movement between assessment and
 merge. If a PR's validation predates the live base
 head, judge that here (GitHub's mergeability and the checks on the current PR head)
 rather than recording the older base. Record holds in merge-plan.md. Return ready only when the entire requested batch is
-eligible. Compute the SHA-256 of the exact merge-plan.json bytes and return it as
-plan_digest. Also return whether ordinary validation and independent review were
+eligible. The workflow seals merge-plan.json by script after you finish, so return
+`plan_digest` as an empty string and do not edit the file once written. Also return whether ordinary validation and independent review were
 verified. Return `eligible=true` only when
 every whole-batch eligibility condition above passes. The deterministic gate, not a
 lone ready claim, decides eligibility. No code changes, branch switches, custom
