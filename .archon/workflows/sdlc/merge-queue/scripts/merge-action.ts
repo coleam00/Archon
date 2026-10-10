@@ -92,6 +92,51 @@ function validPlan(value: JsonObject): boolean {
   );
 }
 
+// Agents in Git Bash write drive paths as /c/Users/...; on Windows the runtime reads
+// that as C:\c\Users\... and the evidence looks missing (seen live: a verified PR held).
+function nativePath(path: string): string {
+  if (process.platform !== 'win32') return path;
+  const drive = /^\/([a-zA-Z])(\/|$)/.exec(path);
+  return drive ? `${drive[1].toUpperCase()}:/${path.slice(3)}` : path;
+}
+
+/**
+ * The gate seals the evidence the way it seals the plan: it reads each bound file
+ * itself, records its native path and its SHA-256 in the plan, and the plan digest
+ * then covers them. Execution rechecks those values, so a file changed after the gate
+ * still stops the merge. The agent's own hash is never compared: a model transcribing
+ * a 64-character hash is not a fact.
+ */
+function sealEvidence(current: { value: JsonObject; digest: string }): {
+  plan: { value: JsonObject; digest: string };
+  reasons: string[];
+} {
+  if (!Array.isArray(current.value.evidence)) {
+    return { plan: current, reasons: ['merge plan evidence bindings are missing or invalid'] };
+  }
+  const reasons: string[] = [];
+  const bound: unknown[] = current.value.evidence;
+  const sealed = bound.map((item: unknown): unknown => {
+    const evidence = object(item);
+    if (typeof evidence.path !== 'string' || evidence.path === '') {
+      reasons.push('merge plan evidence bindings are missing or invalid');
+      return item;
+    }
+    const path = nativePath(evidence.path);
+    try {
+      return { ...evidence, path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') };
+    } catch {
+      reasons.push(`approved evidence is unavailable: ${evidence.path}`);
+      return item;
+    }
+  });
+  if (reasons.length > 0) return { plan: current, reasons };
+  const value = { ...current.value, evidence: sealed };
+  const bytes = `${JSON.stringify(value)}\n`;
+  writeFileSync(join(requiredEnv('ARTIFACTS_DIR'), 'merge-plan.json'), bytes, 'utf8');
+  return { plan: { value, digest: createHash('sha256').update(bytes).digest('hex') }, reasons };
+}
+
 function evidenceReasons(value: JsonObject): string[] {
   if (!Array.isArray(value.evidence)) {
     return ['merge plan evidence bindings are missing or invalid'];
@@ -109,7 +154,7 @@ function evidenceReasons(value: JsonObject): string[] {
       continue;
     }
     try {
-      const actual = createHash('sha256').update(readFileSync(evidence.path)).digest('hex');
+      const actual = createHash('sha256').update(readFileSync(nativePath(evidence.path))).digest('hex');
       if (actual !== evidence.sha256) reasons.push(`approved evidence changed: ${evidence.path}`);
     } catch {
       reasons.push(`approved evidence is unavailable: ${evidence.path}`);
@@ -149,7 +194,9 @@ function pathPolicyReasons(planValue: JsonObject): string[] {
 
 function gate(): void {
   const assessment = object(input('assessment'));
-  const current = plan();
+  const read = plan();
+  const sealing = validPlan(read.value) ? sealEvidence(read) : { plan: read, reasons: [] as string[] };
+  const current = sealing.plan;
   const method = assessment.method;
   const reasons: string[] = [];
   if (assessment.eligible !== true) reasons.push('the assessed batch is not eligible');
@@ -176,7 +223,7 @@ function gate(): void {
   reasons.push(...pathPolicyReasons(current.value));
   if (assessment.validation_verified !== true) reasons.push('independent validation is not verified');
   if (assessment.review_verified !== true) reasons.push('independent review is not verified');
-  reasons.push(...evidenceReasons(current.value));
+  reasons.push(...sealing.reasons);
   console.log(
     JSON.stringify({
       ready: reasons.length === 0,

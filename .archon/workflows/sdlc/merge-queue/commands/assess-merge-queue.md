@@ -39,7 +39,9 @@ conflicting sources, and unclear native-queue compatibility return method="" and
 hold. Write merge-plan.json under $ARTIFACTS_DIR with this exact shape:
 `{"repository":"owner/repo","base":"branch","base_sha":"<sha>","method":"squash","pull_requests":[{"number":123,"url":"https://github.com/owner/repo/pull/123","head_sha":"<sha>"}],"evidence":[{"path":"<exact file path>","sha256":"<sha256 of exact bytes>"}],"reasons":[]}`.
 Include every file-backed runtime, validation and review reference relied upon in
-`evidence`; missing or unreadable evidence holds. `base_sha`
+`evidence`; missing or unreadable evidence holds. The gate re-reads every evidence
+file and records its path and SHA-256 by script, so `sha256` may be left empty; write
+each path exactly as the file system names it. `base_sha`
 is the base branch's live head as read from GitHub during this assessment
 (`gh api repos/<owner>/<repo>/branches/<base> --jq .commit.sha`), not a PR's
 merge base and not a PR record's `base.sha`, which is a snapshot: the merge node

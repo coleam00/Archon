@@ -195,6 +195,34 @@ describe('merge action boundary', () => {
     });
   });
 
+  test('a Git Bash drive path to evidence is read on Windows and sealed as a native path', async () => {
+    if (process.platform !== 'win32') return;
+    const fixture = await mergeFixture();
+    const evidence = (fixture.plan.evidence as Array<{ path: string }>)[0];
+    // Seen live: the assess agent wrote /c/Users/... and a verified PR was held as
+    // "approved evidence is unavailable".
+    const bash = evidence.path
+      .replace(/^([A-Za-z]):[\\/]/, (_, drive: string) => `/${drive.toLowerCase()}/`)
+      .replace(/\\/g, '/');
+    fixture.plan.evidence = [{ path: bash, sha256: '0'.repeat(64) }];
+    const content = `${JSON.stringify(fixture.plan)}\n`;
+    await writeFile(join(fixture.artifacts, 'merge-plan.json'), content);
+    const result = run(mergeScript, {
+      ARTIFACTS_DIR: fixture.artifacts,
+      INPUTS_ACTION: 'gate',
+      INPUTS_ASSESSMENT: JSON.stringify(assessment(content)),
+      INPUTS_CI_POLICY: JSON.stringify({ requirement: 'none', checks_state: 'not_applicable' }),
+      INPUTS_MERGE_METHOD: 'squash',
+    });
+    expect(JSON.parse(stdout(result))).toMatchObject({ ready: true });
+    const sealed = JSON.parse(
+      await readFile(join(fixture.artifacts, 'merge-plan.json'), 'utf8')
+    ) as {
+      evidence: Array<{ path: string }>;
+    };
+    expect(sealed.evidence[0].path).toMatch(/^[A-Z]:\//);
+  });
+
   test('the gate seals the plan itself; an agent digest, empty or miscopied, decides nothing', async () => {
     const { artifacts, content } = await mergeFixture();
     const real = digest(content);
@@ -229,6 +257,8 @@ describe('merge action boundary', () => {
       summary: expect.stringContaining('plan entries are missing or invalid'),
     });
 
+    // The gate seals evidence itself: a stale or miscopied agent hash decides nothing,
+    // and the sealed plan carries the file's real hash for execution to recheck.
     const changed = await mergeFixture();
     const evidence = (changed.plan.evidence as Array<{ path: string }>)[0];
     await writeFile(evidence.path, 'changed evidence\n');
@@ -236,12 +266,17 @@ describe('merge action boundary', () => {
       ARTIFACTS_DIR: changed.artifacts,
       INPUTS_ACTION: 'gate',
       INPUTS_ASSESSMENT: JSON.stringify(assessment(changed.content)),
+      INPUTS_CI_POLICY: JSON.stringify({ requirement: 'none', checks_state: 'not_applicable' }),
       INPUTS_MERGE_METHOD: 'squash',
     });
+    const sealedBytes = await readFile(join(changed.artifacts, 'merge-plan.json'), 'utf8');
     expect(JSON.parse(stdout(changedResult))).toMatchObject({
-      ready: false,
-      summary: expect.stringContaining('approved evidence changed'),
+      ready: true,
+      plan_digest: digest(sealedBytes),
     });
+    expect(
+      (JSON.parse(sealedBytes) as { evidence: Array<{ sha256: string }> }).evidence[0].sha256
+    ).toBe(digest('changed evidence\n'));
 
     const missing = await mergeFixture();
     const missingEvidence = (missing.plan.evidence as Array<{ path: string }>)[0];
