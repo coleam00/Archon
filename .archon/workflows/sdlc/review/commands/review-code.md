@@ -56,3 +56,7 @@ background command without a bound: give every wait a timeout, and if the thing 
 on was stopped or vanished, report that instead of waiting again (seen live: a reviewer
 killed every `dotnet` by name, including its own test run, then waited for that run's
 output until the run was cancelled).
+Before you finish, stop every process you started that is still running (a game, a
+server, a watcher), by its recorded process ID, and confirm it is gone: nothing else
+reaps it, and it outlives the run (seen live: an investigation left a windowed game
+open on the owner's screen an hour after its run completed).

@@ -1222,6 +1222,8 @@ describe('agents that run processes stop only their own, by PID', () => {
       expect(prompt).toContain('Stop only processes this node started, by the process ID');
       expect(prompt).toContain('Never kill by');
       expect(prompt).toContain('give every wait a timeout');
+      // Seen live: an investigation left a windowed game running an hour after its run ended.
+      expect(prompt).toContain('Before you finish, stop every process you started');
     });
   }
 });
