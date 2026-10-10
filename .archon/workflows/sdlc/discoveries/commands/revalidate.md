@@ -20,3 +20,13 @@ Return an object with entries, exactly one per item_index:
 
 The next script checks citation bounds and revision stability only. It
 preserves your judgment separately and marks unsupported citations unverified.
+
+## Processes
+
+Stop only processes this node started, by the process ID it recorded. Never kill by
+image or process name (`taskkill /IM`, `pkill`, `killall`, `Stop-Process -Name`): the
+machine runs other work, including other runs' builds and tests. Never wait on a
+background command without a bound: give every wait a timeout, and if the thing waited
+on was stopped or vanished, report that instead of waiting again (seen live: a reviewer
+killed every `dotnet` by name, including its own test run, then waited for that run's
+output until the run was cancelled).

@@ -86,3 +86,13 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
   `$ARTIFACTS_DIR`.
 
 Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, no unresolved gap was disguised by extra breadth, and `git status` matches what you started with.
+
+## Processes
+
+Stop only processes this node started, by the process ID it recorded. Never kill by
+image or process name (`taskkill /IM`, `pkill`, `killall`, `Stop-Process -Name`): the
+machine runs other work, including other runs' builds and tests. Never wait on a
+background command without a bound: give every wait a timeout, and if the thing waited
+on was stopped or vanished, report that instead of waiting again (seen live: a reviewer
+killed every `dotnet` by name, including its own test run, then waited for that run's
+output until the run was cancelled).

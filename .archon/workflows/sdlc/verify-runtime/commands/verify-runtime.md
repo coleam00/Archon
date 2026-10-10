@@ -72,3 +72,13 @@ It cannot prove that model-authored evidence is truthful or that your comparison
 is correct. Record actual tool execution so a reviewer can audit those judgments.
 Your final chat reply is not parsed; normal engine node completion hands the
 report to the checker, including when the report is missing or malformed.
+
+## Processes
+
+Stop only processes this node started, by the process ID it recorded. Never kill by
+image or process name (`taskkill /IM`, `pkill`, `killall`, `Stop-Process -Name`): the
+machine runs other work, including other runs' builds and tests. Never wait on a
+background command without a bound: give every wait a timeout, and if the thing waited
+on was stopped or vanished, report that instead of waiting again (seen live: a reviewer
+killed every `dotnet` by name, including its own test run, then waited for that run's
+output until the run was cancelled).

@@ -27,3 +27,13 @@ You may read files and run read-only commands to find these out — list scripts
 
 - `checks` — each check as `{ name, argv }`, in the order to run. `argv` is the command and its arguments as separate strings, run from the repository root with no shell. When a check genuinely needs a shell (a pipeline, `&&`, an environment assignment), name the shell explicitly, as in `["bash", "-c", "<the project's own command>"]`. On Windows, a command installed as a `.cmd` shim (such as `npm` or `pnpm`) also needs a shell to start. The first failing check ends the run, so order matters.
 - `notes` — one or two sentences: where the gate is defined and why these checks. When the repository genuinely defines no checks, `checks` is empty and `notes` says what you looked at to establish that. An empty list reads as green, so declare it only when there is truly nothing to run, never because the gate looked hard to run.
+
+## Processes
+
+Stop only processes this node started, by the process ID it recorded. Never kill by
+image or process name (`taskkill /IM`, `pkill`, `killall`, `Stop-Process -Name`): the
+machine runs other work, including other runs' builds and tests. Never wait on a
+background command without a bound: give every wait a timeout, and if the thing waited
+on was stopped or vanished, report that instead of waiting again (seen live: a reviewer
+killed every `dotnet` by name, including its own test run, then waited for that run's
+output until the run was cancelled).

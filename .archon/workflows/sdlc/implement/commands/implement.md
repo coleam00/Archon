@@ -77,3 +77,13 @@ No one is watching this run: nothing you print survives unless it lands in this 
 `inherited` and `environment` let delivery continue on red, so neither is the comfortable answer — declaring one commits you to evidence. Name the exact failing check and the concrete reason your change cannot have caused it: that check already red at the starting commit, a failure inside a subsystem your diff never touches, a resource another process holds. Put that evidence in `summary` and in your report. Without it the cause is `introduced`. Never relabel a red check to get past a gate; the pull request's real CI checks the same thing again, so a false claim buys nothing and costs a round.
 
 Before declaring `green: true`, verify it: re-read the full diff of this run (`git status`, `git diff`, and `git log` back to the run's starting commit), confirm the work is fully covered with nothing unrelated included, confirm your report is current, and confirm the checks you cite actually ran this turn.
+
+## Processes
+
+Stop only processes this node started, by the process ID it recorded. Never kill by
+image or process name (`taskkill /IM`, `pkill`, `killall`, `Stop-Process -Name`): the
+machine runs other work, including other runs' builds and tests. Never wait on a
+background command without a bound: give every wait a timeout, and if the thing waited
+on was stopped or vanished, report that instead of waiting again (seen live: a reviewer
+killed every `dotnet` by name, including its own test run, then waited for that run's
+output until the run was cancelled).

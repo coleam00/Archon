@@ -1159,6 +1159,32 @@ describe('agent-written JSON', () => {
   });
 });
 
+describe('agents that run processes stop only their own, by PID', () => {
+  // Seen live: a test reviewer ran `taskkill //F //IM dotnet.exe`, killed its own test
+  // run with every other dotnet process, then waited on that run's output forever.
+  const commands = [
+    'implement/commands/implement.md',
+    'investigate/commands/investigate.md',
+    'review/commands/review-code.md',
+    'review/commands/review-errors.md',
+    'review/commands/review-focused.md',
+    'review/commands/review-seams.md',
+    'review/commands/review-tests.md',
+    'simplify/commands/simplify.md',
+    'validate/commands/discover-checks.md',
+    'verify-runtime/commands/verify-runtime.md',
+    'discoveries/commands/revalidate.md',
+  ];
+  for (const command of commands) {
+    test(command, async () => {
+      const prompt = await readFile(join(workflowRoot, ...command.split('/')), 'utf8');
+      expect(prompt).toContain('Stop only processes this node started, by the process ID');
+      expect(prompt).toContain('Never kill by');
+      expect(prompt).toContain('give every wait a timeout');
+    });
+  }
+});
+
 describe('backlog acceptance criteria a delivery can satisfy', () => {
   test('the slicer never asks for files attached to the pull request', async () => {
     // Seen live: "a harness screenshot is attached" sent a correct delivery to replan,
