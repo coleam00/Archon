@@ -6,17 +6,18 @@
  * (PowerShell's `ConvertTo-Json` and `Out-File` add one), and a path such as
  * `C:\Users\...` written with single backslashes, which JSON reads as invalid
  * escapes (seen live: a delivery failed at publish-pr on "Invalid escape character
- * U"). Strict JSON is tried first; only when it fails is every backslash that does
- * not begin a valid JSON escape doubled and the parse retried. A path segment that
- * happens to start with a valid escape letter (`\n`, `\t`, ...) still decodes as
- * that control character, so callers that need a path the contract fixes should
- * derive it with {@link contractPath} rather than trust the agent's string.
+ * U"). Strict JSON is tried first. Only when it fails, which shows the writer was not
+ * escaping, is the text repaired: `\"`, `\\`, `\/` and `\uXXXX` keep their meaning and
+ * every other backslash is taken literally, so `C:\Users\me\review.md` keeps its `\r`
+ * and `\n...` segments as path characters instead of control characters (seen live:
+ * `\review.md` decoded as a carriage return). Callers that need a path the contract
+ * fixes should still derive it with {@link contractPath}.
  */
 
 import { existsSync } from 'node:fs';
 
 const BOM = /^\uFEFF/;
-const ESCAPE = /\\(["\\/bfnrt]|u[0-9a-fA-F]{4})|\\/g;
+const ESCAPE = /\\(["\\/]|u[0-9a-fA-F]{4})|\\/g;
 
 export function parseAgentJson(raw: string): unknown {
   const text = raw.replace(BOM, '');

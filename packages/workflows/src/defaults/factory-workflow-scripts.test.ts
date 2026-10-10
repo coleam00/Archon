@@ -195,6 +195,32 @@ describe('merge action boundary', () => {
     });
   });
 
+  test('a hand-written plan with single-backslash Windows paths is read and resealed as strict JSON', async () => {
+    const fixture = await mergeFixture();
+    const evidence = (fixture.plan.evidence as Array<{ path: string }>)[0];
+    // Seen live: the gate crashed with "JSON Parse error: Invalid escape character U".
+    const windowsPath = evidence.path.replace(/\//g, '\\');
+    const raw = JSON.stringify({
+      ...fixture.plan,
+      evidence: [{ path: 'PLACEHOLDER', sha256: '' }],
+    }).replace('PLACEHOLDER', windowsPath.replace(/\\\\/g, '\\'));
+    await writeFile(join(fixture.artifacts, 'merge-plan.json'), `${raw}\n`);
+    const result = run(mergeScript, {
+      ARTIFACTS_DIR: fixture.artifacts,
+      INPUTS_ACTION: 'gate',
+      INPUTS_ASSESSMENT: JSON.stringify(assessment(raw)),
+      INPUTS_CI_POLICY: JSON.stringify({ requirement: 'none', checks_state: 'not_applicable' }),
+      INPUTS_MERGE_METHOD: 'squash',
+    });
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    if (process.platform === 'win32') {
+      expect(JSON.parse(stdout(result))).toMatchObject({ ready: true });
+      // The sealed plan is strict JSON for refresh-merge and execute.
+      const sealed = await readFile(join(fixture.artifacts, 'merge-plan.json'), 'utf8');
+      expect(() => JSON.parse(sealed) as unknown).not.toThrow();
+    }
+  });
+
   test('a Git Bash drive path to evidence is read on Windows and sealed as a native path', async () => {
     if (process.platform !== 'win32') return;
     const fixture = await mergeFixture();

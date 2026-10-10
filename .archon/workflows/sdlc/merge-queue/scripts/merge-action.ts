@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseAgentJson } from '../../.shared/agent-json.ts';
 
 type JsonObject = Record<string, unknown>;
 type MergeMethod = keyof typeof methodFlags;
@@ -48,7 +49,10 @@ function isMethod(value: unknown): value is MergeMethod {
 function plan(): { value: JsonObject; digest: string } {
   const bytes = readFileSync(join(requiredEnv('ARTIFACTS_DIR'), 'merge-plan.json'));
   return {
-    value: object(JSON.parse(bytes.toString('utf8')) as unknown),
+    // The assess agent writes this file, often by hand: a Windows evidence path with
+    // single backslashes must not crash the gate (seen live). The gate's seal then
+    // rewrites the plan as strict JSON for every node after it.
+    value: object(parseAgentJson(bytes.toString('utf8'))),
     digest: createHash('sha256').update(bytes).digest('hex'),
   };
 }

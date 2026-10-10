@@ -1144,6 +1144,10 @@ describe('agent-written JSON', () => {
       u: 'é',
       p: String.raw`D:\work`,
     });
+    // Once strict parsing has failed, \r \n \t \b \f are path characters, not controls.
+    expect(parseAgentJson(String.raw`{"p":"C:\Users\me\review\new\tmp\bin\file.md"}`)).toEqual({
+      p: String.raw`C:\Users\me\review\new\tmp\bin\file.md`,
+    });
     // \u followed by non-hex is an invalid escape too.
     expect(parseAgentJson(String.raw`{"p":"C:\users\me"}`)).toEqual({ p: String.raw`C:\users\me` });
   });
