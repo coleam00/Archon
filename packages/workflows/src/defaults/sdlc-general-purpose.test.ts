@@ -1106,3 +1106,18 @@ describe('agent-written JSON', () => {
     expect(() => parseAgentJson(String.raw`{"p":"C:\Users"`)).toThrow();
   });
 });
+
+describe('backlog acceptance criteria a delivery can satisfy', () => {
+  test('the slicer never asks for files attached to the pull request', async () => {
+    // Seen live: "a harness screenshot is attached" sent a correct delivery to replan,
+    // because no workflow node can upload an image to a pull request.
+    const prompt = await readFile(
+      join(workflowRoot, 'backlog', 'commands', 'slice-backlog.md'),
+      'utf8'
+    );
+    expect(prompt).toContain('Every criterion must be one the delivery itself can satisfy');
+    expect(prompt).toContain('evidence file saved in the run');
+    expect(prompt).toContain('Never require attaching files or images to the pull');
+    expect(prompt).toContain('never require a human action');
+  });
+});

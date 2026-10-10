@@ -25,6 +25,10 @@ be built. Each ticket is an object with:
   it READY without guessing: the problem, why it is worth solving, the desired outcome,
   the invariants that must hold, and acceptance criteria as a checklist a verifier can
   check with exact values, not adjectives. Name the document section it comes from.
+  Every criterion must be one the delivery itself can satisfy: proved by a test, by a
+  runtime or harness observation, or by an evidence file saved in the run's artifacts
+  and named in the PR body. Never require attaching files or images to the pull
+  request (the workflows cannot upload them), and never require a human action.
 - `depends_on`: keys of earlier tickets this one needs; usually empty or one.
 - `size`: `small_bounded`, `risky`, or `large`.
 
