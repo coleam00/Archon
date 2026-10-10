@@ -968,6 +968,47 @@ describe('hold-comment write boundary', () => {
     expect(state.comments[0].body).toContain('Hold cleared at `head-8`.');
   });
 
+  test('a clear with explanatory reasons still clears instead of failing the merge run', async () => {
+    const artifacts = await mkdtemp(join(root, 'holds-clear-reasons-'));
+    const statePath = join(artifacts, 'state.json');
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        labels: [],
+        available: [],
+        comments: [{ id: 4, body: '<!-- archon-merge-hold -->\nold hold' }],
+      })
+    );
+    const clear = JSON.stringify([
+      {
+        pr_url: 'https://github.com/owner/repo/pull/7',
+        head_sha: 'head-8',
+        action: 'clear',
+        reasons: [
+          'The merge conflict is resolved.',
+          'The required check passes on the current head.',
+        ],
+      },
+    ]);
+    const result = Bun.spawnSync([process.execPath, holdsScript], {
+      env: env({
+        INPUTS_PRS: prs,
+        INPUTS_HOLDS: clear,
+        INPUTS_MODE: 'auto',
+        INPUTS_PUBLISH_HOLDS: 'true',
+        GH_STATE: statePath,
+      }),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as {
+      comments: Array<{ body: string }>;
+    };
+    expect(state.comments[0].body).toContain('Hold cleared at `head-8`.');
+    expect(state.comments[0].body).not.toContain('conflict is resolved');
+  });
+
   test('accepts an empty sparse plan and rejects duplicate entries', () => {
     const empty = Bun.spawnSync([process.execPath, holdsScript], {
       env: env({

@@ -84,9 +84,10 @@ const holds = rawHolds.map(value => {
   if (hold.action === 'hold' && hold.reasons.length === 0) {
     throw new Error('publish-holds: a hold must include evidence-backed reasons');
   }
-  if (hold.action !== 'hold' && hold.reasons.length !== 0) {
-    throw new Error('publish-holds: only a hold may include reasons');
-  }
+  // A clear publishes only "Hold cleared"; reasons an agent attaches to it are its own
+  // explanation, not a hold. Dropping them must not fail an eligible merge (seen live:
+  // a verified PR's whole merge run failed on explanatory reasons beside a clear).
+  if (hold.action !== 'hold') hold.reasons = [];
   return hold as {
     pr_url: string;
     head_sha: string;
