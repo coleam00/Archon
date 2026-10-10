@@ -228,6 +228,54 @@ describe('caller-owned triage state labels', () => {
     expect(removals).toEqual(['Team-Blocked']);
   });
 
+  test('a wait on open pull requests labels nothing; any other blocker still publishes BLOCKED', async () => {
+    const blocked = (blockedBy: string[]) => ({
+      ...triageVerdict([]),
+      INPUTS_CONTRACT: 'BLOCKED',
+      INPUTS_ROUTE: 'no_action',
+      INPUTS_BLOCKED_REASON: 'waits on another change',
+      INPUTS_BLOCKED_BY: JSON.stringify(blockedBy),
+      INPUTS_STATE_LABELS: JSON.stringify({ READY: 'team-ready', BLOCKED: 'team-blocked' }),
+      INPUTS_PUBLISH: 'true',
+    });
+    const run = async (blockedBy: string[]) => {
+      const artifacts = await mkdtemp(join(root, 'triage-blocked-'));
+      const statePath = join(artifacts, 'state.json');
+      await writeFile(
+        statePath,
+        JSON.stringify({ labels: [], available: ['Team-Blocked', 'Team-Ready'], comments: [] })
+      );
+      const result = runBun(triageScript, {
+        ...blocked(blockedBy),
+        GH_STATE: statePath,
+        GH_LOG: join(artifacts, 'gh.jsonl'),
+      });
+      expect(result.exitCode, result.stderr?.toString()).toBe(0);
+      return {
+        out: JSON.parse(stdout(result)) as Record<string, unknown>,
+        labels: (JSON.parse(await readFile(statePath, 'utf8')) as { labels: string[] }).labels,
+      };
+    };
+
+    // Seen live: BLOCKED on an open sibling PR left the issue skipped after it merged.
+    const onPrs = await run([
+      'https://github.com/owner/repo/pull/64',
+      'https://github.com/owner/repo/pull/65/',
+    ]);
+    expect(onPrs.out).toMatchObject({ contract: 'BLOCKED', published: false });
+    expect(onPrs.labels).toEqual([]);
+
+    for (const blockers of [
+      ['https://github.com/owner/repo/issues/9'],
+      ['https://github.com/owner/repo/pull/64', 'https://github.com/owner/repo/issues/9'],
+      [],
+    ]) {
+      const other = await run(blockers);
+      expect(other.out).toMatchObject({ contract: 'BLOCKED', published: true });
+      expect(other.labels).toEqual(['Team-Blocked']);
+    }
+  });
+
   test('rejects proposed labels that differ only by case', () => {
     const result = runBun(triageScript, {
       ...triageVerdict(['area-ui', 'Area-UI']),

@@ -417,10 +417,20 @@ function main(): void {
     return;
   }
 
+  // A wait on open pull requests ends by itself when they merge or close. Publishing
+  // the BLOCKED state label would mark the item as touched, and backlog intake would
+  // then skip it for good (seen live: an issue blocked on a sibling PR stayed skipped
+  // after that PR merged). So such a verdict routes this run but labels nothing, and
+  // the next intake re-picks the item once the pull requests are gone.
+  const waitsOnPullRequests =
+    contract === 'BLOCKED' &&
+    blockedBy.length > 0 &&
+    blockedBy.every(url => /\/pull\/\d+\/?$/.test(url));
+
   let labels: string[];
   let skipped: string[] = [];
   let published = false;
-  if (publish && item !== undefined) {
+  if (publish && item !== undefined && !waitsOnPullRequests) {
     ({ labels, skipped } = apply(item, labelsFor, area));
     published = true;
   } else {
