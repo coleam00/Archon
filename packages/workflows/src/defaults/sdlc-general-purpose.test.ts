@@ -1630,3 +1630,69 @@ describe('lifecycle binds a re-driven pull request', () => {
     ).toMatchObject({ delivered: false, reason: 'no delivery result' });
   });
 });
+
+const envCheckScript = join(workflowRoot, 'deliver', 'scripts', 'env-check.ts');
+
+describe('a correction loop blocked by the environment stops instead of spinning', () => {
+  // Real fix summaries from a run that spent all five rounds on a held port.
+  const heldPort =
+    'Validate passed all 86 tests; four isolated production browser tests passed. Standard e2e ' +
+    'remains blocked by port 8787, owned by PID 90260 from another worktree. No new CI failures.';
+  const occupied =
+    'Standard e2e remains blocked before tests: another worktree’s PID 90260 occupies port 8787. ' +
+    'No push performed because publication requires green.';
+
+  const rounds = async (inputs: Array<{ summary: string; red_cause?: string }>) => {
+    const artifacts = join(root, `env-check-${Math.random().toString(36).slice(2)}`);
+    await mkdir(artifacts, { recursive: true });
+    return inputs.map(({ summary, red_cause }) =>
+      runBun(envCheckScript, {
+        ARTIFACTS_DIR: artifacts,
+        INPUTS_SUMMARY: summary,
+        INPUTS_RED_CAUSE: red_cause ?? '',
+      })
+    );
+  };
+
+  test('two environment rounds in a row fail the loop and name the blocker', async () => {
+    const [first, second] = await rounds([{ summary: heldPort }, { summary: occupied }]);
+    expect(first.exitCode, first.stderr.toString()).toBe(0);
+    expect(JSON.parse(first.stdout.toString())).toMatchObject({
+      environment: true,
+      signatures: ['port in use'],
+      round: 1,
+    });
+    expect(second.exitCode).toBe(1);
+    expect(second.stderr.toString()).toContain('blocked by the environment again (port in use)');
+  });
+
+  test('a declared environment red counts even without a recognised phrase', async () => {
+    const [, second] = await rounds([
+      { summary: 'database container unavailable', red_cause: 'environment' },
+      { summary: 'still unavailable', red_cause: 'environment' },
+    ]);
+    expect(second.exitCode).toBe(1);
+  });
+
+  test('one environment round, or rounds that are not consecutive, keep going', async () => {
+    const results = await rounds([
+      { summary: heldPort },
+      { summary: 'Fixed both findings; e2e green on a free port.' },
+      { summary: 'Usage limit reached; resumed after the reset and finished the fix.' },
+    ]);
+    for (const result of results) expect(result.exitCode, result.stderr.toString()).toBe(0);
+  });
+
+  test('a finding about a feature that mentions ports or limits is not an environment', async () => {
+    const results = await rounds([
+      {
+        summary: 'Added rate limiting to the login route; the server now reads the port from PORT.',
+      },
+      { summary: 'Return 429 when the per-user request limit is exceeded; documented port 3000.' },
+    ]);
+    for (const result of results) {
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(JSON.parse(result.stdout.toString())).toMatchObject({ environment: false });
+    }
+  });
+});

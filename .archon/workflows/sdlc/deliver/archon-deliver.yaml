@@ -369,6 +369,24 @@ nodes:
             summary: "$fix.output.summary"
             stage: "The correction"
 
+        # A blocker outside the change (a held port, an exhausted limit, a full
+        # disk) that persists across two rounds stops the loop here with its name,
+        # instead of spending every remaining round on a correction that cannot help.
+        - id: env-check
+          script: env-check
+          runtime: bun
+          depends_on: [gate-correction-green]
+          with:
+            red_cause: "$fix.output.red_cause"
+            summary: "$fix.output.summary"
+          output_format:
+            type: object
+            properties:
+              environment: { type: boolean }
+              signatures: { type: array, items: { type: string } }
+              round: { type: integer }
+            required: [environment, signatures, round]
+
         - id: recheck
           include: archon-review
           with:
@@ -380,7 +398,7 @@ nodes:
             tier: "$classify.output.tier"
             errors: "$resolve-scope.output.errors"
             docs: "$classify.output.docs"
-          depends_on: [gate-correction-green]
+          depends_on: [env-check]
 
   # none_failed_min_one_success joins the mutually exclusive paths as bound
   # values: the
