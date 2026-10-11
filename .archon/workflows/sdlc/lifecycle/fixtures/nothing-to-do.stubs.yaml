@@ -1,11 +1,16 @@
-# Dry-run fixture: backlog intake finds no untouched issue. Every downstream node
-# is skipped and the run completes with nothing to do — a fact, not a failure.
+# Dry-run fixture: the backlog is empty (no open issues). Every downstream node
+# is skipped, the stall check reports nothing stalled, and the run completes.
 intake:
   target: ""
   found: false
   selected: true
-  reason: "stub: 3 open issue(s), none untouched"
+  reason: "stub: 0 open issue(s), none untouched"
   waiting_on: []
+  open_issues: 0
+  kind: issue
+  pr: ""
+adopt: { adopted: false, route: "", pr: "", number: 0, branch: "", base: "", head: "", attempt: 0, reason: "no unfinished pull request" }
+stall: { stalled: false, notified: [], summary: "stub: backlog is empty" }
 fixture:
   expect: completed
   inputs:

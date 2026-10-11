@@ -28,6 +28,25 @@ inputs:
       Caller-owned JSON mapping of workflow states to GitHub labels, forwarded
       through ship. Automatic intake requires every state to be mapped and
       treats only mapped labels as previously touched.
+  redrive_limit:
+    default: '2'
+    description: >-
+      How many times automatic intake re-drives one unfinished pull request (an
+      earlier run delivered it, it never merged) before leaving it for a human.
+      Intake finishes such a pull request before starting a new issue. "0" turns
+      re-driving off.
+  redrive_after_minutes:
+    default: '30'
+    description: >-
+      How long an unfinished pull request must sit untouched before intake
+      re-drives it, so work another run or a person is still doing is left alone.
+  stall_fail:
+    default: 'true'
+    description: >-
+      When automatic intake finds open issues but nothing it can start (all
+      claimed, waiting on open dependencies, or labeled for a human), "true" fails
+      the run after commenting on each root blocker; "false" completes it with the
+      same comments.
   scenario:
     required: true
     description: Absolute path to a project runtime scenario JSON.
@@ -108,6 +127,8 @@ nodes:
     with:
       target: "$INPUTS.target"
       state_labels: "$INPUTS.state_labels"
+      redrive_limit: "$INPUTS.redrive_limit"
+      redrive_after_minutes: "$INPUTS.redrive_after_minutes"
     output_format:
       type: object
       properties:
@@ -116,12 +137,34 @@ nodes:
         selected: { type: boolean }
         reason: { type: string }
         waiting_on: { type: array, items: { type: integer } }
-      required: [target, found, selected, reason, waiting_on]
+        open_issues: { type: integer }
+        kind: { type: string, enum: [issue, pr] }
+        pr: { type: string }
+      required: [target, found, selected, reason, waiting_on, open_issues, kind, pr]
+
+  # Nothing to start is a fact; open issues that cannot move are a stall someone
+  # must hear about, so the run says so on the blockers and, by default, fails.
+  - id: stall
+    script: report-stall
+    runtime: uv
+    mutates_checkout: false
+    depends_on: [intake]
+    when: "$intake.output.found == false"
+    with:
+      intake: "$intake.output"
+      stall_fail: "$INPUTS.stall_fail"
+    output_format:
+      type: object
+      properties:
+        stalled: { type: boolean }
+        notified: { type: array, items: { type: integer } }
+        summary: { type: string }
+      required: [stalled, notified, summary]
 
   - id: ship
     include: archon-ship
     depends_on: [intake]
-    when: "$intake.output.found == true"
+    when: "$intake.output.found == true && $intake.output.kind == 'issue'"
     with:
       target: "$intake.output.target"
       publish: "$INPUTS.publish"
@@ -130,15 +173,78 @@ nodes:
       validation_context: "$INPUTS.validation_context"
       final_validation: "$INPUTS.final_validation"
 
+  # Unfinished work: intake chose a pull request an earlier run delivered but
+  # nobody merged. A script records the attempt, checks out its branch and merges
+  # the base in when that is clean; anything needing judgment (a draft, a
+  # conflict) goes to a repair delivery on the same branch. It always runs (with
+  # no pull request it adopts nothing and touches nothing) so every route below
+  # can read its output.
+  - id: adopt
+    script: adopt-pr
+    runtime: uv
+    depends_on: [intake]
+    with:
+      pr: "$intake.output.pr"
+      redrive_limit: "$INPUTS.redrive_limit"
+    output_format:
+      type: object
+      properties:
+        adopted: { type: boolean }
+        route: { type: string, enum: [deliver, verify, ''] }
+        pr: { type: string }
+        number: { type: integer }
+        branch: { type: string }
+        base: { type: string }
+        head: { type: string }
+        attempt: { type: integer }
+        reason: { type: string }
+      required: [adopted, route, pr, number, branch, base, head, attempt, reason]
+
+  # Ordered after ship only because both deliveries can suspend on CI and one
+  # suspension must own the run cursor; intake's kind makes them exclusive.
+  - id: update
+    include: archon-deliver
+    depends_on: [adopt, ship]
+    trigger_rule: none_failed_min_one_success
+    when: "$adopt.output.route == 'deliver'"
+    with:
+      validation_scope: "$INPUTS.validation_scope"
+      validation_context: "$INPUTS.validation_context"
+      final_validation: "$INPUTS.final_validation"
+      work: >-
+        Finish the existing pull request $adopt.output.pr for $intake.output.target.
+        An earlier run delivered it and it never merged ($adopt.output.reason).
+        This checkout is on its branch, $adopt.output.branch. First bring it up to
+        date: merge origin/$adopt.output.base into this branch with `git merge`
+        (never rebase, never force-push), resolving every conflict so both the
+        pull request's intent and the base's changes survive. Then read the issue,
+        the pull request's latest `<!-- archon-review-report -->` comment and any
+        `<!-- archon-merge-hold -->` comment, and complete what they show is still
+        missing. Commit on this branch. Do not switch branches or open another
+        pull request. Independently review every correction.
+
+  - id: revalidate
+    include: archon-validate
+    depends_on: [adopt]
+    when: "$adopt.output.route == 'verify'"
+    with:
+      scope: "$INPUTS.validation_scope"
+      context: "$INPUTS.validation_context"
+
   # Binding the delivered pull request is facts (the delivery's certified URL, gh,
   # git HEAD, this run's review and validation reports), so a script owns it.
   - id: candidate
     script: bind-delivered-pr
     runtime: uv
     mutates_checkout: false
-    depends_on: [ship]
+    depends_on: [intake, ship, adopt, update, revalidate]
+    trigger_rule: none_failed_min_one_success
+    when: "$intake.output.found == true"
     with:
-      delivery: "$ship.output"
+      delivery: { from: "$ship.output", if_skipped: null }
+      update: { from: "$update.output", if_skipped: null }
+      adopted: { from: "$adopt.output", if_skipped: null }
+      revalidated: { from: "$revalidate.output", if_skipped: null }
     output_format:
       type: object
       properties:
@@ -264,9 +370,41 @@ nodes:
         evidence: { type: string }
       required: [ready, prs, evidence]
 
+  # A re-driven pull request whose base was merged in has a new head, so CI
+  # restarted. Wait for it to conclude before the merge queue reads the checks,
+  # instead of letting the queue hold a batch that is only still running.
+  - id: settle
+    depends_on: [selected, adopt]
+    when: "$selected.output.ready == true && $adopt.output.route == 'verify'"
+    loop_group:
+      max_iterations: 13
+      until_bash: |
+        value=$settle-probe.output.state
+        test "$value" != "pending"
+      nodes:
+        - id: settle-probe
+          script: pr-checks
+          runtime: uv
+          with:
+            pr: "$adopt.output.pr"
+          output_format:
+            type: object
+            properties:
+              state: { type: string, enum: [pending, concluded, red] }
+              detail: { type: string }
+            required: [state, detail]
+        - id: settle-pause
+          wait:
+            event: checks.complete
+            deadline_ms: 300000
+          when: $settle-probe.output.state == 'pending'
+          depends_on: [settle-probe]
+
+  # After settle: only one suspending node may own the run cursor at a time.
   - id: discoveries
     workflow: archon-discoveries
-    depends_on: [selected]
+    depends_on: [selected, settle]
+    trigger_rule: none_failed_min_one_success
     when: "$selected.output.ready == true"
     with:
       discovery_artifact: "$ARTIFACTS_DIR/discoveries.json"
@@ -277,7 +415,7 @@ nodes:
   # discovery run still blocks the merge.
   - id: merge
     workflow: archon-merge-queue
-    depends_on: [selected, discoveries]
+    depends_on: [selected, discoveries, settle]
     trigger_rule: none_failed_min_one_success
     when: "$selected.output.ready == true"
     with:

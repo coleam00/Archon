@@ -7,6 +7,10 @@ intake:
   selected: false
   reason: "explicit target"
   waiting_on: []
+  open_issues: 0
+  kind: issue
+  pr: ""
+adopt: { adopted: false, route: "", pr: "", number: 0, branch: "", base: "", head: "", attempt: 0, reason: "no unfinished pull request" }
 ship__triage__triage:
   contract: READY
   route: deliver

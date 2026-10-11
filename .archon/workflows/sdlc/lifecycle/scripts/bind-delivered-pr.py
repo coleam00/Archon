@@ -12,6 +12,13 @@ what was delivered:
 
 Anything else is delivered=false: a declined triage, no pull request, or identity
 or evidence that does not line up. Deterministic gh and git reads; no judgment.
+
+A re-driven pull request arrives one of two ways. A repair delivery (`update`)
+hands back `pr_url` like any repair. An adopted pull request that only needed its
+base merged in (`adopted` with route `verify`) was re-validated in this run
+(`revalidated`, green required) but not re-reviewed, so it needs this run's
+validation.md and, instead of a review report here, the pack's review report
+comment already on the pull request.
 """
 
 import json
@@ -22,6 +29,7 @@ import sys
 
 PR_URL = re.compile(r"https?://[^\s/]+/[\w.-]+/[\w.-]+/pull/\d+")
 EVIDENCE = ("review/report.md", "validation.md")
+REVIEW_MARKER = "<!-- archon-review-report -->"
 
 
 def run(*args: str) -> str:
@@ -43,22 +51,35 @@ def delivered_url(delivery: dict) -> str:
     return first if PR_URL.fullmatch(first) else ""
 
 
+def load(name: str):
+    value = json.loads(os.environ.get(name, "") or "null")
+    return value if isinstance(value, dict) else None
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", newline="\n")
-    delivery = json.loads(os.environ.get("INPUTS_DELIVERY", "") or "null")
-    if not isinstance(delivery, dict):
+    delivery = load("INPUTS_DELIVERY") or load("INPUTS_UPDATE")
+    adopted = load("INPUTS_ADOPTED")
+    evidence = EVIDENCE
+    if delivery is not None:
+        url = delivered_url(delivery)
+    elif adopted is not None and adopted.get("route") == "verify":
+        revalidated = load("INPUTS_REVALIDATED") or {}
+        if revalidated.get("green") is not True:
+            return result(False, "the adopted pull request did not re-validate green")
+        url, evidence = str(adopted.get("pr") or ""), ("validation.md",)
+    else:
         return result(False, "no delivery result")
-    url = delivered_url(delivery)
     if not PR_URL.fullmatch(url):
         return result(False, "the delivery handed back no pull request")
     artifacts = os.environ.get("ARTIFACTS_DIR", "")
-    missing = [name for name in EVIDENCE
+    missing = [name for name in evidence
                if not artifacts or not os.path.isfile(os.path.join(artifacts, name))
                or os.path.getsize(os.path.join(artifacts, name)) == 0]
     if missing:
         return result(False, "this run has no " + " or ".join(missing))
     pr = json.loads(run("gh", "pr", "view", url, "--json",
-                        "state,isDraft,isCrossRepository,headRefName,headRefOid"))
+                        "state,isDraft,isCrossRepository,headRefName,headRefOid,comments"))
     head = run("git", "rev-parse", "HEAD")
     branch = run("git", "branch", "--show-current")
     if pr.get("state") != "OPEN" or pr.get("isDraft"):
@@ -68,6 +89,10 @@ def main() -> int:
     if pr.get("headRefName") != branch or pr.get("headRefOid") != head:
         return result(False, f"{url} head {pr.get('headRefName')}@{pr.get('headRefOid')} "
                              f"is not this checkout's {branch}@{head}")
+    if evidence != EVIDENCE and not any(
+            str(comment.get("body") or "").lstrip().startswith(REVIEW_MARKER)
+            for comment in pr.get("comments") or [] if isinstance(comment, dict)):
+        return result(False, f"{url} carries no review report")
     return result(True, f"{url} at {head}", [url], head)
 
 

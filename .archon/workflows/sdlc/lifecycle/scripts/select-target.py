@@ -18,6 +18,15 @@ stays touched.
 A pull request claims issue N only with a closing keyword (`Closes`, `Fixes`,
 `Resolves` and their forms) or the pack's own `Relates to`, followed by a
 reference to this repository. A bare `#N` mention does not claim anything.
+
+Unfinished work comes before new work. Before choosing an issue, automatic intake
+looks for a pull request an earlier run delivered but never merged: open, from
+this repository, carrying the pack's review report comment, claiming an open
+issue whose dependencies are closed, untouched for `redrive_after_minutes`, and
+re-driven fewer than `redrive_limit` times (each attempt leaves a re-drive
+comment). The oldest such pull request is returned with `kind: pr`; the caller
+brings it up to date and finishes it instead of leaving its issue claimed and
+everything behind it waiting. `redrive_limit` 0 turns this off.
 """
 
 import json
@@ -25,12 +34,16 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 
 
 STATES = {"READY", "DESIGN_FIRST", "NEEDS_CONTRACT_WORK", "BLOCKED", "NO_ACTION"}
 
 # gh paginates internally; the limit only has to exceed any real backlog.
 LIMIT = "100000"
+REVIEW_MARKER = "<!-- archon-review-report -->"
+REDRIVE_MARKER = "<!-- archon-redrive -->"
+PR_FIELDS = "number,title,body,url,isDraft,isCrossRepository,updatedAt,comments"
 DEPENDS = re.compile(r"^[ \t]*depends on:(.*)$", re.IGNORECASE | re.MULTILINE)
 CLAIM_KEYWORD = r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|relates\s+to)\s*:?\s+"
 # One reference to an issue or pull request: its URL, `owner/repo#n`, or `#n`.
@@ -92,6 +105,68 @@ def roots(blockers: set[int], open_needs: dict[int, set[int]]) -> set[int]:
     return found or seen
 
 
+def redrive_settings() -> tuple[int, float]:
+    limit = os.environ.get("INPUTS_REDRIVE_LIMIT", "").strip() or "2"
+    after = os.environ.get("INPUTS_REDRIVE_AFTER_MINUTES", "").strip() or "30"
+    if not limit.isdigit():
+        raise ValueError("redrive_limit must be a whole number")
+    try:
+        minutes = float(after)
+    except ValueError:
+        raise ValueError("redrive_after_minutes must be a number") from None
+    if minutes < 0:
+        raise ValueError("redrive_after_minutes must not be negative")
+    return int(limit), minutes
+
+
+def bodies(pr: dict) -> list[str]:
+    return [str(comment.get("body") or "") for comment in pr.get("comments") or []
+            if isinstance(comment, dict)]
+
+
+def idle_since(pr: dict, minutes: float) -> bool:
+    stamp = str(pr.get("updatedAt") or "")
+    try:
+        updated = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - updated >= timedelta(minutes=minutes)
+
+
+def redrivable(prs: list[dict], repo: str, issue_urls: dict[int, str],
+               open_needs: dict[int, set[int]], limit: int, minutes: float) -> tuple[dict, int] | None:
+    """The oldest pull request a run delivered but nobody merged, with its issue."""
+    if limit <= 0:
+        return None
+    found = []
+    for pr in prs:
+        if pr.get("isCrossRepository") or not pr.get("url"):
+            continue
+        comments = bodies(pr)
+        if not any(body.lstrip().startswith(REVIEW_MARKER) for body in comments):
+            continue
+        if sum(body.lstrip().startswith(REDRIVE_MARKER) for body in comments) >= limit:
+            continue
+        if not idle_since(pr, minutes):
+            continue
+        claims = references(f"{pr.get('title') or ''}\n{pr.get('body') or ''}", repo, CLAIM_KEYWORD)
+        issues = sorted(number for number in claims
+                        if number in issue_urls and not (open_needs.get(number, set()) - {pr["number"]}))
+        if issues:
+            found.append((pr, issues[0]))
+    return min(found, key=lambda item: item[0]["number"]) if found else None
+
+
+def emit(target: str, found: bool, selected: bool, reason: str, waiting_on: list[int],
+         open_issues: int, kind: str = "issue", pr: str = "") -> int:
+    print(json.dumps({"target": target, "found": found, "selected": selected, "reason": reason,
+                      "waiting_on": waiting_on, "open_issues": open_issues, "kind": kind,
+                      "pr": pr}))
+    return 0
+
+
 def repository(issues: list[dict]) -> str:
     match = re.match(r"https?://[^/]+/([^/]+/[^/]+)/issues/\d+", issues[0]["url"]) if issues else None
     return match.group(1) if match else ""
@@ -100,25 +175,28 @@ def repository(issues: list[dict]) -> str:
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     owned_labels, blocked_label, complete_mapping = state_labels()
+    limit, minutes = redrive_settings()
     explicit = os.environ.get("INPUTS_TARGET", "").strip()
     if explicit:
-        print(json.dumps({"target": explicit, "found": True, "selected": False,
-                          "reason": "explicit target", "waiting_on": []}))
-        return 0
+        return emit(explicit, True, False, "explicit target", [], 0)
     if not complete_mapping:
-        print(json.dumps({"target": "", "found": False, "selected": True,
-                          "reason": "automatic intake requires state_labels for every state",
-                          "waiting_on": []}))
-        return 0
+        return emit("", False, True, "automatic intake requires state_labels for every state", [], 0)
     issues = gh("issue", "list", "--state", "open", "--limit", LIMIT,
                 "--json", "number,url,labels,body")
-    prs = gh("pr", "list", "--state", "open", "--limit", LIMIT, "--json", "number,title,body")
+    prs = gh("pr", "list", "--state", "open", "--limit", LIMIT, "--json", PR_FIELDS)
     repo = repository(issues)
     open_numbers = {issue["number"] for issue in issues} | {pr["number"] for pr in prs}
     claimed = set().union(*(references(f"{pr.get('title') or ''}\n{pr.get('body') or ''}",
                                        repo, CLAIM_KEYWORD) for pr in prs))
     open_needs = {issue["number"]: dependencies(issue.get("body"), repo) & open_numbers
                   for issue in issues}
+    unfinished = redrivable(prs, repo, {issue["number"]: issue["url"] for issue in issues},
+                            open_needs, limit, minutes)
+    if unfinished:
+        pr, number = unfinished
+        url = next(issue["url"] for issue in issues if issue["number"] == number)
+        return emit(url, True, True, f"unfinished pull request #{pr['number']} for #{number}",
+                    [], len(issues), "pr", pr["url"])
     candidates = []
     waiting_on: set[int] = set()
     for issue in issues:
@@ -138,14 +216,10 @@ def main() -> int:
         reason = f"{len(issues)} open issue(s), none untouched"
         if waiting_on:
             reason += "; stalled behind open dependencies " + ", ".join(f"#{n}" for n in sorted(waiting_on))
-        print(json.dumps({"target": "", "found": False, "selected": True, "reason": reason,
-                          "waiting_on": sorted(waiting_on)}))
-        return 0
+        return emit("", False, True, reason, sorted(waiting_on), len(issues))
     chosen = min(candidates, key=lambda issue: issue["number"])
-    print(json.dumps({"target": chosen["url"], "found": True, "selected": True,
-                      "reason": f"oldest ready open issue of {len(candidates)}",
-                      "waiting_on": sorted(waiting_on)}))
-    return 0
+    return emit(chosen["url"], True, True, f"oldest ready open issue of {len(candidates)}",
+                sorted(waiting_on), len(issues))
 
 
 if __name__ == "__main__":

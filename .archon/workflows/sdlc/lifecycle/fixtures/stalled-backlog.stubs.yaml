@@ -1,0 +1,20 @@
+# Dry-run fixture: open issues exist but intake can start none of them (all waiting
+# on an open dependency). Ship and every delivery node are skipped and the stall
+# check is reached; its real script comments on the blocker and fails the run,
+# which the script tests prove. Here it is stubbed to show only the routing.
+intake:
+  target: ""
+  found: false
+  selected: true
+  reason: "stub: 2 open issue(s), none untouched; stalled behind open dependencies #1"
+  waiting_on: [1]
+  open_issues: 2
+  kind: issue
+  pr: ""
+adopt: { adopted: false, route: "", pr: "", number: 0, branch: "", base: "", head: "", attempt: 0, reason: "no unfinished pull request" }
+stall: { stalled: true, notified: [1], summary: "stub: stalled behind #1" }
+fixture:
+  expect: completed
+  reached: [intake, stall]
+  inputs:
+    scenario: "/private/scenario.json"

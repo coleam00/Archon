@@ -1,0 +1,106 @@
+# Dry-run fixture: intake finds an unfinished pull request an earlier run delivered
+# (kind pr). Adopt brings it up to date cleanly (route verify), so ship and the
+# repair delivery never run: the adopted head is re-validated, runtime-verified,
+# its restarted CI is awaited, and it reaches the merge and closes its issue.
+intake:
+  target: "https://github.com/example/app/issues/1"
+  found: true
+  selected: true
+  reason: "unfinished pull request #7 for #1"
+  waiting_on: []
+  open_issues: 3
+  kind: pr
+  pr: "https://github.com/example/app/pull/7"
+adopt:
+  adopted: true
+  route: verify
+  pr: "https://github.com/example/app/pull/7"
+  number: 7
+  branch: "fixture-branch"
+  base: "main"
+  head: "0123456789abcdef0123456789abcdef01234567"
+  attempt: 1
+  reason: "#7 merged main in and pushed"
+revalidate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: "first validation for this run", nonce: fixture, reuse: false }
+revalidate__mode: { comparison: false }
+revalidate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
+revalidate__run: { status: green, summary: "stub: project gate green" }
+revalidate__result: { green: true, checks_performed: true, red_cause: "", summary: "stub: project gate green", evidence: null }
+settle-probe: { state: concluded, detail: "stub: 1 check(s) concluded" }
+candidate:
+  delivered: true
+  prs: ["https://github.com/example/app/pull/7"]
+  head: "0123456789abcdef0123456789abcdef01234567"
+# The runtime scenario verifies; with no holdout input the holdout pass must skip on
+# its own `when`, and qualify must still be reached. `qualify` and `selected` stand
+# in for the independently tested evidence path.
+runtime__read-scenario:
+  setup: "true"
+  start: "true"
+  teardown: "true"
+  candidate_command: "echo 0123456789abcdef0123456789abcdef01234567"
+  assertion_ids: ["a1"]
+  assertions_json: []
+# The runtime loop body runs once and verifies (inner node ids are unprefixed).
+prepare-attempt:
+  attempt: 1
+  directory: "/artifacts/runtime"
+  report_path: "/artifacts/runtime/report.json"
+  checkout: "/checkout"
+  report_feedback: ""
+setup-run: { ok: true }
+start-run: { ok: true }
+capture-helper: { path: "/helper" }
+verify: "stub: assertions exercised"
+identity-run: { ok: true }
+check-evidence:
+  status: "verified"
+  reason: "stub: all assertions passed"
+  candidate: "0123456789abcdef0123456789abcdef01234567"
+teardown-run: { ok: true }
+finish-attempt:
+  status: "verified"
+  reason: "stub: all assertions passed"
+  candidate: "0123456789abcdef0123456789abcdef01234567"
+  done: true
+  checkout: "/checkout"
+  directory: "/artifacts/runtime"
+  report_path: "/artifacts/runtime/report.json"
+runtime__gate-verified:
+  verified: true
+  verdict: "verified"
+  candidate: "0123456789abcdef0123456789abcdef01234567"
+  checkout: "/checkout"
+  summary: "stub: verified"
+  directory: "/artifacts/runtime"
+  report_path: "/artifacts/runtime/report.json"
+qualify:
+  ready: true
+  repair: false
+  evidence: "/artifacts/runtime-qualification.md"
+selected:
+  ready: true
+  prs: ["https://github.com/example/app/pull/7"]
+  evidence: "/artifacts/runtime-qualification.md"
+discoveries:
+  count: 0
+  stale_count: 0
+  duplicate_count: 0
+  update_existing_count: 0
+  new_count: 0
+merge:
+  done: true
+  merged: true
+  urls: ["https://github.com/example/app/pull/7"]
+  queued: []
+  prior_base_sha: "fixture-base"
+  summary: "stub: merged"
+close-target: { closed: true, reason: "stub: closed after merge" }
+fixture:
+  expect: completed
+  reached: [adopt, revalidate__result, candidate, runtime__gate-verified, qualify, settle, merge, close-target]
+  inputs:
+    scenario: "/private/scenario.json"
+    merge_mode: "auto"
+    merge_method: "squash"
+    state_labels: '{"READY":"r","DESIGN_FIRST":"d","NEEDS_CONTRACT_WORK":"c","BLOCKED":"b","NO_ACTION":"n"}'

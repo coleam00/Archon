@@ -1255,3 +1255,378 @@ describe('backlog acceptance criteria a delivery can satisfy', () => {
     expect(prompt).toContain('never require a human action');
   });
 });
+
+const adoptScript = join(workflowRoot, 'lifecycle', 'scripts', 'adopt-pr.py');
+const stallScript = join(workflowRoot, 'lifecycle', 'scripts', 'report-stall.py');
+
+describe('lifecycle intake finishes unfinished pull requests before new work', () => {
+  const labels = {
+    READY: 'r',
+    DESIGN_FIRST: 'd',
+    NEEDS_CONTRACT_WORK: 'c',
+    BLOCKED: 'b',
+    NO_ACTION: 'n',
+  };
+  const issue = (number: number, body = '') => ({
+    number,
+    url: `https://github.com/owner/repo/issues/${number}`,
+    labels: [],
+    body,
+  });
+  const old = '2026-01-01T00:00:00Z';
+  const review = { body: '<!-- archon-review-report -->\n# Review report' };
+  const redrive = { body: '<!-- archon-redrive -->\nRe-drive 1 of 2' };
+  const pr = (number: number, body: string, extra: Record<string, unknown> = {}) => ({
+    number,
+    title: 'x',
+    body,
+    url: `https://github.com/owner/repo/pull/${number}`,
+    isDraft: false,
+    isCrossRepository: false,
+    updatedAt: old,
+    comments: [review],
+    ...extra,
+  });
+  const intake = (issues: unknown[], prs: unknown[], values: Record<string, string> = {}) => {
+    const result = runPython(intakeScript, {
+      INPUTS_TARGET: '',
+      INPUTS_STATE_LABELS: JSON.stringify(labels),
+      GH_ISSUES: JSON.stringify(issues),
+      GH_PRS: JSON.stringify(prs),
+      ...values,
+    });
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    return JSON.parse(stdout(result)) as Record<string, unknown>;
+  };
+
+  test('picks the oldest unfinished pull request over a new issue', () => {
+    expect(
+      intake([issue(1), issue(2), issue(3)], [pr(12, 'Closes #2'), pr(11, 'Relates to #1')])
+    ).toMatchObject({
+      found: true,
+      kind: 'pr',
+      pr: 'https://github.com/owner/repo/pull/11',
+      target: 'https://github.com/owner/repo/issues/1',
+      open_issues: 3,
+    });
+  });
+
+  test('leaves alone what it should not re-drive', () => {
+    const fresh = new Date().toISOString();
+    const cases: Array<[string, unknown]> = [
+      ['no review report: a human or another tool opened it', pr(9, 'Closes #1', { comments: [] })],
+      [
+        'touched recently: someone may still be working on it',
+        pr(9, 'Closes #1', { updatedAt: fresh }),
+      ],
+      ['from a fork', pr(9, 'Closes #1', { isCrossRepository: true })],
+      ['claims nothing open', pr(9, 'Closes #5')],
+      ['re-driven to the limit', pr(9, 'Closes #1', { comments: [review, redrive, redrive] })],
+    ];
+    for (const [why, candidate] of cases) {
+      // An issue is chosen instead (#1 while it is unclaimed, else #2).
+      expect(intake([issue(1), issue(2)], [candidate]), why).toMatchObject({
+        found: true,
+        kind: 'issue',
+        pr: '',
+      });
+    }
+  });
+
+  test('waits on a dependency before re-driving the pull request for it', () => {
+    expect(intake([issue(1, 'Depends on: #3'), issue(3)], [pr(9, 'Closes #1')])).toMatchObject({
+      kind: 'issue',
+      target: 'https://github.com/owner/repo/issues/3',
+    });
+  });
+
+  test('the caller sets the limit and the idle time', () => {
+    const once = pr(9, 'Closes #1', { comments: [review, redrive] });
+    expect(intake([issue(1), issue(2)], [once], { INPUTS_REDRIVE_LIMIT: '1' })).toMatchObject({
+      kind: 'issue',
+    });
+    expect(intake([issue(1), issue(2)], [once], { INPUTS_REDRIVE_LIMIT: '3' })).toMatchObject({
+      kind: 'pr',
+    });
+    expect(
+      intake([issue(1), issue(2)], [pr(9, 'Closes #1')], { INPUTS_REDRIVE_LIMIT: '0' })
+    ).toMatchObject({ kind: 'issue', target: 'https://github.com/owner/repo/issues/2' });
+    const recent = pr(9, 'Closes #1', {
+      updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    });
+    expect(
+      intake([issue(1), issue(2)], [recent], { INPUTS_REDRIVE_AFTER_MINUTES: '1' })
+    ).toMatchObject({ kind: 'pr' });
+  });
+
+  test('rejects malformed settings instead of guessing', () => {
+    const result = runPython(intakeScript, {
+      INPUTS_TARGET: '',
+      INPUTS_STATE_LABELS: JSON.stringify(labels),
+      INPUTS_REDRIVE_LIMIT: 'two',
+    });
+    expect(result.exitCode).toBe(1);
+  });
+});
+
+describe('lifecycle reports a stalled backlog instead of a quiet success', () => {
+  const stall = async (intake: Record<string, unknown>, values: Record<string, string> = {}) => {
+    const state = join(root, `stall-state-${Math.random().toString(36).slice(2)}.json`);
+    await writeFile(state, JSON.stringify({ labels: [], available: [], comments: [] }));
+    const result = runPython(stallScript, {
+      INPUTS_INTAKE: JSON.stringify(intake),
+      GH_STATE: state,
+      ...values,
+    });
+    return { result, state };
+  };
+
+  test('an empty backlog is done, not stalled', async () => {
+    const { result } = await stall({ found: false, open_issues: 0, waiting_on: [], reason: '' });
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    expect(JSON.parse(stdout(result))).toMatchObject({ stalled: false });
+  });
+
+  test('comments once on the root blocker and fails the run', async () => {
+    const intake = {
+      found: false,
+      open_issues: 4,
+      waiting_on: [1],
+      reason: '4 open issue(s), none untouched; stalled behind open dependencies #1',
+    };
+    const { result, state } = await stall(intake);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain('stalled');
+    let comments = JSON.parse(await readFile(state, 'utf8')).comments as Array<{ body: string }>;
+    expect(comments).toHaveLength(1);
+    expect(comments[0].body.startsWith('<!-- archon-stall -->')).toBe(true);
+    expect(comments[0].body).toContain('stalled behind #1');
+    // A later tick updates the same comment instead of posting another.
+    const again = runPython(stallScript, {
+      INPUTS_INTAKE: JSON.stringify(intake),
+      GH_STATE: state,
+    });
+    expect(again.exitCode).toBe(1);
+    comments = JSON.parse(await readFile(state, 'utf8')).comments;
+    expect(comments).toHaveLength(1);
+  });
+
+  test('open issues all labeled for a human are a stall with no blocker to comment on', async () => {
+    const { result, state } = await stall(
+      { found: false, open_issues: 2, waiting_on: [], reason: '2 open issue(s), none untouched' },
+      { INPUTS_STALL_FAIL: 'false' }
+    );
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    expect(JSON.parse(stdout(result))).toMatchObject({ stalled: true, notified: [] });
+    expect(JSON.parse(await readFile(state, 'utf8')).comments).toHaveLength(0);
+  });
+});
+
+describe('lifecycle adopts an unfinished pull request on its own branch', () => {
+  let origin: string;
+  let work: string;
+  let counter = 0;
+  const url = 'https://github.com/owner/repo/pull/9';
+  const identity = ['-c', 'user.name=t', '-c', 'user.email=t@example.com'];
+
+  const git = (cwd: string, ...args: string[]): string => {
+    const out = Bun.spawnSync(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+    if (out.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${out.stderr.toString()}`);
+    return out.stdout.toString().trim();
+  };
+
+  // A fresh origin with main and a feature branch; `diverge` adds a base commit
+  // after the branch, `conflict` makes that commit touch the branch's file.
+  const setup = async (diverge: boolean, conflict = false) => {
+    counter += 1;
+    origin = join(root, `adopt-origin-${counter}.git`);
+    const seed = join(root, `adopt-seed-${counter}`);
+    work = join(root, `adopt-work-${counter}`);
+    await mkdir(seed);
+    git(root, 'init', '-q', '--bare', '-b', 'main', origin);
+    git(seed, 'init', '-q', '-b', 'main');
+    await writeFile(join(seed, 'a.txt'), 'base\n');
+    git(seed, 'add', '.');
+    git(seed, ...identity, 'commit', '-q', '-m', 'base');
+    git(seed, 'remote', 'add', 'origin', origin);
+    git(seed, 'push', '-q', 'origin', 'main');
+    git(seed, 'checkout', '-q', '-b', 'feat');
+    await writeFile(join(seed, 'a.txt'), 'feature\n');
+    git(seed, ...identity, 'commit', '-q', '-am', 'feature');
+    git(seed, 'push', '-q', 'origin', 'feat');
+    if (diverge) {
+      git(seed, 'checkout', '-q', 'main');
+      await writeFile(join(seed, conflict ? 'a.txt' : 'b.txt'), 'main moved\n');
+      git(seed, 'add', '.');
+      git(seed, ...identity, 'commit', '-q', '-m', 'main moved');
+      git(seed, 'push', '-q', 'origin', 'main');
+    }
+    git(root, 'clone', '-q', origin, work);
+    git(work, 'config', 'user.name', 't');
+    git(work, 'config', 'user.email', 't@example.com');
+    git(work, 'checkout', '-q', '-b', 'archon/task-run');
+  };
+
+  const adopt = async (view: Record<string, unknown>, values: Record<string, string> = {}) => {
+    const state = join(root, `adopt-state-${counter}.json`);
+    await writeFile(state, JSON.stringify({ labels: [], available: [], comments: [] }));
+    const result = runPython(
+      adoptScript,
+      {
+        INPUTS_PR: url,
+        GH_STATE: state,
+        GH_PR_VIEW: JSON.stringify({
+          state: 'OPEN',
+          isDraft: false,
+          isCrossRepository: false,
+          headRefName: 'feat',
+          baseRefName: 'main',
+          mergeStateStatus: 'CLEAN',
+          comments: [],
+          ...view,
+        }),
+        ...values,
+      },
+      work
+    );
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    const comments = JSON.parse(await readFile(state, 'utf8')).comments as Array<{ body: string }>;
+    return { out: JSON.parse(stdout(result)) as Record<string, unknown>, comments };
+  };
+
+  test('no pull request adopts nothing and touches nothing', async () => {
+    await setup(false);
+    const { out, comments } = await adopt({}, { INPUTS_PR: '' });
+    expect(out).toMatchObject({ adopted: false, route: '' });
+    expect(comments).toHaveLength(0);
+    expect(git(work, 'branch', '--show-current')).toBe('archon/task-run');
+  });
+
+  test('an up-to-date ready pull request is checked out and routed to verification', async () => {
+    await setup(false);
+    const { out, comments } = await adopt({});
+    expect(out).toMatchObject({ adopted: true, route: 'verify', branch: 'feat', attempt: 1 });
+    expect(git(work, 'branch', '--show-current')).toBe('feat');
+    expect(out.head).toBe(git(work, 'rev-parse', 'origin/feat'));
+    expect(comments).toHaveLength(1);
+    expect(comments[0].body.startsWith('<!-- archon-redrive -->')).toBe(true);
+  });
+
+  test('a branch behind its base gets the base merged in and pushed, never rewritten', async () => {
+    await setup(true);
+    const before = git(work, 'rev-parse', 'origin/feat');
+    const { out } = await adopt({ mergeStateStatus: 'BEHIND' });
+    expect(out).toMatchObject({ route: 'verify' });
+    git(work, 'fetch', '-q', 'origin');
+    const pushed = git(work, 'rev-parse', 'origin/feat');
+    expect(pushed).toBe(out.head as string);
+    // The old head is an ancestor of the new one (a merge, not a rebase or force
+    // push), and the base is now contained.
+    git(work, 'merge-base', '--is-ancestor', before, pushed);
+    git(work, 'merge-base', '--is-ancestor', 'origin/main', pushed);
+  });
+
+  test('a conflict or a draft goes to a repair delivery with origin untouched', async () => {
+    await setup(true, true);
+    const before = git(work, 'rev-parse', 'origin/feat');
+    const conflicted = await adopt({ mergeStateStatus: 'BEHIND' });
+    expect(conflicted.out).toMatchObject({ route: 'deliver' });
+    expect(git(work, 'status', '--porcelain')).toBe('');
+    git(work, 'fetch', '-q', 'origin');
+    expect(git(work, 'rev-parse', 'origin/feat')).toBe(before);
+    expect((await adopt({ mergeStateStatus: 'DIRTY' })).out).toMatchObject({ route: 'deliver' });
+    expect((await adopt({ isDraft: true })).out).toMatchObject({ route: 'deliver' });
+  });
+
+  test('a draft whose delivery never finished goes to a repair delivery even when clean', async () => {
+    await setup(false);
+    expect((await adopt({ isDraft: true })).out).toMatchObject({ route: 'deliver' });
+    // GitHub's conflict report is trusted even when this clone looks clean.
+    expect((await adopt({ mergeStateStatus: 'DIRTY' })).out).toMatchObject({ route: 'deliver' });
+  });
+
+  test('stops at the re-drive limit and refuses a fork', async () => {
+    await setup(false);
+    const spent = { body: '<!-- archon-redrive -->\nRe-drive 2 of 2' };
+    const limited = await adopt({ comments: [spent, spent] });
+    expect(limited.out).toMatchObject({ adopted: false });
+    expect(limited.comments).toHaveLength(0);
+    expect((await adopt({ isCrossRepository: true })).out).toMatchObject({ adopted: false });
+  });
+});
+
+describe('lifecycle binds a re-driven pull request', () => {
+  const url = 'https://github.com/owner/repo/pull/9';
+  let repo: string;
+  let artifacts: string;
+  let head: string;
+
+  beforeAll(async () => {
+    repo = join(root, 'bind-adopted-repo');
+    artifacts = join(root, 'bind-adopted-artifacts');
+    await mkdir(artifacts, { recursive: true });
+    await mkdir(repo);
+    const git = (...args: string[]) => {
+      const out = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe' });
+      if (out.exitCode !== 0) throw new Error(out.stderr.toString());
+      return out.stdout.toString().trim();
+    };
+    git('init', '-q', '-b', 'feat');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'x'
+    );
+    head = git('rev-parse', 'HEAD');
+    await writeFile(join(artifacts, 'validation.md'), 'green');
+  });
+
+  const bind = (values: Record<string, unknown>, view: Record<string, unknown> = {}) => {
+    const result = runPython(
+      bindScript,
+      {
+        ...Object.fromEntries(Object.entries(values).map(([k, v]) => [k, JSON.stringify(v)])),
+        ARTIFACTS_DIR: artifacts,
+        GH_PR_VIEW: JSON.stringify({
+          state: 'OPEN',
+          isDraft: false,
+          isCrossRepository: false,
+          headRefName: 'feat',
+          headRefOid: head,
+          comments: [{ body: '<!-- archon-review-report -->\nready' }],
+          ...view,
+        }),
+      },
+      repo
+    );
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    return JSON.parse(stdout(result)) as Record<string, unknown>;
+  };
+  const adopted = { adopted: true, route: 'verify', pr: url };
+
+  test('binds an adopted pull request that re-validated green and carries a review', () => {
+    expect(bind({ INPUTS_ADOPTED: adopted, INPUTS_REVALIDATED: { green: true } })).toMatchObject({
+      delivered: true,
+      prs: [url],
+      head,
+    });
+  });
+
+  test('refuses red re-validation, a missing review, or a delivery route', () => {
+    expect(bind({ INPUTS_ADOPTED: adopted, INPUTS_REVALIDATED: { green: false } })).toMatchObject({
+      delivered: false,
+    });
+    expect(
+      bind({ INPUTS_ADOPTED: adopted, INPUTS_REVALIDATED: { green: true } }, { comments: [] })
+    ).toMatchObject({ delivered: false });
+    expect(
+      bind({ INPUTS_ADOPTED: { ...adopted, route: 'deliver' }, INPUTS_REVALIDATED: null })
+    ).toMatchObject({ delivered: false, reason: 'no delivery result' });
+  });
+});
