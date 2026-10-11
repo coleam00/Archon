@@ -1200,6 +1200,19 @@ describe('agent-written JSON', () => {
   });
 });
 
+describe('runtime verification writes nothing inside the checkout', () => {
+  // Seen live: a verifier's own helper joined a path across a line break and wrote raw
+  // responses into the checkout; the read-only guard then failed a verified run.
+  test('verify-runtime keeps every file it creates under the attempt directory', async () => {
+    const prompt = await readFile(
+      join(workflowRoot, 'verify-runtime', 'commands', 'verify-runtime.md'),
+      'utf8'
+    );
+    expect(prompt).toContain('Write nothing inside the checkout under test');
+    expect(prompt).toContain('goes under the attempt directory above');
+  });
+});
+
 describe('agents that run processes stop only their own, by PID', () => {
   // Seen live: a test reviewer ran `taskkill //F //IM dotnet.exe`, killed its own test
   // run with every other dotnet process, then waited on that run's output forever.

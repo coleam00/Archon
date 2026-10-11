@@ -44,6 +44,12 @@ actually observed. Do not use Start-Transcript, provider/session transcripts,
 chat prose, or a copied tool response as evidence. If a tool cannot export usable
 evidence, mark the assertion inconclusive. A nonzero exit may be the expected
 negative observation; preserve it instead of converting the command to success.
+Write nothing inside the checkout under test: every file this node creates (evidence,
+helper scripts, scratch output, raw responses) goes under the attempt directory above,
+built from that absolute path in a single expression. Never assemble a path from pieces
+split across lines or from a computed value (seen live: a helper script joined a path
+across a line break and wrote `10.4503373803295/raw/*.resp` into the checkout, and the
+read-only checkout guard failed an otherwise verified run).
 
 Write a JSON report at this exact path:
 
