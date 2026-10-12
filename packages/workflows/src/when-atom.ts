@@ -147,9 +147,8 @@ export function splitOutsideQuotes(expr: string, sep: string): string[] {
 /**
  * Every atom string in a (possibly compound) `when:` expression, in source order.
  *
- * Flattens the `||` / `&&` structure away — callers that need the boolean structure
- * (the evaluator) split with {@link splitOutsideQuotes} themselves; callers that only
- * need to inspect each comparison (the loader) use this.
+ * Flattens the `||` / `&&` structure away for reference diagnostics. Use
+ * {@link parseWhenExpression} to validate syntax or preserve boolean structure.
  */
 export function whenAtoms(expr: string): string[] {
   return splitOutsideQuotes(expr.trim(), '||').flatMap(clause => splitOutsideQuotes(clause, '&&'));
