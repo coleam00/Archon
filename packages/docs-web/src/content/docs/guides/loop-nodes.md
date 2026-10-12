@@ -825,7 +825,9 @@ a skipped owner keeps its cursor, or waits to fork until its first executed turn
 The source must be a command, prompt, or plain `loop:` node in an enclosing scope with
 a dependency path proving it completes before the group starts. Same-body, unordered,
 non-session, and loop-group sources are rejected. Nested groups get separate owner
-cursors for each enclosing invocation. The resolved provider must match the source and
+cursors for each enclosing invocation. Nested approval pauses retain every enclosing
+owner cursor and resume within the paused enclosing iteration before advancing.
+The resolved provider must match the source and
 support session resume and immutable forks. Missing context or a replacement owner
 session ID fails the node rather than starting a new conversation.
 

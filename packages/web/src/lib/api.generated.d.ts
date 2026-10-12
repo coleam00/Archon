@@ -4609,6 +4609,14 @@ export interface components {
             provider: string;
           };
         };
+        bodySessionCursorAncestry?: {
+          [key: string]: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+        };
         captureResponse?: boolean;
         onRejectPrompt?: string;
         onRejectMaxAttempts?: number;
@@ -5062,6 +5070,14 @@ export interface components {
               provider: string;
             };
           };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
+            };
+          };
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -5081,6 +5097,14 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
             };
           };
           /** @enum {string} */
@@ -5106,6 +5130,14 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
             };
           };
           /** @enum {string} */

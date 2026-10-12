@@ -1,5 +1,9 @@
 import { describe, test, expect } from 'bun:test';
-import { approvalContextSchema, bodySessionCursorsSchema } from './schemas/workflow-run';
+import {
+  approvalContextSchema,
+  bodySessionCursorsSchema,
+  bodySessionCursorAncestrySchema,
+} from './schemas/workflow-run';
 import {
   isExecNode,
   isGateNode,
@@ -98,7 +102,9 @@ describe('persisted workflow continuation schemas', () => {
       const approval = {
         nodeId: 'group',
         message: 'Review',
-        ...(cursors ? { bodySessionCursors: cursors } : {}),
+        ...(cursors
+          ? { bodySessionCursors: cursors, bodySessionCursorAncestry: { '["group",[]]': cursors } }
+          : {}),
       };
       expect(approvalContextSchema.parse(JSON.parse(JSON.stringify(approval)))).toEqual(approval);
       for (const condition of [
@@ -115,7 +121,12 @@ describe('persisted workflow continuation schemas', () => {
           sessionProvider: null,
           waitingSince: timeWait.waitingSince,
           ...condition,
-          ...(cursors ? { bodySessionCursors: cursors } : {}),
+          ...(cursors
+            ? {
+                bodySessionCursors: cursors,
+                bodySessionCursorAncestry: { '["group",[]]': cursors },
+              }
+            : {}),
         };
         expect(workflowWaitContextSchema.parse(JSON.parse(JSON.stringify(wait)))).toEqual(wait);
       }
@@ -126,6 +137,9 @@ describe('persisted workflow continuation schemas', () => {
       { sessionId: 'O', provider: '' },
     ]) {
       expect(bodySessionCursorsSchema.safeParse({ owner: cursor }).success).toBe(false);
+      expect(
+        bodySessionCursorAncestrySchema.safeParse({ '["group",[]]': { owner: cursor } }).success
+      ).toBe(false);
     }
   });
 

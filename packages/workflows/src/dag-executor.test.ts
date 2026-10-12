@@ -28576,7 +28576,7 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     ]);
   });
 
-  for (const boundary of ['gate', 'time', 'attention'] as const) {
+  for (const boundary of ['gate', 'time', 'event', 'attention'] as const) {
     it(`snapshots and restores the owner at a terminal ${boundary}, including repeated suspension`, async () => {
       const nodes = ownerWorkflow('claude', true);
       const group = nodes[1];
@@ -28589,7 +28589,12 @@ describe('executeDagWorkflow -- addressable session resume', () => {
           ...(boundary === 'gate'
             ? { approval: { message: 'Review' } }
             : {
-                wait: boundary === 'time' ? { duration_ms: 3600000 } : { attention: 'Fix checks' },
+                wait:
+                  boundary === 'time'
+                    ? { duration_ms: 3600000 }
+                    : boundary === 'event'
+                      ? { event: 'checks.complete', deadline_ms: 3600000 }
+                      : { attention: 'Fix checks' },
               }),
         })
       );
@@ -28612,6 +28617,7 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       expect(paused.bodySessionCursors).toEqual({ owner: { sessionId: 'O', provider: 'claude' } });
       if (boundary === 'gate') paused.resolved = 'approved';
       if (boundary === 'time') paused.resumeAt = '2020-01-01T00:00:00.000Z';
+      if (boundary === 'event') paused.signaledAt = new Date().toISOString();
       const resume = async (state: Record<string, unknown>) => {
         const store = createEscalationStore('addressable-run');
         await executeDagWorkflow(
@@ -28626,16 +28632,19 @@ describe('executeDagWorkflow -- addressable session resume', () => {
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
         return store;
       };
-      if (boundary === 'time') {
-        const pending = { ...metadata, wait: { ...paused, resumeAt: '2099-01-01T00:00:00.000Z' } };
-        const stillWaiting = await resume(pending);
+      if (boundary === 'time' || boundary === 'event') {
+        const pending = {
+          ...metadata,
+          wait: { ...paused, signaledAt: undefined, resumeAt: '2099-01-01T00:00:00.000Z' },
+        };
+        const stillWaiting = await resume(JSON.parse(JSON.stringify(pending)));
         expect(stillWaiting.getState().metadata.wait).toMatchObject({
           bodySessionCursors: paused.bodySessionCursors,
           iteration: 1,
         });
         expect(mockSendQueryDag.mock.calls.filter(c => c[0] === 'owner')).toHaveLength(1);
       }
-      const secondStore = await resume(metadata);
+      const secondStore = await resume(JSON.parse(JSON.stringify(metadata)));
       expect(
         mockSendQueryDag.mock.calls
           .filter(c => c[0] === 'owner')
@@ -28649,6 +28658,179 @@ describe('executeDagWorkflow -- addressable session resume', () => {
           ? secondStore.getState().metadata.approval
           : secondStore.getState().metadata.wait;
       expect(second).toMatchObject({ iteration: 2, bodySessionCursors: paused.bodySessionCursors });
+    });
+  }
+
+  for (const boundary of ['gate', 'interactive'] as const) {
+    it(`restores enclosing owners after a nested ${boundary} and scopes new inner invocations`, async () => {
+      const nodes = ownerWorkflow('claude', true);
+      const outer = nodes[1];
+      if (outer?.kind !== 'loop_group') throw new Error('missing outer group');
+      outer.id = 'outer';
+      outer.loop_group.max_iterations = 2;
+      outer.loop_group.until_bash = 'exit 1';
+      outer.loop_group.nodes = [
+        dagNodeSchema.parse({ id: 'owner', prompt: 'outer-owner', context: { resume: 'source' } }),
+        dagNodeSchema.parse({
+          id: 'inner',
+          depends_on: ['owner'],
+          loop_group: {
+            max_iterations: 3,
+            fresh_context: true,
+            until_bash: 'test $review.output.done = true',
+            ...(boundary === 'interactive' ? { interactive: true, gate_message: 'Review' } : {}),
+            nodes: [
+              { id: 'owner', prompt: 'inner-owner', context: { resume: 'source' } },
+              {
+                id: 'review',
+                prompt: 'inner-review',
+                context: 'fresh',
+                depends_on: ['owner'],
+                output_format: {
+                  type: 'object',
+                  properties: { done: { type: 'boolean' } },
+                  required: ['done'],
+                },
+              },
+              ...(boundary === 'gate'
+                ? [
+                    {
+                      id: 'pause',
+                      depends_on: ['review'],
+                      when: '$review.output.done != true',
+                      approval: { message: 'Review' },
+                    },
+                  ]
+                : []),
+            ],
+          },
+        }),
+      ];
+      let reviews = 0;
+      let innerBranches = 0;
+      mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session, options) {
+        const done = prompt === 'inner-review' && ++reviews === 2;
+        if (prompt === 'inner-owner' && options?.forkSession) innerBranches++;
+        yield {
+          type: 'agent_message_chunk',
+          text: prompt === 'inner-review' ? JSON.stringify({ done }) : prompt,
+        };
+        yield {
+          type: 'result',
+          sessionId:
+            prompt === 'source'
+              ? 'S'
+              : prompt === 'outer-owner'
+                ? 'O'
+                : prompt === 'inner-owner'
+                  ? `I${innerBranches}`
+                  : `R${reviews}`,
+          ...(options?.outputFormat ? { structuredOutput: { done } } : {}),
+          ...(session ? { resumed: true } : {}),
+        };
+      });
+      const firstStore = createEscalationStore('addressable-run');
+      await runAddressableWorkflow(nodes, firstStore);
+      expect(firstStore.failWorkflowRun).not.toHaveBeenCalled();
+      const metadata = JSON.parse(JSON.stringify(firstStore.getState().metadata));
+      const pause = metadata.approval;
+      expect(pause.bodySessionCursorAncestry).toEqual({
+        [JSON.stringify(['outer', []])]: { owner: { sessionId: 'O', provider: 'claude' } },
+        [JSON.stringify(['outer.inner', [{ groupId: 'outer', iteration: 1 }]])]: {
+          owner: { sessionId: 'I1', provider: 'claude' },
+        },
+      });
+      pause.resolved = 'approved';
+      const resume = async (state: Record<string, unknown>) => {
+        const resumedStore = createEscalationStore('addressable-run');
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(resumedStore),
+            cwd: testDir,
+            workflow: { name: 'addressable', nodes },
+            workflowRun: makeWorkflowRun('addressable-run', { metadata: state }),
+            priorCompletedNodes: new Map([['source', { output: 'source', sessionId: 'S' }]]),
+            priorNodeSessions: [
+              {
+                workflow_run_id: 'addressable-run',
+                node_id: 'source',
+                provider: 'claude',
+                provider_session_id: 'S',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              },
+            ],
+          })
+        );
+        return resumedStore;
+      };
+      const callsBeforeInvalidResume = mockSendQueryDag.mock.calls.length;
+      const invalid = await resume({
+        ...metadata,
+        approval: { ...pause, bodySessionCursorAncestry: undefined },
+      });
+      expect(invalid.failWorkflowRun).toHaveBeenCalled();
+      expect(mockSendQueryDag.mock.calls).toHaveLength(callsBeforeInvalidResume);
+      const resumedStore = await resume(metadata);
+      expect(resumedStore.failWorkflowRun.mock.calls).toEqual([]);
+      expect(
+        mockSendQueryDag.mock.calls
+          .filter(c => c[0] === 'outer-owner')
+          .map(c => [c[2], c[3]?.forkSession])
+      ).toEqual([
+        ['S', true],
+        ['O', false],
+        ['O', false],
+      ]);
+      expect(
+        mockSendQueryDag.mock.calls
+          .filter(c => c[0] === 'inner-owner')
+          .map(c => [c[2], c[3]?.forkSession])
+      ).toEqual([
+        ['S', true],
+        ['I1', false],
+        ['S', true],
+      ]);
+      expect(resumedStore.getState().metadata.approval).toMatchObject({
+        bodySessionCursorAncestry: {
+          [JSON.stringify(['outer', []])]: { owner: { sessionId: 'O', provider: 'claude' } },
+          [JSON.stringify(['outer.inner', [{ groupId: 'outer', iteration: 2 }]])]: {
+            owner: { sessionId: 'I2', provider: 'claude' },
+          },
+        },
+      });
+      const nextMetadata = JSON.parse(JSON.stringify(resumedStore.getState().metadata));
+      nextMetadata.approval.resolved = 'approved';
+      const thirdStore = await resume(nextMetadata);
+      expect(thirdStore.failWorkflowRun).not.toHaveBeenCalled();
+      expect(
+        mockSendQueryDag.mock.calls
+          .filter(c => c[0] === 'outer-owner')
+          .map(c => [c[2], c[3]?.forkSession])
+      ).toEqual([
+        ['S', true],
+        ['O', false],
+        ['O', false],
+        ['O', false],
+      ]);
+      expect(
+        mockSendQueryDag.mock.calls
+          .filter(c => c[0] === 'inner-owner')
+          .map(c => [c[2], c[3]?.forkSession])
+      ).toEqual([
+        ['S', true],
+        ['I1', false],
+        ['S', true],
+        ['I2', false],
+      ]);
+      expect(thirdStore.getState().metadata.approval).toMatchObject({
+        iteration: 2,
+        bodySessionCursorAncestry: {
+          [JSON.stringify(['outer.inner', [{ groupId: 'outer', iteration: 2 }]])]: {
+            owner: { sessionId: 'I2', provider: 'claude' },
+          },
+        },
+      });
     });
   }
 

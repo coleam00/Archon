@@ -211,6 +211,8 @@ export {
   workflowWaitContextSchema,
   sessionCursorSchema,
   bodySessionCursorsSchema,
+  bodySessionCursorAncestrySchema,
+  type BodySessionCursorAncestry,
   scheduledWorkflowResumeSchema,
   workflowStepStatusSchema,
   nodeStateSchema,

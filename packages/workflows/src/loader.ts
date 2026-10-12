@@ -459,7 +459,8 @@ function collectConditionalJoinWarnings(
  */
 export function collectLoopGroupSinkWarnings(
   nodes: readonly (DagNode | IncludeDirective)[],
-  warnings: string[]
+  warnings: string[],
+  enclosingOwnerSessions = false
 ): void {
   for (const node of nodes) {
     if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
@@ -469,6 +470,9 @@ export function collectLoopGroupSinkWarnings(
     // these checks at all. The body type still admits one, so it stays a participant in
     // the sink count and is never itself classified as a gate or an interactive sink.
     const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
+    const hasOwnerSessions =
+      enclosingOwnerSessions ||
+      node.loop_group.nodes.some(n => !isIncludeDirective(n) && isNodeContextResume(n.context));
 
     // A gate node inside a loop_group body only pauses the enclosing loop when it is
     // the body's SOLE terminal sink (#2707 step 3, target-model decision (b)) — a
@@ -528,7 +532,7 @@ export function collectLoopGroupSinkWarnings(
       }
     }
 
-    // A body-terminal sink that is itself an interactive loop/loop_group can pause
+    // Interactive plain loops and ambient-only nested groups can pause
     // without stopping THIS group (#2753) — a bare gate sink is excluded here since
     // that case is already correctly handled above (and by #2707 step 3 at runtime);
     // this covers a sink whose own pause is trapped one level down instead.
@@ -536,7 +540,8 @@ export function collectLoopGroupSinkWarnings(
       soleSink !== undefined &&
       !isIncludeDirective(soleSink) &&
       !isGateNode(soleSink) &&
-      isUnescalatableInteractiveSink(soleSink)
+      isUnescalatableInteractiveSink(soleSink) &&
+      !(hasOwnerSessions && isLoopGroupNode(soleSink))
     ) {
       const message =
         `Node '${node.id}': this loop_group's terminal sink ('${soleSink.id}') is itself an ` +
@@ -552,7 +557,7 @@ export function collectLoopGroupSinkWarnings(
       );
     }
 
-    collectLoopGroupSinkWarnings(node.loop_group.nodes, warnings);
+    collectLoopGroupSinkWarnings(node.loop_group.nodes, warnings, hasOwnerSessions);
   }
 }
 

@@ -157,12 +157,23 @@ export function describeWorkflowStoreConformance(
 
     test('preserves private loop owner cursors through durable pause storage', async () => {
       const bodySessionCursors = { owner: { sessionId: 'O', provider: 'codex' } };
+      const bodySessionCursorAncestry = {
+        '["outer",[]]': { owner: { sessionId: 'A', provider: 'codex' } },
+        '["outer.inner",[{"groupId":"outer","iteration":2}]]': bodySessionCursors,
+      };
       const gateRun = await running(store);
-      await store.pauseWorkflowRun(gateRun.id, { ...approval, bodySessionCursors });
+      await store.pauseWorkflowRun(gateRun.id, {
+        ...approval,
+        bodySessionCursors,
+        bodySessionCursorAncestry,
+      });
       const storedGate = await store.getWorkflowRun(gateRun.id);
       expect(
         approvalContextSchema.parse(storedGate?.metadata?.approval).bodySessionCursors
       ).toEqual(bodySessionCursors);
+      expect(
+        approvalContextSchema.parse(storedGate?.metadata?.approval).bodySessionCursorAncestry
+      ).toEqual(bodySessionCursorAncestry);
       const waitRun = await running(store);
       await store.pauseWorkflowRunForWait(
         waitRun.id,
@@ -175,6 +186,7 @@ export function describeWorkflowStoreConformance(
           sessionId: 'review-session',
           sessionProvider: 'codex',
           bodySessionCursors,
+          bodySessionCursorAncestry,
         },
         { kind: 'started', stepName: 'group.wait' }
       );
@@ -184,6 +196,7 @@ export function describeWorkflowStoreConformance(
       expect(storedWait.owner).toBe('loop_group');
       if (storedWait.owner !== 'loop_group') throw new Error('wrong wait owner');
       expect(storedWait.bodySessionCursors).toEqual(bodySessionCursors);
+      expect(storedWait.bodySessionCursorAncestry).toEqual(bodySessionCursorAncestry);
     });
 
     test('pending claim has exactly one winner and stamps the checkout', async () => {

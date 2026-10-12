@@ -115,7 +115,12 @@ import type {
   WorkflowWaitContext,
   ScheduledWorkflowResume,
 } from './schemas';
-import { bodySessionCursorsSchema, type SessionCursor } from './schemas';
+import {
+  bodySessionCursorsSchema,
+  bodySessionCursorAncestrySchema,
+  type BodySessionCursorAncestry,
+  type SessionCursor,
+} from './schemas';
 import {
   isExecNode,
   isAgentNode,
@@ -4353,13 +4358,23 @@ async function executeLoopGroupBody(
   const rawWait = workflowRun.metadata?.wait;
   const loopWaitMeta = isWorkflowWaitContext(rawWait) ? rawWait : undefined;
   const loopOwnedWaitMeta = loopWaitMeta?.owner === 'loop_group' ? loopWaitMeta : undefined;
+  const ownerInvocationKey = nodeInvocationKey(stepName, ctx.loopGroupPath);
+  const rawAncestry =
+    loopGateMeta?.bodySessionCursorAncestry ?? loopOwnedWaitMeta?.bodySessionCursorAncestry;
+  const restoredAncestry =
+    rawAncestry === undefined ? undefined : bodySessionCursorAncestrySchema.parse(rawAncestry);
+  const matchesOwnerInvocation =
+    restoredAncestry === undefined || Object.hasOwn(restoredAncestry, ownerInvocationKey);
   const isLegacyInteractiveLoopResume =
-    loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
+    matchesOwnerInvocation &&
+    loopGateMeta?.type === 'interactive_loop' &&
+    loopGateMeta.nodeId === node.id;
   const isEscalatedGateResume =
+    matchesOwnerInvocation &&
     loopGateMeta?.type === 'approval' &&
     loopGateMeta.nodeId === node.id &&
     loopGateMeta.bodyGateId !== undefined;
-  const isEscalatedWaitResume = loopOwnedWaitMeta?.nodeId === node.id;
+  const isEscalatedWaitResume = matchesOwnerInvocation && loopOwnedWaitMeta?.nodeId === node.id;
   const isLoopResume =
     isLegacyInteractiveLoopResume || isEscalatedGateResume || isEscalatedWaitResume;
   const ownerIds = new Set(bodyNodes.filter(n => isNodeContextResume(n.context)).map(n => n.id));
@@ -4374,10 +4389,26 @@ async function executeLoopGroupBody(
       `Loop group '${node.id}' cannot restore named owner sessions: invalid loop wait state.`
     );
   }
-  if (bodySessionCursors !== undefined && isLoopResume) {
-    const rawCursors = isEscalatedWaitResume
-      ? loopOwnedWaitMeta?.bodySessionCursors
-      : loopGateMeta?.bodySessionCursors;
+  const pauseLoopPath = loopGateMeta?.execution?.invocation.loopPath;
+  const pauseFrame = pauseLoopPath?.[ctx.loopGroupPath.length];
+  const enclosingPauseFrame =
+    pauseFrame?.groupId === node.id &&
+    nodeInvocationKey(stepName, pauseLoopPath?.slice(0, ctx.loopGroupPath.length) ?? []) ===
+      ownerInvocationKey
+      ? pauseFrame
+      : undefined;
+  const restoredOwnerCursors = restoredAncestry?.[ownerInvocationKey];
+  if (
+    bodySessionCursors !== undefined &&
+    (isLoopResume || restoredOwnerCursors !== undefined || enclosingPauseFrame !== undefined)
+  ) {
+    const rawCursors =
+      restoredOwnerCursors ??
+      (isLoopResume && restoredAncestry === undefined
+        ? isEscalatedWaitResume
+          ? loopOwnedWaitMeta?.bodySessionCursors
+          : loopGateMeta?.bodySessionCursors
+        : undefined);
     const parsed = bodySessionCursorsSchema.safeParse(rawCursors);
     if (!parsed.success) {
       throw new Error(
@@ -4390,8 +4421,16 @@ async function executeLoopGroupBody(
       bodySessionCursors.set(id, cursor);
     }
   }
+  const bodySessionCursorAncestry = new Map(ctx.bodySessionCursorAncestry);
+  if (bodySessionCursors !== undefined || bodySessionCursorAncestry.size > 0) {
+    bodySessionCursorAncestry.set(ownerInvocationKey, bodySessionCursors ?? new Map());
+  }
   const resumeIteration = loopGateMeta?.iteration ?? loopOwnedWaitMeta?.iteration ?? 0;
-  const startIteration = isLoopResume ? resumeIteration + 1 : 1;
+  const startIteration = isLoopResume
+    ? resumeIteration + 1
+    : restoredAncestry !== undefined
+      ? (enclosingPauseFrame?.iteration ?? 1)
+      : 1;
   // max_iterations bounds autonomous work. An attention wait contributes no work while
   // paused, so each explicit resume authorizes one fresh iteration even after that bound.
   // This keeps manual recovery resumable without turning a concluded-red wait into polling.
@@ -4449,6 +4488,7 @@ async function executeLoopGroupBody(
         ...(bodySessionCursors !== undefined
           ? { bodySessionCursors: Object.fromEntries(bodySessionCursors) }
           : {}),
+        ...snapshotBodySessionCursorAncestry(bodySessionCursorAncestry),
       }
     );
     const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
@@ -4811,6 +4851,7 @@ async function executeLoopGroupBody(
       nodeSessionHandles: new Map(ctx.nodeSessionHandles),
       namedResumeSourceIds: ctx.namedResumeSourceIds,
       bodySessionCursors,
+      bodySessionCursorAncestry,
       lastSequentialSession: group.fresh_context || i === 1 ? undefined : loopLastSequentialSession,
       warnedProviderConflicts: ctx.warnedProviderConflicts,
       totalCostUsd: undefined,
@@ -4932,6 +4973,22 @@ async function executeLoopGroupBody(
           ...(suspensionPoint !== undefined ? { suspensionPoint } : {}),
         };
       }
+    }
+
+    if (
+      postBodyStatus === 'paused' &&
+      bodySessionCursorAncestry.size > 0 &&
+      iterBodyNodes.some(
+        n => n.kind === 'loop_group' && scopedNodeOutputs.get(n.id)?.state === 'running'
+      )
+    ) {
+      return {
+        state: 'running',
+        output: lastIterationOutput,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
     }
 
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
@@ -5176,6 +5233,7 @@ async function executeLoopGroupBody(
         ...(bodySessionCursors !== undefined
           ? { bodySessionCursors: Object.fromEntries(bodySessionCursors) }
           : {}),
+        ...snapshotBodySessionCursorAncestry(bodySessionCursorAncestry),
         // Signal state for finalize-on-bare-approve (#2074). The structured payload
         // rides along (#2637) so the finalize attaches it like a natural completion.
         completionSignaled: completionDetected,
@@ -6930,15 +6988,28 @@ async function pauseGateRespectingExternalTransition(
   return approvalContext;
 }
 
-/** Execute a durable wait without holding a subprocess or provider slot. */
+function snapshotBodySessionCursorAncestry(
+  ancestry: RunLayersContext['bodySessionCursorAncestry']
+): { bodySessionCursorAncestry?: BodySessionCursorAncestry } {
+  return ancestry === undefined || ancestry.size === 0
+    ? {}
+    : {
+        bodySessionCursorAncestry: Object.fromEntries(
+          [...ancestry].map(([key, cursors]) => [key, Object.fromEntries(cursors)])
+        ),
+      };
+}
+
 interface WaitLoopOwner {
   groupId: string;
   iteration: number;
   sessionId: string | null;
   sessionProvider: string | null;
   bodySessionCursors?: Record<string, SessionCursor>;
+  bodySessionCursorAncestry?: BodySessionCursorAncestry;
 }
 
+/** Execute a durable wait without holding a subprocess or provider slot. */
 async function executeWaitNode(
   ctx: RunLayersContext,
   node: WaitNode,
@@ -6978,6 +7049,9 @@ async function executeWaitNode(
           sessionProvider: loopOwner.sessionProvider,
           ...(loopOwner.bodySessionCursors !== undefined
             ? { bodySessionCursors: loopOwner.bodySessionCursors }
+            : {}),
+          ...(loopOwner.bodySessionCursorAncestry !== undefined
+            ? { bodySessionCursorAncestry: loopOwner.bodySessionCursorAncestry }
             : {}),
         } as const);
   const condition = waitCondition(node.wait);
@@ -7370,6 +7444,7 @@ async function executeApprovalNode(
           ...(ctx.bodySessionCursors !== undefined
             ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
             : {}),
+          ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
         }
       : {}),
     type: 'approval',
@@ -9418,6 +9493,7 @@ interface RunLayersContext extends RunInputs, RunDerived {
   nodeSessionHandles?: Map<string, SequentialSessionCursor>;
   namedResumeSourceIds?: ReadonlySet<string>;
   bodySessionCursors?: Map<string, SessionCursor>;
+  bodySessionCursorAncestry?: Map<string, Map<string, SessionCursor>>;
   /** Sequential-session threading cursor (mutated by runLayers). Provider-tagged so the
    *  session is only threaded into nodes that resolve to the SAME provider (#1992). */
   lastSequentialSession: SequentialSessionCursor | undefined;
@@ -10172,6 +10248,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                         ...(ctx.bodySessionCursors !== undefined
                           ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
                           : {}),
+                        ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
                       }
                 );
                 return { nodeId: node.id, output };

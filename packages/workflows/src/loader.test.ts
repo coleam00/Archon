@@ -8029,6 +8029,41 @@ nodes:
       expect(pw[0]).toContain("Node 'iterate': node-level loop 'interactive:' is deprecated");
     });
 
+    it('does not warn about nested group pauses when an enclosing group owns a named session', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: source',
+        '    prompt: Start the owner session',
+        '  - id: outer',
+        '    depends_on: [source]',
+        '    loop_group:',
+        '      until_bash: "exit 1"',
+        '      max_iterations: 2',
+        '      nodes:',
+        '        - id: owner',
+        '          prompt: Continue',
+        '          context: { resume: source }',
+        '        - id: middle',
+        '          depends_on: [owner]',
+        '          loop_group:',
+        '            until_bash: "exit 1"',
+        '            max_iterations: 2',
+        '            nodes:',
+        '              - id: inner',
+        '                loop_group:',
+        '                  until_bash: "exit 1"',
+        '                  max_iterations: 2',
+        '                  interactive: true',
+        '                  gate_message: Review',
+        '                  nodes:',
+        '                    - id: work',
+        '                      prompt: Work',
+      ]);
+      expect(pw.some(w => w.includes('#2753'))).toBe(false);
+    });
+
     it('warns on a gate/interactive loop_group nested inside a loop_group body', async () => {
       // Exercises the recursion into loop_group.nodes — the outer group's own
       // body-terminal sink is 'inner-loop' (a plain interactive `loop:` node,

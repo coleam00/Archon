@@ -82,6 +82,12 @@ export const sessionCursorSchema = z.object({
 export type SessionCursor = z.infer<typeof sessionCursorSchema>;
 export const bodySessionCursorsSchema = z.record(z.string().min(1), sessionCursorSchema);
 
+export const bodySessionCursorAncestrySchema = z.record(
+  z.string().min(1),
+  bodySessionCursorsSchema
+);
+export type BodySessionCursorAncestry = z.infer<typeof bodySessionCursorAncestrySchema>;
+
 const workflowWaitLoopOwnerFields = {
   owner: z.literal('loop_group'),
   nodeId: z.string().min(1),
@@ -90,6 +96,7 @@ const workflowWaitLoopOwnerFields = {
   sessionId: z.string().nullable(),
   sessionProvider: z.string().nullable(),
   bodySessionCursors: bodySessionCursorsSchema.optional(),
+  bodySessionCursorAncestry: bodySessionCursorAncestrySchema.optional(),
 } as const;
 
 /**
@@ -759,6 +766,7 @@ export const approvalContextSchema = z.object({
    */
   sessionProvider: z.string().nullable().optional(),
   bodySessionCursors: bodySessionCursorsSchema.optional(),
+  bodySessionCursorAncestry: bodySessionCursorAncestrySchema.optional(),
   /** When true, the user's approval comment is stored as `$nodeId.output`. Legacy-mode gates only (see `onRejectPrompt`). */
   captureResponse: z.boolean().optional(),
   /** The on_reject prompt template (stored at pause time so reject handlers don't need the workflow def). */
