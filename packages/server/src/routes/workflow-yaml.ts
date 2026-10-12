@@ -5,11 +5,11 @@
  * every comment and reflows the file, so instead the new definition is merged into the parsed
  * document of the file already on disk, which keeps comments and scalar styles.
  *
- * The library re-renders whitespace (`{ a }` becomes `{a}`); that is the accepted cost of keeping
- * this small. Before the text is returned it is parsed back and compared with the definition, so
- * a merge that produced a different document fails the save instead of being written.
+ * Existing scalar edits replace parser-owned source tokens, keeping unrelated bytes intact.
+ * Structural edits and changes involving anchors or aliases use the document merge instead.
+ * Both paths must read back as the submitted definition before a save can write them.
  */
-import { Document, isAlias, isMap, isNode, isScalar, isSeq, parseDocument, visit } from 'yaml';
+import { CST, Document, isAlias, isMap, isNode, isScalar, isSeq, parseDocument, visit } from 'yaml';
 import type { Alias, Node } from 'yaml';
 import { parseYaml } from '@archon/workflows/loader';
 
@@ -28,6 +28,88 @@ function isPlainObject(value: unknown): value is Plain {
 /** Id of a sequence item that is a mapping with a string `id` (a DAG node), else undefined. */
 function itemId(value: unknown): string | undefined {
   return isPlainObject(value) && typeof value.id === 'string' ? value.id : undefined;
+}
+
+function tryRenderScalarEdits(definition: Plain, source: string): string | undefined {
+  const doc = parseDocument(source, { keepSourceTokens: true });
+  if (doc.errors.length > 0 || !isMap(doc.contents)) return undefined;
+  const edits: { start: number; end: number; text: string }[] = [];
+
+  function collect(node: unknown, value: unknown, afterKey: boolean, inFlow: boolean): boolean {
+    const previous: unknown = isNode(node) ? node.toJS(doc) : node;
+    if (Bun.deepEquals(previous, value)) return true;
+    // Shared sources need alias settlement; tagged values need schema-aware merging.
+    if (!isNode(node) || isAlias(node) || node.anchor || node.tag) return false;
+    if (isMap(node) && isPlainObject(value)) {
+      const keys = Object.keys(value).filter(key => value[key] !== undefined);
+      if (keys.length !== node.items.length) return false;
+      return node.items.every(
+        ({ key, value: child }) =>
+          isScalar(key) &&
+          typeof key.value === 'string' &&
+          keys.includes(key.value) &&
+          collect(child, value[key.value], true, inFlow || node.flow === true)
+      );
+    }
+    if (isSeq(node) && Array.isArray(value)) {
+      if (node.items.length !== value.length) return false;
+      return node.items.every((child, index) => {
+        const oldValue: unknown = isNode(child) ? child.toJS(doc) : child;
+        if (itemId(oldValue) !== itemId(value[index])) return false;
+        return collect(child, value[index], false, inFlow || node.flow === true);
+      });
+    }
+    if (
+      !isScalar(node) ||
+      (value !== null &&
+        typeof value !== 'string' &&
+        typeof value !== 'number' &&
+        typeof value !== 'boolean')
+    ) {
+      return false;
+    }
+    const token = node.srcToken;
+    if (!token || !CST.isScalar(token) || token.source.length === 0) return false;
+    const original = CST.stringify(token);
+    const start = token.offset;
+    const end = start + original.length;
+    if (source.slice(start, end) !== original) return false;
+
+    // CST renders strings without schema resolution. Use the document serializer to
+    // distinguish plain strings from values such as "true" that require quoting.
+    const canonical = new Document(value).toString({ ...TO_STRING, blockQuote: false });
+    const scalar = parseDocument(canonical).contents;
+    if (!isScalar(scalar)) return false;
+    const replacement = structuredClone(token);
+    CST.setScalarValue(replacement, typeof value === 'string' ? value : canonical.trimEnd(), {
+      afterKey,
+      inFlow,
+      type: typeof value !== 'string' ? 'PLAIN' : node.type === 'PLAIN' ? scalar.type : undefined,
+    });
+    const eol = original.includes('\r\n')
+      ? '\r\n'
+      : original.includes('\n')
+        ? '\n'
+        : source.includes('\r\n')
+          ? '\r\n'
+          : '\n';
+    edits.push({
+      start,
+      end,
+      text: CST.stringify(replacement).replace(/\r\n/g, '\n').replace(/\n/g, eol),
+    });
+    return true;
+  }
+
+  if (!collect(doc.contents, definition, false, false)) return undefined;
+  let text = source;
+  let boundary = source.length;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    if (edit.end > boundary || edit.start < 0) return undefined;
+    text = text.slice(0, edit.start) + edit.text + text.slice(edit.end);
+    boundary = edit.start;
+  }
+  return text;
 }
 
 interface MergeState {
@@ -178,13 +260,15 @@ export function serializeWorkflowPreservingText(
 
 function render(definition: Record<string, unknown>, existingText: string | undefined): string {
   if (existingText !== undefined) {
+    if (readsAs(existingText, definition)) return existingText;
+    const scalarEdits = tryRenderScalarEdits(definition, existingText);
+    if (scalarEdits !== undefined) return scalarEdits;
     // Work in LF: the library keeps a CR inside comments of a CRLF file and ends lines with LF,
     // which would mix the two. The file's line ending is restored at the end.
     const eol = existingText.includes('\r\n') ? '\r\n' : '\n';
     // Widened from Document.Parsed: merged-in nodes are created, not parsed.
     const doc: Document = parseDocument(existingText.replace(/\r\n/g, '\n'));
     if (doc.errors.length === 0 && isMap(doc.contents)) {
-      if (readsAs(existingText, definition)) return existingText;
       const state: MergeState = { doc, aliasValues: new Map() };
       doc.contents = merge(state, doc.contents, definition);
       settleAliases(state);

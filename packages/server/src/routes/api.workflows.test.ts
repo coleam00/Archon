@@ -1311,13 +1311,9 @@ describe('PUT /api/workflows/:name', () => {
       edited.nodes[0].command = 'plan-v2';
       const { status, saved } = await putOverCommentedFile(edited);
       expect(status).toBe(200);
-      expect(saved).toContain('command: plan-v2');
-      expect(saved).toContain('# Top-level comment about the flow');
-      expect(saved).toContain('# the planning step');
-      expect(saved).toContain('# the build step');
-      expect(saved).toContain('# not a YAML comment, part of the script');
-      expect(saved).toContain("description: 'Commented flow'");
-      expect(saved).toContain('depends_on: [plan]');
+      expect(saved).toBe(
+        commentedYaml.replace('command: plan # inline note', 'command: plan-v2 # inline note')
+      );
     });
   });
 });

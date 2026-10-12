@@ -70,7 +70,7 @@ describe('serializeWorkflowPreservingText', () => {
     );
   });
 
-  test('flow collections stay flow collections, re-spaced by the library', () => {
+  test('a scalar edit leaves unrelated flow collection spacing intact', () => {
     const spaced = [
       'name: spaced',
       'nodes:',
@@ -86,10 +86,22 @@ describe('serializeWorkflowPreservingText', () => {
       },
       spaced
     );
-    expect(text).toBe(
-      spaced
-        .replace('model: opus', 'model: sonnet')
-        .replace('{ type: object, required: [ x ] }', '{type: object, required: [x]}')
+    expect(text).toBe(spaced.replace('model: opus', 'model: sonnet'));
+  });
+
+  test('changing classify.model in the deliver workflow changes exactly one line', async () => {
+    const original = await Bun.file(
+      new URL('../../../../.archon/workflows/sdlc/deliver/archon-deliver.yaml', import.meta.url)
+    ).text();
+    const definition = parseYaml(original) as Record<string, unknown> & {
+      nodes: { id: string; model?: string }[];
+    };
+    const classify = definition.nodes.find(node => node.id === 'classify');
+    expect(classify?.model).toBe('small');
+    if (!classify) throw new Error('Missing classify node');
+    classify.model = 'medium';
+    expect(serializeWorkflowPreservingText(definition, original)).toBe(
+      original.replace('    model: small', '    model: medium')
     );
   });
 
@@ -289,8 +301,84 @@ describe('serializeWorkflowPreservingText', () => {
       edited.nodes[0].command = 'b';
       const text = serializeWorkflowPreservingText(edited, crlf);
       expect(parseYaml(text)).toEqual(edited);
-      expect(text).toContain('# the only step');
+      expect(text).toBe(crlf.replace('command: a', 'command: b'));
     });
+  });
+
+  test.each([
+    ["'old'", "it's new", "'it''s new'"],
+    ['"old"', 'say "new"', String.raw`"say \"new\""`],
+    ['old', 'true', '"true"'],
+    ['old', '123', '"123"'],
+    ['old', false, 'false'],
+    ['"old"', 42, '42'],
+    ['old', null, 'null'],
+    ['false', 'false', '"false"'],
+    ['old', 'colon: space', '"colon: space"'],
+  ] as const)('rewrites %s as %s with schema-safe types', (old, value, expected) => {
+    const source = `name: x\nvalue: ${old} # inline\nother: { a: [ b ] }\n`;
+    const definition = { name: 'x', value, other: { a: ['b'] } };
+    const text = serializeWorkflowPreservingText(definition, source);
+    expect(text).toBe(source.replace(`value: ${old}`, `value: ${expected}`));
+    expect(parseYaml(text)).toEqual(definition);
+  });
+
+  test.each(['|-', '>-', '|', '>'])('edits a %s block with its header comment', header => {
+    const prefix = 'name: x\nvalue: ';
+    const suffix = 'other: { a: [ b ] } # untouched\n';
+    const source = `${prefix}${header} # header\n  old\n  body\n${suffix}`;
+    const value = 'first\nsecond\n';
+    const definition = { name: 'x', value, other: { a: ['b'] } };
+    const text = serializeWorkflowPreservingText(definition, source);
+    expect(text.startsWith(prefix + header[0])).toBe(true);
+    expect(text.endsWith(suffix)).toBe(true);
+    expect(text).toContain('# header\n');
+    expect(parseYaml(text)).toEqual(definition);
+  });
+
+  test('multiple edits retain flow separators and offsets despite different lengths', () => {
+    const source = 'name: x\nvalues: [ short , "old" , 3 ] # list\nother: { a: [ b ] }\n';
+    const definition = { name: 'a longer name', values: ['a,b', 'x', 12], other: { a: ['b'] } };
+    expect(serializeWorkflowPreservingText(definition, source)).toBe(
+      source
+        .replace('name: x', 'name: a longer name')
+        .replace('short', '"a,b"')
+        .replace('"old"', '"x"')
+        .replace('3 ]', '12 ]')
+    );
+  });
+
+  test('multiline quoted edits retain surrounding bytes', () => {
+    const source = 'name: x\nvalue: "old" # value\nother: { a: [ b ] }\n';
+    const definition = { name: 'x', value: 'first\nsecond', other: { a: ['b'] } };
+    const text = serializeWorkflowPreservingText(definition, source);
+    expect(text).toBe(source.replace('"old"', '"first\n\n  second"'));
+  });
+
+  test.each(['\r\n', '\n'])(
+    'mixed EOL and Unicode before an edit preserve untouched bytes (%j)',
+    eol => {
+      const source = `name: café 🦊\r\ndescription: "first\r\n  second"\nmodel: old # model${eol}other: { a: [ b ] }\r\n`;
+      const definition = {
+        name: 'café 🦊',
+        description: 'first second',
+        model: 'new',
+        other: { a: ['b'] },
+      };
+      expect(serializeWorkflowPreservingText(definition, source)).toBe(
+        source.replace('model: old', 'model: new')
+      );
+    }
+  );
+
+  test('structural changes use the document merge and retain comments', () => {
+    const source = '# header\nname: x\nvalue: old # value\nother: { a: [ b ] }\n';
+    const definition = { name: 'x', value: 'new', other: { a: ['b'] }, added: true };
+    const text = serializeWorkflowPreservingText(definition, source);
+    expect(parseYaml(text)).toEqual(definition);
+    expect(text).toContain('# header');
+    expect(text).toContain('# value');
+    expect(text).toContain('other: {a: [b]}');
   });
 
   test('a long single-line value is not folded', () => {
