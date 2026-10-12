@@ -2217,7 +2217,7 @@ describe('WorktreeProvider', () => {
         const steps: string[] = [];
         const copy = spyOn(worktreeCopy, 'copyWorktreeFiles').mockImplementation(async () => {
           steps.push('copy');
-          return ['.seed'];
+          return [worktreeCopy.parseCopyFileEntry('.seed')];
         });
         execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
           if (args.includes('add')) steps.push('add');

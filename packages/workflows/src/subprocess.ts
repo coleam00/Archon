@@ -20,18 +20,6 @@ export function containerCommandName(cmd: string): string {
 }
 
 /**
- * Run a deterministic subprocess (bash/script node body, loop `until_bash`) under
- * the given execution context.
- *
- * `options.env` is the ARCHON-MANAGED env only (node vars + codebase env + creds)
- * — NEVER pre-merged with `process.env`. The host path layers it over the
- * (already-cleaned) host `process.env`, byte-identical to before. The container
- * path delivers ONLY that managed env via `docker exec -e` (host `process.env`
- * never crosses the boundary — the isolation invariant) and runs the command
- * in-container at the same absolute cwd, so `bash:`/`script:` nodes have no
- * host-escape hole.
- */
-/**
  * Build the `docker exec` argv for a deterministic subprocess (bash/script) in a
  * container. Env is delivered ONLY via `-e` flags (never merged with the docker
  * CLI's own env / host process.env — the isolation invariant); the command name
@@ -114,12 +102,6 @@ export function redactSubprocessError(
   return e;
 }
 
-/**
- * Who a retained subprocess-output row belongs to (#2967).
- *
- * Required on every `runSubprocess` call, so a new deterministic-exec call site cannot
- * silently opt out of retention — the type carries the invariant instead of a comment.
- */
 interface SubprocessRetention {
   logDir: string;
   workflowRunId: string;
@@ -134,10 +116,21 @@ interface SubprocessRetention {
    * onto the same `step` — those are then told apart by row order.
    */
   nodeId: string;
-  /** `<bash>` / `<script>` / `<until_bash>`, matching the transcript's other rows. */
   label: string;
 }
 
+/**
+ * Run a deterministic subprocess (bash/script node body, loop `until_bash`) under
+ * the given execution context.
+ *
+ * `options.env` is the ARCHON-MANAGED env only (node vars + codebase env + creds)
+ * — NEVER pre-merged with `process.env`. The host path layers it over the
+ * (already-cleaned) host `process.env`, byte-identical to before. The container
+ * path delivers ONLY that managed env via `docker exec -e` (host `process.env`
+ * never crosses the boundary — the isolation invariant) and runs the command
+ * in-container at the same absolute cwd, so `bash:`/`script:` nodes have no
+ * host-escape hole.
+ */
 export async function runSubprocess(
   execContext: ExecutionContext,
   cmd: string,
