@@ -1,3 +1,4 @@
+import { WORKTREE_SETUP_EVENT_TYPES } from '@archon/workflows/schemas/worktree-setup';
 import { PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
 import { createRunAiConfigurationSnapshot } from '@archon/workflows/run-ai-configuration';
 import { buildAiProfile } from '@archon/workflows/model-validation';
@@ -6942,6 +6943,28 @@ describe('workflowLogsCommand', () => {
     expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();
     expect(workflowDb.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(workflowDb.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('renders the complete schema-owned setup event vocabulary', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const messages = WORKTREE_SETUP_EVENT_TYPES.map(type => `Setup evidence for ${type}`);
+    writeFileSync(
+      transcriptPath,
+      WORKTREE_SETUP_EVENT_TYPES.map((type, index) =>
+        JSON.stringify({ type, setup: { message: messages[index] } })
+      ).join('\n') + '\n'
+    );
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run('failed'));
+    expect(
+      await workflowLogsCommand(
+        createTestWorkflowHost(),
+        run('failed').id,
+        false,
+        undefined,
+        'text'
+      )
+    ).toBe(0);
+    expect(stdoutText()).toBe(messages.join('\n') + '\n');
   });
 
   it('renders every transcript row kind as text and skips rows it cannot render', async () => {

@@ -94,6 +94,14 @@ export async function prepareRunAiConfiguration(
     { ...fileConfig, envVars: { ...fileConfig.envVars, ...dbEnvVars } },
     effectiveRunConfig?.layer
   );
+  config.protectedCredentialValues = [
+    ...new Set([
+      ...(config.protectedCredentialValues ?? []),
+      ...Object.entries(dbEnvVars).flatMap(([key, value]) =>
+        config.envVars?.[key] === value ? [value] : []
+      ),
+    ]),
+  ];
   const snapshot =
     readRunAiConfigurationSnapshot(deps.providers, options.continuationRun?.metadata) ??
     readRunAiConfigurationSnapshot(deps.providers, options.aiConfigurationRun?.metadata);

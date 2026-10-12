@@ -19,7 +19,7 @@ import { hostname } from 'os';
 import { dirname, join } from 'path';
 import { MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS, spellWorkflowCommand } from './deps';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
-import type { WorkflowDeps } from './deps';
+import type { WorkflowDeps, WorkflowEnvironment } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, captureWorkflowTerminal } from '@archon/paths';
 import { workflowTelemetryShape } from './telemetry-shape';
@@ -224,8 +224,34 @@ function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null
   return { owner, repo };
 }
 
+type WorkflowGithubDeps = Pick<
+  WorkflowDeps,
+  'resolveBotGitHubToken' | 'isPerUserGitHubEnabled' | 'getUserGithubToken' | 'getUserGithubAuthor'
+> & { store: Pick<WorkflowDeps['store'], 'getCodebase'> };
+
+export async function resolveWorkflowGithubEnvironment(
+  deps: WorkflowGithubDeps,
+  codebaseId: string | undefined,
+  userId: string | undefined,
+  environment: WorkflowEnvironment
+): Promise<WorkflowEnvironment> {
+  const bot = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
+  const user = await resolveUserGithubEnvForWorkflow(deps, userId);
+  return {
+    ...environment,
+    envVars: { ...environment.envVars, ...bot, ...user },
+    protectedEnvKeys: [
+      ...new Set([
+        ...(environment.protectedEnvKeys ?? []),
+        ...Object.keys(bot),
+        ...Object.keys(user),
+      ]),
+    ],
+  };
+}
+
 async function resolveBotGitHubEnvForWorkflow(
-  deps: WorkflowDeps,
+  deps: WorkflowGithubDeps,
   codebaseId: string | undefined
 ): Promise<Record<string, string>> {
   if (!codebaseId || !deps.resolveBotGitHubToken) return {};
@@ -247,7 +273,7 @@ async function resolveBotGitHubEnvForWorkflow(
  * for server-initiated runs and solo installs, leaving the bot env untouched.
  */
 async function resolveUserGithubEnvForWorkflow(
-  deps: WorkflowDeps,
+  deps: WorkflowGithubDeps,
   userId: string | undefined
 ): Promise<Record<string, string>> {
   const perUserEnabled = deps.isPerUserGitHubEnabled?.() ?? false;
@@ -2910,21 +2936,11 @@ export async function executeWorkflow(
   try {
     // The environment stays fixed for this execution; resumed segments resolve again
     // through the provider's refresh cache. Resolve inside the run's failure boundary.
-    const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
-    const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, executionUserId);
-    config.envVars = {
-      ...config.envVars,
-      // The injected bot token is system-set; the per-user override
-      // wins last so a run routes through the originating human's token (or scrubs
-      // the org/bot token when they haven't connected). Empty-string values from
-      // the per-user policy scrub the corresponding key via the subprocess merge.
-      ...botGitHubEnv,
-      ...userGitHubEnv,
-    };
-    const protectedEnvKeys = new Set([...Object.keys(botGitHubEnv), ...Object.keys(userGitHubEnv)]);
-    if (protectedEnvKeys.size > 0) {
-      config.protectedEnvKeys = [...protectedEnvKeys];
-    }
+    Object.assign(
+      config,
+      await resolveWorkflowGithubEnvironment(deps, codebaseId, executionUserId, config)
+    );
+    const protectedEnvKeys = new Set(config.protectedEnvKeys);
 
     // Per-user AI-provider credentials (Phase 2). Resolved AFTER artifactsDir is
     // created because file-based deliveries (Codex `CODEX_HOME/auth.json`) live

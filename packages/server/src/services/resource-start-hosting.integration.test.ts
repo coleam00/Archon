@@ -1,3 +1,4 @@
+import { resolveProjectPaths } from '@archon/workflows/executor';
 import { listWorkflowEvents } from '@archon/core/db/workflow-events';
 import { randomUUID } from 'node:crypto';
 import { getOrCreateConversation } from '@archon/core/db/conversations';
@@ -14,7 +15,7 @@ import { execFileAsync } from '@archon/git';
  * pending run exactly as the executor does, so the claim fence stays the real one.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -438,6 +439,25 @@ describe('server resource-start host', () => {
         fails ? 'worktree_setup_failed' : 'worktree_setup_completed',
       ]);
       expect(setup[1]?.data?.stdoutTail).toContain('setup-evidence');
+      const run = await getWorkflowRun(runId);
+      if (!run) throw new Error('Expected setup audit owner');
+      const { logDir } = await resolveProjectPaths(
+        workflowHost.deps,
+        join(root, 'project'),
+        runId,
+        run.codebase_id ?? undefined
+      );
+      const transcript: unknown[] = (await readFile(join(logDir, `${runId}.jsonl`), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line: string) => JSON.parse(line));
+      expect(transcript).toMatchObject([
+        { type: setup[0]?.event_type, workflow_id: runId, setup: setup[0]?.data },
+        { type: 'exec_output', stdout_tail: 'setup-evidence', exit_code: fails ? 7 : 0 },
+        { type: setup[1]?.event_type, workflow_id: runId, setup: setup[1]?.data },
+      ]);
+      expect(setup[0]?.data?.message).toContain('started');
+      expect(setup[1]?.data?.message).toContain(fails ? 'exit code 7' : 'completed');
       if (fails) {
         expect(setup[1]?.data?.exitCode).toBe(7);
         await expect(start()).rejects.toThrow('its setup did not finish');

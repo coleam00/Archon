@@ -1,3 +1,4 @@
+import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
 import {
   requireTerminalStatusWrite,
   TerminalStatusWriteError,
@@ -4676,6 +4677,7 @@ function formatProviderEvent(
  * stay unlabelled rather than attributed to a guessed one.
  */
 function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): string | undefined {
+  if (isWorktreeSetupEventType(row.type)) return row.setup?.message;
   const step = row.step ?? '?';
   switch (row.type) {
     case 'workflow_start':
@@ -4727,10 +4729,6 @@ function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): 
       const brief = row.tool_input ? formatToolInputBrief(name, row.tool_input) : null;
       return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
     }
-    case 'worktree_setup_started':
-    case 'worktree_setup_completed':
-    case 'worktree_setup_failed':
-      return row.setup?.message;
     case 'exec_output': {
       const lines = [`[${step}] Output (exit ${String(row.exit_code ?? '?')})`];
       if (row.stdout_tail) lines.push(indentLines(row.stdout_tail, '  '));

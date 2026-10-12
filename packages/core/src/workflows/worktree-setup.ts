@@ -18,23 +18,25 @@ import {
   retainStreamTail,
 } from '@archon/workflows/subprocess';
 import { logWorktreeSetup } from '@archon/workflows/logger';
-import type { CapturedSourceOwner, PreparedWorkflowSource } from '@archon/workflows/executor';
+import type {
+  CapturedSourceOwner,
+  PreparedWorkflowSource,
+  resolveWorkflowGithubEnvironment,
+} from '@archon/workflows/executor';
 import type { WorkflowEnvironment, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorktreeSetupEvent } from '@archon/workflows/schemas/worktree-setup';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import { getCodebaseEnvVars } from '../db/env-vars';
 
-export interface WorktreeSetupDeps {
+export type WorktreeSetupDeps = Parameters<typeof resolveWorkflowGithubEnvironment>[0] & {
   store: Pick<WorkflowDeps['store'], 'getCodebase' | 'persistWorkflowEvent'>;
-}
+};
 
 function createSetupExecutor(
   environment: WorkflowEnvironment,
   audit: (event: WorktreeSetupEvent) => Promise<void>,
-  retention:
-    | { standalone: true }
-    | { logDir: string; workflowRunId: string; nodeId: string; label: string },
+  retention: { standalone: true } | { logDir: string; workflowRunId: string; label: string },
   attribution?: { parentNodeId: string; childIndex: number }
 ): WorktreeSetupExecutor {
   return async input => {
@@ -153,12 +155,19 @@ function createSetupExecutor(
 
 export function createRunWorktreeSetupExecutor(
   deps: WorktreeSetupDeps,
-  run: Pick<WorkflowRun, 'id'>,
+  run: Pick<WorkflowRun, 'id' | 'user_id'>,
   environment: WorkflowEnvironment,
   attribution?: { parentNodeId: string; childIndex: number }
 ): WorktreeSetupExecutor {
   return async input => {
-    const { resolveProjectPaths } = await import('@archon/workflows/executor');
+    const { resolveProjectPaths, resolveWorkflowGithubEnvironment } =
+      await import('@archon/workflows/executor');
+    const effectiveEnvironment = await resolveWorkflowGithubEnvironment(
+      deps,
+      input.codebaseId,
+      run.user_id ?? undefined,
+      environment
+    );
     const { logDir } = await resolveProjectPaths(
       deps,
       input.canonicalRepoPath,
@@ -166,7 +175,7 @@ export function createRunWorktreeSetupExecutor(
       input.codebaseId
     );
     await createSetupExecutor(
-      environment,
+      effectiveEnvironment,
       async event => {
         await deps.store.persistWorkflowEvent({
           workflow_run_id: run.id,
@@ -175,7 +184,7 @@ export function createRunWorktreeSetupExecutor(
         });
         await logWorktreeSetup(logDir, run.id, event);
       },
-      { logDir, workflowRunId: run.id, nodeId: '', label: '<worktree.postCreate>' },
+      { logDir, workflowRunId: run.id, label: '<worktree.postCreate>' },
       attribution
     )(input);
   };
@@ -186,7 +195,10 @@ export const executeStandaloneWorktreeSetup: WorktreeSetupExecutor = async input
   const managed = await getCodebaseEnvVars(input.codebaseId);
   const log = createLogger('isolation.worktree-setup');
   await createSetupExecutor(
-    { envVars: { ...config.envVars, ...managed } },
+    {
+      envVars: { ...config.envVars, ...managed },
+      protectedCredentialValues: Object.values(managed),
+    },
     async event => {
       if (event.type === 'worktree_setup_failed') log.error(event, event.type);
       else log.info(event, event.type);

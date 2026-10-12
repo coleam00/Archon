@@ -37,3 +37,7 @@ export const worktreeSetupEventSchema = z.discriminatedUnion('type', [
   }),
 ]);
 export type WorktreeSetupEvent = z.infer<typeof worktreeSetupEventSchema>;
+
+export function isWorktreeSetupEventType(type: string): type is WorktreeSetupEvent['type'] {
+  return WORKTREE_SETUP_EVENT_TYPES.some(eventType => eventType === type);
+}

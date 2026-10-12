@@ -3,7 +3,7 @@ import { test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { captureLogLines, trackTempRoots } from '@archon/paths/test-utils';
 import { resolveBashPath } from '@archon/git';
 import { runSubprocess } from '@archon/workflows/subprocess';
 import { WorktreePostCreateError, classifyIsolationError } from '@archon/isolation';
@@ -28,7 +28,7 @@ const persist = mock(async (event: WorkflowEventInput): Promise<void> => {
   rows.push(event);
 });
 const deps = { store: { getCodebase: async () => null, persistWorkflowEvent: persist } };
-const run = { id: 'setup-run' };
+const run = { id: 'setup-run', user_id: null };
 const input = (commands: string[], timeout = 300000): WorktreeSetupInput => ({
   workingPath: root,
   canonicalRepoPath: root,
@@ -216,3 +216,169 @@ test('a command terminated by a signal is an execution failure', async () => {
   if (error.signal) expect(error.message).toContain(error.signal);
   else expect(typeof error.exitCode).toBe('number');
 });
+
+test('timeout kills TERM-ignoring descendants before returning setup failure', async () => {
+  const started = Date.now();
+  const error = await createRunWorktreeSetupExecutor(
+    deps,
+    run,
+    {}
+  )(input(["trap '' TERM; (sleep 0.8; touch escaped-timeout) & wait"], 30)).catch(
+    (error: unknown) => error
+  );
+  expect(error).toBeInstanceOf(WorktreePostCreateError);
+  expect(rows[1].data?.failureKind).toBe('timeout');
+  expect(Date.now() - started).toBeLessThan(600);
+  await Bun.sleep(850);
+  expect(await Bun.file(join(root, 'escaped-timeout')).exists()).toBe(false);
+});
+
+for (const scenario of [
+  {
+    name: 'named user without a token scrubs host and bot credentials',
+    perUser: true,
+    user: 'user',
+    token: undefined,
+    fallback: false,
+    expected: '||',
+  },
+  {
+    name: 'personal token wins over bot and host',
+    perUser: true,
+    user: 'user',
+    token: 'personal-setup-credential',
+    fallback: false,
+    expected: 'personal-setup-credential|personal-setup-credential|',
+  },
+  {
+    name: 'trusted server uses bot credentials',
+    perUser: true,
+    user: undefined,
+    token: undefined,
+    fallback: false,
+    expected: 'bot-setup-credential|bot-setup-credential|host-copilot-credential',
+  },
+  {
+    name: 'disabled per-user mode uses bot credentials',
+    perUser: false,
+    user: 'user',
+    token: undefined,
+    fallback: false,
+    expected: 'bot-setup-credential|bot-setup-credential|host-copilot-credential',
+  },
+  {
+    name: 'explicit org fallback keeps bot credentials',
+    perUser: true,
+    user: 'user',
+    token: undefined,
+    fallback: true,
+    expected: 'bot-setup-credential|bot-setup-credential|host-copilot-credential',
+  },
+]) {
+  test(`setup GitHub policy: ${scenario.name}`, async () => {
+    const previous = {
+      GH_TOKEN: process.env.GH_TOKEN,
+      GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+      COPILOT_GITHUB_TOKEN: process.env.COPILOT_GITHUB_TOKEN,
+      ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK: process.env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK,
+    };
+    Object.assign(process.env, {
+      GH_TOKEN: 'host-setup-credential',
+      GITHUB_TOKEN: 'host-setup-credential',
+      COPILOT_GITHUB_TOKEN: 'host-copilot-credential',
+      ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK: String(scenario.fallback),
+    });
+    try {
+      const credentialsDeps = {
+        store: {
+          ...deps.store,
+          getCodebase: async () => ({
+            id: 'project',
+            name: 'acme/demo',
+            repository_url: 'https://github.com/acme/demo',
+            default_cwd: root,
+            kind: 'repo' as const,
+          }),
+        },
+        resolveBotGitHubToken: async () => 'bot-setup-credential',
+        isPerUserGitHubEnabled: () => scenario.perUser,
+        getUserGithubToken: async () => scenario.token,
+      };
+      const probe = 'printf "%s|%s|%s" "$GH_TOKEN" "$GITHUB_TOKEN" "$COPILOT_GITHUB_TOKEN"';
+      await createRunWorktreeSetupExecutor(
+        credentialsDeps,
+        { ...run, user_id: scenario.user ?? null },
+        {}
+      )(input([`${probe} | tee github-environment`]));
+      expect(await readFile(join(root, 'github-environment'), 'utf8')).toBe(scenario.expected);
+      const { resolveWorkflowGithubEnvironment } = await import('@archon/workflows/executor');
+      const environment = await resolveWorkflowGithubEnvironment(
+        credentialsDeps,
+        'project',
+        scenario.user,
+        {}
+      );
+      const bash = await runSubprocess({ kind: 'host' }, resolveBashPath(), ['-c', probe], {
+        cwd: root,
+        timeout: 1000,
+        env: environment.envVars ?? {},
+        protectedEnvKeys: environment.protectedEnvKeys,
+        retention: { standalone: true },
+      });
+      expect(bash.stdout).toBe(scenario.expected);
+      for (const credential of [
+        'host-setup-credential',
+        'host-copilot-credential',
+        'personal-setup-credential',
+        'bot-setup-credential',
+      ])
+        expect(JSON.stringify(rows)).not.toContain(credential);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+}
+
+test.each([false, true])(
+  'managed values with arbitrary key names are redacted (failure: %s)',
+  async fails => {
+    const secret = 'arbitrary-managed-db-credential';
+    const error = await createRunWorktreeSetupExecutor(deps, run, {
+      envVars: { REGISTRY_AUTH: secret },
+      protectedCredentialValues: [secret],
+    })(
+      input([`echo "$REGISTRY_AUTH"; echo "$REGISTRY_AUTH" >&2; ${fails ? 'exit 7' : 'true'}`])
+    ).catch((error: unknown) => error);
+    expect(JSON.stringify(rows)).not.toContain(secret);
+    expect(rows[1]?.data?.stdoutTail).toContain('[REDACTED]');
+    expect(rows[1]?.data?.stderrTail).toContain('[REDACTED]');
+    if (fails) {
+      expect(error).toBeInstanceOf(WorktreePostCreateError);
+      expect(JSON.stringify(error)).not.toContain(secret);
+      expect(String(error)).not.toContain(secret);
+    }
+  }
+);
+
+test.each([false, true])(
+  'standalone setup protects every managed value in application logs (failure: %s)',
+  async fails => {
+    const capture = captureLogLines();
+    try {
+      const error = await executeStandaloneWorktreeSetup(
+        input([`echo "$PROJECT_VALUE"; echo "$PRECEDENCE" >&2; ${fails ? 'exit 7' : 'true'}`])
+      ).catch((error: unknown) => error);
+      const events = capture.lines.filter(line => line.module === 'isolation.worktree-setup');
+      expect(events).toHaveLength(2);
+      expect(events[1]?.stdoutTail).toContain('[REDACTED]');
+      expect(events[1]?.stderrTail).toContain('[REDACTED]');
+      expect(JSON.stringify(events)).not.toContain('"project"');
+      if (fails) expect(String(error)).not.toContain('project');
+    } finally {
+      capture.restore();
+    }
+  }
+);

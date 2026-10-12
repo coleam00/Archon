@@ -46,7 +46,7 @@ export function buildSubprocessDockerArgs(
   return dockerArgs;
 }
 
-/** The shape `execFile` rejects with: argv-bearing fields plus the classifier fields. */
+/** Subprocess failure evidence, including the owned host deadline and legacy execFile fields. */
 export type RawSubprocessRejection = Error & {
   stdout?: string;
   stderr?: string;
@@ -59,12 +59,14 @@ export type RawSubprocessRejection = Error & {
   code?: number | string | null;
   /** True when Node killed the child after the configured `execFile` timeout elapsed. */
   killed?: boolean;
-  /** Set (with `code: null`) when the child was killed, which for `execFile` is a timeout. */
+  /** The host process-tree deadline expired, independent of its eventual exit code. */
+  timedOut?: boolean;
+  /** Terminal signal, also present when a command terminates itself. */
   signal?: string | null;
 };
 
 export function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
-  return error.killed === true && error.code === null;
+  return error.timedOut === true || (error.killed === true && error.code === null);
 }
 
 /**
@@ -74,7 +76,7 @@ export function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
  * removed even when the failed process echoes them without their env key.
  *
  * Mutates in place rather than returning a fresh Error: callers classify the
- * rejection by reading `killed` (timeout) and `code` (ENOENT/EACCES) off
+ * rejection by reading `timedOut`/`killed` and `code` (ENOENT/EACCES) off
  * the original object, and a replacement would silently drop those and turn every
  * timeout into a generic failure.
  *
@@ -175,6 +177,7 @@ export async function runSubprocess(
         : await execFileAsync(cmd, args, {
             cwd: options.cwd,
             timeout: options.timeout,
+            processTreeTimeout: true,
             env: subprocessEnv,
           });
 
