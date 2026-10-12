@@ -567,12 +567,14 @@ bun install
 | Start frontend only | `bun run dev:web`                   |
 | Run tests           | `bun run test`                      |
 | Type check          | `bun run type-check`                |
-| Full validation     | `bun run validate`                  |
+| Local validation    | `bun run validate`                  |
 | Web UI              | http://localhost:5173               |
 | API server          | http://localhost:3090               |
 | Health check        | `curl http://localhost:3090/health` |
 
 ---
+
+CI is the full validation gate. Format and workflow fixtures are explicit local checks: `bun run validate --only format,workflow-fixtures`.
 
 ## What's Next?
 

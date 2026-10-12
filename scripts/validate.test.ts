@@ -26,6 +26,17 @@ describe('validate check selection', () => {
     ]);
   });
 
+  test('generated-files retains each required freshness check in order', () => {
+    expect(selectChecks(['generated-files'])[0].commands).toEqual([
+      ['bun', 'run', 'check:bundled'],
+      ['bun', 'run', 'check:pi-vendor-map'],
+      ['bun', 'run', 'check:capability-matrix'],
+      ['bun', 'run', 'check:provider-contract-schema'],
+      ['bun', 'run', 'check:chat-contract-schema'],
+      ['bun', 'run', 'check:api-types'],
+    ]);
+  });
+
   test('a selection runs in declaration order, not argument order', () => {
     expect(selectChecks(['tests', 'lint']).map(check => check.id)).toEqual(['lint', 'tests']);
   });

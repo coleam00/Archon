@@ -92,7 +92,6 @@ jobs:
   # instead of one after another. A check whose result cannot depend on the OS (type-check,
   # lint, format) runs once, in `static` on Linux; Windows runs only what can differ there.
   test:
-    needs: changes
     if: ${{ !github.event.pull_request.draft }}
     strategy:
       # Both legs must always report. With the default fail-fast, an ubuntu
@@ -218,7 +217,6 @@ jobs:
         run: bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts
 
   static:
-    needs: changes
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:

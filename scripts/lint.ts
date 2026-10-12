@@ -28,8 +28,10 @@ async function findTargets(): Promise<string[][]> {
   ];
 }
 
-async function main(): Promise<number> {
-  const targets = await findTargets();
+export async function runLintTargets(
+  targets: readonly (readonly string[])[],
+  runTarget: (patterns: readonly string[]) => Promise<number>
+): Promise<number> {
   const exitCodes: number[] = [];
   let nextTarget = 0;
   async function worker(): Promise<void> {
@@ -37,27 +39,7 @@ async function main(): Promise<number> {
       const index = nextTarget++;
       const patterns = targets[index];
       try {
-        console.log(`Linting ${patterns.join(', ')}`);
-        const child = Bun.spawn(
-          [
-            'node',
-            'node_modules/eslint/bin/eslint.js',
-            ...patterns,
-            '--no-error-on-unmatched-pattern',
-            '--no-warn-ignored',
-            ...eslintArgs,
-            // ESLint's cache does not track imported types; this must override caller flags.
-            '--no-cache',
-          ],
-          {
-            cwd: REPO_ROOT,
-            stdin: 'inherit',
-            stdout: 'inherit',
-            stderr: 'inherit',
-          }
-        );
-        const exitCode = await child.exited;
-        exitCodes[index] = exitCode;
+        exitCodes[index] = await runTarget(patterns);
       } catch (error) {
         console.error(error);
         exitCodes[index] = 1;
@@ -68,4 +50,30 @@ async function main(): Promise<number> {
   return exitCodes.find(code => code !== 0) ?? 0;
 }
 
-process.exit(await main());
+async function main(): Promise<number> {
+  return runLintTargets(await findTargets(), async patterns => {
+    console.log(`Linting ${patterns.join(', ')}`);
+    const child = Bun.spawn(
+      [
+        'node',
+        'node_modules/eslint/bin/eslint.js',
+        ...patterns,
+        '--no-error-on-unmatched-pattern',
+        '--no-warn-ignored',
+        ...eslintArgs,
+        // ESLint's cache does not track imported types; this must override caller flags.
+        '--no-cache',
+      ],
+      {
+        cwd: REPO_ROOT,
+        stdin: 'inherit',
+        stdout: 'inherit',
+        stderr: 'inherit',
+      }
+    );
+    const exitCode = await child.exited;
+    return exitCode;
+  });
+}
+
+if (import.meta.main) process.exit(await main());

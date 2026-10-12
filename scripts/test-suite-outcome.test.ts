@@ -90,3 +90,67 @@ describe('Test Suite aggregate outcome', () => {
     expect(result.stderr.toString()).toContain('workflow-fixtures finished with failure');
   });
 });
+
+function record(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Expected a workflow mapping');
+  }
+  return Object.fromEntries(Object.entries(value));
+}
+
+const jobs = record(record(Bun.YAML.parse(WORKFLOW)).jobs);
+function jobSteps(job: Record<string, unknown>): Record<string, unknown>[] {
+  if (!Array.isArray(job.steps)) throw new Error('Expected workflow steps');
+  return job.steps.map(record);
+}
+
+describe('fixture CI wiring', () => {
+  test('publishes the fixture decision from the deciding step', () => {
+    const changes = record(jobs.changes);
+    expect(record(changes.outputs)['run-fixtures']).toBe(
+      '${{ steps.decision.outputs.run-fixtures }}'
+    );
+    const decision = jobSteps(changes).find(step => step.id === 'decision');
+    expect(decision?.run).toContain(
+      'run_fixtures=$(bun scripts/should-run-test-suite.ts --workflow-fixtures)'
+    );
+    expect(decision?.run).toContain('echo "run-fixtures=$run_fixtures" >> "$GITHUB_OUTPUT"');
+  });
+
+  test.each(['workflow-fixtures', 'workflow-fixtures-windows'])(
+    '%s skips expensive work and reports the decision on unrelated changes',
+    id => {
+      const job = record(jobs[id]);
+      const steps = jobSteps(job);
+      expect(job.needs).toBe('changes');
+      expect(job.if).toBe('${{ !github.event.pull_request.draft }}');
+      expect(steps.map(step => step.name ?? step.uses)).toEqual([
+        'actions/checkout@v4',
+        'Setup Bun',
+        'Setup uv',
+        'Install dependencies',
+        'Run workflow fixtures',
+        'Report fixture selection',
+      ]);
+      for (const step of steps.slice(0, -1)) {
+        expect(step.if).toBe("needs.changes.outputs.run-fixtures == 'true'");
+      }
+      expect(steps.find(step => step.name === 'Run workflow fixtures')?.run).toBe(
+        'bun run validate --only workflow-fixtures'
+      );
+      const report = steps.at(-1);
+      expect(report?.if).toBeUndefined();
+      expect(record(report?.env).RUN_FIXTURES).toBe('${{ needs.changes.outputs.run-fixtures }}');
+      expect(report?.run).toContain('case "$RUN_FIXTURES" in');
+      expect(report?.run).toContain(
+        'false) echo "Workflow fixtures skipped: no fixture inputs changed."'
+      );
+      expect(report?.run).toContain('exit 1');
+    }
+  );
+
+  test.each(['test', 'static'])('%s runs independently of the selector', id => {
+    expect(record(jobs[id]).needs).toBeUndefined();
+    expect(record(jobs[id]).if).toBe('${{ !github.event.pull_request.draft }}');
+  });
+});

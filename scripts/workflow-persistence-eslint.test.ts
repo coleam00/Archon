@@ -6,6 +6,24 @@ import { pathToFileURL } from 'node:url';
 import { trackTempRoots } from '@archon/paths/test-utils';
 
 const track = trackTempRoots();
+const boundaryConsumers = [
+  'packages/core/src/operations/workflow-operations.ts',
+  'packages/core/src/operations/workflow-adoption.ts',
+  'packages/core/src/services/run-attention-watch.ts',
+  'packages/core/src/services/codebase-checkout-resolver.ts',
+  'packages/core/src/workflows/continuation-host.ts',
+  'packages/core/src/workflows/resource-start-host.ts',
+  'packages/core/src/workflows/child-isolation-resolver.ts',
+  'packages/core/src/workflows/headless-platform.ts',
+  'packages/core/src/handlers/clone.ts',
+  'packages/cli/src/commands/workflow.ts',
+  'packages/cli/src/commands/workflow-continuations.ts',
+  'packages/cli/src/commands/trigger.ts',
+  'packages/cli/src/adapters/cli-adapter.ts',
+  'packages/cli/src/utils/owned-run-termination.ts',
+  'packages/server/src/services/resource-start-hosting.ts',
+  'packages/server/src/services/webhook-source-plugins.ts',
+];
 
 test('typed lint preserves the workflow persistence boundary through resolved modules and symbols', async () => {
   const root = track(mkdtempSync(join(tmpdir(), 'workflow-persistence-eslint-')));
@@ -91,6 +109,13 @@ test('typed lint preserves the workflow persistence boundary through resolved mo
     }, {
       files: ['consumers/*.ts'], plugins: { archon: { rules: { persistence: rule } } }, rules: { 'archon/persistence': 'error' },
     }] });
+    const production = new ESLint({ cwd: ${JSON.stringify(resolve(import.meta.dir, '..'))} });
+    for (const file of ${JSON.stringify(boundaryConsumers)}) {
+      const config = await production.calculateConfigForFile(file);
+      if (config?.rules['archon/no-workflow-persistence']?.[0] !== 2) {
+        throw new Error('Persistence boundary missing for ' + file);
+      }
+    }
     const results = await eslint.lintFiles(['consumers/*.ts', 'outside.ts']);
     console.log(JSON.stringify(results.map(result => ({ file: result.filePath, messages: result.messages }))));
   `

@@ -33,9 +33,12 @@ Use the `/release` skill (or follow these manual steps):
 git checkout dev
 git pull origin dev
 
-# Run full validation
+# Run default local validation
 bun run validate
+bun run validate --only format,workflow-fixtures
 ```
+
+CI remains the full validation gate, including service and binary checks that local validation does not run.
 
 The `/release` skill automates the following:
 1. Compares `dev` to `main` to generate changelog entries

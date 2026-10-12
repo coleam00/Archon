@@ -95,7 +95,7 @@ export function shouldRunWorkflowFixtures(files: Iterable<string>): boolean {
  */
 export function changedFilesBetween(base: string, head: string, repo = process.cwd()): string[] {
   const result = Bun.spawnSync(
-    ['git', 'diff', '--name-only', '--no-renames', `${base}...${head}`],
+    ['git', 'diff', '--name-only', '-z', '--no-renames', `${base}...${head}`],
     {
       cwd: repo,
       stdout: 'pipe',
@@ -105,7 +105,7 @@ export function changedFilesBetween(base: string, head: string, repo = process.c
   if (result.exitCode !== 0) {
     throw new Error(`Could not read changed files: ${result.stderr.toString().trim()}`);
   }
-  return result.stdout.toString().split('\n').filter(Boolean);
+  return result.stdout.toString().split('\0').filter(Boolean);
 }
 
 /**

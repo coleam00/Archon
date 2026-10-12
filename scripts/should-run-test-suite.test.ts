@@ -208,6 +208,32 @@ describe('diff mode', () => {
     expect(result.stdout).toBe('false');
   });
 
+  test.each(
+    process.platform === 'win32'
+      ? ['é.yaml']
+      : ['é.yaml', 'quote".yaml', 'back\\slash.yaml', 'tab\t.yaml', 'line\n.yaml']
+  )('fixture decision preserves Git-quoted filename %j', filename => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-fixture-path-')));
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'config', 'core.quotepath', 'true');
+    git(repo, 'config', 'user.email', 'test@example.com');
+    git(repo, 'config', 'user.name', 'Test');
+    const base = commit(repo, 'seed.ts', 'seed');
+    mkdirSync(join(repo, '.archon/workflows/sdlc/fixtures'), { recursive: true });
+    const file = `.archon/workflows/sdlc/fixtures/${filename}`;
+    const head = commit(repo, file, 'fixture change');
+    expect(changedFilesBetween(base, head, repo)).toEqual([file]);
+    const result = runDecision(
+      trackTempRoot,
+      'pull_request',
+      { pull_request: { base: { sha: base }, head: { sha: head } } },
+      repo,
+      ['--workflow-fixtures']
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('true');
+  });
+
   test('a code change on the branch still runs the suite', () => {
     const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-suite-diff-')));
     git(repo, 'init', '-q', '-b', 'main');
