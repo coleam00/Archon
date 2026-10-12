@@ -271,7 +271,6 @@ export {
   startOAuth,
   pollOAuth,
   cancelOAuth,
-  OAuthCallbackPortBusyError,
   type ResolvedCredential,
   type DeliveryResult,
   type DeliveryOptions,
@@ -317,3 +316,5 @@ export type { RunActor } from './operations/run-authorization';
 export { authorizeRunAction, RunActionForbiddenError } from './operations/run-authorization';
 
 export { processProviderRegistration } from './providers/process-registration';
+
+export { loadProviderPlugins } from './providers/load-provider-plugins';

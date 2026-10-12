@@ -15,7 +15,7 @@ import {
   getUniqueCommitCount,
   isPatchEquivalent,
 } from '@archon/git';
-import { getIsolationProvider } from '@archon/isolation';
+import { getIsolationProvider, readWorktreeCreationId } from '@archon/isolation';
 import {
   removeEnvironment,
   listContainerEnvironments,
@@ -59,6 +59,7 @@ export async function isolationListCommand(): Promise<void> {
       console.log(`  ${env.branch_name ?? env.workflow_id}`);
       console.log(`    Path: ${env.working_path}`);
       console.log(`    Type: ${env.workflow_type} | Platform: ${platform} | Last activity: ${age}`);
+      if (env.cleanupSkipReason) console.log(`    Cleanup skipped: ${env.cleanupSkipReason}`);
     }
   }
 
@@ -99,9 +100,17 @@ export async function isolationListCommand(): Promise<void> {
  */
 export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
   // Reconcile ghosts via the operations layer
-  const { ghostsReconciled } = await listEnvironments();
+  const { ghostsReconciled, codebases } = await listEnvironments();
   if (ghostsReconciled > 0) {
     console.log(`Reconciled ${String(ghostsReconciled)} ghost environment(s) (missing from disk).`);
+  }
+
+  for (const codebase of codebases) {
+    for (const env of codebase.environments) {
+      if (env.cleanupSkipReason) {
+        console.log(`Skipped: ${env.branch_name ?? env.workflow_id} (${env.cleanupSkipReason})`);
+      }
+    }
   }
 
   console.log(`Finding environments with no activity for ${String(daysStale)}+ days...`);
@@ -139,11 +148,17 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
     }
 
     try {
-      await provider.destroy(env.working_path, {
+      const result = await provider.destroy(env.working_path, {
         branchName: env.branch_name ? toBranchName(env.branch_name) : undefined,
         canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
+        creationId: readWorktreeCreationId(env.metadata) ?? undefined,
       });
 
+      if (!result.worktreeRemoved || !result.directoryClean) {
+        throw new Error(
+          `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
+        );
+      }
       await isolationDb.updateStatus(env.id, 'destroyed');
       console.log('  Status: Cleaned');
       cleaned++;

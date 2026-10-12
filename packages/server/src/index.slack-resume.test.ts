@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, writeFile, unlink } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import {
   clearPlatformPolicies,
   retainsWorkspace,
@@ -8,6 +12,10 @@ import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowResumeTarget } from './services/workflow-resume-service';
+import { providerCapabilitiesSchema, type ProviderRegistration } from '@archon/provider-contract';
+
+let pluginsDir: string;
+let expectedSlackRetention: 'age-based' | 'retain' = 'age-based';
 
 type SlackWorkflowResume = (runId: string, slackUserId: string) => Promise<boolean>;
 
@@ -118,7 +126,31 @@ mock.module('@archon/paths/cli-command', () => ({
 }));
 const mockRegisterBuiltinProviders = mock((): void => undefined);
 const mockRegisterCommunityProviders = mock((): void => undefined);
+const mockRegisterProvider = mock((_registration: ProviderRegistration): void => undefined);
+const installedProvider: ProviderRegistration = {
+  id: 'installed-provider',
+  displayName: 'Installed provider',
+  builtIn: false,
+  capabilities: providerCapabilitiesSchema.parse({
+    ...Object.fromEntries(Object.keys(providerCapabilitiesSchema.shape).map(key => [key, false])),
+    backgroundWork: 'none',
+    sessionFork: undefined,
+    knownToolNames: undefined,
+    renamedTools: undefined,
+  }),
+  credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
+  parseConfig: raw => raw,
+  factory: () => {
+    throw new Error('Boot must not spawn the installed provider');
+  },
+};
+const mockLoadProviderPlugins = mock(
+  async (_pluginsDir: string): Promise<ProviderRegistration[]> => [installedProvider]
+);
 mock.module('@archon/providers', () => ({
+  registerProvider: mockRegisterProvider,
+}));
+mock.module('@archon/providers/in-process', () => ({
   claimPiExtensionProcessError: (): boolean => false,
   registerBuiltinProviders: mockRegisterBuiltinProviders,
   registerCommunityProviders: mockRegisterCommunityProviders,
@@ -155,6 +187,7 @@ const logger: TestLogger = {
 mock.module('@archon/paths', () => ({
   BUNDLED_IS_BINARY: false,
   getArchonEnvPath: (): string => '/tmp/.archon/.env',
+  getPluginsPath: (): string => pluginsDir,
   createLogger: (): typeof logger => logger,
   logArchonPaths: (): void => undefined,
   validateAppDefaultsPaths: async (): Promise<void> => undefined,
@@ -177,7 +210,13 @@ class MockConversationLockManager {
 }
 
 mock.module('@archon/core', () => ({
-  getVendorCatalog: (): object => ({}),
+  loadProviderPlugins: mockLoadProviderPlugins,
+  getVendorCatalog: (): object => {
+    expect(mockLoadProviderPlugins).toHaveBeenCalledWith(pluginsDir);
+    expect(mockRegisterProvider).toHaveBeenCalledTimes(1);
+    expect(mockRegisterProvider.mock.calls[0]?.[0]).toBe(installedProvider);
+    return {};
+  },
   handleMessage: async (): Promise<void> => undefined,
   pool: {
     query: async (): Promise<object> => ({}),
@@ -195,7 +234,10 @@ mock.module('@archon/core', () => ({
       getRegisteredPlatformPolicies()
         .map(policy => policy.id)
         .sort()
-    ).toEqual(['discord', 'slack', 'telegram']);
+    ).toEqual(['api', 'cli', 'discord', 'gitea', 'github', 'gitlab', 'slack', 'telegram', 'web']);
+    expect(
+      getRegisteredPlatformPolicies().find(policy => policy.id === 'slack')?.workspaceRetention
+    ).toBe(expectedSlackRetention);
     return { botName: 'Archon' };
   },
   logConfig: (): void => undefined,
@@ -352,7 +394,8 @@ const originalListeners = new Map(
   processEvents.map(event => [event, new Set(processEmitter.listeners(event))] as const)
 );
 
-beforeAll(() => {
+beforeAll(async () => {
+  pluginsDir = await mkdtemp(join(tmpdir(), 'server-chat-policies-'));
   for (const key of envKeys) delete process.env[key];
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
   process.env.HOST = '127.0.0.1';
@@ -361,7 +404,8 @@ beforeAll(() => {
   process.env.WEB_UI_DEV = '1';
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await removeTempTree(pluginsDir);
   for (const [key, value] of originalEnv) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -390,6 +434,59 @@ describe('Slack workflow resume composition', () => {
       expect(retainsWorkspace('telegram')).toBe(true);
     } finally {
       serveSpy.mockRestore();
+    }
+  });
+
+  test('server reads a chat receipt before config loading and supersedes its bundled policy', async () => {
+    const file = join(pluginsDir, 'installed', 'owner', 'chat-fixture', 'receipt.json');
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: 'owner/chat-fixture',
+        manifest: {
+          schemaVersion: 1,
+          kind: 'chat',
+          name: 'fixture',
+          description: 'Fixture',
+          executable: 'archon-chat-fixture',
+        },
+        tag: 'v1',
+        commit: 'a'.repeat(40),
+        installedAt: new Date(0).toISOString(),
+        files: [{ path: 'archon-chat-fixture', sha256: 'b'.repeat(64) }],
+        descriptor: {
+          protocol: 'archon-chat/1',
+          id: 'slack',
+          displayName: 'Fixture',
+          version: '1',
+          capabilities: { defaultWorkflowDispatch: 'background' },
+          policy: {
+            workspaceRetention: 'retain',
+            streaming: { defaultMode: 'stream', envVar: 'FIXTURE_STREAMING_MODE' },
+          },
+        },
+      })
+    );
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 12345,
+    })) as unknown as typeof Bun.serve);
+    try {
+      const { startServer } = await import('./index');
+      expectedSlackRetention = 'retain';
+      await startServer({ port: 12345, skipPlatformAdapters: true });
+      expect(getRegisteredPlatformPolicies().filter(policy => policy.id === 'slack')).toEqual([
+        {
+          id: 'slack',
+          workspaceRetention: 'retain',
+          streaming: { defaultMode: 'stream', envVar: 'FIXTURE_STREAMING_MODE' },
+        },
+      ]);
+    } finally {
+      serveSpy.mockRestore();
+      await unlink(file);
+      expectedSlackRetention = 'age-based';
     }
   });
 

@@ -9,12 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { removeTempTree } from '@archon/paths/test-utils';
-import {
-  getRegistration,
-  isRegisteredProvider,
-  registerBuiltinProviders,
-  registerProvider,
-} from '@archon/providers';
+import { getRegistration, isRegisteredProvider, registerProvider } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { MessageChunk, ProviderAdmissionEvent, SendQueryOptions } from '@archon/providers';
 import { closeDatabase, getDatabase, resetDatabase } from '../db/connection';
 import { SqliteAdapter } from '../db/adapters/sqlite';
@@ -24,7 +20,7 @@ import {
   releaseProviderAttemptHolder,
   tryAdmitProviderAttempt,
 } from '../db/provider-attempts';
-import { currentProcessOwner } from '../db/process-owner';
+import { currentProcessOwner } from '@archon/paths/process-owner';
 import { ProviderConcurrencyConfigError } from '../config/provider-concurrency';
 import { getAgentProvider, ProviderAdmissionAbortedError } from './provider-admission';
 
@@ -423,7 +419,7 @@ describe('cross-process admission', () => {
     // Prime the schema once so the children only contend for the slot.
     await getDatabase().query('SELECT 1');
     const script = `
-      import { registerBuiltinProviders } from './packages/providers/src/index.ts';
+      import { registerBuiltinProviders } from './packages/providers/src/in-process.ts';
       import { tryAdmitProviderAttempt, releaseProviderAttempt } from './packages/core/src/db/provider-attempts.ts';
       registerBuiltinProviders();
       const id = crypto.randomUUID();

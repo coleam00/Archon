@@ -1,3 +1,9 @@
+import {
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+  toolCallAttentionArraySchema,
+  type ToolCallAttention,
+} from '@archon/workflows/schemas/workflow-run';
+import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 /**
  * Database operations for workflow runs
@@ -1101,6 +1107,7 @@ export async function resumeWorkflowRun(
       const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
       const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
       const metadataPatch = {
+        [TOOL_CALL_ATTENTION_METADATA_KEY]: null,
         error: null,
         [RUN_STOP_REASON_METADATA_KEY]: null,
         continuation_retry_at: null,
@@ -1221,11 +1228,15 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
              completed_at = NULL,
              started_at = ${dialect.now()},
              last_activity_at = ${dialect.now()},
-             metadata = ${metadataWithoutCancelledReason}
+             metadata = ${dialect.jsonMerge(metadataWithoutCancelledReason, 5)}
          WHERE id = $1
            AND status = 'cancelled'
            AND ${cancelledReason} IN ($2, $3, $4)`,
-        [id, ...FAN_OUT_CANCEL_REASONS]
+        [
+          id,
+          ...FAN_OUT_CANCEL_REASONS,
+          JSON.stringify({ [TOOL_CALL_ATTENTION_METADATA_KEY]: null }),
+        ]
       );
       if ((result.rowCount ?? 0) === 0) {
         throw new Error(`Workflow run is not an engine-cancelled fan-out child (id: ${id})`);
@@ -1275,6 +1286,56 @@ export async function getWorkflowRunByWorkerPlatformId(
     getLog().error({ err }, 'db.workflow_run_get_by_worker_platform_id_failed');
     throw new Error(`Failed to get workflow run by worker platform ID: ${err.message}`);
   }
+}
+
+export async function setToolCallAttention(
+  runId: string,
+  streamId: string,
+  calls: ToolCallAttention[]
+): Promise<boolean> {
+  const snapshot = toolCallAttentionArraySchema.parse(calls);
+  if (snapshot.some(call => call.streamId !== streamId))
+    throw new Error('Tool attention stream mismatch');
+  const dialect = getDialect();
+  const changed = await getDatabase().withTransaction(async query => {
+    if (getDatabaseType() === 'sqlite') {
+      await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [runId]);
+    }
+    const result = await query<{ status: string; metadata: unknown }>(
+      `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+      [runId]
+    );
+    const row = result.rows[0];
+    if (row?.status !== 'running') return false;
+    const metadata = normalizeMetadata(row.metadata);
+    const previous = toolCallAttentionArraySchema.parse(
+      metadata[TOOL_CALL_ATTENTION_METADATA_KEY] ?? []
+    );
+    const own = previous.filter(call => call.streamId === streamId);
+    if (JSON.stringify(own) === JSON.stringify(snapshot)) return false;
+    const combined = [...previous.filter(call => call.streamId !== streamId), ...snapshot];
+    await query(
+      `UPDATE remote_agent_workflow_runs SET metadata = ${dialect.jsonMerge('metadata', 2)} WHERE id = $1`,
+      [
+        runId,
+        JSON.stringify({ [TOOL_CALL_ATTENTION_METADATA_KEY]: combined.length ? combined : null }),
+      ]
+    );
+    await insertWorkflowEvent(query, {
+      workflow_run_id: runId,
+      event_type: 'run_attention_changed',
+      data: { streamId, hasAttention: snapshot.length > 0 },
+    });
+    return true;
+  });
+  if (changed)
+    getWorkflowEventEmitter().emit({
+      type: 'run_attention_changed',
+      runId,
+      streamId,
+      hasAttention: snapshot.length > 0,
+    });
+  return changed;
 }
 
 /**

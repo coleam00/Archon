@@ -1,13 +1,8 @@
-import type { PiExtensionPosture } from '@archon/provider-contract';
+import { snapshotConfigSchema, type PiExtensionPosture } from '@archon/provider-contract';
 import type { PiProviderDefaults, ProviderConfigScope } from '../../types';
-import { InvalidProviderRunConfigError } from '@archon/provider-contract';
-import {
-  assertKnownRunConfigKeys,
-  invalidRunConfigValue,
-  isConfigRecord,
-  normalizeRunConfigString,
-} from '../../shared/run-config';
-import { parsePiModelRef } from './model-ref';
+import { z } from 'zod';
+import { parseConfigSchema } from '../../shared/run-config';
+import { piModelRefSchema } from './model-ref';
 
 export type { PiProviderDefaults };
 
@@ -166,99 +161,37 @@ export function parsePiConfig(raw: Record<string, unknown>): ParsedPiConfig {
   return result;
 }
 
-function validateExtensionPosture(raw: Record<string, unknown>, path = ''): void {
-  assertKnownRunConfigKeys(raw, ['enableExtensions', 'interactive', 'extensionFlags']);
-  for (const key of ['enableExtensions', 'interactive'] as const) {
-    if (raw[key] !== undefined && typeof raw[key] !== 'boolean') {
-      invalidRunConfigValue(`${path}${key}`, 'a boolean');
-    }
-  }
-  if (raw.extensionFlags !== undefined) {
-    if (!isConfigRecord(raw.extensionFlags)) {
-      invalidRunConfigValue(`${path}extensionFlags`, 'an object of boolean or string values');
-    }
-    for (const [key, value] of Object.entries(raw.extensionFlags)) {
-      if (typeof value !== 'boolean' && typeof value !== 'string') {
-        invalidRunConfigValue(`${path}extensionFlags.${key}`, 'a boolean or string');
-      }
-    }
-  }
-}
+const extensionFields = {
+  enableExtensions: z.boolean().optional(),
+  interactive: z.boolean().optional(),
+  extensionFlags: z.record(z.string(), z.union([z.boolean(), z.string()])).optional(),
+};
+const portableFields = {
+  model: piModelRefSchema.optional(),
+  ...extensionFields,
+  nodes: z.record(z.string(), z.strictObject(extensionFields)).optional(),
+};
+const processFields = {
+  env: z.record(z.string(), z.string()).optional(),
+  maxConcurrent: z.number().int().positive().optional(),
+};
+export const configSchemas = {
+  install: z.strictObject({ ...portableFields, ...processFields }),
+  run: z.strictObject({
+    ...portableFields,
+    env: z
+      .never({ error: 'Pi extension environment mutates process.env and is process-scoped' })
+      .optional(),
+    maxConcurrent: z
+      .never({ error: 'Pi concurrency is initialized once for the process lifetime' })
+      .optional(),
+  }),
+  snapshot: snapshotConfigSchema(portableFields, processFields),
+};
 
-/**
- * Settings whose consumer owns process-lifetime state: `env` writes into
- * `process.env` at session start and `maxConcurrent` sizes a gate initialized
- * once per process. Both are honoured from `.archon/config.yaml`; neither can be
- * re-decided for a single run.
- */
-const PROCESS_SCOPED_SETTINGS = {
-  env: 'Pi extension environment mutates process.env and is process-scoped',
-  maxConcurrent: 'Pi concurrency is initialized once for the process lifetime',
-} as const;
-
-/** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
 export function parsePiConfigStrict(
   raw: Record<string, unknown>,
   scope: ProviderConfigScope
 ): ParsedPiConfig {
-  assertKnownRunConfigKeys(raw, [
-    'model',
-    'enableExtensions',
-    'interactive',
-    'extensionFlags',
-    'nodes',
-    ...Object.keys(PROCESS_SCOPED_SETTINGS),
-  ]);
-  if (scope === 'run') {
-    for (const [key, reason] of Object.entries(PROCESS_SCOPED_SETTINGS)) {
-      if (Object.hasOwn(raw, key)) throw new InvalidProviderRunConfigError(key, reason);
-    }
-  }
-  if (raw.env !== undefined) {
-    if (!isConfigRecord(raw.env)) invalidRunConfigValue('env', 'an object of string values');
-    for (const [name, value] of Object.entries(raw.env)) {
-      if (typeof value !== 'string') invalidRunConfigValue(`env.${name}`, 'a string');
-    }
-  }
-  if (
-    raw.maxConcurrent !== undefined &&
-    (typeof raw.maxConcurrent !== 'number' ||
-      !Number.isInteger(raw.maxConcurrent) ||
-      raw.maxConcurrent <= 0)
-  ) {
-    invalidRunConfigValue('maxConcurrent', 'a positive integer');
-  }
-  let model = normalizeRunConfigString(raw.model, 'model');
-  if (model !== undefined) {
-    const parsedModel = parsePiModelRef(model);
-    if (parsedModel === undefined) {
-      invalidRunConfigValue('model', "a Pi vendor/model reference such as 'minimax/minimax-m3'");
-    }
-    model = `${parsedModel.provider}/${parsedModel.modelId}`;
-  }
-  validateExtensionPosture(
-    Object.fromEntries(
-      ['enableExtensions', 'interactive', 'extensionFlags']
-        .filter(key => Object.hasOwn(raw, key))
-        .map(key => [key, raw[key]])
-    )
-  );
-  if (raw.nodes !== undefined) {
-    if (!isConfigRecord(raw.nodes)) {
-      invalidRunConfigValue('nodes', 'an object of per-node settings');
-    }
-    for (const [nodeId, value] of Object.entries(raw.nodes)) {
-      if (!isConfigRecord(value)) {
-        invalidRunConfigValue(`nodes.${nodeId}`, 'an object');
-      }
-      validateExtensionPosture(value, `nodes.${nodeId}.`);
-    }
-  }
-  const parsed = parsePiConfig(raw);
-  if (scope === 'snapshot') {
-    for (const key of Object.keys(parsed)) {
-      if (Object.hasOwn(PROCESS_SCOPED_SETTINGS, key)) Reflect.deleteProperty(parsed, key);
-    }
-  }
-  return model === undefined ? parsed : { ...parsed, model };
+  return parseConfigSchema(configSchemas[scope], raw);
 }

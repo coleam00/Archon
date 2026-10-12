@@ -4,11 +4,15 @@
  *
  * The CLI installer, workflow discovery, the docs-site index and the release
  * workflow all need these shapes and names, and none of those can import
- * another, so they live in this leaf package with no dependency beyond zod.
+ * another, so they share this package. Descriptors are owned by the corresponding
+ * provider or chat contract.
  * Reading receipts from disk lives in `./store`, so a consumer that only
  * needs the schemas does not load filesystem code.
  */
 import { z } from 'zod';
+import { chatPluginDescriptorSchema } from '@archon/chat-contract/descriptor';
+import { releaseAsset } from '@archon/paths/release-asset';
+import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
 
 export const PLUGIN_MANIFEST_FILE = 'archon-plugin.json';
 
@@ -35,7 +39,7 @@ const versionRange = z
     'must be a semver range such as >=0.11.0'
   );
 
-// A kind joins this schema when its install path and runtime contract exist.
+// A kind joins this schema when its install path and wire contract exist.
 // Until then its manifest is rejected, rather than accepted and half-installed.
 const manifestBase = {
   schemaVersion: z.literal(1),
@@ -44,6 +48,26 @@ const manifestBase = {
   // A semver range checked against the running Archon at install time.
   compatibility: z.object({ archon: versionRange }).strict().optional(),
 };
+
+export const providerManifestSchema = z
+  .object({
+    ...manifestBase,
+    kind: z.literal('provider'),
+    executable: z
+      .string()
+      .regex(/^archon-provider-[a-z0-9]+(?:-[a-z0-9]+)*$/, 'must be archon-provider-<name>'),
+  })
+  .strict();
+
+export const chatManifestSchema = z
+  .object({
+    ...manifestBase,
+    kind: z.literal('chat'),
+    executable: z
+      .string()
+      .regex(/^archon-chat-[a-z0-9]+(?:-[a-z0-9]+)*$/, 'must be archon-chat-<name>'),
+  })
+  .strict();
 
 export const forgeManifestSchema = z
   .object({ ...manifestBase, kind: z.literal('forge'), executable: forgeExecutable })
@@ -86,9 +110,13 @@ export const workflowPackManifestSchema = z
 
 export const pluginManifestSchema = z.discriminatedUnion('kind', [
   forgeManifestSchema,
+  providerManifestSchema,
+  chatManifestSchema,
   workflowPackManifestSchema,
 ]);
 
+export type ChatManifest = z.infer<typeof chatManifestSchema>;
+export type ProviderManifest = z.infer<typeof providerManifestSchema>;
 export type ForgeManifest = z.infer<typeof forgeManifestSchema>;
 export type WorkflowPackManifest = z.infer<typeof workflowPackManifestSchema>;
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;
@@ -126,6 +154,16 @@ export const forgeReceiptSchema = z
   })
   .strict();
 
+export const providerReceiptSchema = forgeReceiptSchema.extend({
+  manifest: providerManifestSchema,
+  descriptor: providerPluginDescriptorSchema,
+});
+
+export const chatReceiptSchema = forgeReceiptSchema.extend({
+  manifest: chatManifestSchema,
+  descriptor: chatPluginDescriptorSchema,
+});
+
 /**
  * A pack's files live in one tree the installer owns outright (see
  * `packTreePath` in `./store`), so the receipt names the commit instead of a
@@ -143,8 +181,15 @@ export const workflowPackReceiptSchema = z
   })
   .strict();
 
-export const pluginReceiptSchema = z.union([forgeReceiptSchema, workflowPackReceiptSchema]);
+export const pluginReceiptSchema = z.union([
+  forgeReceiptSchema,
+  providerReceiptSchema,
+  chatReceiptSchema,
+  workflowPackReceiptSchema,
+]);
 
+export type ChatReceipt = z.infer<typeof chatReceiptSchema>;
+export type ProviderReceipt = z.infer<typeof providerReceiptSchema>;
 export type ForgeReceipt = z.infer<typeof forgeReceiptSchema>;
 export type WorkflowPackReceipt = z.infer<typeof workflowPackReceiptSchema>;
 export type PluginReceipt = z.infer<typeof pluginReceiptSchema>;
@@ -152,6 +197,20 @@ export type PluginReceipt = z.infer<typeof pluginReceiptSchema>;
 /** Narrows on the manifest's kind, which TypeScript cannot do through a nested field. */
 export function isForgeReceipt(receipt: PluginReceipt): receipt is ForgeReceipt {
   return receipt.manifest.kind === 'forge';
+}
+
+export function isProviderReceipt(receipt: PluginReceipt): receipt is ProviderReceipt {
+  return receipt.manifest.kind === 'provider';
+}
+
+export function isChatReceipt(receipt: PluginReceipt): receipt is ChatReceipt {
+  return receipt.manifest.kind === 'chat';
+}
+
+export function isBinaryReceipt(
+  receipt: PluginReceipt
+): receipt is ForgeReceipt | ProviderReceipt | ChatReceipt {
+  return isForgeReceipt(receipt) || isProviderReceipt(receipt) || isChatReceipt(receipt);
 }
 
 /** One line naming every failed field, for install and discovery errors. */
@@ -162,13 +221,11 @@ export function describeIssues(error: z.ZodError): string {
 }
 
 /**
- * The release asset a forge executable is published as for one Bun compile
+ * The release asset a plugin executable is published as for one Bun compile
  * target (`bun-<os>-<arch>`), e.g. `archon-forge-github-windows-x64.exe`.
  * release.yml names the asset with this and the installer requests it, so the
  * two cannot drift.
  */
-export function forgeReleaseAsset(executable: string, bunTarget: string): string {
-  const match = /^bun-(darwin|linux|windows)-(x64|arm64)$/.exec(bunTarget);
-  if (!match) throw new Error(`No forge plugin release asset is built for ${bunTarget}`);
-  return `${executable}-${match[1]}-${match[2]}${match[1] === 'windows' ? '.exe' : ''}`;
+export function pluginReleaseAsset(executable: string, bunTarget: string): string {
+  return releaseAsset(executable, bunTarget);
 }

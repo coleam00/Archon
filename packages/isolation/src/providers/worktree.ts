@@ -5,7 +5,7 @@
  */
 
 import { createHash, randomUUID } from 'crypto';
-import { access, chmod, readdir, readFile, writeFile, rm, stat } from 'fs/promises';
+import { access, lstat, chmod, readdir, readFile, writeFile, rm, stat } from 'fs/promises';
 import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 
 import { createLogger } from '@archon/paths';
@@ -282,11 +282,12 @@ export class WorktreeProvider implements IIsolationProvider {
    * @param options - Cleanup options:
    *   - force: Force removal even with uncommitted changes
    *   - branchName: Delete the associated branch after worktree removal
-   *   - canonicalRepoPath: Required for branch cleanup if worktree path doesn't exist
+   *   - canonicalRepoPath: Expected repository, required for present-checkout removal
+   *   - creationId: Expected creation proof for ordinary present-checkout removal
    *
    * Cleanup behavior:
-   * - Worktree removal: Best-effort, continues if already removed
-   * - Directory cleanup: Best-effort, logs but doesn't fail if directory persists
+   * - Present checkout: requires repository registration and matching creation proof
+   * - Git removal failures propagate; surviving directories are retained and reported
    * - Branch deletion: Best-effort, logs but doesn't fail
    *
    * **IMPORTANT: Branch cleanup limitation**
@@ -296,7 +297,7 @@ export class WorktreeProvider implements IIsolationProvider {
    * To ensure branch cleanup when the worktree may already be removed,
    * always provide `canonicalRepoPath`.
    *
-   * Throws only for unexpected errors (permissions, git failures).
+   * Throws on unproven ownership, permissions, and Git removal failures.
    */
   async destroy(envId: string, options?: WorktreeDestroyOptions): Promise<DestroyResult> {
     const worktreePath = envId;
@@ -307,11 +308,7 @@ export class WorktreeProvider implements IIsolationProvider {
         );
       }
       const path = toWorktreePath(worktreePath);
-      await verifyWorktreeOwnership(path, options.canonicalRepoPath);
-      const identity = await getGitCheckoutIdentity(worktreePath);
-      const marker = await readFile(join(identity.gitDir, CREATION_MARKER), 'utf8');
-      if (marker !== options.guardedRemoval.creationId)
-        throw new Error('Worktree creation identity changed');
+      await this.verifyCreation(path, options.canonicalRepoPath, options.guardedRemoval.creationId);
       // `lock` fails on an already locked worktree, so an operator's lock or an
       // unfinished setup refuses release. Adoption refuses this lock, so no new
       // run can pick the checkout up while beforeRemove checks for claimants.
@@ -367,20 +364,36 @@ export class WorktreeProvider implements IIsolationProvider {
       warnings: [],
     };
 
-    // Check if worktree path exists before attempting removal (optimization to avoid spawning git)
-    const pathExists = await this.directoryExists(worktreePath);
+    // Filesystem presence is distinct from a valid Git checkout: replacements must be retained.
+    const pathExists = await this.pathExists(worktreePath);
     if (!pathExists) {
       getLog().debug({ worktreePath }, 'worktree_path_already_removed');
       result.worktreeRemoved = true; // Already gone counts as removed
       result.directoryClean = true;
     }
 
-    // Get canonical repo path - use provided path or derive from worktree
+    if (pathExists) {
+      if (!options?.canonicalRepoPath || !options.creationId) {
+        throw new Error(
+          `Cannot verify worktree ownership at ${worktreePath}: canonical repository and creation proof are required; retained for operator inspection`
+        );
+      }
+      await this.verifyCreation(
+        toWorktreePath(worktreePath),
+        options.canonicalRepoPath,
+        options.creationId
+      );
+      if (!(await isWorktreeRegistered(options.canonicalRepoPath, worktreePath))) {
+        throw new Error(
+          `Cannot verify worktree ownership at ${worktreePath}: not registered with the expected repository`
+        );
+      }
+    }
+
+    // A present checkout has already required an independently supplied repository.
     let repoPath: string;
     if (options?.canonicalRepoPath) {
       repoPath = (await getGitCommandAnchors(options.canonicalRepoPath)).durable;
-    } else if (pathExists) {
-      repoPath = (await getGitCommandAnchors(worktreePath)).durable;
     } else {
       // Path doesn't exist and no canonicalRepoPath provided - can't clean up branch
       // This is expected when worktree was already fully cleaned up externally
@@ -404,35 +417,13 @@ export class WorktreeProvider implements IIsolationProvider {
       }
       gitArgs.push(worktreePath);
 
-      try {
-        await execFileAsync('git', gitArgs, { timeout: GIT_OPERATION_TIMEOUT_MS });
-        result.worktreeRemoved = true;
-      } catch (error) {
-        if (!this.isWorktreeMissingError(error)) {
-          throw error;
-        }
-        getLog().debug({ worktreePath }, 'worktree_already_removed');
-        result.worktreeRemoved = true;
-        // Continue to branch deletion below - branch may still exist
-      }
-
-      // Ensure directory is fully removed (git may leave untracked files like .archon/)
-      const dirExists = await this.directoryExists(worktreePath);
-      if (dirExists) {
-        getLog().debug({ worktreePath }, 'cleaning_remaining_directory');
-        try {
-          await rm(worktreePath, { recursive: true, force: true });
-          getLog().debug({ worktreePath }, 'remaining_directory_cleaned');
-          result.directoryClean = true;
-        } catch (error) {
-          const err = error as NodeJS.ErrnoException;
-          const warning = `Failed to clean remaining directory at ${worktreePath}: ${err.message}`;
-          getLog().error({ err: error, worktreePath }, 'remaining_directory_cleanup_failed');
-          result.warnings.push(warning);
-          // directoryClean stays false
-        }
-      } else {
-        result.directoryClean = true;
+      await execFileAsync('git', gitArgs, { timeout: GIT_OPERATION_TIMEOUT_MS });
+      result.worktreeRemoved = true;
+      result.directoryClean = !(await this.pathExists(worktreePath));
+      if (!result.directoryClean) {
+        result.warnings.push(
+          `Retained directory at ${worktreePath}: Git removal left a path on disk; inspect it before removing it manually`
+        );
       }
     }
 
@@ -462,6 +453,8 @@ export class WorktreeProvider implements IIsolationProvider {
       }
     }
 
+    if (!result.worktreeRemoved || !result.directoryClean) return result;
+
     // Delete associated branch if provided (best-effort cleanup)
     if (options?.branchName) {
       result.branchDeleted = await this.deleteBranchTracked(repoPath, options.branchName, result);
@@ -480,18 +473,31 @@ export class WorktreeProvider implements IIsolationProvider {
     return result;
   }
 
-  /**
-   * Check if an error indicates the worktree path is missing.
-   * Checks both message and stderr for robustness across git versions/locales.
-   */
-  private isWorktreeMissingError(error: unknown): boolean {
-    const err = error as Error & { stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`;
-    return (
-      errorText.includes('No such file or directory') ||
-      errorText.includes('does not exist') ||
-      errorText.includes('is not a working tree')
-    );
+  private async verifyCreation(
+    path: WorktreePath,
+    repo: RepoPath,
+    creationId: string
+  ): Promise<void> {
+    try {
+      await verifyWorktreeOwnership(path, repo);
+      const identity = await getGitCheckoutIdentity(path);
+      const marker = await readFile(join(identity.gitDir, CREATION_MARKER), 'utf8');
+      if (marker !== creationId) throw new Error('Worktree creation identity changed');
+    } catch (error) {
+      throw new Error(`Cannot verify worktree ownership at ${path}: ${(error as Error).message}`, {
+        cause: error,
+      });
+    }
+  }
+
+  private async pathExists(path: string): Promise<boolean> {
+    try {
+      await lstat(path);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
   }
 
   /**

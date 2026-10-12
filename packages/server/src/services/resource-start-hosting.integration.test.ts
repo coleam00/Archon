@@ -1,6 +1,9 @@
+import { randomUUID } from 'node:crypto';
+import { getOrCreateConversation } from '@archon/core/db/conversations';
+import { listMessages } from '@archon/core/db/messages';
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { execFileSync } from 'node:child_process';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import { saveUserProviderKey } from '@archon/core/db/user-provider-key-store';
 import { getWorkflowRun } from '@archon/core/db/workflows';
 import { execFileAsync } from '@archon/git';
@@ -15,7 +18,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
-import { getConversationById } from '@archon/core/db/conversations';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { registerFolder, registerRepository } from '@archon/core';
 import { updateCodebase, findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
@@ -190,11 +192,15 @@ async function fixture(
   );
 
   const engine = recordingEngine();
-  const host = createServerResourceStartHost(HOST_ID, engine);
+  const workflowHost = { ...createSqlWorkflowHost(), engine };
+  const host = createServerResourceStartHost(HOST_ID, workflowHost);
   const app = new OpenAPIHono();
   registerWebhookSourceRoutes(
     app,
-    await loadWebhookSourcePlugins(configPath),
+    await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt: input => workflowHost.deps.store.acceptStartReceipt(input),
+      isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
+    }),
     autoDrain ? (): void => void host.requestDrain() : undefined
   );
   return {
@@ -250,6 +256,79 @@ afterEach(async () => {
 });
 
 describe('server resource-start host', () => {
+  test('a version-1 queued launch delivers output and metadata to its real conversation', async () => {
+    const { deliver } = await fixture(false);
+    expect((await deliver('blocker', 'queue')).status).toBe(200);
+    const blockerId = await admitWithoutStarting();
+    const sqlHost = createSqlWorkflowHost();
+    const blocker = await sqlHost.deps.store.getResourceStartRequest(blockerId);
+    if (!blocker) throw new Error('Missing blocker');
+    const conversation = await getOrCreateConversation('cli', 'legacy-thread');
+    const id = randomUUID();
+    const launch = {
+      ...blocker.launch,
+      run: {
+        ...blocker.launch.run,
+        id,
+        origin: { conversationId: conversation.id, userId: USER_ID },
+      },
+    };
+    expect(
+      (
+        await sqlHost.deps.store.admitResourceStart({
+          resource: blocker.resource,
+          capacity: 1,
+          hostId: HOST_ID,
+          overlap: 'queue',
+          launch,
+        })
+      ).status
+    ).toBe('queued');
+    const { origin: _origin, ...run } = launch.run;
+    await getDatabase().query(
+      'UPDATE remote_agent_resource_start_requests SET launch = $1 WHERE id = $2',
+      [
+        JSON.stringify({
+          version: 1,
+          run: { ...run, conversation_id: conversation.id, user_id: USER_ID },
+          execution: launch.execution,
+        }),
+        id,
+      ]
+    );
+    await sqlHost.deps.store.claimPendingWorkflowRun(blockerId);
+    await sqlHost.deps.store.completeWorkflowRun(blockerId, { duration_ms: 1 });
+    const engine = recordingEngine();
+    let delivered = false;
+    const host = createServerResourceStartHost(HOST_ID, {
+      ...sqlHost,
+      engine: {
+        ...engine,
+        async submit(input) {
+          const result = await engine.submit(input);
+          expect(input.origin).toEqual({ conversationId: conversation.id, userId: USER_ID });
+          await input.platform.sendMessage(input.conversationId, 'Legacy output', {
+            category: 'workflow_status',
+            segment: 'new',
+          });
+          delivered = true;
+          return result;
+        },
+      },
+    });
+    await host.requestDrain();
+    await until(() => (delivered ? true : undefined));
+    expect(engine.claimed).toEqual([id]);
+    const messages = await listMessages(conversation.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      conversation_id: conversation.id,
+      role: 'assistant',
+      content: 'Legacy output',
+    });
+    expect(JSON.parse(messages[0].metadata)).toEqual({ category: 'workflow_status' });
+  });
+
   test('a webhook receipt is prepared, admitted and started through the engine port', async () => {
     const { deliver, engine } = await fixture();
     await writeFile(join(root, 'home', 'config.yaml'), 'defaultAssistant: pi\n');
@@ -264,11 +343,8 @@ describe('server resource-start host', () => {
     expect(submitted.options?.preCreatedRun?.id).toBe(runId);
     expect(submitted.options?.preCreatedRun?.status).toBe('pending');
     const run = submitted.options?.preCreatedRun;
-    if (!run?.conversation_id) throw new Error('Missing prepared run conversation');
-    expect(await getConversationById(run.conversation_id)).toMatchObject({
-      codebase_id: run.codebase_id,
-      ai_assistant_type: 'codex',
-    });
+    expect(run?.conversation_id).toBeNull();
+    expect(run?.origin).toEqual({ userId: USER_ID });
     expect(submitted.workflow.name).toBe('hosted');
     // Provenance is data on the run, not prose in the user message.
     expect(submitted.userMessage).toBe('');
@@ -447,6 +523,7 @@ describe('server resource-start host', () => {
     expect((await deliver('dead', 'queue')).status).toBe(200);
     const admitted: string[] = [];
     await drainResourceStartHost({
+      ...createSqlWorkflowHost(),
       hostId: HOST_ID,
       startAdmitted: async id => {
         admitted.push(id);
@@ -455,7 +532,7 @@ describe('server resource-start host', () => {
     const result = await startAdmittedResourceStart({
       requestId: admitted[0],
       hostId: HOST_ID,
-      engine,
+      host: { ...createSqlWorkflowHost(), engine },
       createPlatform: () => new HeadlessPlatform(),
     });
     expect(result.success).toBe(false);
@@ -471,6 +548,7 @@ describe('server resource-start host', () => {
     ).toBe(before);
     expect((await deliver('next', 'queue')).status).toBe(200);
     await drainResourceStartHost({
+      ...createSqlWorkflowHost(),
       hostId: HOST_ID,
       startAdmitted: async id => {
         admitted.push(id);
@@ -485,6 +563,7 @@ describe('server resource-start host', () => {
     // Admit without starting, so both starters race for the same pending run.
     const admitted: string[] = [];
     await drainResourceStartHost({
+      ...createSqlWorkflowHost(),
       hostId: HOST_ID,
       startAdmitted: async requestId => {
         admitted.push(requestId);
@@ -496,7 +575,7 @@ describe('server resource-start host', () => {
       startAdmittedResourceStart({
         requestId,
         hostId: HOST_ID,
-        engine,
+        host: { ...createSqlWorkflowHost(), engine },
         createPlatform: () => new HeadlessPlatform(),
       });
 
@@ -522,7 +601,7 @@ describe('server resource-start host', () => {
       startAdmittedResourceStart({
         requestId,
         hostId: HOST_ID,
-        engine: target,
+        host: { ...createSqlWorkflowHost(), engine: target },
         createPlatform: () => new HeadlessPlatform(),
       });
 
@@ -538,11 +617,14 @@ describe('server resource-start host', () => {
     const { deliver } = await fixture(false);
     expect((await deliver('first', 'queue')).status).toBe(200);
     const host = createServerResourceStartHost(HOST_ID, {
-      async submit() {
-        throw new Error('engine unavailable');
-      },
-      async resume() {
-        throw new Error('not used');
+      ...createSqlWorkflowHost(),
+      engine: {
+        async submit() {
+          throw new Error('engine unavailable');
+        },
+        async resume() {
+          throw new Error('not used');
+        },
       },
     });
 
@@ -567,6 +649,7 @@ describe('server resource-start host', () => {
 async function admitWithoutStarting(): Promise<string> {
   const admitted: string[] = [];
   await drainResourceStartHost({
+    ...createSqlWorkflowHost(),
     hostId: HOST_ID,
     startAdmitted: async requestId => {
       admitted.push(requestId);

@@ -298,6 +298,14 @@ function formatRunDetail(run: WorkflowRun): string {
   // AI approver can decide finalize-vs-iterate without parsing prose.
   const rawApproval = run.metadata.approval;
   const attention = runAttention(run);
+  if (attention?.kind === 'stalled_tool_calls') {
+    parts.push('tool calls need attention; work remains running');
+    for (const call of attention.calls)
+      parts.push(
+        `${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)`
+      );
+    parts.push(`inspect with archon workflow logs ${run.id}, or explicitly cancel`);
+  }
   if (attention?.kind === 'action_required') {
     parts.push(`action required: ${attention.message.slice(0, 300)}`);
     parts.push(

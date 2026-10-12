@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { registerBuiltinProviders } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { WorkflowDeps } from './deps';
 
 const root = await mkdtemp(join(tmpdir(), 'archon-live-bundle-'));

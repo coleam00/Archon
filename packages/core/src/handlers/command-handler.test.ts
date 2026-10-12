@@ -20,6 +20,9 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
 import {
   MissingProjectDirectoryError,
+  worktreeRegistrationMetadata,
+  readWorktreeCreationId,
+  type DestroyResult,
   type IsolationEnvironmentRow,
   type IsolationRequest,
   type WorktreeCreationEnvironment,
@@ -384,7 +387,16 @@ const mockIsolationCreate = mock<
     },
   })
 );
-const mockIsolationDestroy = mock(() => Promise.resolve());
+const mockIsolationDestroy = mock(
+  (): Promise<DestroyResult> =>
+    Promise.resolve({
+      worktreeRemoved: true,
+      directoryClean: true,
+      branchDeleted: null,
+      remoteBranchDeleted: null,
+      warnings: [],
+    })
+);
 
 mock.module('../isolation', () => ({
   getIsolationProvider: () => ({
@@ -398,6 +410,8 @@ mock.module('../isolation', () => ({
   }),
 }));
 mock.module('@archon/isolation', () => ({
+  worktreeRegistrationMetadata,
+  readWorktreeCreationId,
   getIsolationProvider: () => ({
     providerType: 'worktree',
     create: mockIsolationCreate,
@@ -447,7 +461,7 @@ mock.module('../services/cleanup-service', () => ({
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupStaleWorktrees: mockCleanupStaleWorktrees,
   getWorktreeStatusBreakdown: mock(() =>
-    Promise.resolve({ total: 0, active: 0, merged: 0, stale: 0 })
+    Promise.resolve({ total: 0, active: 0, merged: 0, stale: 0, activeEnvs: [] })
   ),
 }));
 
@@ -1534,6 +1548,11 @@ describe('CommandHandler', () => {
           expect(result.message).toMatch(/worktrees[\\\/]task-feat-auth/);
           expect(mockUpdateConversation).toHaveBeenCalled();
           expect(mockIsolationCreate).toHaveBeenCalled();
+          expect(mockIsolationEnvDbCreate).toHaveBeenCalledWith(
+            expect.objectContaining({
+              metadata: { worktree_creation_id: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
+            })
+          );
         });
 
         test.each([
@@ -1662,6 +1681,7 @@ describe('CommandHandler', () => {
           workflow_id: 'task-feat-x',
           working_path: '/workspace/my-repo/worktrees/feat-x',
           branch_name: 'feat-x',
+          metadata: { worktree_creation_id: 'checkout-proof' },
         });
 
         test('should require active worktree', async () => {
@@ -1689,6 +1709,11 @@ describe('CommandHandler', () => {
 
           expect(result.success).toBe(true);
           expect(result.message).toContain('removed');
+          expect(mockIsolationDestroy).toHaveBeenCalledWith(featXEnv.working_path, {
+            force: false,
+            canonicalRepoPath: '/workspace/my-repo',
+            creationId: 'checkout-proof',
+          });
           expect(result.message).toMatch(/worktrees[\\\/]feat-x/);
           expect(mockUpdateConversation).toHaveBeenCalled();
         });
@@ -1710,6 +1735,35 @@ describe('CommandHandler', () => {
           expect(result.success).toBe(true);
           expect(mockDeactivateSession).toHaveBeenCalledWith('session-789', 'worktree-removed');
         });
+
+        test.each(['refusal', 'partial'])(
+          'retains conversation and environment on %s',
+          async mode => {
+            const conv = makeConversation({
+              ...conversationWithCodebase,
+              isolation_env_id: featXEnv.id,
+            });
+            mockIsolationEnvDbGet.mockResolvedValueOnce(featXEnv);
+            if (mode === 'refusal')
+              mockIsolationDestroy.mockRejectedValueOnce(new Error('ownership changed'));
+            else
+              mockIsolationDestroy.mockResolvedValueOnce({
+                worktreeRemoved: true,
+                directoryClean: false,
+                branchDeleted: null,
+                remoteBranchDeleted: null,
+                warnings: ['Retained directory'],
+              });
+            const result = await handleCommand(conv, '/worktree remove --force', operator);
+            expect(result.success).toBe(false);
+            expect(result.message).toContain(
+              mode === 'refusal' ? 'ownership changed' : 'Retained directory'
+            );
+            expect(mockIsolationEnvDbUpdate).not.toHaveBeenCalled();
+            expect(mockUpdateConversation).not.toHaveBeenCalled();
+            expect(mockDeactivateSession).not.toHaveBeenCalled();
+          }
+        );
 
         test('refuses to remove a worktree owned by a live workflow run', async () => {
           const convWithWorktree = makeConversation({

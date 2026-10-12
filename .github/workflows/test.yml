@@ -145,7 +145,7 @@ jobs:
       # scripts/bun-test-command.ts; see coleam00/Archon#3294.
       - name: Validate (Windows)
         if: runner.os == 'Windows'
-        run: bun run validate --only cli-import-boundary,package-edges,bundled-defaults,bundled-skill,bundled-schema,pi-vendor-map,codex-protocol,capability-matrix,provider-contract-schema,api-types,tests
+        run: bun run validate --only workflow-import-boundary,cli-import-boundary,package-edges,bundled-defaults,bundled-skill,bundled-schema,pi-vendor-map,codex-protocol,capability-matrix,provider-contract-schema,chat-contract-schema,api-types,tests
 
   # Windows fixtures run beside the Windows tests rather than after them: they are the
   # second-slowest Windows check, and serial they made that leg the critical path.
@@ -172,6 +172,22 @@ jobs:
       - name: Run workflow fixtures
         run: bun run validate --only workflow-fixtures
 
+  file-store-primitives-macos:
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      # The compiled probe never skips under GitHub Actions, so it runs, and must pass, here.
+      - name: Prove file store primitives, including a compiled binary
+        run: bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts
+
   static:
     needs: changes
     if: needs.changes.outputs.run-tests == 'true'
@@ -188,7 +204,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Validate
-        run: bun run validate --only cli-import-boundary,package-edges,bundled-defaults,bundled-skill,bundled-schema,pi-vendor-map,codex-protocol,capability-matrix,provider-contract-schema,api-types,type-check,lint,format
+        run: bun run validate --only workflow-import-boundary,cli-import-boundary,package-edges,bundled-defaults,bundled-skill,bundled-schema,pi-vendor-map,codex-protocol,capability-matrix,provider-contract-schema,chat-contract-schema,api-types,type-check,lint,format
 
   schema-upgrade:
     needs: changes
@@ -371,6 +387,48 @@ jobs:
         if: always()
         run: docker rm -f archon-smoke || true
 
+  serve-binary:
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            binary: archon-linux-x64
+            server: archon-server-linux-x64
+          - os: windows-latest
+            target: bun-windows-x64
+            binary: archon-windows-x64.exe
+            server: archon-server-windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build web UI
+        run: bun run build:web
+      - name: Build matching server and CLI
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          OUTFILE: dist/${{ matrix.binary }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/serve-web/web"
+          cp -R packages/web/dist/. "$RUNNER_TEMP/serve-web/web/"
+          tar czf archon-web.tar.gz -C "$RUNNER_TEMP/serve-web" web
+          mkdir -p dist
+          bash scripts/build-binaries.sh
+      - name: Smoke-test archon serve
+        shell: bash
+        run: |
+          bun scripts/smoke-serve.ts dist/${{ matrix.binary }} dist/${{ matrix.server }} archon-web.tar.gz
+
   test-suite:
     name: Test Suite
     needs:
@@ -380,9 +438,11 @@ jobs:
         test,
         workflow-fixtures,
         workflow-fixtures-windows,
+        file-store-primitives-macos,
         schema-upgrade,
         postgres-parity,
         docker-build,
+        serve-binary,
       ]
     # On a draft the aggregate is skipped with everything else, so the check reads
     # "skipped" rather than a green that claims tests passed. A draft cannot merge, and

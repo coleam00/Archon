@@ -31,11 +31,8 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
-import {
-  registerBuiltinProviders,
-  registerCommunityProviders,
-  clearRegistry,
-} from '@archon/providers';
+import { clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import { type ProviderDefaults } from '@archon/provider-contract';
 clearRegistry();
 registerBuiltinProviders();

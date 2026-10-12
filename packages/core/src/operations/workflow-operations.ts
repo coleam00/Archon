@@ -370,8 +370,9 @@ export function assertApprovable(run: WorkflowRun): ApprovalContext {
       );
     case 'unreadable':
       throw new Error(unreadableGateMessage(run, attention, approval));
+    case 'stalled_tool_calls':
     case 'terminal':
-      // Unreachable: the status guard above already returned for every terminal status.
+      // The status guard excludes running and terminal runs.
       throw new Error(
         `Cannot approve run with status '${run.status}'. Only paused runs can be approved.`
       );
@@ -439,8 +440,9 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
       }
       break;
     case 'awaiting_response':
+    case 'stalled_tool_calls':
     case 'terminal':
-      // 'terminal' is unreachable: the status guard above already returned for it.
+      // The status guard excludes running and terminal runs.
       break;
   }
   return approval;

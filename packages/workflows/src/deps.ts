@@ -1,3 +1,4 @@
+import type { ResolvedWorkflowPolicy } from './schemas/run-config';
 /**
  * Workflow dependency injection types.
  *
@@ -126,12 +127,7 @@ export interface WorkflowConfig {
   aliases?: RawAliasesConfig;
   tiers?: RawTiersConfig;
   commands: { folder?: string };
-  workflows?: {
-    autoResumeOnQuotaReset: boolean;
-    quotaFallbackDelayMs?: number;
-    quotaMaxAttempts: number;
-    quotaDeadlineMs: number;
-  };
+  workflows?: ResolvedWorkflowPolicy;
   defaults?: {
     loadDefaultWorkflows?: boolean;
     loadDefaultCommands?: boolean;

@@ -1,12 +1,7 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import {
-  registerBuiltinProviders,
-  clearRegistry,
-  getRegistration,
-  registerProvider,
-  registerOpencodeProvider,
-} from '@archon/providers';
+import { clearRegistry, getRegistration, registerProvider } from '@archon/providers';
+import { registerBuiltinProviders, registerOpencodeProvider } from '@archon/providers/in-process';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { EFFORT_LADDER } from '@archon/provider-contract';

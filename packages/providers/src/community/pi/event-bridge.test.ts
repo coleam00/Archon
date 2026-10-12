@@ -332,6 +332,25 @@ describe('mapPiEvent', () => {
     expect(chunks).toEqual([]);
   });
 
+  test('bash commands supply provider display titles', () => {
+    expect(
+      mapPiEvent({
+        type: 'tool_execution_start',
+        toolCallId: 'shell',
+        toolName: 'bash',
+        args: { command: 'bun test' },
+      })
+    ).toEqual([
+      {
+        type: 'tool_call',
+        toolCallId: 'shell',
+        name: 'bash',
+        title: 'bun test',
+        rawInput: { command: 'bun test' },
+      },
+    ]);
+  });
+
   test('tool_execution_start → tool_call with its args as rawInput', () => {
     const chunks = mapPiEvent({
       type: 'tool_execution_start',

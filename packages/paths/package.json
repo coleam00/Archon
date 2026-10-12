@@ -8,6 +8,8 @@
     ".": "./src/index.ts",
     "./bundled-build": "./src/bundled-build.ts",
     "./cli-command": "./src/cli-command.ts",
+    "./release-asset": "./src/release-asset.ts",
+    "./server-launch": "./src/server-launch.ts",
     "./archon-paths": "./src/archon-paths.ts",
     "./credential-redaction": "./src/credential-redaction.ts",
     "./logger": "./src/logger.ts",
@@ -16,7 +18,8 @@
     "./env-loader": "./src/env-loader.ts",
     "./test-utils": "./src/test-utils.ts",
     "./plugin-process": "./src/plugin-process.ts",
-    "./skills": "./src/skills.ts"
+    "./skills": "./src/skills.ts",
+    "./process-owner": "./src/process-owner.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",

@@ -365,11 +365,11 @@ nodes:
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [OpenCode on GitHub](https://github.com/opencode-ai/opencode) — upstream project.
 
-## Pi (Community Provider)
+## Pi
 
-**One adapter, ~20 LLM backends.** Pi (`@earendil-works/pi-coding-agent`) is a community-maintained coding-agent harness that Archon integrates as the first community provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and local inference (LM Studio, ollama, llamacpp, custom OpenAI-compatible endpoints registered in `~/.pi/agent/models.json`) under a single `provider: pi` entry.
+**One adapter, ~20 LLM backends.** Pi (`@earendil-works/pi-coding-agent`) is a coding-agent harness that Archon integrates as a maintained provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and local inference (LM Studio, ollama, llamacpp, custom OpenAI-compatible endpoints registered in `~/.pi/agent/models.json`) under a single `provider: pi` entry.
 
-Pi is registered as `builtIn: false` — it validates the community-provider seam rather than being a core-team-maintained option. If it proves stable and valuable it may be promoted to `builtIn: true` later.
+Pi is maintained by the Archon core team alongside Claude and Codex. It is registered as `builtIn: true` and exposes both an in-process factory and a provider plugin entry.
 
 ### Azure models
 
@@ -383,7 +383,7 @@ Pi is included as a dependency of `@archon/providers` — no separate install ne
 
 ### Quick setup via wizard
 
-Run `archon setup` and select **Pi (community)** in the AI assistant multiselect. The wizard prompts for your preferred backend and API key, writes the key to `~/.archon/.env`, and writes the model ref to `~/.archon/config.yaml` automatically.
+Run `archon setup` and select **Pi** in the AI assistant multiselect. The wizard prompts for your preferred backend and API key, writes the key to `~/.archon/.env`, and writes the model ref to `~/.archon/config.yaml` automatically.
 
 ### Authenticate
 

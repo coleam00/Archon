@@ -90,7 +90,7 @@ The adapter must supply `ctx.platformUserId` from its authenticated sender. Reso
 
 Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds non-interactive fresh runs. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
 
-Hosts must set the complete offline policy set before loading config or running cleanup, even when credentials are absent or the transport is disabled. Cleanup throws until this is called; a host with no chat platforms passes `[]`. Each call replaces the whole set.
+Hosts must set the complete offline policy set before loading config or running cleanup, even when credentials are absent or the transport is disabled. Cleanup throws until this is called; include policies for non-chat surfaces too, and pass `[]` only when the host has no platforms. Each call replaces the whole set.
 
 ```typescript
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
@@ -104,7 +104,7 @@ setPlatformPolicies([
 ]);
 ```
 
-Use `workspaceRetention: 'retain'` to exempt workspaces from age-based cleanup. Merged and missing worktrees can still be removed. Platforms missing from the set use age-based cleanup. Bundled hosts pass `bundledPlatformPolicies` from `@archon/adapters/platform-policies`; a host that adds a platform passes `[...bundledPlatformPolicies, myPolicy]`. Policies load without transport SDKs or credentials. Platform identifiers are lowercase kebab-case, start with a letter, and contain at most 32 characters.
+Use `workspaceRetention: 'retain'` to exempt workspaces from age-based cleanup. Merged and missing worktrees can still be removed. Workspaces with an unregistered non-null originating platform are kept and reported by cleanup. Bundled hosts load `defaultPlatformPolicies` from `@archon/adapters/platform-policies` through `loadPlatformPolicies` from `@archon/core/platforms/chat-plugins`, which replaces defaults with installed receipt policies. A custom host includes its surface policies and uses the same loader before calling `setPlatformPolicies`. Policies load without transport SDKs or credentials. Platform identifiers are lowercase kebab-case, start with a letter, and contain at most 32 characters.
 
 ## Testing
 

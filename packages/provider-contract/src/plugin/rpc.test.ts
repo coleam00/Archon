@@ -2,19 +2,14 @@ import { expect, test } from 'bun:test';
 import { connectProvider } from './connect';
 import { descriptor } from './fixtures/provider';
 import { streamPair } from './fixtures/streams';
-import {
-  ProviderPluginProtocolError,
-  ProviderPluginRemoteError,
-  ProviderRpc,
-  rpcMessageSchema,
-} from './rpc';
+import { PluginProtocolError, PluginRemoteError, PluginRpc, rpcMessageSchema } from './rpc';
 import { PROVIDER_PLUGIN_MAX_MESSAGE_BYTES } from './wire';
 
 const encode = (value: unknown): Uint8Array =>
   new TextEncoder().encode(`${JSON.stringify(value)}\n`);
 
 async function malformed(parts: Uint8Array[], line: number): Promise<void> {
-  const rpc = new ProviderRpc({
+  const rpc = new PluginRpc({
     readable: new ReadableStream({
       start(controller) {
         for (const part of parts) controller.enqueue(part);
@@ -23,10 +18,10 @@ async function malformed(parts: Uint8Array[], line: number): Promise<void> {
     }),
     writable: new WritableStream(),
   });
-  rpc.provider = descriptor.id;
+  rpc.plugin = descriptor.id;
   try {
-    await expect(rpc.done).rejects.toBeInstanceOf(ProviderPluginProtocolError);
-    await expect(rpc.done).rejects.toThrow(`Provider plugin test-provider, line ${String(line)}`);
+    await expect(rpc.done).rejects.toBeInstanceOf(PluginProtocolError);
+    await expect(rpc.done).rejects.toThrow(`Plugin test-provider, line ${String(line)}`);
   } finally {
     await rpc.close();
   }
@@ -53,7 +48,7 @@ test('framing handles split UTF-8, CRLF and multiple messages per read', async (
     '{"jsonrpc":"2.0","method":"_test","params":"🦊"}\r\n{"jsonrpc":"2.0","method":"_test","params":42}\n'
   );
   const parts = [...raw].map(byte => new Uint8Array([byte]));
-  const rpc = new ProviderRpc({
+  const rpc = new PluginRpc({
     readable: new ReadableStream({
       start(controller) {
         for (const part of parts) controller.enqueue(part);
@@ -72,13 +67,13 @@ test('framing handles split UTF-8, CRLF and multiple messages per read', async (
 
 test('unknown notifications are ignored and requests get -32601 in either direction', async () => {
   const pair = streamPair();
-  const host = new ProviderRpc(pair.host);
-  const agent = new ProviderRpc(pair.provider);
+  const host = new PluginRpc(pair.host);
+  const agent = new PluginRpc(pair.provider);
   await agent.notify('_unknown', { test: true });
   await expect(agent.request('fs/read_text_file', { path: '/tmp/file' })).rejects.toMatchObject({
     code: -32601,
   });
-  await expect(host.request('_unknown', {})).rejects.toBeInstanceOf(ProviderPluginRemoteError);
+  await expect(host.request('_unknown', {})).rejects.toBeInstanceOf(PluginRemoteError);
   await host.close();
   await agent.done;
   await agent.close();
@@ -86,8 +81,8 @@ test('unknown notifications are ignored and requests get -32601 in either direct
 
 test('pending requests fail when the peer disconnects', async () => {
   const pair = streamPair();
-  const host = new ProviderRpc(pair.host);
-  const agent = new ProviderRpc(pair.provider);
+  const host = new PluginRpc(pair.host);
+  const agent = new PluginRpc(pair.provider);
   let started = (): void => {};
   const observed = new Promise<void>(resolve => {
     started = resolve;
@@ -105,7 +100,7 @@ test('pending requests fail when the peer disconnects', async () => {
 
 test('malformed chunks fail with the plugin identity and incoming line number', async () => {
   const pair = streamPair();
-  const agent = new ProviderRpc(pair.provider);
+  const agent = new PluginRpc(pair.provider);
   agent.handle('initialize', () => ({
     protocolVersion: 1,
     agentCapabilities: { _meta: { archon: descriptor } },
@@ -120,8 +115,8 @@ test('malformed chunks fail with the plugin identity and incoming line number', 
   try {
     const stream = client.sendQuery('turn', '/');
     const error: unknown = await stream.next().catch(error => error);
-    expect(error).toBeInstanceOf(ProviderPluginProtocolError);
-    expect(error).toMatchObject({ provider: 'test-provider', line: 3 });
+    expect(error).toBeInstanceOf(PluginProtocolError);
+    expect(error).toMatchObject({ plugin: 'test-provider', line: 3 });
     await expect(client.sendQuery('turn', '/').next()).rejects.toThrow('test-provider');
   } finally {
     await client.close();
@@ -140,9 +135,9 @@ test('initialize rejects unsupported ACP or Archon protocol versions and missing
     { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
   ]) {
     const pair = streamPair();
-    const agent = new ProviderRpc(pair.provider);
+    const agent = new PluginRpc(pair.provider);
     agent.handle('initialize', () => response);
-    await expect(connectProvider(pair.host)).rejects.toBeInstanceOf(ProviderPluginProtocolError);
+    await expect(connectProvider(pair.host)).rejects.toBeInstanceOf(PluginProtocolError);
     await agent.done;
     await agent.close();
   }
@@ -150,7 +145,7 @@ test('initialize rejects unsupported ACP or Archon protocol versions and missing
 
 test('host rejects unsupported agent-to-client requests after handshake', async () => {
   const pair = streamPair();
-  const agent = new ProviderRpc(pair.provider);
+  const agent = new PluginRpc(pair.provider);
   agent.handle('initialize', () => ({
     protocolVersion: 1,
     agentCapabilities: { _meta: { archon: descriptor } },
@@ -180,7 +175,7 @@ test('JSON-RPC errors cannot masquerade as results', () => {
 
 test('a cancelled turn may end at transport EOF without a synthetic chunk', async () => {
   const pair = streamPair();
-  const agent = new ProviderRpc(pair.provider);
+  const agent = new PluginRpc(pair.provider);
   const abort = new AbortController();
   agent.handle('initialize', () => ({
     protocolVersion: 1,
@@ -221,7 +216,7 @@ test('the exact line-byte limit is accepted and oversized outbound messages fail
     method: '_ignored',
     params: 'a'.repeat(PROVIDER_PLUGIN_MAX_MESSAGE_BYTES - overhead),
   });
-  const rpc = new ProviderRpc({
+  const rpc = new PluginRpc({
     readable: new ReadableStream({
       start(controller) {
         controller.enqueue(line);
@@ -230,10 +225,10 @@ test('the exact line-byte limit is accepted and oversized outbound messages fail
     }),
     writable: new WritableStream(),
   });
-  rpc.provider = descriptor.id;
+  rpc.plugin = descriptor.id;
   await rpc.done;
   await expect(
     rpc.notify('_ignored', { text: 'a'.repeat(PROVIDER_PLUGIN_MAX_MESSAGE_BYTES) })
-  ).rejects.toBeInstanceOf(ProviderPluginProtocolError);
+  ).rejects.toBeInstanceOf(PluginProtocolError);
   await rpc.close();
 });

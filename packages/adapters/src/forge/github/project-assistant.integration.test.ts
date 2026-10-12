@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WebhookEvent } from './types';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
 const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-forge-assistant-')));
 const originalArchonHome = process.env.ARCHON_HOME;

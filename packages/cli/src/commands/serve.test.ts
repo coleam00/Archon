@@ -9,9 +9,10 @@ import {
   afterEach,
   spyOn,
 } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { buildWebTarball, FIXTURE_INDEX_HTML } from '../test-support/web-tarball';
 
 // Mock @archon/paths BEFORE importing the module under test.
 // BUNDLED_IS_BINARY = false puts serveCommand on its source-checkout path, and
@@ -26,26 +27,22 @@ const mockLogger = {
   trace: mock(() => undefined),
 };
 let sourceWebDistDir = '/tmp/test-archon/unset-source-web-dist';
+const paths = { ...(await import('@archon/paths')) };
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: mock(() => mockLogger),
   getWebDistDir: mock((version: string) => `/tmp/test-archon/web-dist/${version}`),
+  getServerDistDir: mock((version: string) => `/tmp/test-archon/server/${version}`),
+  getSourceServerEntry: () => '/checkout/packages/server/src/bin.ts',
+  getLogLevel: () => 'debug',
   getSourceWebDistDir: mock(() => sourceWebDistDir),
   BUNDLED_IS_BINARY: false,
   BUNDLED_VERSION: 'dev',
   BUNDLED_WEB_DIST_SHA256: '',
+  BUNDLED_SERVER_SHA256: '',
 }));
 
-// serveCommand reaches the real server through a dynamic import. Stub it so the
-// source-mode tests can read back which dist it was handed without opening a
-// listening socket.
-const startServerCalls: Array<{ webDistPath: string; port?: number }> = [];
-mock.module('@archon/server', () => ({
-  startServer: mock(async (opts: { webDistPath: string; port?: number }) => {
-    startServerCalls.push(opts);
-  }),
-}));
-
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { trackTempRoots, removeTempTree } from '@archon/paths/test-utils';
 import {
   serveCommand,
   parseChecksum,
@@ -119,87 +116,6 @@ describe('parseEmbeddedChecksum', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// In-process tar.gz fixture builder.
-//
-// downloadWebDist shells out to `tar xzf -`, so the fixture it is fed has to be
-// a genuine gzipped tar — but BUILDING that fixture does not need a subprocess.
-// Spawning `tar czf -` here used to make the beforeAll hook the one thing in
-// this file that could hang on a child process, which is exactly how it failed
-// on windows CI (#2306). Emitting the ~1.1 KB ustar archive directly is
-// deterministic, platform-independent, and needs no `tar` on PATH.
-// ---------------------------------------------------------------------------
-
-/** Write ASCII into a fixed-width header field (NUL padding comes from the zeroed buffer). */
-function writeField(header: Uint8Array, offset: number, value: string, width: number): void {
-  header.set(new TextEncoder().encode(value).subarray(0, width), offset);
-}
-
-/** Write a ustar numeric field: zero-padded octal followed by a trailing NUL. */
-function writeOctalField(header: Uint8Array, offset: number, value: number, width: number): void {
-  writeField(header, offset, value.toString(8).padStart(width - 1, '0'), width - 1);
-}
-
-/** One 512-byte ustar header block. `typeflag` is '0' (file) or '5' (directory). */
-function tarHeader(name: string, size: number, typeflag: '0' | '5', mode: number): Uint8Array {
-  const header = new Uint8Array(512);
-  writeField(header, 0, name, 100);
-  writeOctalField(header, 100, mode, 8);
-  writeOctalField(header, 108, 0, 8); // uid
-  writeOctalField(header, 116, 0, 8); // gid
-  writeOctalField(header, 124, size, 12);
-  writeOctalField(header, 136, 0, 12); // mtime — fixed so the fixture is byte-stable
-  header.fill(0x20, 148, 156); // checksum field reads as 8 spaces while summing
-  header[156] = typeflag.charCodeAt(0);
-  writeField(header, 257, 'ustar', 6); // magic (NUL-terminated by the zeroed buffer)
-  writeField(header, 263, '00', 2); // version
-  let checksum = 0;
-  for (const byte of header) checksum += byte;
-  writeField(header, 148, checksum.toString(8).padStart(6, '0'), 6);
-  header[154] = 0x00;
-  header[155] = 0x20;
-  return header;
-}
-
-/** Concatenate blocks into one buffer. */
-function concatBytes(blocks: Uint8Array[]): Uint8Array<ArrayBuffer> {
-  const total = blocks.reduce((sum, block) => sum + block.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const block of blocks) {
-    out.set(block, offset);
-    offset += block.length;
-  }
-  return out;
-}
-
-/**
- * The exact bytes the fixture claims to carry. Every test that extracts asserts
- * the file lands with THIS content, not merely that a file exists — a hand-rolled
- * binary format that nothing validates is a worse trap than the hang it replaced.
- * A `size` field short by a few bytes, dropped padding, or a missing terminator
- * all still produce an `index.html` and a `tar` exit 0; only comparing content
- * catches them.
- */
-const FIXTURE_INDEX_HTML = '<html>ok</html>';
-
-/** `web/` + `web/index.html`, tarred and gzipped — the shape `archon serve` downloads. */
-function buildWebTarball(indexHtml: string): Uint8Array<ArrayBuffer> {
-  const body = new TextEncoder().encode(indexHtml);
-  const padding = new Uint8Array((512 - (body.length % 512)) % 512);
-  return new Uint8Array(
-    Bun.gzipSync(
-      concatBytes([
-        tarHeader('web/', 0, '5', 0o755),
-        tarHeader('web/index.html', body.length, '0', 0o644),
-        body,
-        padding,
-        new Uint8Array(1024), // two zero blocks terminate the archive
-      ])
-    )
-  );
-}
-
 describe('resolveTarBin', () => {
   // Windows ships bsdtar at System32\tar.exe, but Git for Windows puts GNU tar
   // on PATH ahead of it, and GNU tar cannot open a drive-letter operand: it
@@ -261,8 +177,8 @@ describe('downloadWebDist', () => {
     tarballHash = hasher.digest('hex');
   });
 
-  afterAll(() => {
-    rmSync(tmpRoot, { recursive: true, force: true });
+  afterAll(async () => {
+    await removeTempTree(tmpRoot);
   });
 
   beforeEach(() => {
@@ -441,116 +357,122 @@ describe('buildWebTarball structural conformance', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// serveCommand blocks in the foreground until SIGINT/SIGTERM. Raising a real
-// signal here would also reach the test runner, so the tests call the listeners
-// the command registered and drop them — what the signal itself would do — and
-// only ever touch listeners that were not already there.
-// ---------------------------------------------------------------------------
-
-const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'] as const;
-type ShutdownListener = () => void;
-
-function shutdownListeners(): Map<string, Set<ShutdownListener>> {
-  return new Map(
-    SHUTDOWN_SIGNALS.map(signal => [
-      signal,
-      new Set(process.listeners(signal) as unknown as ShutdownListener[]),
-    ])
-  );
+const signals = ['SIGINT', 'SIGTERM'] as const;
+function listeners() {
+  return signals.map(signal => process.listeners(signal));
 }
 
-/** Listeners registered since `before` — the ones serveCommand is parked on. */
-function newShutdownListeners(
-  before: Map<string, Set<ShutdownListener>>
-): Array<[(typeof SHUTDOWN_SIGNALS)[number], ShutdownListener]> {
-  const added: Array<[(typeof SHUTDOWN_SIGNALS)[number], ShutdownListener]> = [];
-  for (const signal of SHUTDOWN_SIGNALS) {
-    for (const listener of process.listeners(signal) as unknown as ShutdownListener[]) {
-      if (!before.get(signal)?.has(listener)) added.push([signal, listener]);
-    }
-  }
-  return added;
-}
-
-/** Resolve once the command has started the server and parked on a signal. */
-async function waitForForegroundWait(before: Map<string, Set<ShutdownListener>>): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    if (newShutdownListeners(before).length > 0) return;
-    await new Promise(resolve => setTimeout(resolve, 5));
-  }
-  throw new Error('serveCommand never reached its foreground wait');
-}
-
-function interruptForegroundWait(before: Map<string, Set<ShutdownListener>>): void {
-  for (const [signal, listener] of newShutdownListeners(before)) {
-    process.removeListener(signal, listener);
-    listener();
-  }
+function fakeChild(exitCode = 0) {
+  const kill = mock((_signal?: number | NodeJS.Signals) => {});
+  return { pid: 1234, exited: Promise.resolve(exitCode), kill };
 }
 
 describe('serveCommand in a source checkout', () => {
   const trackTempRoot = trackTempRoots();
-  let consoleErrorSpy: ReturnType<typeof spyOn>;
-  let fetchSpy: ReturnType<typeof spyOn>;
   let builtDist: string;
-
+  let fetchSpy: ReturnType<typeof spyOn>;
+  let consoleErrorSpy: ReturnType<typeof spyOn>;
   beforeEach(() => {
-    consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    // Any fetch at all would mean the source path tried to download a release.
-    fetchSpy = spyOn(globalThis, 'fetch');
-    fetchSpy.mockImplementation(async () => {
-      throw new Error('serveCommand must not download in a source checkout');
-    });
-    startServerCalls.length = 0;
     builtDist = trackTempRoot(mkdtempSync(join(tmpdir(), 'serve-source-dist-')));
     writeFileSync(join(builtDist, 'index.html'), '<html>built</html>');
     sourceWebDistDir = builtDist;
+    fetchSpy = spyOn(globalThis, 'fetch');
+    fetchSpy.mockImplementation(async () => {
+      throw new Error('source checkout must not fetch');
+    });
+    consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
   });
-
   afterEach(() => {
-    consoleErrorSpy.mockRestore();
     fetchSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
   });
-
-  it('serves the locally built dist on the requested port', async () => {
-    const before = shutdownListeners();
-    const pending = serveCommand({ port: 4321 });
-
-    await waitForForegroundWait(before);
-    expect(startServerCalls).toEqual([{ webDistPath: builtDist, port: 4321 }]);
-    expect(fetchSpy).not.toHaveBeenCalled();
-
-    interruptForegroundWait(before);
-    expect(await pending).toBe(0);
-  });
-
-  it('refuses with a build instruction when the dist has not been built', async () => {
-    sourceWebDistDir = join(builtDist, 'not-built-yet');
-
-    const exitCode = await serveCommand({});
-
-    expect(exitCode).toBe(1);
-    expect(startServerCalls).toEqual([]);
-    expect(fetchSpy).not.toHaveBeenCalled();
-    const errors = consoleErrorSpy.mock.calls.flat().join('\n');
-    expect(errors).toContain(sourceWebDistDir);
-    expect(errors).toContain('bun run build:web');
-    // The old refusal sent source installs to `bun run dev`, which is a different
-    // thing (every package's dev server, HMR, a held terminal) and is why #3218
-    // was reported. It must not come back.
-    expect(errors).not.toContain('bun run dev');
-  });
-
-  it('refuses --download-only because a source checkout downloads nothing', async () => {
-    const exitCode = await serveCommand({ downloadOnly: true });
-
-    expect(exitCode).toBe(1);
-    expect(startServerCalls).toEqual([]);
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(consoleErrorSpy.mock.calls.flat().join('\n')).toContain(
-      '--download-only is for binary installs'
+  it('spawns the source server with launch overrides, inherited stdio and CLI env', async () => {
+    const before = listeners();
+    const child = fakeChild(7);
+    const spawn = mock(
+      (
+        _argv: string[],
+        _options: Bun.SpawnOptions.OptionsObject<'inherit', 'inherit', 'inherit'>
+      ) => child
     );
+    expect(await serveCommand({ port: 4321 }, spawn)).toBe(7);
+    expect(spawn).toHaveBeenCalledWith(
+      [
+        process.execPath,
+        '--no-env-file',
+        '/checkout/packages/server/src/bin.ts',
+        '--cli-version',
+        'dev',
+        '--port',
+        '4321',
+        '--web-dist',
+        builtDist,
+      ],
+      {
+        stdin: 'inherit',
+        stdout: 'inherit',
+        stderr: 'inherit',
+        env: { ...process.env, LOG_LEVEL: 'debug' },
+      }
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(listeners()).toEqual(before);
+  });
+  it('leaves SIGINT to the foreground group and forwards SIGTERM once to the recorded child', async () => {
+    const before = listeners();
+    let finish!: (code: number) => void;
+    const child = {
+      ...fakeChild(),
+      exited: new Promise<number>(resolve => {
+        finish = resolve;
+      }),
+    };
+    const pending = serveCommand({}, () => child);
+    for (const [index, signal] of signals.entries()) {
+      const added = process.listeners(signal).filter(listener => !before[index].includes(listener));
+      expect(added).toHaveLength(1);
+      for (const listener of added) listener(signal);
+      if (signal === 'SIGINT') expect(child.kill).not.toHaveBeenCalled();
+    }
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    finish(0);
+    expect(await pending).toBe(0);
+    expect(listeners()).toEqual(before);
+  });
+  it('reports spawn failure and removes signal handlers', async () => {
+    const before = listeners();
+    expect(
+      await serveCommand({}, () => {
+        throw new Error('spawn refused');
+      })
+    ).toBe(1);
+    expect(consoleErrorSpy.mock.calls.flat().join(' ')).toContain('spawn refused');
+    expect(listeners()).toEqual(before);
+  });
+  it('refuses with a build instruction when the dist is missing', async () => {
+    sourceWebDistDir = join(builtDist, 'missing');
+    const spawn = mock(
+      (
+        _argv: string[],
+        _options: Bun.SpawnOptions.OptionsObject<'inherit', 'inherit', 'inherit'>
+      ) => fakeChild()
+    );
+    expect(await serveCommand({}, spawn)).toBe(1);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(consoleErrorSpy.mock.calls.flat().join(' ')).toContain('bun run build:web');
+  });
+  it('refuses --download-only in source mode', async () => {
+    const spawn = mock(
+      (
+        _argv: string[],
+        _options: Bun.SpawnOptions.OptionsObject<'inherit', 'inherit', 'inherit'>
+      ) => fakeChild()
+    );
+    expect(await serveCommand({ downloadOnly: true }, spawn)).toBe(1);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

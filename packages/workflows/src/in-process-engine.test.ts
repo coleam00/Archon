@@ -101,11 +101,8 @@ mock.module('./event-emitter', () => ({
 }));
 
 // --- Bootstrap provider registry (after path mocks), same as executor.test.ts ---
-import {
-  registerBuiltinProviders,
-  registerCommunityProviders,
-  clearRegistry,
-} from '@archon/providers';
+import { clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 clearRegistry();
 registerBuiltinProviders();
 registerCommunityProviders();

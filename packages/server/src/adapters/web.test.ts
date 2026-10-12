@@ -20,6 +20,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
+import { RESERVED_CHAT_PLATFORMS } from '@archon/chat-contract/descriptor';
 import { WebAdapter } from './web';
 import { SSETransport, type SSEWriter } from './web/transport';
 import type { MessagePersistence } from './web/persistence';
@@ -278,4 +279,8 @@ describe('WebAdapter.removeStream — tool tracking', () => {
       .find(e => e.type === 'tool_result');
     expect(result?.name).toBe('Bash');
   });
+});
+
+test('the Web platform identity is reserved from chat plugins', () => {
+  expect(RESERVED_CHAT_PLATFORMS.get(WebAdapter.prototype.getPlatformType())).toBeDefined();
 });

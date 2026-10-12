@@ -313,6 +313,13 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
         type: 'tool_call',
         toolCallId: event.toolCallId,
         name: event.toolName,
+        ...(event.toolName === 'bash' &&
+        typeof event.args === 'object' &&
+        event.args !== null &&
+        'command' in event.args &&
+        typeof event.args.command === 'string'
+          ? { title: event.args.command }
+          : {}),
       };
       if (event.args !== undefined) {
         call.rawInput = toolCallSchema.shape.rawInput.parse(event.args);

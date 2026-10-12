@@ -96,7 +96,7 @@ async function seed(wait: string, secondWait = ''): Promise<Fixture> {
   writeFileSync(
     entry,
     `
-import { registerBuiltinProviders } from ${path('packages/providers/src/index.ts')};
+import { registerBuiltinProviders } from ${path('packages/providers/src/in-process.ts')};
 import { createWorkflowDeps } from ${path('packages/core/src/workflows/store-adapter.ts')};
 import { loadConfig } from ${path('packages/core/src/config/config-loader.ts')};
 import { createCodebase } from ${path('packages/core/src/db/codebases.ts')};

@@ -40,6 +40,9 @@ This chapter collects every CLI command, variable, and YAML option in one place.
 | `archon isolation cleanup --merged` | Remove worktrees whose branches merged into the base branch |
 | `archon isolation cleanup --merged --include-closed` | Also remove worktrees with closed (abandoned) PRs |
 
+Cleanup keeps and reports workspaces whose originating platform is no longer
+registered, including merged worktrees. Use `archon isolation list` to inspect them.
+
 ### `archon complete`
 
 | Command | Description |

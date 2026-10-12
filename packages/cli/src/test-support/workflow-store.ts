@@ -1,3 +1,4 @@
+import { createInMemoryResourceStartStore } from './resource-start-store';
 import { randomUUID } from 'node:crypto';
 import {
   WorkflowNotResumableError,
@@ -29,6 +30,7 @@ import {
 } from '@archon/workflows/schemas/provider-event';
 import type { WorkflowNodeSession, WorkflowRunNodeSession } from '@archon/workflows/store';
 import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
+import type { User } from '@archon/core/schemas/user';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 
@@ -38,6 +40,8 @@ const unsupported = async (): Promise<never> => {
 
 export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
   const codebases = new Map<string, Codebase>();
+  const users = new Map<string, User>();
+  const identities = new Map<string, string>();
   return {
     codebases: {
       getCodebase: async id => codebases.get(id) ?? null,
@@ -86,7 +90,33 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
         row.commands = structuredClone(commands);
       },
     },
-    users: { getUserById: unsupported, findOrCreateUserByPlatformIdentity: unsupported },
+    users: {
+      getUserById: async id => structuredClone(users.get(id) ?? null),
+      findOrCreateUserByPlatformIdentity: async (
+        platform,
+        id,
+        displayName
+      ): ReturnType<IWorkflowHostStore['users']['findOrCreateUserByPlatformIdentity']> => {
+        const key = JSON.stringify([platform, id]);
+        const existing = identities.get(key);
+        if (existing) {
+          const user = users.get(existing);
+          if (!user) throw new Error('Identity names a missing user');
+          return structuredClone(user);
+        }
+        const user: User = {
+          id: randomUUID(),
+          display_name: displayName ?? null,
+          email: null,
+          role: 'member',
+          created_at: new Date(),
+          updated_at: new Date(),
+        };
+        identities.set(key, user.id);
+        users.set(user.id, user);
+        return structuredClone(user);
+      },
+    },
     conversations: { getConversationById: unsupported, updateConversation: unsupported },
     messages: { addMessage: unsupported },
     isolation: {
@@ -201,7 +231,60 @@ export function createInMemoryWorkflowStore(
     event: WorkflowEventInput,
     precedingEvents: WorkflowEventInput[] = []
   ): Promise<void> => terminalBatch([{ run, event, precedingEvents }]);
+  const createRun: IWorkflowStore['createWorkflowRun'] = async (
+    input
+  ): ReturnType<IWorkflowStore['createWorkflowRun']> => {
+    const origin =
+      input.origin && Object.values(input.origin).some(value => value !== undefined)
+        ? structuredClone(input.origin)
+        : null;
+    const run: WorkflowRun = {
+      id: input.id ?? randomUUID(),
+      workflow_name: input.workflow_name,
+      origin,
+      conversation_id: origin?.conversationId ?? null,
+      parent_conversation_id: origin?.parentConversationId ?? null,
+      user_id: origin?.userId ?? null,
+      user_message: input.user_message,
+      metadata: structuredClone(input.metadata ?? {}),
+      codebase_id: input.codebase_id ?? null,
+      status: 'pending',
+      outcome: null,
+      started_at: new Date(),
+      completed_at: null,
+      last_activity_at: null,
+      working_path: input.working_path ?? null,
+      output_root: null,
+      checkout_baseline: null,
+      parent_run_id: input.parent_run_id ?? null,
+      adopted_from_run_id: input.adopted_from_run_id ?? null,
+    };
+    if (runs.has(run.id)) throw new Error('Duplicate run');
+    runs.set(run.id, run);
+    return structuredClone(run);
+  };
+  const admission = createInMemoryResourceStartStore(createRun, async id =>
+    structuredClone(runs.get(id) ?? null)
+  );
   const store: InMemoryWorkflowStore = {
+    admitResourceStart: serialize(admission.admitResourceStart.bind(admission)),
+    drainResourceStarts: serialize(admission.drainResourceStarts.bind(admission)),
+    acceptStartReceipt: serialize(admission.acceptStartReceipt.bind(admission)),
+    getStartReceipt: serialize(admission.getStartReceipt.bind(admission)),
+    listStartReceipts: serialize(admission.listStartReceipts.bind(admission)),
+    listPendingStartBindings: serialize(admission.listPendingStartBindings.bind(admission)),
+    getResourceStartRequest: serialize(admission.getResourceStartRequest.bind(admission)),
+    listQueuedResourceStartsForHost: serialize(
+      admission.listQueuedResourceStartsForHost.bind(admission)
+    ),
+    withdrawQueuedResourceStart: serialize(admission.withdrawQueuedResourceStart.bind(admission)),
+    claimStartBindingPreparation: serialize(admission.claimStartBindingPreparation.bind(admission)),
+    completeStartBindingPreparation: serialize(
+      admission.completeStartBindingPreparation.bind(admission)
+    ),
+    failStartBindingPreparation: serialize(admission.failStartBindingPreparation.bind(admission)),
+    resetStartBindingPreparation: serialize(admission.resetStartBindingPreparation.bind(admission)),
+
     listDueWorkflowContinuations: async (
       now,
       limit = 25
@@ -273,36 +356,7 @@ export function createInMemoryWorkflowStore(
     backdate: serialize(async (id, dates) => {
       Object.assign(row(id), structuredClone(dates));
     }),
-    createWorkflowRun: serialize(async (input): ReturnType<IWorkflowStore['createWorkflowRun']> => {
-      const origin =
-        input.origin && Object.values(input.origin).some(value => value !== undefined)
-          ? structuredClone(input.origin)
-          : null;
-      const run: WorkflowRun = {
-        id: input.id ?? randomUUID(),
-        workflow_name: input.workflow_name,
-        origin,
-        conversation_id: origin?.conversationId ?? null,
-        parent_conversation_id: origin?.parentConversationId ?? null,
-        user_id: origin?.userId ?? null,
-        user_message: input.user_message,
-        metadata: structuredClone(input.metadata ?? {}),
-        codebase_id: input.codebase_id ?? null,
-        status: 'pending',
-        outcome: null,
-        started_at: new Date(),
-        completed_at: null,
-        last_activity_at: null,
-        working_path: input.working_path ?? null,
-        output_root: null,
-        checkout_baseline: null,
-        parent_run_id: input.parent_run_id ?? null,
-        adopted_from_run_id: input.adopted_from_run_id ?? null,
-      };
-      if (runs.has(run.id)) throw new Error('Duplicate run');
-      runs.set(run.id, run);
-      return structuredClone(run);
-    }),
+    createWorkflowRun: serialize(createRun),
     getWorkflowRun: async id => structuredClone(runs.get(id) ?? null),
     getWorkflowRunStatus: async id => runs.get(id)?.status ?? null,
     claimPendingWorkflowRun: serialize(
@@ -465,6 +519,7 @@ export function createInMemoryWorkflowStore(
       run.last_activity_at = new Date();
       return structuredClone(run);
     }),
+    setToolCallAttention: async () => true,
     createWorkflowEvent: serialize(
       async (input): ReturnType<IWorkflowStore['createWorkflowEvent']> => {
         record(input);

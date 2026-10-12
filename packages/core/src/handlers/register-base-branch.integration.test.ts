@@ -7,7 +7,7 @@ import { mkdtemp, readFile, realpath, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { registerBuiltinProviders } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { WorktreeProvider } from '@archon/isolation';
 import { getDefaultBranch, syncWorkspace, toRepoPath, toBranchName } from '@archon/git';
 import { SqliteAdapter, sqliteDialect } from '../db/adapters/sqlite';

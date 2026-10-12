@@ -44,7 +44,7 @@ loadArchonEnv(process.cwd());
 // Workflow scripts started by this server call back into the CLI through the
 // same host command the CLI publishes for its own runs.
 import { publishArchonCliCommand } from '@archon/paths/cli-command';
-publishArchonCliCommand();
+if (!BUNDLED_IS_BINARY) publishArchonCliCommand();
 
 // Smart default: fall back to Claude Code's built-in OAuth (`claude /login`)
 // ONLY for solo installs with no explicit credentials. Per-user installs
@@ -54,18 +54,22 @@ if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
+import { registerProvider } from '@archon/providers';
 import {
   claimPiExtensionProcessError,
   registerBuiltinProviders,
   registerCommunityProviders,
-} from '@archon/providers';
-import { getVendorCatalog } from '@archon/core';
+} from '@archon/providers/in-process';
+import { getPluginsPath } from '@archon/paths';
+import { getVendorCatalog, loadProviderPlugins } from '@archon/core';
 import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
 import { CODEX_BOOT_CHECKED, readCodexBootAuth } from './boot/codex-auth-posture';
 
 // Bootstrap provider registry before any provider lookups
 registerBuiltinProviders();
 registerCommunityProviders();
+for (const registration of await loadProviderPlugins(getPluginsPath()))
+  registerProvider(registration);
 // Fail fast at boot (not on first API request) if any registration declares a
 // credential vendor the delivery map can't deliver — that's a provider bug
 // that must block startup, not surface as a runtime 500 (#1955).
@@ -81,7 +85,8 @@ import {
   SlackAdapter,
   SlackWorkflowBridge,
 } from '@archon/adapters';
-import { bundledPlatformPolicies } from '@archon/adapters/platform-policies';
+import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
+import { loadPlatformPolicies } from '@archon/core/platforms/chat-plugins';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { telegramPolicy } from '@archon/adapters/chat/telegram/policy';
 import { slackPolicy } from '@archon/adapters/chat/slack/policy';
@@ -272,7 +277,7 @@ export interface ServerOptions {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
-  setPlatformPolicies(bundledPlatformPolicies);
+  setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
@@ -729,14 +734,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
 
+  const resourceStartWorkflowHost = createSqlWorkflowHost();
   const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
   const webhookSources = webhookSourcesConfigPath
-    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath)
+    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath, {
+        acceptReceipt: input => resourceStartWorkflowHost.deps.store.acceptStartReceipt(input),
+        isKnownUser: async id =>
+          (await resourceStartWorkflowHost.records.users.getUserById(id)) !== null,
+      })
     : undefined;
   // Explicit only: bindings choose their execution host, so the server never guesses one.
   const resourceStartHostId = process.env.ARCHON_TRIGGER_HOST?.trim();
   const resourceStartHost = resourceStartHostId
-    ? createServerResourceStartHost(resourceStartHostId)
+    ? createServerResourceStartHost(resourceStartHostId, resourceStartWorkflowHost)
     : undefined;
   const requestResourceStartDrain = resourceStartHost
     ? (): void => void resourceStartHost.requestDrain()

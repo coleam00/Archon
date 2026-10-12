@@ -52,6 +52,7 @@ export interface Run {
   userMessage: string;
   activeNodes: string[];
   lastTool?: string | null;
+  toolCallAttention?: NonNullable<WorkflowRunMetadata['tool_call_attention']>;
   /**
    * Pending human gate. Null once the gate is resolved (see gateResolved).
    * `completionSignaled` is true when an interactive-loop gate paused on an
@@ -221,6 +222,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     userMessage: raw.user_message ?? '',
     activeNodes,
     lastTool: null,
+    toolCallAttention: raw.status === 'running' ? (raw.metadata?.tool_call_attention ?? []) : [],
     approval: parsedWait === null ? parsedApproval : null,
     wait: parsedWait,
     gateResolved,

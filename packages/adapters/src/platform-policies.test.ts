@@ -5,7 +5,7 @@ import {
   retainsWorkspace,
   setPlatformPolicies,
 } from '@archon/core/platforms/registry';
-import { bundledPlatformPolicies } from './platform-policies';
+import { bundledPlatformPolicies, defaultPlatformPolicies } from './platform-policies';
 
 beforeEach(clearPlatformPolicies);
 
@@ -27,6 +27,19 @@ test('bundled policies are valid and keep existing retention and streaming defau
       workspaceRetention: 'age-based',
       streaming: { defaultMode: 'batch', envVar: 'DISCORD_STREAMING_MODE' },
     },
+    { id: 'github', workspaceRetention: 'age-based' },
+    { id: 'gitea', workspaceRetention: 'age-based' },
+    { id: 'gitlab', workspaceRetention: 'age-based' },
   ]);
   expect(retainsWorkspace('telegram')).toBe(true);
+});
+
+test('default policies include the host surfaces before bundled platforms', () => {
+  setPlatformPolicies(defaultPlatformPolicies);
+  expect(getRegisteredPlatformPolicies()).toEqual([
+    { id: 'cli', workspaceRetention: 'age-based' },
+    { id: 'web', workspaceRetention: 'age-based' },
+    { id: 'api', workspaceRetention: 'age-based' },
+    ...bundledPlatformPolicies,
+  ]);
 });

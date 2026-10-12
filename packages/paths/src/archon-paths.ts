@@ -563,6 +563,14 @@ export function getSourceWebDistDir(): string {
   return join(getSourceRepoRoot(), 'packages', 'web', 'dist');
 }
 
+export function getSourceServerEntry(): string {
+  return join(getSourceRepoRoot(), 'packages', 'server', 'src', 'bin.ts');
+}
+
+export function getServerDistDir(version: string): string {
+  return join(getArchonHome(), 'server', version);
+}
+
 /**
  * The bundled packs root in a source checkout. Every bundled pack, with its
  * commands and scripts, lives in a folder beneath it.

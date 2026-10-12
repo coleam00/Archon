@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { giteaPolicy } from './policy';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -242,7 +243,7 @@ export class GiteaAdapter implements IPlatformAdapter {
    * Get platform type
    */
   getPlatformType(): string {
-    return 'gitea';
+    return giteaPolicy.id;
   }
 
   /**
@@ -683,7 +684,7 @@ export class GiteaAdapter implements IPlatformAdapter {
     getLog().info({ conversationId, merged }, 'isolation_cleanup_started');
 
     try {
-      await onConversationClosed('gitea', conversationId, { merged });
+      await onConversationClosed(giteaPolicy.id, conversationId, { merged });
       getLog().info({ conversationId }, 'isolation_cleanup_complete');
     } catch (error) {
       const err = error as Error;
@@ -820,7 +821,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     if (attributedLogin) {
       try {
         const user = await userDb.findOrCreateUserByPlatformIdentity(
-          'gitea',
+          giteaPolicy.id,
           attributedLogin,
           attributedLogin
         );
@@ -849,7 +850,11 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     // 11. Ensure repo ready (clone if needed, sync if new conversation)
     await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
 
-    const existingConv = await db.getOrCreateConversation('gitea', conversationId, codebase.id);
+    const existingConv = await db.getOrCreateConversation(
+      giteaPolicy.id,
+      conversationId,
+      codebase.id
+    );
     const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
 
     if (needsProjectContext) {

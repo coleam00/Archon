@@ -1,3 +1,4 @@
+import { apiPolicy } from './headless-policy';
 import {
   spellWorkflowCommand,
   type IWorkflowPlatform,
@@ -34,6 +35,6 @@ export class HeadlessPlatform implements IWorkflowPlatform {
   }
 
   getPlatformType(): string {
-    return 'api';
+    return apiPolicy.id;
   }
 }

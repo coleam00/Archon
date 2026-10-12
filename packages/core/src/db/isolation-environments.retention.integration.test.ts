@@ -49,6 +49,8 @@ test('bound retention exclusions work alongside activity and creation thresholds
     { id: 'retain-test', workspaceRetention: 'retain' },
     { id: 'matrix-chat', workspaceRetention: 'retain' },
     { id: 'new-forge', workspaceRetention: 'age-based' },
+    { id: 'active', workspaceRetention: 'age-based' },
+    { id: 'young', workspaceRetention: 'age-based' },
   ]);
   await seed('retain-test', 30);
   await seed('matrix-chat', 30);
@@ -73,9 +75,18 @@ test('unconfigured registry fails instead of treating every platform as age-base
   await expect(findStaleEnvironments()).rejects.toThrow('Platform policies are not configured');
 });
 
-test('empty policy set has valid SQL and preserves NULL exclusion', async () => {
+test('empty policy set excludes unknown platforms and preserves NULL exclusion', async () => {
   setPlatformPolicies([]);
-  const stale = await seed('retain-test', 30);
+  await seed('retain-test', 30);
   await seed(null, 30);
-  expect((await findStaleEnvironments()).map(row => row.id)).toEqual([stale.id]);
+  expect(await findStaleEnvironments()).toEqual([]);
+});
+
+test('removing a retaining plugin never makes its historical rows stale candidates', async () => {
+  setPlatformPolicies([{ id: 'matrix-chat', workspaceRetention: 'retain' }]);
+  await seed('matrix-chat', 30);
+  expect(await findStaleEnvironments()).toEqual([]);
+  setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+  const cli = await seed('cli', 30);
+  expect((await findStaleEnvironments()).map(row => row.id)).toEqual([cli.id]);
 });

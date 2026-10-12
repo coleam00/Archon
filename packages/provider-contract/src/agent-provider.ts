@@ -1,3 +1,4 @@
+import type { ProviderDiagnostics, ProviderModelList } from './information';
 import { z } from 'zod';
 import type { CredentialStatus } from './credential-status';
 import type { ProviderCapabilities } from './capabilities';
@@ -143,10 +144,16 @@ export interface AgentRequestOptions {
  * form. `values` is a non-empty tuple, so an enum with no options is a compile
  * error rather than a provider-side runtime throw.
  */
-export type NativeToolProperty =
-  | { kind: 'string'; description?: string }
-  | { kind: 'enum'; values: readonly [string, ...string[]]; description?: string }
-  | { kind: 'boolean'; description?: string };
+export const nativeToolPropertySchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('string'), description: z.string().optional() }),
+  z.object({
+    kind: z.literal('enum'),
+    values: z.tuple([z.string()], z.string()).check(z.minLength(1)).readonly(),
+    description: z.string().optional(),
+  }),
+  z.object({ kind: z.literal('boolean'), description: z.string().optional() }),
+]);
+export type NativeToolProperty = z.infer<typeof nativeToolPropertySchema>;
 
 /**
  * The closed input shape a native tool may declare: a flat object of string /
@@ -154,10 +161,11 @@ export type NativeToolProperty =
  * provider maps this to its SDK's schema form, so the supported subset lives
  * here once instead of being re-derived by each converter.
  */
-export interface NativeToolInputSchema {
-  properties: Record<string, NativeToolProperty>;
-  required: readonly string[];
-}
+export const nativeToolInputSchema = z.object({
+  properties: z.record(z.string(), nativeToolPropertySchema),
+  required: z.array(z.string()).readonly(),
+});
+export type NativeToolInputSchema = z.infer<typeof nativeToolInputSchema>;
 
 /**
  * Build a NativeToolInputSchema while tying `required` to the property keys: a
@@ -278,6 +286,11 @@ export interface SendQueryOptions extends AgentRequestOptions {
  * Allows supporting multiple agent providers (Claude, Codex, etc.)
  */
 export interface IAgentProvider {
+  diagnose?(request: {
+    assistantConfig?: SendQueryOptions['assistantConfig'];
+  }): Promise<ProviderDiagnostics>;
+  listModels?(): Promise<ProviderModelList>;
+
   resolveCredentialModel?(request: {
     model?: string;
     assistantConfig?: SendQueryOptions['assistantConfig'];

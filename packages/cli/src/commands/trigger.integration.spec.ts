@@ -318,7 +318,12 @@ describe('trigger CLI durable execution', () => {
       import { loadWebhookSourcePlugins } from ${JSON.stringify(join(packagesRoot, 'server/src/services/webhook-source-plugins.ts'))};
       import { registerWebhookSourceRoutes } from ${JSON.stringify(join(packagesRoot, 'server/src/routes/webhooks.ts'))};
       import { closeDatabase } from ${JSON.stringify(join(packagesRoot, 'core/src/db/connection.ts'))};
-      const host = await loadWebhookSourcePlugins(${JSON.stringify(forgeConfigPath)});
+      import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
+      const workflowHost = createSqlWorkflowHost();
+      const host = await loadWebhookSourcePlugins(${JSON.stringify(forgeConfigPath)}, {
+        acceptReceipt: workflowHost.deps.store.acceptStartReceipt,
+        isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
+      });
       const app = new OpenAPIHono();
       registerWebhookSourceRoutes(app, host);
       const payload = JSON.stringify({action:'opened',repository:{full_name:'owner/repo'},

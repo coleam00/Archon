@@ -1,7 +1,7 @@
 /**
  * Database operations for isolation environments
  */
-import { retainedPlatformIds } from '../platforms/registry';
+import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { pool, getDialect, getDatabaseType } from './connection';
 import {
   TERMINAL_WORKFLOW_STATUSES,
@@ -332,10 +332,12 @@ export async function findStaleEnvironments(
   const staleActivityThreshold = dialect.nowMinusDays(1);
   const staleCreationThreshold = dialect.nowMinusDays(2);
 
-  const retainedIds = retainedPlatformIds();
-  const retentionFilter = retainedIds.length
-    ? `AND e.created_by_platform NOT IN (${retainedIds.map((_, index) => `$${index + 3}`).join(', ')})`
-    : '';
+  const ageBasedIds = getRegisteredPlatformPolicies()
+    .filter(policy => policy.workspaceRetention === 'age-based')
+    .map(policy => policy.id);
+  const retentionFilter = ageBasedIds.length
+    ? `AND e.created_by_platform IN (${ageBasedIds.map((_, index) => `$${index + 3}`).join(', ')})`
+    : 'AND 1 = 0';
 
   const result = await pool.query<EnvironmentWithCodebasePath>(
     `SELECT e.*, c.default_cwd as codebase_default_cwd, c.name as codebase_name
@@ -350,7 +352,7 @@ export async function findStaleEnvironments(
            AND conv.last_activity_at > ${staleActivityThreshold}
        )
        AND e.created_at < ${staleCreationThreshold}`,
-    [staleDays, staleDays, ...retainedIds]
+    [staleDays, staleDays, ...ageBasedIds]
   );
   return result.rows.map(normalizeEnvironmentWithCodebase);
 }

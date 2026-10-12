@@ -1,9 +1,15 @@
+import { providerDiagnosticsSchema, providerModelListSchema } from '../information';
 import { Readable, Writable } from 'node:stream';
 import type { IAgentProvider } from '../agent-provider';
 import type { ProviderStopReason } from '../result';
-import { ProviderRpc, type ProviderPluginIO } from './rpc';
+import { PluginRemoteError, PluginRpc, type PluginIO } from './rpc';
 import {
+  diagnoseRequestSchema,
+  listModelsRequestSchema,
   acpStopReason,
+  toolCallResponseSchema,
+  logNotificationSchema,
+  type ProviderLogSink,
   cancelNotificationSchema,
   checkCredentialRequestSchema,
   initializeRequestSchema,
@@ -16,8 +22,11 @@ import {
 } from './wire';
 
 export async function serveProvider(
-  options: { descriptor: ProviderPluginDescriptor; create: () => IAgentProvider },
-  io: ProviderPluginIO = {
+  options: {
+    descriptor: ProviderPluginDescriptor;
+    create: (log: ProviderLogSink) => IAgentProvider;
+  },
+  io: PluginIO = {
     readable: Readable.toWeb(process.stdin),
     writable: Writable.toWeb(process.stdout),
   }
@@ -26,8 +35,10 @@ export async function serveProvider(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
   const descriptor = providerPluginDescriptorSchema.parse(options.descriptor);
-  const rpc = new ProviderRpc(io);
-  rpc.provider = descriptor.id;
+  const rpc = new PluginRpc(io);
+  rpc.plugin = descriptor.id;
+  const log: ProviderLogSink = record =>
+    rpc.notify('_archon/log', logNotificationSchema.parse(record));
   const connectionAbort = new AbortController();
   const sessions = new Map<
     string,
@@ -62,15 +73,31 @@ export async function serveProvider(
     const params = promptRequestSchema.parse(raw);
     const session = sessions.get(params.sessionId);
     if (!session || session.active) throw new Error('Unknown or active provider session');
-    const { prompt, cwd, resumeSessionId, ...requestOptions } = session.request;
+    const { prompt, cwd, resumeSessionId, nativeTools, ...requestOptions } = session.request;
     if (params.prompt[0].text !== prompt)
       throw new Error('session/prompt disagrees with Archon request');
     session.active = true;
     let reason: ProviderStopReason | undefined;
     try {
-      for await (const chunk of options.create().sendQuery(prompt, cwd, resumeSessionId, {
+      for await (const chunk of options.create(log).sendQuery(prompt, cwd, resumeSessionId, {
         ...requestOptions,
-        env,
+        env: requestOptions.execContext?.kind === 'container' ? requestOptions.env : env,
+        ...(nativeTools
+          ? {
+              nativeTools: nativeTools.map(spec => ({
+                ...spec,
+                handler: async (input): Promise<string> =>
+                  rpc.parse(
+                    toolCallResponseSchema,
+                    await rpc.request('_archon/tool_call', {
+                      sessionId: params.sessionId,
+                      name: spec.name,
+                      input,
+                    })
+                  ).text,
+              })),
+            }
+          : {}),
         abortSignal: session.abort.signal,
       })) {
         if (chunk.type === 'result') reason = chunk.stopReason;
@@ -90,13 +117,29 @@ export async function serveProvider(
   rpc.handle('_archon/check_credential', async raw => {
     requireInitialized();
     const request = checkCredentialRequestSchema.parse(raw);
-    return options.create().checkCredential({ ...request, env, signal: connectionAbort.signal });
+    return options.create(log).checkCredential({ ...request, env, signal: connectionAbort.signal });
   });
   rpc.handle('_archon/resolve_credential_model', async raw => {
     requireInitialized();
     const request = resolveCredentialModelRequestSchema.parse(raw);
-    const model = await options.create().resolveCredentialModel?.(request);
+    const model = await options.create(log).resolveCredentialModel?.(request);
     return model === undefined ? {} : { model };
+  });
+  rpc.handle('_archon/diagnose', async raw => {
+    requireInitialized();
+    const request = diagnoseRequestSchema.parse(raw);
+    const provider = options.create(log);
+    if (!provider.diagnose)
+      throw new PluginRemoteError(-32601, 'Provider does not support diagnose');
+    return providerDiagnosticsSchema.parse(await provider.diagnose(request));
+  });
+  rpc.handle('_archon/list_models', async raw => {
+    requireInitialized();
+    listModelsRequestSchema.parse(raw);
+    const provider = options.create(log);
+    if (!provider.listModels)
+      throw new PluginRemoteError(-32601, 'Provider does not support listModels');
+    return providerModelListSchema.parse(await provider.listModels());
   });
   try {
     await rpc.done;

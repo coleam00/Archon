@@ -6,6 +6,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./providers/load-provider-plugins": "./src/providers/load-provider-plugins.ts",
+    "./providers/inspect-provider-plugin": "./src/providers/inspect-provider-plugin.ts",
+    "./providers/process-registration": "./src/providers/process-registration.ts",
     "./effort": "./src/effort.ts",
     "./types": "./src/types/index.ts",
     "./db": "./src/db/index.ts",
@@ -24,6 +27,7 @@
     "./state/*": "./src/state/*.ts",
     "./schemas": "./src/schemas/index.ts",
     "./schemas/*": "./src/schemas/*.ts",
+    "./platforms/chat-plugins": "./src/platforms/chat-plugins.ts",
     "./platforms/registry": "./src/platforms/registry.ts",
     "./platforms/types": "./src/platforms/types.ts",
     "./handlers/clone": "./src/handlers/clone.ts",
@@ -35,6 +39,7 @@
     "build": "echo 'No build needed - Bun runs TypeScript directly'"
   },
   "dependencies": {
+    "@archon/plugin-manifest": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
@@ -45,7 +50,8 @@
     "@octokit/auth-app": "^8.0.0",
     "@octokit/rest": "^22.0.0",
     "pg": "^8.11.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@archon/chat-contract": "workspace:*"
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",

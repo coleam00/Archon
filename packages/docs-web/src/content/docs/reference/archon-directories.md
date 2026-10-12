@@ -47,6 +47,7 @@ Archon provides a unified directory and configuration system with:
 ├── temp/                           # Ephemeral scratch (per-simulation dry-run dirs; removed when the run ends)
 ├── worktrees/                      # Legacy global worktrees (repos not in workspaces/)
 ├── vendor/codex/                   # Codex native binary (binary builds, user-placed)
+├── server/<version>/               # Cached server executable (archon serve, binary only)
 ├── web-dist/<version>/             # Cached web UI dist (archon serve, binary only)
 ├── update-check.json               # Update check cache (binary builds only, 1h release-data TTL; 24h CLI notice interval)
 ├── tier-notice.json                # One-time tier-default notice state (CLI, per version)

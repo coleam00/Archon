@@ -1,4 +1,4 @@
-import { addMessage } from '@archon/core/db/messages';
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 /**
  * The server as a resource-start host.
@@ -13,10 +13,7 @@ import {
   drainResourceStartHost,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { createLogger } from '@archon/paths';
-import type { IWorkflowEngine } from '@archon/workflows/engine-port';
-import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 
 const log = createLogger('resource-start-hosting');
@@ -31,27 +28,29 @@ export interface ServerResourceStartHost {
 
 export function createServerResourceStartHost(
   hostId: string,
-  engine: IWorkflowEngine = new InProcessWorkflowEngine(createWorkflowDeps())
+  host: WorkflowHost
 ): ServerResourceStartHost {
   const startAdmitted = async (requestId: string): Promise<void> => {
     // Not awaited: a run can take hours and must not hold the drain or a webhook ACK.
     void startAdmittedResourceStart({
       requestId,
       hostId,
-      engine,
-      createPlatform: ({ conversationDbId }) =>
-        new HeadlessPlatform(
-          conversationDbId
+      host,
+      createPlatform: ({ origin }) => {
+        const conversationId = origin?.conversationId;
+        return new HeadlessPlatform(
+          conversationId
             ? async (message, metadata): Promise<void> => {
-                await addMessage(
-                  conversationDbId,
+                await host.records.messages.addMessage(
+                  conversationId,
                   'assistant',
                   message,
                   toPersistedMessageMetadata(metadata)
                 );
               }
             : undefined
-        ),
+        );
+      },
     })
       .then(result => {
         if (!result.success) {
@@ -83,7 +82,7 @@ export function createServerResourceStartHost(
     do {
       again = false;
       try {
-        await drainResourceStartHost({ hostId, startAdmitted });
+        await drainResourceStartHost({ ...host, hostId, startAdmitted });
       } catch (error) {
         log.error({ err: error as Error, hostId }, 'resource_start.drain_failed');
       }

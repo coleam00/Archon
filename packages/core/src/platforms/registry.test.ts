@@ -5,6 +5,7 @@ import {
   getRegisteredPlatformPolicies,
   retainsWorkspace,
   setPlatformPolicies,
+  unknownPlatformReason,
 } from './registry';
 
 beforeEach(clearPlatformPolicies);
@@ -25,6 +26,18 @@ describe('platform policies', () => {
     expect(() => retainsWorkspace(null)).toThrow('Platform policies are not configured');
     setPlatformPolicies([]);
     expect(retainsWorkspace('telegram')).toBe(false);
+  });
+
+  test('unknown-platform cleanup keeps legacy null rows distinct from missing policies', () => {
+    expect(unknownPlatformReason(null)).toBeUndefined();
+    expect(() => unknownPlatformReason('removed-chat')).toThrow(
+      'Platform policies are not configured'
+    );
+    setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+    expect(unknownPlatformReason('cli')).toBeUndefined();
+    expect(unknownPlatformReason('removed-chat')).toContain(
+      "platform 'removed-chat' is not registered"
+    );
   });
 
   test('a later call replaces the whole set', () => {

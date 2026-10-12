@@ -46,7 +46,7 @@ import {
 
 beforeAll(async (): Promise<void> => {
   const { registerBuiltinProviders, registerCommunityProviders } =
-    await import('@archon/providers');
+    await import('@archon/providers/in-process');
   registerBuiltinProviders();
   registerCommunityProviders();
 });

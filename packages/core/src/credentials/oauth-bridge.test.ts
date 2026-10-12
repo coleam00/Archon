@@ -17,39 +17,17 @@ mock.module('../db/connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
-// Drive Pi's login() via a controllable impl. The singletons are the objects the
-// bridge maps Archon providers to (claude→anthropic, codex→openaiCodex, copilot→…).
-type Callbacks = {
-  onAuth: (info: { url: string }) => void;
-  onDeviceCode: (info: { userCode: string; verificationUri: string }) => void;
-  onManualCodeInput?: () => Promise<string>;
-  onPrompt: (p: unknown) => Promise<string>;
-  onSelect: (p: { options: { id: string }[] }) => Promise<string | undefined>;
-  onProgress?: (m: string) => void;
-  signal?: AbortSignal;
-};
+import type { OAuthLoginCallbacks as Callbacks } from './subscription-oauth';
 let loginImpl: (cb: Callbacks) => Promise<Record<string, unknown>>;
-function makeProvider(id: string, usesCallbackServer?: boolean) {
-  return {
-    id,
-    name: id,
-    ...(usesCallbackServer ? { usesCallbackServer } : {}),
-    login: (cb: Callbacks) => loginImpl(cb),
-    refreshToken: async (c: Record<string, unknown>) => c,
-    getApiKey: () => 'k',
-  };
-}
-// anthropic/codex bind a local fixed-port callback server in pi (#1963).
-const anthropic = makeProvider('anthropic', true);
-const codex = makeProvider('openaiCodex', true);
-const copilot = makeProvider('github-copilot');
-mock.module('@archon/providers/oauth', () => ({
-  getOAuthProvider: (id: string) =>
-    ({ anthropic, openaiCodex: codex, 'github-copilot': copilot })[id],
-  getOAuthApiKey: async () => ({ newCredentials: {}, apiKey: 'k' }),
-  anthropicOAuthProvider: anthropic,
-  openaiCodexOAuthProvider: codex,
-  githubCopilotOAuthProvider: copilot,
+const anthropic = {
+  usesCallbackServer: true,
+  login: (cb: Callbacks) => loginImpl(cb),
+};
+const copilot = { login: (cb: Callbacks) => loginImpl(cb) };
+mock.module('./oauth-providers', () => ({
+  subscriptionOAuthProviderFor: (id: string) => ({ anthropic, 'github-copilot': copilot })[id],
+  SUBSCRIPTION_PROVIDERS: new Set(['anthropic', 'openai', 'github-copilot']),
+  OPENAI_SUBSCRIPTION_VENDOR: 'openai',
 }));
 
 // The openai (ChatGPT/Codex) flow is Archon-owned (#1924) — drive its exchange
@@ -82,13 +60,8 @@ mock.module('./openai-oauth', () => ({
   refreshOpenAiOAuthCredentials: async (creds: Record<string, unknown>) => creds,
 }));
 
-const {
-  startOAuth,
-  pollOAuth,
-  cancelOAuth,
-  resetOAuthSessionsForTest,
-  OAuthCallbackPortBusyError,
-} = await import('./oauth-bridge');
+const { startOAuth, pollOAuth, cancelOAuth, resetOAuthSessionsForTest } =
+  await import('./oauth-bridge');
 
 function tick(ms = 15): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
@@ -340,17 +313,14 @@ describe('oauth-bridge', () => {
 
   // ---- #1963: abandoned logins must not wedge the fixed callback port ----
 
-  test('aborting a session rejects the manual-code deferred so a pi-style login releases its callback server (#1963)', async () => {
-    // Mirror pi-ai 0.79.1 loginAnthropic: the callback server only closes in a
-    // `finally` reached after onManualCodeInput() settles — pi ignores the
-    // abort signal, so the deferred rejection is the only path there.
+  test('aborting a session rejects the manual-code deferred so a manual login releases its callback server (#1963)', async () => {
     let serverClosed = false;
     loginImpl = async cb => {
       cb.onAuth({ url: 'https://x' });
       try {
         await cb.onManualCodeInput!();
       } finally {
-        serverClosed = true; // pi's `finally { server.close() }`
+        serverClosed = true;
       }
       return { access: 'a' };
     };
@@ -500,21 +470,6 @@ describe('oauth-bridge', () => {
     },
     testTimeout(10000)
   );
-
-  test('EADDRINUSE at start surfaces an actionable retryable error, not an opaque failure (#1963)', async () => {
-    loginImpl = async () => {
-      throw new Error('listen EADDRINUSE: address already in use 127.0.0.1:53692');
-    };
-    let thrown: unknown;
-    try {
-      await startOAuth('u1', 'claude');
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toBeInstanceOf(OAuthCallbackPortBusyError);
-    expect((thrown as Error).message).toMatch(/callback port/i);
-    expect((thrown as Error).message).toMatch(/retry/i);
-  });
 
   // ---- #1924: openai (ChatGPT/Codex) runs the Archon-owned PKCE flow ----
 

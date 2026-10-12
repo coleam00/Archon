@@ -1,3 +1,4 @@
+import type { ResolvedWorkflowPolicy } from '@archon/workflows/schemas/run-config';
 /**
  * Configuration types for Archon YAML config files
  *
@@ -191,7 +192,7 @@ export interface GlobalConfig {
    */
   container?: ContainerConfig;
 
-  /** Default-off policy for continuing terminal quota failures after time passes. */
+  /** Operator policy for live tool attention and quota continuation. */
   workflows?: WorkflowContinuationConfig;
 }
 
@@ -222,7 +223,7 @@ export interface RepoConfig {
   /** Repo-level model tier presets — override global tiers with same name. */
   tiers?: RawTiersConfig;
 
-  /** Project override for quota-failure continuation. */
+  /** Project override for live tool attention and quota continuation. */
   workflows?: WorkflowContinuationConfig;
 
   /**
@@ -395,12 +396,7 @@ export interface MergedConfig {
   concurrency: {
     maxConversations: number;
   };
-  workflows: {
-    autoResumeOnQuotaReset: boolean;
-    quotaFallbackDelayMs?: number;
-    quotaMaxAttempts: number;
-    quotaDeadlineMs: number;
-  };
+  workflows: ResolvedWorkflowPolicy;
   commands: {
     /**
      * Additional command folder to search (relative to repo root)

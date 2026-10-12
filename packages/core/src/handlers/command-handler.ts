@@ -13,7 +13,12 @@ import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
-import { classifyIsolationError, getIsolationProvider } from '@archon/isolation';
+import {
+  classifyIsolationError,
+  getIsolationProvider,
+  readWorktreeCreationId,
+  worktreeRegistrationMetadata,
+} from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
   cleanupMergedWorktrees,
@@ -423,6 +428,7 @@ async function handleWorktreeCommand(
           working_path: env.workingPath,
           branch_name: env.branchName ?? branchName,
           created_by_platform: conversation.platform_type,
+          metadata: { ...worktreeRegistrationMetadata(env.metadata) },
         });
 
         // Update conversation with isolation info (use database UUID)
@@ -521,7 +527,17 @@ async function handleWorktreeCommand(
 
         // Use isolation provider for removal (pass the working path, not UUID)
         const provider = getIsolationProvider();
-        await provider.destroy(isolationEnv.working_path, { force: forceFlag });
+        const result = await provider.destroy(isolationEnv.working_path, {
+          force: forceFlag,
+          canonicalRepoPath: toRepoPath(mainPath),
+          creationId: readWorktreeCreationId(isolationEnv.metadata) ?? undefined,
+        });
+        if (!result.worktreeRemoved || !result.directoryClean) {
+          return {
+            success: false,
+            message: `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`,
+          };
+        }
 
         // Update database record status
         await isolationEnvDb.updateStatus(isolationEnvId, 'destroyed');
@@ -858,7 +874,11 @@ async function handleWorkflowCommand(
           }
           msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
           const attention = runAttention(run);
-          if (attention?.kind === 'action_required') {
+          if (attention?.kind === 'stalled_tool_calls') {
+            msg += '  Tool calls need attention; work remains running.\n';
+            for (const call of attention.calls)
+              msg += `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)\n`;
+          } else if (attention?.kind === 'action_required') {
             msg += `  Action required: ${attention.message}\n`;
             msg += `  Resume: \`${cmd(`resume ${run.id}`)}\`\n`;
             msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;
@@ -1375,6 +1395,9 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
               msg += `\n  • ${String(breakdown.stale)} stale (14+ days inactive)`;
             }
             msg += `\n  • ${String(breakdown.active)} active`;
+          }
+          for (const env of breakdown.activeEnvs) {
+            if (env.reason) msg += `\n  • ${env.branchName}: ${env.reason}`;
           }
         } catch (error) {
           // Don't fail status if breakdown fails

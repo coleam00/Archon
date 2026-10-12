@@ -222,10 +222,10 @@ Commands:
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into the base branch
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
-  serve                      Start the web UI server (binary installs download it on first run)
+  serve                      Start the web UI server (binary installs download server and UI on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
   plugin install <owner/repo[/path][@tag]>
-                             Install a plugin from GitHub (default: forge plugins the latest release, workflow packs the default branch)
+                             Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
   plugin update <id>[@tag]   Reinstall an installed plugin at a tag, or its latest release or default branch
   plugin remove <id>         Delete the files an installed plugin wrote
   plugin copy <id>           Copy an installed workflow pack into this project's .archon/workflows/
@@ -291,7 +291,7 @@ Options:
   --conversation-id <id>     Correlation id for the run's messages. It creates no
                              conversation and no persist_session scope
   --port <port>              Override server port for 'serve' (default: 3090)
-  --download-only            Download web UI without starting the server
+  --download-only            Download server and web UI without starting the server
   --force                    For 'setup': overwrite existing values instead of merging
                              For 'complete': remove even when safety checks block it
 

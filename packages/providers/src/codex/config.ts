@@ -5,14 +5,12 @@
 import type { CodexProviderDefaults } from '../types';
 import {
   EFFORT_LADDER,
+  snapshotConfigSchema,
   type EffortRung,
   type ProviderConfigScope,
 } from '@archon/provider-contract';
-import {
-  assertKnownRunConfigKeys,
-  invalidRunConfigValue,
-  normalizeRunConfigString,
-} from '../shared/run-config';
+import { z } from 'zod';
+import { configStringSchema, parseConfigSchema } from '../shared/run-config';
 
 // Re-export so consumers can import the type from either location
 export type { CodexProviderDefaults } from '../types';
@@ -60,51 +58,31 @@ export function parseCodexConfig(raw: Record<string, unknown>): CodexProviderDef
   return result;
 }
 
-/** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
+const fields = {
+  model: configStringSchema.optional(),
+  modelReasoningEffort: z
+    .enum(CODEX_EFFORTS, { error: `expected ${CODEX_EFFORTS.join(', ')}` })
+    .optional(),
+  webSearchMode: z.enum(['disabled', 'cached', 'live']).optional(),
+  additionalDirectories: z.array(z.string()).optional(),
+  codexBinaryPath: configStringSchema.optional(),
+};
+export const configSchemas = {
+  install: z.strictObject(fields),
+  run: z.strictObject(fields),
+  snapshot: snapshotConfigSchema(
+    { model: fields.model, modelReasoningEffort: fields.modelReasoningEffort },
+    {
+      webSearchMode: fields.webSearchMode,
+      additionalDirectories: fields.additionalDirectories,
+      codexBinaryPath: fields.codexBinaryPath,
+    }
+  ),
+};
+
 export function parseCodexConfigStrict(
   raw: Record<string, unknown>,
   scope: ProviderConfigScope = 'install'
 ): CodexProviderDefaults {
-  assertKnownRunConfigKeys(raw, [
-    'model',
-    'modelReasoningEffort',
-    'webSearchMode',
-    'additionalDirectories',
-    'codexBinaryPath',
-  ]);
-  const model = normalizeRunConfigString(raw.model, 'model');
-  const codexBinaryPath = normalizeRunConfigString(raw.codexBinaryPath, 'codexBinaryPath');
-  if (raw.modelReasoningEffort !== undefined && !isCodexEffort(raw.modelReasoningEffort)) {
-    invalidRunConfigValue('modelReasoningEffort', CODEX_EFFORTS.join(', '));
-  }
-  if (
-    raw.webSearchMode !== undefined &&
-    (typeof raw.webSearchMode !== 'string' ||
-      !['disabled', 'cached', 'live'].includes(raw.webSearchMode))
-  ) {
-    invalidRunConfigValue('webSearchMode', 'disabled, cached, or live');
-  }
-  if (raw.additionalDirectories !== undefined) {
-    if (!Array.isArray(raw.additionalDirectories)) {
-      invalidRunConfigValue('additionalDirectories', 'an array of strings');
-    }
-    const invalidIndex = raw.additionalDirectories.findIndex(value => typeof value !== 'string');
-    if (invalidIndex >= 0) {
-      invalidRunConfigValue(`additionalDirectories.${invalidIndex}`, 'a string');
-    }
-  }
-  const parsed = parseCodexConfig(raw);
-  if (scope === 'snapshot') {
-    return {
-      ...(model === undefined ? {} : { model }),
-      ...(parsed.modelReasoningEffort === undefined
-        ? {}
-        : { modelReasoningEffort: parsed.modelReasoningEffort }),
-    };
-  }
-  return {
-    ...parsed,
-    ...(model === undefined ? {} : { model }),
-    ...(codexBinaryPath === undefined ? {} : { codexBinaryPath }),
-  };
+  return parseConfigSchema(configSchemas[scope], raw);
 }
