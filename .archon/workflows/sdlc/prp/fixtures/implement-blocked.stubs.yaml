@@ -12,7 +12,6 @@ triage:
   blocked_by: []
   summary: "stub: current code confirms a complete work order"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
-gate-direct: '{"gate":"direct"}'
 implement__implement:
   done: true
   green: false

@@ -226,30 +226,17 @@ nodes:
     depends_on: [verdict]
     when: "$verdict.output.route == 'plan' && $verdict.output.design_first == false"
 
-  # Route markers: one join into delivery from whichever route succeeded.
-  - id: gate-direct
-    bash: echo '{"gate":"direct"}'
-    depends_on: [verdict]
-    when: "$verdict.output.route == 'deliver'"
-
-  - id: gate-rooted
-    bash: echo '{"gate":"rooted"}'
-    depends_on: [inv]
-    when: "$inv.output.rooted == true"
-
-  - id: gate-planned
-    bash: echo '{"gate":"planned"}'
-    depends_on: [planned]
-    when: "$planned.output.ready == true"
-
   # One round: implement → draft PR → review → (simplify → CI). A review that needs
   # fixes, or a red CI the PR caused, starts another round. Each round's implementer
   # is a fresh agent that reads the previous round's review report and ci.md; once a
   # loop body can continue a named session, `implement` resumes the previous round's
   # session instead.
   - id: rounds
-    depends_on: [gate-direct, gate-rooted, gate-planned]
+    # One join into delivery: the direct route, a rooted investigation, or a ready
+    # plan. `&&` short-circuits, so a skipped producer's output is never read.
+    depends_on: [verdict, inv, planned]
     trigger_rule: none_failed_min_one_success
+    when: "$verdict.output.route == 'deliver' || $verdict.output.route == 'investigate' && $inv.output.rooted == true || $verdict.output.route == 'plan' && $verdict.output.design_first == false && $planned.output.ready == true"
     loop_group:
       until_bash: |
         done=$round.output.done
