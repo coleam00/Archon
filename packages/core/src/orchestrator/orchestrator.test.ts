@@ -278,7 +278,34 @@ const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflo
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
     providers: providerRegistry,
-    store: { getCodebaseEnvVars: async () => ({}) },
+    store: {
+      getCodebaseEnvVars: async () => ({}),
+      createWorkflowRun: async (
+        data: Parameters<import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']>[0]
+      ): Promise<import('@archon/workflows/schemas/workflow-run').WorkflowRun> => ({
+        id: data.id ?? 'run-1',
+        workflow_name: data.workflow_name,
+        status: 'pending',
+        outcome: null,
+        origin: data.origin ?? null,
+        conversation_id: data.origin?.conversationId ?? null,
+        parent_conversation_id: data.origin?.parentConversationId ?? null,
+        user_id: data.origin?.userId ?? null,
+        codebase_id: data.codebase_id ?? null,
+        user_message: data.user_message,
+        metadata: data.metadata ?? {},
+        started_at: new Date(),
+        completed_at: null,
+        last_activity_at: null,
+        working_path: null,
+        parent_run_id: null,
+        adopted_from_run_id: null,
+        output_root: null,
+        checkout_baseline: null,
+      }),
+      updateWorkflowRun: async () => {},
+      failWorkflowRun: async () => {},
+    },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
       version: 1,
       ciphertext: 'sealed',
@@ -394,6 +421,19 @@ const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+  finalizeWorkflowSource: mock(
+    async (_deps: unknown, source: WorkflowExecutor.PreparedWorkflowSource) => source
+  ),
+  preparedWorkflowSourceRecord: (source: WorkflowExecutor.PreparedWorkflowSource) => ({
+    version: 1,
+    root: source.anchor.root,
+    origin: source.origin,
+    captured_at: source.manifest.captured_at,
+    digest: source.manifest.digest,
+    source_config: source.anchor.config,
+    file_count: source.manifest.file_count,
+    byte_count: source.manifest.byte_count,
+  }),
   hydrateResumableRun: mock(() => Promise.resolve(null)),
   // Source capture runs before dispatch and does real filesystem work; stub it so these
   // tests stay about routing. `mock.module` MERGES, so an export omitted here keeps its

@@ -3615,7 +3615,8 @@ describe('approve/reject auto-resume', () => {
     expect(mockCreateCodebaseChildResolver).toHaveBeenCalledWith(
       expect.objectContaining({ getById: expect.any(Function), create: expect.any(Function) }),
       expect.objectContaining({ id: 'cb-uuid-1', name: 'owner/repo' }),
-      expect.objectContaining({ baseBranch: 'main' })
+      expect.objectContaining({ baseBranch: 'main' }),
+      expect.objectContaining({ store: expect.any(Object) })
     );
     const opts = mockExecuteWorkflow.mock.calls[0]?.[7];
     expect(opts?.resolveChildIsolation).toBeDefined();
