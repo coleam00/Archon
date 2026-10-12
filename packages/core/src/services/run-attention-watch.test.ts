@@ -409,6 +409,7 @@ describe('waitForRunAttention', () => {
         kind: 'awaiting_response',
         runId: 'r1',
         respondTo: { runId: 'r1', nodeId: 'review' },
+        occurrence: 'legacy:review',
         message: 'Approve the plan.',
       },
     });
@@ -464,6 +465,7 @@ describe('waitForRunAttention', () => {
         kind: 'action_required',
         runId: 'r1',
         nodeId: 'rerun-ci',
+        occurrence: 'wait:2026-08-28T10:00:00.000Z',
         message: 'Rerun the failed check.',
       },
     });
@@ -501,6 +503,7 @@ describe('waitForRunAttention', () => {
           kind: 'awaiting_response',
           runId: 'child',
           respondTo: { runId: 'child', nodeId: 'child-gate' },
+          occurrence: 'legacy:child-gate',
           message: 'Approve the plan.',
         },
       });

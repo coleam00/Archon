@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import { StatusStrip } from './StatusStrip';
 import { OriginBadge } from './OriginBadge';
 import { ApprovalContext } from './ApprovalContext';
+import { RunActionBar } from './RunActionBar';
 import { ApprovalPanel } from './ApprovalPanel';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
@@ -16,18 +17,9 @@ interface PendingInputBannerProps {
 }
 
 /**
- * Attention surface for runs paused on a human gate (approval node or a
- * question the agent asked). Pinned above the runs feed so a run that needs
- * action can't be missed — it stays visible regardless of the active filter
- * or how far the feed is scrolled, until the user acts on it or dismisses it.
- *
- * The action surface is the same {@link ApprovalContext} + {@link ApprovalPanel}
- * used inline on a paused card; while a run is surfaced here its feed card
- * collapses to a pointer so the live panel isn't duplicated.
- *
- * Dismiss is session-only — the run is still paused, so it re-surfaces on the
- * next load. Acting on it later happens from the feed card (which restores the
- * inline panel once dismissed).
+ * Pinned above the feed regardless of its filters and pagination. While promoted
+ * here, a run's feed card collapses its action panel to avoid duplicate forms.
+ * Dismissal lasts only for this occurrence in the current browser session.
  */
 export function PendingInputBanner({
   runs,
@@ -107,9 +99,19 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
           </div>
         </div>
 
-        {/* Same surfaces as a paused card: the question + the action panel. */}
-        <ApprovalContext run={run} />
-        <ApprovalPanel run={run} />
+        {run.attention?.kind === 'action_required' ? (
+          <>
+            <p className="mt-3 whitespace-pre-wrap text-sm text-text-primary">
+              {run.attention.message}
+            </p>
+            <RunActionBar run={run} />
+          </>
+        ) : (
+          <>
+            <ApprovalContext run={run} />
+            <ApprovalPanel run={run} />
+          </>
+        )}
       </div>
     </article>
   );
