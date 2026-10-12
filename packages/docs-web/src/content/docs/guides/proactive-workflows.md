@@ -33,7 +33,7 @@ When an issue opens, it runs four nodes:
 3. **`review`** is an approval gate. Its message shows the classifier's reason and the full draft. Approving continues the run. Rejecting cancels it, so nothing is posted.
 4. **`post`** sends the draft with `gh issue comment`. It is a `bash:` node rather than an agent because the person approved that exact text, and an agent could reword it after approval.
 
-The workflow declares `repository` and `issue_number` as required [inputs](/guides/authoring-workflows/#workflow-signature-inputs-returns-and-inputs), so the trigger binding supplies them. It declares `interactive: true` because a workflow with an approval gate must.
+The workflow declares `repository` and `issue_number` as required [inputs](/guides/authoring-workflows/#workflow-signature-inputs-returns-and-inputs), so the trigger binding supplies them. It declares `interactive: true` because `archon validate workflows` requires that of any workflow with an approval gate. The flag changes nothing for a triggered run, which has no chat to stream to.
 
 Every agent node returns a small typed object. Nodes never parse another node's prose, and the `when:` condition compares an enum field, not free text.
 
@@ -82,7 +82,7 @@ archon workflow status --all
 archon workflow get <run-id>
 ```
 
-Then approve or reject it. Both commands continue the run:
+Then approve or reject it. Approving continues the run to `post`; rejecting cancels it:
 
 ```bash
 archon workflow approve <run-id>
