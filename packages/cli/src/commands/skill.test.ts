@@ -25,6 +25,7 @@ describe('copyArchonSkill', () => {
       ...new Bun.Glob('**/*').scanSync({
         cwd: resolve(import.meta.dir, '../../../../.claude/skills/archon-cli'),
         onlyFiles: true,
+        dot: true,
       }),
     ]
       .map(file => file.replaceAll('\\', '/'))
