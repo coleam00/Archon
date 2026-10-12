@@ -208,3 +208,49 @@ test('verifies the published Standard Webhooks signing vector', async () => {
     )
   ).toMatchObject({ status: 'received' });
 });
+
+const pointerDocument = { nested: { items: [null, { 'a/b': { '~key': false } }] }, '': 7 };
+test.each([
+  ['', pointerDocument],
+  ['/nested/items/0', null],
+  ['/nested/items/1/a~1b/~0key', false],
+  ['/', 7],
+  ['/nested/items/01', undefined],
+  ['/nested/items/-', undefined],
+  ['/nested/items/2', undefined],
+  ['/nested/items/0/x', undefined],
+  ['/toString', undefined],
+  ['/constructor', undefined],
+  ['/missing', undefined],
+] as const)('maps pointer %s through own JSON properties', async (pointer, expected) => {
+  const result = await receive(signed(JSON.stringify(pointerDocument)), {
+    ...config(),
+    bindings: [{ ...binding, inputMapping: { payload: pointer } }],
+  });
+  if (expected === undefined) {
+    expect(result).toMatchObject({
+      status: 'received',
+      acceptance: {
+        outcome: 'unmatched',
+        bindings: [],
+        evaluatedBindings: [{ bindingId: binding.bindingId, status: 'rejected' }],
+      },
+    });
+  } else {
+    expect(result).toMatchObject({
+      status: 'received',
+      acceptance: {
+        outcome: 'matched',
+        bindings: [{ launch: { inputs: { count: 0, payload: expected } } }],
+      },
+    });
+  }
+});
+test.each(['abc', '/~', '/~2', '/a~x'])('fails boot for invalid pointer %s', pointer => {
+  expect(() =>
+    createSource({
+      sourceInstanceId: 'orders',
+      config: { ...config(), bindings: [{ ...binding, inputMapping: { payload: pointer } }] },
+    })
+  ).toThrow('configuration');
+});

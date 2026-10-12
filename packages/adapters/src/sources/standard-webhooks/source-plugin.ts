@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import { jsonValueSchema, type JsonValue } from '@archon/workflows/output-ref';
@@ -9,10 +9,60 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 import type {
   WebhookSourcePluginFactory,
+  WebhookSourceRequest,
   WebhookSourceResult,
 } from '@archon/workflows/webhook-source-plugin';
-import { isJsonPointer, resolveJsonPointer } from './json-pointer';
-import { decodeSigningSecret, verifySignature } from './signature';
+
+function isJsonPointer(pointer: string): boolean {
+  return (pointer === '' || pointer.startsWith('/')) && !/~(?:[^01]|$)/.test(pointer);
+}
+
+function resolveJsonPointer(value: JsonValue, pointer: string): JsonValue | undefined {
+  if (!isJsonPointer(pointer)) return undefined;
+  if (pointer === '') return value;
+  let current: JsonValue | undefined = value;
+  for (const token of pointer.slice(1).split('/')) {
+    const key = token.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(key)) return undefined;
+      current = current[Number(key)];
+    } else if (current !== null && typeof current === 'object' && Object.hasOwn(current, key)) {
+      current = current[key];
+    } else return undefined;
+  }
+  return current;
+}
+
+function decodeSigningSecret(secret: string | undefined): Buffer {
+  const encoded = secret?.startsWith('whsec_') ? secret.slice(6) : '';
+  const decoded = Buffer.from(encoded, 'base64');
+  if (decoded.length === 0 || decoded.toString('base64') !== encoded)
+    throw new Error('Standard Webhooks signing secret must be whsec_ followed by valid base64');
+  return decoded;
+}
+
+function verifySignature(request: WebhookSourceRequest, secret: Buffer): boolean {
+  const id = request.headers['webhook-id'];
+  const timestamp = request.headers['webhook-timestamp'];
+  const signatures = request.headers['webhook-signature'];
+  if (!id || !timestamp || !signatures || !/^[0-9]+$/.test(timestamp)) return false;
+  const seconds = Number(timestamp);
+  const received = Date.parse(request.receivedAt) / 1000;
+  if (
+    !Number.isSafeInteger(seconds) ||
+    !Number.isFinite(received) ||
+    Math.abs(received - seconds) > 300
+  )
+    return false;
+  const expected = Buffer.from(
+    createHmac('sha256', secret).update(`${id}.${timestamp}.${request.body}`).digest('base64')
+  );
+  return signatures.split(' ').some(entry => {
+    if (!entry.startsWith('v1,')) return false;
+    const candidate = Buffer.from(entry.slice(3));
+    return candidate.length === expected.length && timingSafeEqual(candidate, expected);
+  });
+}
 
 const bindingSchema = resourceStartBindingIntentSchema
   .omit({ bindingRevision: true })

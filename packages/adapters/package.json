@@ -10,8 +10,7 @@
     "./forge/github-source-plugin": "./src/forge/github/source-plugin.ts",
     "./community/forge/gitea": "./src/community/forge/gitea/index.ts",
     "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts",
-    "./forge/github-plugin": "./src/forge/github/plugin.ts",
-    "./sources/standard-webhooks-source-plugin": "./src/sources/standard-webhooks/source-plugin.ts"
+    "./forge/github-plugin": "./src/forge/github/plugin.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
