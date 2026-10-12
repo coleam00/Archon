@@ -266,7 +266,7 @@ export async function linkPlatformIdentity(
   platform: IdentityPlatform,
   platformUserId: string,
   displayName?: string,
-  options: { move?: boolean } = {}
+  move = false
 ): Promise<void> {
   identityPlatformSchema.parse(platform);
   if (!platformUserId.trim()) throw new Error('Platform user id must not be empty.');
@@ -281,14 +281,14 @@ export async function linkPlatformIdentity(
          platform_display_name = COALESCE(excluded.platform_display_name, remote_agent_user_identities.platform_display_name)
      WHERE remote_agent_user_identities.user_id = excluded.user_id OR $5
      RETURNING *`,
-    [userId, platform, platformUserId, displayName ?? null, options.move ?? false]
+    [userId, platform, platformUserId, displayName ?? null, move]
   );
   if (!result.rows[0]) {
     const existing = await selectIdentity(platform, platformUserId);
     if (!existing) throw new Error('Identity disappeared while linking; retry the command.');
     throw new PlatformIdentityConflictError(platform, platformUserId, existing.user_id, userId);
   }
-  getLog().info({ userId, platform, moved: options.move ?? false }, 'user.identity_linked');
+  getLog().info({ userId, platform, moved: move }, 'user.identity_linked');
 }
 
 export async function linkGithubIdentity(userId: string, login: string): Promise<void> {

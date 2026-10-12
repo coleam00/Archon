@@ -76,6 +76,10 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
       'Proves provider-attempt admission contention and holder-kind convergence against a live PostgreSQL service.',
   },
   {
+    command: 'bun run --cwd packages/core test src/db/users.postgres.integration.test.ts',
+    reason: 'Proves identity linking, conflicts and moves in scratch PostgreSQL databases.',
+  },
+  {
     command: 'bun test packages/core/src/db/workflows.postgres.integration.test.ts',
     reason:
       'Proves workflow-run queries with Postgres-only semantics (metadata merge, uuid id-prefix lookup) against a live PostgreSQL service.',

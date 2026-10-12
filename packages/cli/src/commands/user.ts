@@ -38,6 +38,6 @@ export async function userLinkCommand(
       'Expected <platform>:<platform-user-id> with a valid platform and non-empty id.'
     );
   }
-  await linkPlatformIdentity(userId, platform.data, platformUserId, undefined, { move });
+  await linkPlatformIdentity(userId, platform.data, platformUserId, undefined, move);
   console.log(`${userId}\t${identity}`);
 }
