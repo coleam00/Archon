@@ -217,22 +217,6 @@ test('a command terminated by a signal is an execution failure', async () => {
   else expect(typeof error.exitCode).toBe('number');
 });
 
-test('timeout kills TERM-ignoring descendants before returning setup failure', async () => {
-  const started = Date.now();
-  const error = await createRunWorktreeSetupExecutor(
-    deps,
-    run,
-    {}
-  )(input(["trap '' TERM; (sleep 0.8; touch escaped-timeout) & wait"], 30)).catch(
-    (error: unknown) => error
-  );
-  expect(error).toBeInstanceOf(WorktreePostCreateError);
-  expect(rows[1].data?.failureKind).toBe('timeout');
-  expect(Date.now() - started).toBeLessThan(600);
-  await Bun.sleep(850);
-  expect(await Bun.file(join(root, 'escaped-timeout')).exists()).toBe(false);
-});
-
 for (const scenario of [
   {
     name: 'named user without a token scrubs host and bot credentials',

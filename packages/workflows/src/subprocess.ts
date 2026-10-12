@@ -46,7 +46,7 @@ export function buildSubprocessDockerArgs(
   return dockerArgs;
 }
 
-/** Subprocess failure evidence, including the owned host deadline and legacy execFile fields. */
+/** Subprocess failure evidence, including execFile timeout and exit fields. */
 export type RawSubprocessRejection = Error & {
   stdout?: string;
   stderr?: string;
@@ -59,14 +59,12 @@ export type RawSubprocessRejection = Error & {
   code?: number | string | null;
   /** True when Node killed the child after the configured `execFile` timeout elapsed. */
   killed?: boolean;
-  /** The host process-tree deadline expired, independent of its eventual exit code. */
-  timedOut?: boolean;
   /** Terminal signal, also present when a command terminates itself. */
   signal?: string | null;
 };
 
 export function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
-  return error.timedOut === true || (error.killed === true && error.code === null);
+  return error.killed === true && error.code === null;
 }
 
 /**
@@ -76,7 +74,7 @@ export function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
  * removed even when the failed process echoes them without their env key.
  *
  * Mutates in place rather than returning a fresh Error: callers classify the
- * rejection by reading `timedOut`/`killed` and `code` (ENOENT/EACCES) off
+ * rejection by reading `killed` and `code` (ENOENT/EACCES) off
  * the original object, and a replacement would silently drop those and turn every
  * timeout into a generic failure.
  *
@@ -143,8 +141,6 @@ export async function runSubprocess(
     cwd: string;
     timeout: number;
     env: NodeJS.ProcessEnv;
-    /** Nodes stay in the live owner's process group so run cancellation stops them. */
-    processTreeTimeout?: true;
     protectedEnvKeys?: readonly string[];
     protectedCredentialValues?: readonly string[];
     retention: SubprocessRetention | { standalone: true };
@@ -179,7 +175,6 @@ export async function runSubprocess(
         : await execFileAsync(cmd, args, {
             cwd: options.cwd,
             timeout: options.timeout,
-            ...(options.processTreeTimeout ? { processTreeTimeout: true } : {}),
             env: subprocessEnv,
           });
 

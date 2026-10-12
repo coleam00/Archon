@@ -1,5 +1,4 @@
-import { terminateTree } from '@archon/paths/plugin-process';
-import { execFile, spawn } from 'child_process';
+import { execFile } from 'child_process';
 import { existsSync } from 'fs';
 import { mkdir as fsMkdir } from 'fs/promises';
 import { promisify } from 'util';
@@ -95,18 +94,9 @@ export async function execFileAsync(
     maxBuffer?: number;
     env?: NodeJS.ProcessEnv;
     windowsHide?: boolean;
-    /** Await forced process-tree termination when the deadline expires. */
-    processTreeTimeout?: boolean;
   }
 ): Promise<{ stdout: string; stderr: string }> {
-  const { processTreeTimeout, ...execOptions } = options ?? {};
-  if (processTreeTimeout && execOptions.timeout) {
-    return execFileWithProcessTreeTimeout(cmd, args, {
-      ...execOptions,
-      timeout: execOptions.timeout,
-    });
-  }
-  const result = await promisifiedExecFile(cmd, args, { windowsHide: true, ...execOptions });
+  const result = await promisifiedExecFile(cmd, args, { windowsHide: true, ...options });
   // The `.toString()` these two lines used to carry is gone deliberately. Passing an
   // options OBJECT unconditionally (rather than possibly `undefined`) resolves
   // execFile to its string-encoding overload, so both fields are already strings and
@@ -116,95 +106,6 @@ export async function execFileAsync(
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
   };
-}
-
-async function execFileWithProcessTreeTimeout(
-  cmd: string,
-  args: string[],
-  options: Omit<NonNullable<Parameters<typeof execFileAsync>[2]>, 'processTreeTimeout'> & {
-    timeout: number;
-  }
-): Promise<{ stdout: string; stderr: string }> {
-  const child = spawn(cmd, args, {
-    cwd: options.cwd,
-    env: options.env,
-    windowsHide: options.windowsHide ?? true,
-    detached: process.platform !== 'win32',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const maxBuffer = options.maxBuffer ?? 1024 * 1024;
-  let stdout = Buffer.alloc(0);
-  let stderr = Buffer.alloc(0);
-  let failure: Error | undefined;
-  let timedOut = false;
-  let termination: Promise<void> | undefined;
-  let terminationError: Error | undefined;
-  const stop = (): void => {
-    if (termination) return;
-    termination =
-      child.pid === undefined
-        ? Promise.resolve()
-        : terminateTree(child.pid).catch((error: unknown) => {
-            terminationError = error instanceof Error ? error : new Error(JSON.stringify(error));
-          });
-  };
-  const timer = setTimeout(() => {
-    timedOut = true;
-    stop();
-  }, options.timeout);
-  const collect = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
-    const previous = stream === 'stdout' ? stdout : stderr;
-    const buffer = Buffer.concat([previous, chunk.subarray(0, maxBuffer - previous.length)]);
-    if (stream === 'stdout') stdout = buffer;
-    else stderr = buffer;
-    if (previous.length + chunk.length > maxBuffer && !failure) {
-      failure = Object.assign(new Error(`${stream} maxBuffer length exceeded`), {
-        code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
-      });
-      clearTimeout(timer);
-      stop();
-    }
-  };
-  child.stdout.on('data', (chunk: Buffer) => {
-    collect('stdout', chunk);
-  });
-  child.stderr.on('data', (chunk: Buffer) => {
-    collect('stderr', chunk);
-  });
-  child.on('error', error => {
-    failure = error;
-  });
-  const closed = await new Promise<{ code: number | null; signal: string | null }>(resolve => {
-    child.once('close', (code, signal) => {
-      resolve({ code, signal });
-    });
-  });
-  clearTimeout(timer);
-  await termination;
-  if (terminationError !== undefined) {
-    failure ??= new Error(`Command failed: ${cmd} ${args.join(' ')}`);
-    failure.message += `; could not terminate subprocess tree: ${terminationError.message}`;
-  }
-  const output = { stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8') };
-  if (timedOut || failure || closed.code !== 0) {
-    throw Object.assign(
-      failure ??
-        new Error(
-          timedOut
-            ? `Command timed out after ${options.timeout} ms`
-            : `Command failed: ${cmd} ${args.join(' ')}\n${output.stderr}`
-        ),
-      {
-        ...output,
-        ...(!failure ? { code: closed.code } : {}),
-        signal: closed.signal,
-        timedOut,
-        cmd: `${cmd} ${args.join(' ')}`,
-        spawnargs: args,
-      }
-    );
-  }
-  return output;
 }
 
 /** Wrapper around fs.mkdir for test mockability */
