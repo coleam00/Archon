@@ -1522,6 +1522,6 @@ checkout (auto-registered when needed) or registered folder resolves the project
 `USERNAME` identifies the operator. Projects with colliding storage names share state,
 just as with `$STATE_DIR`; register them with distinct names.
 
-`archon workflow cleanup <days>` also prunes old state revisions, keeps each live
+`archon workflow cleanup <days>` also prunes old state revisions, keeps each live document's latest
 revision, retains the latest tombstone of deleted documents, and reports both counts.
 See [Durable state documents](/guides/authoring-workflows/#durable-state-documents).
