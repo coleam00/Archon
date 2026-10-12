@@ -2331,8 +2331,23 @@ export async function executeWorkflow(
   // older-wins tiebreaker. The query treats `pending` rows older than 5 min
   // as orphaned, so leaks from crashed dispatches or resume orphans don't
   // permanently block the path.
-  if (workflow.mutates_checkout !== false) {
+  const subrun = readSubrunMetadata(workflowRun.metadata);
+  if (workflow.mutates_checkout !== false || subrun.childIndex !== undefined) {
     try {
+      const sharedCheckoutSiblings =
+        workflowRun.parent_run_id &&
+        subrun.parentNodeId !== undefined &&
+        subrun.childIndex !== undefined
+          ? (await deps.store.findChildRuns(workflowRun.parent_run_id)).filter(sibling => {
+              const peer = readSubrunMetadata(sibling.metadata);
+              return (
+                sibling.id !== workflowRun.id &&
+                sibling.working_path === cwd &&
+                peer.parentNodeId === subrun.parentNodeId &&
+                peer.childIndex !== undefined
+              );
+            })
+          : [];
       // A `workflow:` sub-run and its children share ONE checkout (#2121), so the
       // path-lock must not treat another run in this run's OWN vertical tree line as
       // a conflict. Exclude both directions:
@@ -2340,14 +2355,11 @@ export async function executeWorkflow(
       //     its own running/paused parent on that path.
       //   • DESCENDANTS (downward via a bounded walk) — a parent resumed while still
       //     blocked on a paused child must re-pause on it, not self-cancel against it.
-      // Siblings are intentionally NOT excluded (see #2180). The ancestor lookup fails
-      // OPEN (skip the best-effort lock) — a false self-collision against the parent is
-      // worse than a briefly-unenforced lock; the descendant lookup fails CLOSED (run
-      // the lock with whatever we have) — most runs have no descendants, so a lost set
-      // only risks a legitimate-looking collision, never a self-collision.
-      const pathLockExclude: string[] = [];
-      let skipPathLock = false;
-      if (workflowRun.parent_run_id) {
+      // Only children of the same fan-out node may share the lock horizontally.
+      // Children of other nodes still compete, even when they have the same parent.
+      const pathLockExclude = sharedCheckoutSiblings.map(sibling => sibling.id);
+      let skipPathLock = workflow.mutates_checkout === false;
+      if (!skipPathLock && workflowRun.parent_run_id) {
         try {
           const ancestry = await deps.store.getRunAncestry(workflowRun.id);
           pathLockExclude.push(...ancestry.map(a => a.id));
@@ -2445,6 +2457,25 @@ export async function executeWorkflow(
           success: false,
           error: `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
         };
+      }
+      for (const sibling of sharedCheckoutSiblings) {
+        // Append on both runs: the earlier child may already have finished before
+        // this child exists. No read/modify/write metadata race is needed.
+        for (const [runId, siblingId] of [
+          [workflowRun.id, sibling.id],
+          [sibling.id, workflowRun.id],
+        ]) {
+          await deps.store.createWorkflowEvent({
+            workflow_run_id: runId,
+            event_type: 'workflow.checkout_shared',
+            data: {
+              parent_run_id: workflowRun.parent_run_id,
+              parent_node_id: subrun.parentNodeId,
+              working_path: cwd,
+              sibling_run_id: siblingId,
+            },
+          });
+        }
       }
     } catch (error) {
       if (error instanceof TerminalStatusWriteError) throw error;

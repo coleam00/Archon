@@ -146,6 +146,7 @@ export const WORKFLOW_EVENT_TYPES = [
   // Between-run continuation (#2747) — written on the ADOPTING run's log when it
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
+  'workflow.checkout_shared',
   ...DURABLE_WORKFLOW_EVENT_TYPES,
   'node_retry_scheduled',
   'loop_iteration_started',

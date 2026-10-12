@@ -3222,6 +3222,7 @@ nodes:
     // `isolation: worktree` on the fan-out node isolates every child: the resolver was
     // called once per item, with distinct child indexes.
     expect(calls).toHaveLength(3);
+    expect(store.events.some(e => e.event_type === 'workflow.checkout_shared')).toBe(false);
     expect([...calls.map(c => c.childIndex ?? 0)].sort((a, b) => a - b)).toEqual([0, 1, 2]);
 
     // Three children, each linked to the parent + the fan-out node, keyed by child_index,
@@ -3335,6 +3336,11 @@ nodes:
     for (const c of children) {
       expect(c.status).toBe('completed');
       expect(c.working_path).toBe(cwd);
+      expect(
+        store.events.some(
+          e => e.workflow_run_id === c.id && e.event_type === 'workflow.checkout_shared'
+        )
+      ).toBe(true);
     }
     const workCompleted = store.events.find(
       e => e.event_type === 'node_completed' && e.step_name === 'work'
@@ -3346,11 +3352,13 @@ nodes:
     ]);
   });
 
-  it('blocks a shared-checkout fan-out over a repo-writing child BEFORE any child is spawned', async () => {
-    await writeWorkflow('fan-child', fanChildEcho);
-    await writeWorkflow(
-      'fan-collide',
-      `
+  it(
+    'runs repo-writing fan-out children in the shared checkout and excludes unrelated runs',
+    async () => {
+      await writeWorkflow('fan-child', fanChildEcho);
+      await writeWorkflow(
+        'fan-collide',
+        `
 name: fan-collide
 description: concurrent children over the parent checkout, child does not declare read-only
 nodes:
@@ -3364,39 +3372,108 @@ nodes:
       items: "$plan.output"
       max_parallel: 2
 `
-    );
+      );
 
-    const store = new InMemoryStore();
-    const deps = makeDeps(store);
-    const parent = await discover('fan-collide');
-    const { resolver, calls } = makeFanResolver(cwd);
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      { conversationId: 'conv-db' },
-      { resolveChildIsolation: resolver }
-    );
+      let releaseOverlap: (() => void) | undefined;
+      const overlap = new Promise<void>(resolve => {
+        releaseOverlap = resolve;
+      });
+      let releaseQueries: (() => void) | undefined;
+      const queriesReady = new Promise<void>(resolve => {
+        releaseQueries = resolve;
+      });
+      let outsideResult: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
+      const outside = await discover('fan-child');
+      class SharedCheckoutStore extends InMemoryStore {
+        maxLiveChildren = 0;
+        private firstPair = 0;
+        private lockQueries = 0;
+        findChildRuns = async (parentRunId: string): Promise<WorkflowRun[]> => {
+          const children = [...this.runs.values()].filter(r => r.parent_run_id === parentRunId);
+          if (children.length === 1 && children[0] && holdsPathLock(children[0].status)) {
+            await Promise.race([
+              overlap,
+              new Promise<never>((_resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error('children did not overlap')), 5000);
+                void overlap.then(() => clearTimeout(timer));
+              }),
+            ]);
+          }
+          if (children.length >= 2) releaseOverlap?.();
+          return [...this.runs.values()].filter(r => r.parent_run_id === parentRunId);
+        };
+        getActiveWorkflowRunByPath: IWorkflowStore['getActiveWorkflowRunByPath'] = async (
+          path,
+          self
+        ) => {
+          const row = self ? this.runs.get(self.id) : undefined;
+          if (row?.parent_run_id) {
+            this.maxLiveChildren = Math.max(
+              this.maxLiveChildren,
+              [...this.runs.values()].filter(
+                r => r.parent_run_id === row.parent_run_id && holdsPathLock(r.status)
+              ).length
+            );
+          }
+          if (row?.parent_run_id && this.firstPair++ === 0) {
+            outsideResult = await executeWorkflow(
+              makeDeps(this),
+              makePlatform(),
+              'outside',
+              cwd,
+              outside,
+              'outside',
+              { conversationId: 'outside' }
+            );
+          }
+          if (row?.parent_run_id && ++this.lockQueries <= 2) {
+            if (this.lockQueries === 2) releaseQueries?.();
+            await queriesReady;
+          }
+          return super.getActiveWorkflowRunByPath(path, self);
+        };
+      }
+      const store = new SharedCheckoutStore();
+      const deps = makeDeps(store);
+      const parent = await discover('fan-collide');
+      const { resolver, calls } = makeFanResolver(cwd);
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        { conversationId: 'conv-db' },
+        { resolveChildIsolation: resolver }
+      );
 
-    expect(result.success).toBe(false);
-    // Nothing was spawned and nothing was isolated — the cost of finding out at runtime
-    // (N-1 self-cancelled siblings, unrecoverable by resume) is never paid.
-    expect([...store.runs.values()].filter(r => r.workflow_name === 'fan-child')).toHaveLength(0);
-    expect(calls).toHaveLength(0);
-
-    const nodeFailed = store.events.find(
-      e => e.event_type === 'node_failed' && e.step_name === 'work'
-    );
-    const error = String(nodeFailed?.data?.error);
-    // The message names all three ways out — the author picks, the engine never guesses.
-    expect(error).toContain('mutates_checkout: false');
-    expect(error).toContain('isolation: worktree');
-    expect(error).toContain('max_parallel: 1');
-    expect(error).toContain('fan-child');
-  });
+      expect(result.success).toBe(true);
+      expect(store.maxLiveChildren).toBe(2);
+      expect(outsideResult?.success).toBe(false);
+      if (outsideResult?.success !== false) throw new Error('outside run was not refused');
+      expect(outsideResult.error).toContain('Workflow already active on this path');
+      const children = [...store.runs.values()].filter(
+        r => r.parent_run_id === result.workflowRunId
+      );
+      expect(children).toHaveLength(3);
+      expect(children.map(c => c.status)).toEqual(['completed', 'completed', 'completed']);
+      expect(calls).toHaveLength(0);
+      for (const child of children) {
+        expect(child.status).toBe('completed');
+        expect(child.working_path).toBe(cwd);
+        const siblings = store.events
+          .filter(
+            e => e.workflow_run_id === child.id && e.event_type === 'workflow.checkout_shared'
+          )
+          .map(e => e.data?.sibling_run_id);
+        expect(new Set(siblings)).toEqual(
+          new Set(children.filter(c => c.id !== child.id).map(c => c.id))
+        );
+      }
+    },
+    testTimeout(20000)
+  );
 
   it('an orphan-cancelled index is re-driven on resume, not left permanently cancelled', async () => {
     // `fan_out_orphan` is stamped by the ENGINE when the item list shrinks under a child.
@@ -3616,100 +3693,6 @@ nodes:
     const after = await store.getWorkflowRun(legacy.id);
     expect(after?.status).toBe('cancelled');
     expect((after?.metadata as Record<string, unknown>).cancelled_reason).toBe('fan_out_orphan');
-  });
-
-  it('a resume with ONE instance left is not blocked by the shared-checkout preflight', async () => {
-    // The preflight counts the indices this attempt will actually DRIVE, not items.length.
-    // Counting items.length instead would block every resume of a wide shared-checkout
-    // fan-out — including one with a single failed instance left, where there is no
-    // concurrency at all. That inversion (blocking recovery from an unrelated failure) is
-    // the bug this branch already fixed once, and nothing pinned it until now.
-    await writeWorkflow('fan-child', fanChildEcho);
-    await writeWorkflow(
-      'fan-resume-preflight',
-      `
-name: fan-resume-preflight
-description: wide fan-out over a repo-writing child, resumed with one instance left
-nodes:
-  - id: plan
-    bash: |
-      printf '%s' '["a","b","c"]'
-  - id: work
-    workflow: fan-child
-    depends_on: [plan]
-    fan_out:
-      items: "$plan.output"
-      max_parallel: 3
-      join: all_success
-`
-    );
-
-    const store = new InMemoryStore();
-    const deps = makeDeps(store);
-    const parent = await discover('fan-resume-preflight');
-
-    // Seed a partly-completed attempt: indices 0 and 2 completed, index 1 failed. The child
-    // declares no `mutates_checkout: false`, so a preflight counting items.length would see
-    // 3 and refuse; counting drivable indices sees 1 and proceeds.
-    const parentRun = await store.createWorkflowRun({
-      workflow_name: 'fan-resume-preflight',
-      origin: { conversationId: 'conv-db' },
-      user_message: 'goal',
-      working_path: cwd,
-    });
-    store.events.push({
-      workflow_run_id: parentRun.id,
-      event_type: 'node_completed',
-      step_name: 'plan',
-      data: { node_output: '["a","b","c"]' },
-    });
-    const seed = async (
-      idx: number,
-      status: Extract<WorkflowRun['status'], 'completed' | 'failed'>
-    ): Promise<void> => {
-      const child = await store.createWorkflowRun({
-        workflow_name: 'fan-child',
-        origin: { conversationId: 'conv-db' },
-        user_message: ['a', 'b', 'c'][idx],
-        parent_run_id: parentRun.id,
-        working_path: cwd,
-        metadata: { parent_node_id: 'work', child_index: idx },
-      });
-      if (status === 'completed') {
-        await store.updateWorkflowRun(child.id, { status: 'running' });
-        await store.completeWorkflowRun(
-          child.id,
-          { duration_ms: 0 },
-          { summary: `did:${['a', 'b', 'c'][idx]}` }
-        );
-      } else {
-        await store.failWorkflowRun(child.id, 'seeded failure');
-      }
-    };
-    await seed(0, 'completed');
-    await seed(1, 'failed');
-    await seed(2, 'completed');
-
-    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
-    const r = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      { conversationId: 'conv-db' },
-      { ...(hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }) }
-    );
-
-    // The resume completed: the one failed instance was re-driven, and the preflight did
-    // not fire on a `max_parallel: 3` node whose remaining work is a single child.
-    expect(r.success).toBe(true);
-    const nodeFailed = store.events.find(
-      e => e.event_type === 'node_failed' && e.step_name === 'work'
-    );
-    expect(String(nodeFailed?.data?.error ?? '')).not.toContain('mutates_checkout');
-    expect([...store.runs.values()].filter(c => c.workflow_name === 'fan-child')).toHaveLength(3);
   });
 
   it('max_parallel: 1 is a valid serial-in-place fan-out over a repo-writing child', async () => {
@@ -5554,21 +5537,8 @@ nodes:
   // deadline (5s) or a loaded CI run dies as a bun-test timeout instead of the
   // diagnostic rendezvous error.
   it(
-    'GAP: concurrent fan-out cancels a sibling unless the child sets mutates_checkout:false',
+    'children of different workflow nodes still compete for the shared checkout',
     async () => {
-      // The path lock (executor.ts, "Siblings are intentionally NOT excluded") means two
-      // `workflow:` nodes in one layer collide on the shared checkout: the loser
-      // self-cancels and its parent node fails. This is NOT the gate-slot bug — it
-      // happens with no gates anywhere, and it makes the default fan-out layout
-      // (`plan → [worker-a, worker-b]`) fail deterministically.
-      //
-      // The escape hatch is `mutates_checkout: false` on the CHILD workflow: the author
-      // asserts the child does not write the checkout, and the lock is skipped.
-      //
-      // Consequence for fan-out designs: analysis/review peers that write only to
-      // $ARTIFACTS_DIR can run concurrently TODAY. Peers that EDIT the repo cannot —
-      // those need per-child isolation (`isolation: worktree`, reserved + rejected in
-      // slice 1). Both halves are asserted so a change to either is visible.
       const childYaml = (name: string, extra: string): string => `
 name: ${name}
 description: fan-out child
