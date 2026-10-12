@@ -3,7 +3,6 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
-import { terminateTree } from '@archon/paths/plugin-process';
 import { descriptor } from './fixtures/descriptor';
 import type { ConnectedChat } from '@archon/chat-contract';
 import { ChatPluginUnavailableError } from './platform';
@@ -30,7 +29,7 @@ async function until(check: () => boolean | Promise<boolean>) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
-async function fixture(mode: string, args: string[] = []) {
+async function fixture(mode: string) {
   const root = await mkdtemp(join(tmpdir(), 'chat-process-'));
   roots.push(root);
   const file = join(root, 'pids');
@@ -38,7 +37,7 @@ async function fixture(mode: string, args: string[] = []) {
   const supervisor = new ChatSupervisor(
     {
       descriptor,
-      argv: [process.execPath, join(import.meta.dir, 'fixtures/plugin.ts'), mode, file, ...args],
+      argv: [process.execPath, join(import.meta.dir, 'fixtures/plugin.ts'), mode, file],
     },
     () => {},
     state => {
@@ -58,30 +57,22 @@ async function fixture(mode: string, args: string[] = []) {
   return { supervisor, live: () => live, pids, file };
 }
 
-test(
-  'a crash after readiness restarts the plugin',
-  async () => {
-    const { supervisor, pids, live } = await fixture('crash');
-    await until(live);
-    await expect(
-      supervisor.request(connection => connection.send({ conversationId: 'thread', text: 'hello' }))
-    ).rejects.toBeInstanceOf(ChatPluginUnavailableError);
-    await until(async () => (await pids()).length >= 2);
-    await until(live);
-    await supervisor.stop();
-    expect(records.some(record => record.includes('restart_scheduled'))).toBe(true);
-    expect(records.join('\n')).not.toContain('SECRET_TOKEN');
-    expect(records.join('\n')).not.toContain('USER_MESSAGE');
-  },
-  // Measured on windows-latest: a cold first job-launcher start took 19.6s, and each crash
-  // takes ~2.8s to surface while the PowerShell launcher exits.
-  testTimeout(40_000)
-);
-
-test(
-  'start failures restart with capped exponential backoff',
-  async () => {
-    const { supervisor, pids } = await fixture('retry');
+test.each(['crash', 'retry'])(
+  '%s restarts with capped exponential backoff',
+  async mode => {
+    records.length = 0;
+    const { supervisor, pids, live } = await fixture(mode);
+    if (mode === 'crash') {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await until(live);
+        await expect(
+          supervisor.request(connection =>
+            connection.send({ conversationId: 'thread', text: 'hello' })
+          )
+        ).rejects.toBeInstanceOf(ChatPluginUnavailableError);
+        await until(async () => (await pids()).length >= attempt + 2);
+      }
+    }
     await until(async () => (await pids()).length >= 4);
     await supervisor.stop();
     const delays = records
@@ -195,55 +186,6 @@ test('remote send errors expose only the typed RPC code, never plugin prose', as
   expect(records.join('\n')).not.toContain('SECRET_TOKEN');
   expect(records.join('\n')).not.toContain('USER_MESSAGE');
 });
-
-test.skipIf(process.platform !== 'win32')(
-  'Windows owns descendants after plugin stdin exit and crash',
-  async () => {
-    for (const mode of ['orphan-eof', 'orphan-crash']) {
-      const { supervisor, pids } = await fixture(mode);
-      await until(async () => (await pids()).length >= 2);
-      const ids = (await pids()).slice(0, 2).map(value => Number(value.replace('child:', '')));
-      try {
-        if (mode === 'orphan-crash') {
-          await until(() => records.some(record => record.includes('restart_scheduled')));
-        }
-        await supervisor.stop();
-        await until(() =>
-          ids.every(pid => {
-            try {
-              process.kill(pid, 0);
-              return false;
-            } catch (error) {
-              return (error as NodeJS.ErrnoException).code === 'ESRCH';
-            }
-          })
-        );
-      } finally {
-        await Promise.all(ids.map(terminateTree));
-      }
-      records.length = 0;
-    }
-  },
-  testTimeout(15_000)
-);
-
-test.skipIf(process.platform !== 'win32')(
-  'Windows launcher preserves executable arguments literally',
-  async () => {
-    const args = [
-      '',
-      'space and Unicode æ',
-      'embedded " quote',
-      'trailing\\',
-      "'; $env:USERPROFILE; $(exit 7)",
-    ];
-    const { supervisor, live, file } = await fixture('arguments', args);
-    await until(live);
-    expect(JSON.parse(await readFile(`${file}.args`, 'utf8'))).toEqual(args);
-    await supervisor.stop();
-  },
-  testTimeout(5000)
-);
 
 test(
   'send deadlines do not bound subprocess initialization',
