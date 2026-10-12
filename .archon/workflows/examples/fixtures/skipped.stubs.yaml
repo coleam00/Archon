@@ -1,0 +1,9 @@
+# The classifier skips the issue. Nothing after it has a stub, so the fixture
+# fails if any later node is reached.
+classify: { route: skip, reason: "stub: a feature request, not a bug" }
+fixture:
+  expect: completed
+  reached: [classify]
+  inputs:
+    repository: acme/widgets
+    issue_number: "43"
