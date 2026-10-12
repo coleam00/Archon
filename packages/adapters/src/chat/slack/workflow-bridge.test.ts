@@ -19,6 +19,17 @@ import type {
   WorkflowOperations,
 } from '@archon/core/operations/workflow-operations';
 
+const mockLogger = {
+  info: mock(() => undefined),
+  warn: mock(() => undefined),
+  error: mock(() => undefined),
+  debug: mock(() => undefined),
+};
+mock.module('@archon/paths', () => ({
+  createLogger: () => mockLogger,
+  captureApprovalResolved: () => undefined,
+}));
+
 const mockFindOrCreateUser = mock(async (_platform: string, userId: string) => ({
   id: `archon-${userId}`,
 }));
@@ -255,6 +266,8 @@ function makeTerminalEvent(status: 'completed' | 'failed' | 'cancelled'): Workfl
 
 describe('SlackWorkflowBridge', () => {
   beforeEach(() => {
+    mockLogger.info.mockClear();
+    mockLogger.warn.mockClear();
     mockGetConversationId.mockReset();
     mockSubscribe.mockClear();
     mockRespondToWorkflow.mockClear();
@@ -481,13 +494,18 @@ describe('SlackWorkflowBridge', () => {
   test('identity lookup failure passes unidentified without changing cancellation behavior', async () => {
     const { adapter, dispatchAction } = makeFakeAdapter();
     new SlackWorkflowBridge(adapter as never).attach();
-    mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+    mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable for U123 @alice'));
     await dispatchAction('cancel:r1', {
       user: { id: 'U123' },
       channel: { id: 'C1' },
       message: { ts: '2.000' },
     });
     expect(mockCancelWorkflow).toHaveBeenCalledWith('r1', { kind: 'unidentified' });
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { errorType: 'Error', platform: 'slack' },
+      'slack.bridge_actor_resolve_failed'
+    );
+    expect(mockLogger.info).toHaveBeenCalledWith({ runId: 'r1' }, 'slack.bridge_cancel_dispatched');
   });
 
   test.each(['revise', 'a'.repeat(256)])(
@@ -1023,6 +1041,10 @@ describe('SlackWorkflowBridge', () => {
       message: { ts: '2.000' },
     });
 
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { surface: 'respond' },
+      'slack.bridge_unauthorized_click'
+    );
     expect(mockApproveWorkflow).not.toHaveBeenCalled();
   });
 

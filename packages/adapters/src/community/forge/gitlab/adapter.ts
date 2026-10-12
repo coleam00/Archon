@@ -92,10 +92,7 @@ export class GitLabAdapter implements IPlatformAdapter {
       getLog().info('gitlab.whitelist_disabled');
     }
 
-    getLog().info(
-      { botMention: this.botMention, gitlabUrl: this.gitlabUrl },
-      'gitlab.adapter_initialized'
-    );
+    getLog().info({ gitlabUrl: this.gitlabUrl }, 'gitlab.adapter_initialized');
   }
 
   // ---------------------------------------------------------------------------
@@ -770,7 +767,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
       if (isSlashCommand) {
         finalMessage = strippedComment.split('\n')[0].trim();
-        getLog().debug({ command: finalMessage }, 'gitlab.slash_command_processing');
+        getLog().debug('gitlab.slash_command_processing');
 
         if (isMR && mergeRequest) {
           contextToAppend = `GitLab Merge Request !${String(mergeRequest.iid)}: "${mergeRequest.title}"\nUse 'glab mr view ${String(mergeRequest.iid)}' for full details if needed.`;

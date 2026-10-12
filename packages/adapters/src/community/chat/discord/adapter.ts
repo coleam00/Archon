@@ -246,7 +246,7 @@ export class DiscordAdapter implements IPlatformAdapter {
       const content = this.stripBotMention(message);
       const threadName = this.generateThreadName(content);
 
-      getLog().info({ threadName, messageId: message.id }, 'discord.thread_creating');
+      getLog().info({ messageId: message.id }, 'discord.thread_creating');
 
       const thread = await message.startThread({
         name: threadName,

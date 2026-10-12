@@ -217,10 +217,7 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     this.retryDelayFn = options?.retryDelayMs ?? ((attempt: number): number => 1000 * attempt);
 
-    getLog().info(
-      { botMention: this.botMention, authMode: auth.kind },
-      'github.adapter_initialized'
-    );
+    getLog().info({ authMode: auth.kind }, 'github.adapter_initialized');
   }
 
   /**
@@ -1349,7 +1346,7 @@ ${userComment}`;
     if (isSlashCommand) {
       // For slash commands, use only the first line
       finalMessage = strippedComment.split('\n')[0].trim();
-      getLog().debug({ command: finalMessage }, 'github.slash_command_processing');
+      getLog().debug('github.slash_command_processing');
 
       // Add issue/PR reference context
       if (eventType === 'issue' && issue) {

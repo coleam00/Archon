@@ -92,7 +92,7 @@ export class GiteaAdapter implements IPlatformAdapter {
 
     this.retryDelayFn = options?.retryDelayMs ?? ((attempt: number): number => 1000 * attempt);
 
-    getLog().info({ botMention: this.botMention, baseUrl: this.baseUrl }, 'adapter_initialized');
+    getLog().info({ baseUrl: this.baseUrl }, 'adapter_initialized');
   }
 
   /**
@@ -918,7 +918,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     if (isSlashCommand) {
       // For slash commands, use only the first line
       finalMessage = strippedComment.split('\n')[0].trim();
-      getLog().debug({ command: finalMessage }, 'slash_command_processing');
+      getLog().debug('slash_command_processing');
 
       // Add issue/PR reference context
       if (isPR && pullRequest) {

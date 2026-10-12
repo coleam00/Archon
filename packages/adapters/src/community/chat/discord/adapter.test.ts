@@ -99,6 +99,9 @@ describe('DiscordAdapter', () => {
   });
 
   beforeEach(() => {
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.warn.mockClear();
     mockChannelSend.mockClear();
     mockChannelsFetch.mockClear();
     mockClientOn.mockClear();
@@ -227,6 +230,31 @@ describe('DiscordAdapter', () => {
       expect(calls.length).toBe(1);
       return calls[0][1] as (msg: import('discord.js').Message) => void;
     }
+
+    test('unauthorized and ready events log no platform identities', async () => {
+      const original = process.env.DISCORD_ALLOWED_USER_IDS;
+      process.env.DISCORD_ALLOWED_USER_IDS = '111';
+      try {
+        const adapter = new DiscordAdapter('fake-token-for-testing');
+        await adapter.start();
+        getMessageCreateHandler()({
+          author: { id: '987654321', username: 'alice', bot: false },
+          content: '@alice',
+        } as unknown as import('discord.js').Message);
+        const ready = (
+          mockClientOnce as unknown as Mock<
+            (event: string, callback: (client: unknown) => void) => void
+          >
+        ).mock.calls.find(call => call[0] === 'ready')?.[1];
+        if (!ready) throw new Error('Missing ready callback');
+        ready({ user: { id: '111', tag: 'alice#1234' } });
+        expect(mockLogger.info).toHaveBeenCalledWith('discord.unauthorized_message');
+        expect(mockLogger.info).toHaveBeenCalledWith('discord.bot_logged_in');
+      } finally {
+        if (original === undefined) delete process.env.DISCORD_ALLOWED_USER_IDS;
+        else process.env.DISCORD_ALLOWED_USER_IDS = original;
+      }
+    });
 
     test('passes platformUserId and displayName from message.author', async () => {
       const adapter = new DiscordAdapter('fake-token-for-testing');
@@ -712,7 +740,7 @@ describe('DiscordAdapter', () => {
       const mockMessage = {
         id: 'msg123',
         channelId: 'channel456',
-        content: 'Test message for thread',
+        content: 'Help <@987654321> @alice',
         channel: {
           isThread: () => false,
         },
@@ -726,10 +754,14 @@ describe('DiscordAdapter', () => {
       const result = await adapter.ensureThread('channel456', mockMessage);
 
       expect(mockStartThread).toHaveBeenCalledWith({
-        name: 'Test message for thread',
+        name: 'Help <@987654321> @alice',
         autoArchiveDuration: 1440,
         reason: 'Bot response thread',
       });
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { messageId: 'msg123' },
+        'discord.thread_creating'
+      );
       expect(result).toBe('newthread123');
     });
 

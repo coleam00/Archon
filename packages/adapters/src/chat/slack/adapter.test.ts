@@ -99,6 +99,19 @@ mock.module('@slack/bolt', () => ({
   },
 }));
 
+import { DeviceFlowError, GithubIdentityConflictError } from '@archon/core';
+const mockFindOrCreateUser = mock(async () => ({ id: 'internal-user' }));
+const mockConnectGithub = mock(async () => undefined);
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mockFindOrCreateUser,
+}));
+mock.module('@archon/core', () => ({
+  isPerUserGitHubEnabled: () => true,
+  connectGithubForUser: mockConnectGithub,
+  DeviceFlowError,
+  GithubIdentityConflictError,
+}));
+
 import { SlackAdapter } from './adapter';
 import type { SlackMessageEvent } from './types';
 
@@ -108,6 +121,9 @@ describe('SlackAdapter', () => {
   });
 
   beforeEach(() => {
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.warn.mockClear();
     mockPostMessage.mockClear();
   });
 
@@ -323,6 +339,25 @@ describe('SlackAdapter', () => {
     });
   });
 
+  test.each(['app_mention', 'message'])('unauthorized %s logs no actor data', async eventName => {
+    const original = process.env.SLACK_ALLOWED_USER_IDS;
+    process.env.SLACK_ALLOWED_USER_IDS = 'U1ALICE';
+    try {
+      mockEvent.mockClear();
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      await adapter.start();
+      const callback = mockEvent.mock.calls.find(call => call[0] === eventName)?.[1];
+      if (typeof callback !== 'function') throw new Error('Missing event callback');
+      await callback({ event: { user: 'U_PRIVATE', text: '@alice', channel_type: 'im' } });
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        eventName === 'message' ? 'slack.unauthorized_dm' : 'slack.unauthorized_message'
+      );
+    } finally {
+      if (original === undefined) delete process.env.SLACK_ALLOWED_USER_IDS;
+      else process.env.SLACK_ALLOWED_USER_IDS = original;
+    }
+  });
+
   describe('message formatting', () => {
     let adapter: SlackAdapter;
 
@@ -523,11 +558,42 @@ describe('SlackAdapter', () => {
         // (mirrors the app_mention silent-rejection policy).
         expect((args.respond as Mock<() => Promise<void>>).mock.calls.length).toBe(0);
         expect(mockPostMessage).not.toHaveBeenCalled();
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          { kind: 'archon-workflow' },
+          'slack.slash_unauthorized'
+        );
       } finally {
         if (original === undefined) delete process.env.SLACK_ALLOWED_USER_IDS;
         else process.env.SLACK_ALLOWED_USER_IDS = original;
       }
     });
+
+    test.each(['identity', 'device flow'])(
+      'GitHub connect %s errors log only classification',
+      async source => {
+        mockCommand.mockClear();
+        mockLogger.warn.mockClear();
+        const error = Object.assign(new Error('U_PRIVATE @alice Alice Liddell'), {
+          code: '23505',
+          detail: 'U_PRIVATE',
+        });
+        if (source === 'identity') mockFindOrCreateUser.mockRejectedValueOnce(error);
+        else mockConnectGithub.mockRejectedValueOnce(error);
+        const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+        adapter.onMessage(async () => {});
+        await adapter.start();
+        await findCommandHandler('/archon')(
+          makeSlashArgs({ user_id: 'U_PRIVATE', text: 'connect github' })
+        );
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          { errorType: 'Error', errorCode: '23505', platform: 'slack' },
+          source === 'identity'
+            ? 'slack.connect_github_identity_failed'
+            : 'slack.connect_github_failed'
+        );
+      }
+    );
 
     test('/archon-workflow acknowledges the command in the spelling the user typed', async () => {
       mockPostMessage.mockClear();

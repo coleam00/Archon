@@ -105,17 +105,8 @@ export class TelegramAdapter implements IPlatformAdapter {
     try {
       await this.bot.api.sendMessage(id, formatted, { parse_mode: 'MarkdownV2' });
       getLog().debug({ chunkLength: chunk.length }, 'telegram.markdownv2_chunk_sent');
-    } catch (error) {
-      // Fallback to stripped plain text for this chunk
-      const err = error as Error;
-      getLog().warn(
-        {
-          err,
-          originalPreview: chunk.substring(0, 200),
-          formattedPreview: formatted.substring(0, 200),
-        },
-        'telegram.markdownv2_failed'
-      );
+    } catch {
+      getLog().warn({ chunkLength: chunk.length }, 'telegram.markdownv2_failed');
       await this.bot.api.sendMessage(id, stripMarkdown(chunk));
     }
   }
