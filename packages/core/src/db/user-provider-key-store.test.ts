@@ -17,24 +17,20 @@ mock.module('./connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
-// Pi OAuth wrapper: mint a bearer from the stored blob (echoing the creds so the
-// store sees "no rotation" by default). Provider singletons stubbed with `.id`.
-const mockGetOAuthApiKey = mock(
-  async (_providerId: string, creds: Record<string, unknown>) =>
-    ({ newCredentials: Object.values(creds)[0] ?? {}, apiKey: 'minted-oauth-key' }) as {
+import { SubscriptionTokenError } from '../credentials/subscription-oauth';
+const mockMintSubscription = mock(
+  async (_provider: unknown, creds: Record<string, unknown>) =>
+    ({ newCredentials: creds, apiKey: 'minted-oauth-key' }) as {
       newCredentials: Record<string, unknown>;
       apiKey: string;
     } | null
 );
-mock.module('@archon/providers/oauth', () => ({
-  getOAuthApiKey: mockGetOAuthApiKey,
-  anthropicOAuthProvider: { id: 'anthropic' },
-  openaiCodexOAuthProvider: { id: 'openaiCodex' },
-  githubCopilotOAuthProvider: { id: 'github-copilot' },
+const subscriptionOAuth = await import('../credentials/subscription-oauth');
+mock.module('../credentials/subscription-oauth', () => ({
+  ...subscriptionOAuth,
+  mintOAuthApiKey: mockMintSubscription,
 }));
 
-// The openai vendor refreshes through the Archon-owned flow (NOT Pi's
-// getOAuthApiKey — it would drop id_token on rotation, #1924). Same contract.
 const mockMintOpenAi = mock(
   async (creds: Record<string, unknown>) =>
     ({ newCredentials: creds, apiKey: 'openai-minted-key' }) as {
@@ -96,7 +92,7 @@ function oauthRow(overrides: Partial<UserProviderKeyRow> = {}): UserProviderKeyR
     kind: 'oauth',
     api_key_encrypted: null,
     // Well-formed blob: `expires` must be numeric — the store rejects rows
-    // without it before calling the Pi mint path (oauth_malformed_expires).
+    // without it before calling the subscription mint path (oauth_malformed_expires).
     oauth_creds_encrypted: encryptToken(
       JSON.stringify({ access: 'oauth-bearer', expires: OAUTH_BLOB_EXPIRES }),
       key
@@ -237,7 +233,7 @@ describe('user-provider-key-store', () => {
       expect(await getDecryptedProviderCredential('user-1', 'openrouter')).toEqual(UNREADABLE);
     });
 
-    test('oauth row → mints a usable bearer via getOAuthApiKey', async () => {
+    test('oauth row → mints a usable bearer via mintOAuthApiKey', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
       const cred = await getDecryptedProviderCredential('user-1', 'claude');
       expect(cred).toEqual({
@@ -249,16 +245,16 @@ describe('user-provider-key-store', () => {
           rawCreds: { access: 'oauth-bearer', expires: OAUTH_BLOB_EXPIRES },
         },
       });
-      expect(mockGetOAuthApiKey).toHaveBeenCalled();
+      expect(mockMintSubscription).toHaveBeenCalled();
     });
 
     test('oauth row → unusable on missing/non-numeric expires, no mint attempt', async () => {
-      // The Pi mint path decides refresh purely by `Date.now() >= expires`
-      // (Archon-owned since pi-ai 0.84 — toAuth never checks expiry). A blob
+      // The subscription mint path decides refresh purely by `Date.now() >= expires`
+      // A blob
       // without a numeric `expires` would make that comparison silently
       // false and serve a stale token as success; the store must reject it
       // at the deserialization boundary instead (oauth_malformed_expires).
-      mockGetOAuthApiKey.mockClear();
+      mockMintSubscription.mockClear();
       const key = getEncryptionKey();
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
@@ -268,21 +264,21 @@ describe('user-provider-key-store', () => {
         ])
       );
       expect(await getDecryptedProviderCredential('user-1', 'claude')).toEqual(UNREADABLE);
-      expect(mockGetOAuthApiKey).not.toHaveBeenCalled();
+      expect(mockMintSubscription).not.toHaveBeenCalled();
     });
 
-    test('oauth row → unusable when getOAuthApiKey yields no key', async () => {
+    test('oauth row → unusable when mintOAuthApiKey yields no key', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
-      mockGetOAuthApiKey.mockResolvedValueOnce(null);
+      mockMintSubscription.mockResolvedValueOnce(null);
       expect(await getDecryptedProviderCredential('user-1', 'claude')).toMatchObject({
         state: 'unusable',
         source: 'archon',
       });
     });
 
-    test('Pi refresh throws → check_failed with fixed evidence (cause unknown)', async () => {
+    test('Unclassified refresh error → check_failed with fixed evidence (cause unknown)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
-      mockGetOAuthApiKey.mockRejectedValueOnce(new Error('Anthropic token refresh failed'));
+      mockMintSubscription.mockRejectedValueOnce(new Error('Anthropic token refresh failed'));
       expect(await getDecryptedProviderCredential('user-1', 'claude')).toEqual({
         state: 'check_failed',
         source: 'archon',
@@ -290,13 +286,24 @@ describe('user-provider-key-store', () => {
       });
     });
 
+    test('core subscription refresh status classifies rejection without vendor error text', async () => {
+      for (const status of [400, 401, 429, 500, undefined]) {
+        mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+        mockMintSubscription.mockRejectedValueOnce(
+          new SubscriptionTokenError('Token request failed.', status)
+        );
+        const result = await getDecryptedProviderCredential('user-1', 'claude');
+        expect(result.state).toBe(status === 400 || status === 401 ? 'unusable' : 'check_failed');
+      }
+    });
+
     test('oauth row → unusable on corrupt ciphertext (decrypt/parse fails), no refresh attempt', async () => {
-      mockGetOAuthApiKey.mockClear();
+      mockMintSubscription.mockClear();
       mockQuery.mockResolvedValueOnce(
         createQueryResult([oauthRow({ oauth_creds_encrypted: 'not-a-valid-ciphertext' })])
       );
       expect(await getDecryptedProviderCredential('user-1', 'claude')).toEqual(UNREADABLE);
-      expect(mockGetOAuthApiKey).not.toHaveBeenCalled();
+      expect(mockMintSubscription).not.toHaveBeenCalled();
     });
 
     test('oauth row → unusable when oauth ciphertext is missing (corrupt row)', async () => {
@@ -308,7 +315,7 @@ describe('user-provider-key-store', () => {
 
     test('oauth rotation → re-saves the new blob', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()])); // record SELECT
-      mockGetOAuthApiKey.mockResolvedValueOnce({
+      mockMintSubscription.mockResolvedValueOnce({
         newCredentials: { access: 'ROTATED', refresh: 'r2', expires: 999 },
         apiKey: 'minted-after-rotate',
       });
@@ -325,7 +332,7 @@ describe('user-provider-key-store', () => {
     });
 
     test('coalesces concurrent oauth reads → a single refresh (inflight Map)', async () => {
-      mockGetOAuthApiKey.mockClear();
+      mockMintSubscription.mockClear();
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
       const [a, b] = await Promise.all([
@@ -333,7 +340,7 @@ describe('user-provider-key-store', () => {
         getDecryptedProviderCredential('user-1', 'claude'),
       ]);
       expect(a).toEqual(b);
-      expect(mockGetOAuthApiKey).toHaveBeenCalledTimes(1);
+      expect(mockMintSubscription).toHaveBeenCalledTimes(1);
     });
 
     // ---- openai: Archon-owned refresh path (#1924) ----
@@ -349,8 +356,8 @@ describe('user-provider-key-store', () => {
       });
     }
 
-    test('openai oauth row → routes through the Archon flow, NOT Pi getOAuthApiKey (#1924)', async () => {
-      mockGetOAuthApiKey.mockClear();
+    test('openai oauth row → routes through the Archon flow, separate from the subscription mint (#1924)', async () => {
+      mockMintSubscription.mockClear();
       mockMintOpenAi.mockClear();
       mockQuery.mockResolvedValueOnce(createQueryResult([openaiOauthRow()]));
       const cred = await getDecryptedProviderCredential('user-1', 'openai');
@@ -360,7 +367,7 @@ describe('user-provider-key-store', () => {
         credential: { kind: 'oauth', oauthApiKey: 'openai-minted-key', rawCreds: openaiBlob() },
       });
       expect(mockMintOpenAi).toHaveBeenCalledTimes(1);
-      expect(mockGetOAuthApiKey).not.toHaveBeenCalled();
+      expect(mockMintSubscription).not.toHaveBeenCalled();
     });
 
     test('openai oauth row → unusable on malformed expires, no mint attempt', async (): Promise<void> => {
@@ -393,7 +400,7 @@ describe('user-provider-key-store', () => {
     });
 
     test("legacy 'codex' rows normalize onto the openai path", async () => {
-      mockGetOAuthApiKey.mockClear();
+      mockMintSubscription.mockClear();
       mockMintOpenAi.mockClear();
       mockQuery.mockResolvedValueOnce(createQueryResult([openaiOauthRow('codex')]));
       const cred = await getDecryptedProviderCredential('user-1', 'codex');
@@ -402,7 +409,7 @@ describe('user-provider-key-store', () => {
         credential: { kind: 'oauth', oauthApiKey: 'openai-minted-key' },
       });
       expect(mockMintOpenAi).toHaveBeenCalledTimes(1);
-      expect(mockGetOAuthApiKey).not.toHaveBeenCalled();
+      expect(mockMintSubscription).not.toHaveBeenCalled();
     });
 
     test('openai rotation → re-saves a blob that still carries the id_token', async () => {
@@ -506,7 +513,7 @@ describe('user-provider-key-store', () => {
           secret: 'sk-ant-ort01-PLANTED',
           check: async () => {
             mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
-            mockGetOAuthApiKey.mockRejectedValueOnce(
+            mockMintSubscription.mockRejectedValueOnce(
               new Error(
                 'HTTP request failed. status=400; body={"refresh_token":"sk-ant-ort01-PLANTED"}'
               )
@@ -525,7 +532,7 @@ describe('user-provider-key-store', () => {
   });
 
   describe('listDecryptedUserProviderCredentials', () => {
-    test('decrypts api_key rows AND oauth rows (oauth minted via getOAuthApiKey)', async () => {
+    test('decrypts api_key rows AND oauth rows (oauth minted via mintOAuthApiKey)', async () => {
       // First call: list metadata (api_key + oauth).
       mockQuery.mockResolvedValueOnce(
         createQueryResult([

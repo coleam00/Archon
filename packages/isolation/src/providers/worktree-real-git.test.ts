@@ -204,6 +204,98 @@ describe('WorktreeProvider against real git', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
+  test('ordinary destruction preserves a replacement clone', async () => {
+    await git(repoPath, 'remote', 'add', 'origin', repoPath);
+    const created = await provider.create({
+      ...request,
+      workflowType: 'task',
+      taskBranch: {
+        kind: 'new',
+        branch: toBranchName('owned'),
+        fromBranch: toBranchName('main'),
+      },
+    });
+    if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+    await git(repoPath, 'worktree', 'remove', created.workingPath);
+    await git(root, 'clone', '-q', repoPath, created.workingPath);
+    await writeFile(join(created.workingPath, 'operator-file'), 'keep me');
+
+    const error = await provider
+      .destroy(created.workingPath, {
+        canonicalRepoPath: request.canonicalRepoPath,
+        creationId: created.metadata.creationId,
+        branchName: created.branchName,
+        force: true,
+      })
+      .catch((error: unknown) => error);
+
+    expect(await readFile(join(created.workingPath, 'operator-file'), 'utf8')).toBe('keep me');
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('ownership');
+    expect(await git(repoPath, 'branch', '--list', created.branchName)).toContain(
+      created.branchName
+    );
+  });
+
+  test.each([
+    'missing proof',
+    'changed proof',
+    'missing marker',
+    'new generation',
+    'different clone',
+    'unregistered',
+    'plain directory',
+  ])('ordinary destruction refuses %s even with force', async scenario => {
+    await git(repoPath, 'remote', 'add', 'origin', repoPath);
+    const freshRequest: IsolationRequest = {
+      ...request,
+      workflowType: 'task',
+      taskBranch: {
+        kind: 'new',
+        branch: toBranchName('owned'),
+        fromBranch: toBranchName('main'),
+      },
+    };
+    const created = await provider.create(freshRequest);
+    if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+    let creationId: string | undefined = created.metadata.creationId;
+    if (scenario === 'missing proof') creationId = undefined;
+    if (scenario === 'changed proof') creationId = 'different';
+    const admin = (await git(created.workingPath, 'rev-parse', '--absolute-git-dir')).trim();
+    if (scenario === 'missing marker') await rm(join(admin, 'archon-creation-id'));
+    if (scenario === 'unregistered') await rm(admin, { recursive: true });
+    if (
+      scenario === 'new generation' ||
+      scenario === 'different clone' ||
+      scenario === 'plain directory'
+    ) {
+      await git(repoPath, 'worktree', 'remove', created.workingPath);
+      if (scenario === 'new generation') {
+        await git(repoPath, 'branch', '-D', created.branchName);
+        await provider.create(freshRequest);
+      }
+      if (scenario === 'different clone') {
+        const other = join(root, 'other');
+        await git(root, 'clone', '-q', repoPath, other);
+        await git(other, 'worktree', 'add', '-q', '--detach', created.workingPath);
+      }
+      if (scenario === 'plain directory') await mkdir(created.workingPath, { recursive: true });
+    }
+    await writeFile(join(created.workingPath, 'operator-file'), 'keep me');
+    await expect(
+      provider.destroy(created.workingPath, {
+        canonicalRepoPath: request.canonicalRepoPath,
+        creationId,
+        branchName: created.branchName,
+        force: true,
+      })
+    ).rejects.toThrow('ownership');
+    expect(await readFile(join(created.workingPath, 'operator-file'), 'utf8')).toBe('keep me');
+    expect(await git(repoPath, 'branch', '--list', created.branchName)).toContain(
+      created.branchName
+    );
+  });
+
   test('an existing repository with a failed fetch still receives network guidance', async () => {
     await git(repoPath, 'remote', 'add', 'origin', join(root, 'missing-remote.git'));
 
@@ -676,7 +768,7 @@ describe('WorktreeProvider against real git', () => {
     // configured files. `--lock` on the add itself is what closes that window.
     const firstReason = await lockSeenDuringAdd();
     expect(firstReason).toMatch(/^archon: worktree setup in progress: .+/);
-    await provider.destroy(worktreePath, { canonicalRepoPath: request.canonicalRepoPath });
+    await git(repoPath, 'worktree', 'remove', worktreePath);
     await provider.create(request);
     const secondReason = await lockSeenDuringAdd();
     expect(secondReason).toMatch(/^archon: worktree setup in progress: .+/);

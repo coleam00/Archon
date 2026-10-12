@@ -7,6 +7,8 @@ import {
 } from './store';
 import {
   TERMINAL_WORKFLOW_STATUSES,
+  approvalContextSchema,
+  workflowWaitContextSchema,
   isTerminalRunStatus,
   type ApprovalContext,
   type WorkflowWaitContext,
@@ -151,6 +153,50 @@ export function describeWorkflowStoreConformance(
     });
     afterEach(async () => {
       await harness?.close();
+    });
+
+    test('preserves private loop owner cursors through durable pause storage', async () => {
+      const bodySessionCursors = { owner: { sessionId: 'O', provider: 'codex' } };
+      const bodySessionCursorAncestry = {
+        '["outer",[]]': { owner: { sessionId: 'A', provider: 'codex' } },
+        '["outer.inner",[{"groupId":"outer","iteration":2}]]': bodySessionCursors,
+      };
+      const gateRun = await running(store);
+      await store.pauseWorkflowRun(gateRun.id, {
+        ...approval,
+        bodySessionCursors,
+        bodySessionCursorAncestry,
+      });
+      const storedGate = await store.getWorkflowRun(gateRun.id);
+      expect(
+        approvalContextSchema.parse(storedGate?.metadata?.approval).bodySessionCursors
+      ).toEqual(bodySessionCursors);
+      expect(
+        approvalContextSchema.parse(storedGate?.metadata?.approval).bodySessionCursorAncestry
+      ).toEqual(bodySessionCursorAncestry);
+      const waitRun = await running(store);
+      await store.pauseWorkflowRunForWait(
+        waitRun.id,
+        {
+          ...wait,
+          owner: 'loop_group',
+          nodeId: 'group',
+          bodyWaitId: 'wait',
+          iteration: 2,
+          sessionId: 'review-session',
+          sessionProvider: 'codex',
+          bodySessionCursors,
+          bodySessionCursorAncestry,
+        },
+        { kind: 'started', stepName: 'group.wait' }
+      );
+      const storedWait = workflowWaitContextSchema.parse(
+        (await store.getWorkflowRun(waitRun.id))?.metadata?.wait
+      );
+      expect(storedWait.owner).toBe('loop_group');
+      if (storedWait.owner !== 'loop_group') throw new Error('wrong wait owner');
+      expect(storedWait.bodySessionCursors).toEqual(bodySessionCursors);
+      expect(storedWait.bodySessionCursorAncestry).toEqual(bodySessionCursorAncestry);
     });
 
     test('pending claim has exactly one winner and stamps the checkout', async () => {

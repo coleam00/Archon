@@ -13,6 +13,7 @@ import {
   getRegisteredPlatformPolicies,
   unknownPlatformReason,
   retainsWorkspace,
+  type UnknownPlatformReason,
 } from '../platforms/registry';
 import * as isolationEnvDb from '../db/isolation-environments';
 import * as conversationDb from '../db/conversations';
@@ -321,12 +322,19 @@ export async function onConversationClosed(
     return;
   }
 
+  const result = await removeEnvironment(envId, {
+    force: false,
+    deleteRemoteBranch: options?.merged,
+  });
+  if (result.skippedReason && result.skippedReason !== 'already destroyed') {
+    throw new Error(`Conversation cleanup retained environment ${envId}: ${result.skippedReason}`);
+  }
+
   // Clear this conversation's reference (best-effort - conversation may be deleted).
-  // `cwd` is cleared alongside it when it names the environment being torn down:
-  // leaving it set would strand the conversation on a directory that is about to
-  // be deleted, and a chat turn uses `cwd` verbatim (the orchestrator refuses the
-  // turn outright once the path is gone). Null means "no override" — the
-  // conversation falls back to codebase.default_cwd, the same end state
+  // `cwd` is cleared alongside it when it names the removed environment:
+  // a chat turn uses `cwd` verbatim and refuses a missing directory.
+  // Null means "no override": the conversation falls back to codebase.default_cwd,
+  // the same end state
   // /setproject produces. A cwd pointing somewhere else is left untouched.
   const cwdBelongsToEnv = conversation.cwd === env.working_path;
   await conversationDb
@@ -337,11 +345,6 @@ export async function onConversationClosed(
     .catch(err => {
       if (!(err instanceof ConversationNotFoundError)) throw err;
     });
-
-  await removeEnvironment(envId, {
-    force: false,
-    deleteRemoteBranch: options?.merged,
-  });
 }
 
 /**
@@ -360,8 +363,16 @@ export interface RemoveEnvironmentResult {
   worktreeRemoved: boolean;
   /** Whether the branch was deleted (null if branch cleanup was not attempted) */
   branchDeleted: boolean | null;
-  /** If the operation was a no-op, why it was skipped */
-  skippedReason?: string;
+  /**
+   * Why removal did not proceed. A closed set so callers that branch
+   * on a reason fail type-check when it changes, instead of silently diverging.
+   */
+  skippedReason?:
+    | 'environment not found'
+    | 'already destroyed'
+    | 'has uncommitted changes'
+    | 'filesystem removal incomplete; environment remains active'
+    | UnknownPlatformReason;
   /** Warnings from partial cleanup (e.g., branch couldn't be deleted) */
   warnings: string[];
 }
@@ -426,6 +437,7 @@ export async function removeEnvironment(
     // Call destroy even if path doesn't exist - branch cleanup may still be needed
     const destroyResult = await provider.destroy(env.working_path, {
       force: options?.force,
+      creationId: readWorktreeCreationId(env.metadata) ?? undefined,
       branchName: toBranchName(env.branch_name),
       canonicalRepoPath,
       deleteRemoteBranch: options?.deleteRemoteBranch,

@@ -15,7 +15,7 @@ import {
   getUniqueCommitCount,
   isPatchEquivalent,
 } from '@archon/git';
-import { getIsolationProvider } from '@archon/isolation';
+import { getIsolationProvider, readWorktreeCreationId } from '@archon/isolation';
 import {
   removeEnvironment,
   listContainerEnvironments,
@@ -148,11 +148,17 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
     }
 
     try {
-      await provider.destroy(env.working_path, {
+      const result = await provider.destroy(env.working_path, {
         branchName: env.branch_name ? toBranchName(env.branch_name) : undefined,
         canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
+        creationId: readWorktreeCreationId(env.metadata) ?? undefined,
       });
 
+      if (!result.worktreeRemoved || !result.directoryClean) {
+        throw new Error(
+          `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
+        );
+      }
       await isolationDb.updateStatus(env.id, 'destroyed');
       console.log('  Status: Cleaned');
       cleaned++;

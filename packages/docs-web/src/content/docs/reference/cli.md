@@ -1199,6 +1199,15 @@ removing a plugin must not make its historical workspaces eligible for deletion.
 shows the cleanup skip reason. Rows with no originating platform keep their existing cleanup
 behavior.
 
+Ordinary removal requires a stored creation proof matching
+Archon's marker and Git registration in the expected repository. Replacement
+repositories, adopted checkouts, and older records without proof are retained for
+operator inspection. If Git removal leaves a directory behind, cleanup reports it
+and keeps the environment active; inspect that path before removing it manually.
+
+These ownership checks also apply to `/worktree remove` and `archon complete`;
+`--force` never bypasses them.
+
 ```bash
 # Default: 7 days
 archon isolation cleanup
@@ -1288,14 +1297,14 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass safety checks
+archon complete feature-auth --force  # bypass uncommitted-change, running-workflow, and open-PR checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip safety checks |
+| `--force` | Skip uncommitted-change, running-workflow, and open-PR checks; ownership checks still apply |
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone

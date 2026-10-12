@@ -437,15 +437,6 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
-        /** @description OAuth callback port still held by a previous login attempt — retry shortly */
-        503: {
-          headers: {
-            [name: string]: unknown;
-          };
-          content: {
-            'application/json': components['schemas']['Error'];
-          };
-        };
       };
     };
     delete?: never;
@@ -4612,6 +4603,20 @@ export interface components {
         iteration?: number;
         sessionId?: string | null;
         sessionProvider?: string | null;
+        bodySessionCursors?: {
+          [key: string]: {
+            sessionId: string;
+            provider: string;
+          };
+        };
+        bodySessionCursorAncestry?: {
+          [key: string]: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+        };
         captureResponse?: boolean;
         onRejectPrompt?: string;
         onRejectMaxAttempts?: number;
@@ -5059,6 +5064,20 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
+            };
+          };
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -5074,6 +5093,20 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
+            };
+          };
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */
@@ -5093,6 +5126,20 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
+            };
+          };
           /** @enum {string} */
           kind: 'attention';
           /** Format: date-time */
