@@ -95,7 +95,7 @@ This file is the canonical project guidance for coding agents. Keep it short, du
 
 ## Workflow-language boundary
 
-The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md) before changing the YAML surface.
+The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md) before changing the YAML surface. Read [`.archon/workflows/sdlc/CONSTITUTION.md`](.archon/workflows/sdlc/CONSTITUTION.md) before changing the SDLC pack.
 
 - YAML should expose only what the engine must see to govern a run: topology, gates, joins, retries, sessions, artifacts, durable waits, and reusable structure.
 - Computation belongs inside a `bash:`, `script:`, or `prompt:` node. Choosing a script instead of a prompt is an ordinary reliability and maintainability decision, not a constitutional rule.

@@ -19,6 +19,8 @@ A prompt that computes is a **legitimate authoring choice**, and frequently the 
 
 Neither choice touches the language, so neither is the constitution's business.
 
+For how the SDLC pack makes that choice (agents first, determinism only after an observed failure), see [`workflows/sdlc/CONSTITUTION.md`](workflows/sdlc/CONSTITUTION.md).
+
 **The one narrow case that argues for determinism** — and it is a reliability argument, not a constitutional one: a check with **no judgment content** (a boolean with exactly one correct answer, like "does this file exist") whose failure has **irreversible external consequences** is better expressed as a node that cannot decline to fire. Not because a prompt cannot evaluate it, but because the cost of it not firing is unrecoverable. Cite reliability when you make that argument; do not cite this page.
 
 This is not an aesthetic preference. The declarative surface is what makes Archon's core promises possible: load-time validation, the visual builder, resumability, audit trails, and approval gates all depend on the engine being able to *statically see* the workflow's structure. Every unit of computation that leaks into the YAML is a unit the engine can no longer validate, render, resume, or audit — and a unit that a script node would have handled better.
