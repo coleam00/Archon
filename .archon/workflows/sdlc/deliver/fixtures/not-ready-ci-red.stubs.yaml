@@ -1,6 +1,5 @@
-# Outcome: not ready, red. CI is red on the delivered head: flip-ready never runs
-# (it has no stub, so reaching it would fail this fixture) and the real outcome script
-# reports the root cause.
+# Outcome: not ready, red. The CI agent answers red (it has put the pull request back
+# to draft), and the real outcome script reports the root cause.
 impl__implement:
   done: true
   green: true

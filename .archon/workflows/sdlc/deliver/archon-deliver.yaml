@@ -330,11 +330,10 @@ nodes:
         summary: { type: string, pattern: '\S' }
       required: [changed, summary]
 
-  # Whether CI is green on the delivered head is this agent's judgment, waiting
-  # included: it reads whatever CI the project has and waits for running checks
-  # itself. It never writes. It runs only when the review converged; flip-ready
-  # marks the pull request ready only on a green answer, so a red pull request is
-  # never made ready.
+  # CI is one agent's job, waiting included. It runs only when the review converged.
+  # It marks the pull request ready, which starts CI on a project that skips drafts,
+  # waits however long CI takes, and on red puts the pull request back to draft
+  # before it answers, so a red pull request never stays ready.
   - id: ci
     command: check-ci
     model: medium
@@ -352,26 +351,12 @@ nodes:
         evidence: { type: string, pattern: '\S' }
       required: [state, summary, evidence]
 
-  - id: flip-ready
-    script: flip-ready
-    runtime: bun
-    depends_on: [ci]
-    when: "$ci.output.state == 'green'"
-    with:
-      pr: "$pr.output"
-    output_format:
-      type: object
-      properties:
-        pr_url: { type: string, minLength: 1 }
-      required: [pr_url]
-
   # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts):
-  # ready with the pull request's URL, or not ready with why. A failed flip blocks
-  # this join, so the run reports the node that failed.
+  # ready with the pull request's URL, or not ready with why.
   - id: outcome
     script: outcome
     runtime: bun
-    depends_on: [update-pr-body, ci, flip-ready]
+    depends_on: [update-pr-body, ci]
     trigger_rule: none_failed_min_one_success
     with:
       pr: "$pr.output"
@@ -379,7 +364,6 @@ nodes:
       correction_action: { from: "$corrections.output.action", if_skipped: null }
       state: { from: "$ci.output.state", if_skipped: null }
       ci_summary: { from: "$ci.output.summary", if_skipped: null }
-      pr_url: { from: "$flip-ready.output.pr_url", if_skipped: null }
     output_format:
       type: object
       properties:

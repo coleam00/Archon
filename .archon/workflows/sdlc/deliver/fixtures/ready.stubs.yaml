@@ -1,6 +1,7 @@
 # Outcome: ready. The review asks for one correction; the fixer validates and pushes,
-# the gate reads its verdict, and the continuation review converges. CI is green, so flip-ready
-# marks the pull request ready and the real outcome script reports it.
+# the gate reads its verdict, and the continuation review converges. The CI agent
+# marks the pull request ready and answers green, and the real outcome script
+# reports it.
 impl__implement:
   done: true
   green: true
@@ -66,8 +67,7 @@ match-discoveries: { matches: [] }
 file-discoveries: '{"records":[]}'
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 ci: { state: green, summary: "stub: every check that gates a merge passed", evidence: "stub: gh pr checks on the head commit" }
-flip-ready: { pr_url: "https://github.com/example/repo/pull/1" }
 fixture:
   expect: completed
-  reached: [gate-fix, recheck__synthesize, ci, flip-ready, outcome]
+  reached: [gate-fix, recheck__synthesize, ci, outcome]
 exec-code: true

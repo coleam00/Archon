@@ -44,13 +44,12 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-Whether CI is green is judgment, so one agent node (`ci`) makes it once the work is
-done: it reads whatever CI the project has, waits on running checks itself, and
-answers green, red with the root cause, or blocked with what CI waits for. The ready
-mark follows only a green answer, and it refuses a head that does not merge cleanly
-into the freshly fetched base, so a red PR is never made ready. The ready write
-reads the state back afterwards, because a successful exit is not proof the state
-changed.
+Whether CI is green is judgment, so one agent node (`ci`) owns it once the work is
+done. It refuses to mark ready a head that does not merge cleanly into its base,
+marks the pull request ready (a project whose CI skips drafts starts it then), waits
+however long CI takes, and answers green, red with the root cause, or blocked. On
+anything but green it puts the pull request back to draft before it answers, so a
+red PR never stays ready.
 
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is
@@ -84,19 +83,19 @@ forge source is for host execution: a container execution receives neither
 
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
-request, `publish-review` upserts the one marked review comment, `flip-ready` marks it
-ready once CI is green, and `file-discoveries` files each discovery the review accepted as
+request, `publish-review` upserts the one marked review comment, and `file-discoveries` files each discovery the review accepted as
 a tracker issue, reusing an open issue the matching agent found for it. The forge
 contract has no issue operation yet, so that one — like triage's labels — goes
 through `gh` whichever source the run selected. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
 the selected source, and fails unless the result reads back — so "the write
 failed" and "the write may have landed" stay different outcomes, in the pack as in
-the forge contract. Two agents write directly: the fix agent pushes its own commit
-to the pull request's branch, and the review that follows refuses to publish unless
-the pull request's remote head is the commit it reviewed; and `update-pr-body`
-edits the description with `gh`, because judging which claims are stale and
-rewriting them is the whole job. No script reads an
+the forge contract. Three agents write directly with `gh`: the fix agent pushes its
+own commit to the pull request's branch, and the review that follows refuses to
+publish unless the pull request's remote head is the commit it reviewed;
+`update-pr-body` edits the description, because judging which claims are stale and
+rewriting them is the whole job; and `ci` marks the pull request ready and back to
+draft around its CI wait. No script reads an
 agent-written file to find out what to write.
 
 Which remote holds a repository is decided by its configured URL, never by the

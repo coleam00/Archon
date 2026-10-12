@@ -257,21 +257,6 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
   return view.pr;
 }
 
-/** Take the pull request out of draft, and prove it is no longer a draft. */
-export function markPrReady(ref: QualifiedPr, source: ForgeSource): PrRecord {
-  if (source === 'forge') {
-    const value = forgeResult('pr.ready', { ref: { repo: ref.repo, number: ref.number } });
-    return parsePrRecord(value.pr);
-  }
-  const ready = gh('pr', 'ready', String(ref.number), '--repo', ghRepo(ref.repo));
-  if (!ready.ok) throw new Error(`the ready flip failed: ${ready.stderr}`);
-  const after = viewPr(ref, source);
-  if (after.pr.is_draft || after.pr.state !== 'open') {
-    throw new Error(`${after.pr.url} still reports draft after the ready flip`);
-  }
-  return after.pr;
-}
-
 export function markPrDraft(ref: QualifiedPr, source: ForgeSource): PrRecord {
   if (source === 'forge') {
     const value = forgeResult('pr.draft', { ref: { repo: ref.repo, number: ref.number } });

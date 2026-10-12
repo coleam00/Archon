@@ -135,7 +135,7 @@ archon workflow run archon-pr --no-worktree --input draft=false
 
 #### `archon-deliver`
 
-The delivery tail: implement the work (the implementer runs the project's validation before handing off), bring the branch up to date with its base and open a draft PR, review it, and correct and close the findings; each fixer validates before it pushes. Then it updates the PR description and checks CI once: an agent waits for the project's checks and judges them. Green marks the PR ready for review once it merges cleanly. Red leaves it in draft and the run ends not ready, with the root cause: a red PR is never marked ready. `--input pull_request=<number>` continues that open PR instead of opening one. There is no approval gate inside the run; your gate is PR review and merge.
+The delivery tail: implement the work (the implementer runs the project's validation before handing off), bring the branch up to date with its base and open a draft PR, review it, and correct and close the findings; each fixer validates before it pushes. Then it updates the PR description and hands CI to one agent: if the PR merges cleanly, the agent marks it ready, waits for the project's checks however long they take, and puts it back in draft if they are red. A red PR never stays ready; the run ends not ready, with the root cause. `--input pull_request=<number>` continues that open PR instead of opening one. There is no approval gate inside the run; your gate is PR review and merge.
 
 **When to use it**: The work is decided, for example an approved plan, and should become a reviewed, ready-to-merge PR.
 

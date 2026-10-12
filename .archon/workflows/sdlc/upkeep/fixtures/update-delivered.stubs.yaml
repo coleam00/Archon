@@ -52,7 +52,6 @@ deliver__match-discoveries: { matches: [] }
 deliver__file-discoveries: '{"records":[]}'
 deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 deliver__ci: { state: green, summary: "stub: every check that gates a merge passed", evidence: "stub: gh pr checks on the head commit" }
-deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }
 deliver__outcome: { ready: true, pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
 fixture:
   expect: completed

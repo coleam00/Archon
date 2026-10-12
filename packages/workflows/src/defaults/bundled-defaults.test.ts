@@ -382,10 +382,10 @@ describe('bundled-defaults', () => {
       expect(offenders).toEqual([]);
     });
 
-    // CI is judged once, by one agent node after the work is done, which waits on
-    // running checks itself: the graph has no engine wait and no loop around CI.
-    // The ready mark follows only a green verdict.
-    it('archon-deliver judges CI in one agent node and marks ready only on green', () => {
+    // CI is one agent node after the work is done: it marks the pull request ready,
+    // waits on CI itself and puts it back to draft on red. The graph has no engine
+    // wait, no loop around CI and no separate ready-mark node.
+    it('archon-deliver leaves CI, the ready mark included, to one agent node', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],
         'archon-deliver.yaml',
@@ -410,10 +410,7 @@ describe('bundled-defaults', () => {
         'recheck',
       ]);
       expect(node('ci')?.depends_on).toEqual(['update-pr-body']);
-      expect(node('flip-ready')).toMatchObject({
-        depends_on: ['ci'],
-        when: "$ci.output.state == 'green'",
-      });
+      expect(node('flip-ready')).toBeUndefined();
       expect(parsed.workflow.returns).toBe('outcome');
       expect(parsed.workflow.outcome_field).toBe('ready');
     });
@@ -772,7 +769,7 @@ describe('bundled-defaults', () => {
   });
 
   describe('run-owned public actions (#2909)', () => {
-    it('records a PR identity and uses it for review, the body update and the ready flip', () => {
+    it('records a PR identity and uses it for review and the body update', () => {
       const pr = BUNDLED_WORKFLOWS['archon-pr'];
       const deliver = BUNDLED_WORKFLOWS['archon-deliver'];
       const sync = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::update-pr-body'];
@@ -782,13 +779,6 @@ describe('bundled-defaults', () => {
       expect(deliver).toContain('scope: "$pr.output"');
       const parsedDelivery = parseWorkflow(deliver, 'archon-deliver.yaml', providerRegistry);
       if (parsedDelivery.workflow === null) throw new Error(parsedDelivery.error.error);
-      const flip = parsedDelivery.workflow.nodes.find(node => node.id === 'flip-ready');
-      expect(flip).toMatchObject({
-        kind: 'exec',
-        runtime: 'bun',
-        script: 'flip-ready',
-        with: { pr: '$pr.output' },
-      });
       expect(deliver).not.toContain('git remote get-url origin');
       // A command node reads its node-local `with:` map through `$INPUTS.<name>`,
       // never the INPUTS_<UPPER_SNAKE> env form — that one is built only for

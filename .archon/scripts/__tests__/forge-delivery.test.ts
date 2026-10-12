@@ -4,8 +4,8 @@
  * process, which talks to a fake GitHub (./fake-github-fetch.ts).
  *
  * The other pack tests fake the CLI's answers. This one proves the pieces agree:
- * a delivery creates a draft pull request, upserts the same review comment
- * across rounds, flips ready and restores draft, and none of
+ * a delivery creates a draft pull request and upserts the same review comment
+ * across rounds, and none of
  * those steps calls `gh`.
  */
 import { describe, expect, it } from 'bun:test';
@@ -32,7 +32,7 @@ const FAKE_GITHUB = join(import.meta.dir, 'fake-github-fetch.ts');
 
 const MARKER = '<!-- archon-review-report -->';
 // A real checkout whose recorded remote is a local bare repository: publish-pr pushes
-// it before it creates, and flip-ready merges it against the base.
+// it before it creates.
 const CHECKOUT = gitCheckout();
 const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: CHECKOUT, encoding: 'utf8' }).stdout.trim();
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
@@ -128,7 +128,7 @@ process.exitCode = await forgeCommand(
 }
 
 describe('the forge opt-in delivers through plugin operations', () => {
-  it('creates a draft, upserts one review comment, flips ready and restores draft', () => {
+  it('creates a draft and upserts one review comment', () => {
     const host = forgeHost();
     const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {
       const run = runPackScript(relative, {
@@ -190,15 +190,6 @@ describe('the forge opt-in delivers through plugin operations', () => {
     // 3. The second round edits the same comment rather than adding one.
     review(ROUND_TWO, true);
 
-    // 4. The ready flip.
-    const flipped = through('deliver/scripts/flip-ready', { inputs: { INPUTS_PR: created.stdout } });
-    expect(JSON.parse(flipped.stdout)).toEqual({ pr_url: record.url });
-
-    const drafted = through('../../scripts/__tests__/mark-pr-draft');
-    expect(JSON.parse(drafted.stdout)).toMatchObject({ is_draft: true, state: 'open' });
-    const unchanged = through('../../scripts/__tests__/mark-pr-draft');
-    expect(JSON.parse(unchanged.stdout)).toMatchObject({ is_draft: true });
-
     const state = github();
     expect(state.pulls).toHaveLength(1);
     expect(state.pulls[0]).toMatchObject({ draft: true });
@@ -210,8 +201,6 @@ describe('the forge opt-in delivers through plugin operations', () => {
       `POST https://${FAKE_HOST}/api/v3/repos/example/repo/pulls`,
       `POST https://${FAKE_HOST}/api/v3/repos/example/repo/issues/42/comments`,
       `PATCH https://${FAKE_HOST}/api/v3/repos/example/repo/issues/comments/900`,
-      `POST https://${FAKE_HOST}/api/graphql`,
-      `POST https://${FAKE_HOST}/api/graphql`,
     ]);
   }, 120_000);
 });

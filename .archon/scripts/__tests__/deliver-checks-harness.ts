@@ -352,15 +352,6 @@ else {
   };
 }
 
-export function runDeliverScript(
-  script: 'flip-ready',
-  options: ScriptOptions = {}
-): ScriptRun {
-  // A ready mark checks mergeability against the base in a real checkout.
-  const cwd = options.cwd ?? gitCheckout();
-  return runPackScript(`deliver/scripts/${script}`, { ...options, cwd });
-}
-
 function git(cwd: string, ...args: string[]): string {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
   if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);

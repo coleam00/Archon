@@ -106,7 +106,6 @@ describe("deliver's terminal outcome", () => {
         INPUTS_PR: JSON.stringify(forgePrRecord()),
         INPUTS_REVIEW_ACTION: 'none',
         INPUTS_CORRECTION_ACTION: 'null',
-        INPUTS_PR_URL: 'null',
         TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
         ...inputs,
       },
@@ -116,8 +115,8 @@ describe("deliver's terminal outcome", () => {
     return JSON.parse(run.stdout) as { ready: boolean; pr_url: string; summary: string };
   };
 
-  it('reports the flipped pull request as ready on green', () => {
-    expect(outcome({ INPUTS_STATE: 'green', INPUTS_CI_SUMMARY: 'all passed', INPUTS_PR_URL: PR_URL })).toEqual({
+  it('reports the pull request as ready on green', () => {
+    expect(outcome({ INPUTS_STATE: 'green', INPUTS_CI_SUMMARY: 'all passed' })).toEqual({
       ready: true,
       pr_url: PR_URL,
       summary: PR_URL,
@@ -142,10 +141,10 @@ describe("deliver's terminal outcome", () => {
     expect(result.summary).toStartWith('Not ready, the review asks for a replan');
   });
 
-  it('reports CI with no result as not ready, never as red', () => {
+  it('reports a blocked pull request as not ready, never as red', () => {
     const result = outcome({ INPUTS_STATE: 'blocked', INPUTS_CI_SUMMARY: 'awaits approval' });
     expect(result.ready).toBe(false);
-    expect(result.summary).toStartWith('Not ready, CI has no result: awaits approval');
+    expect(result.summary).toStartWith('Not ready, blocked: awaits approval');
   });
 });
 
