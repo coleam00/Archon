@@ -15,6 +15,7 @@ import {
   runSubprocess,
   isSubprocessTimeout,
   redactSubprocessError,
+  retainStreamTail,
 } from '@archon/workflows/subprocess';
 import { logWorktreeSetup } from '@archon/workflows/logger';
 import type { CapturedSourceOwner, PreparedWorkflowSource } from '@archon/workflows/executor';
@@ -26,10 +27,6 @@ import { getCodebaseEnvVars } from '../db/env-vars';
 
 export interface WorktreeSetupDeps {
   store: Pick<WorkflowDeps['store'], 'getCodebase' | 'persistWorkflowEvent'>;
-}
-
-function retainedTail(text: string | undefined): string | undefined {
-  return text ? text.slice(-16_384) : undefined;
 }
 
 function createSetupExecutor(
@@ -112,7 +109,7 @@ function createSetupExecutor(
           commandIndex,
           safeCommand,
           failureKind,
-          `${detail}\n${retainedTail(rejection.stderr) ?? ''}\n${retainedTail(rejection.stdout) ?? ''}`,
+          `${detail}\n${retainStreamTail(rejection.stderr) ?? ''}\n${retainStreamTail(rejection.stdout) ?? ''}`,
           exitCode,
           errno,
           signal,
@@ -127,8 +124,8 @@ function createSetupExecutor(
             exitCode,
             errno,
             signal,
-            stdoutTail: retainedTail(rejection.stdout),
-            stderrTail: retainedTail(rejection.stderr),
+            stdoutTail: retainStreamTail(rejection.stdout),
+            stderrTail: retainStreamTail(rejection.stderr),
             message: failure.message,
           });
         } catch (auditError) {
@@ -146,8 +143,8 @@ function createSetupExecutor(
         ...identity,
         type: 'worktree_setup_completed',
         durationMs: Date.now() - started,
-        stdoutTail: retainedTail(redactCredentialValues(result.stdout, credentials)),
-        stderrTail: retainedTail(result.stderr),
+        stdoutTail: retainStreamTail(redactCredentialValues(result.stdout, credentials)),
+        stderrTail: retainStreamTail(result.stderr),
         message: `Worktree setup ${commandIndex + 1} completed: ${safeCommand}`,
       });
     }

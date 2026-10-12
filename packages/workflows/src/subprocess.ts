@@ -8,6 +8,8 @@ import {
 } from '@archon/paths/credential-redaction';
 import { logExecOutput } from './logger';
 
+export { retainStreamTail } from './executor-shared';
+
 /**
  * Reduce a host-resolved command to the name the container image exposes on
  * PATH: strip any directory (a host absolute path like the Windows Git-Bash

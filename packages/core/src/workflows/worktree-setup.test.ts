@@ -188,10 +188,20 @@ test('a failed command and failed audit both remain visible without leaking cred
 
 test('output overflow has its own failure kind and retains bounded evidence', async () => {
   await expect(
-    createRunWorktreeSetupExecutor(deps, run, {})(input(["printf '%1100000s' x"]))
+    createRunWorktreeSetupExecutor(deps, run, {})(input(["printf '%1100000s' x | tr ' ' x"]))
   ).rejects.toThrow('output_limit');
   expect(rows[1].data?.failureKind).toBe('output_limit');
-  expect(String(rows[1].data?.stdoutTail).length).toBeLessThanOrEqual(16384);
+  expect(rows[1].data?.stdoutTail).toBe(`…[truncated to last 2000 chars]\n${'x'.repeat(2000)}`);
+});
+
+test('successful setup uses marked stream tails and omits whitespace-only evidence', async () => {
+  await createRunWorktreeSetupExecutor(
+    deps,
+    run,
+    {}
+  )(input(["printf '%2200s' x | tr ' ' x; printf '   \n' >&2"]));
+  expect(rows[1].data?.stdoutTail).toBe(`…[truncated to last 2000 chars]\n${'x'.repeat(2000)}`);
+  expect(rows[1].data?.stderrTail).toBeUndefined();
 });
 
 test('a command terminated by a signal is an execution failure', async () => {
