@@ -1,0 +1,25 @@
+# Outcome: not ready, implement_blocked. The implementer changed code but its handoff
+# validation stays red for a cause it introduced; nothing is published.
+triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: current code confirms a complete work order"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+gate-direct: '{"gate":"direct"}'
+implement__implement:
+  done: true
+  green: false
+  red_cause: "introduced"
+  summary: "stub: a prerequisite migration is missing"
+implement__assert-changed: "3 files changed"
+fixture:
+  expect: completed
+  reached: [implement__implement, round, outcome]
+exec-code: true

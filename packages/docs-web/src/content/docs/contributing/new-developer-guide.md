@@ -306,7 +306,7 @@ The table below lists the key workflows in the bundled `sdlc` pack. All bundled 
 
 ## Parallel Agents: The PR Review Example
 
-On a full first round, `archon-review` runs the specialist lenses its scope agent picked, each in a fresh session, as shown below. Seams runs unless the change clearly touches no type, contract, state or boundary; the code lens uses the configured `large` model tier.
+On a full first round, `archon-review` runs specialist lenses in fresh sessions as shown below. The code lens uses the configured `large` model tier. A focused first round starts with seams and a general reviewer; an engaged full-review risk adds code, tests, and simplify before synthesis.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -323,18 +323,18 @@ On a full first round, `archon-review` runs the specialist lenses its scope agen
 │   │ Step 2: PARALLEL LENSES (each in a fresh session)               │  │
 │   │                                                                 │  │
 │   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │  │
-│   │   │ code         │  │ seams        │  │ tests        │         │  │
+│   │   │ code         │  │ seams        │  │ simplify     │         │  │
 │   │   │              │  │              │  │              │         │  │
-│   │   │ Bugs,        │  │ Contracts    │  │ Missing      │         │  │
-│   │   │ correctness  │  │ that drift   │  │ coverage     │         │  │
+│   │   │ Bugs,        │  │ Contracts    │  │ Unneeded     │         │  │
+│   │   │ correctness  │  │ that drift   │  │ machinery    │         │  │
 │   │   └──────────────┘  └──────────────┘  └──────────────┘         │  │
 │   │                                                                 │  │
-│   │   ┌──────────────┐  ┌──────────────┐                           │  │
-│   │   │ errors       │  │ docs         │                           │  │
-│   │   │              │  │              │                           │  │
-│   │   │ Visibility & │  │ Stale docs   │                           │  │
-│   │   │ containment  │  │              │                           │  │
-│   │   └──────────────┘  └──────────────┘                           │  │
+│   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │  │
+│   │   │ tests        │  │ errors       │  │ docs         │         │  │
+│   │   │              │  │ (opt-in)     │  │ (when docs   │         │  │
+│   │   │ Missing      │  │ Visibility & │  │  change)     │         │  │
+│   │   │ coverage     │  │ containment  │  │ Stale docs   │         │  │
+│   │   └──────────────┘  └──────────────┘  └──────────────┘         │  │
 │   │                                                                 │  │
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                              │                                          │

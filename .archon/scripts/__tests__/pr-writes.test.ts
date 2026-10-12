@@ -17,7 +17,7 @@ import {
   runPackScript,
   type ScriptOptions,
   type ScriptRun,
-} from './pack-script-harness';
+} from './deliver-checks-harness';
 
 const MARKER = '<!-- archon-review-report -->';
 const REPORT = 'Round 1: ready';
@@ -248,6 +248,84 @@ describe('publish-pr opens the pull request at most once', () => {
   });
 });
 
+function publishBody(options: ScriptOptions & { change?: boolean } = {}): ScriptRun {
+  const { change = true, ...rest } = options;
+  return runPackScript('deliver/scripts/publish-pr-body', {
+    ...rest,
+    inputs: { INPUTS_INTENT: '{ARTIFACTS}/pr-body-intent.json', ...rest.inputs },
+    artifacts: {
+      'pr-body-intent.json': JSON.stringify(
+        change ? { change: true, bodyPath: '{ARTIFACTS}/pr-body-final.md' } : { change: false }
+      ),
+      'pr-body-final.md': 'The corrected body',
+      ...rest.artifacts,
+    },
+  });
+}
+
+describe('publish-pr-body applies the resync and proves it landed', () => {
+  const record = JSON.stringify(forgePrRecord());
+
+  it('edits through gh and reads the body back', () => {
+    const result = publishBody({ inputs: { INPUTS_PR: record } });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+    expect(result.gh.some(call => call.startsWith('pr edit 42 --repo'))).toBe(true);
+  });
+
+  it('refuses when the edit reports success and the body reads back unchanged', () => {
+    const result = publishBody({ inputs: { INPUTS_PR: record }, gh: { writeLost: true } });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('does not match what was written');
+  });
+
+  it('writes nothing at all when the body was already accurate', () => {
+    const result = publishBody({ change: false, inputs: { INPUTS_PR: record } });
+    expect(result.code).toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(result.forge).toEqual([]);
+  });
+
+  it('edits through the plugin on the opt-in path, with the body in the request file', () => {
+    const result = publishBody({
+      source: 'forge',
+      inputs: { INPUTS_PR: record },
+      forge: {
+        kind: 'fake',
+        response: forgeOperation('pr.edit-body', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          pr: forgePrRecord(),
+          bodyDigest: 'digest',
+        }),
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(JSON.parse(result.forgeRequests[0]).body).toBe('The corrected body');
+  });
+
+  it('surfaces an unverified edit with what may remain on the forge', () => {
+    const result = publishBody({
+      source: 'forge',
+      inputs: { INPUTS_PR: record },
+      forge: {
+        kind: 'fake',
+        response: forgeFailure(
+          'pr.edit-body',
+          'verification_failed',
+          'Pull request body read-back did not match',
+          { leaveBehind: 'the pull request body may have changed' }
+        ),
+      },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('verification_failed');
+    expect(result.stderr).toContain('the pull request body may have changed');
+  });
+});
 
 function publishReview(options: ScriptOptions = {}): ScriptRun {
   return runPackScript('review/scripts/publish-review', {
@@ -481,4 +559,63 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.stderr).toContain(`reviewed ${REVIEWED}, but the checkout is now at moved0000`);
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
   });
+});
+
+describe('markPrDraft uses the selected source', () => {
+  const script = '../../scripts/__tests__/mark-pr-draft';
+  it('converts through gh and reads back draft state', () => {
+    const result = runPackScript(script, { gh: { pr: { isDraft: false } } });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ is_draft: true, state: 'open' });
+    expect(result.gh).toContain('pr ready 42 --repo ghe.example.com/example/repo --undo');
+  });
+  it.each(['CLOSED', 'MERGED'] as const)('refuses %s without a write', state => {
+    const result = runPackScript(script, { gh: { pr: { state } } });
+    expect(result.code).not.toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
+  });
+  it('does not write for an already-draft PR', () => {
+    const result = runPackScript(script);
+    expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
+  });
+  it('fails when gh conversion does not read back', () => {
+    const result = runPackScript(script, { gh: { pr: { isDraft: false }, writeLost: true } });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('does not report an open draft');
+  });
+  it('calls pr.draft through forge without gh', () => {
+    const result = runPackScript(script, {
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        response: forgeOperation('pr.draft', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          pr: forgePrRecord(),
+        }),
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(result.forge[0]).toContain('forge pr.draft --json --data-file');
+    expect(JSON.parse(result.forgeRequests[0]).ref).toEqual(PR);
+    expect(JSON.parse(result.stdout)).toMatchObject({ is_draft: true });
+  });
+  it.each(['refused', 'verification_failed', 'outcome_unknown'] as const)(
+    'surfaces %s with no fallback',
+    outcome => {
+      const result = runPackScript(script, {
+        source: 'forge',
+        forge: {
+          kind: 'fake',
+          response: forgeFailure('pr.draft', outcome, 'unsupported or unverifiable conversion'),
+        },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(outcome);
+      expect(result.gh).toEqual([]);
+    }
+  );
 });

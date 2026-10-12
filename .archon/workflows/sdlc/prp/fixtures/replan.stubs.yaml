@@ -1,0 +1,44 @@
+# Outcome: not ready, replan. The review finds the change needs a different shape;
+# another correction round cannot fix that, so no simplify or CI runs.
+triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: current code confirms a complete work order"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+gate-direct: '{"gate":"direct"}'
+implement__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented"
+implement__assert-changed: "3 files changed"
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__scope:
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+review__route: { seams: true, code: true, tests: false, errors: false, docs: false, risk: "stub: changes a typed contract" }
+review__seams: "0 findings"
+review__code: "0 findings"
+review__review-complete: "settled"
+review__synthesize:
+  ready: false
+  action: replan
+  findings_summary: "stub: the change needs a different owner"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: false
+  action: replan
+  findings_summary: "stub: the change needs a different owner"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+fixture:
+  expect: completed
+  reached: [review__publish, round, outcome]
+exec-code: true

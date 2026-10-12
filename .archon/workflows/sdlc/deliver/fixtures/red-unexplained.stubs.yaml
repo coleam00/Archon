@@ -1,0 +1,15 @@
+# Dry-run fixture: red with no declared cause fails as loudly as introduced red
+# (--exec-code, so the real gate script decides). `red_cause` is declared optional
+# so a green turn need not carry it, which makes this fixture the guard: absence
+# must never read as permission.
+impl__implement:
+  done: true
+  green: false
+  red_cause: ""
+  summary: "stub: checks are red and the implementation never said why"
+impl__assert-changed: "3 files changed"
+# gate-green is deliberately unstubbed: the real script must refuse.
+fixture:
+  expect: failed
+  fail-node: gate-green
+exec-code: true

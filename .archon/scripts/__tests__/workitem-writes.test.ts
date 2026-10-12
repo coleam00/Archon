@@ -1,10 +1,18 @@
 import { expect, test } from 'bun:test';
-import { forgeFailure, forgeOperation, PR, runPackScript } from './pack-script-harness';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  forgeFailure,
+  forgeOperation,
+  forgePrRecord,
+  PR,
+  runPackScript,
+} from './deliver-checks-harness';
 const inputs = {
   INPUTS_ITEM: JSON.stringify({ repo: PR.repo, number: 7 }),
   INPUTS_PUBLISH: 'true',
   INPUTS_CONTRACT: 'READY',
-  INPUTS_ROUTE: 'deliver',
+  INPUTS_ROUTE: 'direct',
   INPUTS_COMPLEXITY: 'small',
   INPUTS_DESIGN_FIRST: 'false',
   INPUTS_SUMMARY: 'Ready',
@@ -14,8 +22,10 @@ const inputs = {
   INPUTS_PROPOSED_EDITS: '{"title":"","body":""}',
   INPUTS_REPORT: '{"path":"triage.md"}',
 };
+const record = { title: 'Discovery', claim: 'Claim', evidence: ['file:3'], relation: 'unrelated' };
+const discoveries = { INPUTS_PR: JSON.stringify(forgePrRecord()) };
 
-test('default gh triage applies wanted labels', () => {
+test('default gh triage applies wanted labels and default discovery persists read-back URL', () => {
   const triage = runPackScript('triage/scripts/verdict', { inputs });
   expect({ code: triage.code, stderr: triage.stderr }).toMatchObject({ code: 0 });
   expect(JSON.parse(triage.stdout)).toMatchObject({
@@ -25,6 +35,16 @@ test('default gh triage applies wanted labels', () => {
   expect(triage.forge).toEqual([]);
   expect(triage.gh.some(call => call.includes('--hostname ghe.example.com'))).toBe(true);
   expect(triage.gh.some(call => call.startsWith('label create nonexistent'))).toBe(false);
+  const discovery = runPackScript('deliver/scripts/file-discoveries', {
+    inputs: discoveries,
+    artifacts: { 'discoveries.json': JSON.stringify([record]) },
+  });
+  expect({ code: discovery.code, stderr: discovery.stderr }).toMatchObject({ code: 0 });
+  expect(discovery.gh).toHaveLength(2);
+  expect(discovery.forge).toEqual([]);
+  expect(
+    JSON.parse(readFileSync(join(discovery.artifacts, 'discoveries.json'), 'utf8'))[0].issue
+  ).toBe(JSON.parse(discovery.stdout).issues[0]);
 });
 
 test('unpublished and non-tracker triage never invoke either transport', () => {
@@ -78,35 +98,52 @@ test('forge publication fails without label facts rather than assuming no labels
 });
 
 test('forge failures preserve unknown outcome evidence and never fall back or retry', () => {
-  const run = runPackScript('triage/scripts/verdict', {
-    source: 'forge',
-    inputs,
-    forge: {
-      kind: 'fake',
-      response: forgeFailure('workitem.view', 'outcome_unknown', 'response lost'),
-    },
-  });
-  expect(run.code).not.toBe(0);
-  expect(run.gh).toEqual([]);
-  expect(run.forge).toHaveLength(1);
-  expect(run.stderr).toContain('outcome_unknown');
-  expect(run.stdout).toBe('');
+  for (const script of ['triage/scripts/verdict', 'deliver/scripts/file-discoveries']) {
+    const op = script.includes('triage') ? 'workitem.view' : 'workitem.create';
+    const run = runPackScript(script, {
+      source: 'forge',
+      inputs: { ...inputs, ...discoveries },
+      artifacts: { 'discoveries.json': JSON.stringify([record]) },
+      forge: { kind: 'fake', response: forgeFailure(op, 'outcome_unknown', 'response lost') },
+    });
+    expect(run.code).not.toBe(0);
+    expect(run.gh).toEqual([]);
+    expect(run.forge).toHaveLength(1);
+    expect(run.stderr).toContain('outcome_unknown');
+    expect(run.stdout).toBe('');
+  }
 });
 
-// Ship routes on the state label, so each READY route carries its own.
-test('a READY item is labelled with the route ship takes on it', () => {
-  for (const [route, designFirst, label] of [
-    ['deliver', 'false', 'archon-ready'],
-    ['plan', 'false', 'archon-plan'],
-    ['plan', 'true', 'archon-need-design'],
-    ['investigate', 'false', 'archon-issue'],
-  ]) {
-    const run = runPackScript('triage/scripts/verdict', {
-      inputs: { ...inputs, INPUTS_PUBLISH: 'false', INPUTS_ROUTE: route, INPUTS_DESIGN_FIRST: designFirst },
-    });
-    expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-    expect(JSON.parse(run.stdout).labels).toContain(label);
-  }
+test('filed sidecar records resume without a write and invalid source cannot fall back', () => {
+  const saved = { ...record, issue: 'https://tracker.example/items/1' };
+  const resumed = runPackScript('deliver/scripts/file-discoveries', {
+    source: 'forge',
+    inputs: discoveries,
+    artifacts: { 'discoveries.json': JSON.stringify([saved]) },
+  });
+  expect(resumed.code).toBe(0);
+  expect(resumed.gh).toEqual([]);
+  expect(resumed.forge).toEqual([]);
+  const invalid = runPackScript('deliver/scripts/file-discoveries', {
+    source: 'invalid',
+    inputs: discoveries,
+    artifacts: { 'discoveries.json': JSON.stringify([record]) },
+  });
+  expect(invalid.code).not.toBe(0);
+  expect(invalid.gh).toEqual([]);
+  expect(invalid.forge).toEqual([]);
+});
+
+test('default gh discovery retains URL even when read-back disagrees', () => {
+  const run = runPackScript('deliver/scripts/file-discoveries', {
+    gh: { writeLost: true },
+    inputs: discoveries,
+    artifacts: { 'discoveries.json': JSON.stringify([record]) },
+  });
+  expect(run.code).not.toBe(0);
+  expect(
+    JSON.parse(readFileSync(join(run.artifacts, 'discoveries.json'), 'utf8'))[0].issue
+  ).toContain('/issues/7');
 });
 
 test('default triage preserves inherited-property labels and accepts them as area labels', () => {

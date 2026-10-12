@@ -1,8 +1,7 @@
 name: archon-implement
 description: |
-  Implement a change and keep working until it is complete and focused checks on
-  what it changed pass (the full project gate is the caller's, run once after).
-  Commits as it goes; opens no PR. The input is anything intent-shaped:
+  Implement a change and keep working until it is complete and the project's own
+  checks pass. Commits as it goes; opens no PR. The input is anything intent-shaped:
   a plan (path or inline), review findings, a CI failure to fix, or a plain
   description of what to build.
 
@@ -46,7 +45,10 @@ nodes:
         # when the checks did not all run. A green turn has no red to
         # explain, and the empty string is how it says so: OpenAI strict mode rejects
         # any schema whose `required` omits a declared property, so optionality has to
-        # live inside the type rather than in what `required` leaves out.
+        # live inside the type rather than in what `required` leaves out: every
+        # archon-deliver run on a Codex config died at the first turn while this
+        # was optional by omission. '' is the value gate-green.ts already treats as
+        # no cause declared, so the gate that spends on this verdict is unchanged.
         red_cause:
           type: string
           enum: [introduced, inherited, environment, incomplete, ""]

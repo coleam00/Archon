@@ -1,0 +1,48 @@
+# Outcome: not ready, ci_other. CI is red on a check the base branch also fails; the CI
+# agent leaves the PR a draft and the run stops with the cause.
+triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: current code confirms a complete work order"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+gate-direct: '{"gate":"direct"}'
+implement__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented"
+implement__assert-changed: "3 files changed"
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__scope:
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+review__route: { seams: true, code: true, tests: false, errors: false, docs: false, risk: "stub: changes a typed contract" }
+review__seams: "0 findings"
+review__code: "0 findings"
+review__review-complete: "settled"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+simplify: { findings: false }
+ci:
+  state: other
+  summary: "stub: test fails on the base branch too"
+fixture:
+  expect: completed
+  reached: [ci, round, outcome]
+exec-code: true

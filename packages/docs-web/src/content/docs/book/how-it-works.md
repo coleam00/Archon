@@ -33,16 +33,15 @@ nodes:
   - id: planned
     include: archon-plan
     depends_on: [triage]
-    when: "$triage.output.route == 'plan' && $triage.output.design_first == false"
+    when: "$triage.output.route == 'plan'"
 
-  # STAGE 3: DELIVER. Rounds of implement, validate, draft PR, review; then simplify,
-  # and a CI agent marks the PR ready on green
+  # STAGE 3: DELIVER. Implement, open a draft PR, review, fix, validate, flip ready
   - id: deliver
     include: archon-deliver
     depends_on: [gate-direct, gate-rooted, gate-planned]
     trigger_rule: none_failed_min_one_success
 
-  # STAGE 4: OUTCOME. Record whether a PR was delivered, or why not
+  # STAGE 4: OUTCOME. Record whether a PR was delivered
   - id: outcome
     script: outcome
     depends_on: [triage, deliver]
@@ -56,15 +55,13 @@ That's the shape of it. Each `include:` node pulls in another bundled workflow, 
 
 | Stage | Workflow | What the AI Did | Artifact Produced |
 |-------|----------|-----------------|-------------------|
-| Triage | `archon-triage` | Read the issue, checked its claims against the current code, chose a route, and labelled it | `triage.md` |
+| Triage | `archon-triage` | Read the issue, checked its claims against the current code, and chose a route | `triage.md` |
 | Investigate | `archon-investigate` | For an unknown cause: reproduced the problem and proved the root cause | `investigation.md` |
 | Plan | `archon-plan` | For an undecided shape: chose an approach and broke it into verifiable steps | `plan.md` |
-| Implement | `archon-implement` (inside deliver) | Read the work order, made the changes, ran focused checks on them, committed | `implementation.md` |
-| Validate | `archon-validate` (inside deliver) | Ran the project's full checks once, before anything was published | Validation verdict |
-| Create PR | `archon-pr` (inside deliver) | Pushed the branch and opened (or updated) a draft PR | Draft PR on GitHub |
-| Review | `archon-review` (inside deliver) | Ran the lenses its risk call picked; a review that needed fixes started another round | PR comment |
-| Simplify | `archon-simplify` (inside deliver) | Once the review passed, proposed smaller shapes the implementer adopted or declined | `shape.md` |
-| CI | CI agent (inside deliver) | Waited for CI and judged it: green marked the PR ready, a PR-caused red started another round | `ci.md` |
+| Implement | `archon-implement` (inside deliver) | Read the work order, made the changes, ran the project's checks, committed | `implementation.md` |
+| Create PR | `archon-pr` (inside deliver) | Pushed the branch and opened a draft PR | Draft PR on GitHub |
+| Review | `archon-review` (inside deliver) | Ran parallel review lenses; deliver then fixed the findings and re-reviewed each fix | PR comment |
+| Validate | `archon-validate` (inside deliver) | Ran the project's checks; deliver then waited for CI and flipped the PR ready | `validation.md` |
 
 Each stage is independent and focused. Triage doesn't know how the fix will be built; it writes a file. Deliver doesn't repeat triage's checks; it reads `triage.md` and whichever of `investigation.md` or `plan.md` the route produced. The workflow stitches them together.
 

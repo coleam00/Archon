@@ -44,6 +44,12 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
+The ready preflight re-reads checks for the recorded qualified PR itself. It refuses
+pending, red, gated and unknown checks and any failed read, because a failed
+observation is not evidence that no CI exists. The flip targets that same qualified
+PR and reads the draft state back afterwards, because a successful exit is not proof
+the state changed.
+
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is
 whether the guard is protecting *this node's own action*, or restating something
@@ -51,11 +57,12 @@ that was already true when the node started.
 
 ## Forge source
 
-One switch selects the source for every pull-request and label read and write
-this pack makes. [`.shared/forge.ts`](.shared/forge.ts) owns which one a run
-selected, and [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and
-writes, returning the same shapes from either source. The CI agent's prompt names
-both sources' commands for reading checks and marking the pull request ready:
+One switch selects the source for every pull-request and check read and write
+this pack makes; issue writes go through `gh` either way (see below).
+[`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected;
+[`.shared/checks.ts`](.shared/checks.ts) owns the check read and its gate policy,
+and [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes. Both
+return the same shapes from either source, so one policy classifies both:
 
 - **`gh` (default).** The GitHub CLI, acting on the recorded qualified PR. This
   needs only the authenticated `gh` the pack has always used.
@@ -67,25 +74,27 @@ both sources' commands for reading checks and marking the pull request ready:
 
 The source is never picked from what happens to be installed. When `forge` is
 selected and cannot answer (no host command, no plugin for the host, a failed
-operation), the node refuses and reports the failure on stderr; none of them falls
-back to `gh`. Any other value of `ARCHON_SDLC_FORGE` refuses too. The
+operation), the node refuses and `ci-note` reports the failure on stderr; none of
+them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE` refuses too. The
 forge source is for host execution: a container execution receives neither
 `ARCHON_SDLC_FORGE` nor `ARCHON_CLI_COMMAND`, so a containerized run uses `gh`.
 
-## Public writes
+## Public writes belong to a script
 
-An agent judges and authors; where a write must provably land exactly once, the
-node after it performs the write and proves it. `publish-pr` opens or reuses the
-pull request and `publish-review` upserts the one marked review comment. Each takes
-a recorded intent from the agent before it, writes through the selected source, and
-fails unless the result reads back, so "the write failed" and "the write may have
-landed" stay different outcomes, in the pack as in the forge contract. Triage's
-labels are written the same way by its verdict node.
+An agent judges and authors; the node after it performs the one public write and
+proves it landed. `publish-pr` opens or reuses the pull request, `publish-pr-body`
+applies the resync, `publish-review` upserts the one marked review comment,
+`flip-ready` flips it out of draft, and `file-discoveries` files each discovery
+the review accepted as a tracker issue. The forge contract has no issue
+operation yet, so that one — like triage's labels — goes through `gh` whichever
+source the run selected. Each takes a recorded intent from the agent
+before it, writes through the selected source, and fails unless the result reads
+back — so "the write failed" and "the write may have landed" stay different
+outcomes, in the pack as in the forge contract.
 
-The ready flip is the exception, and deliberately so: CI is one agent node. The agent
-that waits for CI and judges it marks the pull request ready on green, through the
-selected source, and reads it back. The prompt names the forge seam's commands for
-the opt-in path; the scripts read `ARCHON_SDLC_FORGE` through `forge.ts`.
+That split is also what keeps the source switch out of the prompts. A prompt that
+branched on `ARCHON_SDLC_FORGE` would be an invented protocol; `forge.ts` reads it
+and the agents never see it.
 
 ## Deterministic scripts
 
@@ -128,12 +137,13 @@ The engine retains what every exec node prints, so a node's output is the record
 whether it set out to keep one or not. Never print a value that can contain a
 secret: read it where it is normalized and pass on the normalized form. A remote
 URL is the common one — `https://<token>@host/repo` is a perfectly ordinary origin
-— so a node that needs `owner/repo` normalizes it inside the substitution that reads
-the remote, and only that reaches a command line. Failure messages are the same
+— so the ready flip normalizes `owner/repo` inside the substitution that reads the
+remote, and only that reaches a command line. Failure messages are the same
 surface: interpolating the raw value into one leaks it just as effectively.
 
-That retention is also why a node does not need its own log: the transcript already
-holds every command it ran.
+That retention is also why a node does not need its own log. The ready flip once
+wrote one by hand — every command it ran, echoed into an artifact — which is what
+the transcript now holds for free.
 
 ## The engineering-conventions sidecar
 

@@ -509,7 +509,7 @@ describe('validateWorkflowResources — loop.command', () => {
     // command-nodes already get.
     const command = formatPackagedResourceReference(
       { source: 'bundled', pack: 'sdlc', workflow: 'deliver' },
-      'ci'
+      'classify-review-scope'
     );
     const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', command)]);
     const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
@@ -1265,7 +1265,7 @@ describe('validateWorkflowResources — bash output-ref lint', () => {
 
   test('no false positive: prose apostrophes and heredoc bodies elsewhere in the script', async () => {
     // Both bodies are reduced from shipped workflows that a whole-body quote scanner
-    // reported (t1-fix-issue's open-pr). In `commented`
+    // reported (archon-deliver's flip-ready, t1-fix-issue's open-pr). In `commented`
     // the apostrophe of "gh's" opens nothing because it is mid-word; in `heredoc` the
     // `--body "$(cat <<...` double quote stays open to the end of its own line, and
     // only line-locality stops it from reaching the refs on the lines below. Every

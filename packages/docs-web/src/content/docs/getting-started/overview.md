@@ -356,9 +356,9 @@ archon complete <branch> --force   # skip uncommitted-changes check
 | `archon-triage` | Check an issue against the current code and decide what it needs next |
 | `archon-investigate` | Prove the root cause of a bug or open question and write a report |
 | `archon-plan` | Turn decided intent into an implementable plan |
-| `archon-implement` | Build decided work until focused checks on the change pass (commits, no PR) |
+| `archon-implement` | Build decided work until the project's checks pass (commits, no PR) |
 | `archon-pr` | Open a pull request for committed work on the current branch |
-| `archon-deliver` | Implement, validate once, open a draft PR, review and correct, simplify, then a CI agent marks it ready |
+| `archon-deliver` | Implement, open a draft PR, review, fix findings, validate, and flip it ready |
 | `archon-review` | Review a PR or the working diff through parallel specialist lenses |
 | `archon-validate` | Run the project's own checks and report a structured verdict |
 | `archon-upkeep` | Update one dependency through the reviewed delivery tail |

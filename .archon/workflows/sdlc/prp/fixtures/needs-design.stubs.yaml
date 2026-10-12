@@ -1,0 +1,18 @@
+# Outcome: needs design. A READY item whose shape needs a person's design is labelled
+# archon-need-design and stops; no plan or delivery runs.
+triage:
+  contract: READY
+  route: plan
+  design_first: true
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: the owning module is a product decision"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+fixture:
+  expect: completed
+  reached: [verdict, outcome]
+exec-code: true

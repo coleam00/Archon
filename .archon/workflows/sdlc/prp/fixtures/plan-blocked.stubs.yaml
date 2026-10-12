@@ -1,0 +1,19 @@
+# Outcome: plan blocked. The plan route (archon-plan) leaves a material decision open,
+# so delivery never starts.
+triage:
+  contract: READY
+  route: plan
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: the storage shape is undecided"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+planned__plan: { ready: false, summary: "stub: two storage shapes, no evidence to pick", report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" } }
+fixture:
+  expect: completed
+  reached: [planned__plan, outcome]
+exec-code: true

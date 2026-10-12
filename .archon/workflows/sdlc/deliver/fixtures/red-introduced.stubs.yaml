@@ -1,0 +1,14 @@
+# Dry-run fixture: red the change caused still stops delivery dead (--exec-code, so
+# the real gate script decides). This is the route that must not change: a broken
+# check is the one red no downstream gate can excuse.
+impl__implement:
+  done: true
+  green: false
+  red_cause: introduced
+  summary: "stub: the new guard broke two type checks in the package it touches"
+impl__assert-changed: "3 files changed"
+# gate-green is deliberately unstubbed: the real script must refuse.
+fixture:
+  expect: failed
+  fail-node: gate-green
+exec-code: true

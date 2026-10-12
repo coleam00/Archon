@@ -316,3 +316,59 @@ it("refuses implement's unfinished validation with the green gates' message", ()
   expect(run.stderr.toString().trim()).toBe(unfinishedValidation('The implementation', summary));
   expect(run.stderr.toString()).not.toMatch(/\bred\b/);
 });
+
+describe('the green gate on a validation that did not finish', () => {
+  const script = join(
+    import.meta.dir,
+    '..',
+    '.archon/workflows/sdlc/deliver/scripts/gate-green.ts'
+  );
+  function gate(cause: string, summary: string, green = 'false') {
+    const run = Bun.spawnSync([process.execPath, script], {
+      env: {
+        ...process.env,
+        INPUTS_GREEN: green,
+        INPUTS_RED_CAUSE: cause,
+        INPUTS_SUMMARY: summary,
+        INPUTS_STAGE: 'The project gate',
+      },
+    });
+    return { exitCode: run.exitCode, stdout: run.stdout.toString(), stderr: run.stderr.toString() };
+  }
+
+  it('refuses incomplete as unfinished, never as red, and carries the reason', () => {
+    const summary = 'A usage limit stopped validation during type-check; lint passed.';
+    const result = gate('incomplete', summary);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain("The project gate: validation didn't finish.");
+    expect(result.stderr).toContain(summary);
+    expect(result.stderr).toContain('Resume the run');
+    expect(result.stderr).not.toMatch(/\bred\b/);
+  });
+
+  it('refuses incomplete even when the verdict also claims green', () => {
+    const result = gate('incomplete', 'type-check never ran', 'true');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain("validation didn't finish");
+  });
+
+  it('still refuses red with no declared cause as unexplained red', () => {
+    const result = gate('', 'tests failed');
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('is red and declared no red_cause');
+  });
+});
+
+it('does not route an interaction red cause to the accepted-red attention wait', () => {
+  const root = join(import.meta.dir, '..', '.archon/workflows/sdlc/deliver/scripts');
+  const route = Bun.spawnSync([process.execPath, join(root, 'ci-attention-route.ts')], {
+    env: { ...process.env, INPUTS_RED_CAUSE: 'interaction' },
+  });
+  expect(route.exitCode).toBe(0);
+  expect(JSON.parse(route.stdout.toString())).toEqual({
+    attention: false,
+    red_cause: 'interaction',
+  });
+});

@@ -1,63 +1,54 @@
 /**
- * One return for every terminal result of the routed chain.
+ * One return for every legitimate terminal result of the routed fix chain.
  *
- * When delivery ran, its typed ending is the result. Otherwise the advisory stop that
- * kept it from running is: triage found no work owed or a non-ready contract, the item
- * needs human design, planning left a decision open, or the investigation did not prove
- * a fix boundary. `delivered` is this workflow's authored outcome.
+ * Negative advisory verdicts complete with the report that explains them; delivery is
+ * accepted when the deliver branch actually ran and handed back the pull request it
+ * opened. `delivered` is this workflow's authored outcome: an honest "no work is
+ * owed" is a successful run that shipped nothing, and the two facts are separate.
  *
- * Bound inputs (canonical text; a skipped producer arrives as "null"):
- * - INPUTS_ROUTE / INPUTS_DESIGN_FIRST / INPUTS_SUMMARY: triage's verdict.
- * - INPUTS_DELIVER: archon-deliver's outcome `{ready, reason, pr_url, summary}`, or
- *   "null" when delivery was skipped.
+ * Bound inputs (`with:` bindings, canonical text in env):
+ * - INPUTS_ROUTE / INPUTS_SUMMARY: triage's verdict.
+ * - INPUTS_DELIVERED: `$deliver.output.pr_url`, the flip's certified URL, or "null"
+ *   when the deliver branch was skipped (no_action, or an advisory stop upstream of
+ *   the gates). The value is validated at the producer, so nothing here re-reads it
+ *   for URL shape.
+ *
+ * A failed delivery cannot reach this node: the failure
+ * cascades an `upstream_failed` skip that blocks this join, and the run's terminal
+ * record names the node that actually failed.
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';
-import { discoveryReport } from '../../.shared/report.ts';
+import { caveats } from '../../.shared/report.ts';
 
 const artifacts = artifactsDir();
+const listingFile = process.env.TYPED_ARTIFACTS_FILE;
 const route = text(process.env.INPUTS_ROUTE);
-const designFirst = text(process.env.INPUTS_DESIGN_FIRST) === 'true';
 const summary = text(process.env.INPUTS_SUMMARY);
-const deliver = JSON.parse(text(process.env.INPUTS_DELIVER) || 'null') as {
-  ready: boolean;
-  reason: string;
-  pr_url: string;
-  summary: string;
-} | null;
+const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
 
-function stopped(reason: string, why: string, report: string): void {
+if (route === 'no_action') {
   emit({
     delivered: false,
-    reason,
-    pr_url: '',
-    summary: `${why}\nReport: ${artifacts}/${report}${discoveryReport(artifacts)}`,
-  });
-}
-
-if (deliver !== null) {
-  emit({
-    delivered: deliver.ready,
-    reason: deliver.ready ? 'delivered' : 'not_ready',
-    pr_url: deliver.pr_url,
     summary:
-      // Delivery's summary already relays the run's discoveries.
-      `${deliver.ready ? 'Ready' : `Not ready (${deliver.reason})`}: ${deliver.summary}`,
+      `No delivery needed: ${summary}\nReport: ${artifacts}/triage.md` +
+      caveats(artifacts, { listingFile }),
   });
-} else if (route === 'no_action') {
-  stopped('no_action', `No delivery: ${summary}`, 'triage.md');
-} else if (designFirst) {
-  stopped('needs_design', `Needs human planning before any run: ${summary}`, 'triage.md');
-} else if (route === 'investigate') {
-  stopped(
-    'not_rooted',
-    'No delivery started: the investigation did not establish a safe fix boundary.',
-    'investigation.md'
-  );
+} else if (delivered === 'null') {
+  const stop =
+    route === 'investigate'
+      ? {
+          reason: 'the investigation did not establish a safe fix boundary',
+          report: 'investigation.md',
+        }
+      : { reason: 'planning left a material decision unresolved', report: 'plan.md' };
+  emit({
+    delivered: false,
+    summary:
+      `No delivery started: ${stop.reason}.\nReport: ${artifacts}/${stop.report}` +
+      caveats(artifacts, { listingFile }),
+  });
 } else {
-  stopped(
-    'plan_blocked',
-    'No delivery started: planning left a material decision unresolved.',
-    'plan.md'
-  );
+  // Deliver ran, so the record it returned is the report.
+  emit({ delivered: true, summary: delivered + caveats(artifacts, { listingFile }) });
 }

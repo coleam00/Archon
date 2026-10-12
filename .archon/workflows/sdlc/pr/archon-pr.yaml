@@ -16,11 +16,6 @@ inputs:
   draft:
     default: "true"
     description: '"true" opens the PR as a draft; anything else opens it ready for review.'
-  validation:
-    default: ""
-    description: >-
-      The project validation the caller ran before publishing, as it reported it.
-      A red the change did not cause is disclosed in the PR body.
 
 returns: publish
 

@@ -48,21 +48,13 @@ From the originating contract, list every **acceptance** item (how completed beh
 
 An explicit narrowing in the operator's trigger, or a plan the trigger explicitly names as this delivery, is an accepted boundary. Preserve all originating items and their sources; mark items explicitly assigned to future parts deferred with their authorization and owning part. Do not infer an assignment from a plan merely used to explain a broad request. Unassigned or unexplained omissions remain current requirements. A derived document without that authorization cannot drop originating acceptance: record its narrowing as a conflict. Correctness, truth, documentation and proof inside the delivered slice remain required.
 
-## Select the lenses
+## Select docs review
 
-The operator's lens request (empty means none):
-
-$INPUTS.scopes
-
-Make one risk call from the diff and the accepted contract, record it in scope.md, and pick the lenses it earns. In continuation mode the lenses do not run; declare the selection anyway from the delta.
-
-- `seams` — missing types, counterpart drift, bypassed boundaries. It has found the most important defects, so it runs unless the change clearly touches no type, contract, payload, state, wire format, persistence, concurrency, isolation, security, or other boundary. When the risk is unclear, it runs.
-- `code` — general correctness, sanity, scope, and repository fit. It runs on every change that touches code or behavior; a documentation-only change may skip it.
-- `tests` — behavioral coverage and regression protection, when the change establishes or alters behavior a test should protect.
-- `errors` — swallowed failures, fallbacks, and actionable errors, when the change adds or changes catches, fallbacks, retries, error translation, or recovery.
-- `docs` — stale or missing documentation, when the diff changes shipped documentation or a user-facing command, configuration, or behavior. A small, mechanical, likely-correct change (a version bump, a one-line fix, a rename, a test-only tweak) does not earn it on a doc-adjacent touch alone.
-
-At least one lens runs on a full round. Lenses the operator names are added to your selection; an explicit restriction ("only tests") replaces it; `all` selects every lens. Honor any other inclusion or exclusion by its intent.
+Set `docs` true when the reviewed diff changes shipped documentation, unless the
+diff is small, mechanical, and likely-correct — a version bump, a one-line fix, a
+rename, a test-only tweak — in which case a doc-adjacent touch alone does not
+earn the lens. Otherwise set it false. This selection applies only when the
+workflow's `docs` input is `auto`; an explicit input overrides it.
 
 ## Light mode (a prior report exists)
 
@@ -83,6 +75,5 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 
 Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract's source, has all three of its Acceptance, Invariants, and Steering subsections, names the head SHA, and that the diff commands in it actually produce output in this checkout. Then declare:
 
-- `seams`, `code`, `tests`, `errors`, `docs`: one boolean each, the lenses selected above.
-- `risk`: the risk call that picked them, in one or two sentences.
+- `docs`: the boolean selected above.
 - `pr`: the qualified pull request this round reviews, as `{"repo": {"host": ..., "path": "owner/repo"}, "number": N}` — the same identity scope.md records. For a working-diff target, `null`. The node that publishes the review report writes to this record and to nothing else, so a wrong or guessed identity would put the report on the wrong pull request.

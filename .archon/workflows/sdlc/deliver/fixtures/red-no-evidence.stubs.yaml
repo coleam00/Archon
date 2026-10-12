@@ -1,0 +1,18 @@
+# Dry-run fixture: a red the implementation calls inherited but backs with nothing
+# is refused (--exec-code, so the real gate script decides). The label is not the
+# claim: a pass on non-introduced red is worth exactly the failing check it names,
+# so an empty summary is refused like a missing cause is.
+#
+# The project gate's half of the same rule is validate-red-no-evidence.stubs.yaml.
+# One script serves all three gates, so neither can drift from the other.
+impl__implement:
+  done: true
+  green: false
+  red_cause: inherited
+  summary: ""
+impl__assert-changed: "3 files changed"
+# gate-green is deliberately unstubbed: the real script must refuse.
+fixture:
+  expect: failed
+  fail-node: gate-green
+exec-code: true

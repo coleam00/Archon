@@ -1,7 +1,14 @@
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect } from 'bun:test';
-import { existsSync, readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { spawnSync } from 'child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { dirname, join } from 'path';
+import { removeTempTree } from '@archon/paths/test-utils';
+import {
+  fakeGhPreload,
+  type GhFake,
+} from '../../../../.archon/scripts/__tests__/deliver-checks-harness';
 import {
   isBinaryBuild,
   BUNDLED_COMMANDS,
@@ -139,6 +146,15 @@ describe('bundled-defaults', () => {
       }
     });
 
+    it('classify-review-scope declares only its structured output fields', () => {
+      const content =
+        BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::classify-review-scope'];
+      expect(content).toContain('- `tier` — `focused` or `full`');
+      expect(content).toContain('- `errors`, `docs` — booleans');
+      expect(content).toContain('- `reasons` — `{tier, errors, docs}`');
+      expect(content).not.toContain('`tests`, `errors`, `comments`, `types`, `docs`');
+    });
+
     it('the SDLC investigation, plan, implementation and every review lens own separate discovery records', () => {
       const expected = new Map([
         ['__archon_pack__bundled:sdlc:investigate::investigate', 'discoveries/investigate.json'],
@@ -147,6 +163,7 @@ describe('bundled-defaults', () => {
         ['__archon_pack__bundled:sdlc:review::review-code', 'discoveries/review-code.json'],
         ['__archon_pack__bundled:sdlc:review::review-seams', 'discoveries/review-seams.json'],
         ['__archon_pack__bundled:sdlc:simplify::simplify', 'discoveries/review-simplify.json'],
+        ['__archon_pack__bundled:sdlc:review::review-focused', 'discoveries/review-focused.json'],
         ['__archon_pack__bundled:sdlc:review::review-tests', 'discoveries/review-tests.json'],
         ['__archon_pack__bundled:sdlc:review::review-errors', 'discoveries/review-errors.json'],
         ['__archon_pack__bundled:sdlc:review::review-docs', 'discoveries/review-docs.json'],
@@ -196,6 +213,7 @@ describe('bundled-defaults', () => {
       const lenses = [
         '__archon_pack__bundled:sdlc:review::review-code',
         '__archon_pack__bundled:sdlc:review::review-seams',
+        '__archon_pack__bundled:sdlc:review::review-focused',
         '__archon_pack__bundled:sdlc:simplify::simplify',
         '__archon_pack__bundled:sdlc:review::review-tests',
         '__archon_pack__bundled:sdlc:review::review-errors',
@@ -213,9 +231,8 @@ describe('bundled-defaults', () => {
         // anything that touches the change is a finding, only unrelated work is a
         // discovery. Every reviewer states it in the same words.
         expect(content).toContain('is a finding, even when the contract never named it');
-        // Simplify runs after review, outside a review round, so it reads no scope.md.
+        expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
         if (!key.includes(':simplify::')) {
-          expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
           expect(content).toContain('$mode.output.risks');
         }
       }
@@ -231,7 +248,7 @@ describe('bundled-defaults', () => {
             !key.endsWith('review-scope')) ||
           key === '__archon_pack__bundled:sdlc:simplify::simplify'
       );
-      expect(reviewers.length).toBeGreaterThanOrEqual(6);
+      expect(reviewers.length).toBeGreaterThanOrEqual(7);
       expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
         '## Severity'
       );
@@ -285,22 +302,32 @@ describe('bundled-defaults', () => {
       expect(content).not.toContain('Original work item:');
     });
 
-    it('archon-deliver reviews the published PR against the accepted work order', () => {
+    it('archon-deliver preserves the conditional-lens bindings', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],
         'archon-deliver.yaml',
         providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-      const rounds = parsed.workflow.nodes.find(node => node.id === 'rounds');
-      if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
-      const review = rounds.loop_group.nodes.find(node => node.id === 'review');
+
+      const resolveScope = parsed.workflow.nodes.find(node => node.id === 'resolve-scope');
+      expect(resolveScope).toBeDefined();
+      expect(resolveScope?.kind).toBe('exec');
+      if (resolveScope?.kind !== 'exec') throw new Error('resolve-scope is not executable');
+      expect(resolveScope.runtime).toBe('bun');
+      expect(resolveScope.script).toBe('resolve-review-scope');
+      expect(resolveScope.with).toEqual({
+        c_errors: '$classify.output.errors',
+      });
+
+      const review = parsed.workflow.nodes.find(node => node.id === 'review');
       expect(review?.kind).toBe('include');
       if (review?.kind !== 'include') throw new Error('review is not an include');
       expect(review.with).toMatchObject({
         scope: '$pr.output',
         work_order: '$INPUTS.work',
-        scopes: '$INPUTS.review_scopes',
+        errors: '$resolve-scope.output.errors',
+        docs: '$classify.output.docs',
       });
       // One typed value carries the target — not the same number bound twice
       // beside a head branch nothing downstream reads (#2968).
@@ -308,10 +335,10 @@ describe('bundled-defaults', () => {
       expect(review.with).not.toHaveProperty('pr_head');
     });
 
-    // Every commit that ships is read by a review round. The one exception is by design:
-    // the simplify adoption (`reshape`) runs once after the last review round and goes
-    // straight to CI, so only behavior-preserving smaller shapes ship unreviewed.
-    it('archon-deliver follows every implementation pass but the simplify adoption with a review', () => {
+    // Every commit that ships is read by a review round that judges structure as well
+    // as correctness. A pass that writes code with no review after it ships that code
+    // unread, and any structure finding it declines goes unjudged.
+    it('archon-deliver follows every implementation pass with a review', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],
         'archon-deliver.yaml',
@@ -341,11 +368,7 @@ describe('bundled-defaults', () => {
           });
         for (const node of nodes) {
           if (node.kind === 'loop_group') checkScope(node.loop_group.nodes);
-          if (
-            isInclude(node.id, 'archon-implement') &&
-            node.id !== 'reshape' &&
-            !reviewedAfter(node.id)
-          ) {
+          if (isInclude(node.id, 'archon-implement') && !reviewedAfter(node.id)) {
             unreviewed.push(node.id);
           }
         }
@@ -354,9 +377,78 @@ describe('bundled-defaults', () => {
       expect(unreviewed).toEqual([]);
     });
 
-    // The scope agent's selection is the lens set synthesis requires, so every lens
-    // node needs a selection field and every field a lens node.
-    it('the scope selection names exactly the review-lens nodes', () => {
+    it('archon-deliver delegates the optional CI read timeout to the engine', () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver'],
+        'archon-deliver.yaml',
+        providerRegistry
+      );
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+
+      const corrections = parsed.workflow.nodes.find(node => node.id === 'corrections');
+      expect(corrections?.kind).toBe('loop_group');
+      if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
+
+      const ciNote = corrections.loop_group.nodes.find(node => node.id === 'ci-note');
+      expect(ciNote?.kind).toBe('exec');
+      if (ciNote?.kind !== 'exec') throw new Error('ci-note is not executable');
+      expect(ciNote).toMatchObject({
+        runtime: 'bun',
+        timeout: 45_000,
+        on_timeout: 'skip',
+        with: { pr: { from: '$pr.output' } },
+      });
+      expect(ciNote.script).not.toContain('mktemp');
+      expect(ciNote.script).not.toContain('GH_PID');
+      expect(ciNote.script).not.toContain('WATCHDOG');
+
+      const ciEvidence = corrections.loop_group.nodes.find(node => node.id === 'ci-evidence');
+      expect(ciEvidence?.kind).toBe('exec');
+      if (ciEvidence?.kind !== 'exec') throw new Error('ci-evidence is not executable');
+      expect(ciEvidence).toMatchObject({
+        runtime: 'bun',
+        depends_on: ['ci-note'],
+        trigger_rule: 'all_done',
+        with: {
+          note: {
+            from: '$ci-note.output',
+            if_skipped:
+              'No CI evidence is available for this round (the check read timed out). Proceed on the review findings alone.',
+          },
+        },
+      });
+
+      const fix = corrections.loop_group.nodes.find(node => node.id === 'fix');
+      expect(fix?.depends_on).toEqual(['ci-evidence']);
+    });
+
+    it('flip-ready names only what it needs, and never loses a gate to a longer chain', () => {
+      // The flip used to name ten ancestors because a failure propagated exactly one
+      // hop: a join that named only the tail of a chain never saw the chain's gates
+      // fail. Failure-cascade skips carry `upstream_failed` across every hop now, so
+      // the list is the four the flip actually needs. gate-validated, gate-ready and
+      // validate are reachable through ci-verdict; ci-verdict stays because the rule
+      // needs one successful dependency, and a clean-review delivery has no other.
+      // That the cascade really blocks is proved by execution, not by this list —
+      // deliver's validate-red* and late-red-unconverged fixtures expect the gate
+      // itself as the failed node and never reach the flip.
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver'],
+        'archon-deliver.yaml',
+        providerRegistry
+      );
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+      const flipReady = parsed.workflow.nodes.find(node => node.id === 'flip-ready');
+      expect(flipReady?.depends_on).toEqual([
+        'ci-verdict',
+        'ci-attention-route',
+        'ci-attention',
+        'publish-pr-body',
+      ]);
+      expect(flipReady?.trigger_rule).toBe('none_failed_min_one_success');
+    });
+
+    it('synthesis requires the review-lens membership declared by the graph', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-review'],
         'archon-review.yaml',
@@ -367,19 +459,12 @@ describe('bundled-defaults', () => {
         .filter(node => 'output_type' in node && node.output_type === 'review-lens')
         .map(node => node.id)
         .sort();
-      const scope = parsed.workflow.nodes.find(node => node.id === 'scope');
-      const properties = (scope && 'output_format' in scope ? scope.output_format : undefined)
-        ?.properties as Record<string, { type?: unknown }> | undefined;
-      if (properties === undefined) throw new Error('scope has no output properties');
-      const selection = Object.entries(properties)
-        .filter(([, value]) => value.type === 'boolean')
-        .map(([key]) => key)
-        .sort();
-      expect(selection).toEqual(lenses);
-      for (const lens of lenses) {
-        const node = parsed.workflow.nodes.find(candidate => candidate.id === lens);
-        expect(node?.when).toContain(`$scope.output.${lens} == true`);
-      }
+      const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
+      const membership = synthesize.match(
+        /Require completed artifacts for every enabled specialist: `review-lens` for (.+?), and `structure-review` for simplify\./
+      );
+      if (!membership) throw new Error('synthesis has no specialist completion inventory');
+      expect(membership[1].split(/, | and /).sort()).toEqual(lenses);
     });
 
     it('the errors lens probes the complete independent-work blast radius', () => {
@@ -410,35 +495,69 @@ describe('bundled-defaults', () => {
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
       const scopeSchema = scope.output_format;
       if (scopeSchema === undefined) throw new Error('scope has no output_format');
-      const selected = { seams: true, code: true, tests: false, errors: false, docs: false };
-      expect(
-        validateStructuredOutput({ ...selected, risk: 'contract change', pr: null }, scopeSchema)
-          .valid
-      ).toBe(true);
+      expect(scopeSchema).toEqual({
+        type: 'object',
+        properties: {
+          docs: { type: 'boolean' },
+          pr: {
+            type: ['object', 'null'],
+            properties: {
+              repo: {
+                type: 'object',
+                properties: {
+                  host: { type: 'string', pattern: '\\S' },
+                  path: { type: 'string', pattern: '\\S' },
+                },
+                required: ['host', 'path'],
+              },
+              number: { type: 'integer', minimum: 1 },
+            },
+            required: ['repo', 'number'],
+          },
+        },
+        required: ['docs', 'pr'],
+      });
+      expect(validateStructuredOutput({ docs: false, pr: null }, scopeSchema).valid).toBe(true);
       expect(
         validateStructuredOutput(
           {
-            ...selected,
-            risk: 'contract change',
-            pr: { repo: { host: 'github.com', path: 'coleam00/Archon' }, number: 3557 },
+            docs: false,
+            pr: {
+              repo: { host: 'github.com', path: 'coleam00/Archon' },
+              number: 3557,
+            },
           },
           scopeSchema
         ).valid
       ).toBe(true);
-      expect(
-        validateStructuredOutput({ ...selected, risk: 'contract change', pr: {} }, scopeSchema)
-          .valid
-      ).toBe(false);
-      expect(
-        validateStructuredOutput({ ...selected, risk: ' ', pr: null }, scopeSchema).valid
-      ).toBe(false);
+      expect(validateStructuredOutput({ docs: false, pr: {} }, scopeSchema).valid).toBe(false);
+      expect(parsed.workflow.inputs?.docs?.default).toBe('auto');
+      const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
+      expect(docs?.when).toContain("$INPUTS.docs == 'auto' && $scope.output.docs == true");
 
-      const specialists = ['seams', 'code', 'tests', 'errors', 'docs'];
+      const specialists = ['seams', 'code', 'tests', 'focused', 'simplify', 'errors', 'docs'];
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
       expect(reviewComplete?.kind).toBe('exec');
-      expect(reviewComplete?.depends_on).toEqual(['scope', ...specialists]);
+      expect(reviewComplete?.depends_on).toEqual(['coverage', ...specialists]);
+      const lensWhen = (id: string) => parsed.workflow?.nodes.find(node => node.id === id)?.when;
+      expect(lensWhen('seams')).not.toContain('tier');
+      expect(lensWhen('code')).toContain('$coverage.output.full == true');
+      expect(lensWhen('tests')).toContain('$coverage.output.full == true');
+      expect(lensWhen('focused')).toContain("$INPUTS.tier == 'focused'");
+      // Structure is a full-tier lens again: delivery's pre-PR pass is the first look,
+      // not a replacement for this one.
+      expect(lensWhen('simplify')).toContain('$coverage.output.full == true');
       // Reviewers are read-only by the engine's check, not only by their prompts.
-      for (const id of ['scope', ...specialists, 'synthesize']) {
+      for (const id of [
+        'scope',
+        'seams',
+        'code',
+        'tests',
+        'focused',
+        'errors',
+        'docs',
+        'synthesize',
+      ]) {
         const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
         expect(node && 'mutates_checkout' in node ? node.mutates_checkout : undefined).toBe(false);
       }
@@ -486,9 +605,11 @@ describe('bundled-defaults', () => {
       );
 
       for (const lens of specialists) {
-        expect(commands[`__archon_pack__bundled:sdlc:review::review-${lens}`]).toContain(
-          `sources: [${lens}]`
-        );
+        const key =
+          lens === 'simplify'
+            ? '__archon_pack__bundled:sdlc:simplify::simplify'
+            : `__archon_pack__bundled:sdlc:review::review-${lens}`;
+        expect(commands[key]).toContain(`sources: [${lens}]`);
       }
     });
 
@@ -523,6 +644,22 @@ describe('bundled-defaults', () => {
       expect(synthesize).toContain('## Judge contract coverage');
       expect(synthesize).toContain('`sources: [contract]`');
       expect(synthesize).toContain('An unmet contract item is a blocking finding');
+    });
+
+    // The same "does this diff earn a docs review" call is made in two packs — at
+    // delivery time by the classifier, and at review time when `docs` is `auto`. They
+    // drifted once: only the delivery copy carried the trivial-diff carve-out, so the
+    // same doc-adjacent typo fix earned the lens through one entry point and not the
+    // other. Whitespace-normalized so the guard survives either file being rewrapped.
+    it('applies the trivial-diff carve-out in both docs classifiers', () => {
+      const squash = (text: string): string => text.replace(/\s+/g, ' ');
+      const carveOut = 'a version bump, a one-line fix, a rename, a test-only tweak';
+      expect(
+        squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::classify-review-scope'])
+      ).toContain(carveOut);
+      expect(
+        squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-scope'])
+      ).toContain(carveOut);
     });
 
     // Calibration lesson 4 (#2898): the run that motivated this rewrite produced a false
@@ -671,13 +808,31 @@ describe('bundled-defaults', () => {
   });
 
   describe('run-owned public actions (#2909)', () => {
-    it('records a PR identity and uses it for review', () => {
+    it('records a PR identity and uses it for review, the body resync and the ready flip', () => {
       const pr = BUNDLED_WORKFLOWS['archon-pr'];
       const deliver = BUNDLED_WORKFLOWS['archon-deliver'];
+      const sync = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::sync-pr-body'];
 
       expect(pr).toContain('output_type: pull-request');
       expect(deliver).not.toContain('output_type: public-action');
       expect(deliver).toContain('scope: "$pr.output"');
+      const parsedDelivery = parseWorkflow(deliver, 'archon-deliver.yaml', providerRegistry);
+      if (parsedDelivery.workflow === null) throw new Error(parsedDelivery.error.error);
+      const flip = parsedDelivery.workflow.nodes.find(node => node.id === 'flip-ready');
+      expect(flip).toMatchObject({
+        kind: 'exec',
+        runtime: 'bun',
+        script: 'flip-ready',
+        with: { pr: { from: '$pr.output' } },
+      });
+      expect(deliver).not.toContain('git remote get-url origin');
+      // A command node reads its node-local `with:` map through `$INPUTS.<name>`,
+      // never the INPUTS_<UPPER_SNAKE> env form — that one is built only for
+      // bash/script nodes, and naming it here left the agent reading the literal
+      // token with no PR number in it (#2909 R1).
+      expect(sync).toContain('$INPUTS.pr');
+      expect(sync).toContain('$INPUTS.current_body');
+      expect(sync).not.toContain('INPUTS_PR');
 
       // The public write belongs to a deterministic node, not to a prompt: the
       // identity it writes to is the recorded record, and the same node performs
@@ -704,6 +859,33 @@ describe('bundled-defaults', () => {
         required: expect.arrayContaining(['repo', 'number', 'url', 'head', 'base', 'is_draft']),
       });
       expect(prParsed.workflow.returns).toBe('publish');
+
+      const deliverParsed = parseWorkflow(deliver, 'archon-deliver.yaml', providerRegistry);
+      if (deliverParsed.workflow === null) throw new Error(deliverParsed.error.error);
+      const syncNode = deliverParsed.workflow.nodes.find(node => node.id === 'sync-pr-body');
+      expect(syncNode?.kind).toBe('agent');
+      if (syncNode?.kind !== 'agent') throw new Error('sync-pr-body is not an agent node');
+      // A command node carries its bindings on `source`, not the node root.
+      expect(syncNode.source).toMatchObject({
+        kind: 'command',
+        with: { pr: '$pr.output', current_body: '$read-pr-body.output.body' },
+      });
+      expect(
+        deliverParsed.workflow.nodes.find(node => node.id === 'publish-pr-body')
+      ).toMatchObject({
+        kind: 'exec',
+        runtime: 'bun',
+        script: 'publish-pr-body',
+        with: { pr: '$pr.output', intent: '$sync-pr-body.output.intent' },
+      });
+      // Composition once dropped that binding while materializing the command body
+      // and then reported both names as missing caller inputs, so archon-deliver
+      // declared them with empty defaults purely to load inside ship/upkeep
+      // (#2968 item 4). Composition keeps the binding now (#2964), so the decoys are
+      // gone — and the empty default that used to be spliced in where the real value
+      // belongs cannot come back with them.
+      expect(deliverParsed.workflow.inputs?.pr_number).toBeUndefined();
+      expect(deliverParsed.workflow.inputs?.pr_head).toBeUndefined();
     });
 
     it('publishes the review report from a deterministic node, not the reviewer', () => {
@@ -731,6 +913,122 @@ describe('bundled-defaults', () => {
         BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesizeCommand).not.toContain('gh pr comment');
       expect(synthesizeCommand).not.toContain('gh api');
+    });
+
+    it('uses check events as wake-ups while retaining bounded probes and deadlines', () => {
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-deliver'],
+        'archon-deliver.yaml',
+        providerRegistry
+      );
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+
+      for (const [groupId, probeId, pauseId] of [
+        ['await-checks', 'ci-probe', 'ci-pause'],
+        ['await-fix-checks', 'fix-ci-probe', 'fix-ci-pause'],
+      ] as const) {
+        const group = parsed.workflow.nodes.find(node => node.id === groupId);
+        if (group?.kind !== 'loop_group') throw new Error(`${groupId} is not a loop group`);
+        expect(group.loop_group.max_iterations).toBe(13);
+        expect(group.loop_group.until_bash?.trim()).toBe(
+          `value=$${probeId}.output.state\ntest "$value" != "pending"`
+        );
+
+        const probeIndex = group.loop_group.nodes.findIndex(node => node.id === probeId);
+        const pauseIndex = group.loop_group.nodes.findIndex(node => node.id === pauseId);
+        expect(probeIndex).toBeGreaterThanOrEqual(0);
+        expect(pauseIndex).toBeGreaterThan(probeIndex);
+        const pause = group.loop_group.nodes[pauseIndex];
+        if (pause?.kind !== 'wait') throw new Error(`${pauseId} is not a wait node`);
+        expect(pause.wait).toEqual({ event: 'checks.complete', deadline_ms: 300000 });
+        expect(pause.wait).not.toHaveProperty('duration_ms');
+        expect(pause.depends_on).toEqual([probeId]);
+        expect(pause.when).toBe(`$${probeId}.output.state == 'pending'`);
+      }
+    });
+  });
+
+  // A binary install executes the shipped copies of the deliver check scripts, so
+  // these run the bundled pack rather than the source tree. The full matrix for
+  // both sources lives in .archon/scripts/__tests__; this pins the default and
+  // the loud opt-in failure on what actually ships.
+  describe('deliver check source (bundled pack)', () => {
+    const runShipped = async (
+      script: 'check-ci' | 'flip-ready',
+      options: { source?: string; checks?: GhFake['checks'] }
+    ): Promise<{ code: number; stdout: string; stderr: string; gh: string[] }> => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-bundled-checks-'));
+      try {
+        for (const [path, content] of Object.entries(BUNDLED_SCRIPT_PACKS.sdlc!.files)) {
+          mkdirSync(dirname(join(root, 'sdlc', path)), { recursive: true });
+          writeFileSync(join(root, 'sdlc', path), content);
+        }
+        const ghLog = join(root, 'gh.log');
+        const preload = join(root, 'fake-gh.ts');
+        writeFileSync(preload, fakeGhPreload({ checks: options.checks ?? 'fail' }, ghLog));
+        const run = spawnSync(
+          process.execPath,
+          ['--preload', preload, join(root, 'sdlc', 'deliver', 'scripts', `${script}.ts`)],
+          {
+            cwd: root,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              INPUTS_PR: JSON.stringify({
+                repo: { host: 'github.com', path: 'owner/repo' },
+                number: 42,
+              }),
+              ARCHON_SDLC_FORGE: options.source ?? '',
+              ARCHON_CLI_COMMAND: '',
+            },
+          }
+        );
+        return {
+          code: run.status ?? -1,
+          stdout: run.stdout,
+          stderr: run.stderr,
+          gh: existsSync(ghLog) ? readFileSync(ghLog, 'utf8').split('\n').filter(Boolean) : [],
+        };
+      } finally {
+        await removeTempTree(root);
+      }
+    };
+
+    it('reads checks through gh by default', async () => {
+      const probe = await runShipped('check-ci', {
+        checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }],
+      });
+      expect(probe.code).toBe(0);
+      expect(JSON.parse(probe.stdout)).toEqual({
+        state: 'red',
+        detail: 'non-green checks: build (failure)',
+      });
+      expect(probe.gh[0]).toBe('pr checks 42 --repo github.com/owner/repo --json name,state');
+
+      const flip = await runShipped('flip-ready', {
+        checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
+      });
+      expect(flip.code).toBe(0);
+      expect(flip.gh).toContain('pr ready 42 --repo github.com/owner/repo');
+    });
+
+    it('refuses the ready flip when the default gh read fails', async () => {
+      const flip = await runShipped('flip-ready', { checks: 'fail' });
+      expect(flip.code).not.toBe(0);
+      expect(flip.stderr).toContain('flip-ready: could not read check state');
+      expect(flip.gh.some(call => call.startsWith('pr ready'))).toBe(false);
+    });
+
+    it('fails loudly when the forge source is selected but unavailable', async () => {
+      for (const script of ['check-ci', 'flip-ready'] as const) {
+        const run = await runShipped(script, {
+          source: 'forge',
+          checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
+        });
+        expect(run.code).not.toBe(0);
+        expect(run.stderr).toContain('ARCHON_CLI_COMMAND is not set');
+        expect(run.gh).toEqual([]);
+      }
     });
   });
 

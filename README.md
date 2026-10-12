@@ -235,12 +235,13 @@ Archon ships the `sdlc` workflow pack for the software development lifecycle:
 | Workflow | What it does |
 |----------|-------------|
 | `archon-ship` | Issue or request → triage → investigate or plan → deliver a reviewed PR |
+| `archon-prp` | Experimental, beside `archon-ship`: triage labels the route, then capped rounds of implement → draft PR → review, simplify once, and a CI agent marks the PR ready |
 | `archon-triage` | Check an issue against the current code and decide what it needs next |
 | `archon-investigate` | Prove the root cause of a bug or open question and write a report |
 | `archon-plan` | Turn decided intent into an implementable plan |
-| `archon-implement` | Build decided work until focused checks on the change pass; commits, no PR |
+| `archon-implement` | Build decided work until the project's checks pass; commits, no PR |
 | `archon-pr` | Open a pull request for committed work on the current branch |
-| `archon-deliver` | Implement → validate → draft PR → review → correct → simplify → CI agent marks it ready |
+| `archon-deliver` | Implement → draft PR → review → fix findings → validate → CI → ready for review |
 | `archon-review` | Review a PR or the working diff through parallel specialist lenses |
 | `archon-validate` | Run the project's own checks and report a structured verdict |
 | `archon-upkeep` | Update one dependency through the reviewed delivery tail |

@@ -189,7 +189,7 @@ describe('repo-tests exit codes', () => {
         'test',
         '.archon/scripts/',
         '-t',
-        'ends typed at the cap instead of starting a round the loop cannot finish',
+        'the tier consumers read their supplied policy',
       ],
       { cwd: REPO_ROOT, stdout: 'ignore', stderr: 'ignore' }
     );
