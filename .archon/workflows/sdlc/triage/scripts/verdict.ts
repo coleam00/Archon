@@ -28,22 +28,34 @@ import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
 type Complexity = 'small' | 'risky' | 'large';
 
-// Exactly one state label per item. Design-first is READY whose next step is
-// design, so it replaces the ready label rather than sitting beside it.
-const STATE_LABEL: Record<Contract, string> = {
-  READY: 'archon-ready',
+type Route = 'investigate' | 'plan' | 'deliver';
+
+// Exactly one state label per item. A READY item's label names the route ship takes
+// on it: archon-ready delivers, archon-plan plans then delivers, archon-issue
+// investigates then delivers, and archon-need-design stops for human planning.
+const STATE_LABEL: Record<Exclude<Contract, 'READY'>, string> = {
   NEEDS_CONTRACT_WORK: 'archon-needs-contract',
   BLOCKED: 'archon-blocked',
   NO_ACTION: 'archon-close',
 };
-const DESIGN_FIRST_LABEL = 'archon-design-first';
+const ROUTE_LABEL: Record<Route, string> = {
+  deliver: 'archon-ready',
+  plan: 'archon-plan',
+  investigate: 'archon-issue',
+};
+const DESIGN_FIRST_LABEL = 'archon-need-design';
 const COMPLEXITY_LABEL: Record<Complexity, string> = {
   small: 'archon-small',
   risky: 'archon-risky',
   large: 'archon-large',
 };
 const PACK_LABELS: Record<string, { color: string; description: string }> = {
-  'archon-ready': { color: '0E8A16', description: 'Triage: the contract is ready for a run' },
+  'archon-ready': { color: '0E8A16', description: 'Triage: ready to deliver' },
+  'archon-plan': { color: '1D76DB', description: 'Triage: ready; a plan comes before delivery' },
+  'archon-issue': {
+    color: 'C5DEF5',
+    description: 'Triage: ready; an investigation comes before delivery',
+  },
   'archon-needs-contract': {
     color: 'D93F0B',
     description: "Triage: one of the contract's six elements is missing",
@@ -56,9 +68,9 @@ const PACK_LABELS: Record<string, { color: string; description: string }> = {
     color: '6A737D',
     description: 'Triage: already delivered, duplicate, obsolete, or out of direction',
   },
-  'archon-design-first': {
+  'archon-need-design': {
     color: '5319E7',
-    description: 'Triage: ready, but settle the engineering shape before implementing',
+    description: 'Triage: ready, but it needs human planning before any run',
   },
   'archon-small': { color: 'C2E0C6', description: 'Triage: bounded change' },
   'archon-risky': {
@@ -279,7 +291,15 @@ function main(): void {
     return;
   }
 
-  let labels = [designFirst ? DESIGN_FIRST_LABEL : STATE_LABEL[contract]];
+  let state: string;
+  if (contract !== 'READY') state = STATE_LABEL[contract];
+  else if (designFirst) state = DESIGN_FIRST_LABEL;
+  else if (Object.hasOwn(ROUTE_LABEL, route)) state = ROUTE_LABEL[route as Route];
+  else {
+    invalid(`a READY contract routes to investigate, plan, or deliver, got route=${route}`);
+    return;
+  }
+  let labels = [state];
   // Size only matters on an item that can still be worked; a close verdict carries none.
   if (contract !== 'NO_ACTION') labels.push(COMPLEXITY_LABEL[complexity]);
 

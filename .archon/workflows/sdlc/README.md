@@ -79,22 +79,20 @@ them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE` refuses too. The
 forge source is for host execution: a container execution receives neither
 `ARCHON_SDLC_FORGE` nor `ARCHON_CLI_COMMAND`, so a containerized run uses `gh`.
 
-## Public writes belong to a script
+## Public writes
 
-An agent judges and authors; the node after it performs the one public write and
-proves it landed. `publish-pr` opens or reuses the pull request, `publish-pr-body`
-applies the resync, `publish-review` upserts the one marked review comment,
-`flip-ready` flips it out of draft, and `file-discoveries` files each discovery
-the review accepted as a tracker issue. The forge contract has no issue
-operation yet, so that one — like triage's labels — goes through `gh` whichever
-source the run selected. Each takes a recorded intent from the agent
-before it, writes through the selected source, and fails unless the result reads
-back — so "the write failed" and "the write may have landed" stay different
-outcomes, in the pack as in the forge contract.
+An agent judges and authors; where a write must provably land exactly once, the
+node after it performs the write and proves it. `publish-pr` opens or reuses the
+pull request and `publish-review` upserts the one marked review comment. Each takes
+a recorded intent from the agent before it, writes through the selected source, and
+fails unless the result reads back, so "the write failed" and "the write may have
+landed" stay different outcomes, in the pack as in the forge contract. Triage's
+labels are written the same way by its verdict node.
 
-That split is also what keeps the source switch out of the prompts. A prompt that
-branched on `ARCHON_SDLC_FORGE` would be an invented protocol; `forge.ts` reads it
-and the agents never see it.
+The ready flip is the exception, and deliberately so: CI is one agent node. The agent
+that waits for CI and judges it marks the pull request ready on green, through the
+selected source, and reads it back. The prompt names the forge seam's commands for
+the opt-in path; the scripts read `ARCHON_SDLC_FORGE` through `forge.ts`.
 
 ## Deterministic scripts
 
@@ -137,13 +135,12 @@ The engine retains what every exec node prints, so a node's output is the record
 whether it set out to keep one or not. Never print a value that can contain a
 secret: read it where it is normalized and pass on the normalized form. A remote
 URL is the common one — `https://<token>@host/repo` is a perfectly ordinary origin
-— so the ready flip normalizes `owner/repo` inside the substitution that reads the
-remote, and only that reaches a command line. Failure messages are the same
+— so a node that needs `owner/repo` normalizes it inside the substitution that reads
+the remote, and only that reaches a command line. Failure messages are the same
 surface: interpolating the raw value into one leaks it just as effectively.
 
-That retention is also why a node does not need its own log. The ready flip once
-wrote one by hand — every command it ran, echoed into an artifact — which is what
-the transcript now holds for free.
+That retention is also why a node does not need its own log: the transcript already
+holds every command it ran.
 
 ## The engineering-conventions sidecar
 

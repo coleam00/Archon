@@ -79,8 +79,8 @@ function discoveries(artifacts: string): string {
   }
   if (read.value.length === 0) return '';
 
-  // Delivery files each record as an issue and writes its URL back as `issue`.
-  // Once every record has one, the tracker knows about them and the relay is moot.
+  // A record carries `issue` once someone has filed it. Once every record has one,
+  // the tracker knows about them and the relay is moot.
   const entries = read.value.map(entry => {
     const record = records([entry])[0];
     const title = (record === undefined ? '' : display(record.title)) || '(untitled discovery)';

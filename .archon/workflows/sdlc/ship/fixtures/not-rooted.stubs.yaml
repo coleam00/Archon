@@ -1,0 +1,19 @@
+# Outcome: not rooted. The investigation route does not prove a fix boundary, so
+# delivery never starts.
+triage__triage:
+  contract: READY
+  route: investigate
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: the crash cause is unproven"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+inv__investigate: { rooted: false, summary: "stub: two causes remain plausible", report: { type: archon_artifact, run_id: "fixture-run", path: "investigation.md" } }
+fixture:
+  expect: completed
+  reached: [inv__investigate, outcome]
+exec-code: true

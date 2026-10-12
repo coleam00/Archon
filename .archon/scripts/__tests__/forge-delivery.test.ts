@@ -4,9 +4,8 @@
  * process, which talks to a fake GitHub (./fake-github-fetch.ts).
  *
  * The other pack tests fake the CLI's answers. This one proves the pieces agree:
- * a delivery creates a draft pull request, updates its body, upserts the same
- * review comment across rounds, reads checks, flips ready and restores draft, and none of
- * those steps calls `gh`.
+ * a delivery creates a draft pull request and upserts the same review comment across
+ * rounds, triage applies its labels, and none of those steps calls `gh`.
  */
 import { describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -14,12 +13,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
-  forgePrRecord,
   PR,
   runPackScript,
   type ScriptOptions,
   type ScriptRun,
-} from './deliver-checks-harness';
+} from './pack-script-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
 
 const trackTempRoot = trackTempRoots();
@@ -31,7 +29,6 @@ const FAKE_GITHUB = join(import.meta.dir, 'fake-github-fetch.ts');
 const MARKER = '<!-- archon-review-report -->';
 const HEAD_SHA = 'feedface00000000000000000000000000000000';
 const OPENING_BODY = 'Opening body: the change adds a guard.';
-const RESYNCED_BODY = 'Resynced body: the change adds a guard and its test.';
 const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
 const ROUND_TWO = `Round two at ${HEAD_SHA}: every finding resolved.`;
 
@@ -123,7 +120,7 @@ process.exitCode = await forgeCommand(
 }
 
 describe('the forge opt-in delivers through plugin operations', () => {
-  it('creates a draft, resyncs its body, upserts one review comment, reads checks, flips ready and restores draft', () => {
+  it('creates a draft and upserts one review comment across rounds', () => {
     const host = forgeHost();
     const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {
       const run = runPackScript(relative, {
@@ -181,50 +178,25 @@ describe('the forge opt-in delivers through plugin operations', () => {
     // 2. The first review round's canonical comment.
     review(ROUND_ONE, false);
 
-    // 3. The body resync reads the live body, then replaces it.
-    const read = through('deliver/scripts/read-pr-body', {
-      inputs: { INPUTS_PR: created.stdout },
-    });
-    const current = JSON.parse(read.stdout) as { body: string };
-    expect(readFileSync(current.body, 'utf8')).toBe(OPENING_BODY);
-    through('deliver/scripts/publish-pr-body', {
-      inputs: { INPUTS_PR: created.stdout, INPUTS_INTENT: '{ARTIFACTS}/intent.json' },
-      artifacts: {
-        'intent.json': JSON.stringify({ change: true, bodyPath: '{ARTIFACTS}/final.md' }),
-        'final.md': RESYNCED_BODY,
-      },
-    });
-
     // 4. The second round edits the same comment rather than adding one.
     review(ROUND_TWO, true);
 
-    // 5. The ready flip reads checks, then flips.
-    const flipped = through('deliver/scripts/flip-ready');
-    expect(JSON.parse(flipped.stdout)).toEqual({ pr_url: record.url });
-
-    const drafted = through('../../scripts/__tests__/mark-pr-draft');
-    expect(JSON.parse(drafted.stdout)).toMatchObject({ is_draft: true, state: 'open' });
-    const unchanged = through('../../scripts/__tests__/mark-pr-draft');
-    expect(JSON.parse(unchanged.stdout)).toMatchObject({ is_draft: true });
 
     const state = github();
     expect(state.pulls).toHaveLength(1);
-    expect(state.pulls[0]).toMatchObject({ draft: true, body: RESYNCED_BODY });
+    expect(state.pulls[0]).toMatchObject({ draft: true, body: OPENING_BODY });
     expect(state.comments).toEqual([{ id: 900, body: `${MARKER}\n${ROUND_TWO}` }]);
     const writes = state.calls.filter(call => !call.startsWith('GET '));
     expect(writes.map(call => call.replace(/\?.*$/, ''))).toEqual([
       `POST https://${FAKE_HOST}/api/v3/repos/example/repo/pulls`,
       `POST https://${FAKE_HOST}/api/v3/repos/example/repo/issues/42/comments`,
-      `PATCH https://${FAKE_HOST}/api/v3/repos/example/repo/pulls/42`,
       `PATCH https://${FAKE_HOST}/api/v3/repos/example/repo/issues/comments/900`,
-      `POST https://${FAKE_HOST}/api/graphql`,
-      `POST https://${FAKE_HOST}/api/graphql`,
     ]);
   }, 120_000);
 });
 
 for (const other of [false, true]) {
-  it(`preserves inherited-property labels and publishes marker-idempotent discoveries through ${other ? 'a non-GitHub tracker' : 'GitHub'}`, () => {
+  it(`preserves inherited-property labels through ${other ? 'a non-GitHub tracker' : 'GitHub'}`, () => {
     const host = forgeHost(other);
     const operatorLabels = Object.getOwnPropertyNames(Object.prototype);
     const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
@@ -239,7 +211,7 @@ for (const other of [false, true]) {
       INPUTS_ITEM: JSON.stringify({ repo, number: 7 }),
       INPUTS_PUBLISH: 'true',
       INPUTS_CONTRACT: 'READY',
-      INPUTS_ROUTE: 'direct',
+      INPUTS_ROUTE: 'deliver',
       INPUTS_COMPLEXITY: 'small',
       INPUTS_DESIGN_FIRST: 'false',
       INPUTS_SUMMARY: 'Ready',
@@ -257,35 +229,10 @@ for (const other of [false, true]) {
       published: true,
       labels: ['archon-ready', 'archon-small', 'area', 'constructor'],
     });
-    const record = {
-      title: 'Proved discovery',
-      claim: 'Concrete claim',
-      evidence: ['file:12'],
-      relation: 'unrelated',
-      source_nodes: ['review'],
-    };
-    const discovery = (runId: string): ScriptRun =>
-      runPackScript('deliver/scripts/file-discoveries', {
-        ...options,
-        inputs: { INPUTS_PR: JSON.stringify(forgePrRecord({ repo })), WORKFLOW_ID: runId },
-        artifacts: { 'discoveries.json': JSON.stringify([{ ...record, source_nodes: [runId] }]) },
-      });
-    const first = discovery('first');
-    const second = discovery('second');
-    for (const result of [first, second]) {
-      expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
-      expect(result.gh).toEqual([]);
-      const saved = JSON.parse(readFileSync(join(result.artifacts, 'discoveries.json'), 'utf8'));
-      expect(saved[0].issue).toBe(JSON.parse(result.stdout).issues[0]);
-    }
-    expect(JSON.parse(first.stdout)).toEqual(JSON.parse(second.stdout));
     const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
       issues: { number: number; labels: (string | { name: string })[] }[];
       labels: { name: string }[];
-      writes?: string[];
-      calls?: string[];
     };
-    expect(state.issues).toHaveLength(2);
     const labels = state.issues[0].labels.map(label =>
       typeof label === 'string' ? label : label.name
     );
@@ -293,9 +240,5 @@ for (const other of [false, true]) {
       ['archon-ready', 'archon-small', 'area', 'operator', ...operatorLabels].sort()
     );
     expect(state.labels.some(label => label.name === 'nonexistent')).toBe(false);
-    const writes = other
-      ? state.writes?.filter(op => op === 'workitem.create')
-      : state.calls?.filter(call => call.startsWith('POST ') && call.includes('/issues'));
-    expect(writes).toHaveLength(1);
   });
 }

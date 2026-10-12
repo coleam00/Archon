@@ -1,22 +1,19 @@
-# Sparse guard fixture: run with --default-stubs --exec-code. A plan that still
-# needs a human decision completes honestly, while the delivery tail is skipped
-# and the real outcome node points to plan.md.
+# Outcome: plan blocked. The plan route leaves a material decision open, so delivery
+# never starts.
 triage__triage:
   contract: READY
   route: plan
   design_first: false
-  complexity: large
+  complexity: small
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
   proposed_edits: { title: "", body: "" }
   blocked_reason: ""
   blocked_by: []
-  summary: "stub: material product shape remains undecided"
+  summary: "stub: the storage shape is undecided"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
-planned__plan:
-  ready: false
-  summary: "stub: owner decision required before implementation"
-  report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
+planned__plan: { ready: false, summary: "stub: two storage shapes, no evidence to pick", report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" } }
 fixture:
   expect: completed
+  reached: [planned__plan, outcome]
 exec-code: true

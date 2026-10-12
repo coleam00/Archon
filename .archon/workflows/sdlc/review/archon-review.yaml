@@ -1,11 +1,10 @@
 name: archon-review
 description: |
   Review a change through parallel specialist lenses and produce one evidence-based
-  verdict. On the first round, seams always runs. A full-tier round adds code,
-  tests, and simplify; a focused round (a low-risk change) adds one general
-  reviewer first. An engaged full-review risk adds the full specialists before
-  synthesis. Errors judges failure visibility and containment; docs runs only for
-  shipped-doc changes.
+  verdict. The scope agent makes the risk call and picks the lenses: seams runs
+  unless the change clearly touches no type, contract, state or boundary; code
+  covers general correctness; tests, errors and docs run when the change engages
+  them or the operator asks. Each lens is a fresh reviewer; synthesis aggregates.
   Reviews a PR when given one, otherwise the working diff. Every round also holds the change to the accepted contract: each
   stated acceptance item, invariant, and steering constraint is met with cited
   evidence or raised as a blocking finding.
@@ -42,21 +41,12 @@ inputs:
       The accepted outcome and scope boundaries for this change. Delivery passes
       the same work order implementation received. Standalone review may leave
       this empty and use the PR's problem, outcome, and explicit scope instead.
-  errors:
-    default: false
-    description: Enable the failure visibility and containment lens.
-  tier:
-    default: "full"
+  scopes:
+    default: ""
     description: >-
-      focused — seams plus one general reviewer, for a change that engages none
-      of the risks the lenses scale on; any other value runs the full tier: code,
-      seams, tests and simplify. A focused risk escalation adds those specialists
-      before the round publishes its verdict.
-  docs:
-    default: "auto"
-    description: >-
-      Docs-impact lens — auto selects shipped-documentation changes from the
-      reviewed diff; true or false overrides that selection.
+      The operator's lens request, if any: lenses to add (seams, code, tests,
+      errors, docs, or all) or an explicit restriction such as "only tests".
+      Empty lets the scope agent pick lenses by risk.
 
 returns: publish
 outcome_field: ready
@@ -95,7 +85,13 @@ nodes:
     output_format:
       type: object
       properties:
+        seams: { type: boolean }
+        code: { type: boolean }
+        tests: { type: boolean }
+        errors: { type: boolean }
         docs: { type: boolean }
+        # The risk call that picked the lenses, recorded in the report.
+        risk: { type: string, pattern: '\S' }
         # The qualified pull request this round reviewed, or `null` for a working
         # diff. publish below writes to this record and to nothing else, so the
         # comment can never land on an ambient branch→PR mapping. The bounds match
@@ -112,20 +108,20 @@ nodes:
               required: [host, path]
             number: { type: integer, minimum: 1 }
           required: [repo, number]
-      required: [docs, pr]
+      required: [seams, code, tests, errors, docs, risk, pr]
 
   # ── Lenses ────────────────────────────────────────────────────────
   # Every reviewer is read-only by the engine's check, not only by its prompt:
   # lenses run in parallel in one checkout, so a reviewer that edits it can
-  # mislead the others. Seams runs on every tier: a contract two sides must keep
-  # in agreement is as easy to break in a small change as in a large one.
+  # mislead the others. The scope agent picks the lenses; a continuation round
+  # runs none of them (synthesize verifies the delta itself).
   - id: seams
     output_type: review-lens
     command: review-seams
     context: fresh
     mutates_checkout: false
     depends_on: [scope]
-    when: "$mode.output.continuation == false"
+    when: "$mode.output.continuation == false && $scope.output.seams == true"
 
   - id: code
     output_type: review-lens
@@ -133,59 +129,16 @@ nodes:
     command: review-code
     context: fresh
     mutates_checkout: false
-    depends_on: [coverage]
-    when: "$mode.output.continuation == false && $coverage.output.full == true"
+    depends_on: [scope]
+    when: "$mode.output.continuation == false && $scope.output.code == true"
 
   - id: tests
     output_type: review-lens
     command: review-tests
     context: fresh
     mutates_checkout: false
-    depends_on: [coverage]
-    when: "$mode.output.continuation == false && $coverage.output.full == true"
-
-  # A focused reviewer can require full coverage before this round concludes.
-  - id: focused
-    output_type: review-lens
-    command: review-focused
-    context: fresh
-    mutates_checkout: false
     depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.tier == 'focused'"
-    output_format:
-      type: object
-      properties:
-        full_review: { type: boolean }
-        reason: { type: string, pattern: '\S' }
-      required: [full_review, reason]
-
-  - id: coverage
-    output_type: review-coverage
-    script: resolve-review-coverage
-    runtime: bun
-    depends_on: [scope, focused]
-    trigger_rule: none_failed_min_one_success
-    with:
-      continuation: "$mode.output.continuation"
-      tier: "$INPUTS.tier"
-      focused: { from: "$focused.output", if_skipped: null }
-    output_format:
-      type: object
-      properties:
-        full: { type: boolean }
-      required: [full]
-
-  # Structure is judged on every full-tier change, never selected for one; the
-  # focused reviewer carries a machinery check instead. The charter lives in its
-  # own workflow so delivery can also run it before the PR opens, when a smaller
-  # shape is still cheap; this lens is then the second, independent look.
-  - id: simplify
-    include: archon-simplify
-    with:
-      stage: review
-      work_order: "$INPUTS.work_order"
-    depends_on: [coverage]
-    when: "$mode.output.continuation == false && $coverage.output.full == true"
+    when: "$mode.output.continuation == false && $scope.output.tests == true"
 
   - id: errors
     output_type: review-lens
@@ -193,7 +146,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.errors == 'true'"
+    when: "$mode.output.continuation == false && $scope.output.errors == true"
 
   - id: docs
     output_type: review-lens
@@ -201,7 +154,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.docs == 'true' || $mode.output.continuation == false && $INPUTS.docs == 'auto' && $scope.output.docs == true"
+    when: "$mode.output.continuation == false && $scope.output.docs == true"
 
   # all_done lets this barrier settle after input-disabled lenses, every skipped
   # continuation lens, or a lens whose retries were exhausted. The deciding
@@ -209,7 +162,7 @@ nodes:
   # mode/scope preflight: synthesize separately requires scope to have succeeded.
   - id: review-complete
     bash: "true"
-    depends_on: [coverage, seams, code, tests, focused, simplify, errors, docs]
+    depends_on: [scope, seams, code, tests, errors, docs]
     trigger_rule: all_done
 
   # A failed specialist (a provider stream dying mid-review, say) must not kill

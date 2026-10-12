@@ -1,21 +1,18 @@
 # Simplify — The Smallest Coherent Shape
 
-Writing code is cheap; maintaining it and recovering option value are not. Hunt one defect: **the change delivers its required outcome through more structure than that outcome needs.** Preserve meaningful invariants, supported behavior, and useful foundations — not accidental implementation shape. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree (`git worktree add --detach "$(mktemp -d)" HEAD`, removed when you are done), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile.
+Writing code is cheap; maintaining it and recovering option value are not. Hunt one defect: **the change delivers its required outcome through more structure than that outcome needs.** Preserve meaningful invariants, supported behavior, and useful foundations — not accidental implementation shape. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree (`git worktree add --detach "$(mktemp -d)" HEAD`, removed when you are done), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile.
 
-Stage: **$INPUTS.stage**.
+Delivery runs you once, after the last review round passed and before CI judges the pull request. The diff is this branch's commits over its base: fetch `origin $BASE_BRANCH` and read `git diff origin/$BASE_BRANCH...HEAD`. The accepted contract is the work order below; `$ARTIFACTS_DIR/implementation.md` records what the implementation claims, and `$ARTIFACTS_DIR/review/report.md` what the review accepted. Every finding you report is adopted or declined by the implementer before CI runs, and nothing reviews the result again, so report only a smaller shape you proved preserves behavior.
 
-- `review` — you are one lens of a review round. Read `$ARTIFACTS_DIR/review/scope.md` first: it names the diff, its base, and the accepted contract.
-- `pre-pr` — delivery runs you on the committed implementation before its pull request opens, so no scope.md exists. The diff is this branch's commits over its base: fetch `origin $BASE_BRANCH` and read `git diff origin/$BASE_BRANCH...HEAD`. The accepted contract is the work order below, and `$ARTIFACTS_DIR/implementation.md` records what the implementation claims. This is the cheapest moment to change the shape: nothing is published and no other reviewer has read the code yet.
-
-Accepted work order (may be empty in `review`, where scope.md carries it):
+Accepted work order:
 
 $INPUTS.work_order
 
-Then read, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point. Those are the project's own values: a structural preference that one of them states is a finding you cite, and one that none of them states is taste you leave out. Anchor the review on the accepted work order's stated invariants, and scale scrutiny to concrete consequences and explicitly try to refute the relevant invariants; a prose-only change gets the minimum. In light mode, verify prior simplify findings first, then examine only the delta.
+Then read, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point. Those are the project's own values: a structural preference that one of them states is a finding you cite, and one that none of them states is taste you leave out. Anchor the review on the accepted work order's stated invariants, and scale scrutiny to concrete consequences and explicitly try to refute the relevant invariants; a prose-only change gets the minimum.
 
 ## Establish the contract
 
-Start with the exact diff your stage names, against its base. Establish the intended outcome and invariants from the accepted work order, the PR, the changed files, their tests, and direct consumers. Read beyond the diff only as far as settling a concrete question requires. Existing code is evidence, not a mandate.
+Start with the diff above, against its base. Establish the intended outcome and invariants from the accepted work order, the PR, the changed files, their tests, and direct consumers. Read beyond the diff only as far as settling a concrete question requires. Existing code is evidence, not a mandate.
 
 ## Test the structural decisions
 
@@ -58,7 +55,7 @@ State what each finding costs if it merges — the machinery that stays, the dec
 
 ## Output
 
-Write your report — `$ARTIFACTS_DIR/review/simplify.md` in `review`, `$ARTIFACTS_DIR/shape.md` in `pre-pr` — where each in-scope finding begins with `sources: [simplify]`, followed by what it costs, the proof fields above with `file:line` references, the smaller shape, what disappears, and any real tradeoff. Then the examined-and-clean list naming the decisive primitives, invariants, or supported variations that justify the structure you left alone. In light mode, a verdict per prior finding. If nothing meaningful can disappear, say so briefly and name what you checked — never claim the change is optimal.
+Write your report to `$ARTIFACTS_DIR/shape.md`, where each in-scope finding begins with `sources: [simplify]`, followed by what it costs, the proof fields above with `file:line` references, the smaller shape, what disappears, and any real tradeoff. Then the examined-and-clean list naming the decisive primitives, invariants, or supported variations that justify the structure you left alone. If nothing meaningful can disappear, say so briefly and name what you checked — never claim the change is optimal.
 
 A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding, even when the contract never named it. A proved defect you meet that does not touch the change — unrelated or pre-existing — is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/review-simplify.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`simplify`). Write no file for no discovery; never append to another lens's file or record suspicion.
 

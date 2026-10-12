@@ -20,9 +20,11 @@ inputs:
     description: >-
       The update to assess — a dependency name, version, or advisory. When
       empty, the run's trigger message is the target.
-  errors:
-    default: "auto"
-    description: Silent-failure lens — auto, true, or false.
+  review_scopes:
+    default: ""
+    description: >-
+      Review lenses to add to the risk-picked ones (seams, code, tests, errors,
+      docs, or all), or an explicit restriction such as "only tests".
 
 # `delivered:false` is a valid completion: an assessment that finds the locked
 # version already current is a successful run that shipped nothing, and lifecycle
@@ -75,7 +77,7 @@ nodes:
   - id: deliver
     include: archon-deliver
     with:
-      errors: "$INPUTS.errors"
+      review_scopes: "$INPUTS.review_scopes"
       work: >-
         Apply the dependency update specified in
         $ARTIFACTS_DIR/upkeep-assessment.md. Read that file in full first — it
@@ -98,9 +100,8 @@ nodes:
     when: "$assess.output.action == 'update'"
 
   # One return for every legitimate terminal result: a no_action assessment
-  # completes with its report path; a delivered update is reported from the
-  # flip's certified URL the deliver branch returned (if_skipped binding, so a
-  # skipped flip arrives as null).
+  # completes with its report path; otherwise delivery's own typed ending is the
+  # result (if_skipped binding, so a skipped delivery arrives as null).
   #
   # A failed delivery cascades an `upstream_failed` skip that blocks this join,
   # so the run's terminal record names the node that failed.
@@ -112,7 +113,7 @@ nodes:
     with:
       action: "$assess.output.action"
       summary: "$assess.output.summary"
-      delivered: { from: "$deliver.output.pr_url", if_skipped: null }
+      deliver: { from: "$deliver.output", if_skipped: null }
     output_format:
       type: object
       properties:

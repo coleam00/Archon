@@ -1,0 +1,36 @@
+# Wait for CI and judge it
+
+The pull request's review has passed. Wait for its CI to conclude on the current head, judge what the result means, and act on it. No one watches this run; your structured answer and `$ARTIFACTS_DIR/ci.md` are all the next node reads.
+
+The pull request is this branch's open pull request in the repository `origin` points at: find it with `gh pr list --repo <owner>/<repo> --head "$(git branch --show-current)" --state open`. Every `gh pr` command names that repository with `--repo <owner>/<repo>`: in a clone of a fork, gh otherwise resolves the upstream parent. When `ARCHON_SDLC_FORGE=forge`, use the forge seam instead (`archon forge pr.view`, `archon forge checks.state`, `archon forge pr.ready`) with the qualified repository and number.
+
+## Wait
+
+Confirm the pull request's head is this checkout's `HEAD`; if it is not, the push never landed, so stop with `other` and say so. Then wait until every check on that head has concluded: `gh pr checks <number> --repo <owner>/<repo> --watch` blocks until they do. Right after a push the head may have no checks yet; give registration a few minutes. A repository with no CI configured at all (no active workflows) is `green` with that stated as the evidence. A repository with CI configured where nothing starts on this pull request after a reasonable wait (a maintainer's approval, a path filter) is `other`, with what you observed. A pending check is not green, and a check waiting on a maintainer's approval is not green either.
+
+Do not re-run, cancel, or otherwise change any check, and do not modify any file.
+
+## Judge a red
+
+For every failing check, gather the evidence before you claim a cause:
+
+1. **Where it lives.** Read the failing job's logs (for GitHub, `gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs`; `gh pr checks` names the runs). Record the source file each failure points at: the failing test's file, or the file a compile, lint, or type error names. When a failure names no file, such as a job that never started or a runner that lost its connection, say so.
+2. **The base.** Whether the same check fails on the base branch's latest concluded run.
+3. **The diff.** Whether any failing path is a file this pull request changed, or code its change makes reachable.
+
+Then declare one state:
+
+- `pr_caused` — this pull request's changes cause the failure. A failure in a file the pull request changed is PR-caused whatever else is true. When you cannot tell, it is PR-caused: a correction round that finds nothing to fix costs less than shipping a defect.
+- `other` — the failure exists without this pull request: the same check fails on the base, or the failure is the infrastructure's (a runner or network failure, a timeout on a path the change never touches), with the evidence that shows it.
+- `green` — every check concluded and passed.
+
+## Act
+
+- `green`: take the pull request out of draft (`gh pr ready <number> --repo <owner>/<repo>`), then read it back and confirm it is no longer a draft. If the flip fails, the state is `other` with the error.
+- `pr_caused`: write the failing checks, their log lines, and the file each points at to `$ARTIFACTS_DIR/ci.md`. The next round's implementer fixes from that file, and review sees the correction again. Leave the pull request a draft.
+- `other`: write the cause and its evidence to `$ARTIFACTS_DIR/ci.md`. Leave the pull request a draft: never leave a red pull request ready.
+
+## Declare
+
+- `state` — `green`, `pr_caused`, or `other`.
+- `summary` — two to four sentences: the checks and their conclusions, the cause with the log lines, runs, and commits that show it, and what you did to the pull request.

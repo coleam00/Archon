@@ -48,7 +48,7 @@ Declare exactly one contract verdict:
 
 Only a `READY` item carries an engineering route, and a `READY` item always carries one. For every other verdict, `route` is `no_action` and the verdict is the reason; the route you would have chosen belongs in the assessment for the human, not in the declared field.
 
-When the contract is sound but the engineering shape must be settled before any run should implement — the owning type or module, the supported and rejected cases, a compatibility boundary — declare `design_first: true` and route to `plan`. That is a `READY` item whose next step is design, not a contract defect.
+When the contract is sound but the engineering shape needs a person's design before any run should plan or implement it — the owning type or module, the supported and rejected cases, a compatibility boundary that is a product decision rather than an engineering one — declare `design_first: true` and route to `plan`. That is a `READY` item whose next step is human planning, not a contract defect: ship stops there and the item waits in the planning queue. Shape decisions a planning agent can settle from the code and the contract are a plain `plan` route, not design-first.
 
 ## Judge complexity
 
@@ -95,7 +95,7 @@ Do not investigate the full causal chain, choose the implementation design, impl
 
 - `contract` — exactly one of `READY`, `NEEDS_CONTRACT_WORK`, `BLOCKED`, or `NO_ACTION`, using the definitions above.
 - `route` — exactly one of `investigate`, `plan`, `deliver`, or `no_action`; `no_action` exactly when `contract` is not `READY`.
-- `design_first` — true only for a `READY` item routed to `plan` because its engineering shape must be settled before implementation.
+- `design_first` — true only for a `READY` item routed to `plan` because its shape needs a person's design before any run plans or implements it.
 - `complexity` — exactly one of `small`, `risky`, or `large`.
 - `item` — `{ "repo": { "host": "tracker.example", "path": "owner/repo" }, "number": N }` when the target is a tracker issue, otherwise `{ "repo": { "host": "", "path": "" }, "number": 0 }`: the empty repository is how you say the target is not a tracker item, and the fields are always present.
 - `area_labels` — the repository's existing area labels this item touches, possibly empty.

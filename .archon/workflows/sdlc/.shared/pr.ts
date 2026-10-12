@@ -257,62 +257,6 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
   return view.pr;
 }
 
-/** Replace the pull request body, and prove the replacement landed. */
-export function editPrBody(ref: QualifiedPr, bodyPath: string, source: ForgeSource): PrRecord {
-  const body = readFileSync(bodyPath, 'utf8');
-  if (source === 'forge') {
-    const value = forgeResult('pr.edit-body', {
-      ref: { repo: ref.repo, number: ref.number },
-      body,
-    });
-    return parsePrRecord(value.pr);
-  }
-  const number = String(ref.number);
-  const edited = gh('pr', 'edit', number, '--repo', ghRepo(ref.repo), '--body-file', bodyPath);
-  if (!edited.ok) throw new Error(`gh pr edit failed: ${edited.stderr}`);
-  const after = viewPr(ref, source);
-  if (after.body !== body) {
-    throw new Error(
-      `the pull request body read back from ${after.pr.url} does not match what was written; it may need reconciling`
-    );
-  }
-  return after.pr;
-}
-
-/** Take the pull request out of draft, and prove it is no longer a draft. */
-export function markPrReady(ref: QualifiedPr, source: ForgeSource): PrRecord {
-  if (source === 'forge') {
-    const value = forgeResult('pr.ready', { ref: { repo: ref.repo, number: ref.number } });
-    return parsePrRecord(value.pr);
-  }
-  const ready = gh('pr', 'ready', String(ref.number), '--repo', ghRepo(ref.repo));
-  if (!ready.ok) throw new Error(`the ready flip failed: ${ready.stderr}`);
-  const after = viewPr(ref, source);
-  if (after.pr.is_draft || after.pr.state !== 'open') {
-    throw new Error(`${after.pr.url} still reports draft after the ready flip`);
-  }
-  return after.pr;
-}
-
-export function markPrDraft(ref: QualifiedPr, source: ForgeSource): PrRecord {
-  if (source === 'forge') {
-    const value = forgeResult('pr.draft', { ref: { repo: ref.repo, number: ref.number } });
-    return parsePrRecord(value.pr);
-  }
-  const before = viewPr(ref, source).pr;
-  if (before.state !== 'open') {
-    throw new Error(`${before.url} is ${before.state} and cannot be converted to draft`);
-  }
-  if (before.is_draft) return before;
-  const draft = gh('pr', 'ready', String(ref.number), '--repo', ghRepo(ref.repo), '--undo');
-  if (!draft.ok) throw new Error(`the draft conversion failed: ${draft.stderr}`);
-  const after = viewPr(ref, source).pr;
-  if (!after.is_draft || after.state !== 'open') {
-    throw new Error(`${after.url} does not report an open draft after conversion`);
-  }
-  return after;
-}
-
 interface GhComment {
   readonly id: string;
   readonly body: string;

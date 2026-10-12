@@ -1,10 +1,11 @@
 name: archon-ship
 description: |
-  Ground an issue or request against the current repository before spending on
-  it, then take the least speculative path: investigate an unknown cause, plan
-  an undecided shape, deliver an implementation-ready work order, or stop when
-  no work remains. Actionable paths converge on the reviewed delivery tail.
-  One governed run, one artifact store, no inherited issue assumptions.
+  Take one issue or request to a ready PR. Triage grounds it against the current
+  repository and labels it with the route: archon-ready delivers; archon-plan
+  plans, then delivers; archon-issue investigates, then delivers on a proven
+  cause; archon-need-design stops for human planning. Delivery implements,
+  validates once, opens a draft PR, reviews and corrects it, and a CI agent marks
+  it ready on green. Every other ending is not ready, with its reason.
 
   Use when: a GitHub issue or request should be taken from current-truth check
   through to a reviewed PR — "fix this issue", "implement issue #123", "take
@@ -20,9 +21,11 @@ inputs:
     description: >-
       What to take through the pipeline — an issue, document, plan, report, or
       free-form request. When empty, the run's trigger message is the target.
-  errors:
-    default: "auto"
-    description: Silent-failure lens — auto, true, or false.
+  review_scopes:
+    default: ""
+    description: >-
+      Review lenses to add to the risk-picked ones (seams, code, tests, errors,
+      docs, or all), or an explicit restriction such as "only tests".
   publish:
     default: "false"
     description: >-
@@ -77,7 +80,8 @@ nodes:
         assessment first, preserve its verified outcome and constraints, and
         decide the implementation questions it identified.
     depends_on: [triage]
-    when: "$triage.output.route == 'plan'"
+    # A design-first item stops here for human planning (archon-need-design).
+    when: "$triage.output.route == 'plan' && $triage.output.design_first == false"
 
   - id: gate-planned
     bash: echo '{"gate":"planned"}'
@@ -87,7 +91,7 @@ nodes:
   - id: deliver
     include: archon-deliver
     with:
-      errors: "$INPUTS.errors"
+      review_scopes: "$INPUTS.review_scopes"
       work: >-
         Deliver the work prepared by this run. Read $ARTIFACTS_DIR/triage.md
         first. When present, plan.md or investigation.md is the detailed work
@@ -97,19 +101,10 @@ nodes:
     depends_on: [gate-direct, gate-rooted, gate-planned]
     trigger_rule: none_failed_min_one_success
 
-  # One return for every legitimate terminal result. Negative advisory verdicts
-  # complete with the report that explains them; delivery is reported from the
-  # flip's certified URL the deliver branch returned (bound with if_skipped, so a
-  # skipped flip arrives as null) — see scripts/outcome.ts.
-  #
-  # Two dependencies carry the whole graph. `deliver` depends on all three spend
-  # gates, which depend on triage, inv and planned in turn, so nothing this node
-  # reports on can settle after it. `triage` is named because
-  # none_failed_min_one_success needs one completed dependency, and on the no_action
-  # route `deliver` is the skipped one.
-  #
-  # A failed delivery cascades an `upstream_failed` skip that blocks this join,
-  # so the run's terminal record names the node that failed.
+  # One return for every terminal result: delivery's own typed ending when it ran,
+  # otherwise the advisory stop that kept it from running. A failed delivery
+  # cascades an `upstream_failed` skip that blocks this join, so the run's terminal
+  # record names the node that failed.
   - id: outcome
     script: outcome
     runtime: bun
@@ -117,11 +112,17 @@ nodes:
     trigger_rule: none_failed_min_one_success
     with:
       route: "$triage.output.route"
+      design_first: "$triage.output.design_first"
       summary: "$triage.output.summary"
-      delivered: { from: "$deliver.output.pr_url", if_skipped: null }
+      deliver: { from: "$deliver.output", if_skipped: null }
     output_format:
       type: object
       properties:
         delivered: { type: boolean }
+        reason:
+          type: string
+          enum:
+            [delivered, no_action, needs_design, plan_blocked, not_rooted, not_ready]
+        pr_url: { type: string }
         summary: { type: string }
-      required: [delivered, summary]
+      required: [delivered, reason, pr_url, summary]

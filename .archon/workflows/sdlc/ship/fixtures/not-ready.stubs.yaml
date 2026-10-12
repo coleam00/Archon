@@ -1,0 +1,56 @@
+# Outcome: not ready. Delivery ran and ended with a reason (here CI red for a cause
+# outside the PR); ship reports delivery's own ending.
+triage__triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  summary: "stub: current code confirms a complete work order"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+implement__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented, focused checks green"
+implement__assert-changed: "3 files changed"
+validate__mode: { comparison: false }
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
+validate__run: { status: green, summary: "stub: full gate green" }
+validate__result: { green: true, red_cause: "", summary: "stub: full gate green", evidence: null }
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__scope:
+  seams: true
+  code: true
+  tests: false
+  errors: false
+  docs: false
+  risk: "stub: changes a typed contract"
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+review__seams: "0 findings"
+review__code: "0 findings"
+review__review-complete: "settled"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+simplify__simplify: { findings: false }
+ci:
+  state: other
+  summary: "stub: test fails on the base branch too"
+fixture:
+  expect: completed
+  reached: [deliver__outcome, outcome]
+exec-code: true
