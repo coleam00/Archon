@@ -1063,14 +1063,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
 
-  // Guard against SDK cleanup races and hand stack-attested Pi extension
-  // failures back to the Pi turns that loaded that extension. When a DAG node is aborted,
-  // the Claude Agent SDK's PostToolUse hook may be in-flight. After the hook
-  // returns { continue: true }, handleControlRequest() tries to write() back to
-  // the subprocess pipe — but the pipe is already closed (abort fired). The
-  // write() throws "Operation aborted", which becomes an unhandled rejection
-  // because it occurs AFTER the for-await generator loop exits (and thus outside
-  // the try/catch in claude.ts). These are SDK cleanup races, not fatal app errors.
+  // Every unhandled rejection or exception exits: vendor error text (such as the Claude
+  // SDK's "Operation aborted") must not decide what gets suppressed. The one exception is
+  // a stack-attested Pi extension failure, which goes back to the Pi turn that loaded it.
   process.on('unhandledRejection', handleUnhandledRejection);
   process.on('uncaughtException', handleUncaughtException);
 
