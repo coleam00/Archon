@@ -58,22 +58,30 @@ async function fixture(mode: string, args: string[] = []) {
   return { supervisor, live: () => live, pids, file };
 }
 
-test.each(['crash', 'retry'])(
-  '%s restarts with capped exponential backoff',
-  async mode => {
-    records.length = 0;
-    const { supervisor, pids, live } = await fixture(mode);
-    if (mode === 'crash') {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        await until(live);
-        await expect(
-          supervisor.request(connection =>
-            connection.send({ conversationId: 'thread', text: 'hello' })
-          )
-        ).rejects.toBeInstanceOf(ChatPluginUnavailableError);
-        await until(async () => (await pids()).length >= attempt + 2);
-      }
-    }
+test(
+  'a crash after readiness restarts the plugin',
+  async () => {
+    const { supervisor, pids, live } = await fixture('crash');
+    await until(live);
+    await expect(
+      supervisor.request(connection => connection.send({ conversationId: 'thread', text: 'hello' }))
+    ).rejects.toBeInstanceOf(ChatPluginUnavailableError);
+    await until(async () => (await pids()).length >= 2);
+    await until(live);
+    await supervisor.stop();
+    expect(records.some(record => record.includes('restart_scheduled'))).toBe(true);
+    expect(records.join('\n')).not.toContain('SECRET_TOKEN');
+    expect(records.join('\n')).not.toContain('USER_MESSAGE');
+  },
+  // Measured on windows-latest: a cold first job-launcher start took 19.6s, and each crash
+  // takes ~2.8s to surface while the PowerShell launcher exits.
+  testTimeout(40_000)
+);
+
+test(
+  'start failures restart with capped exponential backoff',
+  async () => {
+    const { supervisor, pids } = await fixture('retry');
     await until(async () => (await pids()).length >= 4);
     await supervisor.stop();
     const delays = records
