@@ -1,4 +1,4 @@
-import type { WorkflowConfig } from './deps';
+import type { WorkflowEnvironment } from './deps';
 /**
  * Per-child isolation resolver port for `workflow:` sub-run nodes (#2121 slice 2,
  * PR-A).
@@ -27,10 +27,7 @@ import type { OwnedWorktree } from './schemas/workflow-run';
  * the request carries only what varies per child.
  */
 export interface ChildIsolationRequest {
-  setupEnvironment: Pick<
-    WorkflowConfig,
-    'envVars' | 'protectedEnvKeys' | 'protectedCredentialValues'
-  >;
+  setupEnvironment: WorkflowEnvironment;
   /** The parent run — its id seeds the child's branch/worktree identifier. */
   parentRun: WorkflowRun;
   /** The `workflow:` node id spawning this child (used for the worktree description). */

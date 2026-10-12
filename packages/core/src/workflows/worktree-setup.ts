@@ -18,7 +18,7 @@ import {
 } from '@archon/workflows/subprocess';
 import { logWorktreeSetup } from '@archon/workflows/logger';
 import type { CapturedSourceOwner, PreparedWorkflowSource } from '@archon/workflows/executor';
-import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
+import type { WorkflowEnvironment, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorktreeSetupEvent } from '@archon/workflows/schemas/worktree-setup';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
@@ -28,17 +28,12 @@ export interface WorktreeSetupDeps {
   store: Pick<WorkflowDeps['store'], 'getCodebase' | 'persistWorkflowEvent'>;
 }
 
-export type SetupEnvironment = Pick<
-  WorkflowConfig,
-  'envVars' | 'protectedEnvKeys' | 'protectedCredentialValues'
->;
-
 function retainedTail(text: string | undefined): string | undefined {
   return text ? text.slice(-16_384) : undefined;
 }
 
 function createSetupExecutor(
-  environment: SetupEnvironment,
+  environment: WorkflowEnvironment,
   audit: (event: WorktreeSetupEvent) => Promise<void>,
   retention:
     | { standalone: true }
@@ -160,7 +155,7 @@ function createSetupExecutor(
 export function createRunWorktreeSetupExecutor(
   deps: WorktreeSetupDeps,
   run: Pick<WorkflowRun, 'id'>,
-  environment: SetupEnvironment,
+  environment: WorkflowEnvironment,
   attribution?: { parentNodeId: string; childIndex: number }
 ): WorktreeSetupExecutor {
   return async input => {
