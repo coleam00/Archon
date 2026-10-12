@@ -1,11 +1,11 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { loadConfig } from '@archon/core/config/config-loader';
-import { getProjectStoragePaths } from '@archon/paths';
+import { canonicalizeProjectPath, getProjectStoragePaths } from '@archon/paths';
 import { stateCommand } from './state';
 import {
   createInMemoryWorkflowStore,
@@ -158,7 +158,7 @@ test('operator identity and registered folder project use the same durable scope
   if (alias !== folder) symlinkSync(folder, alias);
   await host.records.codebases.createCodebase({
     name: 'Ops',
-    default_cwd: realpathSync(folder),
+    default_cwd: await canonicalizeProjectPath(folder),
     kind: 'folder',
   });
   expect(
