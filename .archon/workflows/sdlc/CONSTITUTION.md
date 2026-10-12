@@ -26,10 +26,14 @@ Draw the workflow as nodes and outcomes before building it. Test each outcome on
 
 Check whether CI is green. If it is green, the PR is marked ready. If it is red, find the root cause and stop. No polling loops, no re-run machinery, no classification scripts. Never leave a red PR ready.
 
-## 7. The pack works for any project
+## 7. Validate once
+
+An agent tests, lints and type-checks the code it changed, nothing more. The full project validation runs once per round, just before the work goes to review. A node that runs the whole suite on its own costs every node that comes after it.
+
+## 8. The pack works for any project
 
 The pack doesn't know a project's commands, branches, CI names or language. An agent discovers them and records them as typed output. Pack files carry no tracker references and no history; they describe what is true now.
 
-## 8. Smaller is the default
+## 9. Smaller is the default
 
 Before adding a node, look for one to delete. A structural change is drawn with the maintainer first, and benched against the current pack before it replaces it. The bench reports outcome correctness, wall clock and cost.

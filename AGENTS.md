@@ -169,6 +169,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Always run lint through `bun run lint` or `bun run lint:fix`; the wrapper isolates packages to keep typed lint within its memory budget.
 - Run the narrow checks that prove the changed behavior while iterating.
 - Run `bun run validate` before opening a pull request. It runs every pull-request gate except the ones needing something a contributor may not have — a live PostgreSQL, a Docker daemon, an unshallowed checkout, Node for the docs site, GitHub API quota — because `scripts/validate.ts` owns the check list and the workflows call that script rather than restating it.
+- Inside a workflow node, test, lint and type-check only the code you changed. The workflow runs the full validation once, before review; don't repeat it in every node.
 - Those excluded jobs are listed in [`CONTRIBUTING.md`](CONTRIBUTING.md) with the command to run each one yourself. Schema changes require the PostgreSQL upgrade check from that list.
 - For visual or runtime behavior, add direct evidence when static tests cannot prove the outcome.
 - Destructive verification, including DDL, migrations, and data writes, runs only against a scratch database you create and drop. A configured live DSN is read-only at most; when only a live resource exists, stop and surface it to the operator.
