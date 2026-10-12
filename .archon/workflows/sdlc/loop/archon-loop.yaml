@@ -1,0 +1,51 @@
+name: archon-loop
+description: |
+  One unattended move on a repository, then an independent review. A builder
+  reads the whole board (open pull requests, CI, review comments, issues) and
+  makes the single most valuable move: finish an open pull request, or start the
+  next issue. A separate reviewer, in a fresh context, checks the result the way
+  a user would and either merges it or sends it back with findings. All state
+  lives in GitHub, so the next run picks up where this one left off.
+
+  Use when: a scheduler should keep a backlog moving with nobody at the
+  keyboard — "keep building", "run the loop".
+  NOT for: slicing a product document into issues (archon-backlog).
+model: large
+
+inputs:
+  runtime:
+    default: >-
+      No runtime instructions were given; use what the project documents for
+      running it (for example a harness or end-to-end document), if anything.
+    description: >-
+      How to run the app and what to look at: a path to the project's runtime
+      instructions or scenario file, or plain text. Both agents read it.
+  merge:
+    default: auto
+    description: >-
+      auto lets the reviewer merge what it accepts; any other value leaves the
+      merge to a human after an approving comment.
+  attempts:
+    default: "3"
+    description: >-
+      How many times the loop works the same issue or pull request without
+      progress before it labels it needs-owner and moves on.
+
+nodes:
+  - id: work
+    command: loop-work
+    context: fresh
+    idle_timeout: 2700000
+    with:
+      runtime: "$INPUTS.runtime"
+      attempts: "$INPUTS.attempts"
+
+  - id: review
+    command: loop-review
+    context: fresh
+    depends_on: [work]
+    idle_timeout: 2700000
+    with:
+      builder: "$work.output"
+      runtime: "$INPUTS.runtime"
+      merge: "$INPUTS.merge"

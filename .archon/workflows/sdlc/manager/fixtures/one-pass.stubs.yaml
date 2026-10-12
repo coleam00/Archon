@@ -1,0 +1,9 @@
+# Dry-run fixture: one manager pass, with the runtime instructions in its prompt.
+manage: "Closed 2 duplicates; no owner questions."
+fixture:
+  expect: completed
+  reached: [manage]
+  resolved-text-contains:
+    manage: "/private/run-the-app.md"
+  inputs:
+    runtime: "/private/run-the-app.md"

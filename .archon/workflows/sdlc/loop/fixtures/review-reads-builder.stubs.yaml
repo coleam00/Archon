@@ -1,0 +1,12 @@
+# Dry-run fixture: the reviewer is handed the builder's report, the merge mode and the
+# runtime instructions, and both agents run in that order.
+work: "Fixed the review findings on the open pull request.\nPR: https://github.com/example/app/pull/7"
+review: "merged https://github.com/example/app/pull/7"
+fixture:
+  expect: completed
+  reached: [work, review]
+  resolved-text-contains:
+    review: "PR: https://github.com/example/app/pull/7"
+  inputs:
+    runtime: "/private/run-the-app.md"
+    merge: "auto"
