@@ -1603,7 +1603,7 @@ async function dispatchOrchestratorWorkflowOwned(
       else await withRunLiveOwner(captured.preparedSource.runId, {}, submitFresh);
     }
   } catch (error) {
-    if (setupRun && !foregroundSubmitted)
+    if (setupRun && !foregroundSubmitted && !(error instanceof TerminalStatusWriteError))
       await requireTerminalStatusWrite(
         setupDeps.store.failWorkflowRun(setupRun.id, toError(error).message, {
           exitReason: 'launch_failed',

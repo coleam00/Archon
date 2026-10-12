@@ -130,6 +130,24 @@ describe('IsolationResolver', () => {
     });
   }
 
+  test('passes the setup executor as transient creation context', async () => {
+    const provider = makeMockProvider();
+    const create = spyOn(provider, 'create');
+    const setupExecutor = async (): Promise<void> => {};
+    const resolver = createResolver({ provider });
+    await resolver.resolve({
+      existingEnvId: null,
+      codebase: defaultCodebase,
+      platformType: 'web',
+      setupExecutor,
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ codebaseId: defaultCodebase.id }),
+      setupExecutor
+    );
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('setupExecutor');
+  });
+
   test('existing env valid — returns resolved with method existing', async () => {
     const env = makeEnvRow();
     const resolver = createResolver({
@@ -1353,7 +1371,8 @@ describe('IsolationResolver', () => {
 
       expect(result.status).toBe('resolved');
       expect(createSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ canonicalRepoPath: defaultCwd })
+        expect.objectContaining({ canonicalRepoPath: defaultCwd }),
+        undefined
       );
     });
 

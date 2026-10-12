@@ -443,6 +443,10 @@ mock.module('../utils/error', () => ({
   toError: mock((e: unknown) => (e instanceof Error ? e : new Error(String(e)))),
 }));
 
+const mockFailPreparedRun = mock<
+  import('@archon/workflows/store').IWorkflowStore['failWorkflowRun']
+>(async () => {});
+
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
     providers: providerRegistry,
@@ -459,7 +463,7 @@ mock.module('../workflows/store-adapter', () => ({
           working_path: null,
         }),
       updateWorkflowRun: async () => {},
-      failWorkflowRun: async () => {},
+      failWorkflowRun: mockFailPreparedRun,
     },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
       version: 1,
@@ -2325,6 +2329,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetWorkflowRunDb.mockReset();
     mockGetWorkflowRunDb.mockImplementation(async id => resumableRuns.get(id) ?? null);
     capturedSourceOwnerCalls.length = 0;
+    mockFailPreparedRun.mockReset();
+    mockFailPreparedRun.mockResolvedValue(undefined);
     mockExecuteWorkflow.mockClear();
     mockDispatchBackgroundWorkflow.mockClear();
     mockFindResumableRunByParentConversation.mockClear();
@@ -2366,6 +2372,22 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockStartRunLiveOwner.mockClear();
     mockWithRunLiveOwner.mockClear();
     mockCloseRunLiveOwner.mockClear();
+  });
+
+  test('a terminal status write failure during worktree preparation is not retried', async () => {
+    const { IsolationBlockedError } = await import('@archon/isolation');
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult(true));
+    mockValidateAndResolveIsolation.mockRejectedValueOnce(
+      new IsolationBlockedError('setup failed', 'creation_failed')
+    );
+    mockFailPreparedRun.mockRejectedValueOnce(new Error('database write unavailable'));
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
+    expect(mockFailPreparedRun).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
   });
 
   test('calls executeWorkflow (not dispatchBackground) for interactive workflow on web', async () => {

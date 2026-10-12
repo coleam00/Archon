@@ -1,4 +1,7 @@
-import { requireTerminalStatusWrite } from '@archon/workflows/terminal-status-write';
+import {
+  requireTerminalStatusWrite,
+  TerminalStatusWriteError,
+} from '@archon/workflows/terminal-status-write';
 import {
   configureWorktreeIsolation,
   createRunWorktreeSetupExecutor,
@@ -3131,7 +3134,6 @@ async function runWorkflowWithOwnedSource(
         );
 
         let isolatedEnv: WorktreeCreationEnvironment;
-        let setupRun: WorkflowRun | undefined;
         try {
           if (!preparedSource)
             throw new Error('Worktree setup requires a captured workflow source');
@@ -3141,7 +3143,7 @@ async function runWorkflowWithOwnedSource(
               ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
             }
           );
-          setupRun =
+          const setupRun =
             detachedPreCreatedRun ??
             (await host.deps.store.createWorkflowRun({
               id: preparedSource.runId,
@@ -3205,9 +3207,7 @@ async function runWorkflowWithOwnedSource(
               canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
               description: `CLI workflow: ${workflowName}`,
             },
-            setupRun
-              ? createRunWorktreeSetupExecutor(host.deps, setupRun, preparedAiConfiguration.config)
-              : undefined
+            createRunWorktreeSetupExecutor(host.deps, setupRun, preparedAiConfiguration.config)
           );
         } catch (createError) {
           // Same translation the container branches above apply. The classified
@@ -3476,16 +3476,9 @@ async function runWorkflowWithOwnedSource(
           // The frozen source this run executes, captured before the workflow was even
           // selected. A resume ignores it and loads the source recorded on its own row.
           preparedSource,
-          // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
-          // executor adopts for us there (see #2690). Until then a rename failure
-          // leaves the staged directory un-adopted so the wrap reclaims it on the
-          // way out.
           capturedSourceOwner: owner,
           // Between-run continuation (#2747): written once onto the fresh row.
           ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
-          // The row a detached parent already wrote (#2872). `inputs` and the
-          // continuation fields above are still passed: the executor consumes them only
-          // when IT creates the row, and this row already carries them.
           ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
           ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
           ownedWorktree,
@@ -3505,7 +3498,6 @@ async function runWorkflowWithOwnedSource(
         });
       }
     } finally {
-      await closeRunLiveOwner();
       unsubscribe();
 
       // Deregister the signal handlers now that the run's lifecycle is settled
@@ -3696,7 +3688,7 @@ async function runWorkflowWithOwnedSource(
     }
     return undefined;
   } catch (error) {
-    if (setupPreparedRun && !executionSubmitted)
+    if (setupPreparedRun && !executionSubmitted && !(error instanceof TerminalStatusWriteError))
       await requireTerminalStatusWrite(
         host.deps.store.failWorkflowRun(setupPreparedRun.id, (error as Error).message, {
           exitReason: 'launch_failed',

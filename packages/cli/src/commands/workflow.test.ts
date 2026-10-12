@@ -3667,6 +3667,33 @@ describe('workflowRunCommand', () => {
     expect(capturedSourceOwnerCalls.some(call => call.startsWith('reclaim:'))).toBe(false);
   });
 
+  it('records a preparation failure before releasing its live-owner lock', async () => {
+    const isolation = await import('@archon/isolation');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
+      errors: [],
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-owner',
+      default_cwd: '/test/path',
+    });
+    (isolation.configureIsolation as ReturnType<typeof mock>)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error('child resolver configuration failed');
+      });
+    const closesBefore = mockRunLiveOwnerClose.mock.calls.length;
+    (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      expect(mockRunLiveOwnerClose.mock.calls).toHaveLength(closesBefore);
+    });
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'go')
+    ).rejects.toThrow('child resolver configuration failed');
+    expect(mockRunLiveOwnerClose.mock.calls).toHaveLength(closesBefore + 1);
+  });
+
   it('surfaces a classified worktree creation failure, not the raw error', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const conversationDb = await import('@archon/core/db/conversations');
