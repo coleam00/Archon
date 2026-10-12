@@ -596,7 +596,7 @@ test.each([{ pi: 1 }, { pi: 1, host: 2 }, { pi: 2, host: 1 }])(
       `assistants:\n  pi:\n    maxConcurrent: ${pi}\n${host === undefined ? '' : `concurrency:\n  providers:\n    pi: ${host}\n`}`
     );
     const cleanup = new AbortController();
-    const options = { assistantConfig: { maxConcurrent: pi }, abortSignal: cleanup.signal };
+    const options = { abortSignal: cleanup.signal };
     const first = getAgentProvider('pi', POLL_MS).sendQuery('first', root, undefined, options);
     const secondWaiting = waitingEvent();
     const secondRun = getAgentProvider('pi', POLL_MS).sendQuery('second', root, undefined, {

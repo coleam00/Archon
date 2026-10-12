@@ -54,6 +54,8 @@ export interface RunAiConfigurationOptions {
     | { kind: 'resolved'; overrides: ResolvedRunModelOverrides };
 }
 
+// The resolvers that throw NoDefaultProviderError are pure and shared with the executor
+// and validator, which hold no registry. Preflight does, so it adds the install hint here.
 export async function prepareRunAiConfiguration(
   ...args: Parameters<typeof prepareAiConfiguration>
 ): Promise<PreparedRunAiConfiguration> {

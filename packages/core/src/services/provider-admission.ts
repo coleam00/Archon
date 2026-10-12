@@ -17,7 +17,6 @@ import type {
   ProviderAdmissionEvent,
   SendQueryOptions,
 } from '@archon/providers';
-import { parsePiConfig } from '@archon/providers/pi/config';
 import { loadProviderConcurrencyCaps } from '../config/provider-concurrency';
 import { releaseProviderAttempt, tryAdmitProviderAttempt } from '../db/provider-attempts';
 
@@ -83,17 +82,7 @@ class ProviderSlot {
           getLog().info({ provider: this.provider, attemptId }, 'provider_admission.wait_aborted');
         throw new ProviderAdmissionAbortedError(this.provider);
       }
-      const installCap = (await loadProviderConcurrencyCaps()).get(this.provider);
-      const piCap =
-        this.provider === 'pi'
-          ? parsePiConfig(this.options?.assistantConfig ?? {}).maxConcurrent
-          : undefined;
-      const capacity =
-        installCap === undefined
-          ? piCap
-          : piCap === undefined
-            ? installCap
-            : Math.min(installCap, piCap);
+      const capacity = (await loadProviderConcurrencyCaps()).get(this.provider);
       if (capacity === undefined) return false;
       this.capacity = capacity;
       const { admitted, live } = await tryAdmitProviderAttempt({
