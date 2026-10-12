@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { gitlabPolicy } from './policy';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -632,8 +633,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     // 3. Authorization check
     const senderUsername = event.user?.username;
     if (!isGitLabUserAuthorized(senderUsername, this.allowedUsers)) {
-      const maskedUser = senderUsername ? `${senderUsername.slice(0, 3)}***` : 'unknown';
-      getLog().info({ maskedUser }, 'gitlab.unauthorized_webhook');
+      getLog().info({ platform: gitlabPolicy.id }, 'gitlab.unauthorized_webhook');
       return;
     }
 
@@ -662,11 +662,11 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
     // 5. Self-trigger prevention
     if (comment.includes(BOT_RESPONSE_MARKER)) {
-      getLog().debug({ commentAuthor: event.user?.username }, 'gitlab.ignoring_marked_comment');
+      getLog().debug('gitlab.ignoring_marked_comment');
       return;
     }
     if (event.user?.username?.toLowerCase() === this.botMention.toLowerCase()) {
-      getLog().debug({ commentAuthor: event.user.username }, 'gitlab.ignoring_own_comment');
+      getLog().debug('gitlab.ignoring_own_comment');
       return;
     }
 
@@ -688,7 +688,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         archonUserId = user.id;
       } catch (err) {
         getLog().warn(
-          { err: toError(err), gitlabUsername: senderUsername },
+          { ...identityErrorLogFields(err), platform: gitlabPolicy.id },
           'gitlab.user_resolve_failed'
         );
       }

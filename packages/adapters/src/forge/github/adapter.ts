@@ -2,6 +2,7 @@
  * GitHub platform adapter using Octokit REST API and Webhooks
  * Handles issue and PR comments with @mention detection
  */
+import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
@@ -1100,9 +1101,7 @@ ${userComment}`;
     // 2b. Authorization check - verify sender is in whitelist
     const senderUsername = event.sender?.login;
     if (!isGitHubUserAuthorized(senderUsername, this.allowedUsers)) {
-      // Log unauthorized attempt (mask username for privacy)
-      const maskedUser = senderUsername ? `${senderUsername.slice(0, 3)}***` : 'unknown';
-      getLog().info({ maskedUser }, 'github.unauthorized_webhook');
+      getLog().info({ platform: githubPolicy.id }, 'github.unauthorized_webhook');
       return; // Silent rejection - no error response
     }
 
@@ -1132,10 +1131,7 @@ ${userComment}`;
     // Primary: Check for hidden marker in comment body (works with user's PAT)
     const commentBody = event.comment?.body ?? '';
     if (commentBody.includes(BOT_RESPONSE_MARKER)) {
-      getLog().debug(
-        { commentAuthor: event.comment?.user?.login },
-        'github.ignoring_marked_comment'
-      );
+      getLog().debug('github.ignoring_marked_comment');
       return;
     }
     // Secondary: Check comment author. In App mode the bot account is
@@ -1145,7 +1141,7 @@ ${userComment}`;
     // user-to-server token would otherwise be misfiltered.
     const commentAuthor = event.comment?.user?.login;
     if (commentAuthor?.toLowerCase() === this.botLogin.toLowerCase()) {
-      getLog().debug({ commentAuthor }, 'github.ignoring_own_comment');
+      getLog().debug('github.ignoring_own_comment');
       return;
     }
 
@@ -1194,7 +1190,7 @@ ${userComment}`;
         archonUserId = user.id;
       } catch (err) {
         getLog().warn(
-          { err: toError(err), githubLogin: attributedLogin },
+          { ...identityErrorLogFields(err), platform: githubPolicy.id },
           'github.user_resolve_failed'
         );
       }

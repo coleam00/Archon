@@ -430,7 +430,7 @@ describe('GitHubAdapter', () => {
     test('rejects unauthorized senders before the repository check', async () => {
       await receive('installation', { sender: { login: 'outsider' } });
       expect(mockLogger.info).toHaveBeenCalledWith(
-        { maskedUser: 'out***' },
+        { platform: 'github' },
         'github.unauthorized_webhook'
       );
       expect(mockLogger.debug).not.toHaveBeenCalled();

@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { giteaPolicy } from './policy';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
@@ -762,9 +763,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     // 2b. Authorization check - verify sender is in whitelist
     const senderUsername = event.sender?.login;
     if (!isGiteaUserAuthorized(senderUsername, this.allowedUsers)) {
-      // Log unauthorized attempt (mask username for privacy)
-      const maskedUser = senderUsername ? `${senderUsername.slice(0, 3)}***` : 'unknown';
-      getLog().info({ maskedUser }, 'unauthorized_webhook');
+      getLog().info({ platform: giteaPolicy.id }, 'unauthorized_webhook');
       return; // Silent rejection - no error response
     }
 
@@ -796,13 +795,13 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     // Primary: Check for hidden marker in comment body (works with user's token)
     const commentBody = event.comment?.body ?? '';
     if (commentBody.includes(BOT_RESPONSE_MARKER)) {
-      getLog().debug({ commentAuthor: event.comment?.user?.login }, 'ignoring_marked_comment');
+      getLog().debug('ignoring_marked_comment');
       return;
     }
     // Secondary: Check comment author (works with dedicated bot account)
     const commentAuthor = event.comment?.user?.login;
     if (commentAuthor?.toLowerCase() === this.botMention.toLowerCase()) {
-      getLog().debug({ commentAuthor }, 'ignoring_own_comment');
+      getLog().debug('ignoring_own_comment');
       return;
     }
 
@@ -828,7 +827,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
         archonUserId = user.id;
       } catch (err) {
         getLog().warn(
-          { err: toError(err), giteaLogin: attributedLogin },
+          { ...identityErrorLogFields(err), platform: giteaPolicy.id },
           'gitea.user_resolve_failed'
         );
       }

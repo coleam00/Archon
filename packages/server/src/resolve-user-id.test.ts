@@ -90,13 +90,22 @@ describe('resolveUserId', () => {
   });
 
   test('logs failure as static server.user_resolve_failed event (not platform-templated)', async () => {
-    findOrCreate.mockRejectedValueOnce(new Error('connection refused'));
+    findOrCreate.mockRejectedValueOnce(
+      Object.assign(new Error('duplicate identity 999'), {
+        code: '23505',
+        detail: 'Key (platform_user_id)=(999) already exists.',
+      })
+    );
     await resolveUserId('telegram', 999, undefined);
 
     const failedCall = warnCalls.find(c => c.evt === 'server.user_resolve_failed');
     expect(failedCall).toBeDefined();
     expect(failedCall?.obj).toHaveProperty('platform', 'telegram');
-    expect(failedCall?.obj).toHaveProperty('platformUserId', '999');
+    expect(failedCall?.obj).toEqual({
+      platform: 'telegram',
+      errorType: 'Error',
+      errorCode: '23505',
+    });
     // Confirm we did NOT use a per-platform event name (would collide with the
     // GitHub adapter's own `github.user_resolve_failed` event).
     expect(warnCalls.find(c => c.evt === 'telegram.user_resolve_failed')).toBeUndefined();

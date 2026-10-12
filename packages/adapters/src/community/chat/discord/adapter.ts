@@ -306,9 +306,7 @@ export class DiscordAdapter implements IPlatformAdapter {
       // Authorization check - verify sender is in whitelist
       const userId = message.author.id;
       if (!isDiscordUserAuthorized(userId, this.allowedUserIds)) {
-        // Log unauthorized attempt (mask user ID for privacy)
-        const maskedId = userId ? `${userId.slice(0, 4)}***` : 'unknown';
-        getLog().info({ maskedUserId: maskedId }, 'discord.unauthorized_message');
+        getLog().info('discord.unauthorized_message');
         return; // Silent rejection
       }
 
@@ -321,8 +319,8 @@ export class DiscordAdapter implements IPlatformAdapter {
     });
 
     // Log when ready
-    this.client.once(Events.ClientReady, readyClient => {
-      getLog().info({ tag: readyClient.user.tag }, 'discord.bot_logged_in');
+    this.client.once(Events.ClientReady, () => {
+      getLog().info('discord.bot_logged_in');
     });
 
     // Login with stored token

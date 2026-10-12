@@ -1139,7 +1139,7 @@ describe('GiteaAdapter', () => {
       }
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ giteaLogin: 'commenter' }),
+        { errorType: 'Error', platform: 'gitea' },
         'gitea.user_resolve_failed'
       );
     });

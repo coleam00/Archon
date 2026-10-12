@@ -679,7 +679,7 @@ describe('GitLabAdapter', () => {
       }
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ gitlabUsername: 'testuser' }),
+        { errorType: 'Error', platform: 'gitlab' },
         'gitlab.user_resolve_failed'
       );
     });

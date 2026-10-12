@@ -61,6 +61,7 @@ import {
   registerCommunityProviders,
 } from '@archon/providers/in-process';
 import { getPluginsPath } from '@archon/paths';
+import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { getVendorCatalog, loadProviderPlugins } from '@archon/core';
 import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
 import { CODEX_BOOT_CHECKED, readCodexBootAuth } from './boot/codex-auth-posture';
@@ -189,10 +190,7 @@ export async function resolveUserId(
     );
     return user.id;
   } catch (err) {
-    getLog().warn(
-      { err: err as Error, platform, platformUserId: String(platformUserId) },
-      'server.user_resolve_failed'
-    );
+    getLog().warn({ ...identityErrorLogFields(err), platform }, 'server.user_resolve_failed');
     return undefined;
   }
 }
@@ -207,12 +205,12 @@ function createMessageErrorHandler(
   conversationId: string
 ): (error: unknown) => Promise<void> {
   return async (error: unknown): Promise<void> => {
-    getLog().error({ err: error, platform, conversationId }, 'message_processing_failed');
+    getLog().error({ err: error, platform }, 'message_processing_failed');
     try {
       const userMessage = classifyAndFormatError(error as Error, adapter);
       await adapter.sendMessage(conversationId, userMessage);
     } catch (sendError) {
-      getLog().error({ err: sendError, platform, conversationId }, 'error_message_send_failed');
+      getLog().error({ err: sendError, platform }, 'error_message_send_failed');
     }
   };
 }

@@ -638,7 +638,7 @@ describe('SlackAdapter', () => {
     test('users_info_failed log strips err.data (no PII leak)', async () => {
       mockLogger.warn.mockClear();
       const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
-      const slackErr = Object.assign(new Error('rate_limited'), {
+      const slackErr = Object.assign(new Error('rate_limited for U_RATE'), {
         data: { error: 'rate_limited', response_metadata: { workspace: 'sensitive-info' } },
       });
       mockUsersInfo.mockRejectedValueOnce(slackErr);
@@ -652,7 +652,8 @@ describe('SlackAdapter', () => {
       const payload = failedCall![0] as Record<string, unknown>;
       expect(payload).not.toHaveProperty('err');
       expect(JSON.stringify(payload)).not.toContain('sensitive-info');
-      expect(payload).toHaveProperty('errMessage', 'rate_limited');
+      expect(payload).not.toHaveProperty('errMessage');
+      expect(JSON.stringify(payload)).not.toContain('U_RATE');
       expect(payload).toHaveProperty('slackErrorCode', 'rate_limited');
     });
 

@@ -1,3 +1,4 @@
+import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 /**
  * REST API routes for the Archon Web UI.
@@ -1725,7 +1726,10 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
     } catch (err) {
       // Proxy-authenticated installs can keep attributing requests during a
       // session-backend outage. Without a header the API gate fails closed.
-      getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
+      getLog().warn(
+        { ...identityErrorLogFields(err), path: c.req.path },
+        'web.session_resolve_failed'
+      );
     }
   }
 
@@ -1738,7 +1742,7 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
   } catch (err) {
     // Attribution is best-effort; the strict credential guard reports 503.
     getLog().warn(
-      { err: err as Error, headerPresent: true, path: c.req.path },
+      { ...identityErrorLogFields(err), headerPresent: true, path: c.req.path },
       'web.user_resolve_failed'
     );
     return undefined;
@@ -1772,7 +1776,7 @@ export async function requireWebUser(
     try {
       session = await auth.api.getSession({ headers: c.req.raw.headers });
     } catch (err) {
-      getLog().error({ err: err as Error }, 'web.session_resolve_failed');
+      getLog().error(identityErrorLogFields(err), 'web.session_resolve_failed');
       return { error: apiError(c, 503, 'Could not verify session — backend unavailable') };
     }
     if (session?.user) {
@@ -1784,7 +1788,7 @@ export async function requireWebUser(
         );
         return { userId: user.id, role: user.role };
       } catch (err) {
-        getLog().error({ err: err as Error }, 'web.user_resolve_failed');
+        getLog().error(identityErrorLogFields(err), 'web.user_resolve_failed');
         return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
       }
     }
@@ -1797,7 +1801,10 @@ export async function requireWebUser(
     const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
     return { userId: user.id, role: user.role };
   } catch (err) {
-    getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
+    getLog().error(
+      { ...identityErrorLogFields(err), headerPresent: true },
+      'web.user_resolve_failed'
+    );
     return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
   }
 }
@@ -2000,7 +2007,10 @@ export function registerApiRoutes(
       if (err instanceof DeviceFlowError) {
         return c.json({ status: 'error' as const, detail: err.code });
       }
-      getLog().error({ err: err as Error }, 'auth.github_device_poll_failed');
+      getLog().error(
+        { ...identityErrorLogFields(err), userId: web.userId, platform: 'github' },
+        'auth.github_device_poll_failed'
+      );
       return apiError(c, 500, 'Failed to poll GitHub device flow');
     }
   });

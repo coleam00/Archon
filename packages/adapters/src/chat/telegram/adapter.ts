@@ -61,7 +61,7 @@ export class TelegramAdapter implements IPlatformAdapter {
    */
   async sendMessage(chatId: string, message: string, _metadata?: MessageMetadata): Promise<void> {
     const id = parseInt(chatId);
-    getLog().debug({ chatId, messageLength: message.length }, 'telegram.send_message');
+    getLog().debug({ messageLength: message.length }, 'telegram.send_message');
 
     if (message.length <= MAX_LENGTH) {
       // Short message: try MarkdownV2 formatting
@@ -181,9 +181,7 @@ export class TelegramAdapter implements IPlatformAdapter {
       // Authorization check - verify sender is in whitelist
       const userId = ctx.from?.id;
       if (!isUserAuthorized(userId, this.allowedUserIds)) {
-        // Log unauthorized attempt (mask user ID for privacy)
-        const maskedId = userId !== undefined ? `${String(userId).slice(0, 4)}***` : 'unknown';
-        getLog().info({ maskedUserId: maskedId }, 'telegram.unauthorized_message');
+        getLog().info('telegram.unauthorized_message');
         return; // Silent rejection
       }
 
@@ -202,7 +200,7 @@ export class TelegramAdapter implements IPlatformAdapter {
         // Intentional: message dropped silently if handler not registered yet.
         // In production the server always calls onMessage() before start(); this
         // path only surfaces during development or misconfiguration.
-        getLog().debug({ chatId: ctx.chat?.id }, 'telegram.message_dropped_no_handler');
+        getLog().debug('telegram.message_dropped_no_handler');
       }
     });
 

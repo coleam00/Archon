@@ -1,3 +1,4 @@
+import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 /**
  * Slack workflow bridge: translates WorkflowEventEmitter events into Slack
@@ -548,7 +549,10 @@ export class SlackWorkflowBridge {
       const user = await findOrCreateUserByPlatformIdentity('slack', slackUserId);
       return { kind: 'user', userId: user.id };
     } catch (err) {
-      getLog().warn({ err }, 'slack.bridge_actor_resolve_failed');
+      getLog().warn(
+        { ...identityErrorLogFields(err), platform: 'slack' },
+        'slack.bridge_actor_resolve_failed'
+      );
       return { kind: 'unidentified' };
     }
   }
@@ -672,7 +676,7 @@ export class SlackWorkflowBridge {
           runId,
           await this.resolveRunActor(actorId)
         );
-        getLog().info({ runId, actorId: maskUserId(actorId) }, 'slack.bridge_cancel_dispatched');
+        getLog().info({ runId }, 'slack.bridge_cancel_dispatched');
         // The eventual workflow_cancelled event repaints the status message. It carries
         // no cascade facts, so a stop that left sub-runs or a parent behind says so here.
         if (result.kind === 'stopped') {
@@ -798,7 +802,7 @@ export class SlackWorkflowBridge {
 
   private assertAuthorized(userId: string | undefined, surface: string): boolean {
     if (isSlackUserAuthorized(userId, this.adapter.getAllowedUserIds())) return true;
-    getLog().info({ maskedUserId: maskUserId(userId), surface }, 'slack.bridge_unauthorized_click');
+    getLog().info({ surface }, 'slack.bridge_unauthorized_click');
     return false;
   }
 }
@@ -831,11 +835,6 @@ function parseApprovalAction(action: ButtonAction): SlackApprovalAction | null {
     return null;
   const nodeId = path.join(':');
   return nodeId ? { runId, nodeId, decision } : null;
-}
-
-function maskUserId(userId: string | undefined): string {
-  if (!userId) return 'unknown';
-  return `${userId.slice(0, 4)}***`;
 }
 
 function isDefined<T>(v: T | undefined): v is T {
