@@ -94,7 +94,7 @@ function createSetupExecutor(
           ? 'timeout'
           : rejection.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
             ? 'output_limit'
-            : typeof rejection.code === 'number'
+            : typeof rejection.code === 'number' || rejection.signal
               ? 'exit'
               : 'spawn';
         const exitCode = typeof rejection.code === 'number' ? rejection.code : undefined;
@@ -104,7 +104,9 @@ function createSetupExecutor(
           failureKind === 'timeout'
             ? `timed out after ${input.timeout} ms`
             : failureKind === 'exit'
-              ? `failed with exit code ${exitCode}`
+              ? exitCode !== undefined
+                ? `failed with exit code ${exitCode}`
+                : `terminated by signal ${signal}`
               : `failed (${failureKind}): ${rejection.message}`;
         const failure = new WorktreePostCreateError(
           commandIndex,

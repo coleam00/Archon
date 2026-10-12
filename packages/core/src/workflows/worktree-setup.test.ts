@@ -193,3 +193,16 @@ test('output overflow has its own failure kind and retains bounded evidence', as
   expect(rows[1].data?.failureKind).toBe('output_limit');
   expect(String(rows[1].data?.stdoutTail).length).toBeLessThanOrEqual(16384);
 });
+
+test('a command terminated by a signal is an execution failure', async () => {
+  const error = await createRunWorktreeSetupExecutor(
+    deps,
+    run,
+    {}
+  )(input(['kill -TERM $$'])).catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(WorktreePostCreateError);
+  if (!(error instanceof WorktreePostCreateError)) throw new Error('Expected setup failure');
+  expect(error.failureKind).toBe('exit');
+  if (error.signal) expect(error.message).toContain(error.signal);
+  else expect(typeof error.exitCode).toBe('number');
+});
