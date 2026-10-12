@@ -54,6 +54,12 @@ inputs:
     description: >-
       auto (fork pull requests only) or always (every delivery) for the final
       local project validation before the ready flip.
+  discovery_publication:
+    default: "auto"
+    description: >-
+      preview, approve or auto. In preview, review discoveries are not filed as
+      tracker issues; they stay in discoveries.json for the caller's discovery
+      handling. approve and auto file them.
   # Forwarded to archon-validate's `scope` and `context`. A composing caller (a
   # repair delivery, a ship) passes its own so the final gate measures what the
   # caller needs, and a changed context forces a fresh verdict instead of reuse.
@@ -414,6 +420,7 @@ nodes:
     trigger_rule: none_failed_min_one_success
     with:
       pr: "$pr.output"
+      publication: "$INPUTS.discovery_publication"
     output_format:
       type: object
       properties:

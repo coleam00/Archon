@@ -129,6 +129,7 @@ nodes:
       validation_scope: "$INPUTS.validation_scope"
       validation_context: "$INPUTS.validation_context"
       final_validation: "$INPUTS.final_validation"
+      discovery_publication: "$INPUTS.discovery_publication"
 
   # Binding the delivered pull request is facts (the delivery's certified URL, gh,
   # git HEAD, this run's review and validation reports), so a script owns it.
@@ -189,6 +190,7 @@ nodes:
       validation_scope: "$INPUTS.validation_scope"
       validation_context: "$INPUTS.validation_context"
       final_validation: "$INPUTS.final_validation"
+      discovery_publication: "$INPUTS.discovery_publication"
       work: >-
         Repair the existing PR on this same branch using the concrete runtime
         findings in $qualify.output.evidence. Preserve the original work order in

@@ -51,6 +51,11 @@ inputs:
     description: >-
       Forwarded to delivery: auto (fork pull requests only) or always (every
       delivery leaves local validation evidence).
+  discovery_publication:
+    default: "auto"
+    description: >-
+      Forwarded to delivery: preview keeps review discoveries unfiled; approve
+      and auto file them as tracker issues.
 
 # `delivered:false` is a valid completion: an honest "no work is owed" is a
 # successful run that shipped nothing, and lifecycle status and work outcome are
@@ -114,6 +119,7 @@ nodes:
       validation_scope: "$INPUTS.validation_scope"
       validation_context: "$INPUTS.validation_context"
       final_validation: "$INPUTS.final_validation"
+      discovery_publication: "$INPUTS.discovery_publication"
       work: >-
         Deliver the work prepared by this run. Read $ARTIFACTS_DIR/triage.md
         first. When present, plan.md or investigation.md is the detailed work

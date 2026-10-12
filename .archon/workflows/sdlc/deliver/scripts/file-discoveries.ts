@@ -11,11 +11,20 @@
  * may describe different work, and reusing it would report this record filed
  * while its claim and evidence were never published.
  *
- * Forge-selected runs recover an existing issue by a stable content marker.
- * The default gh path persists the URL before its independent read-back.
+ * Every filed issue carries a stable content marker, and both paths recover an
+ * existing issue by it, so a later run that finds the same work does not file
+ * it again. The gh path searches for the marker before creating, and persists
+ * the URL before its independent read-back.
+ *
+ * In `preview` publication nothing is filed: the records stay in
+ * `discoveries.json` for the caller's own discovery handling (the lifecycle's
+ * discoveries workflow honors the same mode). Seen live: a lifecycle launched
+ * with discovery_publication=preview still filed every review note as an issue,
+ * about thirty overnight, duplicates included.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
+ * - INPUTS_PUBLICATION: `preview`, `approve` or `auto`; empty means `auto`.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -80,6 +89,10 @@ try {
   const path = join(artifactsDir(), 'discoveries.json');
   const records = existsSync(path) ? parseAgentJson(readFileSync(path, 'utf8')) : [];
   if (!Array.isArray(records)) throw new Error('discoveries.json is not an array');
+  const publication = text(process.env.INPUTS_PUBLICATION).trim() || 'auto';
+  if (!['preview', 'approve', 'auto'].includes(publication)) {
+    throw new Error(`publication must be preview, approve or auto, not ${publication}`);
+  }
 
   const filed: string[] = [];
   const scratch = mkdtempSync(join(tmpdir(), 'archon-discovery-'));
@@ -89,6 +102,7 @@ try {
         filed.push(record.issue);
         continue;
       }
+      if (publication === 'preview') continue;
       const title = typeof record.title === 'string' ? record.title.trim() : '';
       if (title === '') throw new Error('a discovery has no title');
 
@@ -102,6 +116,7 @@ try {
           })
         )
         .digest('hex')} -->`;
+      const hash = marker.slice('<!-- archon-discovery:'.length, -' -->'.length);
       let url: string;
       if (source === 'forge') {
         url = parseCreatedWorkItem(
@@ -116,8 +131,17 @@ try {
         record.issue = url;
         writeFileSync(path, `${JSON.stringify(records, null, 2)}\n`);
       } else {
+        const found = JSON.parse(
+          gh('issue', 'list', '--repo', repo, '--state', 'all', '--search', `${hash} in:body`, '--json', 'url', '--limit', '1') || '[]'
+        ) as { url: string }[];
+        if (found.length > 0) {
+          record.issue = found[0].url;
+          writeFileSync(path, `${JSON.stringify(records, null, 2)}\n`);
+          filed.push(found[0].url);
+          continue;
+        }
         const bodyPath = join(scratch, 'body.md');
-        writeFileSync(bodyPath, body(record, pr.url));
+        writeFileSync(bodyPath, `${marker}\n${body(record, pr.url)}`);
         url = gh('issue', 'create', '--repo', repo, '--title', title, '--body-file', bodyPath);
         // Persist before read-back so a resumed gh run retains the created URL.
         record.issue = url;

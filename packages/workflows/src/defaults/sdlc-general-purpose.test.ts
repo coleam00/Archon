@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { existsSync, readFileSync } from 'node:fs';
 import { chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
@@ -13,6 +14,7 @@ const bindScript = join(workflowRoot, 'lifecycle', 'scripts', 'bind-delivered-pr
 const refreshScript = join(workflowRoot, 'merge-queue', 'scripts', 'refresh-merge.py');
 const holdsScript = join(workflowRoot, 'merge-queue', 'scripts', 'publish-holds.ts');
 const publishPrScript = join(workflowRoot, 'pr', 'scripts', 'publish-pr.ts');
+const fileDiscoveriesScript = join(workflowRoot, 'deliver', 'scripts', 'file-discoveries.ts');
 
 let root: string;
 let fakeBin: string;
@@ -49,7 +51,13 @@ else if (args[0] === 'issue' && args[1] === 'edit') {
   state.labels = [...new Map([...state.labels.filter((label:string) => !removed.includes(label.toLowerCase())),...added].map((label:string) => [label.toLowerCase(),label])).values()];
   writeFileSync(statePath, JSON.stringify(state));
 }
-else if (args[0] === 'issue' && args[1] === 'view') console.log(JSON.stringify({state: process.env.GH_ISSUE_STATE ?? 'OPEN'}));
+else if (args[0] === 'issue' && args[1] === 'view') console.log(JSON.stringify({state: process.env.GH_ISSUE_STATE ?? 'OPEN', title: process.env.GH_ISSUE_TITLE ?? ''}));
+else if (args[0] === 'issue' && args[1] === 'create') {
+  // Records the body it was handed, so a test can see what would be published.
+  const bodyFile = args[args.indexOf('--body-file') + 1];
+  if (process.env.GH_LOG) appendFileSync(process.env.GH_LOG, JSON.stringify({created: readFileSync(bodyFile, 'utf8')}) + '\\n');
+  console.log('https://github.com/owner/repo/issues/77');
+}
 else if (args[0] === 'issue' && args[1] === 'close') {}
 else if (args[0] === 'pr' && args[1] === 'view' && fakeView) {
   // A full pull request record; GH_MERGE_SEQ_FILE replays mergeStateStatus reads in order.
@@ -159,6 +167,96 @@ function runBun(script: string, values: Record<string, string>): ReturnType<type
     stderr: 'pipe',
   });
 }
+
+describe('review discoveries honor the publication mode and are filed once', () => {
+  // Seen live: a lifecycle launched with discovery_publication=preview still filed every
+  // review note as an issue, about thirty overnight, duplicates included.
+  const pr = JSON.stringify({
+    schemaVersion: 1,
+    repo: { host: 'github.com', path: 'owner/repo' },
+    number: 5,
+    url: 'https://github.com/owner/repo/pull/5',
+    head: 'feature',
+    base: 'main',
+    is_draft: true,
+    state: 'open',
+    head_repo: { host: 'github.com', path: 'owner/repo' },
+    head_revision: null,
+    base_revision: null,
+    maintainer_can_modify: null,
+  });
+  const discovery = {
+    title: 'Scene wiring has no CI test',
+    claim: 'The scene is untested.',
+    evidence: ['a.cs:1'],
+  };
+
+  async function run(publication: string, issues: unknown[]) {
+    const dir = await mkdtemp(join(root, 'discoveries-'));
+    await writeFile(join(dir, 'discoveries.json'), JSON.stringify([discovery]));
+    const log = join(dir, 'gh.log');
+    const result = runBun(fileDiscoveriesScript, {
+      INPUTS_PR: pr,
+      INPUTS_PUBLICATION: publication,
+      ARTIFACTS_DIR: dir,
+      ARCHON_SDLC_FORGE: '',
+      GH_LOG: log,
+      GH_ISSUES: JSON.stringify(issues),
+      GH_ISSUE_TITLE: discovery.title,
+    });
+    const lines = existsSync(log)
+      ? readFileSync(log, 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map(line => JSON.parse(line))
+      : [];
+    const created = lines.filter(
+      (entry: { created?: string }) => typeof entry.created === 'string'
+    );
+    return {
+      result,
+      created,
+      saved: JSON.parse(readFileSync(join(dir, 'discoveries.json'), 'utf8')),
+    };
+  }
+
+  test('preview files nothing and keeps the records for the discoveries workflow', async () => {
+    const { result, created, saved } = await run('preview', []);
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    expect(JSON.parse(stdout(result))).toEqual({ issues: [] });
+    expect(created).toHaveLength(0);
+    expect(saved[0].issue).toBeUndefined();
+  });
+
+  test('auto files one issue whose body carries the content marker', async () => {
+    const { result, created, saved } = await run('auto', []);
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    expect(JSON.parse(stdout(result))).toEqual({
+      issues: ['https://github.com/owner/repo/issues/77'],
+    });
+    expect(created).toHaveLength(1);
+    expect(created[0].created).toMatch(/^<!-- archon-discovery:[0-9a-f]{64} -->\n/);
+    expect(saved[0].issue).toBe('https://github.com/owner/repo/issues/77');
+  });
+
+  test('a later run reuses the issue that already carries the marker instead of filing again', async () => {
+    const { result, created, saved } = await run('auto', [
+      { url: 'https://github.com/owner/repo/issues/9' },
+    ]);
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    expect(JSON.parse(stdout(result))).toEqual({
+      issues: ['https://github.com/owner/repo/issues/9'],
+    });
+    expect(created).toHaveLength(0);
+    expect(saved[0].issue).toBe('https://github.com/owner/repo/issues/9');
+  });
+
+  test('an unknown publication mode is refused', async () => {
+    const { result, created } = await run('sometimes', []);
+    expect(result.exitCode).not.toBe(0);
+    expect(created).toHaveLength(0);
+  });
+});
 
 describe('caller-owned triage state labels', () => {
   test('keeps a neutral result unlabeled when the mapping is empty', () => {
