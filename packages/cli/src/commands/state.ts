@@ -2,6 +2,7 @@ import { relative } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import * as git from '@archon/git';
 import {
+  canonicalizeProjectPath,
   getArchonWorkspacesPath,
   getProjectStoragePaths,
   resolveProjectStorageKey,
@@ -106,20 +107,21 @@ export async function stateCommand(
       writer = { kind: 'run', runId: run.id, nodePath: identity.path };
     } else {
       if (env.ARCHON_NODE_EXECUTION) throw new Error('ARCHON_NODE_EXECUTION requires WORKFLOW_ID');
-      const repoRoot = await git.findRepoRoot(options.cwd);
+      // Folder registration stores the canonical path (#2927), so look up the same
+      // spelling: a symlinked or Windows 8.3 cwd would otherwise miss its project.
+      const cwd = await canonicalizeProjectPath(options.cwd);
+      const repoRoot = await git.findRepoRoot(cwd);
       let codebase = repoRoot
         ? await findCodebaseForCheckoutPath(repoRoot, host.records.codebases)
-        : ((await host.records.codebases.findCodebaseByDefaultCwd(options.cwd)) ??
-          (await host.records.codebases.findCodebaseByPathPrefix(options.cwd)));
+        : ((await host.records.codebases.findCodebaseByDefaultCwd(cwd)) ??
+          (await host.records.codebases.findCodebaseByPathPrefix(cwd)));
       if (repoRoot && !codebase) {
         const registered = await registerRepository(host.records.codebases, repoRoot);
         codebase = await host.records.codebases.getCodebase(registered.codebaseId);
         if (!codebase)
           throw new StateProjectResolutionError('Registered project is missing from the store');
       }
-      root = getProjectStoragePaths(
-        resolveProjectStorageKey(codebase, repoRoot ?? options.cwd)
-      ).root;
+      root = getProjectStoragePaths(resolveProjectStorageKey(codebase, repoRoot ?? cwd)).root;
       const identity = resolveCliUserId(env);
       if (!identity) throw new Error('Set ARCHON_USER_ID (or USER) for operator attribution');
       writer = { kind: 'operator', identity };

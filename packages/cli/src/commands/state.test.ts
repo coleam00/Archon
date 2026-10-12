@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -150,13 +150,23 @@ test('usage, cap and patch errors have distinct codes and write nothing', async 
 });
 test('operator identity and registered folder project use the same durable scope', async () => {
   const { host, root, output } = await fixture();
-  await host.records.codebases.createCodebase({ name: 'Ops', default_cwd: root, kind: 'folder' });
+  // Registration stores the canonical path; the operator's cwd may be a symlink or a
+  // Windows 8.3 short name for the same folder.
+  const folder = join(root, 'ops');
+  mkdirSync(folder);
+  const alias = join(root, 'ops-alias');
+  symlinkSync(folder, alias, 'junction');
+  await host.records.codebases.createCodebase({
+    name: 'Ops',
+    default_cwd: realpathSync(folder),
+    kind: 'folder',
+  });
   expect(
     await stateCommand(
       host,
       'put',
       ['ledger'],
-      { cwd: root, ifRevision: '0' },
+      { cwd: alias, ifRevision: '0' },
       {
         env: { ARCHON_USER_ID: 'rasmus' },
         readInput: async () => '{}',
