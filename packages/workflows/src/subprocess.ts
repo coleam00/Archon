@@ -143,6 +143,8 @@ export async function runSubprocess(
     cwd: string;
     timeout: number;
     env: NodeJS.ProcessEnv;
+    /** Nodes stay in the live owner's process group so run cancellation stops them. */
+    processTreeTimeout?: true;
     protectedEnvKeys?: readonly string[];
     protectedCredentialValues?: readonly string[];
     retention: SubprocessRetention | { standalone: true };
@@ -177,7 +179,7 @@ export async function runSubprocess(
         : await execFileAsync(cmd, args, {
             cwd: options.cwd,
             timeout: options.timeout,
-            processTreeTimeout: true,
+            ...(options.processTreeTimeout ? { processTreeTimeout: true } : {}),
             env: subprocessEnv,
           });
 

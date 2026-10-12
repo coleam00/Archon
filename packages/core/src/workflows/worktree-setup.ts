@@ -76,6 +76,7 @@ function createSetupExecutor(
         result = await runSubprocess({ kind: 'host' }, resolveBashPath(), ['-c', command], {
           cwd: input.workingPath,
           timeout: input.timeout,
+          processTreeTimeout: true,
           env: environment.envVars ?? {},
           protectedEnvKeys: environment.protectedEnvKeys,
           protectedCredentialValues: environment.protectedCredentialValues,
