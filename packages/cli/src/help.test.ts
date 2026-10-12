@@ -187,6 +187,8 @@ Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
+  state <get|put|patch|log|delete|list>
+                             Read and audit durable project JSON documents
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
   user <list|role>           List users and manage roles as the operator

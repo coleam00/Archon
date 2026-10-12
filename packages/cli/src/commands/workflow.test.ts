@@ -867,6 +867,7 @@ const coreCapabilities = await import('@archon/core');
 const { createSqlWorkflowOperations } = await import('@archon/core/workflows/sql-host');
 function createTestWorkflowHost(): import('@archon/core/workflows/host-store').WorkflowHost {
   const host = createSqlWorkflowHost();
+  host.deps.store.pruneStateRevisions = mock(async () => ({ count: 0 }));
   host.deps.store.createWorkflowEvent = mockCreateWorkflowEvent;
   host.deps.store.persistWorkflowEvent = mockPersistWorkflowEvent;
   host.deps.loadConfig = coreCapabilities.loadConfig;
@@ -11393,7 +11394,12 @@ describe('workflowCleanupCommand', () => {
       count: 5,
     });
 
-    await workflowCleanupCommand(createTestWorkflowHost(), 30);
+    const host = createTestWorkflowHost();
+    const prune = mock(async () => ({ count: 7 }));
+    host.deps.store.pruneStateRevisions = prune;
+    await workflowCleanupCommand(host, 30);
+    expect(prune).toHaveBeenCalledWith(30);
+    expect(consoleSpy).toHaveBeenCalledWith('Pruned 7 state revision(s) older than 30 days.');
 
     expect(consoleSpy).toHaveBeenCalledWith('Deleted 5 workflow run(s) older than 30 days.');
   });
@@ -11416,7 +11422,7 @@ describe('workflowCleanupCommand', () => {
     );
 
     await expect(workflowCleanupCommand(createTestWorkflowHost(), 7)).rejects.toThrow(
-      'Failed to clean up workflow runs: disk full'
+      'Failed to clean up workflow history: disk full'
     );
   });
 });

@@ -216,6 +216,27 @@ const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 // ---------------------------------------------------------------------------
 
 class InMemoryStore implements IWorkflowStore {
+  getStateDocument: IWorkflowStore['getStateDocument'] = async () => {
+    throw new Error('Unexpected getStateDocument');
+  };
+  putStateDocument: IWorkflowStore['putStateDocument'] = async () => {
+    throw new Error('Unexpected putStateDocument');
+  };
+  patchStateDocument: IWorkflowStore['patchStateDocument'] = async () => {
+    throw new Error('Unexpected patchStateDocument');
+  };
+  deleteStateDocument: IWorkflowStore['deleteStateDocument'] = async () => {
+    throw new Error('Unexpected deleteStateDocument');
+  };
+  listStateRevisions: IWorkflowStore['listStateRevisions'] = async () => {
+    throw new Error('Unexpected listStateRevisions');
+  };
+  listStateDocuments: IWorkflowStore['listStateDocuments'] = async () => {
+    throw new Error('Unexpected listStateDocuments');
+  };
+  pruneStateRevisions: IWorkflowStore['pruneStateRevisions'] = async () => {
+    throw new Error('Unexpected pruneStateRevisions');
+  };
   admitResourceStart: IWorkflowStore['admitResourceStart'] = async () => {
     throw new Error('Unexpected admitResourceStart');
   };

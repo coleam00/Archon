@@ -6406,6 +6406,8 @@ export async function workflowResetSessionsCommand(
 export async function workflowCleanupCommand(host: WorkflowHost, days: number): Promise<void> {
   try {
     const { count } = await host.deps.store.deleteOldWorkflowRuns(days);
+    const { count: revisions } = await host.deps.store.pruneStateRevisions(days);
+    console.log(`Pruned ${revisions} state revision(s) older than ${days} days.`);
     if (count === 0) {
       console.log(`No workflow runs older than ${days} days to clean up.`);
     } else {
@@ -6414,7 +6416,7 @@ export async function workflowCleanupCommand(host: WorkflowHost, days: number): 
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, days }, 'cli.workflow_cleanup_failed');
-    throw new Error(`Failed to clean up workflow runs: ${err.message}`);
+    throw new Error(`Failed to clean up workflow history: ${err.message}`);
   }
 }
 

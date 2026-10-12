@@ -163,6 +163,13 @@
     ],
     [
       "src/commands/workflow-launch-config.integration.spec.ts"
+    ],
+    [
+      "src/commands/state.test.ts",
+      "src/test-support/state-document-store.conformance.test.ts"
+    ],
+    [
+      "src/commands/state.integration.spec.ts"
     ]
   ]
 }

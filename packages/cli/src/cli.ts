@@ -369,6 +369,7 @@ async function main(): Promise<number> {
 
   // Commands that don't require git repo validation
   const noGitCommands = [
+    'state',
     'trigger',
     'version',
     'help',
@@ -578,6 +579,28 @@ async function main(): Promise<number> {
     }
 
     switch (command) {
+      case 'state': {
+        const { stateCommand } = await loadRoute(() => import('./commands/state'), {
+          database: true,
+        });
+        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+        const { getDatabaseType } = await import('@archon/core/db/connection');
+        return await stateCommand(
+          createSqlWorkflowHost(createCliWorkflowDeps()),
+          subcommand,
+          positionals.slice(2),
+          {
+            cwd,
+            ...(typeof values['if-revision'] === 'string'
+              ? { ifRevision: values['if-revision'] }
+              : {}),
+            ...(typeof values.limit === 'string' ? { limit: values.limit } : {}),
+            ...(typeof values.prefix === 'string' ? { prefix: values.prefix } : {}),
+          },
+          { storeKind: getDatabaseType() }
+        );
+      }
       case 'trigger': {
         const { triggerCommand, spawnAdmitted } = await loadRoute(
           () => import('./commands/trigger'),
