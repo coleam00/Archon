@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
   applyStatePatch,
+  stateValueSchema,
   StatePatchError,
   validateStateValue,
   StateDocumentTooLargeError,
@@ -52,4 +53,26 @@ test('cap counts UTF-8 JSON bytes and accepts exactly 64 KiB', () => {
   validateStateValue('x'.repeat(65534));
   expect(() => validateStateValue('x'.repeat(65535))).toThrow(StateDocumentTooLargeError);
   expect(() => validateStateValue('é'.repeat(32768))).toThrow(StateDocumentTooLargeError);
+});
+
+test('JSON validation rejects invalid members without transforming valid objects', () => {
+  const source = JSON.parse('{"__proto__":{"kept":true},"nested":[{"__proto__":null}]}') as unknown;
+  expect(source).toBe(stateValueSchema.parse(source));
+  const cycle: Record<string, unknown> = {};
+  cycle.self = cycle;
+  const invalidPrototypeMember = Object.defineProperty({}, '__proto__', {
+    value: undefined,
+    enumerable: true,
+  });
+  for (const value of [
+    cycle,
+    invalidPrototypeMember,
+    [undefined],
+    new Array(1),
+    NaN,
+    Infinity,
+    new Date(),
+  ]) {
+    expect(stateValueSchema.safeParse(value).success).toBe(false);
+  }
 });

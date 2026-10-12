@@ -6,8 +6,26 @@ export const stateDocumentNameSchema = z
   .min(1)
   .max(200)
   .regex(/^[a-z0-9._-]+(?:\/[a-z0-9._-]+)*$/);
-export const stateValueSchema = z.json();
-export type StateValue = z.infer<typeof stateValueSchema>;
+export type StateValue = z.infer<ReturnType<typeof z.json>>;
+function isStateValue(value: unknown, ancestors = new Set<object>()): value is StateValue {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || ancestors.has(value)) return false;
+  if (
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) !== Object.prototype &&
+    Object.getPrototypeOf(value) !== null
+  )
+    return false;
+  ancestors.add(value);
+  const valid = (Array.isArray(value) ? [...value] : Object.values(value)).every(member =>
+    isStateValue(member, ancestors)
+  );
+  ancestors.delete(value);
+  return valid;
+}
+// JSON validation must preserve all own members, including __proto__.
+export const stateValueSchema = z.custom<StateValue>(value => isStateValue(value));
 const pointerSchema = z
   .string()
   .refine(

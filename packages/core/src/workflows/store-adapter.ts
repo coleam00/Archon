@@ -89,7 +89,6 @@ export function createWorkflowStore(): IWorkflowStore {
   return {
     ...createSqlStateDocumentStore({
       query: (sql, params) => getDatabase().query(sql, params),
-      withTransaction: fn => getDatabase().withTransaction(fn),
     }),
     setToolCallAttention: workflowDb.setToolCallAttention,
     admitResourceStart: resourceStarts.admitResourceStart,

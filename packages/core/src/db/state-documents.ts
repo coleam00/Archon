@@ -73,37 +73,33 @@ async function insert(query: Query, project: string, revision: StateRevision): P
   return result.rowCount === 1;
 }
 
-export function createSqlStateDocumentStore(
-  db: Pick<IDatabase, 'query' | 'withTransaction'>
-): IStateDocumentStore {
+export function createSqlStateDocumentStore(db: Pick<IDatabase, 'query'>): IStateDocumentStore {
+  const query = db.query.bind(db);
   const write = async (
     input: Parameters<IStateDocumentStore['deleteStateDocument']>[0],
     operation: StateRevision['operation'],
     compute: (prior: StateRevision | null) => StateRevision['value']
   ): Promise<StateRevision> => {
     for (let attempt = 0; attempt <= 5; attempt++) {
-      const result = await db.withTransaction(async query => {
-        const prior = await latest(query, input.project, input.name);
-        const actual = prior?.revision ?? 0;
-        if (input.ifRevision !== undefined && input.ifRevision !== actual)
-          throw new StateRevisionConflictError(input.name, input.ifRevision, actual);
-        const value = compute(prior);
-        const next: StateRevision = {
-          name: input.name,
-          revision: actual + 1,
-          value,
-          operation,
-          writer: input.writer,
-          createdAt: new Date().toISOString(),
-        };
-        return { written: await insert(query, input.project, next), next, actual };
-      });
-      if (result.written) return result.next;
+      const prior = await latest(query, input.project, input.name);
+      const actual = prior?.revision ?? 0;
+      if (input.ifRevision !== undefined && input.ifRevision !== actual)
+        throw new StateRevisionConflictError(input.name, input.ifRevision, actual);
+      const next: StateRevision = {
+        name: input.name,
+        revision: actual + 1,
+        value: compute(prior),
+        operation,
+        writer: input.writer,
+        createdAt: new Date().toISOString(),
+      };
+      const written = await insert(query, input.project, next);
+      if (written) return next;
       if (input.ifRevision !== undefined || attempt === 5) {
-        const current = await latest(db.query.bind(db), input.project, input.name);
+        const current = await latest(query, input.project, input.name);
         throw new StateRevisionConflictError(
           input.name,
-          input.ifRevision ?? result.actual,
+          input.ifRevision ?? actual,
           current?.revision ?? 0
         );
       }
@@ -118,7 +114,7 @@ export function createSqlStateDocumentStore(
       name
     ): ReturnType<IStateDocumentStore['getStateDocument']> => {
       scope(project, name);
-      const row = await latest(db.query.bind(db), project, name);
+      const row = await latest(query, project, name);
       return row?.value === null ? null : row;
     },
     putStateDocument: async (supplied): ReturnType<IStateDocumentStore['putStateDocument']> => {
@@ -143,7 +139,7 @@ export function createSqlStateDocumentStore(
       const limit =
         options.limit === undefined ? undefined : z.number().int().positive().parse(options.limit);
       return (
-        await db.query<RevisionRow>(
+        await query<RevisionRow>(
           `SELECT * FROM remote_agent_state_revisions WHERE project_key = $1 AND name = $2 ORDER BY revision DESC${limit === undefined ? '' : ' LIMIT $3'}`,
           limit === undefined ? [project, name] : [project, name, limit]
         )
@@ -153,17 +149,15 @@ export function createSqlStateDocumentStore(
       z.number().int().nonnegative().parse(days);
       const cutoff = new Date(Date.now() - days * 86400000).toISOString();
       // Tombstones are revision cursors; removing one would make a stale CAS valid after recreation.
-      return db.withTransaction(async query => {
-        const result = await query(
-          `DELETE FROM remote_agent_state_revisions
+      const result = await query(
+        `DELETE FROM remote_agent_state_revisions
           WHERE created_at < $1 AND EXISTS (
             SELECT 1 FROM remote_agent_state_revisions newer WHERE newer.project_key = remote_agent_state_revisions.project_key
               AND newer.name = remote_agent_state_revisions.name AND newer.revision > remote_agent_state_revisions.revision
           )`,
-          [cutoff]
-        );
-        return { count: result.rowCount };
-      });
+        [cutoff]
+      );
+      return { count: result.rowCount };
     },
   };
 }

@@ -11415,6 +11415,20 @@ describe('workflowCleanupCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('No workflow runs older than 7 days to clean up.');
   });
 
+  it('reports committed run deletion when state pruning fails', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      count: 5,
+    });
+    const host = createTestWorkflowHost();
+    host.deps.store.pruneStateRevisions = mock(async () => {
+      throw new Error('state unavailable');
+    });
+    await expect(workflowCleanupCommand(host, 7)).rejects.toThrow(
+      'Deleted 5 workflow run(s) older than 7 days, but failed to prune state revisions: state unavailable'
+    );
+  });
+
   it('should throw when deleteOldWorkflowRuns fails', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockRejectedValueOnce(

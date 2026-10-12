@@ -84,7 +84,7 @@ const forgeOperationDescriptions = {
 const commandHelp: HelpEntry[] = [
   {
     command: 'state',
-    spec: 'state <get|put|patch|log|delete|list>',
+    spec: 'state <get|put|patch|log|delete>',
     description: 'Read and audit durable project JSON documents',
   },
   {

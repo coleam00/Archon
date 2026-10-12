@@ -153,3 +153,22 @@ test('operator identity and registered folder project use the same durable scope
   expect(output.at(-1)).toMatchObject({ writer: { kind: 'operator', identity: 'rasmus' } });
   expect((await host.deps.store.getStateDocument('_folder/ops', 'ledger'))?.revision).toBe(1);
 });
+
+test('JSON input keeps own prototype keys and enforces their size', async () => {
+  const { invoke, output } = await fixture();
+  const source = '{"__proto__":{"kept":true},"nested":[{"__proto__":null}]}';
+  expect(await invoke('put', source, { ifRevision: '0' })).toBe(0);
+  expect(await invoke('get')).toBe(0);
+  expect(output.at(-1)).toMatchObject({ value: JSON.parse(source) });
+  expect(await invoke('patch', `{"ops":[{"op":"set","path":"/added","value":${source}}]}`)).toBe(0);
+  expect(output.at(-1)).toMatchObject({
+    value: { ...JSON.parse(source), added: JSON.parse(source) },
+  });
+  const oversized = `{"__proto__":"${'x'.repeat(65536)}"}`;
+  expect(await invoke('put', oversized, { ifRevision: '2' })).toBe(4);
+  expect(await invoke('patch', `{"ops":[{"op":"set","path":"/large","value":${oversized}}]}`)).toBe(
+    4
+  );
+  expect(await invoke('log')).toBe(0);
+  expect(output.at(-1)).toHaveLength(2);
+});

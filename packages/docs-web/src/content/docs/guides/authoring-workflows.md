@@ -1460,7 +1460,7 @@ The [CLI reference](/reference/cli/#state) describes pointer and tombstone seman
 
 Let the agent judge what to remember, then commit its structured output in a script node
 when the write must happen. For example, a review agent returns a completed PR identifier;
-its dependent node appends that identifier to a ledger:
+its dependent host-side node appends that identifier to a ledger:
 
 ```yaml
 nodes:
@@ -1487,6 +1487,11 @@ nodes:
       child.stdin.end();
       if (await child.exited !== 0) throw new Error('State commit failed');
 ```
+
+This recipe runs on the host. Container-isolated nodes cannot use `archon state` in
+this release: they do not receive the host's `ARCHON_CLI_COMMAND` or access to its store.
+Commit state in a host-side step. `$STATE_DIR` remains available for free-form files on
+the host, but it also is not mounted into container runs.
 
 Bash/script nodes already receive `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION`; writes
 record their run ID and node path. Invoke the JSON argv in `ARCHON_CLI_COMMAND` instead

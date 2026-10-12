@@ -3,6 +3,9 @@ import {
   StateRevisionConflictError,
   StateDocumentTooLargeError,
   StatePatchError,
+  stateValueSchema,
+  statePutSchema,
+  stateWriterSchema,
   type IStateDocumentStore,
   type StateWriter,
 } from './state-document-store';
@@ -113,6 +116,53 @@ export function describeStateDocumentConformance(
       expect((await store.getStateDocument('one', 'ledger'))?.revision).toBe(3);
       expect(await store.listStateRevisions('one', 'ledger', { limit: 1 })).toHaveLength(1);
     });
+    check('every schema-defined writer field round-trips', async ({ store }) => {
+      for (const variant of stateWriterSchema.options) {
+        const supplied = Object.fromEntries(
+          Object.keys(variant.shape).map(field => [
+            field,
+            field === 'kind' ? variant.shape.kind.value : `writer-${field}`,
+          ])
+        );
+        const writer = stateWriterSchema.parse(supplied);
+        const input = { project: 'writers', name: writer.kind, writer };
+        await store.putStateDocument({ ...input, value: {}, ifRevision: 0 });
+        expect((await store.getStateDocument(input.project, input.name))?.writer).toEqual(writer);
+        expect((await store.listStateRevisions(input.project, input.name))[0]?.writer).toEqual(
+          writer
+        );
+      }
+    });
+    check(
+      'JSON members survive reads, patch values and subsequent unrelated patches',
+      async ({ store }) => {
+        const supplied: unknown = JSON.parse(
+          '{"__proto__":{"own":true},"nested":{"__proto__":null},"array":[{"__proto__":[1]}]}'
+        );
+        const value = stateValueSchema.parse(supplied);
+        expect(supplied).toEqual(value);
+        if (value === null || typeof value !== 'object' || Array.isArray(value))
+          throw new Error('Expected JSON object');
+        const input = { project: 'json', name: 'members', writer };
+        await store.putStateDocument({ ...input, value, ifRevision: 0 });
+        expect((await store.getStateDocument(input.project, input.name))?.value).toEqual(value);
+        const ops = [{ op: 'set' as const, path: '/added', value }];
+        await store.patchStateDocument({ ...input, ops });
+        const expected = { ...value, added: value };
+        expect((await store.getStateDocument(input.project, input.name))?.value).toEqual(expected);
+        const history = await store.listStateRevisions(input.project, input.name);
+        expect(history[0]?.operation).toEqual({ op: 'patch', ops });
+        expect(history[1]?.value).toEqual(value);
+        await store.patchStateDocument({
+          ...input,
+          ops: [{ op: 'set', path: '/other', value: true }],
+        });
+        expect((await store.getStateDocument(input.project, input.name))?.value).toEqual({
+          ...expected,
+          other: true,
+        });
+      }
+    );
     check('audit history is complete unless the caller requests a limit', async ({ store }) => {
       for (let revision = 0; revision < 101; revision++) {
         await store.putStateDocument({
@@ -167,6 +217,20 @@ export function describeStateDocumentConformance(
           store.patchStateDocument({ ...input, ops: [{ op: 'set', path: 'invalid', value: 1 }] })
         )
       ).toBeInstanceOf(StatePatchError);
+      const oversized = statePutSchema.shape.value.parse(
+        JSON.parse(`{"__proto__":"${'x'.repeat(65536)}"}`) as unknown
+      );
+      expect(
+        await rejection(store.putStateDocument({ ...input, value: oversized, ifRevision: 0 }))
+      ).toBeInstanceOf(StateDocumentTooLargeError);
+      expect(
+        await rejection(
+          store.patchStateDocument({
+            ...input,
+            ops: [{ op: 'append', path: '/values', value: oversized }],
+          })
+        )
+      ).toBeInstanceOf(StateDocumentTooLargeError);
       expect(await store.listStateRevisions('one', 'limit')).toEqual([]);
       await store.putStateDocument({ ...input, value: { target: 2 }, ifRevision: 0 });
       expect(
