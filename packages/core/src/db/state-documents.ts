@@ -149,20 +149,6 @@ export function createSqlStateDocumentStore(
         )
       ).rows.map(hydrate);
     },
-    listStateDocuments: async (
-      project,
-      options = {}
-    ): ReturnType<IStateDocumentStore['listStateDocuments']> => {
-      z.string().min(1).parse(project);
-      const rows = await db.query<RevisionRow>(
-        `SELECT r.* FROM remote_agent_state_revisions r
-        WHERE project_key = $1 AND value IS NOT NULL AND NOT EXISTS (
-          SELECT 1 FROM remote_agent_state_revisions newer WHERE newer.project_key = r.project_key AND newer.name = r.name AND newer.revision > r.revision
-        ) ORDER BY name`,
-        [project]
-      );
-      return rows.rows.filter(row => row.name.startsWith(options.prefix ?? '')).map(hydrate);
-    },
     pruneStateRevisions: async (days): ReturnType<IStateDocumentStore['pruneStateRevisions']> => {
       z.number().int().nonnegative().parse(days);
       const cutoff = new Date(Date.now() - days * 86400000).toISOString();

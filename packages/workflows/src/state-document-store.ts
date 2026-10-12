@@ -220,6 +220,5 @@ export interface IStateDocumentStore {
     name: string,
     options?: { limit?: number }
   ): Promise<StateRevision[]>;
-  listStateDocuments(project: string, options?: { prefix?: string }): Promise<StateRevision[]>;
   pruneStateRevisions(olderThanDays: number): Promise<{ count: number }>;
 }

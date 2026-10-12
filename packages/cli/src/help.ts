@@ -489,12 +489,6 @@ const scopedOnlyHelp: HelpEntry[] = [
     spec: 'state log <name> [--limit <n>]',
     description: 'Read revisions newest first, including writers and operations',
   },
-  {
-    command: 'state',
-    subcommand: 'list',
-    spec: 'state list [--prefix <prefix>]',
-    description: 'List live documents in this project',
-  },
   ...Object.entries(forgeOperationDescriptions)
     .filter(([op]) => op !== 'resolve')
     .map(([subcommand, description]) => ({

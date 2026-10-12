@@ -92,7 +92,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   const noop = async (): Promise<void> => undefined;
   return {
     getStateDocument: async () => null,
-    listStateDocuments: async () => [],
     listStateRevisions: async () => [],
     putStateDocument: async () => {
       throw new Error('Unsupported state documents');

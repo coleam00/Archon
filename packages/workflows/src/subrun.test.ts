@@ -231,9 +231,6 @@ class InMemoryStore implements IWorkflowStore {
   listStateRevisions: IWorkflowStore['listStateRevisions'] = async () => {
     throw new Error('Unexpected listStateRevisions');
   };
-  listStateDocuments: IWorkflowStore['listStateDocuments'] = async () => {
-    throw new Error('Unexpected listStateDocuments');
-  };
   pruneStateRevisions: IWorkflowStore['pruneStateRevisions'] = async () => {
     throw new Error('Unexpected pruneStateRevisions');
   };

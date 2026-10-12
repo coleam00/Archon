@@ -103,7 +103,6 @@ export function describeStateDocumentConformance(
       });
       expect(deleted.revision).toBe(2);
       expect(await store.getStateDocument('one', 'ledger')).toBeNull();
-      expect(await store.listStateDocuments('one')).toEqual([]);
       expect((await store.listStateRevisions('one', 'ledger'))[0]).toMatchObject({
         value: null,
         operation: { op: 'delete' },
@@ -112,8 +111,6 @@ export function describeStateDocumentConformance(
       expect((await store.getStateDocument('two', 'ledger'))?.value).toBe(123);
       await store.putStateDocument({ ...input, ifRevision: 2 });
       expect((await store.getStateDocument('one', 'ledger'))?.revision).toBe(3);
-      expect(await store.listStateDocuments('one', { prefix: 'led' })).toHaveLength(1);
-      expect(await store.listStateDocuments('one', { prefix: 'other' })).toEqual([]);
       expect(await store.listStateRevisions('one', 'ledger', { limit: 1 })).toHaveLength(1);
     });
     check('audit history is complete unless the caller requests a limit', async ({ store }) => {

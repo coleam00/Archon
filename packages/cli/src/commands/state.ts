@@ -30,7 +30,6 @@ export interface StateCommandOptions {
   cwd: string;
   ifRevision?: string;
   limit?: string;
-  prefix?: string;
 }
 
 export async function stateCommand(
@@ -50,17 +49,14 @@ export async function stateCommand(
   const store = host.deps.store;
   const readInput = dependencies.readInput ?? ((): Promise<string> => Bun.stdin.text());
   try {
-    if (!subcommand || !['get', 'put', 'patch', 'log', 'delete', 'list'].includes(subcommand))
-      throw new Error('Expected state get|put|patch|log|delete|list');
-    if (args.length !== (subcommand === 'list' ? 0 : 1))
-      throw new Error('Expected one document name (none for list)');
+    if (!subcommand || !['get', 'put', 'patch', 'log', 'delete'].includes(subcommand))
+      throw new Error('Expected state get|put|patch|log|delete');
+    if (args.length !== 1) throw new Error('Expected one document name');
     if (options.ifRevision !== undefined && !['put', 'delete'].includes(subcommand))
       throw new Error('--if-revision is only valid for put or delete');
     if (options.limit !== undefined && subcommand !== 'log')
       throw new Error('--limit is only valid for log');
-    if (options.prefix !== undefined && subcommand !== 'list')
-      throw new Error('--prefix is only valid for list');
-    const name = subcommand === 'list' ? '' : stateDocumentNameSchema.parse(args[0]);
+    const name = stateDocumentNameSchema.parse(args[0]);
     const integer = (text: string): number => {
       if (!/^(0|[1-9][0-9]*)$/u.test(text)) throw new Error('Expected a nonnegative integer');
       return stateRevisionNumberSchema.parse(Number(text));
@@ -156,12 +152,6 @@ export async function stateCommand(
           project,
           name,
           limit === undefined ? {} : { limit }
-        );
-        break;
-      case 'list':
-        output = await store.listStateDocuments(
-          project,
-          options.prefix === undefined ? {} : { prefix: options.prefix }
         );
         break;
     }

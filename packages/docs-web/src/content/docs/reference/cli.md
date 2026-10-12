@@ -1491,7 +1491,6 @@ archon state get review/123
 printf '{"seen":[]}' | archon state put review/123 --if-revision 0
 printf '{"ops":[{"op":"append","path":"/seen","value":123}]}' | archon state patch review/123
 archon state log review/123 --limit 100
-archon state list --prefix review/
 archon state delete review/123 --if-revision 2
 ```
 

@@ -51,7 +51,6 @@ export const cliArgOptions: CliArgOptions = {
   status: { type: 'string' },
   limit: { type: 'string' },
   'if-revision': { type: 'string' },
-  prefix: { type: 'string' },
   timeout: { type: 'string' },
   follow: { type: 'boolean' },
   format: { type: 'string' },

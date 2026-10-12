@@ -45,13 +45,13 @@ async function fixture() {
   const invoke = (
     op: string,
     input = '',
-    flags: { ifRevision?: string; limit?: string; prefix?: string } = {},
+    flags: { ifRevision?: string; limit?: string } = {},
     override = env
   ) =>
     stateCommand(
       host,
       op,
-      op === 'list' ? [] : ['review/123'],
+      ['review/123'],
       { cwd: root, ...flags },
       {
         env: override,
@@ -81,8 +81,6 @@ test('JSON commands preserve run attribution, audit, CAS and tombstone recreatio
   expect(output.at(-1)).toMatchObject([
     { revision: 2, operation: { op: 'patch' }, writer: { kind: 'run' } },
   ]);
-  expect(await invoke('list', '', { prefix: 'review/' })).toBe(0);
-  expect(output.at(-1)).toMatchObject([{ name: 'review/123' }]);
   expect(await invoke('delete', '', { ifRevision: '2' })).toBe(0);
   expect(await invoke('put', '{}', { ifRevision: '3' })).toBe(0);
 });
@@ -116,7 +114,7 @@ test('mismatched store, absent project and invalid identity refuse without write
     )
   ).toBe(1);
   expect(output.at(-1)).toMatchObject({ error: 'The run has no resolvable project root' });
-  expect(await store.listStateDocuments('owner/repo')).toEqual([]);
+  expect(await store.listStateRevisions('owner/repo', 'review/123')).toEqual([]);
 });
 test('usage, cap and patch errors have distinct codes and write nothing', async () => {
   const { invoke, output, store } = await fixture();

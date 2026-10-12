@@ -65,23 +65,6 @@ export function createInMemoryStateDocumentStore(): IStateDocumentStore & {
       options
     ): ReturnType<IStateDocumentStore['listStateRevisions']> =>
       structuredClone([...rows(project, name)].reverse().slice(0, options?.limit)),
-    listStateDocuments: async (
-      project,
-      options
-    ): ReturnType<IStateDocumentStore['listStateDocuments']> =>
-      structuredClone(
-        [...documents.entries()]
-          .flatMap(([id, history]) => {
-            const row = history.at(-1);
-            if (!row) throw new Error('Empty state history');
-            return id === key(project, row.name) &&
-              row.value !== null &&
-              row.name.startsWith(options?.prefix ?? '')
-              ? [row]
-              : [];
-          })
-          .sort((a, b) => a.name.localeCompare(b.name))
-      ),
     pruneStateRevisions: async (days): ReturnType<IStateDocumentStore['pruneStateRevisions']> => {
       const cutoff = Date.now() - days * 86400000;
       let count = 0;
