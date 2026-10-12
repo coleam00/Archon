@@ -843,7 +843,8 @@ const GATE_ON_A_SHELL_NODE =
 export function validateDagStructure(
   nodes: readonly (DagNode | IncludeDirective)[],
   enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>,
-  includeAliases?: ReadonlyMap<string, string>
+  includeAliases?: ReadonlyMap<string, string>,
+  eligibleResumeSources?: ReadonlyMap<string, DagNode | IncludeDirective>
 ): string | null {
   // Check ID uniqueness
   const nodesById = new Map<string, DagNode | IncludeDirective>();
@@ -925,7 +926,7 @@ export function validateDagStructure(
       );
     if (sharedNode === undefined) continue;
     if (enclosingNodes !== undefined) {
-      return `Node '${sharedNode.id}' uses scalar context: 'shared' in a structurally parallel loop_group body. Scalar 'shared' only inherits the ambient session in sequential layers. Serialize the body nodes with 'depends_on' or use fresh context; context.resume is not supported inside loop_group bodies`;
+      return `Node '${sharedNode.id}' uses scalar context: 'shared' in a structurally parallel loop_group body. Scalar 'shared' only inherits the ambient session in sequential layers. Serialize the body nodes with 'depends_on' or use fresh context; use context: { resume: <pre-loop-node-id> } for a private owner session`;
     }
     return `Node '${sharedNode.id}' uses scalar context: 'shared' in a structurally parallel layer. Scalar 'shared' only inherits the ambient session in sequential layers. Use 'context: { resume: <upstream-node-id> }' to fork an exact upstream session, or serialize the nodes with 'depends_on'`;
   }
@@ -1165,23 +1166,26 @@ export function validateDagStructure(
     }
   }
 
-  // A named session source must be in the same static scope and complete before its
-  // consumer. Runtime validation owns provider/session facts that loading cannot know.
+  // Body ancestry is proven at group entry, separately from output visibility.
   for (const node of nodes) {
     if (isIncludeDirective(node)) continue;
     if (!isNodeContextResume(node.context)) continue;
-    if (enclosingNodes !== undefined) {
-      return `Node '${node.id}' uses context.resume inside a loop_group body, which is not supported`;
-    }
     const sourceId = node.context.resume;
-    const source = nodesById.get(sourceId);
+    if (enclosingNodes !== undefined && nodesById.has(sourceId)) {
+      return `Node '${node.id}' context.resume cannot name a source inside the same loop_group body`;
+    }
+    const source =
+      enclosingNodes === undefined ? nodesById.get(sourceId) : eligibleResumeSources?.get(sourceId);
+    if (source === undefined && enclosingNodes?.has(sourceId)) {
+      return `Node '${node.id}' context.resume source '${sourceId}' is not an upstream dependency of the loop_group`;
+    }
     if (source === undefined) {
       return `Node '${node.id}' context.resume references unknown node '${sourceId}'`;
     }
     if (isIncludeDirective(source) || !(isAgentNode(source) || isLoopNode(source))) {
       return `Node '${node.id}' context.resume source '${sourceId}' is not a session-producing command, prompt, or loop node`;
     }
-    if (!transitiveDepsOf(node.id).has(sourceId)) {
+    if (enclosingNodes === undefined && !transitiveDepsOf(node.id).has(sourceId)) {
       return `Node '${node.id}' context.resume source '${sourceId}' is not an upstream dependency`;
     }
   }
@@ -1327,7 +1331,17 @@ export function validateDagStructure(
         ...(enclosingNodes ?? []),
         ...nodesById,
       ]);
-      const bodyError = validateDagStructure(node.loop_group.nodes, scopeNodes, includeAliases);
+      const eligible = new Map(eligibleResumeSources);
+      for (const id of transitiveDepsOf(node.id)) {
+        const ancestor = nodesById.get(id);
+        if (ancestor !== undefined) eligible.set(id, ancestor);
+      }
+      const bodyError = validateDagStructure(
+        node.loop_group.nodes,
+        scopeNodes,
+        includeAliases,
+        eligible
+      );
       if (bodyError) {
         return `loop_group '${node.id}' body: ${bodyError}`;
       }
@@ -1716,15 +1730,41 @@ export function parseWorkflow(
       }
     }
 
-    for (const node of dagNodes) {
-      if (isIncludeDirective(node)) continue;
+    interface SessionNode {
+      node: DagNode;
+      provider: string | undefined;
+    }
+    const sessionConsumers: { consumer: SessionNode; sources: ReadonlyMap<string, SessionNode> }[] =
+      [];
+    const collectSessionNodes = (
+      nodes: readonly (DagNode | IncludeDirective)[],
+      inheritedProvider: string | undefined,
+      enclosing = new Map<string, SessionNode>()
+    ): void => {
+      const scope = new Map(enclosing);
+      for (const node of nodes) {
+        if (!isIncludeDirective(node))
+          scope.set(node.id, { node, provider: node.provider ?? inheritedProvider });
+      }
+      for (const node of nodes) {
+        if (isIncludeDirective(node)) continue;
+        const consumer = scope.get(node.id);
+        if (consumer === undefined) continue;
+        if (isNodeContextResume(node.context)) sessionConsumers.push({ consumer, sources: scope });
+        if (isLoopGroupNode(node))
+          collectSessionNodes(node.loop_group.nodes, consumer.provider, scope);
+      }
+    };
+    collectSessionNodes(dagNodes, provider);
+    for (const {
+      consumer: { node, provider: consumerProvider },
+      sources,
+    } of sessionConsumers) {
       if (!isNodeContextResume(node.context)) continue;
-      const sourceNodeId = node.context.resume;
-      const source = dagNodes.find(candidate => candidate.id === sourceNodeId);
-      if (source === undefined || isIncludeDirective(source)) continue; // validateDagStructure already reports this case.
-
-      const consumerProvider = node.provider ?? provider;
-      const sourceProvider = source.provider ?? provider;
+      const sourceEntry = sources.get(node.context.resume);
+      if (sourceEntry === undefined) continue;
+      const source = sourceEntry.node;
+      const sourceProvider = sourceEntry.provider;
       if (
         consumerProvider !== undefined &&
         sourceProvider !== undefined &&

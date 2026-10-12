@@ -4603,6 +4603,12 @@ export interface components {
         iteration?: number;
         sessionId?: string | null;
         sessionProvider?: string | null;
+        bodySessionCursors?: {
+          [key: string]: {
+            sessionId: string;
+            provider: string;
+          };
+        };
         captureResponse?: boolean;
         onRejectPrompt?: string;
         onRejectMaxAttempts?: number;
@@ -5050,6 +5056,12 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -5065,6 +5077,12 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */
@@ -5084,6 +5102,12 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
           /** @enum {string} */
           kind: 'attention';
           /** Format: date-time */

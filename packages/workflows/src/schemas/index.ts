@@ -209,6 +209,8 @@ export {
   workflowRunStatusSchema,
   workflowRunOutcomeSchema,
   workflowWaitContextSchema,
+  sessionCursorSchema,
+  bodySessionCursorsSchema,
   scheduledWorkflowResumeSchema,
   workflowStepStatusSchema,
   nodeStateSchema,
@@ -318,3 +320,5 @@ export {
   toolCallAttentionArraySchema,
   type ToolCallAttention,
 } from './workflow-run';
+
+export type { SessionCursor } from './workflow-run';

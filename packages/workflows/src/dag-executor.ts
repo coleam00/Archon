@@ -115,6 +115,7 @@ import type {
   WorkflowWaitContext,
   ScheduledWorkflowResume,
 } from './schemas';
+import { bodySessionCursorsSchema, type SessionCursor } from './schemas';
 import {
   isExecNode,
   isAgentNode,
@@ -835,17 +836,8 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
   };
 }
 
-/**
- * Sequential-session threading cursor. Tagged with the resolved provider that produced
- * the session so a downstream sequential node on a DIFFERENT provider starts fresh
- * instead of attempting an impossible cross-provider resume (#1992) — a foreign session
- * id hard-fails Claude ("No conversation found with session ID") and cold-falls-back
- * on Codex.
- */
-interface SequentialSessionCursor {
-  sessionId: string;
-  provider: string;
-}
+type SequentialSessionCursor = SessionCursor;
+type SessionResumeIntent = 'ordinary' | 'source-fork' | 'owner-continuation';
 
 /** Makes a provider session durable before its node becomes authoritatively complete. */
 type SessionCheckpoint = (sessionId: string) => Promise<void>;
@@ -2119,7 +2111,8 @@ async function executeNodeInternal(
   stepNamePrefix = '',
   iteration?: number,
   checkpointSession?: SessionCheckpoint,
-  typedArtifactsFile?: string
+  typedArtifactsFile?: string,
+  resumeIntent: SessionResumeIntent = 'ordinary'
 ): Promise<NodeExecutionResult> {
   const {
     deps,
@@ -2172,7 +2165,7 @@ async function executeNodeInternal(
       ...(namedResumeSourceNodeId !== undefined
         ? {
             sessionSourceNodeId: namedResumeSourceNodeId,
-            sessionForkRequested: true,
+            sessionForkRequested: resumeIntent !== 'owner-continuation',
           }
         : {}),
     },
@@ -2318,13 +2311,15 @@ async function executeNodeInternal(
 
   // Create per-node abort controller for idle timeout cleanup
   const nodeAbortController = new AbortController();
-  // Request a fork when resuming. Exact-fork callers gate on sessionFork first;
-  // legacy resume-only providers may continue the source session in place.
-  const shouldForkSession = resumeSessionId !== undefined;
+  const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
     abortSignal: nodeAbortController.signal,
-    ...(shouldForkSession ? { forkSession: true } : {}),
+    ...(resumeIntent === 'owner-continuation'
+      ? { forkSession: false }
+      : shouldForkSession
+        ? { forkSession: true }
+        : {}),
   };
   let nodeIdleTimedOut = false;
   let lastWatchdogReset: WatchdogReset | undefined;
@@ -2630,7 +2625,7 @@ async function executeNodeInternal(
       try {
         await runStreamPass(
           reaskPrompt,
-          structuredOutputPass(reaskAttempt, resumeSessionId, namedResumeSourceNodeId !== undefined)
+          structuredOutputPass(reaskAttempt, resumeSessionId, resumeIntent === 'source-fork')
         );
       } finally {
         await watchdogResets.flush();
@@ -2801,10 +2796,15 @@ async function executeNodeInternal(
       }
       if (newSessionId === undefined || newSessionId.trim() === '') {
         throw new Error(
-          `Node '${node.id}' forked the session from '${namedResumeSourceNodeId}' but the provider returned no branch session ID.`
+          `Node '${node.id}' resumed '${namedResumeSourceNodeId}' but the provider returned no branch session ID.`
         );
       }
-      if (newSessionId === resumeSessionId) {
+      if (resumeIntent === 'owner-continuation' && newSessionId !== resumeSessionId) {
+        throw new Error(
+          `Node '${node.id}' did not continue its private owner session: the provider replaced the session ID.`
+        );
+      }
+      if (resumeIntent !== 'owner-continuation' && newSessionId === resumeSessionId) {
         throw new Error(
           `Node '${node.id}' did not create an immutable fork of '${namedResumeSourceNodeId}': the provider reused the source session ID.`
         );
@@ -2893,7 +2893,9 @@ async function executeNodeInternal(
         diagnostics: {
           ...execution.diagnostics,
           ...(node.output_type !== undefined ? { outputType: node.output_type } : {}),
-          ...(namedResumeSourceNodeId !== undefined ? { sessionForked: true } : {}),
+          ...(namedResumeSourceNodeId !== undefined
+            ? { sessionForked: resumeIntent !== 'owner-continuation' }
+            : {}),
           ...(backgroundTasksIncomplete.length > 0 ? { backgroundTasksIncomplete } : {}),
         },
       }
@@ -4360,6 +4362,34 @@ async function executeLoopGroupBody(
   const isEscalatedWaitResume = loopOwnedWaitMeta?.nodeId === node.id;
   const isLoopResume =
     isLegacyInteractiveLoopResume || isEscalatedGateResume || isEscalatedWaitResume;
+  const ownerIds = new Set(bodyNodes.filter(n => isNodeContextResume(n.context)).map(n => n.id));
+  const bodySessionCursors = ownerIds.size === 0 ? undefined : new Map<string, SessionCursor>();
+  const rawLoopWait =
+    typeof rawWait === 'object' &&
+    rawWait !== null &&
+    'nodeId' in rawWait &&
+    rawWait.nodeId === node.id;
+  if (bodySessionCursors !== undefined && rawLoopWait && !isEscalatedWaitResume) {
+    throw new Error(
+      `Loop group '${node.id}' cannot restore named owner sessions: invalid loop wait state.`
+    );
+  }
+  if (bodySessionCursors !== undefined && isLoopResume) {
+    const rawCursors = isEscalatedWaitResume
+      ? loopOwnedWaitMeta?.bodySessionCursors
+      : loopGateMeta?.bodySessionCursors;
+    const parsed = bodySessionCursorsSchema.safeParse(rawCursors);
+    if (!parsed.success) {
+      throw new Error(
+        `Loop group '${node.id}' cannot restore named owner sessions: missing or invalid bodySessionCursors.`
+      );
+    }
+    for (const [id, cursor] of Object.entries(parsed.data)) {
+      if (!ownerIds.has(id))
+        throw new Error(`Loop group '${node.id}' has an unknown restored session owner '${id}'.`);
+      bodySessionCursors.set(id, cursor);
+    }
+  }
   const resumeIteration = loopGateMeta?.iteration ?? loopOwnedWaitMeta?.iteration ?? 0;
   const startIteration = isLoopResume ? resumeIteration + 1 : 1;
   // max_iterations bounds autonomous work. An attention wait contributes no work while
@@ -4416,6 +4446,9 @@ async function executeLoopGroupBody(
         iteration: resumeIteration,
         sessionId: loopOwnedWaitMeta?.sessionId ?? null,
         sessionProvider: loopOwnedWaitMeta?.sessionProvider ?? null,
+        ...(bodySessionCursors !== undefined
+          ? { bodySessionCursors: Object.fromEntries(bodySessionCursors) }
+          : {}),
       }
     );
     const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
@@ -4775,6 +4808,9 @@ async function executeLoopGroupBody(
       // session forward so a body AI node resumes the prior iteration's conversation.
       // Gate on the literal i === 1 (not startIteration): on interactive resume the
       // first processed iteration must continue the restored pre-pause session.
+      nodeSessionHandles: new Map(ctx.nodeSessionHandles),
+      namedResumeSourceIds: ctx.namedResumeSourceIds,
+      bodySessionCursors,
       lastSequentialSession: group.fresh_context || i === 1 ? undefined : loopLastSequentialSession,
       warnedProviderConflicts: ctx.warnedProviderConflicts,
       totalCostUsd: undefined,
@@ -5137,6 +5173,9 @@ async function executeLoopGroupBody(
         // a different provider (#1992). null = this pause has no cursor to restore.
         sessionId: loopLastSequentialSession?.sessionId ?? null,
         sessionProvider: loopLastSequentialSession?.provider ?? null,
+        ...(bodySessionCursors !== undefined
+          ? { bodySessionCursors: Object.fromEntries(bodySessionCursors) }
+          : {}),
         // Signal state for finalize-on-bare-approve (#2074). The structured payload
         // rides along (#2637) so the finalize attaches it like a natural completion.
         completionSignaled: completionDetected,
@@ -6897,6 +6936,7 @@ interface WaitLoopOwner {
   iteration: number;
   sessionId: string | null;
   sessionProvider: string | null;
+  bodySessionCursors?: Record<string, SessionCursor>;
 }
 
 async function executeWaitNode(
@@ -6936,6 +6976,9 @@ async function executeWaitNode(
           iteration: loopOwner.iteration,
           sessionId: loopOwner.sessionId,
           sessionProvider: loopOwner.sessionProvider,
+          ...(loopOwner.bodySessionCursors !== undefined
+            ? { bodySessionCursors: loopOwner.bodySessionCursors }
+            : {}),
         } as const);
   const condition = waitCondition(node.wait);
   let context: WorkflowWaitContext;
@@ -7324,6 +7367,9 @@ async function executeApprovalNode(
           iteration: bodyGateOwner.iteration,
           sessionId: ctx.lastSequentialSession?.sessionId ?? null,
           sessionProvider: ctx.lastSequentialSession?.provider ?? null,
+          ...(ctx.bodySessionCursors !== undefined
+            ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
+            : {}),
         }
       : {}),
     type: 'approval',
@@ -9369,14 +9415,9 @@ interface RunLayersContext extends RunInputs, RunDerived {
   claimedWorkPausePolicy?: ClaimedWorkPausePolicy;
   /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
-  /**
-   * Private provider session handles produced by completed top-level nodes. Undefined
-   * inside loop_group bodies because repeated local IDs have no addressable lineage
-   * contract yet.
-   */
   nodeSessionHandles?: Map<string, SequentialSessionCursor>;
-  /** Top-level node IDs whose sessions are named by at least one downstream consumer. */
   namedResumeSourceIds?: ReadonlySet<string>;
+  bodySessionCursors?: Map<string, SessionCursor>;
   /** Sequential-session threading cursor (mutated by runLayers). Provider-tagged so the
    *  session is only threaded into nodes that resolve to the SAME provider (#1992). */
   lastSequentialSession: SequentialSessionCursor | undefined;
@@ -9621,7 +9662,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               return async (sessionId: string): Promise<void> => {
                 await ctx.deps.store.upsertWorkflowRunNodeSession({
                   workflow_run_id: ctx.workflowRun.id,
-                  node_id: node.id,
+                  node_id: ctx.stepNamePrefix + node.id,
                   provider,
                   provider_session_id: sessionId,
                 });
@@ -10128,6 +10169,9 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                         iteration: loopFrame.iteration,
                         sessionId: ctx.lastSequentialSession?.sessionId ?? null,
                         sessionProvider: ctx.lastSequentialSession?.provider ?? null,
+                        ...(ctx.bodySessionCursors !== undefined
+                          ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
+                          : {}),
                       }
                 );
                 return { nodeId: node.id, output };
@@ -10229,9 +10273,14 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               : undefined;
             const hasNamedSessionResume = namedResumeSourceNodeId !== undefined;
             let resumeSessionId: string | undefined;
+            let resumeIntent: SessionResumeIntent = hasNamedSessionResume
+              ? 'source-fork'
+              : 'ordinary';
             if (hasNamedSessionResume) {
               const sourceNodeId = namedResumeSourceNodeId;
-              const sourceHandle = ctx.nodeSessionHandles?.get(sourceNodeId);
+              const ownerCursor = ctx.bodySessionCursors?.get(node.id);
+              if (ownerCursor !== undefined) resumeIntent = 'owner-continuation';
+              const sourceHandle = ownerCursor ?? ctx.nodeSessionHandles?.get(sourceNodeId);
               if (sourceHandle === undefined) {
                 throw new Error(
                   `Node '${node.id}' cannot resume '${sourceNodeId}': the completed source has no available provider session.`
@@ -10248,7 +10297,10 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 );
               }
               const caps = ctx.deps.getAgentProvider(provider).getCapabilities();
-              if (!caps.sessionResume || caps.sessionFork !== true) {
+              if (
+                !caps.sessionResume ||
+                (resumeIntent === 'source-fork' && caps.sessionFork !== true)
+              ) {
                 throw new Error(
                   `Node '${node.id}' cannot resume '${sourceNodeId}': resolved provider '${provider}' does not support immutable session forks.`
                 );
@@ -10407,9 +10459,6 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   node,
                   provider,
                   nodeOptions,
-                  // Always pass the prior session ID. executeNodeInternal requests a fork,
-                  // but legacy resume-only providers may continue in place; named resume
-                  // separately capability-gates and verifies an exact fork.
                   resumeSessionId,
                   resolvedNodeModel,
                   resolvedTier,
@@ -10417,7 +10466,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.stepNamePrefix,
                   iteration,
                   checkpointSessionForProvider(provider),
-                  attemptTypedArtifactsFile
+                  attemptTypedArtifactsFile,
+                  resumeIntent
                 );
               },
               { state: 'failed', output: '', error: 'Node did not execute' },
@@ -10609,6 +10659,19 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
           sessionProvider !== undefined
         ) {
           ctx.nodeSessionHandles.set(nodeId, {
+            sessionId: output.sessionId,
+            provider: sessionProvider,
+          });
+        }
+        const ownerNode = nodeById.get(nodeId);
+        if (
+          ownerNode &&
+          isNodeContextResume(ownerNode.context) &&
+          output.state === 'completed' &&
+          output.sessionId !== undefined &&
+          sessionProvider !== undefined
+        ) {
+          ctx.bodySessionCursors?.set(nodeId, {
             sessionId: output.sessionId,
             provider: sessionProvider,
           });
@@ -11555,9 +11618,13 @@ export async function executeDagWorkflow(
     persistScope = { key: runPersistScopeKey, sessionsAtStart };
   }
   const namedResumeSourceIds = new Set<string>();
-  for (const node of workflow.nodes) {
-    if (isNodeContextResume(node.context)) namedResumeSourceIds.add(node.context.resume);
-  }
+  const collectNamedSources = (nodes: readonly DagNode[]): void => {
+    for (const node of nodes) {
+      if (isNodeContextResume(node.context)) namedResumeSourceIds.add(node.context.resume);
+      if (isLoopGroupNode(node)) collectNamedSources(resolvedBodyNodes(node.loop_group));
+    }
+  };
+  collectNamedSources(workflow.nodes);
   const nodeSessionHandles = new Map<string, SequentialSessionCursor>();
   for (const row of priorNodeSessions ?? []) {
     // The completed-output snapshot is the authority for which nodes actually

@@ -6867,7 +6867,7 @@ nodes:
 `);
 
       expect(result.error?.error).toContain("loop_group 'group' body: Node 'shared'");
-      expect(result.error?.error).toContain('context.resume is not supported');
+      expect(result.error?.error).toContain('pre-loop-node-id');
       expect(result.error?.error).toContain('depends_on');
     });
   });
@@ -6975,7 +6975,92 @@ nodes:
       expect(sibling.error?.error).toContain('not an upstream dependency');
     });
 
-    it('rejects named resume inside a loop_group body', () => {
+    it('accepts a named pre-loop owner and rejects unordered and non-session sources', () => {
+      const workflow = (source: string, dependencies = '[source]') => `
+name: owners
+description: owners
+nodes:
+  - id: source
+    ${source}
+  - id: corrections
+    depends_on: ${dependencies}
+    loop_group:
+      until_bash: 'test $review.output.done = true'
+      max_iterations: 3
+      nodes:
+        - id: owner
+          prompt: correct
+          context: { resume: source }
+        - id: review
+          prompt: review
+          context: fresh
+          depends_on: [owner]
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+            required: [done]
+`;
+      expect(parseAddressable(workflow('prompt: implement')).error).toBeNull();
+      expect(parseAddressable(workflow('command: implement')).error).toBeNull();
+      expect(parseAddressable(workflow('prompt: implement', '[]')).error?.error).toContain(
+        'upstream dependency'
+      );
+      expect(parseAddressable(workflow('bash: echo ready')).error?.error).toContain(
+        'not a session-producing'
+      );
+      expect(
+        parseAddressable(
+          workflow('prompt: implement\n    provider: claude').replace(
+            'prompt: correct',
+            'prompt: correct\n          provider: codex'
+          )
+        ).error?.error
+      ).toContain("consumer uses 'codex'");
+    });
+
+    it('proves nested ancestry at each enclosing group entry with provider defaults', () => {
+      const yaml = `
+name: nested-owner
+description: nested owner
+provider: claude
+nodes:
+  - id: source
+    loop: { prompt: implement, until: DONE, max_iterations: 1 }
+  - id: outer
+    depends_on: [source]
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      nodes:
+        - id: local
+          prompt: local
+        - id: inner
+          depends_on: [local]
+          loop_group:
+            until_bash: exit 0
+            max_iterations: 2
+            nodes:
+              - id: owner
+                prompt: owner
+                context: { resume: local }
+              - id: ancestor-owner
+                prompt: owner
+                context: { resume: source }
+`;
+      expect(parseAddressable(yaml).error).toBeNull();
+      expect(
+        parseAddressable(yaml.replace('depends_on: [local]', 'depends_on: []')).error?.error
+      ).toContain('upstream dependency');
+      expect(
+        parseAddressable(yaml.replace('depends_on: [source]', 'depends_on: []')).error?.error
+      ).toContain('upstream dependency');
+      expect(
+        parseAddressable(yaml.replace('id: outer', 'id: outer\n    provider: codex')).error?.error
+      ).toContain("consumer uses 'codex'");
+    });
+
+    it('rejects named resume from the same loop_group body', () => {
       const result = parseAddressable(`
 name: nested
 description: nested
@@ -6992,7 +7077,7 @@ nodes:
           depends_on: [source]
           context: { resume: source }
 `);
-      expect(result.error?.error).toContain('inside a loop_group body');
+      expect(result.error?.error).toContain('inside the same loop_group body');
     });
 
     it('rejects statically mismatched and fork-incapable providers', () => {
