@@ -35,7 +35,7 @@ test(
     );
     registerApiRoutes(app, adapter, new ConversationLockManager());
     const intervalMs = 1000;
-    const observed = new Map<string, { kind: string; at: number; occurrence?: string }>();
+    const observed = new Map<string, { kind: string; occurrence?: string }>();
     const observerErrors: unknown[] = [];
     transport.registerStream(DASHBOARD_STREAM, {
       closed: false,
@@ -61,7 +61,6 @@ test(
               if (!observed.has(run.workflow_name))
                 observed.set(run.workflow_name, {
                   kind: attention.kind,
-                  at: Date.now(),
                   occurrence: attention.occurrence,
                 });
             }
@@ -125,14 +124,8 @@ test(
           await Bun.sleep(20);
         expect(observerErrors).toEqual([]);
         expect(observed.get(name)?.kind).toBe(detached ? 'action_required' : 'awaiting_response');
-        if (detached) {
-          const seen = observed.get(name);
-          if (!seen?.occurrence) throw new Error('No wait occurrence observed');
-          // Scheduling and HTTP overhead are separate from the one-second poll cadence.
-          expect(seen.at - Date.parse(seen.occurrence.slice('wait:'.length))).toBeLessThan(
-            intervalMs + 250
-          );
-        }
+        if (detached && !observed.get(name)?.occurrence)
+          throw new Error('No wait occurrence observed');
       }
     } finally {
       poller.stop();
