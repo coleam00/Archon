@@ -247,6 +247,8 @@ export {
 export {
   updateUserGithubProfile,
   linkGithubIdentity,
+  linkPlatformIdentity,
+  PlatformIdentityConflictError,
   GithubIdentityConflictError,
 } from './db/users';
 

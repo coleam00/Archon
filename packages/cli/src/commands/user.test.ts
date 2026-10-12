@@ -69,3 +69,33 @@ test('unknown ids, invalid roles and missing arguments fail clearly', async () =
   expect(missing.code).toBe(1);
   expect(missing.stderr).toContain('Usage: archon user role');
 });
+
+test('link creates and moves identities without changing roles or deleting the previous user', async () => {
+  await db.query("UPDATE remote_agent_users SET role = 'member' WHERE id = 'unlinked'", []);
+  const linked = await run('link', 'unlinked', 'matrix-chat:user:123');
+  expect(linked.code).toBe(0);
+  expect(linked.stdout).toContain('unlinked\tmatrix-chat:user:123');
+  expect((await run('link', 'unlinked', 'matrix-chat:user:123')).code).toBe(0);
+  const conflict = await run('link', 'unlinked', 'slack:U123');
+  expect(conflict.code).toBe(1);
+  expect(conflict.stderr).toContain('operator-user');
+  expect(conflict.stderr).toContain('unlinked');
+  expect((await run('list')).stdout).toContain('slack:U123');
+  expect((await run('link', 'unlinked', 'slack:U123', '--move')).code).toBe(0);
+  const users = (await run('list')).stdout;
+  expect(users).toContain('unlinked\tmember\t-\tmatrix-chat:user:123, slack:U123');
+  expect(users).toContain('operator-user\tadmin\tAlice\tweb:web-login');
+});
+
+test('link rejects unknown users, malformed identities and missing arguments', async () => {
+  const unknown = await run('link', 'missing', 'slack:U999', '--move');
+  expect(unknown.code).toBe(1);
+  expect(unknown.stderr).toContain('Unknown user id: missing');
+  for (const identity of ['slack', ':U123', 'slack:', 'Invalid_platform:U123', 'slack:   ']) {
+    const result = await run('link', 'unlinked', identity);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('Expected <platform>:<platform-user-id>');
+  }
+  expect((await run('link', 'unlinked')).stderr).toContain('Usage: archon user link');
+  expect((await run('link', '--help')).stdout).toContain('[--move]');
+});

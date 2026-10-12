@@ -1190,7 +1190,7 @@ async function main(): Promise<number> {
       }
 
       case 'user': {
-        const { userListCommand, userRoleCommand } = await loadRoute(
+        const { userListCommand, userRoleCommand, userLinkCommand } = await loadRoute(
           () => import('./commands/user'),
           { database: true }
         );
@@ -1209,8 +1209,17 @@ async function main(): Promise<number> {
             }
             await userRoleCommand(positionals[2] ?? '', positionals[3] ?? '');
             break;
+          case 'link':
+            if (positionals.length !== 4) {
+              return await fail(
+                jsonFlag,
+                'Usage: archon user link <user-id> <platform>:<platform-user-id> [--move]'
+              );
+            }
+            await userLinkCommand(positionals[2] ?? '', positionals[3] ?? '', Boolean(values.move));
+            break;
           default:
-            return await fail(jsonFlag, 'Usage: archon user <list|role>');
+            return await fail(jsonFlag, 'Usage: archon user <list|role|link>');
         }
         break;
       }

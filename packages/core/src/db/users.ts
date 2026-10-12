@@ -247,45 +247,56 @@ export async function updateUserGithubProfile(
   );
 }
 
-/**
- * Attach a GitHub identity to an EXISTING Archon user (the connecting actor).
- * Unlike findOrCreateUserByPlatformIdentity, this never mints a new user — the
- * device-flow connect surfaces already have the actor's user_id and only need
- * to bind their GitHub login to it. Throws GithubIdentityConflictError if the
- * login already maps to a different user.
- */
-export async function linkGithubIdentity(userId: string, login: string): Promise<void> {
-  const platform: IdentityPlatform = 'github';
-  const existing = await selectIdentity(platform, login);
-  if (existing) {
-    if (existing.user_id !== userId) {
-      throw new GithubIdentityConflictError(login);
-    }
-    await pool.query(
-      'UPDATE remote_agent_user_identities SET platform_display_name = $1 WHERE id = $2',
-      [login, existing.id]
+export class PlatformIdentityConflictError extends Error {
+  constructor(
+    public readonly platform: IdentityPlatform,
+    public readonly platformUserId: string,
+    public readonly existingUserId: string,
+    public readonly requestedUserId: string
+  ) {
+    super(
+      `Identity ${platform}:${platformUserId} is already linked to user ${existingUserId}; cannot link to user ${requestedUserId} without --move.`
     );
-    getLog().info({ userId, login }, 'user.github_identity_relinked');
-    return;
+    this.name = 'PlatformIdentityConflictError';
   }
+}
+
+export async function linkPlatformIdentity(
+  userId: string,
+  platform: IdentityPlatform,
+  platformUserId: string,
+  displayName?: string,
+  options: { move?: boolean } = {}
+): Promise<void> {
+  identityPlatformSchema.parse(platform);
+  if (!platformUserId.trim()) throw new Error('Platform user id must not be empty.');
+  if (!(await getUserById(userId))) throw new Error(`Unknown user id: ${userId}`);
+
+  // Enforce ownership in the write itself so concurrent links cannot silently move an identity.
+  const result = await pool.query<UserIdentity>(
+    `INSERT INTO remote_agent_user_identities (user_id, platform, platform_user_id, platform_display_name)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (platform, platform_user_id) DO UPDATE
+     SET user_id = excluded.user_id,
+         platform_display_name = COALESCE(excluded.platform_display_name, remote_agent_user_identities.platform_display_name)
+     WHERE remote_agent_user_identities.user_id = excluded.user_id OR $5
+     RETURNING *`,
+    [userId, platform, platformUserId, displayName ?? null, options.move ?? false]
+  );
+  if (!result.rows[0]) {
+    const existing = await selectIdentity(platform, platformUserId);
+    if (!existing) throw new Error('Identity disappeared while linking; retry the command.');
+    throw new PlatformIdentityConflictError(platform, platformUserId, existing.user_id, userId);
+  }
+  getLog().info({ userId, platform, moved: options.move ?? false }, 'user.identity_linked');
+}
+
+export async function linkGithubIdentity(userId: string, login: string): Promise<void> {
   try {
-    await pool.query(
-      `INSERT INTO remote_agent_user_identities (user_id, platform, platform_user_id, platform_display_name)
-       VALUES ($1, $2, $3, $4)`,
-      [userId, platform, login, login]
-    );
-    getLog().info({ userId, login }, 'user.github_identity_linked');
+    await linkPlatformIdentity(userId, 'github', login, login);
   } catch (err) {
-    // Concurrent connect of the same ('github', login) raced us past the SELECT
-    // and inserted first. UNIQUE(platform, platform_user_id) rejects the loser —
-    // re-read and honor the winner: conflict if it's a different user, otherwise
-    // a no-op (e.g. a double-clicked "Connect GitHub").
-    if (!isUniqueViolation(err)) throw err;
-    const winner = await selectIdentity(platform, login);
-    if (winner && winner.user_id !== userId) {
-      throw new GithubIdentityConflictError(login);
-    }
-    getLog().info({ userId, login }, 'user.github_identity_link_race_recovered');
+    if (err instanceof PlatformIdentityConflictError) throw new GithubIdentityConflictError(login);
+    throw err;
   }
 }
 

@@ -1,5 +1,5 @@
-import { listUsersWithIdentities, setUserRole } from '@archon/core/db/users';
-import { userRoleSchema } from '@archon/core/schemas/user';
+import { linkPlatformIdentity, listUsersWithIdentities, setUserRole } from '@archon/core/db/users';
+import { identityPlatformSchema, userRoleSchema } from '@archon/core/schemas/user';
 
 export async function userListCommand(): Promise<void> {
   const users = await listUsersWithIdentities();
@@ -23,4 +23,21 @@ export async function userRoleCommand(userId: string, role: string): Promise<voi
   }
   await setUserRole(userId, parsed.data);
   console.log(`${userId}\t${parsed.data}`);
+}
+
+export async function userLinkCommand(
+  userId: string,
+  identity: string,
+  move: boolean
+): Promise<void> {
+  const separator = identity.indexOf(':');
+  const platform = identityPlatformSchema.safeParse(identity.slice(0, separator));
+  const platformUserId = identity.slice(separator + 1);
+  if (separator < 1 || !platform.success || !platformUserId.trim()) {
+    throw new Error(
+      'Expected <platform>:<platform-user-id> with a valid platform and non-empty id.'
+    );
+  }
+  await linkPlatformIdentity(userId, platform.data, platformUserId, undefined, { move });
+  console.log(`${userId}\t${identity}`);
 }

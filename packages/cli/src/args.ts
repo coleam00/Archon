@@ -44,6 +44,7 @@ export const cliArgOptions: CliArgOptions = {
   yes: { type: 'boolean' },
   force: { type: 'boolean' },
   merged: { type: 'boolean' },
+  move: { type: 'boolean' },
   'include-closed': { type: 'boolean' },
   'conversation-id': { type: 'string' },
   detach: { type: 'boolean' },
