@@ -71,7 +71,7 @@ test('link, relink and move preserve users and their roles', async () => {
   );
   expect(unchanged.rows[0]?.platform_display_name).toBe('New name');
   await expect(linkPlatformIdentity(owner.id, 'matrix-chat', 'chat:123')).rejects.toThrow(
-    `user ${previous.id}; cannot link to user ${owner.id} without --move`
+    `user ${previous.id}; linking it to user ${owner.id} requires moving it`
   );
   expect((await findOrCreateUserByPlatformIdentity('matrix-chat', 'chat:123')).id).toBe(
     previous.id

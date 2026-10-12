@@ -255,7 +255,7 @@ export class PlatformIdentityConflictError extends Error {
     public readonly requestedUserId: string
   ) {
     super(
-      `Identity ${platform}:${platformUserId} is already linked to user ${existingUserId}; cannot link to user ${requestedUserId} without --move.`
+      `Identity ${platform}:${platformUserId} is already linked to user ${existingUserId}; linking it to user ${requestedUserId} requires moving it.`
     );
     this.name = 'PlatformIdentityConflictError';
   }
@@ -271,6 +271,8 @@ export async function linkPlatformIdentity(
   identityPlatformSchema.parse(platform);
   if (!platformUserId.trim()) throw new Error('Platform user id must not be empty.');
   if (!(await getUserById(userId))) throw new Error(`Unknown user id: ${userId}`);
+  // Read only to log who lost the identity; the write below decides ownership.
+  const prior = await selectIdentity(platform, platformUserId);
 
   // Enforce ownership in the write itself so concurrent links cannot silently move an identity.
   const result = await pool.query<UserIdentity>(
@@ -288,7 +290,11 @@ export async function linkPlatformIdentity(
     if (!existing) throw new Error('Identity disappeared while linking; retry the command.');
     throw new PlatformIdentityConflictError(platform, platformUserId, existing.user_id, userId);
   }
-  getLog().info({ userId, platform, moved: move }, 'user.identity_linked');
+  const previousUserId = prior && prior.user_id !== userId ? prior.user_id : undefined;
+  getLog().info(
+    { userId, platform, ...(previousUserId ? { previousUserId } : {}) },
+    'user.identity_linked'
+  );
 }
 
 export async function linkGithubIdentity(userId: string, login: string): Promise<void> {

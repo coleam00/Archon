@@ -80,6 +80,7 @@ test('link creates and moves identities without changing roles or deleting the p
   expect(conflict.code).toBe(1);
   expect(conflict.stderr).toContain('operator-user');
   expect(conflict.stderr).toContain('unlinked');
+  expect(conflict.stderr).toContain('Pass --move');
   expect((await run('list')).stdout).toContain('slack:U123');
   expect((await run('link', 'unlinked', 'slack:U123', '--move')).code).toBe(0);
   const users = (await run('list')).stdout;
@@ -98,4 +99,15 @@ test('link rejects unknown users, malformed identities and missing arguments', a
   }
   expect((await run('link', 'unlinked')).stderr).toContain('Usage: archon user link');
   expect((await run('link', '--help')).stdout).toContain('[--move]');
+});
+
+test('link trims whitespace around the platform user id', async () => {
+  const linked = await run('link', 'unlinked', 'telegram: 42 ');
+  expect(linked.code).toBe(0);
+  expect(linked.stdout).toContain('unlinked\ttelegram:42\n');
+  const identity = await db.query<{ platform_user_id: string }>(
+    "SELECT platform_user_id FROM remote_agent_user_identities WHERE platform = 'telegram'",
+    []
+  );
+  expect(identity.rows.map(row => row.platform_user_id)).toEqual(['42']);
 });

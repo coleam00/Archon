@@ -46,7 +46,7 @@ test.skipIf(!baseUrl)(
       expect(identity.rows[0]?.platform_display_name).toBe('New name');
 
       await expect(linkPlatformIdentity(owner.id, 'matrix-chat', 'chat:123')).rejects.toThrow(
-        `user ${previous.id}; cannot link to user ${owner.id} without --move`
+        `user ${previous.id}; linking it to user ${owner.id} requires moving it`
       );
       expect(await findOrCreateUserByPlatformIdentity('matrix-chat', 'chat:123')).toEqual(previous);
       await linkPlatformIdentity(owner.id, 'matrix-chat', 'chat:123', undefined, true);

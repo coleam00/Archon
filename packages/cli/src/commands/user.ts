@@ -1,4 +1,9 @@
-import { linkPlatformIdentity, listUsersWithIdentities, setUserRole } from '@archon/core/db/users';
+import {
+  linkPlatformIdentity,
+  listUsersWithIdentities,
+  PlatformIdentityConflictError,
+  setUserRole,
+} from '@archon/core/db/users';
 import { identityPlatformSchema, userRoleSchema } from '@archon/core/schemas/user';
 
 export async function userListCommand(): Promise<void> {
@@ -32,12 +37,20 @@ export async function userLinkCommand(
 ): Promise<void> {
   const separator = identity.indexOf(':');
   const platform = identityPlatformSchema.safeParse(identity.slice(0, separator));
-  const platformUserId = identity.slice(separator + 1);
-  if (separator < 1 || !platform.success || !platformUserId.trim()) {
+  // Stored ids are matched exactly, so stray whitespace would create an identity no adapter sends.
+  const platformUserId = identity.slice(separator + 1).trim();
+  if (separator < 1 || !platform.success || !platformUserId) {
     throw new Error(
       'Expected <platform>:<platform-user-id> with a valid platform and non-empty id.'
     );
   }
-  await linkPlatformIdentity(userId, platform.data, platformUserId, undefined, move);
-  console.log(`${userId}\t${identity}`);
+  try {
+    await linkPlatformIdentity(userId, platform.data, platformUserId, undefined, move);
+  } catch (error) {
+    if (error instanceof PlatformIdentityConflictError) {
+      throw new Error(`${error.message} Pass --move to move it.`, { cause: error });
+    }
+    throw error;
+  }
+  console.log(`${userId}\t${platform.data}:${platformUserId}`);
 }

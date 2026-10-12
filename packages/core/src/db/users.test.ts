@@ -13,6 +13,11 @@ const mockWithTransaction = mock(
   async (fn: (q: typeof mockQuery) => Promise<unknown>) => await fn(mockQuery)
 );
 
+const mockInfo = mock((_fields: Record<string, unknown>, _event: string) => {});
+mock.module('@archon/paths', () => ({
+  createLogger: () => ({ info: mockInfo, warn: mock(), error: mock(), debug: mock() }),
+}));
+
 mock.module('./connection', () => ({
   pool: { query: mockQuery },
   getDialect: () => mockPostgresDialect,
@@ -53,6 +58,7 @@ describe('users', () => {
   beforeEach(() => {
     mockQuery.mockClear();
     mockWithTransaction.mockClear();
+    mockInfo.mockClear();
   });
 
   test('invalid platform fails before database access', async () => {
@@ -328,6 +334,7 @@ describe('users', () => {
 
     test('a rejected ownership write reports both users', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'other' })]));
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'other' })]));
       await expect(linkPlatformIdentity('user-1', 'slack', 'U123')).rejects.toEqual(
@@ -337,20 +344,37 @@ describe('users', () => {
 
     test('database failures propagate without recovery', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockRejectedValueOnce(new Error('connection reset'));
       await expect(linkPlatformIdentity('user-1', 'matrix', 'id')).rejects.toThrow(
         'connection reset'
       );
-      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(mockQuery).toHaveBeenCalledTimes(3);
     });
 
     test('a disappeared conflict is a failure rather than success', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'other' })]));
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
       await expect(linkPlatformIdentity('user-1', 'matrix', 'id')).rejects.toThrow(
         'Identity disappeared while linking'
       );
+    });
+
+    test('the log names the previous owner only when ownership moved', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'other' })]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      await linkPlatformIdentity('user-1', 'slack', 'U123', undefined, true);
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      await linkPlatformIdentity('user-1', 'slack', 'U123', undefined, true);
+      expect(mockInfo.mock.calls).toEqual([
+        [{ userId: 'user-1', platform: 'slack', previousUserId: 'other' }, 'user.identity_linked'],
+        [{ userId: 'user-1', platform: 'slack' }, 'user.identity_linked'],
+      ]);
     });
   });
 
