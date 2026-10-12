@@ -8,7 +8,8 @@
  *   Named inputs:     "$INPUTS.mode == 'fast'"  (#2470 inputs, supplied by a caller's
  *                     `with:` — see `resolveInputRef`)
  *   Numeric ops:      "$nodeId.output > '80'"  / ">=" / "<" / "<="
- *                     (both sides must parse as finite numbers; fail-closed otherwise)
+ *                     (the parser rejects a non-numeric RHS; a non-numeric output
+ *                     fails closed at run time)
  *   Unquoted RHS:     "$nodeId.exit_code == 0"  / "$nodeId.passed == true"
  *                     (numbers and booleans may be written without surrounding quotes)
  *   Compound AND/OR:  "$a.output == 'X' && $b.output != 'Y'"
@@ -244,10 +245,11 @@ function evaluateAtom(
   if (operator === '==' || operator === '!=') {
     result = operator === '==' ? actual === expected : actual !== expected;
   } else {
-    // Numeric comparison
+    // Numeric comparison. `parseWhenExpression` only admits a finite-number RHS here,
+    // so only the runtime output can fail to parse.
     const actualNum = parseFloat(actual);
     const expectedNum = parseFloat(expected);
-    if (!Number.isFinite(actualNum) || !Number.isFinite(expectedNum)) {
+    if (!Number.isFinite(actualNum)) {
       getLog().debug({ expr, actual, expected }, 'condition_numeric_parse_failed');
       return { result: false, parsed: false };
     }

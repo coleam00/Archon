@@ -63,6 +63,7 @@ import {
   findUnsupportedNestedWhenRef,
   assertSupportedWhenOutputRefs,
   parseWhenExpression,
+  splitOutsideQuotes,
   WHEN_INPUTS_SCOPE,
 } from './when-atom';
 import {
@@ -826,6 +827,17 @@ const GATE_ON_A_SHELL_NODE =
   "compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead";
 
 /**
+ * The load error for a `when:` that `parseWhenExpression` rejects. The grouping hint is
+ * added only when a parenthesis sits outside a quoted literal, so a typo like
+ * `$a.output = 'x'` is not blamed on grouping.
+ */
+function unsupportedConditionSyntax(nodeId: string, field: string, text: string): string {
+  const hasGrouping = ['(', ')'].some(paren => splitOutsideQuotes(text, paren).length > 1);
+  const hint = hasGrouping ? 'Grouping parentheses are not supported; use' : 'Use';
+  return `Node '${nodeId}' field '${field}' has unsupported condition syntax: "${text}". ${hint} comparisons joined by '&&'/'||' (AND binds tighter), or compute a decision in a script node`;
+}
+
+/**
  * Validate DAG structure: unique IDs, depends_on references exist, no cycles,
  * every runtime-substituted node-output reference points to a known node in its
  * current or enclosing loop scope, and no `when:` compares a free-form AI output to
@@ -1018,7 +1030,7 @@ export function validateDagStructure(
       if (source.surface === 'condition') {
         const expression = parseWhenExpression(source.text, enclosingNodes !== undefined);
         if (expression === null) {
-          return `Node '${node.id}' field '${source.field}' has unsupported condition syntax: "${source.text}". Grouping parentheses are not supported; use comparisons joined by '&&'/'||' (AND binds tighter), or compute a decision in a script node`;
+          return unsupportedConditionSyntax(node.id, source.field, source.text);
         }
         for (const atom of expression.flat()) {
           if (atom.ref.kind === 'input') continue;
@@ -1120,7 +1132,7 @@ export function validateDagStructure(
     if (node.when !== undefined) {
       const expression = parseWhenExpression(node.when, enclosingNodes !== undefined);
       if (expression === null) {
-        return `Node '${node.id}' field 'when' has unsupported condition syntax: "${node.when}". Grouping parentheses are not supported; use comparisons joined by '&&'/'||' (AND binds tighter), or compute a decision in a script node`;
+        return unsupportedConditionSyntax(node.id, 'when', node.when);
       }
       let m: RegExpExecArray | null;
       whenRefPattern.lastIndex = 0;

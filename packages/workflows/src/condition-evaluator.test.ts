@@ -363,7 +363,7 @@ describe('evaluateCondition', () => {
     expect(res.parsed).toBe(false);
   });
 
-  it('numeric operator: fail-closed when expected is not numeric', () => {
+  it('numeric operator: a non-numeric literal is a parse failure, not a comparison', () => {
     const res = evaluateCondition("$n.output > 'abc'", new Map([['n', makeOutput('10')]]));
     expect(res.result).toBe(false);
     expect(res.parsed).toBe(false);
@@ -867,6 +867,18 @@ describe('parseWhenAtom', () => {
     expect(parseWhenAtom("$classify.output = 'BUG'")).toBeNull();
     expect(parseWhenAtom('not an atom')).toBeNull();
     expect(parseWhenAtom('$classify.output ==')).toBeNull();
+  });
+
+  it('rejects a numeric operator whose literal is not a finite number', () => {
+    for (const op of ['<=', '>=', '<', '>'] as const) {
+      expect(parseWhenAtom(`$score.output ${op} 'high'`)).toBeNull();
+      expect(parseWhenAtom(`$score.output ${op} ''`)).toBeNull();
+      expect(parseWhenAtom(`$score.output ${op} true`)).toBeNull();
+      expect(parseWhenAtom(`$INPUTS.limit ${op} 'many'`)).toBeNull();
+    }
+    // Equality has no numeric reading, so any literal stays valid.
+    expect(parseWhenAtom("$score.output == 'high'")).not.toBeNull();
+    expect(parseWhenAtom("$score.output != ''")).not.toBeNull();
   });
 });
 

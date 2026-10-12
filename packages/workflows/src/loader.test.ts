@@ -9755,11 +9755,56 @@ nodes:
   });
 
   it.each([
+    "$a.output > 'high'",
+    "$a.output > ''",
+    '$a.output <= true',
+    "$a.output == 'x' || $b.output >= 'many'",
+  ])('rejects a numeric comparison against a non-numeric literal: %s', when => {
+    // A numeric output on every side still fails closed, so the node could never run.
+    const outputs = new Map(
+      ['a', 'b', 'c'].map(id => [id, { state: 'completed' as const, output: '90' }])
+    );
+    expect(evaluateCondition(when, outputs)).toEqual({ result: false, parsed: false });
+    const result = parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml');
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain("Node 'guarded' field 'when'");
+  });
+
+  it('names grouping only when the expression has a parenthesis outside quotes', () => {
+    const typo = parseWorkflow(workflowWithWhen("$a.output = '(x)'"), 'when-syntax.yaml');
+    expect(typo.error?.error).toContain('unsupported condition syntax');
+    expect(typo.error?.error).not.toContain('parentheses');
+    const grouped = parseWorkflow(workflowWithWhen("($a.output == 'x')"), 'when-syntax.yaml');
+    expect(grouped.error?.error).toContain('Grouping parentheses are not supported');
+  });
+
+  it('rejects unsupported syntax on an include node', () => {
+    const result = parseWorkflow(
+      `name: include-when
+description: Condition on an include directive
+nodes:
+  - id: a
+    bash: echo x
+  - id: blk
+    include: block
+    depends_on: [a]
+    when: "$a.output > 'high'"
+`,
+      'include-when.yaml'
+    );
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain(
+      "Node 'blk' field 'when' has unsupported condition syntax"
+    );
+  });
+
+  it.each([
     "$a.output == 'x' && $b.output == 'y' || $a.output == 'x' && $c.output == 'z'",
     "$a.output == '(x)'",
     "$a.output == 'x && y || z'",
     "$a.output != ''",
     '$a.output >= 0.9',
+    "$a.output < '-3'",
     '$a.output == true',
   ])('loads supported syntax: %s', when => {
     expect(parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml').error).toBeNull();

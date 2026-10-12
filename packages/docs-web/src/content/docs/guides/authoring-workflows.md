@@ -491,7 +491,7 @@ when: "$nodeId.output != 'VALUE'"
 when: "$nodeId.output.field == 'VALUE'"    # JSON dot notation for output_format nodes
 ```
 
-**Numeric operators** (both sides must parse as numbers; fail-closed if not):
+**Numeric operators** (the right-hand side must be a number; a non-numeric output at run time skips the node):
 ```yaml
 when: "$nodeId.output > '80'"
 when: "$nodeId.output >= '0.9'"
@@ -539,7 +539,7 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
   becomes an empty string. `INPUTS` is a reserved scope: a node cannot be given that id
   (the loader rejects it), so `$INPUTS.x` always means an input.
 - Invalid or unsupported expression syntax is rejected when workflows load and by `archon validate workflows`.
-- Numeric operators fail-closed if either side is not a finite number
+- A numeric operator (`<`, `>`, `<=`, `>=`) needs a number on the right-hand side, quoted or bare; any other literal is rejected at load. If the left-hand value is not a number at run time, the node is skipped (fail-closed).
 - Grouping parentheses are not supported. Use AND/OR precedence or compute a decision in a `script:` node and gate on its scalar output.
 - Skipped nodes propagate their skipped state to dependants
 - A **failed** producer's output is never evaluated, fielded or whole-text — a `when:`

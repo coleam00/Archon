@@ -18,7 +18,8 @@
  *   $INPUTS.name              — a named workflow input (#2470)
  *   $LOOP_PREV.node.output    — prior loop-group body output (loop context only)
  *   <op> is == != <= >= < >, RHS is a single-quoted literal or a bare
- *   number/boolean.
+ *   number/boolean. A numeric operator (<= >= < >) needs an RHS that parses as a
+ *   finite number, quoted or not; anything else could never compare true.
  */
 import {
   assertSupportedOutputRefs,
@@ -50,6 +51,16 @@ export type WhenOperator = (typeof WHEN_OPERATORS)[number];
 
 function isWhenOperator(value: string): value is WhenOperator {
   return (WHEN_OPERATORS as readonly string[]).includes(value);
+}
+
+/**
+ * A numeric operator compares `parseFloat` of both sides. The RHS is a literal, so a
+ * non-numeric one could never compare and would skip the node on every run; rejecting it
+ * here makes the loader report it. Same `parseFloat` rule as the evaluator, so `'80'` and
+ * `80` both qualify.
+ */
+function isComparableLiteral(operator: WhenOperator, expected: string): boolean {
+  return operator === '==' || operator === '!=' || Number.isFinite(parseFloat(expected));
 }
 
 /** A node id may contain hyphens; a path segment (a JSON field name) may not. */
@@ -212,7 +223,8 @@ function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom |
         nodeId !== undefined &&
         operator !== undefined &&
         isWhenOperator(operator) &&
-        expected !== undefined
+        expected !== undefined &&
+        isComparableLiteral(operator, expected)
       ) {
         return {
           ref: { kind: 'loop_prev', nodeId, field },
@@ -230,6 +242,7 @@ function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom |
   // Quoted RHS takes precedence; the unquoted alternative covers numbers and booleans.
   const expected = quotedValue !== undefined ? quotedValue : unquotedValue;
   if (operator === undefined || !isWhenOperator(operator) || expected === undefined) return null;
+  if (!isComparableLiteral(operator, expected)) return null;
 
   if (inputName !== undefined) {
     return { ref: { kind: 'input', name: inputName }, operator, expected };
