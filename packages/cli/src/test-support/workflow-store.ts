@@ -1,3 +1,4 @@
+import type { TerminalRecord } from '@archon/workflows/schemas/terminal-record';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { randomUUID } from 'node:crypto';
 import {
@@ -193,9 +194,10 @@ export function createInMemoryWorkflowStore(
       );
       return result;
     };
+  type TerminalEventInput = WorkflowEventInput<`workflow_${TerminalRecord['status']}`>;
   interface TerminalChange {
     run: WorkflowRun;
-    event: WorkflowEventInput;
+    event: TerminalEventInput;
     precedingEvents?: WorkflowEventInput[];
   }
   const terminalBatch = async (changes: TerminalChange[]): Promise<void> => {
@@ -228,7 +230,7 @@ export function createInMemoryWorkflowStore(
   };
   const terminal = async (
     run: WorkflowRun,
-    event: WorkflowEventInput,
+    event: TerminalEventInput,
     precedingEvents: WorkflowEventInput[] = []
   ): Promise<void> => terminalBatch([{ run, event, precedingEvents }]);
   const createRun: IWorkflowStore['createWorkflowRun'] = async (
