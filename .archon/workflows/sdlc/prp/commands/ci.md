@@ -6,7 +6,7 @@ The pull request is this branch's open pull request in the repository `origin` p
 
 ## Wait
 
-Confirm the pull request's head is this checkout's `HEAD`; if it is not, the push never landed, so stop with `other` and say so. Then wait until every check on that head has concluded: `gh pr checks <number> --repo <owner>/<repo> --watch` blocks until they do. Right after a push the head may have no checks yet; give registration a few minutes. A repository with no CI configured at all (no active workflows) is `green` with that stated as the evidence. A repository with CI configured where nothing starts on this pull request after a reasonable wait (a maintainer's approval, a path filter) is `other`, with what you observed. A pending check is not green, and a check waiting on a maintainer's approval is not green either.
+Confirm the pull request's head is this checkout's `HEAD`; if it is not, the push never landed, so stop with `other` and say so. Then wait until every check on that head has concluded: `gh pr checks <number> --repo <owner>/<repo> --watch` blocks until they do. Right after a push the head may have no checks yet, so keep waiting for them however long it takes; there is no time limit. A repository with no CI configured at all (no active workflows) is `green` with that stated as the evidence. CI that is configured but will not start without someone acting — the forge reports the run waiting on a maintainer's approval, or no workflow applies to this change — is `other`, with that evidence. A pending check is not green, and a check waiting on a maintainer's approval is not green either.
 
 Do not re-run, cancel, or otherwise change any check, and do not modify any file.
 
