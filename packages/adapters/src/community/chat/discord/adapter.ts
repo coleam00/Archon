@@ -11,6 +11,7 @@ import {
   ThreadAutoArchiveDuration,
 } from 'discord.js';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { createLogger } from '@archon/paths';
 import { isDiscordUserAuthorized } from './auth';
 import { parseAllowedUserIds } from './auth';
@@ -257,8 +258,11 @@ export class DiscordAdapter implements IPlatformAdapter {
       getLog().info({ threadId: thread.id }, 'discord.thread_created');
       return thread.id;
     } catch (error) {
-      const err = error as Error;
-      getLog().error({ err }, 'discord.thread_creation_failed');
+      // The thread name is user content and Discord errors can echo it.
+      getLog().error(
+        { ...identityErrorLogFields(error), messageId: message.id },
+        'discord.thread_creation_failed'
+      );
       // Fall back to channel ID if thread creation fails
       return message.channelId;
     }

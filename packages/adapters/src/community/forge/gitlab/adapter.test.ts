@@ -277,9 +277,15 @@ describe('GitLabAdapter', () => {
   describe('webhook token verification', () => {
     test('rejects invalid token', async () => {
       const adapter = createAdapter({ secret: 'correct-secret' });
+      mockLogger.error.mockClear();
       await adapter.handleWebhook('{}', 'wrong-token');
       // Should log error and return without processing
       expect(mockHandleMessage).not.toHaveBeenCalled();
+      // A rejected token is often a real but stale secret: no fragment of it is logged.
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { payloadSize: 2 },
+        'gitlab.invalid_webhook_token'
+      );
     });
 
     test('rejects empty token', async () => {

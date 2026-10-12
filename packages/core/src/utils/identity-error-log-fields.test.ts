@@ -19,6 +19,18 @@ describe('identityErrorLogFields', () => {
     expect(identityErrorLogFields(error)).toEqual({ errorType: 'GithubIdentityConflictError' });
   });
 
+  test('keeps a numeric vendor code without the echoed request body', () => {
+    const error = Object.assign(new Error('Invalid Form Body name: Help @alice'), {
+      name: 'DiscordAPIError[50035]',
+      code: 50035,
+      requestBody: { json: { name: 'Help @alice' } },
+    });
+    expect(identityErrorLogFields(error)).toEqual({
+      errorType: 'DiscordAPIError[50035]',
+      errorCode: 50035,
+    });
+  });
+
   test('does not log non-Error thrown values', () => {
     expect(identityErrorLogFields('alice')).toEqual({ errorType: 'string' });
     expect(identityErrorLogFields(null)).toEqual({ errorType: 'object' });

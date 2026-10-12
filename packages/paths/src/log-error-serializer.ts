@@ -1,0 +1,14 @@
+import pino from 'pino';
+
+// Vendor SDK errors carry the request that failed: grammy's `payload` (a chat id,
+// which is the user's id in a private chat, and the message text), discord.js's
+// `requestBody` (message content) and Octokit's `request` (the comment body).
+// Generic handlers log these errors far from the adapter that threw them, so the
+// logger drops those fields for every `err`. Message, code and status remain.
+export function serializeLoggedError(err: Error): ReturnType<typeof pino.stdSerializers.err> {
+  const serialized = pino.stdSerializers.err(err);
+  delete serialized.payload;
+  delete serialized.requestBody;
+  delete serialized.request;
+  return serialized;
+}

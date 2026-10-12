@@ -812,6 +812,36 @@ describe('DiscordAdapter', () => {
       expect(result).toBe('channel456'); // Falls back to channel
     });
 
+    test('logs only the error class and code when thread creation fails', async () => {
+      // Shaped like discord.js DiscordAPIError: the message and requestBody echo the
+      // thread name, which is user content.
+      const apiError = Object.assign(new Error('Invalid Form Body name: Help @alice 987654321'), {
+        name: 'DiscordAPIError[50035]',
+        code: 50035,
+        requestBody: { json: { name: 'Help @alice 987654321' } },
+      });
+      const mockStartThread = mock<StartThread>(async () => {
+        throw apiError;
+      });
+      const mockMessage = {
+        id: 'msg123',
+        channelId: 'channel456',
+        content: 'Help @alice 987654321',
+        channel: { isThread: () => false },
+        guild: { id: 'guild123' },
+        startThread: mockStartThread,
+        mentions: { has: () => false },
+      } as unknown as import('discord.js').Message;
+      mockLogger.error.mockClear();
+
+      await adapter.ensureThread('channel456', mockMessage);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { errorType: 'DiscordAPIError[50035]', errorCode: 50035, messageId: 'msg123' },
+        'discord.thread_creation_failed'
+      );
+    });
+
     test('should deduplicate concurrent thread creation calls', async () => {
       let resolveThread: (value: { id: string }) => void;
       const threadPromise = new Promise<{ id: string }>(resolve => {

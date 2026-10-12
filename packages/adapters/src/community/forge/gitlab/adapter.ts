@@ -611,10 +611,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
   async handleWebhook(payload: string, token: string): Promise<void> {
     // 1. Verify token
     if (!verifyWebhookToken(token, this.webhookSecret)) {
-      getLog().error(
-        { tokenPrefix: token?.substring(0, 8) + '...', payloadSize: payload.length },
-        'gitlab.invalid_webhook_token'
-      );
+      getLog().error({ payloadSize: payload.length }, 'gitlab.invalid_webhook_token');
       return;
     }
 
