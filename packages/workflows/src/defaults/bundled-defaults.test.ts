@@ -382,10 +382,11 @@ describe('bundled-defaults', () => {
       expect(offenders).toEqual([]);
     });
 
-    // CI is one agent node after the work is done: it marks the pull request ready,
-    // waits on CI itself and puts it back to draft on red. The graph has no engine
-    // wait, no loop around CI and no separate ready-mark node.
-    it('archon-deliver leaves CI, the ready mark included, to one agent node', () => {
+    // CI is the project's full validation, judged by one agent prompt that runs after
+    // the initial review converges (ci-first) and at the end of each correction round
+    // (ci). A red the change caused drives another round, whose fix is reviewed before
+    // CI runs again. The graph has no engine wait and no separate ready-mark node.
+    it('archon-deliver judges CI in the correction rounds, with one shared prompt', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],
         'archon-deliver.yaml',
@@ -402,14 +403,20 @@ describe('bundled-defaults', () => {
             : []
       );
       expect(waits).toEqual([]);
-      const corrections = node('corrections');
-      if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
-      expect(corrections.loop_group.nodes.map(body => body.id)).toEqual([
+      const rounds = node('rounds');
+      if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
+      expect(rounds.loop_group.nodes.map(body => body.id)).toEqual([
         'fix',
         'gate-fix',
         'recheck',
+        'ci',
+        'round',
       ]);
-      expect(node('ci')?.depends_on).toEqual(['update-pr-body']);
+      const ci = rounds.loop_group.nodes.find(body => body.id === 'ci');
+      const first = node('ci-first');
+      if (ci?.kind !== 'agent' || first?.kind !== 'agent')
+        throw new Error('ci nodes are not agents');
+      expect(ci.source).toEqual(first.source);
       expect(node('flip-ready')).toBeUndefined();
       expect(parsed.workflow.returns).toBe('outcome');
       expect(parsed.workflow.outcome_field).toBe('ready');

@@ -39,8 +39,8 @@ review__publish:
 match-discoveries: { matches: [] }
 file-discoveries: '{"records":[]}'
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
-ci: { state: red, summary: "stub: lint fails in src/feature.ts:12, a file this pull request adds", evidence: "stub: the lint job log on the head commit" }
+ci-first: { state: red, caused_by_change: false, summary: "stub: test (windows) fails in src/db.test.ts the same way on the base branch", evidence: "stub: the failing job log and the base branch run" }
 fixture:
   expect: completed
-  reached: [ci, outcome]
+  reached: [ci-first, outcome]
 exec-code: true

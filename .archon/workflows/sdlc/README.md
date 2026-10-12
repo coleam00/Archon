@@ -44,12 +44,16 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-Whether CI is green is judgment, so one agent node (`ci`) owns it once the work is
-done. It refuses to mark ready a head that does not merge cleanly into its base,
-marks the pull request ready (a project whose CI skips drafts starts it then), waits
-however long CI takes, and answers green, red with the root cause, or blocked. On
-anything but green it puts the pull request back to draft before it answers, so a
-red PR never stays ready.
+CI is the project's full validation; implementers run only focused checks. Whether
+CI is green is judgment, so one agent prompt owns it, run once the review converges
+(`ci-first`, and `ci` inside the correction rounds). It refuses to mark ready a head
+that does not merge cleanly into its base, marks the pull request ready (a project
+whose CI skips drafts starts it then), waits however long CI takes, and answers
+green, red, or blocked, saying whether a red was caused by the change. On anything
+but green it puts the pull request back to draft before it answers, so a red PR
+never stays ready. A red the change caused goes back to a fixer in the next
+correction round, and that fix is reviewed before CI runs again; any other red ends
+the run not ready.
 
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is

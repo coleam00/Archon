@@ -1,6 +1,7 @@
 /**
  * Small deterministic steps of the delivery tail whose fixtures stub them: the
- * investigation's derived outcome and the deliver and ship terminal reports. Run as
+ * investigation's derived outcome, deliver's correction round, and the deliver and
+ * ship terminal reports. Run as
  * the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
@@ -105,7 +106,11 @@ describe("deliver's terminal outcome", () => {
       inputs: {
         INPUTS_PR: JSON.stringify(forgePrRecord()),
         INPUTS_REVIEW_ACTION: 'none',
-        INPUTS_CORRECTION_ACTION: 'null',
+        INPUTS_FIRST_STATE: 'null',
+        INPUTS_FIRST_SUMMARY: 'null',
+        INPUTS_ACTION: 'null',
+        INPUTS_STATE: 'null',
+        INPUTS_CI_SUMMARY: 'null',
         TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
         ...inputs,
       },
@@ -115,36 +120,72 @@ describe("deliver's terminal outcome", () => {
     return JSON.parse(run.stdout) as { ready: boolean; pr_url: string; summary: string };
   };
 
-  it('reports the pull request as ready on green', () => {
-    expect(outcome({ INPUTS_STATE: 'green', INPUTS_CI_SUMMARY: 'all passed' })).toEqual({
+  it('reports the pull request as ready when CI is green after the initial review', () => {
+    expect(outcome({ INPUTS_FIRST_STATE: 'green', INPUTS_FIRST_SUMMARY: 'all passed' })).toEqual({
       ready: true,
       pr_url: PR_URL,
       summary: PR_URL,
     });
   });
 
-  it('reports red as not ready, with the root cause', () => {
-    const result = outcome({ INPUTS_STATE: 'red', INPUTS_CI_SUMMARY: 'lint fails in src/a.ts' });
+  it('reads the last correction round over the initial CI check', () => {
+    const result = outcome({
+      INPUTS_FIRST_STATE: 'red',
+      INPUTS_FIRST_SUMMARY: 'the change broke a test',
+      INPUTS_ACTION: 'none',
+      INPUTS_STATE: 'green',
+      INPUTS_CI_SUMMARY: 'all passed',
+    });
+    expect(result.ready).toBe(true);
+  });
+
+  it('reports red the change did not cause as not ready, with the root cause', () => {
+    const result = outcome({ INPUTS_FIRST_STATE: 'red', INPUTS_FIRST_SUMMARY: 'the base fails the same way' });
     expect(result.ready).toBe(false);
     expect(result.pr_url).toBe(PR_URL);
-    expect(result.summary).toStartWith('Not ready, red: lint fails in src/a.ts');
+    expect(result.summary).toStartWith('Not ready, red: the base fails the same way');
   });
 
   it('reports a review that ended asking for a replan as not ready, without CI', () => {
-    const result = outcome({
-      INPUTS_REVIEW_ACTION: 'correct',
-      INPUTS_CORRECTION_ACTION: 'replan',
-      INPUTS_STATE: 'null',
-      INPUTS_CI_SUMMARY: 'null',
-    });
+    const result = outcome({ INPUTS_REVIEW_ACTION: 'correct', INPUTS_ACTION: 'replan', INPUTS_STATE: '' });
     expect(result.ready).toBe(false);
     expect(result.summary).toStartWith('Not ready, the review asks for a replan');
   });
 
   it('reports a blocked pull request as not ready, never as red', () => {
-    const result = outcome({ INPUTS_STATE: 'blocked', INPUTS_CI_SUMMARY: 'awaits approval' });
+    const result = outcome({ INPUTS_FIRST_STATE: 'blocked', INPUTS_FIRST_SUMMARY: 'awaits approval' });
     expect(result.ready).toBe(false);
     expect(result.summary).toStartWith('Not ready, blocked: awaits approval');
+  });
+});
+
+describe("deliver's correction round", () => {
+  const round = (inputs: Record<string, string>): { again: boolean; action: string; state: string } =>
+    JSON.parse(
+      runPackScript('deliver/scripts/round', {
+        inputs: {
+          INPUTS_ACTION: 'none',
+          INPUTS_DISCOVERIES: '[]',
+          INPUTS_STATE: 'null',
+          INPUTS_CAUSED_BY_CHANGE: 'null',
+          INPUTS_CI_SUMMARY: 'null',
+          ...inputs,
+        },
+      }).stdout
+    ) as { again: boolean; action: string; state: string };
+
+  it('asks for another round when the review wants corrections, before CI runs', () => {
+    expect(round({ INPUTS_ACTION: 'correct' })).toMatchObject({ again: true, state: '' });
+  });
+
+  it('asks for another round only for a red the change caused', () => {
+    expect(round({ INPUTS_STATE: 'red', INPUTS_CAUSED_BY_CHANGE: 'true' }).again).toBe(true);
+    expect(round({ INPUTS_STATE: 'red', INPUTS_CAUSED_BY_CHANGE: 'false' }).again).toBe(false);
+    expect(round({ INPUTS_STATE: 'green', INPUTS_CAUSED_BY_CHANGE: 'false' }).again).toBe(false);
+  });
+
+  it('ends the rounds on a replan without CI', () => {
+    expect(round({ INPUTS_ACTION: 'replan' })).toMatchObject({ again: false, action: 'replan' });
   });
 });
 

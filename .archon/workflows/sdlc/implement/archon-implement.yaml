@@ -1,7 +1,7 @@
 name: archon-implement
 description: |
-  Implement a change and keep working until it is complete and the project's
-  validation passes. Commits as it goes; opens no PR. The input is anything intent-shaped:
+  Implement a change and keep working until it is complete and the focused checks
+  on what it changed pass. Commits as it goes; opens no PR. The input is anything intent-shaped:
   a plan (path or inline), review findings, a CI failure to fix, or a plain
   description of what to build.
 

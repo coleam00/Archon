@@ -66,8 +66,8 @@ recheck__publish:
 match-discoveries: { matches: [] }
 file-discoveries: '{"records":[]}'
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
-ci: { state: green, summary: "stub: every check that gates a merge passed", evidence: "stub: gh pr checks on the head commit" }
+ci: { state: green, caused_by_change: false, summary: "stub: every check that gates a merge passed", evidence: "stub: gh pr checks on the head commit" }
 fixture:
   expect: completed
-  reached: [gate-fix, recheck__synthesize, ci, outcome]
+  reached: [gate-fix, recheck__synthesize, ci, round, outcome]
 exec-code: true

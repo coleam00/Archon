@@ -1,13 +1,14 @@
 name: archon-deliver
 description: |
-  The delivery tail, autonomous on its green path: implement and validate the
-  work, simplify it before anything is public, bring the branch up to date and
-  open a draft PR, review it at the depth its risk earns, correct the findings the
-  owner judges worth fixing, file discoveries as issues, update the PR
-  description, then check CI:
-  green marks the PR ready, and red ends the run not ready with the root cause. A
-  red PR is never marked ready. There is no in-run approval gate — the human gate is PR
-  review and merge on GitHub, outside the run.
+  The delivery tail, autonomous on its green path: implement the work (focused
+  checks only; CI is the full validation), simplify it before anything is public,
+  bring the branch up to date and open a draft PR, review it at the depth its risk
+  earns, then run rounds of correction, review and CI until the review converges
+  and CI is green. CI red the change caused goes back to a fixer and is reviewed
+  again; any other red ends the run not ready with the cause. A red PR never stays
+  ready. Discoveries are filed as issues and the PR description is updated. There
+  is no in-run approval gate — the human gate is PR review and merge on GitHub,
+  outside the run.
 
   Use when: decided work should become a reviewed, ready-to-merge PR —
   "deliver this plan", "take this to a PR", "build and ship this".
@@ -57,8 +58,8 @@ returns: outcome
 outcome_field: ready
 
 nodes:
-  # The implementer checks its own changes while it works and runs the project's
-  # validation once before handing off; the gate below reads that verdict.
+  # The implementer runs focused checks on what it changed; the project's CI is the
+  # full validation (the ci node). The gate below reads the implementer's verdict.
   - id: impl
     include: archon-implement
     with:
@@ -101,8 +102,8 @@ nodes:
       work_order: "$INPUTS.work"
     depends_on: [gate-green]
 
-  # A decline here is judged by the review. The reshaper validates before it hands
-  # off like any implementer, and the same gate reads its verdict.
+  # A decline here is judged by the review. The reshaper runs focused checks like any
+  # implementer, and the same gate reads its verdict.
   - id: reshape
     include: archon-implement
     depends_on: [shape]
@@ -178,21 +179,105 @@ nodes:
       docs: "$route.output.docs"
     depends_on: [route]
 
-  # A ready initial review skips this block. Otherwise each round corrects the
-  # current canonical findings (the fixer validates before it pushes), then runs a
-  # fresh continuation review over the report and delta, so a blocking fix is never
-  # unreviewed. until_bash ends the loop the moment a recheck stops asking for a
-  # correction; five rounds is a runaway backstop, and exhausting it fails the run
-  # with the PR still draft and the canonical report carrying the open findings.
-  # The review's `action` is an enum the engine enforces on synthesize, so it routes
-  # here unvalidated.
-  - id: corrections
+  # CI is the project's full validation: implementers run only focused checks. The
+  # ci agent marks the pull request ready, waits for CI however long it takes, puts
+  # the pull request back to draft on anything but green, and judges whether a red
+  # was caused by the change, writing what it found to $ARTIFACTS_DIR/ci.md for the
+  # fixer. It runs here when the initial review converged, and at the end of each
+  # correction round otherwise; both share one prompt.
+  - id: ci-first
+    model: medium
+    mutates_checkout: false
     depends_on: [review]
-    when: "$review.output.action == 'correct'"
+    when: "$review.output.action == 'none'"
+    prompt: &ci_prompt |
+      # Check CI
+
+      CI is this project's full validation: the implementers ran only focused checks.
+      Check this pull request's CI, leave the pull request ready only when it is green,
+      and judge every red.
+
+      The pull request, as an earlier node recorded it:
+
+      $pr.output
+
+      The review has converged. The pull request's current head is this checkout's
+      HEAD. No one watches this run; your structured answer is all the next node reads.
+      Use `gh` with `--repo <owner>/<repo>` on every command, and do not modify files or
+      push.
+
+      1. If the pull request is merged, answer `green`: there is nothing to mark. If it is
+         closed without a merge, answer `blocked` and say so.
+      2. Check that the head merges cleanly into its base:
+         `gh pr view <number> --repo <owner>/<repo> --json mergeable`, or fetch the base
+         and run `git merge-tree --write-tree <remote>/<base> HEAD`. A head that
+         conflicts is never marked ready: answer `blocked` and name the conflicting paths.
+      3. Mark the pull request ready if it is a draft:
+         `gh pr ready <number> --repo <owner>/<repo>`. A project whose CI skips draft
+         pull requests starts its CI here.
+      4. Wait for CI to finish, however long it takes, for example with
+         `gh pr checks <number> --repo <owner>/<repo> --watch`. If your tool cuts a
+         command off early, run it again until every check has finished. Judge the
+         checks that gate a merge, whatever CI system the project uses. Do not re-run or
+         cancel checks.
+
+         When the project has no CI at all, run the project's validation scripts
+         yourself, to completion, however long they take: if your tool cuts a command
+         off, start it in the background and keep checking until it has finished. Judge
+         their result the same way.
+      5. Judge every red from its logs. It is caused by this change when the failure is
+         in code, tests or configuration this pull request changes, or follows from
+         them. Anything else is not: the base branch already fails the same way, a flaky
+         test, or the CI infrastructure.
+      6. Green: leave the pull request ready. Red, or any answer other than green: put it
+         back to draft with `gh pr ready <number> --repo <owner>/<repo> --undo`, and
+         confirm it reads as a draft, before you answer.
+      7. Write `$ARTIFACTS_DIR/ci.md`, replacing what is there: the head commit you
+         judged, the state, whether the change caused it, the summary and the evidence.
+         A fixer reads it.
+
+      ## Output
+
+      - `state`:
+        - `green`: every check that gates a merge passed on the head commit, and the
+          pull request is ready.
+        - `red`: a check that gates a merge failed on the head commit. The pull request
+          is a draft again.
+        - `blocked`: the pull request cannot be marked ready (a conflict with its base,
+          or it was closed), or CI has no result to wait for (it waits for someone's
+          approval). The pull request is a draft.
+      - `caused_by_change`: `true` only for a red this pull request's change caused; the
+        work then goes back to a fixer. `false` for green, blocked, and any other red,
+        which stops the run.
+      - `summary`: for `green`, the checks that passed. For `red`, the root cause: which
+        check fails, where, and why. A fixer reads this to correct a red the change
+        caused, so name the failing test or file and the error. For `blocked`, what
+        stops it.
+      - `evidence`: the checks, runs, log lines and commits you read.
+    output_format: &ci_verdict
+      type: object
+      properties:
+        state: { type: string, enum: [green, red, blocked] }
+        caused_by_change: { type: boolean }
+        summary: { type: string, pattern: '\S' }
+        evidence: { type: string, pattern: '\S' }
+      required: [state, caused_by_change, summary, evidence]
+
+  # Each round corrects what is open — the review's findings, and a CI red the change
+  # caused — then reviews the correction, then, once that review converges, runs CI
+  # again. No fix, a CI fix included, is ever left unreviewed. Another round runs when
+  # the review asks for corrections or CI is red because of the change; five rounds is
+  # the cap, and exhausting it fails the run with the pull request a draft. A review
+  # that asks for a replan ends the rounds without CI. `&&` short-circuits, so
+  # ci-first is read only when it ran.
+  - id: rounds
+    depends_on: [review, ci-first]
+    trigger_rule: none_failed_min_one_success
+    when: "$review.output.action == 'correct' || $review.output.action == 'none' && $ci-first.output.state == 'red' && $ci-first.output.caused_by_change == true"
     loop_group:
       until_bash: |
-        value=$recheck.output.action
-        test "$value" != "correct"
+        value=$round.output.again
+        test "$value" = "false"
       max_iterations: 5
       fresh_context: true
       nodes:
@@ -200,31 +285,36 @@ nodes:
           include: archon-implement
           with:
             work: >-
-              Judge every open finding recorded in $ARTIFACTS_DIR/review/report.md,
-              within the accepted work order below. Read both in full before
-              editing. Fix every blocking finding, or decline it only with the
-              evidence that it is not a finding: it is wrong, already satisfied,
-              or its smaller shape changes behavior. Fix a note, or decline it
-              with a one-line reason. The following review judges every decline.
-              A finding unrelated to this change is a follow-up, not work for
-              this round: say so and the review files it. Record every
-              disposition — fixed, declined with its reason or evidence, or
-              unrelated — in implementation.md. When a causal finding
-              records a finite affected-member inventory, the finding is not
-              fixed until every affected member is handled and the smallest
-              relevant proof passes. Do not cross an explicit boundary to make
-              a finding disappear; the following review must return replan if
-              the requested outcome requires that expansion.
+              Correct this pull request within the accepted work order below.
+
+              Judge every open finding recorded in $ARTIFACTS_DIR/review/report.md.
+              Read it and the work order in full before editing. Fix every blocking
+              finding, or decline it only with the evidence that it is not a
+              finding: it is wrong, already satisfied, or its smaller shape changes
+              behavior. Fix a note, or decline it with a one-line reason. The
+              following review judges every decline. A finding unrelated to this
+              change is a follow-up, not work for this round: say so and the review
+              files it. Record every disposition — fixed, declined with its reason
+              or evidence, or unrelated — in implementation.md. When a causal
+              finding records a finite affected-member inventory, the finding is
+              not fixed until every affected member is handled and the smallest
+              relevant proof passes. Do not cross an explicit boundary to make a
+              finding disappear; the following review must return replan if the
+              requested outcome requires that expansion.
+
+              When $ARTIFACTS_DIR/ci.md records CI red that this change caused on
+              the pull request's current head, fix that too, at its cause, never by
+              weakening a test.
 
               Accepted work order:
               $INPUTS.work
 
-              When the project's validation passes, commit the correction and
-              push it to the pull request's head branch, $pr.output.head,
-              naming the branch explicitly: never let git pick an upstream, and
-              never force-push. Do not change the PR's draft state or edit the
-              canonical review comment; the following review owns that public
-              verdict.
+              Run the focused checks on what you changed, then commit the
+              correction and push it to the pull request's head branch,
+              $pr.output.head, naming the branch explicitly: never let git pick an
+              upstream, and never force-push. Do not change the PR's draft state or
+              edit the canonical review comment; the following review owns that
+              public verdict.
 
         # The same gate as after the implementation: a fixer's blocker or
         # introduced red stops the run instead of reaching another review.
@@ -240,7 +330,6 @@ nodes:
             summary: "$fix.output.summary"
             stage: "The correction"
 
-
         - id: recheck
           include: archon-review
           with:
@@ -254,6 +343,47 @@ nodes:
             errors: "$route.output.errors"
             docs: "$route.output.docs"
           depends_on: [gate-fix]
+
+        - id: ci
+          model: medium
+          mutates_checkout: false
+          depends_on: [recheck]
+          when: "$recheck.output.action == 'none'"
+          prompt: *ci_prompt
+          output_format: *ci_verdict
+
+        # `until_bash` and the loop's output cannot read a skipped node, so this joins
+        # the round's review and CI verdicts into the value the loop decides on.
+        - id: round
+          script: round
+          runtime: bun
+          depends_on: [recheck, ci]
+          trigger_rule: all_done
+          with:
+            action: "$recheck.output.action"
+            discoveries: { from: "$recheck.output.discoveries" }
+            state: { from: "$ci.output.state", if_skipped: null }
+            caused_by_change: { from: "$ci.output.caused_by_change", if_skipped: null }
+            ci_summary: { from: "$ci.output.summary", if_skipped: null }
+          output_format:
+            type: object
+            properties:
+              again: { type: boolean }
+              action: { type: string, enum: [none, correct, replan] }
+              discoveries:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    title: { type: string, pattern: '\S' }
+                    claim: { type: string, pattern: '\S' }
+                    evidence: { type: array, items: { type: string }, minItems: 1 }
+                    relation: { type: string, enum: [unrelated, scope_conflict, note] }
+                    source_nodes: { type: array, items: { type: string }, minItems: 1 }
+                  required: [title, claim, evidence, relation, source_nodes]
+              state: { type: string, enum: [green, red, blocked, ''] }
+              ci_summary: { type: string }
+            required: [again, action, discoveries, state, ci_summary]
 
   # Work the review proved but this change does not do becomes tracker issues,
   # one per record, each linking back to this run and the pull request. It joins
@@ -270,12 +400,12 @@ nodes:
     command: match-discoveries
     model: small
     mutates_checkout: false
-    depends_on: [review, corrections]
+    depends_on: [review, rounds]
     trigger_rule: none_failed_min_one_success
     with:
       pr: "$pr.output"
       initial: { from: "$review.output.discoveries" }
-      final: { from: "$corrections.output.discoveries", if_skipped: null }
+      final: { from: "$rounds.output.discoveries", if_skipped: null }
     output_format:
       type: object
       properties:
@@ -296,7 +426,7 @@ nodes:
     with:
       pr: "$pr.output"
       initial: { from: "$review.output.discoveries" }
-      final: { from: "$corrections.output.discoveries", if_skipped: null }
+      final: { from: "$rounds.output.discoveries", if_skipped: null }
       matches: { from: "$match-discoveries.output.matches" }
     output_type: discovery-filing
     output_format:
@@ -315,11 +445,11 @@ nodes:
   # Corrections and the base merge can falsify claims the description made when the
   # draft opened, and an implementer can pass red the description must disclose. One
   # agent reads the live description and the final diff, and edits only what is no
-  # longer true. It runs once the review has converged or stopped, never per round.
+  # longer true. It runs once the rounds have ended, never per round.
   - id: update-pr-body
     command: update-pr-body
     model: medium
-    depends_on: [review, corrections]
+    depends_on: [review, ci-first, rounds]
     trigger_rule: none_failed_min_one_success
     with:
       pr: "$pr.output"
@@ -330,40 +460,20 @@ nodes:
         summary: { type: string, pattern: '\S' }
       required: [changed, summary]
 
-  # CI is one agent's job, waiting included. It runs only when the review converged.
-  # It marks the pull request ready, which starts CI on a project that skips drafts,
-  # waits however long CI takes, and on red puts the pull request back to draft
-  # before it answers, so a red pull request never stays ready.
-  - id: ci
-    command: check-ci
-    model: medium
-    mutates_checkout: false
-    depends_on: [update-pr-body]
-    # `&&` short-circuits, so the loop's verdict is read only when the loop ran.
-    when: "$review.output.action == 'none' || $review.output.action == 'correct' && $corrections.output.action == 'none'"
-    with:
-      pr: "$pr.output"
-    output_format:
-      type: object
-      properties:
-        state: { type: string, enum: [green, red, blocked] }
-        summary: { type: string, pattern: '\S' }
-        evidence: { type: string, pattern: '\S' }
-      required: [state, summary, evidence]
-
   # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts):
   # ready with the pull request's URL, or not ready with why.
   - id: outcome
     script: outcome
     runtime: bun
-    depends_on: [update-pr-body, ci]
-    trigger_rule: none_failed_min_one_success
+    depends_on: [update-pr-body]
     with:
       pr: "$pr.output"
       review_action: "$review.output.action"
-      correction_action: { from: "$corrections.output.action", if_skipped: null }
-      state: { from: "$ci.output.state", if_skipped: null }
-      ci_summary: { from: "$ci.output.summary", if_skipped: null }
+      first_state: { from: "$ci-first.output.state", if_skipped: null }
+      first_summary: { from: "$ci-first.output.summary", if_skipped: null }
+      action: { from: "$rounds.output.action", if_skipped: null }
+      state: { from: "$rounds.output.state", if_skipped: null }
+      ci_summary: { from: "$rounds.output.ci_summary", if_skipped: null }
     output_format:
       type: object
       properties:
