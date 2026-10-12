@@ -5,7 +5,7 @@ impl__implement:
   done: true
   green: true
   red_cause: ""
-  summary: "stub: implemented; the tests for the changed code pass"
+  summary: "stub: implemented; the project's validation passes"
 impl__assert-changed: "3 files changed"
 shape__simplify: { findings: false }
 shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"

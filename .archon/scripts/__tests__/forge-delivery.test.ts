@@ -216,6 +216,8 @@ describe('the forge opt-in delivers through plugin operations', () => {
   }, 120_000);
 });
 
+// Real CLI and plugin processes, like the delivery test above: several seconds on a
+// loaded machine, past the default five.
 for (const other of [false, true]) {
   it(`preserves inherited-property labels and publishes marker-idempotent discoveries through ${other ? 'a non-GitHub tracker' : 'GitHub'}`, () => {
     const host = forgeHost(other);
@@ -293,5 +295,5 @@ for (const other of [false, true]) {
       ? state.writes?.filter(op => op === 'workitem.create')
       : state.calls?.filter(call => call.startsWith('POST ') && call.includes('/issues'));
     expect(writes).toHaveLength(1);
-  });
+  }, 120_000);
 }

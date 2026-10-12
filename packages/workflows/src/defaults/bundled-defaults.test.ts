@@ -406,8 +406,7 @@ describe('bundled-defaults', () => {
       if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
       expect(corrections.loop_group.nodes.map(body => body.id)).toEqual([
         'fix',
-        'revalidate',
-        'gate-revalidated',
+        'gate-fix',
         'recheck',
       ]);
       expect(node('ci')?.depends_on).toEqual(['update-pr-body']);

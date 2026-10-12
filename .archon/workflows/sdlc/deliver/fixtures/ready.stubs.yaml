@@ -1,18 +1,17 @@
-# Outcome: ready. The review asks for one correction; the fixer's round is validated
-# once before its continuation review, which converges. CI is green, so flip-ready
+# Outcome: ready. The review asks for one correction; the fixer validates and pushes,
+# the gate reads its verdict, and the continuation review converges. CI is green, so flip-ready
 # marks the pull request ready and the real outcome script reports it.
 impl__implement:
   done: true
   green: true
   red_cause: ""
-  summary: "stub: implemented; the tests for the changed code pass"
+  summary: "stub: implemented; the project's validation passes"
 impl__assert-changed: "3 files changed"
 shape__simplify: { findings: false }
 shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
 pr__synced: "verify-sync: upstream/dev is merged and the tree is clean"
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-validate__discover: { checks: [{ name: "project gate", argv: ["bun", "-e", "process.exitCode = 0"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 route: { tier: full, seams: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
 review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
 review__scope:
@@ -44,7 +43,6 @@ fix__implement:
   red_cause: ""
   summary: "stub: finding fixed, committed and pushed"
 fix__assert-changed: "1 file changed"
-revalidate__discover: { checks: [{ name: "project gate", argv: ["bun", "-e", "process.exitCode = 0"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy"}'
 recheck__scope:
   docs: false
@@ -71,5 +69,5 @@ ci: { state: green, summary: "stub: every check that gates a merge passed", evid
 flip-ready: { pr_url: "https://github.com/example/repo/pull/1" }
 fixture:
   expect: completed
-  reached: [validate__run, gate-validated, revalidate__run, gate-revalidated, recheck__synthesize, ci, flip-ready, outcome]
+  reached: [gate-fix, recheck__synthesize, ci, flip-ready, outcome]
 exec-code: true

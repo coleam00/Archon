@@ -1,10 +1,10 @@
 name: archon-deliver
 description: |
-  The delivery tail, autonomous on its green path: implement the work, simplify
-  it before anything is public, bring the branch up to date and open a draft PR,
-  validate the project once, review it at the depth its risk earns, correct the
-  findings the owner judges worth fixing (each round validated once before its
-  review), file discoveries as issues, update the PR description, then check CI:
+  The delivery tail, autonomous on its green path: implement and validate the
+  work, simplify it before anything is public, bring the branch up to date and
+  open a draft PR, review it at the depth its risk earns, correct the findings the
+  owner judges worth fixing, file discoveries as issues, update the PR
+  description, then check CI:
   green marks the PR ready, and red ends the run not ready with the root cause. A
   red PR is never marked ready. There is no in-run approval gate — the human gate is PR
   review and merge on GitHub, outside the run.
@@ -57,8 +57,8 @@ returns: outcome
 outcome_field: ready
 
 nodes:
-  # The implementer checks its own changes; the project's full validation runs once,
-  # just before review (validate below).
+  # The implementer checks its own changes while it works and runs the project's
+  # validation once before handing off; the gate below reads that verdict.
   - id: impl
     include: archon-implement
     with:
@@ -101,8 +101,8 @@ nodes:
       work_order: "$INPUTS.work"
     depends_on: [gate-green]
 
-  # A decline here is judged by the review; red it leaves is caught by the
-  # validation before that review.
+  # A decline here is judged by the review. The reshaper validates before it hands
+  # off like any implementer, and the same gate reads its verdict.
   - id: reshape
     include: archon-implement
     depends_on: [shape]
@@ -121,39 +121,32 @@ nodes:
         Accepted work order:
         $INPUTS.work
 
+  - id: gate-reshape
+    script: gate-green
+    runtime: bun
+    output_type: green-gate
+    output_format: *green_gate
+    depends_on: [reshape]
+    with:
+      green: "$reshape.output.green"
+      red_cause: "$reshape.output.red_cause"
+      summary: "$reshape.output.summary"
+      stage: "The structure correction"
+
   - id: pr
     include: archon-pr
     with:
       draft: "true"
       pull_request: "$INPUTS.pull_request"
-    depends_on: [shape, reshape]
+    depends_on: [shape, gate-reshape]
     trigger_rule: none_failed_min_one_success
-
-  # The project's full validation, once, on the merged tree the review will read.
-  - id: validate
-    include: archon-validate
-    depends_on: [pr]
-
-  # Turns the validation's verdict into a stop: red this change introduced, or a
-  # validation that did not finish, fails the run before review spends anything.
-  - id: gate-validated
-    script: gate-green
-    runtime: bun
-    output_type: green-gate
-    output_format: *green_gate
-    depends_on: [validate]
-    with:
-      green: "$validate.output.green"
-      red_cause: "$validate.output.red_cause"
-      summary: "$validate.output.summary"
-      stage: "The project validation"
 
   # Which review lenses this change earns is a quick judgment from the diff and the
   # work order. It runs nothing.
   - id: route
     command: route-review
     model: small
-    depends_on: [gate-validated]
+    depends_on: [pr]
     mutates_checkout: false
     with:
       work: "$INPUTS.work"
@@ -186,8 +179,8 @@ nodes:
     depends_on: [route]
 
   # A ready initial review skips this block. Otherwise each round corrects the
-  # current canonical findings, validates the project once, then runs a fresh
-  # continuation review over the report and delta, so a blocking fix is never
+  # current canonical findings (the fixer validates before it pushes), then runs a
+  # fresh continuation review over the report and delta, so a blocking fix is never
   # unreviewed. until_bash ends the loop the moment a recheck stops asking for a
   # correction; five rounds is a runaway backstop, and exhausting it fails the run
   # with the PR still draft and the canonical report carrying the open findings.
@@ -226,27 +219,27 @@ nodes:
               Accepted work order:
               $INPUTS.work
 
-              Commit the correction and push it to the pull request's head
-              branch, $pr.output.head, naming the branch explicitly: never let
-              git pick an upstream, and never force-push. Do not change the
-              PR's draft state or edit the canonical review comment; the
-              following review owns that public verdict.
+              When the project's validation passes, commit the correction and
+              push it to the pull request's head branch, $pr.output.head,
+              naming the branch explicitly: never let git pick an upstream, and
+              never force-push. Do not change the PR's draft state or edit the
+              canonical review comment; the following review owns that public
+              verdict.
 
-        - id: revalidate
-          include: archon-validate
-          depends_on: [fix]
-
-        - id: gate-revalidated
+        # The same gate as after the implementation: a fixer's blocker or
+        # introduced red stops the run instead of reaching another review.
+        - id: gate-fix
           script: gate-green
           runtime: bun
           output_type: green-gate
           output_format: *green_gate
-          depends_on: [revalidate]
+          depends_on: [fix]
           with:
-            green: "$revalidate.output.green"
-            red_cause: "$revalidate.output.red_cause"
-            summary: "$revalidate.output.summary"
-            stage: "The project validation after a correction"
+            green: "$fix.output.green"
+            red_cause: "$fix.output.red_cause"
+            summary: "$fix.output.summary"
+            stage: "The correction"
+
 
         - id: recheck
           include: archon-review
@@ -260,7 +253,7 @@ nodes:
             seams: "$route.output.seams"
             errors: "$route.output.errors"
             docs: "$route.output.docs"
-          depends_on: [gate-revalidated]
+          depends_on: [gate-fix]
 
   # Work the review proved but this change does not do becomes tracker issues,
   # one per record, each linking back to this run and the pull request. It joins
@@ -320,7 +313,7 @@ nodes:
       required: [records]
 
   # Corrections and the base merge can falsify claims the description made when the
-  # draft opened, and a validation can pass red the description must disclose. One
+  # draft opened, and an implementer can pass red the description must disclose. One
   # agent reads the live description and the final diff, and edits only what is no
   # longer true. It runs once the review has converged or stopped, never per round.
   - id: update-pr-body

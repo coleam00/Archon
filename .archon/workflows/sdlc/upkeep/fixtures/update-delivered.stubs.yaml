@@ -15,7 +15,7 @@ deliver__impl__implement:
   done: true
   green: true
   red_cause: ""
-  summary: "stub: implemented; the tests for the changed code pass"
+  summary: "stub: implemented; the project's validation passes"
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 deliver__shape__simplify: { findings: false }
@@ -23,7 +23,6 @@ deliver__shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 deliver__pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
 deliver__pr__synced: "verify-sync: upstream/dev is merged and the tree is clean"
 deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-deliver__validate__discover: { checks: [{ name: "project gate", argv: ["bun", "-e", "process.exitCode = 0"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 deliver__route: { tier: full, seams: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
 deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
 deliver__review__scope:

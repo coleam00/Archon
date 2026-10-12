@@ -121,7 +121,7 @@ archon workflow run archon-implement --branch feat/export-csv "Implement the pla
 
 #### `archon-pr`
 
-Opens a pull request for the committed work on the current branch. It first merges the latest base branch into the branch, resolving conflicts it can resolve with confidence and stopping with the paths named when it cannot. It runs no checks; `archon-deliver` validates the merged tree before review. It uses the repository's PR template when one exists, pushes the branch, and reads the created PR back to verify it.
+Opens a pull request for the committed work on the current branch. It first merges the latest base branch into the branch, resolving conflicts it can resolve with confidence and stopping with the paths named when it cannot. It runs no checks. It uses the repository's PR template when one exists, pushes the branch, and reads the created PR back to verify it.
 
 **When to use it**: A branch has committed work and needs a PR. Run it with `--no-worktree` from the checkout that holds the branch.
 
@@ -135,7 +135,7 @@ archon workflow run archon-pr --no-worktree --input draft=false
 
 #### `archon-deliver`
 
-The delivery tail: implement the work, bring the branch up to date with its base and open a draft PR, run the project's full validation once, review it, and correct and close the findings, validating each correction round once before its review. Then it updates the PR description and checks CI once: an agent waits for the project's checks and judges them. Green marks the PR ready for review once it merges cleanly. Red leaves it in draft and the run ends not ready, with the root cause: a red PR is never marked ready. `--input pull_request=<number>` continues that open PR instead of opening one. There is no approval gate inside the run; your gate is PR review and merge.
+The delivery tail: implement the work (the implementer runs the project's validation before handing off), bring the branch up to date with its base and open a draft PR, review it, and correct and close the findings; each fixer validates before it pushes. Then it updates the PR description and checks CI once: an agent waits for the project's checks and judges them. Green marks the PR ready for review once it merges cleanly. Red leaves it in draft and the run ends not ready, with the root cause: a red PR is never marked ready. `--input pull_request=<number>` continues that open PR instead of opening one. There is no approval gate inside the run; your gate is PR review and merge.
 
 **When to use it**: The work is decided, for example an approved plan, and should become a reviewed, ready-to-merge PR.
 

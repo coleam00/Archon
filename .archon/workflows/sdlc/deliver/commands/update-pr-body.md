@@ -19,10 +19,10 @@ $INPUTS.pr
    Change only what the diff falsifies. Keep the structure, the tone and every
    claim that is still true. Do not rewrite from scratch, add sections, or narrate
    the correction history.
-3. When `$ARTIFACTS_DIR/validation.md` records a failing check the validation let
-   through as `inherited` or `environment`, the description must say so near the
-   top: the check and why it is not this change's. Keep an existing disclosure that
-   is still true.
+3. When `$ARTIFACTS_DIR/implementation.md` records a failing check the implementer
+   judged `inherited` or `environment`, the description must say so near the top:
+   the check and why it is not this change's. Keep an existing disclosure that is
+   still true.
 4. When something changed, write the complete description to
    `$ARTIFACTS_DIR/pr-body-final.md` and apply it with
    `gh pr edit <number> --repo <owner>/<repo> --body-file "$ARTIFACTS_DIR/pr-body-final.md"`.
