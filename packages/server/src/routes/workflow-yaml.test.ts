@@ -89,17 +89,47 @@ describe('serializeWorkflowPreservingText', () => {
     expect(text).toBe(spaced.replace('model: opus', 'model: sonnet'));
   });
 
-  test('changing classify.model in the deliver workflow changes exactly one line', async () => {
-    const original = await Bun.file(
-      new URL('../../../../.archon/workflows/sdlc/deliver/archon-deliver.yaml', import.meta.url)
-    ).text();
+  test('a model change in a commented, nested workflow changes exactly one line', () => {
+    const original = [
+      'name: deliver',
+      'description: |',
+      '  Implement the work, review it, and open a pull request.',
+      '',
+      '  Use when: decided work should become a reviewed PR.',
+      '',
+      '# Review establishes the first verdict; blockers loop through fix and recheck.',
+      '',
+      'requires: [ github ]',
+      '',
+      'inputs:',
+      '  work:',
+      '    default: ""',
+      '    description: >-',
+      '      What to deliver: a plan path, findings, or a description.',
+      '      Empty means the trigger message is the work.',
+      '',
+      'nodes:',
+      '  # Classify the change so review depth matches its risk.',
+      '  - id: classify',
+      '    model: small',
+      '    prompt: |',
+      '      Read the diff and choose a review tier.',
+      '    output_format:',
+      '      type: object',
+      '      properties:',
+      '        tier: { type: string, enum: [ focused, full ] }',
+      '      required: [ tier ]',
+      '',
+      '  - id: review',
+      '    depends_on: [ classify ]',
+      '    when: "$classify.output.tier == \'full\'" # only on the full tier',
+      '    command: review',
+      '',
+    ].join('\n');
     const definition = parseYaml(original) as Record<string, unknown> & {
       nodes: { id: string; model?: string }[];
     };
-    const classify = definition.nodes.find(node => node.id === 'classify');
-    expect(classify?.model).toBe('small');
-    if (!classify) throw new Error('Missing classify node');
-    classify.model = 'medium';
+    definition.nodes[0].model = 'medium';
     expect(serializeWorkflowPreservingText(definition, original)).toBe(
       original.replace('    model: small', '    model: medium')
     );
