@@ -39,7 +39,7 @@
       "src/commands/inspect-chat-plugin.test.ts"
     ],
     [
-      "src/commands/publish-chat-plugin.test.ts"
+      "src/commands/publish-plugin.test.ts"
     ],
     [
       "src/commands/workflow-provider-plugin.integration.spec.ts"

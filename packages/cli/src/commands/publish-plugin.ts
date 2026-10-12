@@ -10,7 +10,12 @@ interface Publication {
   previousFiles: readonly string[];
 }
 
-export async function publishChatPlugin(publication: Publication): Promise<void> {
+/**
+ * Moves a staged plugin binary and its receipt into place, then removes the files the
+ * previous receipt owned. Any failure restores the previous install from backups taken
+ * up front, so the receipt never names a binary that is not there.
+ */
+export async function publishPlugin(publication: Publication): Promise<void> {
   const { stagedReceipt, receiptFile, stagedBinary, target, previousFiles } = publication;
   const backups = new Map<string, string>();
   const published: string[] = [];
@@ -19,7 +24,7 @@ export async function publishChatPlugin(publication: Publication): Promise<void>
       try {
         await rm(backup, { force: true });
       } catch {
-        console.warn(`Chat plugin backup cleanup failed: ${backup}`);
+        console.warn(`Plugin backup cleanup failed: ${backup}`);
       }
     }
   };
@@ -37,11 +42,12 @@ export async function publishChatPlugin(publication: Publication): Promise<void>
     }
   } catch {
     await discardBackups();
-    throw new Error(`Chat plugin could not back up installed files: ${receiptFile}`);
+    throw new Error(`Plugin could not back up installed files: ${receiptFile}`);
   }
 
   try {
-    // Receipt first keeps ownership visible throughout the publication window.
+    // Receipt first: the other order could strand a binary no receipt owns, which
+    // every later install would refuse to replace.
     await rename(stagedReceipt, receiptFile);
     published.push(receiptFile);
     await renameUnlocked(stagedBinary, target);
@@ -61,17 +67,17 @@ export async function publishChatPlugin(publication: Publication): Promise<void>
     }
     for (const [path, backup] of backups) {
       try {
-        await rename(backup, path);
+        await renameUnlocked(backup, path);
       } catch {
         recovery.push(`${path} (backup: ${backup})`);
       }
     }
     if (recovery.length) {
-      throw new Error(`Chat plugin rollback failed; recovery required: ${recovery.join(', ')}`);
+      throw new Error(`Plugin rollback failed; recovery required: ${recovery.join(', ')}`);
     }
     await discardBackups();
     throw new Error(
-      `Chat plugin publication failed; previous install restored: ${receiptFile}. ${(error as Error).message}`
+      `Plugin publication failed; previous install restored: ${receiptFile}. ${(error as Error).message}`
     );
   }
   // Publication has committed; leftover backups must not turn success into refusal.

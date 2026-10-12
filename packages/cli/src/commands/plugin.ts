@@ -45,13 +45,13 @@ import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-p
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
 import { inspectChatPlugin } from './inspect-chat-plugin';
-import { publishChatPlugin } from './publish-chat-plugin';
+import { publishPlugin } from './publish-plugin';
 import {
   RESERVED_CHAT_PLATFORMS,
   type ChatPluginDescriptor,
 } from '@archon/chat-contract/descriptor';
 import { withPluginMutationLock } from './plugin-mutation-lock';
-import { removeUnlocked, renameUnlocked } from './unlocked-file';
+import { removeUnlocked } from './unlocked-file';
 import { assertProviderRegistrationAllowed, getRegisteredProviders } from '@archon/providers';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
@@ -383,43 +383,16 @@ async function installBinaryPlugin(
       ...(descriptor ? { descriptor } : {}),
     });
     await writeFile(stagedReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
-    if (manifest.kind === 'chat') {
-      await publishChatPlugin({
-        stagedReceipt,
-        receiptFile,
-        stagedBinary,
-        target,
-        previousFiles:
-          previous && isBinaryReceipt(previous)
-            ? previous.files.map(file => join(env.pluginsDir, file.path))
-            : [],
-      });
-    } else {
-      // Receipt first: the other order could strand a binary no receipt owns, which
-      // every later install would refuse to replace. If the binary rename then fails,
-      // the previous receipt comes back, so the receipt never names a binary that
-      // is not there. The restore is staged and renamed like the install, so a
-      // failed restore leaves a whole receipt rather than a truncated one.
-      await rename(stagedReceipt, receiptFile);
-      try {
-        await renameUnlocked(stagedBinary, target);
-      } catch (error) {
-        try {
-          if (previous) {
-            await writeFile(stagedReceipt, `${JSON.stringify(previous, null, 2)}\n`);
-            await renameUnlocked(stagedReceipt, receiptFile);
-          } else {
-            await removeUnlocked(receiptFile);
-          }
-        } catch (restore) {
-          throw new Error(
-            `${(error as Error).message} Restoring the previous receipt also failed (${(restore as Error).message}); ${receiptFile} still describes this failed install.`,
-            { cause: error }
-          );
-        }
-        throw error;
-      }
-    }
+    await publishPlugin({
+      stagedReceipt,
+      receiptFile,
+      stagedBinary,
+      target,
+      previousFiles:
+        previous && isBinaryReceipt(previous)
+          ? previous.files.map(file => join(env.pluginsDir, file.path))
+          : [],
+    });
   } catch (error) {
     // Cleanup runs only on failure (success renamed both staged files away) and must
     // not replace the reason the install failed.
@@ -431,11 +404,6 @@ async function installBinaryPlugin(
       }
     }
     throw error;
-  }
-  if (manifest.kind !== 'chat' && previous && isBinaryReceipt(previous)) {
-    for (const file of previous.files) {
-      if (file.path !== fileName) await removeUnlocked(join(env.pluginsDir, file.path));
-    }
   }
 
   const from = `github.com/${ref.owner}/${ref.repo} ${tag} (commit ${commit})`;
