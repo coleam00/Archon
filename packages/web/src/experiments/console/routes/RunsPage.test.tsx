@@ -125,3 +125,31 @@ test('the console attention skill uses the unpaged endpoint and preserves its AP
     globalThis.fetch = originalFetch;
   }
 });
+
+test('unreadable paused gates appear as repair entries without fabricated actions', () => {
+  const repair = toRun({
+    id: 'repair-run',
+    workflow_name: 'broken-gate',
+    codebase_id: null,
+    status: 'paused',
+    started_at: '2026-10-12T00:00:00.000Z',
+    attention: {
+      kind: 'unreadable',
+      runId: 'repair-run',
+      reason: 'malformed_gate',
+      detail: 'paused with an approval gate this build cannot read',
+    },
+  });
+  set(K.runsAttention, [repair]);
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <RunsPage />
+    </MemoryRouter>
+  );
+  expect(html).toContain('data-pending-run-id="repair-run"');
+  expect(html).toContain('Repair needed:');
+  expect(html).toContain('href="/console/r/repair-run"');
+  expect(html).not.toContain('Resume');
+  expect(html).not.toContain('Approve');
+  expect(html).not.toContain('Reject');
+});

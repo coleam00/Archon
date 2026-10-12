@@ -67,3 +67,48 @@ test('attention is unpaged, includes originless triggered runs, and excludes mac
     expect(run.worker_platform_id).toBeNull();
   }
 });
+
+test('a corrupt paused origin cannot hide an independent valid gate', async () => {
+  const valid = await workflows.createWorkflowRun({ workflow_name: 'valid', user_message: '' });
+  const corrupt = await workflows.createWorkflowRun({ workflow_name: 'corrupt', user_message: '' });
+  for (const run of [valid, corrupt]) {
+    await db.query(
+      "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
+      [JSON.stringify({ approval: { nodeId: 'review', message: 'Approve?' } }), run.id]
+    );
+  }
+  await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+    'not-json',
+    corrupt.id,
+  ]);
+  try {
+    const attention = await workflows.listRunsNeedingAttention();
+    expect(attention.map(run => run.id)).toContain(valid.id);
+    expect(attention.map(run => run.id)).not.toContain(corrupt.id);
+  } finally {
+    await db.query('DELETE FROM remote_agent_workflow_runs WHERE id IN ($1, $2)', [
+      valid.id,
+      corrupt.id,
+    ]);
+  }
+});
+
+test.each([
+  {},
+  { wait: { kind: 'attention' } },
+  { approval: { message: 'missing address' } },
+  { approval: { nodeId: '', message: 'empty address' } },
+  { approval: { nodeId: 'review', message: 'unknown reason', type: 'future' } },
+  { approval: { nodeId: 'child', message: 'missing pointer', type: 'child_workflow' } },
+])('unreadable paused records stay visible for repair: %j', async metadata => {
+  const run = await workflows.createWorkflowRun({ workflow_name: 'repair', user_message: '' });
+  await db.query(
+    "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
+    [JSON.stringify(metadata), run.id]
+  );
+  try {
+    expect((await workflows.listRunsNeedingAttention()).map(row => row.id)).toContain(run.id);
+  } finally {
+    await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [run.id]);
+  }
+});

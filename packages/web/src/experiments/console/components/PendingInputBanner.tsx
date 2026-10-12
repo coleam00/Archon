@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import { Link } from 'react-router';
 import { StatusStrip } from './StatusStrip';
 import { OriginBadge } from './OriginBadge';
 import { ApprovalContext } from './ApprovalContext';
@@ -106,6 +107,13 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
             </p>
             <RunActionBar run={run} />
           </>
+        ) : run.attention?.kind === 'unreadable' ? (
+          <div className="mt-3 text-sm text-error">
+            <p>Repair needed: {run.attention.detail}</p>
+            <Link className="underline" to={`/console/r/${run.id}`}>
+              Inspect run
+            </Link>
+          </div>
         ) : (
           <>
             <ApprovalContext run={run} />

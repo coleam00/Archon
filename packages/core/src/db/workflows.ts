@@ -2394,9 +2394,11 @@ export async function listRunsNeedingAttention(): Promise<DashboardWorkflowRun[]
      WHERE r.status = 'paused'
      ORDER BY r.started_at DESC`
   );
-  return result.rows
-    .map(row =>
-      normalizeWorkflowRun({
+  const runs: DashboardWorkflowRun[] = [];
+  for (const row of result.rows) {
+    let run: DashboardWorkflowRun;
+    try {
+      run = normalizeWorkflowRun({
         ...row,
         agents_completed: null,
         agents_failed: null,
@@ -2405,12 +2407,22 @@ export async function listRunsNeedingAttention(): Promise<DashboardWorkflowRun[]
         current_step_name: null,
         current_step_status: null,
         total_steps: null,
-      })
-    )
-    .filter(run => {
-      const attention = runAttention(run);
-      return attention?.kind === 'awaiting_response' || attention?.kind === 'action_required';
-    });
+      });
+    } catch {
+      // Parser errors can quote stored data, including message text.
+      getLog().error({ workflowRunId: row.id }, 'attention_run_normalization_failed');
+      continue;
+    }
+    const attention = runAttention(run);
+    if (
+      attention?.kind === 'awaiting_response' ||
+      attention?.kind === 'action_required' ||
+      attention?.kind === 'unreadable'
+    ) {
+      runs.push(run);
+    }
+  }
+  return runs;
 }
 
 /**
