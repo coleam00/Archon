@@ -23,9 +23,16 @@ mock.module('../db/connection', () => ({
 }));
 const { createFileWorkflowHost } = await import('./file-host');
 const roots = trackTempRoots();
-const prior = { ...process.env };
+// Restore the keys in place: assigning a new object to process.env drops
+// Bun's case-insensitive Windows env, so later files read PATH as undefined.
+const prior = Object.fromEntries(
+  ['ARCHON_HOME', 'DATABASE_URL'].map(key => [key, process.env[key]])
+);
 afterEach(() => {
-  process.env = { ...prior };
+  for (const [key, value] of Object.entries(prior)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   sqlOpen.mockClear();
 });
 async function git(cwd: string, ...args: string[]): Promise<void> {

@@ -9,9 +9,16 @@ import { toBranchName } from '@archon/git';
 import { createFileWorkflowHost, isolationSchema } from './file-host';
 import { FileStoreUnsupportedError, commit } from '@archon/workflows/file-store';
 const roots = trackTempRoots();
-const prior = { ...process.env };
+// Restore the keys in place: assigning a new object to process.env drops
+// Bun's case-insensitive Windows env, so later files read PATH as undefined.
+const prior = Object.fromEntries(
+  ['ARCHON_HOME', 'DATABASE_URL', 'GITHUB_APP_ID'].map(key => [key, process.env[key]])
+);
 afterEach(() => {
-  process.env = { ...prior };
+  for (const [key, value] of Object.entries(prior)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 });
 test('file isolation records conform to the isolation store row', () => {
   expectTypeOf<z.output<typeof isolationSchema>[number]>().toEqualTypeOf<IsolationEnvironmentRow>();
