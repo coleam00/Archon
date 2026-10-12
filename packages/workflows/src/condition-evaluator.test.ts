@@ -479,14 +479,24 @@ describe('evaluateCondition', () => {
     expect(res.parsed).toBe(false);
   });
 
-  it('|| operator: short-circuits on true first clause — invalid second clause is not evaluated', () => {
-    // When the first OR clause is true, the second clause (even if invalid) is not reached.
-    // This is intentional short-circuit OR behavior. A typo in a later OR clause will still
-    // surface as a parse error on runs where the earlier clauses are false.
+  it('rejects invalid syntax even in a clause that would short-circuit', () => {
     const outputs = new Map([['a', makeOutput('X')]]);
-    const res = evaluateCondition("$a.output == 'X' || not-valid", outputs);
-    expect(res.result).toBe(true);
-    expect(res.parsed).toBe(true); // short-circuit: invalid second clause never reached
+    expect(evaluateCondition("$a.output == 'X' || not-valid", outputs)).toEqual({
+      result: false,
+      parsed: false,
+    });
+  });
+
+  it('short-circuits value resolution after validating syntax', () => {
+    const outputs = new Map([['a', makeOutput('X')]]);
+    expect(evaluateCondition("$a.output == 'X' || $missing.output.field == 'Y'", outputs)).toEqual({
+      result: true,
+      parsed: true,
+    });
+    expect(evaluateCondition("$a.output == 'Z' && $missing.output.field == 'Y'", outputs)).toEqual({
+      result: false,
+      parsed: true,
+    });
   });
 
   // --- splitOutsideQuotes guard: operators inside quoted values are not treated as splitters ---

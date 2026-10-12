@@ -62,9 +62,7 @@ import { workflowNodeHooksSchema } from './schemas/hooks';
 import {
   findUnsupportedNestedWhenRef,
   assertSupportedWhenOutputRefs,
-  parseLoopPrevWhenAtom,
-  parseWhenAtom,
-  whenAtoms,
+  parseWhenExpression,
   WHEN_INPUTS_SCOPE,
 } from './when-atom';
 import {
@@ -1018,9 +1016,12 @@ export function validateDagStructure(
       }
       const refs: { nodeId: string; field?: string; reference: string; prior: boolean }[] = [];
       if (source.surface === 'condition') {
-        for (const text of whenAtoms(source.text)) {
-          const atom = parseLoopPrevWhenAtom(text);
-          if (!atom || atom.ref.kind === 'input') continue;
+        const expression = parseWhenExpression(source.text, enclosingNodes !== undefined);
+        if (expression === null) {
+          return `Node '${node.id}' field '${source.field}' has unsupported condition syntax: "${source.text}". Grouping parentheses are not supported; use comparisons joined by '&&'/'||' (AND binds tighter), or compute a decision in a script node`;
+        }
+        for (const atom of expression.flat()) {
+          if (atom.ref.kind === 'input') continue;
           const { nodeId, field } = atom.ref;
           const prior = atom.ref.kind === 'loop_prev';
           refs.push({
@@ -1117,6 +1118,10 @@ export function validateDagStructure(
     }
 
     if (node.when !== undefined) {
+      const expression = parseWhenExpression(node.when, enclosingNodes !== undefined);
+      if (expression === null) {
+        return `Node '${node.id}' field 'when' has unsupported condition syntax: "${node.when}". Grouping parentheses are not supported; use comparisons joined by '&&'/'||' (AND binds tighter), or compute a decision in a script node`;
+      }
       let m: RegExpExecArray | null;
       whenRefPattern.lastIndex = 0;
       while ((m = whenRefPattern.exec(node.when)) !== null) {
@@ -1145,12 +1150,9 @@ export function validateDagStructure(
       // The atom decomposition comes from the shared `when-atom` parser (the same one
       // the evaluator runs), because the coarse `whenRefPattern` sweep above captures
       // only the first path segment and so cannot tell `$n.output` from
-      // `$n.output.field`. An atom that does not parse is left alone: the executor
-      // already fails closed on it, loudly.
-      for (const atomText of whenAtoms(node.when)) {
-        const atom =
-          enclosingNodes !== undefined ? parseLoopPrevWhenAtom(atomText) : parseWhenAtom(atomText);
-        if (atom?.ref.kind !== 'node' || atom.ref.field !== undefined) continue;
+      // `$n.output.field`.
+      for (const atom of expression.flat()) {
+        if (atom.ref.kind !== 'node' || atom.ref.field !== undefined) continue;
         const producerId = atom.ref.nodeId;
         const producer = nodesById.get(producerId) ?? enclosingNodes?.get(producerId);
         if (!producer || isIncludeDirective(producer)) continue;

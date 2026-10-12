@@ -155,6 +155,21 @@ export function whenAtoms(expr: string): string[] {
   return splitOutsideQuotes(expr.trim(), '||').flatMap(clause => splitOutsideQuotes(clause, '&&'));
 }
 
+/** Parse the full OR-of-AND expression before any values can short-circuit it. */
+export function parseWhenExpression(expr: string, allowLoopPrev = false): WhenAtom[][] | null {
+  const clauses: WhenAtom[][] = [];
+  for (const clause of splitOutsideQuotes(expr.trim(), '||')) {
+    const atoms: WhenAtom[] = [];
+    for (const text of splitOutsideQuotes(clause, '&&')) {
+      const atom = parseWhenAtomInternal(text, allowLoopPrev);
+      if (atom === null) return null;
+      atoms.push(atom);
+    }
+    clauses.push(atoms);
+  }
+  return clauses;
+}
+
 /** Quoted RHS values are literal data, even when they contain reference-shaped text. */
 export function assertSupportedWhenOutputRefs(expr: string): void {
   for (const atom of whenAtoms(expr)) {
@@ -181,9 +196,8 @@ export function findUnsupportedNestedWhenRef(expr: string): { reference: string 
 }
 
 /**
- * Parse one ordinary atom. Returns `null` when the text is not a well-formed atom — every
- * caller treats that as a parse failure (the evaluator fails closed and skips the
- * node; the loader leaves the atom to that runtime behaviour).
+ * Parse one ordinary atom. Returns `null` when the text is not a well-formed atom — the loader rejects
+ * malformed expressions and the evaluator fails closed when called directly.
  */
 export function parseWhenAtom(expr: string): WhenAtom | null {
   return parseWhenAtomInternal(expr, false);
