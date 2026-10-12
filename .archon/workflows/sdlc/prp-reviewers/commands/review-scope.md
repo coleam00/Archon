@@ -62,7 +62,7 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 4. **Changed files** — path list with a one-line shape of the change per file (added/modified/deleted, rough size).
 5. **The diff to review** — inline when small; for a large diff, the exact commands a reviewer runs to see it (`git diff <range>`).
 6. **Prior report** — continuation mode only: its path and reviewed-head cursor. Do not duplicate its findings or coverage.
-7. **Validation** — the project validation the implementer ran at handoff, quoted from `$ARTIFACTS_DIR/implementation.md`: each command and its result. Review runs no project gate of its own; a reviewer runs only a focused check that proves a specific finding.
+7. **Validation** — the checks the implementer ran on what it changed, quoted from `$ARTIFACTS_DIR/implementation.md`: each command and its result. The project's full validation is CI's, after review; review runs no project gate of its own, and a reviewer runs only a focused check that proves a specific finding.
 
 ## Verify before finishing
 
