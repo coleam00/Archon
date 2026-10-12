@@ -1,3 +1,4 @@
+import { listWorkflowEvents } from '@archon/core/db/workflow-events';
 import { randomUUID } from 'node:crypto';
 import { getOrCreateConversation } from '@archon/core/db/conversations';
 import { listMessages } from '@archon/core/db/messages';
@@ -394,6 +395,57 @@ describe('server resource-start host', () => {
     await until(() => engine.claimed[0]);
     expect(engine.submitted[0]?.options?.preCreatedRun?.codebase_id).toBe(parent.codebaseId);
   });
+
+  test.each([false, true])(
+    'worktree provisioning is durable before engine submission (failure: %s)',
+    async fails => {
+      const { deliver, engine } = await fixture(false, { kind: 'worktree' });
+      await writeFile(
+        join(root, 'project', '.archon', 'config.yaml'),
+        `worktree:\n  postCreate:\n    - echo setup-evidence; ${fails ? 'echo valuable > installer-output; exit 7' : 'true'}\n`
+      );
+      expect((await deliver('setup', 'queue')).status).toBe(200);
+      const workflowHost = { ...createSqlWorkflowHost(), engine };
+      const admitted: string[] = [];
+      await drainResourceStartHost({
+        ...workflowHost,
+        hostId: HOST_ID,
+        startAdmitted: async id => {
+          admitted.push(id);
+        },
+      });
+      const runId = admitted[0];
+      if (!runId) throw new Error('Expected admitted run');
+      const start = (): ReturnType<typeof startAdmittedResourceStart> =>
+        startAdmittedResourceStart({
+          host: workflowHost,
+          hostId: HOST_ID,
+          requestId: runId,
+          createPlatform: () => new HeadlessPlatform(),
+        });
+      if (fails) {
+        await expect(start()).rejects.toThrow('exit code 7');
+        expect(engine.submitted).toHaveLength(0);
+        expect((await getWorkflowRun(runId))?.status).toBe('pending');
+      } else {
+        await start();
+        expect(engine.submitted[0]?.options?.preCreatedRun?.id).toBe(runId);
+      }
+      const events = await listWorkflowEvents(runId);
+      const setup = events.filter(event => event.event_type.startsWith('worktree_setup_'));
+      expect(setup.map(event => event.event_type)).toEqual([
+        'worktree_setup_started',
+        fails ? 'worktree_setup_failed' : 'worktree_setup_completed',
+      ]);
+      expect(setup[1]?.data?.stdoutTail).toContain('setup-evidence');
+      if (fails) {
+        expect(setup[1]?.data?.exitCode).toBe(7);
+        await expect(start()).rejects.toThrow('its setup did not finish');
+        expect(engine.submitted).toHaveLength(0);
+      }
+    },
+    30000
+  );
 
   for (const base of [null, 'release']) {
     test(`resource start forwards ${String(base)} at worktree creation and engine submission`, async () => {

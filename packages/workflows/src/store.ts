@@ -1,3 +1,4 @@
+import { WORKTREE_SETUP_EVENT_TYPES } from './schemas/worktree-setup';
 import type { IResourceStartStore } from './resource-start-store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
@@ -127,6 +128,7 @@ export type NodeStateEventType = (typeof NODE_STATE_EVENT_TYPES)[number];
 
 export const DURABLE_WORKFLOW_EVENT_TYPES = [
   ...NODE_STATE_EVENT_TYPES,
+  ...WORKTREE_SETUP_EVENT_TYPES,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
 ] as const;
 export type DurableWorkflowEventType = (typeof DURABLE_WORKFLOW_EVENT_TYPES)[number];

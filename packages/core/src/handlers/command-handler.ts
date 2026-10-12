@@ -1,3 +1,4 @@
+import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
 import { RunActionForbiddenError } from '../operations/run-authorization';
 /**
  * Command handler for slash commands
@@ -400,6 +401,7 @@ async function handleWorktreeCommand(
 
       try {
         // Use isolation provider for worktree creation
+        ensureIsolationConfigured();
         const provider = getIsolationProvider();
         const env = await provider.create({
           codebaseId: conversation.codebase_id,
@@ -442,7 +444,7 @@ async function handleWorktreeCommand(
         const shortPath = shortenPath(env.workingPath, mainPath);
         return {
           success: true,
-          message: `Worktree created!\n\nBranch: ${env.branchName ?? branchName}\nPath: ${shortPath}\n\nThis conversation now works in isolation.\nRun dependency install if needed (e.g., bun install).`,
+          message: `Worktree created!\n\nBranch: ${env.branchName ?? branchName}\nPath: ${shortPath}\n\nThis conversation now works in isolation.`,
           modified: true,
         };
       } catch (error) {

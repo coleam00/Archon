@@ -1,3 +1,9 @@
+import { requireTerminalStatusWrite } from '@archon/workflows/terminal-status-write';
+import {
+  configureWorktreeIsolation,
+  createRunWorktreeSetupExecutor,
+  retainSetupRunSource,
+} from '@archon/core/workflows/worktree-setup';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import type { Conversation } from '@archon/core/schemas/conversation';
 import { providerRegistry } from '@archon/providers';
@@ -55,7 +61,6 @@ import {
   type RawTiersConfig,
 } from '@archon/workflows/model-validation';
 import {
-  configureIsolation,
   getIsolationProvider,
   resolveFolderBackend,
   classifyIsolationError,
@@ -2900,333 +2905,8 @@ async function runWorkflowWithOwnedSource(
   assertNoWorktreeOptionsForFolder(isFolderCodebase, options);
   assertWorkflowNotWorktreePinnedForFolder(isFolderCodebase, pinnedEnabled, workflow.name);
 
-  if (isFolderCodebase && codebase) {
-    // Folder projects run through the folder-backend seam — no worktree isolation.
-    // The in-place backend (default) keeps the agent's cwd at the folder root, so
-    // it sees every child folder/repo, and per-service git (branch/commit/PR) is
-    // the agent's job via bash/gh. The container backend (--container / config)
-    // instead runs everything inside an overlay-isolated container.
-    const folderCodebase = {
-      id: codebase.id,
-      defaultCwd: codebase.default_cwd,
-      name: codebase.name,
-      kind: 'folder' as const,
-    };
-
-    // Selection precedence: --container flag > workflow container.enabled >
-    // config container.enabled (default off). Do NOT swallow loadConfig errors:
-    // a malformed/unreadable config that would carry `container.*` policy must
-    // FAIL the run, never silently downgrade to an in-place host run (fail-fast).
-    // loadConfig returns defaults when no config file exists (not an error).
-    //
-    // On a RESUME (approve/reject/resume re-enter with `{ resume: true }` and no
-    // --container flag), honor the ORIGINAL run's isolation via its stamped
-    // metadata — never re-derive from the flag/config, or a resume could silently
-    // switch a container run to in-place on the live root.
-    const folderConfig = await host.deps.loadConfig(codebase.default_cwd);
-    const wantsContainer = options.resume
-      ? resumable?.metadata?.isolation === 'container'
-      : (options.container ??
-        workflow.container?.enabled ??
-        folderConfig?.container?.enabled ??
-        false);
-
-    if (wantsContainer) {
-      const containerConfig = resolveContainerBackendConfig(folderConfig?.container);
-      const backend = resolveFolderBackend(folderCodebase, {
-        container: true,
-        store: host.records.isolation,
-        containerConfig,
-      });
-      let prepared;
-      if (options.resume) {
-        // Rediscover + restart the container for this run: `docker start` a
-        // suspended container, or recreate one over the persisted upper volume
-        // (the accumulated overlay is preserved). The env id was stamped into the
-        // run metadata at first-run creation. resumeEnv fails LOUD if the volume
-        // is gone (un-applied work lost) rather than restarting from empty.
-        //
-        // Ordering (L3): the container is restarted FIRST (here) even on a
-        // write-back-only resume where no DAG node will re-execute — kept uniform
-        // with the mid-DAG-approval resume, which DOES need a live container. The
-        // subsequent write-back apply runs in an INDEPENDENT `docker run` helper
-        // over the volume (see overlay.ts), so it neither needs nor races the
-        // restarted run container.
-        const resumeEnvId =
-          typeof resumable?.metadata?.isolation_env_id === 'string'
-            ? resumable.metadata.isolation_env_id
-            : undefined;
-        if (!resumeEnvId) {
-          throw new Error(
-            `Cannot resume container run '${resumable?.id ?? '?'}': its isolation env id is ` +
-              'missing from the run metadata. Start a fresh --container run instead.'
-          );
-        }
-        console.log(`Folder project — resuming container run (image ${containerConfig.image}).`);
-        getLog().info(
-          { envId: resumeEnvId, image: containerConfig.image },
-          'workflow.resuming_in_container'
-        );
-        try {
-          prepared = await backend.resumeEnv(resumeEnvId);
-        } catch (resumeErr) {
-          const err = resumeErr as Error;
-          getLog().error({ err, envId: resumeEnvId }, 'workflow.container_resume_failed');
-          throw new Error(classifyIsolationError(err));
-        }
-      } else {
-        console.log(`Folder project — running in container (image ${containerConfig.image}).`);
-        getLog().info(
-          { cwd: codebase.default_cwd, image: containerConfig.image },
-          'workflow.running_in_container'
-        );
-        try {
-          // The container fixes its mounts at creation, so the run's source must already
-          // be at its final path. Move it there now; executeWorkflow recomputes the same
-          // destination and skips its own move.
-          if (preparedSource) {
-            preparedSource = await finalizeWorkflowSource(host.deps, preparedSource, {
-              cwd: folderCodebase.defaultCwd,
-              codebaseId: folderCodebase.id,
-            });
-            // Finalization moved the capture, so keep ownership on the path that now
-            // exists. If container preparation fails below, the wrap reclaims the
-            // finalized capture instead of the already-renamed staging path.
-            owner.hold(preparedSource);
-          }
-          // `$ARTIFACTS_DIR` is the run's output channel on both sides of the boundary,
-          // so it is bound read-write at the same absolute path. Created here by the host
-          // user: a bind target Docker has to create itself would be owned by root.
-          let mounts: { sourceMount: string; artifactsMount: string } | undefined;
-          if (preparedSource) {
-            const { artifactsDir } = await resolveProjectPaths(
-              host.deps,
-              folderCodebase.defaultCwd,
-              preparedSource.runId,
-              folderCodebase.id
-            );
-            await mkdir(artifactsDir, { recursive: true });
-            // Read-only source and read-write artifacts, both at the same absolute path
-            // inside the container, so a path means one thing on either side of the
-            // boundary.
-            mounts = { sourceMount: preparedSource.anchor.root, artifactsMount: artifactsDir };
-          }
-          prepared = await backend.prepare({ codebase: folderCodebase, ...(mounts ?? {}) });
-        } catch (prepErr) {
-          // Map docker/daemon/image failures to an actionable message (daemon down,
-          // runner image missing, docker-group permission — see errors.ts).
-          const err = prepErr as Error;
-          getLog().error({ err, codebaseId: codebase.id }, 'workflow.container_prepare_failed');
-          throw new Error(classifyIsolationError(err));
-        }
-      }
-      // The container mounts the overlay at the SAME absolute path (same-absolute-
-      // path invariant), so prepared.cwd is the folder root. Consume it explicitly
-      // rather than assuming workingCwd — the container backend returns a
-      // container-side cwd, unlike in-place.
-      workingCwd = prepared.cwd;
-      execContext = prepared.execContext;
-      containerBackend = backend;
-      containerEnvId = prepared.envId;
-      containerOverlayMode = prepared.overlayMode;
-      isolationEnvId = prepared.envId;
-    } else {
-      // In-place (default) — byte-identical to pre-container behavior: keep
-      // workingCwd, only annotate the host execContext.
-      console.log('Folder project — running in place (no worktree isolation).');
-      getLog().info({ cwd: workingCwd }, 'workflow.running_without_isolation');
-      const backend = resolveFolderBackend(folderCodebase, { container: false });
-      const prepared = await backend.prepare({ codebase: folderCodebase });
-      execContext = prepared.execContext;
-    }
-  } else if (wantsIsolation && codebase) {
-    // Auto-generate branch identifier from workflow name + timestamp when --branch not provided
-    const branchIdentifier = options.branchName ?? `${workflowName}-${Date.now()}`;
-
-    // Configure isolation with repo config loader (same as orchestrator)
-    configureIsolation(async (repoPath: string) => {
-      const repoConfig = await loadRepoConfig(repoPath);
-      return repoConfig?.worktree ?? null;
-    });
-
-    const provider = getIsolationProvider();
-
-    // Check for existing worktree (only when explicit --branch)
-    const existingEnv = existingBranchEnv;
-
-    if (existingEnv && (await provider.healthCheck(existingEnv.working_path))) {
-      if (options.fromBranch) {
-        getLog().warn(
-          { path: existingEnv.working_path, fromBranch: options.fromBranch },
-          'worktree.reuse_from_branch_ignored'
-        );
-        console.warn(
-          `Warning: Reusing existing worktree at ${existingEnv.working_path}. ` +
-            `--from ${options.fromBranch} was not applied (worktree already exists).`
-        );
-      }
-      if (flagBase) {
-        warnBaseOverrideOnReuse(existingEnv.working_path, flagBase);
-      }
-      // Validate base branch before reuse (warning-only — non-blocking)
-      try {
-        const repoConfig = await loadRepoConfig(codebase.default_cwd);
-        const rawBase = repoConfig?.worktree?.baseBranch?.trim();
-        const repoPath = git.toRepoPath(codebase.default_cwd);
-        const remote =
-          repoConfig?.worktree?.remote?.trim() || (await git.getDefaultRemote(repoPath));
-        if (!remote) throw new Error('Set worktree.remote to select a git remote.');
-        // Four-level fallback: --base override → repo config → codebase default →
-        // git auto-detect. Mirrors WorktreeProvider and executeWorkflow, so the
-        // reuse check validates against the base this dispatch actually asked
-        // for instead of reporting a mismatch nobody requested.
-        let configuredBase: git.BranchName;
-        if (flagBase) {
-          configuredBase = git.toBranchName(flagBase);
-        } else if (rawBase) {
-          configuredBase = git.toBranchName(rawBase);
-        } else if (codebaseDefaultBranch) {
-          configuredBase = git.toBranchName(codebaseDefaultBranch);
-        } else {
-          configuredBase = await git.getDefaultBranch(repoPath, remote);
-        }
-        const isValidBase = await git.isAncestorOf(
-          git.toWorktreePath(existingEnv.working_path),
-          `${remote}/${configuredBase}`
-        );
-        if (!isValidBase) {
-          getLog().warn(
-            { path: existingEnv.working_path, configuredBase, branch: existingEnv.branch_name },
-            'worktree.reuse_base_branch_mismatch'
-          );
-          console.warn(
-            `Warning: Worktree '${existingEnv.branch_name}' is not based on '${configuredBase}'. ` +
-              `Recreate with: bun run cli complete ${existingEnv.branch_name} --force`
-          );
-        }
-      } catch (e) {
-        getLog().debug({ err: e }, 'worktree.reuse_base_branch_check_skipped');
-        // Non-blocking — skip warning if base branch cannot be determined
-      }
-      getLog().info({ path: existingEnv.working_path }, 'worktree_reused');
-      workingCwd = existingEnv.working_path;
-      isolationEnvId = existingEnv.id;
-    } else {
-      // Create new worktree
-      getLog().info(
-        { branch: branchIdentifier, fromBranch: options.fromBranch },
-        'worktree_creating'
-      );
-
-      let isolatedEnv: WorktreeCreationEnvironment;
-      try {
-        isolatedEnv = await provider.create({
-          workflowType: 'task',
-          identifier: branchIdentifier,
-          taskBranch: adoptedTaskBranch
-            ? adoptedTaskBranch
-            : options.branchName
-              ? {
-                  kind: 'new',
-                  branch: git.toBranchName(options.branchName),
-                  ...(options.fromBranch?.trim()
-                    ? { fromBranch: git.toBranchName(options.fromBranch.trim()) }
-                    : {}),
-                }
-              : options.fromBranch?.trim()
-                ? { kind: 'new', fromBranch: git.toBranchName(options.fromBranch.trim()) }
-                : undefined,
-          baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
-          baseOverride: flagBase ? git.toBranchName(flagBase) : undefined,
-          codebaseId: codebase.id,
-          // owner/repo name lets resolveOwnerRepo use the registered identity
-          // instead of the _local/<basename> path fallback (#2022, #2227)
-          codebaseName: codebase.name,
-          canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
-          description: `CLI workflow: ${workflowName}`,
-        });
-      } catch (createError) {
-        // Same translation the container branches above apply. The classified
-        // message also carries the note a failed cleanup records outside
-        // `err.message`, which the raw error would drop on this path.
-        const err = createError as Error;
-        getLog().error({ err, branch: branchIdentifier }, 'worktree.create_failed');
-        throw new Error(classifyIsolationError(err), { cause: err });
-      }
-
-      // Track in database
-      const envRecord = await host.records.isolation.create({
-        codebase_id: codebase.id,
-        workflow_type: 'task',
-        workflow_id: branchIdentifier,
-        provider: 'worktree',
-        working_path: isolatedEnv.workingPath,
-        branch_name: isolatedEnv.branchName,
-        created_by_platform: 'cli',
-        metadata: { ...worktreeRegistrationMetadata(isolatedEnv.metadata) },
-      });
-
-      workingCwd = isolatedEnv.workingPath;
-      isolationEnvId = envRecord.id;
-      if (isolatedEnv.metadata.provenance === 'created')
-        ownedWorktree = { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId };
-      if (!isolatedEnv.metadata.adopted) cutFromCommit = isolatedEnv.metadata.cutFromCommit;
-      getLog().info({ path: workingCwd }, 'worktree_created');
-    }
-  } else if (options.noWorktree) {
-    getLog().info({ cwd }, 'workflow.running_without_isolation');
-  } else if (wantsIsolation) {
-    // Isolation was expected (default) but codebase is unavailable — fail fast. The
-    // `--detach` pre-flight enforces the same refusal before the fork.
-    assertCodebaseResolvedForIsolation({
-      codebase,
-      lookupError: codebaseLookupError,
-      registrationError: codebaseRegistrationError,
-    });
-  }
-
-  if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined && preparedSource) {
-    preparedSource = { ...preparedSource, origin: workingCwd };
-  }
-
-  // Chat-origin runs keep their history; a fresh CLI invocation has no chat record.
-  if (conversation !== undefined) {
-    // Update conversation with cwd and isolation info
-    try {
-      await host.records.conversations.updateConversation(conversation.id, {
-        cwd: workingCwd,
-        codebase_id: codebase?.id ?? null,
-        isolation_env_id: isolationEnvId ?? null,
-      });
-    } catch (error) {
-      const err = error as Error;
-      throw new Error(`Failed to update conversation: ${err.message}`);
-    }
-
-    // Persist user message for Web UI history.
-    try {
-      await host.records.messages.addMessage(
-        conversation.id,
-        'user',
-        userMessage,
-        undefined,
-        cliUserId
-      );
-    } catch (error) {
-      getLog().warn(
-        { err: error as Error, conversationId: conversation.id },
-        'cli_user_message_persist_failed'
-      );
-    }
-  }
-
-  // Graceful-termination guard rails (#1123) settle only THE run this process is
-  // driving. The run id is reserved by source capture before a fresh execution and
-  // already exists on resume or a detached handoff — never from a conversation-wide
-  // "active run" query, which can match a run driven by another process (children
-  // share parent_conversation_id).
-  const ownedRunId = resumable?.id ?? detachedPreCreatedRun?.id ?? preparedSource?.runId;
-  if (ownedRunId === undefined) throw new Error('Workflow execution has no resolved run ID');
+  let setupPreparedRun: WorkflowRun | undefined;
+  let executionSubmitted = false;
   let runLiveOwner: Awaited<ReturnType<typeof startRunLiveOwner>> | undefined = undefined;
   let runLiveOwnerClose: Promise<void> | undefined;
   const closeRunLiveOwner = (): Promise<void> => {
@@ -3234,398 +2914,799 @@ async function runWorkflowWithOwnedSource(
     runLiveOwnerClose ??= runLiveOwner.close();
     return runLiveOwnerClose;
   };
-  const deregisterTermination = registerOwnedRunTermination({
-    store: host.deps.store,
-    runId: ownedRunId,
-    logModule: 'cli.workflow',
-    liveOwner: {
-      isStopRequested: () => runLiveOwner?.isStopRequested() ?? false,
-      close: closeRunLiveOwner,
-    },
-    teardown: async signal => {
-      // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
-      // PRIVILEGED container — the forced exit bypasses the teardown `finally`.
-      if (containerBackend && containerEnvId) {
-        try {
-          await containerBackend.destroy(containerEnvId);
-        } catch (destroyErr) {
-          console.error(
-            `\nWARNING: could not remove the isolation container on ${signal}: ` +
-              `${(destroyErr as Error).message}. Remove it manually: ` +
-              'docker ps -a --filter label=diy.archon.managed=true'
+  try {
+    if (isFolderCodebase && codebase) {
+      // Folder projects run through the folder-backend seam — no worktree isolation.
+      // The in-place backend (default) keeps the agent's cwd at the folder root, so
+      // it sees every child folder/repo, and per-service git (branch/commit/PR) is
+      // the agent's job via bash/gh. The container backend (--container / config)
+      // instead runs everything inside an overlay-isolated container.
+      const folderCodebase = {
+        id: codebase.id,
+        defaultCwd: codebase.default_cwd,
+        name: codebase.name,
+        kind: 'folder' as const,
+      };
+
+      // Selection precedence: --container flag > workflow container.enabled >
+      // config container.enabled (default off). Do NOT swallow loadConfig errors:
+      // a malformed/unreadable config that would carry `container.*` policy must
+      // FAIL the run, never silently downgrade to an in-place host run (fail-fast).
+      // loadConfig returns defaults when no config file exists (not an error).
+      //
+      // On a RESUME (approve/reject/resume re-enter with `{ resume: true }` and no
+      // --container flag), honor the ORIGINAL run's isolation via its stamped
+      // metadata — never re-derive from the flag/config, or a resume could silently
+      // switch a container run to in-place on the live root.
+      const folderConfig = await host.deps.loadConfig(codebase.default_cwd);
+      const wantsContainer = options.resume
+        ? resumable?.metadata?.isolation === 'container'
+        : (options.container ??
+          workflow.container?.enabled ??
+          folderConfig?.container?.enabled ??
+          false);
+
+      if (wantsContainer) {
+        const containerConfig = resolveContainerBackendConfig(folderConfig?.container);
+        const backend = resolveFolderBackend(folderCodebase, {
+          container: true,
+          store: host.records.isolation,
+          containerConfig,
+        });
+        let prepared;
+        if (options.resume) {
+          // Rediscover + restart the container for this run: `docker start` a
+          // suspended container, or recreate one over the persisted upper volume
+          // (the accumulated overlay is preserved). The env id was stamped into the
+          // run metadata at first-run creation. resumeEnv fails LOUD if the volume
+          // is gone (un-applied work lost) rather than restarting from empty.
+          //
+          // Ordering (L3): the container is restarted FIRST (here) even on a
+          // write-back-only resume where no DAG node will re-execute — kept uniform
+          // with the mid-DAG-approval resume, which DOES need a live container. The
+          // subsequent write-back apply runs in an INDEPENDENT `docker run` helper
+          // over the volume (see overlay.ts), so it neither needs nor races the
+          // restarted run container.
+          const resumeEnvId =
+            typeof resumable?.metadata?.isolation_env_id === 'string'
+              ? resumable.metadata.isolation_env_id
+              : undefined;
+          if (!resumeEnvId) {
+            throw new Error(
+              `Cannot resume container run '${resumable?.id ?? '?'}': its isolation env id is ` +
+                'missing from the run metadata. Start a fresh --container run instead.'
+            );
+          }
+          console.log(`Folder project — resuming container run (image ${containerConfig.image}).`);
+          getLog().info(
+            { envId: resumeEnvId, image: containerConfig.image },
+            'workflow.resuming_in_container'
+          );
+          try {
+            prepared = await backend.resumeEnv(resumeEnvId);
+          } catch (resumeErr) {
+            const err = resumeErr as Error;
+            getLog().error({ err, envId: resumeEnvId }, 'workflow.container_resume_failed');
+            throw new Error(classifyIsolationError(err));
+          }
+        } else {
+          console.log(`Folder project — running in container (image ${containerConfig.image}).`);
+          getLog().info(
+            { cwd: codebase.default_cwd, image: containerConfig.image },
+            'workflow.running_in_container'
+          );
+          try {
+            // The container fixes its mounts at creation, so the run's source must already
+            // be at its final path. Move it there now; executeWorkflow recomputes the same
+            // destination and skips its own move.
+            if (preparedSource) {
+              preparedSource = await finalizeWorkflowSource(host.deps, preparedSource, {
+                cwd: folderCodebase.defaultCwd,
+                codebaseId: folderCodebase.id,
+              });
+              // Finalization moved the capture, so keep ownership on the path that now
+              // exists. If container preparation fails below, the wrap reclaims the
+              // finalized capture instead of the already-renamed staging path.
+              owner.hold(preparedSource);
+            }
+            // `$ARTIFACTS_DIR` is the run's output channel on both sides of the boundary,
+            // so it is bound read-write at the same absolute path. Created here by the host
+            // user: a bind target Docker has to create itself would be owned by root.
+            let mounts: { sourceMount: string; artifactsMount: string } | undefined;
+            if (preparedSource) {
+              const { artifactsDir } = await resolveProjectPaths(
+                host.deps,
+                folderCodebase.defaultCwd,
+                preparedSource.runId,
+                folderCodebase.id
+              );
+              await mkdir(artifactsDir, { recursive: true });
+              // Read-only source and read-write artifacts, both at the same absolute path
+              // inside the container, so a path means one thing on either side of the
+              // boundary.
+              mounts = { sourceMount: preparedSource.anchor.root, artifactsMount: artifactsDir };
+            }
+            prepared = await backend.prepare({ codebase: folderCodebase, ...(mounts ?? {}) });
+          } catch (prepErr) {
+            // Map docker/daemon/image failures to an actionable message (daemon down,
+            // runner image missing, docker-group permission — see errors.ts).
+            const err = prepErr as Error;
+            getLog().error({ err, codebaseId: codebase.id }, 'workflow.container_prepare_failed');
+            throw new Error(classifyIsolationError(err));
+          }
+        }
+        // The container mounts the overlay at the SAME absolute path (same-absolute-
+        // path invariant), so prepared.cwd is the folder root. Consume it explicitly
+        // rather than assuming workingCwd — the container backend returns a
+        // container-side cwd, unlike in-place.
+        workingCwd = prepared.cwd;
+        execContext = prepared.execContext;
+        containerBackend = backend;
+        containerEnvId = prepared.envId;
+        containerOverlayMode = prepared.overlayMode;
+        isolationEnvId = prepared.envId;
+      } else {
+        // In-place (default) — byte-identical to pre-container behavior: keep
+        // workingCwd, only annotate the host execContext.
+        console.log('Folder project — running in place (no worktree isolation).');
+        getLog().info({ cwd: workingCwd }, 'workflow.running_without_isolation');
+        const backend = resolveFolderBackend(folderCodebase, { container: false });
+        const prepared = await backend.prepare({ codebase: folderCodebase });
+        execContext = prepared.execContext;
+      }
+    } else if (wantsIsolation && codebase) {
+      // Auto-generate branch identifier from workflow name + timestamp when --branch not provided
+      const branchIdentifier = options.branchName ?? `${workflowName}-${Date.now()}`;
+
+      // Configure isolation with repo config loader (same as orchestrator)
+      configureWorktreeIsolation();
+
+      const provider = getIsolationProvider();
+
+      // Check for existing worktree (only when explicit --branch)
+      const existingEnv = existingBranchEnv;
+
+      if (existingEnv && (await provider.healthCheck(existingEnv.working_path))) {
+        if (options.fromBranch) {
+          getLog().warn(
+            { path: existingEnv.working_path, fromBranch: options.fromBranch },
+            'worktree.reuse_from_branch_ignored'
+          );
+          console.warn(
+            `Warning: Reusing existing worktree at ${existingEnv.working_path}. ` +
+              `--from ${options.fromBranch} was not applied (worktree already exists).`
           );
         }
-      }
-      // Reclaim the staged capture for the same reason: the ownership `finally` —
-      // whose whole premise is "whichever way we leave" — never runs. Ctrl-C during
-      // isolation resolution or worktree creation would otherwise strand a complete
-      // frozen tree.
-      //
-      // The rm targets the ORIGINAL staged path pinned at prepare time, not
-      // `preparedSource.anchor.root` (see `originalStagedRoot`'s note above).
-      // For container runs that path was renamed away by `finalizeWorkflowSource`
-      // and `preparedSource.anchor.root` is now the LIVE source directory —
-      // rm-ing it mid-execution would destroy the run's source.
-      if (originalStagedRoot) {
-        await disposeWorkflowSource({ captureRoot: originalStagedRoot });
-      }
-    },
-  });
-
-  // One-time-per-version notice when the workflow uses unconfigured tier keywords.
-  await maybePrintTierNotice(host, workflow, workingCwd, cliUserId, options.quiet);
-
-  // Subscribe to workflow events for progress rendering. The owner identity was
-  // already reserved by source capture, before executeWorkflow can create its row.
-  // subscribeForConversation is pure in-memory registration — cannot throw in practice.
-  // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
-  const { quiet, verbose } = options;
-  const openToolCalls: OpenToolCalls = new Map();
-  const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
-    if (!quiet) {
-      renderWorkflowEvent(event, verbose ?? false, openToolCalls);
-    }
-  });
-
-  // Notify Web UI that a workflow is dispatching.
-  // Mirrors the orchestrator dispatch message structure (category/segment/workflowDispatch),
-  // but omits the rocket emoji and "(background)" qualifier since the CLI runs synchronously.
-  // In the CLI path there is no separate worker conversation — the CLI itself
-  // is both the dispatcher and the executor, so workerConversationId === conversationId.
-  try {
-    await adapter.sendMessage(conversationId, `Dispatching workflow: **${workflow.name}**`, {
-      category: 'workflow_dispatch_status',
-      segment: 'new',
-      workflowDispatch: { workerConversationId: conversationId, workflowName: workflow.name },
-    });
-  } catch (dispatchError) {
-    getLog().warn(
-      { err: dispatchError as Error, conversationId },
-      'cli.workflow_dispatch_surface_failed'
-    );
-  }
-
-  // The lookup-by-(workflowName, cwd) was already done above for worktree-path
-  // resolution; reuse that result rather than querying twice.
-  const deps = host.deps;
-  const engine = host.engine;
-  let result: Awaited<ReturnType<IWorkflowEngine['submit']>> | undefined;
-  // A genuine container-teardown failure captured in the finally, rethrown AFTER
-  // the finally when the run itself succeeded — so a leaked privileged container
-  // fails the CLI instead of reporting success + exit 0.
-  let containerTeardownError: Error | undefined;
-  try {
-    runLiveOwner = await startRunLiveOwner(ownedRunId, {
-      ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
-    });
-    // Container run context for the engine (Phase C): the write-back backend port +
-    // env id + policy. The executor drives suspend-on-pause and the write-back gate
-    // through this. Absent for host/in-place runs.
-    const containerRunCtx =
-      containerBackend && containerEnvId
-        ? {
-            envId: containerEnvId,
-            writeBack: workflow.container?.write_back ?? ('approve' as const),
-            backend: containerBackend,
-            ...(containerOverlayMode ? { overlayMode: containerOverlayMode } : {}),
+        if (flagBase) {
+          warnBaseOverrideOnReuse(existingEnv.working_path, flagBase);
+        }
+        // Validate base branch before reuse (warning-only — non-blocking)
+        try {
+          const repoConfig = await loadRepoConfig(codebase.default_cwd);
+          const rawBase = repoConfig?.worktree?.baseBranch?.trim();
+          const repoPath = git.toRepoPath(codebase.default_cwd);
+          const remote =
+            repoConfig?.worktree?.remote?.trim() || (await git.getDefaultRemote(repoPath));
+          if (!remote) throw new Error('Set worktree.remote to select a git remote.');
+          // Four-level fallback: --base override → repo config → codebase default →
+          // git auto-detect. Mirrors WorktreeProvider and executeWorkflow, so the
+          // reuse check validates against the base this dispatch actually asked
+          // for instead of reporting a mismatch nobody requested.
+          let configuredBase: git.BranchName;
+          if (flagBase) {
+            configuredBase = git.toBranchName(flagBase);
+          } else if (rawBase) {
+            configuredBase = git.toBranchName(rawBase);
+          } else if (codebaseDefaultBranch) {
+            configuredBase = git.toBranchName(codebaseDefaultBranch);
+          } else {
+            configuredBase = await git.getDefaultBranch(repoPath, remote);
           }
-        : undefined;
-    const resolveChildIsolation = codebase
-      ? createCodebaseChildResolver(host.records.isolation, codebase, {
-          baseBranch: codebaseDefaultBranch,
-          createdByPlatform: 'cli',
-          createdByUserId: cliUserId,
-        })
-      : undefined;
-    const commonOptions = {
-      codebaseId: codebase?.id,
-      source: workflowSource,
-      parseWarnings: workflowEntry?.parseWarnings,
-      baseBranch: codebaseDefaultBranch,
-      baseOverride: flagBase,
-      execContext,
-      container: containerRunCtx,
-      resolveChildIsolation,
-    };
-    if (options.resume && resumable) {
-      let admission: Awaited<ReturnType<IWorkflowEngine['resume']>>;
+          const isValidBase = await git.isAncestorOf(
+            git.toWorktreePath(existingEnv.working_path),
+            `${remote}/${configuredBase}`
+          );
+          if (!isValidBase) {
+            getLog().warn(
+              { path: existingEnv.working_path, configuredBase, branch: existingEnv.branch_name },
+              'worktree.reuse_base_branch_mismatch'
+            );
+            console.warn(
+              `Warning: Worktree '${existingEnv.branch_name}' is not based on '${configuredBase}'. ` +
+                `Recreate with: bun run cli complete ${existingEnv.branch_name} --force`
+            );
+          }
+        } catch (e) {
+          getLog().debug({ err: e }, 'worktree.reuse_base_branch_check_skipped');
+          // Non-blocking — skip warning if base branch cannot be determined
+        }
+        getLog().info({ path: existingEnv.working_path }, 'worktree_reused');
+        workingCwd = existingEnv.working_path;
+        isolationEnvId = existingEnv.id;
+      } else {
+        // Create new worktree
+        getLog().info(
+          { branch: branchIdentifier, fromBranch: options.fromBranch },
+          'worktree_creating'
+        );
+
+        let isolatedEnv: WorktreeCreationEnvironment;
+        let setupRun: WorkflowRun | undefined;
+        try {
+          if (!preparedSource)
+            throw new Error('Worktree setup requires a captured workflow source');
+          runLiveOwner = await startRunLiveOwner(
+            detachedPreCreatedRun?.id ?? preparedSource.runId,
+            {
+              ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
+            }
+          );
+          setupRun =
+            detachedPreCreatedRun ??
+            (await host.deps.store.createWorkflowRun({
+              id: preparedSource.runId,
+              workflow_name: workflow.name,
+              origin: {
+                ...(conversation ? { conversationId: conversation.id } : {}),
+                userId: cliUserId,
+              },
+              codebase_id: codebase.id,
+              user_message: userMessage,
+              metadata: {
+                [RUN_AI_CONFIGURATION_METADATA_KEY]:
+                  preparedAiConfiguration.aiConfigurationSnapshot,
+                ...(preparedAiConfiguration.runConfigMetadata
+                  ? {
+                      [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAiConfiguration.runConfigMetadata,
+                    }
+                  : {}),
+                ...(resolvedInputs ? { [SUBRUN_METADATA_KEYS.inputs]: resolvedInputs } : {}),
+                ...(adoptedFromRunId
+                  ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode } }
+                  : {}),
+              },
+              ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
+            }));
+          detachedPreCreatedRun = setupRun;
+          setupPreparedRun = setupRun;
+          preparedSource = await retainSetupRunSource(
+            host.deps,
+            setupRun,
+            preparedSource,
+            owner,
+            codebase.default_cwd,
+            codebase.id
+          );
+          isolatedEnv = await provider.create(
+            {
+              workflowType: 'task',
+              identifier: branchIdentifier,
+              taskBranch: adoptedTaskBranch
+                ? adoptedTaskBranch
+                : options.branchName
+                  ? {
+                      kind: 'new',
+                      branch: git.toBranchName(options.branchName),
+                      ...(options.fromBranch?.trim()
+                        ? { fromBranch: git.toBranchName(options.fromBranch.trim()) }
+                        : {}),
+                    }
+                  : options.fromBranch?.trim()
+                    ? { kind: 'new', fromBranch: git.toBranchName(options.fromBranch.trim()) }
+                    : undefined,
+              baseBranch: codebaseDefaultBranch
+                ? git.toBranchName(codebaseDefaultBranch)
+                : undefined,
+              baseOverride: flagBase ? git.toBranchName(flagBase) : undefined,
+              codebaseId: codebase.id,
+              // owner/repo name lets resolveOwnerRepo use the registered identity
+              // instead of the _local/<basename> path fallback (#2022, #2227)
+              codebaseName: codebase.name,
+              canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
+              description: `CLI workflow: ${workflowName}`,
+            },
+            setupRun
+              ? createRunWorktreeSetupExecutor(host.deps, setupRun, preparedAiConfiguration.config)
+              : undefined
+          );
+        } catch (createError) {
+          // Same translation the container branches above apply. The classified
+          // message also carries the note a failed cleanup records outside
+          // `err.message`, which the raw error would drop on this path.
+          const err = createError as Error;
+          getLog().error({ err, branch: branchIdentifier }, 'worktree.create_failed');
+          throw new Error(classifyIsolationError(err), { cause: err });
+        }
+
+        // Track in database
+        const envRecord = await host.records.isolation.create({
+          codebase_id: codebase.id,
+          workflow_type: 'task',
+          workflow_id: branchIdentifier,
+          provider: 'worktree',
+          working_path: isolatedEnv.workingPath,
+          branch_name: isolatedEnv.branchName,
+          created_by_platform: 'cli',
+          metadata: { ...worktreeRegistrationMetadata(isolatedEnv.metadata) },
+        });
+
+        workingCwd = isolatedEnv.workingPath;
+        isolationEnvId = envRecord.id;
+        if (isolatedEnv.metadata.provenance === 'created')
+          ownedWorktree = { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId };
+        if (!isolatedEnv.metadata.adopted) cutFromCommit = isolatedEnv.metadata.cutFromCommit;
+        getLog().info({ path: workingCwd }, 'worktree_created');
+      }
+    } else if (options.noWorktree) {
+      getLog().info({ cwd }, 'workflow.running_without_isolation');
+    } else if (wantsIsolation) {
+      // Isolation was expected (default) but codebase is unavailable — fail fast. The
+      // `--detach` pre-flight enforces the same refusal before the fork.
+      assertCodebaseResolvedForIsolation({
+        codebase,
+        lookupError: codebaseLookupError,
+        registrationError: codebaseRegistrationError,
+      });
+    }
+
+    if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined && preparedSource) {
+      preparedSource = { ...preparedSource, origin: workingCwd };
+    }
+
+    // Chat-origin runs keep their history; a fresh CLI invocation has no chat record.
+    if (conversation !== undefined) {
+      // Update conversation with cwd and isolation info
       try {
-        admission = await engine.resume({
-          platform: adapter,
-          conversationId,
+        await host.records.conversations.updateConversation(conversation.id, {
           cwd: workingCwd,
-          legacyWorkflow: workflow,
-          userMessage,
-          run: resumable,
-          options: commonOptions,
+          codebase_id: codebase?.id ?? null,
+          isolation_env_id: isolationEnvId ?? null,
         });
       } catch (error) {
         const err = error as Error;
-        getLog().error(
-          { err, workflowName, runId: resumable.id },
-          'cli.workflow_hydrate_resume_failed'
-        );
-        throw new Error(
-          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`,
-          { cause: err }
-        );
+        throw new Error(`Failed to update conversation: ${err.message}`);
       }
-      if (!admission.accepted) {
-        // `--branch` is only runnable when the prior run used worktree isolation:
-        // folder projects reject worktree options outright, and an in-place repo run
-        // cannot be relaunched onto the branch its own checkout holds. A stale-running
-        // orphan cannot be superseded until it is released, so name that step first.
-        const worktreeBranch = isFolderCodebase ? undefined : resumeBranch;
-        const unblock = isTerminalRunStatus(resumable.status)
-          ? ''
-          : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
-            `  archon workflow abandon ${resumable.id}\n`;
-        const relaunch = [
-          'archon workflow run',
-          workflowName,
-          ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
-          '--supersedes',
-          resumable.id,
-        ].join(' ');
-        throw new Error(
-          `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
-            unblock +
-            (worktreeBranch
-              ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
-              : 'Nothing can be skipped, so start a fresh run instead:\n') +
-            `  ${relaunch}`
-        );
-      }
-      notifyResumeAccepted?.(admission.runId);
-      result = await admission.settled;
-    } else {
-      const opts = {
-        ...commonOptions,
-        // A resume replays the inputs already on its row.
-        inputs: resolvedInputs,
-        ...(modelOverrides
-          ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
-          : {}),
-        ...(runConfig ? { runConfig } : {}),
-        preparedAiConfiguration,
-        // The frozen source this run executes, captured before the workflow was even
-        // selected. A resume ignores it and loads the source recorded on its own row.
-        preparedSource,
-        // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
-        // executor adopts for us there (see #2690). Until then a rename failure
-        // leaves the staged directory un-adopted so the wrap reclaims it on the
-        // way out.
-        capturedSourceOwner: owner,
-        // Between-run continuation (#2747): written once onto the fresh row.
-        ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
-        // The row a detached parent already wrote (#2872). `inputs` and the
-        // continuation fields above are still passed: the executor consumes them only
-        // when IT creates the row, and this row already carries them.
-        ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
-        ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
-        ownedWorktree,
-      };
-      result = await engine.submit({
-        platform: adapter,
-        conversationId,
-        cwd: workingCwd,
-        workflow,
-        userMessage,
-        origin: { ...(conversation ? { conversationId: conversation.id } : {}), userId: cliUserId },
-        options: opts,
-      });
-    }
-  } finally {
-    await closeRunLiveOwner();
-    unsubscribe();
 
-    // Deregister the signal handlers now that the run's lifecycle is settled
-    // (paused / completed / failed, or the throw propagating out of this
-    // finally). A signal from here on gets default handling — the destructive
-    // failWorkflowRun cleanup must never fire against a settled run (#1123),
-    // and removal keeps repeated workflowRunCommand calls in one process from
-    // stacking handlers.
-    deregisterTermination();
-
-    // Container teardown (Phase C) — in `finally` so a throw from executeWorkflow
-    // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
-    // can't orphan a privileged container+volume. A PAUSED run keeps its (already
-    // suspended, by the engine) container + volume for resume — destroying it would
-    // discard the overlay the resume needs. Every OTHER outcome (completed / failed /
-    // cancelled, or a pre-result throw) is terminal for this process → destroy. The
-    // write-back apply already ran inside the engine before completion, so a
-    // completed run's live-root changes are safe before this teardown removes the
-    // volume.
-    const runPaused = Boolean(result?.success && 'paused' in result && result.paused);
-    // H2 — preserve the container+volume whenever the un-applied overlay is still the
-    // only copy of the run's changes: a PAUSED run (awaiting the decision) OR a
-    // TERMINAL run whose write-back never resolved (e.g. a partial applyChanges threw
-    // → run failed with pending_writeback still un-applied). Destroying then would
-    // silently discard the changes despite the "reconcile manually" message. A failed
-    // run stays resumable, so `archon workflow resume <id>` re-runs the apply.
-    let unresolvedWriteback = false;
-    if (containerBackend && containerEnvId && !runPaused && result?.workflowRunId) {
+      // Persist user message for Web UI history.
       try {
-        const finalRun = await deps.store.getWorkflowRun(result.workflowRunId);
-        unresolvedWriteback = hasUnresolvedWriteback(finalRun?.metadata);
-      } catch (lookupErr) {
-        // FAIL CLOSED (R2-F1): if we can't read the run's metadata we can't tell
-        // whether an un-applied write-back is pending — do NOT destroy (the volume
-        // may be the only copy of the changes). Preserve + surface, same as an
-        // unresolved write-back.
-        unresolvedWriteback = true;
-        getLog().error(
-          { err: lookupErr as Error, envId: containerEnvId, runId: result.workflowRunId },
-          'workflow.teardown_run_lookup_failed'
+        await host.records.messages.addMessage(
+          conversation.id,
+          'user',
+          userMessage,
+          undefined,
+          cliUserId
+        );
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, conversationId: conversation.id },
+          'cli_user_message_persist_failed'
         );
       }
     }
-    if (containerBackend && containerEnvId && unresolvedWriteback) {
-      console.error(
-        '\nWARNING: the write-back did not complete — the container + overlay volume are ' +
-          'PRESERVED so your changes are not lost. Retry with ' +
-          `\`bun run cli workflow resume ${result?.workflowRunId ?? '<run-id>'}\` (re-applies the ` +
-          'overlay), or reclaim manually via `docker ps -a --filter label=diy.archon.managed=true`.'
-      );
-      getLog().warn(
-        { envId: containerEnvId, runId: result?.workflowRunId },
-        'workflow.container_preserved_unresolved_writeback'
-      );
-    }
-    if (containerBackend && containerEnvId && !runPaused && !unresolvedWriteback) {
-      try {
-        await containerBackend.destroy(containerEnvId);
-        // Persist a container_destroyed event (console timeline) and emit for any
-        // live subscriber. The emitter fire is after unsubscribe, so the DB row is
-        // the durable channel for CLI runs. No runId on the pre-result throw path —
-        // skip the event, still destroy.
-        const runId = result?.workflowRunId;
-        if (runId) {
-          getWorkflowEventEmitter().emit({
-            type: 'container_lifecycle',
-            runId,
-            phase: 'destroyed',
-          });
-          await deps.store
-            .createWorkflowEvent({
-              workflow_run_id: runId,
-              event_type: 'container_destroyed',
-              step_name: 'container',
-              data: {},
-            })
-            .catch((eventErr: Error) => {
-              getLog().warn(
-                { err: eventErr, runId },
-                'workflow.container_destroyed_event_persist_failed'
-              );
-            });
+
+    // Graceful-termination guard rails (#1123) settle only THE run this process is
+    // driving. The run id is reserved by source capture before a fresh execution and
+    // already exists on resume or a detached handoff — never from a conversation-wide
+    // "active run" query, which can match a run driven by another process (children
+    // share parent_conversation_id).
+    const ownedRunId = resumable?.id ?? detachedPreCreatedRun?.id ?? preparedSource?.runId;
+    if (ownedRunId === undefined) throw new Error('Workflow execution has no resolved run ID');
+    const deregisterTermination = registerOwnedRunTermination({
+      store: host.deps.store,
+      runId: ownedRunId,
+      logModule: 'cli.workflow',
+      liveOwner: {
+        isStopRequested: () => runLiveOwner?.isStopRequested() ?? false,
+        close: closeRunLiveOwner,
+      },
+      teardown: async signal => {
+        // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
+        // PRIVILEGED container — the forced exit bypasses the teardown `finally`.
+        if (containerBackend && containerEnvId) {
+          try {
+            await containerBackend.destroy(containerEnvId);
+          } catch (destroyErr) {
+            console.error(
+              `\nWARNING: could not remove the isolation container on ${signal}: ` +
+                `${(destroyErr as Error).message}. Remove it manually: ` +
+                'docker ps -a --filter label=diy.archon.managed=true'
+            );
+          }
         }
-        console.log('Container and overlay volume removed.');
-      } catch (destroyErr) {
-        // destroy() throws only on a GENUINE docker failure (not idempotent
-        // not-found). Surface it LOUD (console.error, not a --quiet log) so the
-        // operator cleans up the privileged container manually, and CAPTURE it so
-        // a successful run does not report success with a leaked container.
-        console.error(
-          `\nWARNING: failed to remove the isolation container/volume: ${
-            (destroyErr as Error).message
-          }\n` +
-            'Remove it manually: docker ps -a --filter label=diy.archon.managed=true ' +
-            '(then `docker rm -f <name>` and `docker volume rm <name>-upper`).'
-        );
-        getLog().error(
-          { err: destroyErr as Error, envId: containerEnvId },
-          'workflow.container_destroy_failed'
-        );
-        containerTeardownError = destroyErr as Error;
+        // Reclaim the staged capture for the same reason: the ownership `finally` —
+        // whose whole premise is "whichever way we leave" — never runs. Ctrl-C during
+        // isolation resolution or worktree creation would otherwise strand a complete
+        // frozen tree.
+        //
+        // The rm targets the ORIGINAL staged path pinned at prepare time, not
+        // `preparedSource.anchor.root` (see `originalStagedRoot`'s note above).
+        // For container runs that path was renamed away by `finalizeWorkflowSource`
+        // and `preparedSource.anchor.root` is now the LIVE source directory —
+        // rm-ing it mid-execution would destroy the run's source.
+        if (originalStagedRoot) {
+          await disposeWorkflowSource({ captureRoot: originalStagedRoot });
+        }
+      },
+    });
+
+    // One-time-per-version notice when the workflow uses unconfigured tier keywords.
+    await maybePrintTierNotice(host, workflow, workingCwd, cliUserId, options.quiet);
+
+    // Subscribe to workflow events for progress rendering. The owner identity was
+    // already reserved by source capture, before executeWorkflow can create its row.
+    // subscribeForConversation is pure in-memory registration — cannot throw in practice.
+    // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
+    const { quiet, verbose } = options;
+    const openToolCalls: OpenToolCalls = new Map();
+    const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(
+      conversationId,
+      event => {
+        if (!quiet) {
+          renderWorkflowEvent(event, verbose ?? false, openToolCalls);
+        }
       }
-    }
-  }
+    );
 
-  // A container teardown failure on an otherwise-SUCCESSFUL run must fail the CLI
-  // (non-zero exit) — a leaked privileged container is not a success. On a failed
-  // run the workflow-failed error below already exits non-zero (the leak was
-  // logged loudly above), so don't mask it.
-  if (containerTeardownError && result?.success) {
-    throw containerTeardownError;
-  }
-
-  if (!result) {
-    // executeWorkflow threw and it was re-thrown out of the try; this line is
-    // unreachable in practice (the throw propagates), but it satisfies the
-    // narrowing for the terminal-result checks below.
-    throw new Error('Workflow did not produce a result.');
-  }
-
-  let presentedRun: WorkflowRun | null = null;
-  let outcomeReadUnavailable = false;
-  if (workflow.outcome_field !== undefined && result.workflowRunId !== undefined) {
+    // Notify Web UI that a workflow is dispatching.
+    // Mirrors the orchestrator dispatch message structure (category/segment/workflowDispatch),
+    // but omits the rocket emoji and "(background)" qualifier since the CLI runs synchronously.
+    // In the CLI path there is no separate worker conversation — the CLI itself
+    // is both the dispatcher and the executor, so workerConversationId === conversationId.
     try {
-      presentedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
-      outcomeReadUnavailable = presentedRun === null;
-    } catch (error) {
-      outcomeReadUnavailable = true;
+      await adapter.sendMessage(conversationId, `Dispatching workflow: **${workflow.name}**`, {
+        category: 'workflow_dispatch_status',
+        segment: 'new',
+        workflowDispatch: { workerConversationId: conversationId, workflowName: workflow.name },
+      });
+    } catch (dispatchError) {
       getLog().warn(
-        { err: error as Error, workflowRunId: result.workflowRunId },
-        'cli.workflow_outcome_lookup_failed'
+        { err: dispatchError as Error, conversationId },
+        'cli.workflow_dispatch_surface_failed'
       );
     }
-  }
-  const presentRunFacts = (lead: string, executionStatus: WorkflowRunStatus): boolean => {
-    if (outcomeReadUnavailable) {
+
+    // The lookup-by-(workflowName, cwd) was already done above for worktree-path
+    // resolution; reuse that result rather than querying twice.
+    const deps = host.deps;
+    const engine = host.engine;
+    let result: Awaited<ReturnType<IWorkflowEngine['submit']>> | undefined;
+    // A genuine container-teardown failure captured in the finally, rethrown AFTER
+    // the finally when the run itself succeeded — so a leaked privileged container
+    // fails the CLI instead of reporting success + exit 0.
+    let containerTeardownError: Error | undefined;
+    try {
+      runLiveOwner ??= await startRunLiveOwner(ownedRunId, {
+        ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
+      });
+      // Container run context for the engine (Phase C): the write-back backend port +
+      // env id + policy. The executor drives suspend-on-pause and the write-back gate
+      // through this. Absent for host/in-place runs.
+      const containerRunCtx =
+        containerBackend && containerEnvId
+          ? {
+              envId: containerEnvId,
+              writeBack: workflow.container?.write_back ?? ('approve' as const),
+              backend: containerBackend,
+              ...(containerOverlayMode ? { overlayMode: containerOverlayMode } : {}),
+            }
+          : undefined;
+      const resolveChildIsolation = codebase
+        ? createCodebaseChildResolver(
+            host.records.isolation,
+            codebase,
+            {
+              baseBranch: codebaseDefaultBranch,
+              createdByPlatform: 'cli',
+              createdByUserId: cliUserId,
+            },
+            host.deps
+          )
+        : undefined;
+      const commonOptions = {
+        codebaseId: codebase?.id,
+        source: workflowSource,
+        parseWarnings: workflowEntry?.parseWarnings,
+        baseBranch: codebaseDefaultBranch,
+        baseOverride: flagBase,
+        execContext,
+        container: containerRunCtx,
+        resolveChildIsolation,
+      };
+      if (options.resume && resumable) {
+        let admission: Awaited<ReturnType<IWorkflowEngine['resume']>>;
+        try {
+          admission = await engine.resume({
+            platform: adapter,
+            conversationId,
+            cwd: workingCwd,
+            legacyWorkflow: workflow,
+            userMessage,
+            run: resumable,
+            options: commonOptions,
+          });
+        } catch (error) {
+          const err = error as Error;
+          getLog().error(
+            { err, workflowName, runId: resumable.id },
+            'cli.workflow_hydrate_resume_failed'
+          );
+          throw new Error(
+            `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`,
+            { cause: err }
+          );
+        }
+        if (!admission.accepted) {
+          // `--branch` is only runnable when the prior run used worktree isolation:
+          // folder projects reject worktree options outright, and an in-place repo run
+          // cannot be relaunched onto the branch its own checkout holds. A stale-running
+          // orphan cannot be superseded until it is released, so name that step first.
+          const worktreeBranch = isFolderCodebase ? undefined : resumeBranch;
+          const unblock = isTerminalRunStatus(resumable.status)
+            ? ''
+            : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
+              `  archon workflow abandon ${resumable.id}\n`;
+          const relaunch = [
+            'archon workflow run',
+            workflowName,
+            ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
+            '--supersedes',
+            resumable.id,
+          ].join(' ');
+          throw new Error(
+            `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
+              unblock +
+              (worktreeBranch
+                ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
+                : 'Nothing can be skipped, so start a fresh run instead:\n') +
+              `  ${relaunch}`
+          );
+        }
+        notifyResumeAccepted?.(admission.runId);
+        result = await admission.settled;
+      } else {
+        const opts = {
+          ...commonOptions,
+          // A resume replays the inputs already on its row.
+          inputs: resolvedInputs,
+          ...(modelOverrides
+            ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
+            : {}),
+          ...(runConfig ? { runConfig } : {}),
+          preparedAiConfiguration,
+          // The frozen source this run executes, captured before the workflow was even
+          // selected. A resume ignores it and loads the source recorded on its own row.
+          preparedSource,
+          // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
+          // executor adopts for us there (see #2690). Until then a rename failure
+          // leaves the staged directory un-adopted so the wrap reclaims it on the
+          // way out.
+          capturedSourceOwner: owner,
+          // Between-run continuation (#2747): written once onto the fresh row.
+          ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
+          // The row a detached parent already wrote (#2872). `inputs` and the
+          // continuation fields above are still passed: the executor consumes them only
+          // when IT creates the row, and this row already carries them.
+          ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
+          ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+          ownedWorktree,
+        };
+        executionSubmitted = true;
+        result = await engine.submit({
+          platform: adapter,
+          conversationId,
+          cwd: workingCwd,
+          workflow,
+          userMessage,
+          origin: {
+            ...(conversation ? { conversationId: conversation.id } : {}),
+            userId: cliUserId,
+          },
+          options: opts,
+        });
+      }
+    } finally {
+      await closeRunLiveOwner();
+      unsubscribe();
+
+      // Deregister the signal handlers now that the run's lifecycle is settled
+      // (paused / completed / failed, or the throw propagating out of this
+      // finally). A signal from here on gets default handling — the destructive
+      // failWorkflowRun cleanup must never fire against a settled run (#1123),
+      // and removal keeps repeated workflowRunCommand calls in one process from
+      // stacking handlers.
+      deregisterTermination();
+
+      // Container teardown (Phase C) — in `finally` so a throw from executeWorkflow
+      // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
+      // can't orphan a privileged container+volume. A PAUSED run keeps its (already
+      // suspended, by the engine) container + volume for resume — destroying it would
+      // discard the overlay the resume needs. Every OTHER outcome (completed / failed /
+      // cancelled, or a pre-result throw) is terminal for this process → destroy. The
+      // write-back apply already ran inside the engine before completion, so a
+      // completed run's live-root changes are safe before this teardown removes the
+      // volume.
+      const runPaused = Boolean(result?.success && 'paused' in result && result.paused);
+      // H2 — preserve the container+volume whenever the un-applied overlay is still the
+      // only copy of the run's changes: a PAUSED run (awaiting the decision) OR a
+      // TERMINAL run whose write-back never resolved (e.g. a partial applyChanges threw
+      // → run failed with pending_writeback still un-applied). Destroying then would
+      // silently discard the changes despite the "reconcile manually" message. A failed
+      // run stays resumable, so `archon workflow resume <id>` re-runs the apply.
+      let unresolvedWriteback = false;
+      if (containerBackend && containerEnvId && !runPaused && result?.workflowRunId) {
+        try {
+          const finalRun = await deps.store.getWorkflowRun(result.workflowRunId);
+          unresolvedWriteback = hasUnresolvedWriteback(finalRun?.metadata);
+        } catch (lookupErr) {
+          // FAIL CLOSED (R2-F1): if we can't read the run's metadata we can't tell
+          // whether an un-applied write-back is pending — do NOT destroy (the volume
+          // may be the only copy of the changes). Preserve + surface, same as an
+          // unresolved write-back.
+          unresolvedWriteback = true;
+          getLog().error(
+            { err: lookupErr as Error, envId: containerEnvId, runId: result.workflowRunId },
+            'workflow.teardown_run_lookup_failed'
+          );
+        }
+      }
+      if (containerBackend && containerEnvId && unresolvedWriteback) {
+        console.error(
+          '\nWARNING: the write-back did not complete — the container + overlay volume are ' +
+            'PRESERVED so your changes are not lost. Retry with ' +
+            `\`bun run cli workflow resume ${result?.workflowRunId ?? '<run-id>'}\` (re-applies the ` +
+            'overlay), or reclaim manually via `docker ps -a --filter label=diy.archon.managed=true`.'
+        );
+        getLog().warn(
+          { envId: containerEnvId, runId: result?.workflowRunId },
+          'workflow.container_preserved_unresolved_writeback'
+        );
+      }
+      if (containerBackend && containerEnvId && !runPaused && !unresolvedWriteback) {
+        try {
+          await containerBackend.destroy(containerEnvId);
+          // Persist a container_destroyed event (console timeline) and emit for any
+          // live subscriber. The emitter fire is after unsubscribe, so the DB row is
+          // the durable channel for CLI runs. No runId on the pre-result throw path —
+          // skip the event, still destroy.
+          const runId = result?.workflowRunId;
+          if (runId) {
+            getWorkflowEventEmitter().emit({
+              type: 'container_lifecycle',
+              runId,
+              phase: 'destroyed',
+            });
+            await deps.store
+              .createWorkflowEvent({
+                workflow_run_id: runId,
+                event_type: 'container_destroyed',
+                step_name: 'container',
+                data: {},
+              })
+              .catch((eventErr: Error) => {
+                getLog().warn(
+                  { err: eventErr, runId },
+                  'workflow.container_destroyed_event_persist_failed'
+                );
+              });
+          }
+          console.log('Container and overlay volume removed.');
+        } catch (destroyErr) {
+          // destroy() throws only on a GENUINE docker failure (not idempotent
+          // not-found). Surface it LOUD (console.error, not a --quiet log) so the
+          // operator cleans up the privileged container manually, and CAPTURE it so
+          // a successful run does not report success with a leaked container.
+          console.error(
+            `\nWARNING: failed to remove the isolation container/volume: ${
+              (destroyErr as Error).message
+            }\n` +
+              'Remove it manually: docker ps -a --filter label=diy.archon.managed=true ' +
+              '(then `docker rm -f <name>` and `docker volume rm <name>-upper`).'
+          );
+          getLog().error(
+            { err: destroyErr as Error, envId: containerEnvId },
+            'workflow.container_destroy_failed'
+          );
+          containerTeardownError = destroyErr as Error;
+        }
+      }
+    }
+
+    // A container teardown failure on an otherwise-SUCCESSFUL run must fail the CLI
+    // (non-zero exit) — a leaked privileged container is not a success. On a failed
+    // run the workflow-failed error below already exits non-zero (the leak was
+    // logged loudly above), so don't mask it.
+    if (containerTeardownError && result?.success) {
+      throw containerTeardownError;
+    }
+
+    if (!result) {
+      // executeWorkflow threw and it was re-thrown out of the try; this line is
+      // unreachable in practice (the throw propagates), but it satisfies the
+      // narrowing for the terminal-result checks below.
+      throw new Error('Workflow did not produce a result.');
+    }
+
+    let presentedRun: WorkflowRun | null = null;
+    let outcomeReadUnavailable = false;
+    if (workflow.outcome_field !== undefined && result.workflowRunId !== undefined) {
+      try {
+        presentedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
+        outcomeReadUnavailable = presentedRun === null;
+      } catch (error) {
+        outcomeReadUnavailable = true;
+        getLog().warn(
+          { err: error as Error, workflowRunId: result.workflowRunId },
+          'cli.workflow_outcome_lookup_failed'
+        );
+      }
+    }
+    const presentRunFacts = (lead: string, executionStatus: WorkflowRunStatus): boolean => {
+      if (outcomeReadUnavailable) {
+        console.log(
+          `${lead}\n  Status: ${executionStatus}\n  Authored outcome: unavailable — failed to read persisted run`
+        );
+        return true;
+      }
+      if (presentedRun?.outcome == null) return false;
       console.log(
-        `${lead}\n  Status: ${executionStatus}\n  Authored outcome: unavailable — failed to read persisted run`
+        `${lead}\n  Status: ${presentedRun.status}\n  Authored outcome: ${presentedRun.outcome}`
       );
       return true;
-    }
-    if (presentedRun?.outcome == null) return false;
-    console.log(
-      `${lead}\n  Status: ${presentedRun.status}\n  Authored outcome: ${presentedRun.outcome}`
-    );
-    return true;
-  };
+    };
 
-  // Check result and exit appropriately
-  if (result.success && 'paused' in result && result.paused) {
-    // A durable `time`/`event` wait is this process's own cursor to wake; a gate or
-    // `attention` pause has no deadline and stays with whoever resolves it.
-    const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
-    const wait = pausedRun === null ? undefined : pendingDurableWait(pausedRun);
-    if (pausedRun !== null && wait !== undefined) {
-      console.log(
-        `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.resumeAt}; ` +
-          'this process resumes the run at its deadline.'
-      );
-      return { run: pausedRun, wait, destination };
-    }
-    if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
-      console.log('\nWorkflow paused — waiting for approval.');
-    }
-  } else if (result.success) {
-    // Surface workflow result to Web UI as a result card (mirrors orchestrator.ts result message).
-    // Paused workflows are handled in the branch above and intentionally do not get a result card.
-    if ('summary' in result && result.summary) {
-      try {
-        await adapter.sendMessage(conversationId, result.summary, {
-          category: 'workflow_result',
-          segment: 'new',
-          workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
-        });
-      } catch (surfaceError) {
-        getLog().warn(
-          { err: surfaceError as Error, conversationId },
-          'cli.workflow_result_surface_failed'
+    // Check result and exit appropriately
+    if (result.success && 'paused' in result && result.paused) {
+      // A durable `time`/`event` wait is this process's own cursor to wake; a gate or
+      // `attention` pause has no deadline and stays with whoever resolves it.
+      const pausedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
+      const wait = pausedRun === null ? undefined : pendingDurableWait(pausedRun);
+      if (pausedRun !== null && wait !== undefined) {
+        console.log(
+          `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.resumeAt}; ` +
+            'this process resumes the run at its deadline.'
         );
+        return { run: pausedRun, wait, destination };
       }
+      if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
+        console.log('\nWorkflow paused — waiting for approval.');
+      }
+    } else if (result.success) {
+      // Surface workflow result to Web UI as a result card (mirrors orchestrator.ts result message).
+      // Paused workflows are handled in the branch above and intentionally do not get a result card.
+      if ('summary' in result && result.summary) {
+        try {
+          await adapter.sendMessage(conversationId, result.summary, {
+            category: 'workflow_result',
+            segment: 'new',
+            workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
+          });
+        } catch (surfaceError) {
+          getLog().warn(
+            { err: surfaceError as Error, conversationId },
+            'cli.workflow_result_surface_failed'
+          );
+        }
+      }
+      if (!presentRunFacts('\nWorkflow finished.', 'completed')) {
+        console.log('\nWorkflow completed successfully.');
+      }
+    } else {
+      presentRunFacts('\nWorkflow finished.', 'failed');
+      throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
     }
-    if (!presentRunFacts('\nWorkflow finished.', 'completed')) {
-      console.log('\nWorkflow completed successfully.');
-    }
-  } else {
-    presentRunFacts('\nWorkflow finished.', 'failed');
-    throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
+    return undefined;
+  } catch (error) {
+    if (setupPreparedRun && !executionSubmitted)
+      await requireTerminalStatusWrite(
+        host.deps.store.failWorkflowRun(setupPreparedRun.id, (error as Error).message, {
+          exitReason: 'launch_failed',
+        }),
+        { workflowRunId: setupPreparedRun.id, site: 'cli.worktree_setup_failed' }
+      );
+    throw error;
+  } finally {
+    await closeRunLiveOwner();
   }
-  return undefined;
 }
 
 /**
@@ -4654,6 +4735,10 @@ function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): 
       const brief = row.tool_input ? formatToolInputBrief(name, row.tool_input) : null;
       return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
     }
+    case 'worktree_setup_started':
+    case 'worktree_setup_completed':
+    case 'worktree_setup_failed':
+      return row.setup?.message;
     case 'exec_output': {
       const lines = [`[${step}] Output (exit ${String(row.exit_code ?? '?')})`];
       if (row.stdout_tail) lines.push(indentLines(row.stdout_tail, '  '));

@@ -1,3 +1,5 @@
+import { createRunWorktreeSetupExecutor } from './worktree-setup';
+import type { WorktreeSetupExecutor } from '@archon/isolation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import {
   prepareRunAiConfiguration,
@@ -345,7 +347,8 @@ async function worktreeLane(
   codebase: Codebase,
   identifier: string,
   platformType: string,
-  userId: string | undefined
+  userId: string | undefined,
+  setupExecutor: WorktreeSetupExecutor
 ): Promise<{ cwd: string; envId: string; cutFromCommit?: string; ownedWorktree?: OwnedWorktree }> {
   ensureIsolationConfigured();
   const provider = getIsolationProvider();
@@ -362,26 +365,29 @@ async function worktreeLane(
   }
   const workflowId = lane.branch ?? identifier;
   const fromBranch = lane.fromBranch ? toBranchName(lane.fromBranch) : undefined;
-  const env = await provider.create({
-    workflowType: 'task',
-    identifier: workflowId,
-    taskBranch:
-      lane.branch || fromBranch
-        ? {
-            kind: 'new',
-            ...(lane.branch ? { branch: toBranchName(lane.branch) } : {}),
-            ...(fromBranch ? { fromBranch } : {}),
-          }
+  const env = await provider.create(
+    {
+      workflowType: 'task',
+      identifier: workflowId,
+      taskBranch:
+        lane.branch || fromBranch
+          ? {
+              kind: 'new',
+              ...(lane.branch ? { branch: toBranchName(lane.branch) } : {}),
+              ...(fromBranch ? { fromBranch } : {}),
+            }
+          : undefined,
+      baseBranch: codebase.default_branch?.trim()
+        ? toBranchName(codebase.default_branch.trim())
         : undefined,
-    baseBranch: codebase.default_branch?.trim()
-      ? toBranchName(codebase.default_branch.trim())
-      : undefined,
-    baseOverride: lane.baseOverride ? toBranchName(lane.baseOverride) : undefined,
-    codebaseId: codebase.id,
-    codebaseName: codebase.name,
-    canonicalRepoPath: toRepoPath(codebase.default_cwd),
-    description: `Resource start: ${identifier}`,
-  });
+      baseOverride: lane.baseOverride ? toBranchName(lane.baseOverride) : undefined,
+      codebaseId: codebase.id,
+      codebaseName: codebase.name,
+      canonicalRepoPath: toRepoPath(codebase.default_cwd),
+      description: `Resource start: ${identifier}`,
+    },
+    setupExecutor
+  );
   const record = await host.records.isolation.create({
     codebase_id: codebase.id,
     workflow_type: 'task',
@@ -504,7 +510,8 @@ export async function startAdmittedResourceStart(
             codebase,
             `${run.workflow_name}-${run.id.slice(0, 8)}`,
             platform.getPlatformType(),
-            run.user_id ?? undefined
+            run.user_id ?? undefined,
+            createRunWorktreeSetupExecutor(host.deps, run, preparedAiConfiguration.config)
           )
         : {
             cwd: launch.execution.cwd,
@@ -539,11 +546,16 @@ export async function startAdmittedResourceStart(
         ...(lane.kind === 'worktree' && lane.baseOverride
           ? { baseOverride: lane.baseOverride }
           : {}),
-        resolveChildIsolation: createCodebaseChildResolver(host.records.isolation, codebase, {
-          baseBranch,
-          createdByPlatform: platform.getPlatformType(),
-          createdByUserId: run.user_id ?? undefined,
-        }),
+        resolveChildIsolation: createCodebaseChildResolver(
+          host.records.isolation,
+          codebase,
+          {
+            baseBranch,
+            createdByPlatform: platform.getPlatformType(),
+            createdByUserId: run.user_id ?? undefined,
+          },
+          host.deps
+        ),
         // A fresh claim reseals caller configuration, so restore the one sealed at intake.
         ...(sealed
           ? { runConfig: { layer: unsealWorkflowRunConfig(sealed), source: sealed.source } }

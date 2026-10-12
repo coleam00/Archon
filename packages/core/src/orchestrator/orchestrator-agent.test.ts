@@ -337,6 +337,19 @@ const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+  finalizeWorkflowSource: mock(
+    async (_deps: unknown, source: WorkflowExecutor.PreparedWorkflowSource) => source
+  ),
+  preparedWorkflowSourceRecord: (source: WorkflowExecutor.PreparedWorkflowSource) => ({
+    version: 1,
+    root: source.anchor.root,
+    origin: source.origin,
+    captured_at: source.manifest.captured_at,
+    digest: source.manifest.digest,
+    source_config: source.anchor.config,
+    file_count: source.manifest.file_count,
+    byte_count: source.manifest.byte_count,
+  }),
   hydrateResumableRun: mockHydrateResumableRun,
   inspectResumableRun: mockInspectResumableRun,
   // Source capture runs before dispatch and does real filesystem work; stub it so these
@@ -433,7 +446,21 @@ mock.module('../utils/error', () => ({
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
     providers: providerRegistry,
-    store: { getCodebaseEnvVars: async () => ({}) },
+    store: {
+      getCodebaseEnvVars: async () => ({}),
+      createWorkflowRun: async (
+        data: Parameters<import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']>[0]
+      ) =>
+        makeRun({
+          id: data.id,
+          workflow_name: data.workflow_name,
+          status: 'pending',
+          metadata: data.metadata ?? {},
+          working_path: null,
+        }),
+      updateWorkflowRun: async () => {},
+      failWorkflowRun: async () => {},
+    },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
       version: 1,
       ciphertext: 'sealed',
@@ -2321,7 +2348,12 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
     mockGetCodebase.mockReset();
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
-    mockValidateAndResolveIsolation.mockClear();
+    mockValidateAndResolveIsolation.mockReset();
+    mockValidateAndResolveIsolation.mockResolvedValue({
+      status: 'none',
+      cwd: '/test/cwd',
+      env: null,
+    });
     mockResolveWorkflowAdoption.mockClear();
     mockUpdateConversation.mockClear();
     mockResolveWorkflowSourceRoot.mockClear();
@@ -2348,7 +2380,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
-    expect(mockWithRunLiveOwner).toHaveBeenCalledWith('prepared-run-id', {}, expect.any(Function));
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('prepared-run-id');
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     const opts = callArgs[callArgs.length - 1] as {
       baseBranch?: string;
@@ -3525,7 +3557,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     });
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
-    expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'adopt']);
+    expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'hold:/capture', 'adopt', 'adopt']);
   });
 
   test('keeps holding the capture when the dispatch refuses after taking it', async () => {
@@ -4051,7 +4083,11 @@ describe('workflow dispatch routing — interactive flag', () => {
       preCreatedRun?: unknown;
       priorCompletedNodes?: unknown;
     };
-    expect(opts.preCreatedRun).toBeUndefined();
+    expect(opts.preCreatedRun).toMatchObject({
+      id: 'prepared-run-id',
+      status: 'pending',
+      working_path: null,
+    });
     expect(opts.priorCompletedNodes).toBeUndefined();
   });
 });

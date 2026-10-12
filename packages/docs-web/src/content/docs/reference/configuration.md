@@ -226,6 +226,10 @@ worktree:
     - plans/                # Local plans not committed to the team repo
   initSubmodules: true  # Optional: default true — auto-detects .gitmodules and runs
                         # `git submodule update --init --recursive`. Set false to opt out.
+  postCreate:          # Optional: sequential setup commands for newly created checkouts
+    - bun install --frozen-lockfile
+    - ./scripts/seed-fixtures.sh
+  postCreateTimeout: 300000  # Optional: timeout in ms for EACH command
   path: .worktrees      # Optional: co-locate worktrees with the repo at
                         # <repoRoot>/.worktrees/<branch> instead of under
                         # ~/.archon/workspaces/<owner>/<repo>/worktrees/.
@@ -248,8 +252,8 @@ defaults:
 #   - archon-review
 #   - archon-plan
 
-# Per-project environment variables for workflow execution (Claude SDK only)
-# Injected into the Claude subprocess env. For secrets, open Environment variables
+# Per-project environment variables for workflow execution.
+# Injected into workflow subprocess environments. For secrets, open Environment variables
 # from the project row in the console project rail.
 # env:
 #   MY_API_KEY: value
@@ -270,7 +274,17 @@ uses — with `archon ai tier set`, the console AI Settings -> Model Tiers panel
 `tiers:` block — or resolving `small`, `medium`, or `large` fails with a configuration
 error that names those surfaces.
 
-### Claude settingSources
+### Worktree provisioning
+
+`worktree.postCreate` runs sequentially through `bash -c` in the new worktree root, after submodule initialization and `copyFiles`, before the checkout becomes available. It also runs when Archon creates a checkout of an existing branch. Reusing or adopting a checkout already on disk skips provisioning. Commands use ordinary shell expansion; workflow variables and node outputs are unavailable. Put setup logic in a script.
+
+Each command has a timeout of `worktree.postCreateTimeout` milliseconds (default `300000`). The first nonzero exit, timeout, spawn error, or audit-write failure aborts creation. The error includes the command and captured output with known credentials redacted. Cleanup removes only a clean checkout owned by this attempt; installer output or other changes may leave it locked. Inspect the reported path before unlocking or removing it. A worktree does not sandbox commands or undo external side effects.
+
+Setup uses the same host subprocess environment as `bash:` nodes: the cleaned host environment plus effective run configuration and managed project variables. Project variables override file-config values; run credential restrictions remain in force. Archon does not automatically load the target repository's `.env`, including one copied by `copyFiles`. A setup script can explicitly source it.
+
+Started, completed, and failed commands appear in the run audit trail and `workflow logs`. Child setup is recorded on the parent run with the spawning node and child index. Manual worktree creation has no workflow run and writes structured application logs instead.
+
+## Claude settingSources
 
 Controls which sources the Claude Agent SDK discovers during sessions — `CLAUDE.md`, skills, commands, agents, and hooks. In workflow nodes, discovery does not activate ambient skills: the node's `skills:` list remains the exact active set, and omission/`[]` selects none.
 

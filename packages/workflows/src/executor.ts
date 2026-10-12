@@ -416,7 +416,7 @@ export interface ResolvedProjectPaths {
  * Exported for unit testing of the kind-based branch selection.
  */
 export async function resolveProjectPaths(
-  deps: WorkflowDeps,
+  deps: { store: Pick<WorkflowDeps['store'], 'getCodebase'> },
   cwd: string,
   workflowRunId: string,
   codebaseId?: string,
@@ -1407,6 +1407,7 @@ async function runChildWorkflow(
       }
       try {
         childIsolationEnv = await resolveChildIsolation.resolve({
+          setupEnvironment: childPrepared.config,
           parentRun,
           nodeId,
           childIndex,

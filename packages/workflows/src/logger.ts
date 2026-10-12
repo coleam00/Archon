@@ -1,3 +1,4 @@
+import type { WorktreeSetupEvent } from './schemas/worktree-setup';
 import type { NodeExecutionMetadata } from './schemas/node-execution';
 /**
  * SDK Event Logger - captures workflow execution to JSONL
@@ -30,8 +31,10 @@ let logWarningShown = false;
  * a new one.
  */
 export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
+  setup?: WorktreeSetupEvent;
   execution?: NodeExecutionMetadata;
   type:
+    | WorktreeSetupEvent['type']
     | 'workflow_start'
     | 'workflow_resume'
     | 'workflow_complete'
@@ -405,4 +408,12 @@ export async function logExecOutput(
     ...(output.stdoutTail !== undefined ? { stdout_tail: output.stdoutTail } : {}),
     ...(output.stderrTail !== undefined ? { stderr_tail: output.stderrTail } : {}),
   });
+}
+
+export async function logWorktreeSetup(
+  logDir: string,
+  runId: string,
+  setup: WorktreeSetupEvent
+): Promise<void> {
+  await logWorkflowEvent(logDir, runId, { type: setup.type, setup });
 }

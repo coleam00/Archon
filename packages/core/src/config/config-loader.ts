@@ -1,3 +1,4 @@
+import { validateWorktreePostCreate } from '@archon/isolation';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '@archon/workflows/schemas/run-config';
 /**
  * Configuration loader for Archon YAML config files
@@ -488,6 +489,7 @@ async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> 
 export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
   const configPath = join(repoPath, '.archon', 'config.yaml');
   const parsed = await readRepoConfigOrDegrade(configPath);
+  validateWorktreePostCreate(parsed.worktree);
   validateAssistantDefaults(parsed, configPath);
   return parsed;
 }

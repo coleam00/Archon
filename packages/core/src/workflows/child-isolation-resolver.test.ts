@@ -35,8 +35,10 @@ const mockProviderCreate = mock((_req: { identifier: string }) =>
 /** Records the loader the resolver hands to the isolation factory (see the M1 test). */
 const mockConfigureIsolation = mock((_loader: (repoPath: string) => Promise<unknown>) => undefined);
 
+const actualIsolation = await import('@archon/isolation');
 const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  ...actualIsolation,
   worktreeRegistrationMetadata,
   getIsolationProvider: () => ({ create: mockProviderCreate }),
   configureIsolation: mockConfigureIsolation,
@@ -56,6 +58,10 @@ mock.module('../db/isolation-environments', () => ({
 const { buildChildIdentifier, createCodebaseChildResolver } =
   await import('./child-isolation-resolver');
 
+const setupDeps = {
+  store: { getCodebase: async () => null, persistWorkflowEvent: async () => {} },
+};
+
 const REPO_CODEBASE = {
   id: 'cb-1',
   name: 'owner/repo',
@@ -64,11 +70,16 @@ const REPO_CODEBASE = {
 };
 
 function repoResolver(): NonNullable<ReturnType<typeof createCodebaseChildResolver>> {
-  const resolver = createCodebaseChildResolver(sqlIsolation.createIsolationStore(), REPO_CODEBASE, {
-    baseBranch: 'main',
-    createdByPlatform: 'cli',
-    createdByUserId: undefined,
-  });
+  const resolver = createCodebaseChildResolver(
+    sqlIsolation.createIsolationStore(),
+    REPO_CODEBASE,
+    {
+      baseBranch: 'main',
+      createdByPlatform: 'cli',
+      createdByUserId: undefined,
+    },
+    setupDeps
+  );
   if (!resolver) throw new Error('a repo codebase must get a resolver');
   return resolver;
 }
@@ -204,10 +215,16 @@ describe('createCodebaseChildResolver', () => {
     const resolver = createCodebaseChildResolver(
       sqlIsolation.createIsolationStore(),
       { id: 'cb-7', name: 'acme/api', default_cwd: '/repos/api', kind: 'repo' },
-      { baseBranch: 'develop', createdByPlatform: 'slack', createdByUserId: 'user-42' }
+      { baseBranch: 'develop', createdByPlatform: 'slack', createdByUserId: 'user-42' },
+      setupDeps
     );
 
-    await resolver?.resolve({ parentRun, nodeId: 'build', codebaseId: 'cb-7' });
+    await resolver?.resolve({
+      setupEnvironment: {},
+      parentRun,
+      nodeId: 'build',
+      codebaseId: 'cb-7',
+    });
 
     expect(mockProviderCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -215,7 +232,8 @@ describe('createCodebaseChildResolver', () => {
         codebaseName: 'acme/api',
         canonicalRepoPath: '/repos/api',
         baseBranch: 'develop',
-      })
+      }),
+      expect.any(Function)
     );
     expect(mockIsolationDbCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -230,7 +248,8 @@ describe('createCodebaseChildResolver', () => {
     const resolver = createCodebaseChildResolver(
       sqlIsolation.createIsolationStore(),
       { id: 'cb-8', name: 'ops', default_cwd: '/ops', kind: 'folder' },
-      { baseBranch: undefined, createdByPlatform: 'cli', createdByUserId: 'user-42' }
+      { baseBranch: undefined, createdByPlatform: 'cli', createdByUserId: 'user-42' },
+      setupDeps
     );
 
     expect(resolver).toBeUndefined();
@@ -271,7 +290,12 @@ describe('child worktree resolver', () => {
     );
 
     await expect(
-      resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' })
+      resolver.resolve({
+        setupEnvironment: {},
+        parentRun,
+        nodeId: 'refactor-auth',
+        codebaseId: 'cb-1',
+      })
     ).rejects.toThrow('classified: No space left on device');
 
     // Failure happens before registration — no orphan environment row.
@@ -283,7 +307,12 @@ describe('child worktree resolver', () => {
     // it was wired to the wrong project, and creating a checkout in the wrong repo is
     // worse than failing. Guard had no coverage.
     await expect(
-      resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-OTHER' })
+      resolver.resolve({
+        setupEnvironment: {},
+        parentRun,
+        nodeId: 'refactor-auth',
+        codebaseId: 'cb-OTHER',
+      })
     ).rejects.toThrow(/bound to codebase 'cb-1'.*carries codebase 'cb-OTHER'/s);
 
     expect(mockProviderCreate).not.toHaveBeenCalled();
@@ -291,8 +320,18 @@ describe('child worktree resolver', () => {
   });
 
   test('two isolated sub-run nodes in one parent request distinct worktrees', async () => {
-    await resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' });
-    await resolver.resolve({ parentRun, nodeId: 'refactor-billing', codebaseId: 'cb-1' });
+    await resolver.resolve({
+      setupEnvironment: {},
+      parentRun,
+      nodeId: 'refactor-auth',
+      codebaseId: 'cb-1',
+    });
+    await resolver.resolve({
+      setupEnvironment: {},
+      parentRun,
+      nodeId: 'refactor-billing',
+      codebaseId: 'cb-1',
+    });
 
     expect(mockProviderCreate).toHaveBeenCalledTimes(2);
     const [first, second] = mockProviderCreate.mock.calls.map(call => call[0].identifier);
@@ -309,6 +348,7 @@ describe('child worktree resolver', () => {
     nextCreateAdopts = true;
 
     const result = await resolver.resolve({
+      setupEnvironment: {},
       parentRun,
       nodeId: 'refactor-auth',
       codebaseId: 'cb-1',
@@ -321,6 +361,7 @@ describe('child worktree resolver', () => {
 
   test('a freshly created worktree is not recorded as adopted', async () => {
     const result = await resolver.resolve({
+      setupEnvironment: {},
       parentRun,
       nodeId: 'refactor-auth',
       codebaseId: 'cb-1',

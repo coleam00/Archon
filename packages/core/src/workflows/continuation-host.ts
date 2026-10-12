@@ -75,11 +75,16 @@ export async function resumeWorkflowContinuation(
           codebaseId: run.codebase_id ?? undefined,
           baseBranch: codebase?.default_branch?.trim() || undefined,
           resolveChildIsolation: codebase
-            ? createCodebaseChildResolver(host.records.isolation, codebase, {
-                baseBranch: codebase.default_branch?.trim() || undefined,
-                createdByPlatform: context.platform.getPlatformType(),
-                createdByUserId: userId,
-              })
+            ? createCodebaseChildResolver(
+                host.records.isolation,
+                codebase,
+                {
+                  baseBranch: codebase.default_branch?.trim() || undefined,
+                  createdByPlatform: context.platform.getPlatformType(),
+                  createdByUserId: userId,
+                },
+                host.deps
+              )
             : undefined,
         },
       });
