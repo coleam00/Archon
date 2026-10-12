@@ -74,15 +74,15 @@ export async function createFileWorkflowStore(
       const events = await eventsFor([...runs.keys()]);
       const priorEvents = structuredClone(events);
       const result = await call(createTransactionView(runs, events, getCodebase));
+      const priorIds = new Set(priorEvents.map(event => event.id));
+      const nextIds = new Set(events.map(event => event.id));
       const changes = [];
       for (const [id, run] of runs) {
         const added = events.filter(
-          event => event.workflow_run_id === id && !priorEvents.some(prior => prior.id === event.id)
+          event => event.workflow_run_id === id && !priorIds.has(event.id)
         );
         const retract = priorEvents
-          .filter(
-            event => event.workflow_run_id === id && !events.some(next => next.id === event.id)
-          )
+          .filter(event => event.workflow_run_id === id && !nextIds.has(event.id))
           .map(event => event.id);
         if (!isDeepStrictEqual(before.get(id), run) || added.length || retract.length)
           changes.push({ run, events: added, retract });

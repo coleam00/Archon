@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rm, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rm, truncate, unlink } from 'node:fs/promises';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
@@ -161,9 +161,11 @@ async function apply(root: string, intent: Intent): Promise<void> {
     const prior = await readLog(root, line.run.id);
     const last = prior.lines.at(-1);
     if (last && last.seq > line.seq) throw new Error('File store intent is behind the log');
+    // Cut a torn tail by path: on Windows an append-mode handle lacks the
+    // write access SetEndOfFile needs, so FileHandle.truncate fails with EPERM.
+    if (prior.bytes !== prior.total) await truncate(join(dir, 'log.jsonl'), prior.bytes);
     const file = await open(join(dir, 'log.jsonl'), 'a+', 0o600);
     try {
-      if (prior.bytes !== prior.total) await file.truncate(prior.bytes);
       if (last?.seq !== line.seq) await file.writeFile(`${JSON.stringify(line)}\n`);
       await file.sync();
     } finally {
