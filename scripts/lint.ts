@@ -29,31 +29,43 @@ async function findTargets(): Promise<string[][]> {
 }
 
 async function main(): Promise<number> {
-  for (const patterns of await findTargets()) {
-    console.log(`Linting ${patterns.join(', ')}`);
-    const child = Bun.spawn(
-      [
-        'node',
-        'node_modules/eslint/bin/eslint.js',
-        ...patterns,
-        '--no-error-on-unmatched-pattern',
-        '--no-warn-ignored',
-        ...eslintArgs,
-        // ESLint's cache does not track imported types; this must override caller flags.
-        '--no-cache',
-      ],
-      {
-        cwd: REPO_ROOT,
-        stdin: 'inherit',
-        stdout: 'inherit',
-        stderr: 'inherit',
+  const targets = await findTargets();
+  const exitCodes: number[] = [];
+  let nextTarget = 0;
+  async function worker(): Promise<void> {
+    while (nextTarget < targets.length) {
+      const index = nextTarget++;
+      const patterns = targets[index];
+      try {
+        console.log(`Linting ${patterns.join(', ')}`);
+        const child = Bun.spawn(
+          [
+            'node',
+            'node_modules/eslint/bin/eslint.js',
+            ...patterns,
+            '--no-error-on-unmatched-pattern',
+            '--no-warn-ignored',
+            ...eslintArgs,
+            // ESLint's cache does not track imported types; this must override caller flags.
+            '--no-cache',
+          ],
+          {
+            cwd: REPO_ROOT,
+            stdin: 'inherit',
+            stdout: 'inherit',
+            stderr: 'inherit',
+          }
+        );
+        const exitCode = await child.exited;
+        exitCodes[index] = exitCode;
+      } catch (error) {
+        console.error(error);
+        exitCodes[index] = 1;
       }
-    );
-    const exitCode = await child.exited;
-    if (exitCode !== 0) return exitCode;
+    }
   }
-
-  return 0;
+  await Promise.all([worker(), worker()]);
+  return exitCodes.find(code => code !== 0) ?? 0;
 }
 
 process.exit(await main());

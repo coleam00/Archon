@@ -3,12 +3,27 @@
  * must fail loudly. Selecting nothing and exiting 0 would leave a job that reports green while
  * running no check at all.
  */
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { describe, expect, test } from 'bun:test';
-import { VALIDATE_CHECKS, parseOnly, selectChecks } from './validate';
+import { VALIDATE_CHECKS, parseOnly, selectChecks, runCheckCommands } from './validate';
+
+const track = trackTempRoots();
 
 describe('validate check selection', () => {
-  test('no selection runs every check in declaration order', () => {
-    expect(selectChecks([]).map(check => check.id)).toEqual(VALIDATE_CHECKS.map(check => check.id));
+  test('defaults omit formatting and fixtures', () => {
+    expect(selectChecks([]).map(check => check.id)).toEqual([
+      'cli-import-boundary',
+      'package-edges',
+      'generated-files',
+      'type-check',
+      'lint',
+      'installer',
+      'tests',
+    ]);
+    expect(selectChecks(['workflow-fixtures', 'format']).map(check => check.id)).toEqual([
+      'format',
+      'workflow-fixtures',
+    ]);
   });
 
   test('a selection runs in declaration order, not argument order', () => {
@@ -40,5 +55,28 @@ describe('validate argument parsing', () => {
 
   test('--only without a value fails', () => {
     expect(() => parseOnly(['--only'])).toThrow(/--only needs a check id/);
+  });
+});
+
+describe('grouped check execution', () => {
+  test('runs commands in order and stops at the first failure', async () => {
+    const { mkdtempSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const root = track(mkdtempSync(join(tmpdir(), 'validate-commands-')));
+    const append = (value: string): readonly [string, ...string[]] => [
+      process.execPath,
+      '-e',
+      `require('node:fs').appendFileSync('order', '${value}');`,
+    ];
+    expect(await runCheckCommands([append('a'), append('b')], root)).toBe(0);
+    expect(readFileSync(join(root, 'order'), 'utf8')).toBe('ab');
+    expect(
+      await runCheckCommands(
+        [append('c'), [process.execPath, '-e', 'process.exit(23)'], append('d')],
+        root
+      )
+    ).toBe(23);
+    expect(readFileSync(join(root, 'order'), 'utf8')).toBe('abc');
   });
 });

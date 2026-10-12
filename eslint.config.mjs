@@ -1,4 +1,5 @@
 import eslint from '@eslint/js';
+import workflowPersistence from './scripts/workflow-persistence-rule.mjs';
 import tseslint from 'typescript-eslint';
 import prettierConfig from 'eslint-config-prettier';
 import { readFileSync } from 'node:fs';
@@ -157,6 +158,29 @@ export default tseslint.config(
         tsconfigRootDir: import.meta.dirname,
       },
     },
+  },
+
+  {
+    files: [
+      'packages/core/src/operations/workflow-operations.ts',
+      'packages/core/src/operations/workflow-adoption.ts',
+      'packages/core/src/services/run-attention-watch.ts',
+      'packages/core/src/services/codebase-checkout-resolver.ts',
+      'packages/core/src/workflows/continuation-host.ts',
+      'packages/core/src/workflows/resource-start-host.ts',
+      'packages/core/src/workflows/child-isolation-resolver.ts',
+      'packages/core/src/workflows/headless-platform.ts',
+      'packages/core/src/handlers/clone.ts',
+      'packages/cli/src/commands/workflow.ts',
+      'packages/cli/src/commands/workflow-continuations.ts',
+      'packages/cli/src/commands/trigger.ts',
+      'packages/cli/src/adapters/cli-adapter.ts',
+      'packages/cli/src/utils/owned-run-termination.ts',
+      'packages/server/src/services/resource-start-hosting.ts',
+      'packages/server/src/services/webhook-source-plugins.ts',
+    ],
+    plugins: { archon: { rules: { 'no-workflow-persistence': workflowPersistence } } },
+    rules: { 'archon/no-workflow-persistence': 'error' },
   },
 
   // Provider attempts are admitted against the operator's concurrency caps. Callers

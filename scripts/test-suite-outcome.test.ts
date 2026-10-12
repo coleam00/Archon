@@ -17,13 +17,18 @@ function needs(runTests: string, results: Record<string, string>): Record<string
 
 /** Every gated job skipped, as on a documentation-only change. */
 const docsOnlySkips = Object.fromEntries([...GATED].map(job => [job, 'skipped']));
-const allSuccess = Object.fromEntries([...GATED, 'workflow-fixtures'].map(job => [job, 'success']));
+const ALWAYS = ['static', 'test', 'workflow-fixtures', 'workflow-fixtures-windows'];
+const alwaysSuccess = Object.fromEntries(ALWAYS.map(job => [job, 'success']));
+const allSuccess = {
+  ...Object.fromEntries([...GATED].map(job => [job, 'success'])),
+  ...alwaysSuccess,
+};
 
 describe('Test Suite aggregate outcome', () => {
   test('reads the gated jobs from test.yml; jobs that run for every event are not gated', () => {
-    expect(GATED.has('test')).toBe(true);
-    expect(GATED.has('static')).toBe(true);
-    expect(GATED.has('workflow-fixtures-windows')).toBe(true);
+    expect(GATED.has('test')).toBe(false);
+    expect(GATED.has('static')).toBe(false);
+    expect(GATED.has('workflow-fixtures-windows')).toBe(false);
     expect(GATED.has('workflow-fixtures')).toBe(false);
     expect(GATED.has('changes')).toBe(false);
   });
@@ -33,28 +38,25 @@ describe('Test Suite aggregate outcome', () => {
   });
 
   test('passes a documentation-only change that skips the gated jobs', () => {
-    const results = { ...docsOnlySkips, 'workflow-fixtures': 'success' };
+    const results = { ...docsOnlySkips, ...alwaysSuccess };
     expect(testSuiteFailures(needs('false', results), GATED)).toEqual([]);
   });
 
-  test('fails a documentation-only change whose always-run job fails', () => {
-    const results = { ...docsOnlySkips, 'workflow-fixtures': 'failure' };
-    expect(testSuiteFailures(needs('false', results), GATED)).toEqual([
-      'workflow-fixtures finished with failure',
-    ]);
-  });
-
-  test('fails a skipped always-run job even on a documentation-only change', () => {
-    const results = { ...docsOnlySkips, 'workflow-fixtures': 'skipped' };
-    expect(testSuiteFailures(needs('false', results), GATED)).toEqual([
-      'workflow-fixtures finished with skipped',
-    ]);
+  test.each(
+    ALWAYS.flatMap(job => ['failure', 'cancelled', 'skipped'].map(result => [job, result]))
+  )('fails always-run %s with %s even on docs-only changes', (job, result) => {
+    expect(
+      testSuiteFailures(
+        needs('false', { ...docsOnlySkips, ...alwaysSuccess, [job]: result }),
+        GATED
+      )
+    ).toEqual([`${job} finished with ${result}`]);
   });
 
   test('fails a gated job skipped when the decision said to run it', () => {
-    const results = { ...allSuccess, test: 'skipped' };
+    const results = { ...allSuccess, 'docker-build': 'skipped' };
     expect(testSuiteFailures(needs('true', results), GATED)).toEqual([
-      'test finished with skipped',
+      'docker-build finished with skipped',
     ]);
   });
 
