@@ -202,11 +202,6 @@ export function parseWhenAtom(expr: string): WhenAtom | null {
   return parseWhenAtomInternal(expr, false);
 }
 
-/** Parse a loop-group atom, including its scoped `$LOOP_PREV` reference form. */
-export function parseLoopPrevWhenAtom(expr: string): WhenAtom | null {
-  return parseWhenAtomInternal(expr, true);
-}
-
 function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom | null {
   if (allowLoopPrev) {
     const loopPrevMatch = LOOP_PREV_WHEN_ATOM_PATTERN.exec(expr.trim());
