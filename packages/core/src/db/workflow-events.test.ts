@@ -262,6 +262,30 @@ describe('workflow-events', () => {
       );
     });
 
+    test('validates sharing data while preserving PostgreSQL timestamp objects', async () => {
+      const createdAt = new Date('2026-10-12T00:00:00Z');
+      const data = {
+        parent_run_id: 'parent',
+        parent_node_id: 'work',
+        working_path: '/repo',
+        sibling_run_id: 'peer',
+      };
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockEvent,
+            event_type: 'workflow.checkout_shared',
+            created_at: createdAt,
+            data,
+          },
+        ])
+      );
+      const rows = await listWorkflowEvents('run-456');
+      const persistedTimestamp: unknown = rows[0]?.created_at;
+      expect(persistedTimestamp).toBe(createdAt);
+      expect(rows[0]?.data).toEqual(data);
+    });
+
     test('rejects a persisted checkout-sharing event missing its sibling', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([

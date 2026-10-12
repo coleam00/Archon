@@ -11,10 +11,7 @@
 import { pool, getDialect, getDatabaseType } from './connection';
 import type { QueryResult } from './adapters/types';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
-import {
-  checkoutSharedEventDataSchema,
-  checkoutSharedEventRowSchema,
-} from '@archon/workflows/schemas/workflow-event';
+import { checkoutSharedEventDataSchema } from '@archon/workflows/schemas/workflow-event';
 import { createLogger } from '@archon/paths';
 import { foldDagResumeSnapshot } from '@archon/workflows/dag-resume-snapshot';
 import {
@@ -63,14 +60,15 @@ function toDbDateParam(d: Date): string {
 }
 
 function hydrateEventRow(row: WorkflowEventRow): WorkflowEventRow {
-  const hydrated = {
+  const data: Record<string, unknown> =
+    typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+  return {
     ...row,
     data:
-      typeof row.data === 'string' ? (JSON.parse(row.data) as Record<string, unknown>) : row.data,
+      row.event_type === 'workflow.checkout_shared'
+        ? checkoutSharedEventDataSchema.parse(data)
+        : data,
   };
-  return row.event_type === 'workflow.checkout_shared'
-    ? checkoutSharedEventRowSchema.parse(hydrated)
-    : hydrated;
 }
 
 /**
