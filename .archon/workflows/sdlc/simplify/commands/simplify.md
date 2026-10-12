@@ -2,7 +2,7 @@
 
 Writing code is cheap; maintaining it and recovering option value are not. Hunt one defect: **the change delivers its required outcome through more structure than that outcome needs.** Preserve meaningful invariants, supported behavior, and useful foundations — not accidental implementation shape. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree (`git worktree add --detach "$(mktemp -d)" HEAD`, removed when you are done), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile.
 
-Delivery runs you once, after the last review round passed and before CI judges the pull request. The diff is this branch's commits over its base: fetch `origin $BASE_BRANCH` and read `git diff origin/$BASE_BRANCH...HEAD`. The accepted contract is the work order below; `$ARTIFACTS_DIR/implementation.md` records what the implementation claims, and `$ARTIFACTS_DIR/review/report.md` what the review accepted. Every finding you report is adopted or declined by the implementer before CI runs, and nothing reviews the result again, so report only a smaller shape you proved preserves behavior.
+Delivery runs you after a review round passed, before CI judges the pull request, and you judge a change once per run: if `$ARTIFACTS_DIR/shape.md` already exists, an earlier round already ran this pass, so declare `findings: false` and stop without reading further. The diff is this branch's commits over its base: fetch `origin $BASE_BRANCH` and read `git diff origin/$BASE_BRANCH...HEAD`. The accepted contract is the work order below; `$ARTIFACTS_DIR/implementation.md` records what the implementation claims, and `$ARTIFACTS_DIR/review/report.md` what the review accepted. Every finding you report is adopted or declined by the implementer before CI runs, and nothing reviews the result again, so report only a smaller shape you proved preserves behavior.
 
 Accepted work order:
 
@@ -18,7 +18,7 @@ Start with the diff above, against its base. Establish the intended outcome and 
 
 Look first for decisions that add coordination or prematurely close options:
 
-- **Data shape and ownership:** Do core types match the dominant access paths? Is data copied, flattened, rebuilt, cached, or represented more than once when one owner could carry it? A copy of an owner's rule or vocabulary is a second owner even when a boundary forbids importing the owner: the boundary explains the copy, it does not justify it. Report it with the smallest shape that removes the second owner, even when that shape crosses a stated boundary; whether the boundary stops the fix is the owner's decision in `pre-pr` and the synthesizer's in `review`.
+- **Data shape and ownership:** Do core types match the dominant access paths? Is data copied, flattened, rebuilt, cached, or represented more than once when one owner could carry it? A copy of an owner's rule or vocabulary is a second owner even when a boundary forbids importing the owner: the boundary explains the copy, it does not justify it. Report it with the smallest shape that removes the second owner, even when that shape crosses a stated boundary; whether the boundary stops the fix is the implementer's decision.
 - **Coherent capability:** Does the change deepen one useful abstraction, or spread special-case coordination across callers, layers, and schemas?
 - **Concurrency:** If another actor changes shared state concurrently, is the answer safely "nothing"? If not, should the state be isolated instead of synchronized?
 - **Foundations:** Would one smaller primitive make the downstream logic obvious? Remove dead weight before adding scaffold; add scaffold early only when every later phase benefits from it.
@@ -45,13 +45,13 @@ Report a simplification only when the evidence establishes:
 - an existing or smaller primitive that carries the same behavior; and
 - callers, tests, contracts, or focused validation that support the replacement.
 
-Try to falsify the smaller shape against concurrency, ordering, persistence, compatibility, and error semantics where relevant. Do not replace explicit code with clever code, move complexity into a helper, invent a new abstraction for hypothetical reuse, or broaden the review into unrelated cleanup. Report a proved defect of another kind too — a wrong outcome, an unprotected behavior, a missing type at a boundary; in `review` the synthesizer merges what overlaps with other lenses.
+Try to falsify the smaller shape against concurrency, ordering, persistence, compatibility, and error semantics where relevant. Do not replace explicit code with clever code, move complexity into a helper, invent a new abstraction for hypothetical reuse, or broaden the review into unrelated cleanup. Report a proved defect of another kind too — a wrong outcome, an unprotected behavior, a missing type at a boundary.
 
 When execution is practical, run the smallest command that can falsify a replacement. Invoke it the way this repository documents its own commands — the package scripts and invocation rules its steering files name, never an ad-hoc variant one of them warns against.
 
 ## What each finding costs
 
-State what each finding costs if it merges — the machinery that stays, the decision or data that gains a second owner, the concept every later maintainer carries — and whether you proved the smaller shape preserves behavior or could not falsify it; for one you could not, name the evidence that would settle it. Do not assign a severity: in `review` the synthesizer labels every finding, and in `pre-pr` the owner judges each one directly on this evidence. Simplification is corrected on the produced change, not deferred: merged complexity compounds into drift that every later change pays for.
+State what each finding costs if it merges — the machinery that stays, the decision or data that gains a second owner, the concept every later maintainer carries — and whether you proved the smaller shape preserves behavior or could not falsify it; for one you could not, name the evidence that would settle it. Do not assign a severity: the implementer judges each one directly on this evidence. Simplification is corrected on the produced change, not deferred: merged complexity compounds into drift that every later change pays for.
 
 ## Output
 

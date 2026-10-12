@@ -13,10 +13,9 @@
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';
-import { caveats } from '../../.shared/report.ts';
+import { discoveryReport } from '../../.shared/report.ts';
 
 const artifacts = artifactsDir();
-const listingFile = process.env.TYPED_ARTIFACTS_FILE;
 const route = text(process.env.INPUTS_ROUTE);
 const designFirst = text(process.env.INPUTS_DESIGN_FIRST) === 'true';
 const summary = text(process.env.INPUTS_SUMMARY);
@@ -32,7 +31,7 @@ function stopped(reason: string, why: string, report: string): void {
     delivered: false,
     reason,
     pr_url: '',
-    summary: `${why}\nReport: ${artifacts}/${report}${caveats(artifacts, { listingFile })}`,
+    summary: `${why}\nReport: ${artifacts}/${report}${discoveryReport(artifacts)}`,
   });
 }
 
@@ -42,8 +41,8 @@ if (deliver !== null) {
     reason: deliver.ready ? 'delivered' : 'not_ready',
     pr_url: deliver.pr_url,
     summary:
-      `${deliver.ready ? 'Ready' : `Not ready (${deliver.reason})`}: ${deliver.summary}` +
-      caveats(artifacts, { listingFile }),
+      // Delivery's summary already relays the run's discoveries.
+      `${deliver.ready ? 'Ready' : `Not ready (${deliver.reason})`}: ${deliver.summary}`,
   });
 } else if (route === 'no_action') {
   stopped('no_action', `No delivery: ${summary}`, 'triage.md');

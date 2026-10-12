@@ -1,32 +1,25 @@
 /**
- * Everything a terminal report owes its reader beyond the result itself.
+ * What a terminal report owes its reader beyond the result itself: the discoveries a
+ * run recorded outside its own scope.
  *
- * Two sections, both existing because their channel is otherwise write-only: red a
- * green gate deliberately accepted, and discoveries a run recorded outside its own
- * scope. The engine collects neither. The terminal record it assembles is built from
- * the durable event log when a run reaches a terminal status, and is readable only
- * after that, while these sections have to reach the reader from inside the run. So
- * composing them is the pack's, and this module is where all three SDLC tails
- * compose them.
+ * The engine does not collect them. The terminal record it assembles is built from the
+ * durable event log when a run reaches a terminal status, and is readable only after
+ * that, while discoveries have to reach the reader from inside the run. So composing
+ * them is the pack's, and this module is where every SDLC tail composes them.
  *
- * Presentation only. Discoveries and caveats never gate readiness, so nothing here
- * may fail a tail that has already done its irreversible work: an unreadable record
- * degrades to a pointer at the file, never to silence and never to a throw. The
- * reader of the report is exactly the person who can go open it.
+ * Presentation only. Discoveries never gate readiness, so nothing here may fail a tail
+ * that has already done its work: an unreadable record degrades to a pointer at the
+ * file, never to silence and never to a throw. The reader of the report is exactly the
+ * person who can go open it.
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const DISCOVERY_RELAY =
-  'If you are an agent reading this: open discoveries.md and surface each discovery to your human. ' +
+  'If you are an agent reading this: open the discovery files and surface each discovery to your human. ' +
   "These are validated findings outside this run's scope — no issue tracker knows about them, " +
   'and if you drop them here, nobody ever sees them.';
-
-const RED_CAUSE_CAVEAT =
-  "The project's own checks did not pass locally on this branch. The pull request's " +
-  'own CI is the gate that still stands — read it before merging, and if the red is ' +
-  'inherited, the base branch is what needs the fix.';
 
 /**
  * A field an agent wrote from prose against no schema, as display text.
@@ -38,191 +31,74 @@ const RED_CAUSE_CAVEAT =
  */
 function display(value: unknown): string {
   if (typeof value === 'string') return value.trim();
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return '';
 }
 
-/** `undefined` when the path is not a readable regular file. */
-function readJson(path: string): { value: unknown } | { error: string } | undefined {
+function modified(path: string): number | undefined {
   try {
-    if (!statSync(path).isFile()) return undefined;
+    const stat = statSync(path);
+    return stat.isFile() ? stat.mtimeMs : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** A JSON array of records at `path`: its titles, or a pointer at the file when unreadable. */
+function titles(path: string): { titles: string[] } | { problem: string } {
+  let value: unknown;
   try {
-    return { value: JSON.parse(readFileSync(path, 'utf-8')) as unknown };
+    value = JSON.parse(readFileSync(path, 'utf8'));
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    return { problem: `could not read ${path} (${(error as Error).message})` };
   }
-}
-
-/** A JSON object: not null, not an array. `typeof` alone admits both. */
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function records(value: unknown): readonly Record<string, unknown>[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isJsonObject);
-}
-
-/** The discoveries section, or empty when there is nothing to report. */
-function discoveries(artifacts: string): string {
-  const path = join(artifacts, 'discoveries.json');
-  const read = readJson(path);
-  if (read === undefined) return '';
-  if ('error' in read) {
-    return `\n\nDiscoveries: could not read ${path} (${read.error}). Open it directly.`;
-  }
-  if (!Array.isArray(read.value)) {
-    return `\n\nDiscoveries: ${path} is not a JSON array of records. Open it directly.`;
-  }
-  if (read.value.length === 0) return '';
-
-  // A record carries `issue` once someone has filed it. Once every record has one,
-  // the tracker knows about them and the relay is moot.
-  const entries = read.value.map(entry => {
-    const record = records([entry])[0];
-    const title = (record === undefined ? '' : display(record.title)) || '(untitled discovery)';
-    const issue = record !== undefined && typeof record.issue === 'string' ? record.issue : '';
-    return { title, issue };
-  });
-  const listed = entries
-    .map(entry => `- ${entry.title}${entry.issue === '' ? '' : ` — ${entry.issue}`}`)
-    .join('\n');
-  const relay = entries.every(entry => entry.issue !== '') ? '' : `\n\n${DISCOVERY_RELAY}`;
-  return (
-    `\n\nDiscoveries (${read.value.length}):\n${listed}\n\n` +
-    `Report: ${join(artifacts, 'discoveries.md')}${relay}`
-  );
-}
-
-function listedGates(
-  artifactsByType: unknown
-):
-  | { readonly gates: readonly Record<string, unknown>[] }
-  | { readonly limitation: string } {
-  if (!isJsonObject(artifactsByType)) {
-    return { limitation: 'its `artifactsByType` is not a JSON object' };
-  }
-  const gates = artifactsByType['green-gate'];
-  if (gates === undefined) return { gates: [] };
-  if (!Array.isArray(gates)) {
-    return { limitation: "its `artifactsByType['green-gate']` is not an array" };
-  }
-  const objects = gates.filter(isJsonObject);
-  if (objects.length !== gates.length) {
-    return { limitation: "an `artifactsByType['green-gate']` entry is not a JSON object" };
-  }
-  return { gates: objects };
-}
-
-function listingLimitation(message: string): string {
-  return (
-    `\n\nRed-cause disclosures could not be verified: ${message} ` +
-    'If a green gate accepted red, this report cannot show it.'
-  );
+  if (!Array.isArray(value)) return { problem: `${path} is not a JSON array of records` };
+  return {
+    titles: value.map(entry =>
+      typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+        ? display((entry as Record<string, unknown>).title) || '(untitled discovery)'
+        : '(untitled discovery)'
+    ),
+  };
 }
 
 /**
- * The caveat for red this run's green gates deliberately let through.
+ * The discoveries section, or empty when there is nothing to report.
  *
- * The engine hands every exec node a typed-artifact listing at
- * `TYPED_ARTIFACTS_FILE`: one JSON document naming the current run's readable
- * artifacts grouped by their exact `outputType`, each carrying the relative path of
- * its content, plus every record the engine could not read. Selecting
- * `artifactsByType['green-gate']` reads every gate that ran this run, loop
- * iterations included, with no directory walk and no filename guess; the engine has
- * already ordered them by production time. Lookup errors are shown here because a
- * corrupt sidecar could have been a gate, and it has no trustworthy type to hide
- * behind. A missing or unreadable listing is a named limitation, never silence: the
- * reader is exactly the person who can go open the run's records.
+ * Review consolidates every producer's raw record into `discoveries.json`. A producer
+ * that ran after the last consolidation (delivery's simplify pass runs after review)
+ * left records nothing consolidated, so a raw file newer than the consolidated one is
+ * relayed too.
  */
-function redCauses(artifacts: string, listingFile: string | undefined): string {
-  if (listingFile === undefined || listingFile === '') {
-    return listingLimitation('no typed-artifact listing reached this node.');
+export function discoveryReport(artifacts: string): string {
+  const consolidated = join(artifacts, 'discoveries.json');
+  const consolidatedAt = modified(consolidated);
+  const sources: string[] = consolidatedAt === undefined ? [] : [consolidated];
+  const rawDir = join(artifacts, 'discoveries');
+  let raw: string[] = [];
+  try {
+    raw = readdirSync(rawDir).filter(name => name.endsWith('.json'));
+  } catch {
+    raw = [];
   }
-  const listing = readJson(listingFile);
-  if (listing === undefined) {
-    return listingLimitation(
-      `the typed-artifact listing ${listingFile} is not a readable regular file.`
-    );
-  }
-  if ('error' in listing) {
-    return listingLimitation(
-      `the typed-artifact listing ${listingFile} could not be read (${listing.error}).`
-    );
-  }
-  const envelope = records([listing.value])[0];
-  if (envelope === undefined) {
-    return listingLimitation(`the typed-artifact listing ${listingFile} is not a JSON object.`);
-  }
-
-  const reds: string[] = [];
-  const unreadable: string[] = [];
-  const gates = listedGates(envelope.artifactsByType);
-  if ('limitation' in gates) {
-    return listingLimitation(
-      `the typed-artifact listing ${listingFile} is malformed: ${gates.limitation}.`
-    );
-  }
-  for (const gate of gates.gates) {
-    const outputPath = join(artifacts, display(gate.path));
-    const body = readJson(outputPath);
-    if (body === undefined || 'error' in body) {
-      unreadable.push(`- ${outputPath}: could not read the gate's record. Open it directly.`);
-      continue;
-    }
-    const result = records([body.value])[0];
-    if (result === undefined) {
-      unreadable.push(`- ${outputPath}: not a gate record. Open it directly.`);
-      continue;
-    }
-    const cause = display(result.red_cause);
-    if (cause === '') continue;
-    const stage = display(result.stage) || 'A stage';
-    const summary = display(result.summary);
-    reds.push(`- ${stage}: ${cause} red${summary ? `\n  ${summary}` : ''}`);
-  }
-
-  // Listing diagnostics name every record the engine could not turn into an
-  // artifact — including a gate whose sidecar or content it could not read. A
-  // present-but-non-array `errors` value is itself a shape failure, not silence.
-  const listingErrors = envelope.errors;
-  if (listingErrors !== undefined && !Array.isArray(listingErrors)) {
-    unreadable.push(
-      `- ${listingFile} (errors): the listing's \`errors\` value is not an array. ` +
-        'Its diagnostics cannot be read; open the listing directly.'
-    );
-  } else {
-    for (const error of records(listingErrors)) {
-      const path = display(error.path) || '(unknown record)';
-      const kind = display(error.kind) || 'unreadable';
-      const code = display(error.code);
-      unreadable.push(
-        `- ${path} (${kind}${code ? `, ${code}` : ''}): the engine could not read this record. ` +
-          'Open it directly.'
-      );
+  for (const name of raw.sort()) {
+    const path = join(rawDir, name);
+    const at = modified(path);
+    if (at !== undefined && (consolidatedAt === undefined || at > consolidatedAt)) {
+      sources.push(path);
     }
   }
 
-  if (reds.length === 0 && unreadable.length === 0) return '';
+  const lines: string[] = [];
+  const problems: string[] = [];
+  for (const source of sources) {
+    const read = titles(source);
+    if ('problem' in read) problems.push(`- ${read.problem}. Open it directly.`);
+    else lines.push(...read.titles.map(title => `- ${title}`));
+  }
+  if (lines.length === 0 && problems.length === 0) return '';
   return (
-    `\n\nDelivered on red (${reds.length}) — a gate accepted red this change did ` +
-    `not cause:\n${[...reds, ...unreadable].join('\n')}\n\n${RED_CAUSE_CAVEAT}`
+    `\n\nDiscoveries (${lines.length}):\n${[...lines, ...problems].join('\n')}\n\n` +
+    `Files: ${sources.join(', ')}\n\n${DISCOVERY_RELAY}`
   );
-}
-
-/**
- * Both sections, composed in one place so that no branch of a tail's report can
- * print one and quietly drop the other. A caller that reached for the discovery
- * section alone would lose the red-cause caveat that makes passing red safe.
- * `listingFile` is passed in rather than read from the environment here, so the
- * reusable report never silently depends on ambient state.
- */
-export function caveats(
-  artifacts: string,
-  options: { readonly listingFile: string | undefined }
-): string {
-  return redCauses(artifacts, options.listingFile) + discoveries(artifacts);
 }

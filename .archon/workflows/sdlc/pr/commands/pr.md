@@ -30,7 +30,7 @@ You do not look up whether this branch already has a pull request. The publishin
 - Title: concise, human, the meaningful outcome — never an implementation inventory.
 - Link the issue with `Closes #N` only when the PR fully resolves it; `Relates to #N` otherwise. Never infer linkage from a bare number.
 - Never add AI attribution, generated-by footers, or robot emoji.
-- Check whether a gate passed red: read the typed-artifact listing at `$TYPED_ARTIFACTS_FILE`, take its `artifactsByType["green-gate"]` entries in the order the engine recorded them, and open each entry's `path` relative to `$ARTIFACTS_DIR` for that gate's JSON result. Any with a non-empty `red_cause` means this branch is being delivered while a project check is red. Add a short, plainly-titled section near the top of the body giving each such gate's `stage`, `red_cause`, and `summary`, and say that the PR's own CI is the check that still decides. Surface every listing `errors` entry and every gate body you cannot read as a caveat, never as "no gates". A reviewer must not have to discover this from a red badge.
+- The project validation this delivery ran before publishing (empty when the pull request is opened on its own): $INPUTS.validation. When it reports a red check this change did not cause (`inherited` or `environment`), add a short, plainly-titled section near the top of the body naming the check and its evidence, and say that the PR's own CI is the check that still decides. A reviewer must not have to discover this from a red badge.
 - Write the complete body to `$ARTIFACTS_DIR/pr-body.md` — never inside the repository.
 
 ## 4. Push

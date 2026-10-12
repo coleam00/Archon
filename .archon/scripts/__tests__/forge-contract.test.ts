@@ -15,7 +15,6 @@ import {
   CHECK_STATES,
   type ChecksObservation as PackObservation,
   parseQualifiedPr,
-  parseCreatedWorkItem,
   type PrRecord,
   type QualifiedPr,
   type MergeRequest,
@@ -29,7 +28,6 @@ import type { PrRef } from '../../../packages/forge/src/identity';
 import {
   forgePrRecordSchema,
   type ForgePrRecord,
-  type ForgeWorkItemRecord,
 } from '../../../packages/forge/src/lifecycle';
 
 // The pack is standalone and cannot import runtime packages. These assignments
@@ -120,19 +118,6 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
   expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
   // Guard against a vacuous match: the parser must accept the qualified PR.
   expect(verdicts[0].parserAccepts).toBe(true);
-});
-
-test('standalone work-item projection accepts the owning identity and rejects a foreign repository', () => {
-  const repo = { host: 'tracker.example', path: 'group/team/repo' };
-  const workitem: ForgeWorkItemRecord = {
-    ref: { repo, number: 1 },
-    kind: 'issue',
-    url: 'https://tracker.example/group/team/repo/items/1',
-    state: 'closed',
-  };
-  const value = { outcome: 'applied', changed: false, workitem };
-  expect(parseCreatedWorkItem(value, repo)).toBe(workitem.url);
-  expect(() => parseCreatedWorkItem(value, { ...repo, path: 'other' })).toThrow();
 });
 
 test('triage producer declares qualified identities and its non-tracker sentinel', () => {
@@ -260,43 +245,3 @@ test('standalone new-operation projections carry typed request and result eviden
   ).toBe(2);
 });
 
-test('standalone check reader retains unit IDs, rerun attempts and workflow approval', async () => {
-  const { readChecks } = await import('../../workflows/sdlc/.shared/forge');
-  const { checksObservationSchema, summarizeChecks } =
-    await import('../../../packages/forge/src/operations');
-  const ref = { repo: { host: 'forge.example', path: 'group/repo' }, number: 1 };
-  const unit = {
-    unit: { kind: 'check' as const, id: 'opaque-check', name: 'same-name' },
-    nativeState: 'completed',
-    nativeResult: 'failure',
-    phase: 'completed' as const,
-    result: 'failure' as const,
-    state: 'red' as const,
-    rerun: { id: 'opaque-group', attempt: 3 },
-  };
-  const value = checksObservationSchema.parse({
-    ref,
-    revision: 'opaque-revision',
-    units: [unit],
-    summary: summarizeChecks([unit]),
-    required: null,
-    approvalPending: true,
-  });
-  const response = { operationId: 'test', ok: true, result: { op: 'checks.state', value } };
-  const previous = process.env.ARCHON_CLI_COMMAND;
-  process.env.ARCHON_CLI_COMMAND = JSON.stringify([
-    process.execPath,
-    '-e',
-    `console.log(${JSON.stringify(JSON.stringify(response))})`,
-  ]);
-  try {
-    expect(readChecks(ref)).toMatchObject({
-      revision: value.revision,
-      approvalPending: true,
-      units: [{ unit: unit.unit, rerun: unit.rerun }],
-    });
-  } finally {
-    if (previous === undefined) delete process.env.ARCHON_CLI_COMMAND;
-    else process.env.ARCHON_CLI_COMMAND = previous;
-  }
-});

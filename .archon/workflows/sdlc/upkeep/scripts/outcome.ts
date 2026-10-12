@@ -17,10 +17,9 @@
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';
-import { caveats } from '../../.shared/report.ts';
+import { discoveryReport } from '../../.shared/report.ts';
 
 const artifacts = artifactsDir();
-const listingFile = process.env.TYPED_ARTIFACTS_FILE;
 const action = text(process.env.INPUTS_ACTION);
 const summary = text(process.env.INPUTS_SUMMARY);
 const deliver = JSON.parse(text(process.env.INPUTS_DELIVER) || 'null') as {
@@ -34,13 +33,13 @@ if (action === 'no_action' || deliver === null) {
     delivered: false,
     summary:
       `No update needed: ${summary}\nReport: ${artifacts}/upkeep-assessment.md` +
-      caveats(artifacts, { listingFile }),
+      discoveryReport(artifacts),
   });
 } else {
   emit({
     delivered: deliver.ready,
     summary:
-      `${deliver.ready ? 'Ready' : `Not ready (${deliver.reason})`}: ${deliver.summary}` +
-      caveats(artifacts, { listingFile }),
+      // Delivery's summary already relays the run's discoveries.
+      `${deliver.ready ? 'Ready' : `Not ready (${deliver.reason})`}: ${deliver.summary}`,
   });
 }

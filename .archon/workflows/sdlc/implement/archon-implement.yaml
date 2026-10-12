@@ -46,10 +46,7 @@ nodes:
         # when the checks did not all run. A green turn has no red to
         # explain, and the empty string is how it says so: OpenAI strict mode rejects
         # any schema whose `required` omits a declared property, so optionality has to
-        # live inside the type rather than in what `required` leaves out: every
-        # archon-deliver run on a Codex config died at the first turn while this
-        # was optional by omission. '' is the value gate-green.ts already treats as
-        # no cause declared, so the gate that spends on this verdict is unchanged.
+        # live inside the type rather than in what `required` leaves out.
         red_cause:
           type: string
           enum: [introduced, inherited, environment, incomplete, ""]

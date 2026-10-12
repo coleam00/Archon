@@ -1,7 +1,7 @@
 name: archon-deliver
 description: |
   The delivery tail: implement the work, validate it once, publish a draft PR,
-  review it, and correct until the review is ready; simplify once, then one CI
+  review it, and correct until the review is ready; simplify once per run, then one CI
   agent waits for CI and judges it. Green: the agent marks the PR ready. Red the
   PR caused: another round. Red for any other reason: the run stops not ready,
   with the cause. Rounds are capped; the cap ends the run not ready, with the
@@ -80,6 +80,9 @@ nodes:
           when: "$validate.output.green == true || $validate.output.red_cause == 'inherited' || $validate.output.red_cause == 'environment'"
           with:
             draft: "true"
+            validation: >-
+              green: $validate.output.green, red cause: $validate.output.red_cause,
+              summary: $validate.output.summary
 
         - id: review
           include: archon-review
@@ -90,7 +93,8 @@ nodes:
             work_order: "$INPUTS.work"
             scopes: "$INPUTS.review_scopes"
 
-        # Once, after the review passes and before CI judges the PR.
+        # After the review passes, before CI judges the PR. It runs once per run: a
+        # later round's pass finds the earlier shape.md and stops (see simplify.md).
         - id: simplify
           include: archon-simplify
           depends_on: [review]
@@ -118,7 +122,7 @@ nodes:
 
         - id: ci
           command: ci
-          depends_on: [simplify, reshape]
+          depends_on: [review, simplify, reshape]
           trigger_rule: none_failed_min_one_success
           when: "$review.output.ready == true"
           output_format:

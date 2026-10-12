@@ -6,7 +6,7 @@
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';
-import { caveats } from '../../.shared/report.ts';
+import { discoveryReport } from '../../.shared/report.ts';
 
 const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
   ready: boolean;
@@ -20,5 +20,5 @@ emit({
   reason: rounds.reason,
   pr_url: rounds.pr_url,
   summary:
-    rounds.summary + caveats(artifactsDir(), { listingFile: process.env.TYPED_ARTIFACTS_FILE }),
+    rounds.summary + discoveryReport(artifactsDir()),
 });

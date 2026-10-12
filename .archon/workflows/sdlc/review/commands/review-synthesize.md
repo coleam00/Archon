@@ -67,7 +67,7 @@ A finding is **blocking** when merging would leave something wrong, untrue, undo
 
 Unneeded and doubly owned block only when the smaller shape preserves behavior and the evidence proves it; one nobody could falsify is a note.
 
-Scope does not demote them. An unneeded or doubly owned finding on the touched path — the code the change edits, or structure it extends — stays blocking when its fix reaches a file outside the scope the work order lists. Only a boundary the operator stated in the trigger or originating contract, or a plan the trigger explicitly names as this delivery, can stop that fix; an inferred boundary cannot. When an operator-stated boundary does stop it, the finding becomes a `scope_conflict` discovery, which delivery files as an issue, never a note the owner can quietly decline.
+Scope does not demote them. An unneeded or doubly owned finding on the touched path — the code the change edits, or structure it extends — stays blocking when its fix reaches a file outside the scope the work order lists. Only a boundary the operator stated in the trigger or originating contract, or a plan the trigger explicitly names as this delivery, can stop that fix; an inferred boundary cannot. When an operator-stated boundary does stop it, the finding becomes a `scope_conflict` discovery, which the run relays to the operator, never a note the owner can quietly decline.
 
 A boundary never demotes the other kinds. A wrong, untrue, undocumented, or unproved finding stays blocking whatever the work order puts out of scope: "out of scope" is never a reason to label one a note. When its fix needs an operator-stated boundary crossed, the action is `replan`.
 
