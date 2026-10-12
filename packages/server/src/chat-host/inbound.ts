@@ -137,15 +137,20 @@ export function registerChatInbound(
       );
       let resumed = false;
       if (!('cancelled' in result) || !result.cancelled) {
-        const run = await workflowDb.getWorkflowRun(action.runId);
-        if (run) {
-          const target = await workflowResumeTargetForRun(run, platforms);
-          resumed = await resumeWorkflowRunFromServer(
-            createSqlWorkflowHost(),
-            run,
-            actor.kind === 'user' ? actor.userId : undefined,
-            target
-          );
+        // The gate response is already recorded; a failed resume must not report it refused.
+        try {
+          const run = await workflowDb.getWorkflowRun(action.runId);
+          if (run) {
+            const target = await workflowResumeTargetForRun(run, platforms);
+            resumed = await resumeWorkflowRunFromServer(
+              createSqlWorkflowHost(),
+              run,
+              actor.kind === 'user' ? actor.userId : undefined,
+              target
+            );
+          }
+        } catch {
+          getLog().warn({ plugin: descriptor.id, action: action.action }, 'chat.run_resume_failed');
         }
       }
       return {

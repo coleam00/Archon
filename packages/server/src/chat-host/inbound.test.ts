@@ -206,6 +206,22 @@ test('approve and declared response preserve gate occurrence and resume with hos
   ).toMatchObject({ status: 'done', result: { kind: 'approved', resumed: true } });
 });
 
+test('a failed resume reports the recorded approval as not resumed, not refused', async () => {
+  const paused = await run(true);
+  resume.mockImplementationOnce(async () => {
+    throw new Error('resume failed');
+  });
+  expect(
+    await action({ runId: paused.id, action: 'approve', sender: { platformUserId: 'starter' } })
+  ).toEqual({
+    status: 'done',
+    result: { kind: 'approved', type: 'approval_gate', resumed: false },
+  });
+  expect((await getWorkflowRun(paused.id))?.metadata).toMatchObject({
+    approval: { resolved: 'approved' },
+  });
+});
+
 test('cancel without a live owner carries an explicit abandon hint', async () => {
   const started = await run();
   expect(

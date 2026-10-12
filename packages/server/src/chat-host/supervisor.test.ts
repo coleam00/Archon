@@ -41,8 +41,8 @@ async function fixture(mode: string, args: string[] = []) {
       argv: [process.execPath, join(import.meta.dir, 'fixtures/plugin.ts'), mode, file, ...args],
     },
     () => {},
-    value => {
-      live = value;
+    state => {
+      live = state === 'live';
     },
     {
       graceMs: 50,

@@ -8,14 +8,17 @@ import * as conversationDb from '@archon/core/db/conversations';
 import { createLogger } from '@archon/paths';
 import type { ChatSupervisor } from './supervisor';
 
-export function projectRunEvent(
-  event: WorkflowEmitterEvent,
-  conversationId: string
-): ChatRunEvent | undefined {
+type WorkflowStarted = Extract<ChatRunEvent, { type: 'workflow_started' }>;
+/** A chat run event before routing supplies the platform conversation id. */
+type ProjectedRunEvent =
+  | Exclude<ChatRunEvent, WorkflowStarted>
+  | Omit<WorkflowStarted, 'conversationId'>;
+
+export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent | undefined {
   const runId = event.runId;
   switch (event.type) {
     case 'workflow_started':
-      return { type: 'workflow_started', runId, workflowName: event.workflowName, conversationId };
+      return { type: 'workflow_started', runId, workflowName: event.workflowName };
     case 'node_started':
       return {
         type: 'node_state',
@@ -64,7 +67,7 @@ export function projectRunEvent(
     case 'workflow_failed':
       return { type: 'terminal', runId, status: 'failed', error: event.error };
     case 'workflow_cancelled':
-      return { type: 'terminal', runId, status: 'cancelled' };
+      return { type: 'terminal', runId, status: 'cancelled', error: event.reason };
     case 'loop_iteration_started':
     case 'loop_iteration_completed':
     case 'loop_iteration_failed':
@@ -91,7 +94,7 @@ export function subscribeChatRunEvents(plugins: ReadonlyMap<string, ChatSupervis
   let routing = Promise.resolve();
   const deliveries = new Map<string, Promise<void>>();
   const unsubscribe = emitter.subscribe(event => {
-    const projected = projectRunEvent(event, event.runId);
+    const projected = projectRunEvent(event);
     if (!projected) return;
     const fail = (): void => {
       log.warn({ eventType: event.type }, 'chat.run_event_failed');
@@ -100,24 +103,27 @@ export function subscribeChatRunEvents(plugins: ReadonlyMap<string, ChatSupervis
       .then(async () => {
         if (stopped) return;
         const run = await workflowDb.getWorkflowRun(event.runId);
-        const id = run?.parent_conversation_id ?? run?.conversation_id;
+        if (!run) return;
+        const id = run.parent_conversation_id ?? run.conversation_id;
         if (!id) return;
         const conversation = await conversationDb.getConversationById(id);
         if (!conversation?.platform_conversation_id) return;
         const platform = conversation.platform_type;
         const plugin = plugins.get(platform);
         if (!plugin?.plugin.descriptor.capabilities.runEvents) return;
-        if (projected.type === 'workflow_started')
-          projected.conversationId = conversation.platform_conversation_id;
-        if (projected.type === 'terminal') {
-          projected.authoredOutcome = run ? (run.outcome ?? undefined) : 'unavailable';
-          const cost = run?.metadata.total_cost_usd;
+        const routed: ChatRunEvent =
+          projected.type === 'workflow_started'
+            ? { ...projected, conversationId: conversation.platform_conversation_id }
+            : projected;
+        if (routed.type === 'terminal') {
+          routed.authoredOutcome = run.outcome ?? undefined;
+          const cost = run.metadata.total_cost_usd;
           if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0)
-            projected.totalCostUsd = cost;
+            routed.totalCostUsd = cost;
         }
         const delivery = (deliveries.get(platform) ?? Promise.resolve())
           .then(async () => {
-            if (!stopped) await plugin.runEvent(projected);
+            if (!stopped) await plugin.runEvent(routed);
           })
           .catch(fail);
         deliveries.set(platform, delivery);

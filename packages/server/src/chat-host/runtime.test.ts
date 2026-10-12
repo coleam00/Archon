@@ -50,6 +50,35 @@ test(
   testTimeout(5000)
 );
 
+test(
+  'health shows a plugin that failed to start with its state',
+  async () => {
+    const health = ['Web'];
+    const host = createChatHost(
+      [
+        {
+          descriptor,
+          argv: [process.execPath, `${import.meta.dir}/fixtures/plugin.ts`, 'nonretry'],
+        },
+      ],
+      {},
+      new ConversationLockManager(),
+      new Map(),
+      health
+    );
+    try {
+      host.start();
+      expect(health).toEqual(['Web', `Chat: ${descriptor.id} (starting)`]);
+      await until(() => health.includes(`Chat: ${descriptor.id} (failed)`));
+      expect(health).toEqual(['Web', `Chat: ${descriptor.id} (failed)`]);
+    } finally {
+      await host.stop();
+    }
+    expect(health).toEqual(['Web']);
+  },
+  testTimeout(5000)
+);
+
 test('no receipts leave platform and health registries unchanged', async () => {
   const platforms = new Map<string, IWorkflowPlatform>();
   const health = ['Web'];

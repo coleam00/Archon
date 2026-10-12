@@ -24,6 +24,9 @@ export interface SupervisorOptions {
   maxBackoffMs?: number;
 }
 
+/** `failed` is terminal: a non-retryable start or an invalid command is never restarted. */
+export type ChatPluginState = 'starting' | 'live' | 'failed' | 'stopped';
+
 const BOOTSTRAP_TIMEOUT_MS = 30_000;
 
 class ChatRequestTimeoutError extends Error {}
@@ -56,7 +59,7 @@ export class ChatSupervisor implements ChatConnection {
   constructor(
     readonly plugin: InstalledChatPlugin,
     private readonly register: (connection: ConnectedChat) => void,
-    private readonly onLive: (live: boolean) => void,
+    private readonly onState: (state: ChatPluginState) => void,
     private readonly options: SupervisorOptions = {}
   ) {}
 
@@ -82,7 +85,7 @@ export class ChatSupervisor implements ChatConnection {
       if (error instanceof ChatRequestTimeoutError && this.connection === connection) {
         if (++this.sendTimeouts >= 2) {
           this.connection = undefined;
-          this.onLive(false);
+          this.onState('starting');
           await this.dispose?.();
         }
       }
@@ -107,7 +110,7 @@ export class ChatSupervisor implements ChatConnection {
   async stop(): Promise<void> {
     this.stopping = true;
     this.connection = undefined;
-    this.onLive(false);
+    this.onState('stopped');
     this.wakeBackoff?.();
     await this.dispose?.();
     await this.task;
@@ -118,8 +121,10 @@ export class ChatSupervisor implements ChatConnection {
     const invalid = validateCommand(argv[0]);
     if (invalid) {
       this.log.error({ plugin: descriptor.id, reason: invalid }, 'chat.plugin.failed');
+      this.onState('failed');
       return;
     }
+    this.onState('starting');
     let failures = 0;
     while (!this.stopping) {
       let retryable = true;
@@ -199,7 +204,7 @@ export class ChatSupervisor implements ChatConnection {
         await Promise.race([withTimeout(connection.start(), BOOTSTRAP_TIMEOUT_MS), spawnFailure]);
         if (!this.stopping) {
           this.sendTimeouts = 0;
-          this.onLive(true);
+          this.onState('live');
           this.log.info({ plugin: descriptor.id }, 'chat.plugin.started');
           const started = Date.now();
           await Promise.race([connection.closed, ended, spawnFailure]);
@@ -212,7 +217,7 @@ export class ChatSupervisor implements ChatConnection {
         this.log.error({ plugin: descriptor.id, retryable }, 'chat.plugin.failed');
       } finally {
         this.connection = undefined;
-        this.onLive(false);
+        this.onState(this.stopping ? 'stopped' : retryable ? 'starting' : 'failed');
         await this.dispose();
         this.dispose = undefined;
         this.log.debug({ plugin: descriptor.id, stderrBytes }, 'chat.plugin.closed');

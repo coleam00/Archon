@@ -126,7 +126,7 @@ test.each([false, true])(
       });
       expect(JSON.stringify(first)).not.toContain('/private/path');
       expect(
-        projectRunEvent({ type: 'container_lifecycle', runId: 'run', phase: 'created' }, 'thread')
+        projectRunEvent({ type: 'container_lifecycle', runId: 'run', phase: 'created' })
       ).toBeUndefined();
       unsubscribe();
       emitter.emit({
@@ -199,6 +199,40 @@ test('a stalled plugin does not delay run events for another plugin', async () =
       await new Promise(resolve => setTimeout(resolve, 5));
     }
     expect(delivered.map(event => event.runId)).toEqual([healthy.id]);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test('a cancelled run carries its cancellation reason to the plugin', async () => {
+  const delivered: ChatRunEvent[] = [];
+  const supervisor = new ChatSupervisor(
+    { descriptor, argv: [process.execPath] },
+    () => {},
+    () => {}
+  );
+  supervisor.runEvent = async event => {
+    delivered.push(event);
+  };
+  const unsubscribe = subscribeChatRunEvents(new Map([['fixture-chat', supervisor]]));
+  try {
+    const run = await createRun('fixture-chat');
+    getWorkflowEventEmitter().emit({
+      type: 'workflow_cancelled',
+      runId: run.id,
+      nodeId: 'node',
+      reason: 'Cancelled by the run owner',
+    });
+    const deadline = Date.now() + 2000;
+    while (delivered.length < 1) {
+      if (Date.now() > deadline) throw new Error('Event was not forwarded');
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    expect(delivered[0]).toMatchObject({
+      type: 'terminal',
+      status: 'cancelled',
+      error: 'Cancelled by the run owner',
+    });
   } finally {
     unsubscribe();
   }

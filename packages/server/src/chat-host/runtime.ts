@@ -16,15 +16,22 @@ export function createChatHost(
   for (const plugin of installed) {
     const { descriptor } = plugin;
     const healthName = `Chat: ${descriptor.id}`;
+    let listed: string | undefined;
     const supervisor = new ChatSupervisor(
       plugin,
       connection => {
         registerChatInbound(connection, descriptor, platform, locks, platforms);
       },
-      live => {
-        const index = activePlatforms.indexOf(healthName);
-        if (live && index === -1) activePlatforms.push(healthName);
-        if (!live && index !== -1) activePlatforms.splice(index, 1);
+      state => {
+        // While the host runs, health lists each installed plugin with its state; live is the bare name.
+        if (listed !== undefined) activePlatforms.splice(activePlatforms.indexOf(listed), 1);
+        listed =
+          state === 'stopped'
+            ? undefined
+            : state === 'live'
+              ? healthName
+              : `${healthName} (${state})`;
+        if (listed !== undefined) activePlatforms.push(listed);
       }
     );
     const platform = new ChatPluginPlatform(descriptor, supervisor, streaming);
