@@ -153,6 +153,9 @@
       "src/commands/user.test.ts"
     ],
     [
+      "src/commands/auth.test.ts"
+    ],
+    [
       "src/commands/trigger-store.integration.spec.ts"
     ],
     [
