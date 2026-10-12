@@ -428,6 +428,52 @@ test('an executable that stays locked fails by name and leaves the previous rece
   expect(await snapshot(env.pluginsDir)).toEqual(before);
 }, 120_000);
 
+test('a failed update restores the previous receipt even when the receipt is briefly locked', async () => {
+  const env = await environment();
+  expect(await pluginCommand('install', [`${ID}@v1`], env)).toBe(0);
+  const before = await snapshot(env.pluginsDir);
+  // The staged executable stays locked. Once its rename has failed, the receipt is held
+  // too, as a scanner holds a file just renamed into place: its next writes fail.
+  const realRename = fs.rename;
+  const realWriteFile = fs.writeFile;
+  let binaryFailed = false;
+  let receiptFailures = 0;
+  const busy = (path: unknown): Error =>
+    Object.assign(new Error(`EBUSY: resource busy or locked, '${String(path)}'`), {
+      code: 'EBUSY',
+    });
+  const holdReceipt = (target: unknown): void => {
+    if (binaryFailed && String(target).endsWith('receipt.json') && receiptFailures < 3) {
+      receiptFailures++;
+      throw busy(target);
+    }
+  };
+  const rename = spyOn(fs, 'rename').mockImplementation(async (source, target) => {
+    if (String(source).includes(`.${executable}.`)) {
+      binaryFailed = true;
+      throw busy(source);
+    }
+    holdReceipt(target);
+    return realRename(source, target);
+  });
+  const write = spyOn(fs, 'writeFile').mockImplementation(async (target, data, options) => {
+    holdReceipt(target);
+    return realWriteFile(target, data, options);
+  });
+  const sleep = spyOn(Bun, 'sleep').mockResolvedValue(undefined);
+  try {
+    const failed = await plugin(env, 'update', [`${ID}@v2`]);
+    expect(failed.code).toBe(1);
+    expect(failed.err).toMatch(/Could not rename .*\.archon-provider-test-provider.*still EBUSY/);
+  } finally {
+    sleep.mockRestore();
+    write.mockRestore();
+    rename.mockRestore();
+  }
+  expect(receiptFailures).toBe(3);
+  expect(await snapshot(env.pluginsDir)).toEqual(before);
+}, 120_000);
+
 test('a process holding the install lock excludes competing install, update and remove', async () => {
   const env = await environment();
   const spawnMutation = (command: string, id: string): Promise<[number, string, string]> => {

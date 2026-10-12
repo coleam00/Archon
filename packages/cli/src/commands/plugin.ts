@@ -398,15 +398,24 @@ async function installBinaryPlugin(
       // Receipt first: the other order could strand a binary no receipt owns, which
       // every later install would refuse to replace. If the binary rename then fails,
       // the previous receipt comes back, so the receipt never names a binary that
-      // is not there.
+      // is not there. The restore is staged and renamed like the install, so a
+      // failed restore leaves a whole receipt rather than a truncated one.
       await rename(stagedReceipt, receiptFile);
       try {
         await renameUnlocked(stagedBinary, target);
       } catch (error) {
-        if (previous) {
-          await writeFile(receiptFile, `${JSON.stringify(previous, null, 2)}\n`);
-        } else {
-          await rm(receiptFile, { force: true });
+        try {
+          if (previous) {
+            await writeFile(stagedReceipt, `${JSON.stringify(previous, null, 2)}\n`);
+            await renameUnlocked(stagedReceipt, receiptFile);
+          } else {
+            await removeUnlocked(receiptFile);
+          }
+        } catch (restore) {
+          throw new Error(
+            `${(error as Error).message} Restoring the previous receipt also failed (${(restore as Error).message}); ${receiptFile} still describes this failed install.`,
+            { cause: error }
+          );
         }
         throw error;
       }
