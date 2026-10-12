@@ -46,7 +46,7 @@ async function fixture() {
     op: string,
     input = '',
     flags: { ifRevision?: string; limit?: string } = {},
-    override = env
+    override: NodeJS.ProcessEnv = env
   ) =>
     stateCommand(
       host,
@@ -101,6 +101,22 @@ test('mismatched store, absent project and invalid identity refuse without write
       { ...env, ARCHON_NODE_EXECUTION: JSON.stringify({ runId: 'wrong', path: 'commit' }) }
     )
   ).toBe(1);
+  for (const identity of [undefined, '', '{', '{"runId":"x"}']) {
+    const { ARCHON_NODE_EXECUTION: _, ...withoutIdentity } = env;
+    expect(
+      await invoke(
+        'put',
+        '{}',
+        { ifRevision: '0' },
+        identity === undefined
+          ? withoutIdentity
+          : { ...withoutIdentity, ARCHON_NODE_EXECUTION: identity }
+      )
+    ).toBe(1);
+    expect(output.at(-1)).toMatchObject({
+      error: 'WORKFLOW_ID requires ARCHON_NODE_EXECUTION as JSON with runId and path',
+    });
+  }
   const unscoped = await store.createWorkflowRun({ workflow_name: 'state', user_message: '' });
   expect(
     await invoke(

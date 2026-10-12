@@ -80,9 +80,18 @@ export async function stateCommand(
       if (!resolved)
         throw new StateProjectResolutionError('The run has no resolvable project root');
       root = resolved;
-      const identity = nodeExecutionMetadataSchema
+      let supplied: unknown = null;
+      try {
+        supplied = JSON.parse(env.ARCHON_NODE_EXECUTION || 'null');
+      } catch {
+        // Reported below with the same message as a missing identity.
+      }
+      const parsedIdentity = nodeExecutionMetadataSchema
         .pick({ runId: true, path: true })
-        .parse(JSON.parse(env.ARCHON_NODE_EXECUTION ?? 'null') as unknown);
+        .safeParse(supplied);
+      if (!parsedIdentity.success)
+        throw new Error('WORKFLOW_ID requires ARCHON_NODE_EXECUTION as JSON with runId and path');
+      const identity = parsedIdentity.data;
       if (identity.runId !== run.id)
         throw new Error('ARCHON_NODE_EXECUTION does not match WORKFLOW_ID');
       writer = { kind: 'run', runId: run.id, nodePath: identity.path };

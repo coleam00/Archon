@@ -1506,7 +1506,7 @@ stdin to the latest value, initially `{}`, retrying up to five times on contenti
 Operations are `set`, `remove`, and `append`, using RFC 6901 JSON Pointer paths. `set`
 replaces a value, `remove` deletes an existing member (or array element), and `append`
 adds one value to an array, creating it when missing. Missing intermediate objects are
-created for `set` and `append`. Array indices must be canonical, in range integers;
+created for `set` and `append`. Array indices must be canonical, in-range integers;
 `-` is unsupported. The empty pointer addresses the entire document. Root `null` is
 reserved for deletion; nested nulls are ordinary JSON values.
 
