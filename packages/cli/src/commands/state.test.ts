@@ -84,6 +84,16 @@ test('JSON commands preserve run attribution, audit, CAS and tombstone recreatio
   expect(await invoke('delete', '', { ifRevision: '2' })).toBe(0);
   expect(await invoke('put', '{}', { ifRevision: '3' })).toBe(0);
 });
+test('get on a deleted document returns the revision a recreating put must name', async () => {
+  const { invoke, output } = await fixture();
+  expect(await invoke('put', '{"a":1}', { ifRevision: '0' })).toBe(0);
+  expect(await invoke('delete', '', { ifRevision: '1' })).toBe(0);
+  expect(await invoke('get')).toBe(0);
+  expect(output.at(-1)).toEqual({ name: 'review/123', revision: 2, value: null, deleted: true });
+  const { revision } = output.at(-1) as { revision: number };
+  expect(await invoke('put', '{"a":2}', { ifRevision: String(revision) })).toBe(0);
+  expect(output.at(-1)).toMatchObject({ revision: 3, value: { a: 2 } });
+});
 test('mismatched store, absent project and invalid identity refuse without writes', async () => {
   const { invoke, output, store, env } = await fixture();
   expect(await invoke('put', '{}', { ifRevision: '0' }, { ...env, WORKFLOW_ID: 'missing' })).toBe(

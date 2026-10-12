@@ -132,7 +132,15 @@ export async function stateCommand(
     switch (subcommand) {
       case 'get': {
         const row = await store.getStateDocument(project, name);
-        output = { name, revision: row?.revision ?? 0, value: row?.value ?? null };
+        if (row) {
+          output = { name, revision: row.revision, value: row.value };
+          break;
+        }
+        // A deleted document's tombstone is the revision a recreating put must name.
+        const [tombstone] = await store.listStateRevisions(project, name, { limit: 1 });
+        output = tombstone
+          ? { name, revision: tombstone.revision, value: null, deleted: true }
+          : { name, revision: 0, value: null };
         break;
       }
       case 'put': {

@@ -1494,11 +1494,12 @@ archon state log review/123 --limit 100
 archon state delete review/123 --if-revision 2
 ```
 
-Every command writes JSON. `get` returns `{name, revision, value}`; an absent or deleted
-document returns revision `0` and value `null`. `put`, `patch`, and `delete` return the
-new full revision. `log` returns all revisions newest first (use a positive `--limit`
-to bound the result), including tombstones, operation, writer and timestamp.
-To recreate a deleted document, use its tombstone revision from `log`.
+Every command writes JSON. `get` returns `{name, revision, value}`; an absent document
+returns revision `0` and value `null`. A deleted document returns value `null`,
+`deleted: true` and its tombstone revision, which is the revision a recreating `put` must
+name. `put`, `patch`, and `delete` return the new full revision. `log` returns all
+revisions newest first (use a positive `--limit` to bound the result), including
+tombstones, operation, writer and timestamp.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
