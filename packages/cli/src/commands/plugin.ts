@@ -51,6 +51,7 @@ import {
   type ChatPluginDescriptor,
 } from '@archon/chat-contract/descriptor';
 import { withPluginMutationLock } from './plugin-mutation-lock';
+import { removeUnlocked, renameUnlocked } from './unlocked-file';
 import { assertProviderRegistrationAllowed, getRegisteredProviders } from '@archon/providers';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
@@ -394,19 +395,37 @@ async function installBinaryPlugin(
             : [],
       });
     } else {
-      // Receipt first: if the binary rename then fails, the receipt still owns the
-      // name and `update` or `remove` can recover. The other order could strand a
-      // binary no receipt owns, which every later install would refuse to replace.
+      // Receipt first: the other order could strand a binary no receipt owns, which
+      // every later install would refuse to replace. If the binary rename then fails,
+      // the previous receipt comes back, so the receipt never names a binary that
+      // is not there.
       await rename(stagedReceipt, receiptFile);
-      await rename(stagedBinary, target);
+      try {
+        await renameUnlocked(stagedBinary, target);
+      } catch (error) {
+        if (previous) {
+          await writeFile(receiptFile, `${JSON.stringify(previous, null, 2)}\n`);
+        } else {
+          await rm(receiptFile, { force: true });
+        }
+        throw error;
+      }
     }
-  } finally {
-    await rm(stagedBinary, { force: true });
-    await rm(stagedReceipt, { force: true });
+  } catch (error) {
+    // Cleanup runs only on failure (success renamed both staged files away) and must
+    // not replace the reason the install failed.
+    for (const staged of [stagedBinary, stagedReceipt]) {
+      try {
+        await removeUnlocked(staged);
+      } catch (cleanup) {
+        console.warn(`Could not remove ${staged}: ${(cleanup as Error).message}`);
+      }
+    }
+    throw error;
   }
   if (manifest.kind !== 'chat' && previous && isBinaryReceipt(previous)) {
     for (const file of previous.files) {
-      if (file.path !== fileName) await rm(join(env.pluginsDir, file.path), { force: true });
+      if (file.path !== fileName) await removeUnlocked(join(env.pluginsDir, file.path));
     }
   }
 

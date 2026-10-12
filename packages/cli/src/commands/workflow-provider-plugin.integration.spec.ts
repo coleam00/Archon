@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
+import * as fs from 'node:fs/promises';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -358,6 +359,73 @@ test('invalid provider initialize, ids, capabilities and vendors preserve the pr
   expect((await plugin(fresh, 'install', [`${ID}@invalid`])).code).toBe(1);
   expect(await readReceipts(fresh.pluginsDir)).toEqual([]);
   expect(await snapshot(fresh.pluginsDir)).toEqual({});
+}, 120_000);
+
+/**
+ * Holds the staged executable the way Windows does after the install probe ran it: its
+ * rename fails with EBUSY `times` times. Retry delays are skipped.
+ */
+function lockStagedBinary(times: number): () => void {
+  const realRename = fs.rename;
+  let failures = 0;
+  const rename = spyOn(fs, 'rename').mockImplementation(async (source, target) => {
+    if (String(source).includes(`.${executable}.`) && failures < times) {
+      failures++;
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, rename '${String(source)}'`), {
+        code: 'EBUSY',
+      });
+    }
+    return realRename(source, target);
+  });
+  const sleep = spyOn(Bun, 'sleep').mockResolvedValue(undefined);
+  return () => {
+    rename.mockRestore();
+    sleep.mockRestore();
+  };
+}
+
+test('install waits out a staged executable that is briefly locked', async () => {
+  const env = await environment();
+  const release = lockStagedBinary(3);
+  try {
+    expect((await plugin(env, 'install', [`${ID}@v1`])).code).toBe(0);
+  } finally {
+    release();
+  }
+  expect(await readReceipts(env.pluginsDir)).toHaveLength(1);
+  expect(
+    Object.keys(await snapshot(env.pluginsDir)).filter(name => name.includes('partial'))
+  ).toEqual([]);
+  expect((await loadProviderPlugins(env.pluginsDir)).map(provider => provider.id)).toEqual([
+    'test-provider',
+  ]);
+}, 120_000);
+
+test('an executable that stays locked fails by name and leaves the previous receipt', async () => {
+  const fresh = await environment();
+  let release = lockStagedBinary(Number.POSITIVE_INFINITY);
+  try {
+    const failed = await plugin(fresh, 'install', [`${ID}@v1`]);
+    expect(failed.code).toBe(1);
+    expect(failed.err).toMatch(
+      /Could not rename .*\.archon-provider-test-provider.*partial.*still EBUSY/
+    );
+  } finally {
+    release();
+  }
+  expect(await readReceipts(fresh.pluginsDir)).toEqual([]);
+  expect(await snapshot(fresh.pluginsDir)).toEqual({});
+
+  const env = await environment();
+  expect(await pluginCommand('install', [`${ID}@v1`], env)).toBe(0);
+  const before = await snapshot(env.pluginsDir);
+  release = lockStagedBinary(Number.POSITIVE_INFINITY);
+  try {
+    expect((await plugin(env, 'update', [`${ID}@v2`])).code).toBe(1);
+  } finally {
+    release();
+  }
+  expect(await snapshot(env.pluginsDir)).toEqual(before);
 }, 120_000);
 
 test('a process holding the install lock excludes competing install, update and remove', async () => {

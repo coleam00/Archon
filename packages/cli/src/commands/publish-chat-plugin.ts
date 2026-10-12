@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { copyFile, lstat, rename, rm } from 'node:fs/promises';
+import { removeUnlocked, renameUnlocked } from './unlocked-file';
 
 interface Publication {
   stagedReceipt: string;
@@ -43,17 +44,17 @@ export async function publishChatPlugin(publication: Publication): Promise<void>
     // Receipt first keeps ownership visible throughout the publication window.
     await rename(stagedReceipt, receiptFile);
     published.push(receiptFile);
-    await rename(stagedBinary, target);
+    await renameUnlocked(stagedBinary, target);
     published.push(target);
     for (const path of previousFiles) {
-      if (path !== target) await rm(path, { force: true });
+      if (path !== target) await removeUnlocked(path);
     }
-  } catch {
+  } catch (error) {
     const recovery: string[] = [];
     for (const path of published) {
       if (backups.has(path)) continue;
       try {
-        await rm(path, { force: true });
+        await removeUnlocked(path);
       } catch {
         recovery.push(path);
       }
@@ -69,7 +70,9 @@ export async function publishChatPlugin(publication: Publication): Promise<void>
       throw new Error(`Chat plugin rollback failed; recovery required: ${recovery.join(', ')}`);
     }
     await discardBackups();
-    throw new Error(`Chat plugin publication failed; previous install restored: ${receiptFile}`);
+    throw new Error(
+      `Chat plugin publication failed; previous install restored: ${receiptFile}. ${(error as Error).message}`
+    );
   }
   // Publication has committed; leftover backups must not turn success into refusal.
   await discardBackups();
