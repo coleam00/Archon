@@ -150,12 +150,12 @@ test('usage, cap and patch errors have distinct codes and write nothing', async 
 });
 test('operator identity and registered folder project use the same durable scope', async () => {
   const { host, root, output } = await fixture();
-  // Registration stores the canonical path; the operator's cwd may be a symlink or a
-  // Windows 8.3 short name for the same folder.
+  // Registration stores the canonical path; the operator's cwd may be a symlink or,
+  // on Windows, the 8.3 short name the runner's temp directory already uses.
   const folder = join(root, 'ops');
   mkdirSync(folder);
-  const alias = join(root, 'ops-alias');
-  symlinkSync(folder, alias, 'junction');
+  const alias = process.platform === 'win32' ? folder : join(root, 'ops-alias');
+  if (alias !== folder) symlinkSync(folder, alias);
   await host.records.codebases.createCodebase({
     name: 'Ops',
     default_cwd: realpathSync(folder),
