@@ -32,6 +32,15 @@ export interface StateCommandOptions {
   limit?: string;
 }
 
+// Windows CI: `Bun.stdin.text()` on a piped stdin stayed pending without holding the
+// event loop open, so the CLI exited 0 having written nothing. The Node stream keeps
+// the pipe handle alive until EOF.
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Uint8Array));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 export async function stateCommand(
   host: Pick<WorkflowHost, 'deps' | 'records'>,
   subcommand: string | undefined,
@@ -47,7 +56,7 @@ export async function stateCommand(
   const env = dependencies.env ?? process.env;
   const write = dependencies.write ?? writeJsonLine;
   const store = host.deps.store;
-  const readInput = dependencies.readInput ?? ((): Promise<string> => Bun.stdin.text());
+  const readInput = dependencies.readInput ?? readStdin;
   try {
     if (!subcommand || !['get', 'put', 'patch', 'log', 'delete'].includes(subcommand))
       throw new Error('Expected state get|put|patch|log|delete');
