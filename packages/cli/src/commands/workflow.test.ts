@@ -6248,9 +6248,17 @@ describe('workflowGetCommand', () => {
 
       // Human output draws from the same filtered list and says what it omitted.
       await workflowGetCommand(createTestWorkflowHost(), runId);
-      const printed = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
-      for (const report of reports) expect(printed).toContain(`- ${report}`);
-      expect(printed).not.toContain(RUN_ARTIFACTS_ENGINE_SUBDIR);
+      const printed: string = consoleSpy.mock.calls
+        .map((call: unknown[]) => String(call[0]))
+        .join('\n');
+      // Only the listed entries: the transcript path is absolute and may itself
+      // sit under a `.archon` directory.
+      const listed = printed
+        .split('\n')
+        .filter(line => line.startsWith('      - '))
+        .map(line => line.slice('      - '.length));
+      for (const report of reports) expect(listed).toContain(report);
+      expect(listed.filter(file => file.startsWith(`${RUN_ARTIFACTS_ENGINE_SUBDIR}/`))).toEqual([]);
       expect(printed).toContain(`Engine-internal artifact files (not listed): ${internalFiles}`);
     } finally {
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
