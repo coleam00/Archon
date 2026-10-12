@@ -26,9 +26,9 @@ Draw the workflow as nodes and outcomes before building it. Test each outcome on
 
 One agent waits for CI and judges it. Green: it marks the PR ready. Red because of the change: the work goes back to the implementer. Red for any other reason, such as a flake or a broken base branch: the run stops, not ready, with the cause. No polling loops, no re-run machinery, no classification scripts. Every loop has a round limit. Never leave a red PR ready.
 
-## 7. Validate once
+## 7. CI is the validation
 
-An agent tests, lints and type-checks the code it changed, nothing more. The full project validation runs once per round, just before the work goes to review. A node that runs the whole suite on its own costs every node that comes after it.
+An agent tests, lints and type-checks the code it changed, nothing more. The project's full validation is its CI, which runs on every push across every platform it supports. A full local run in a node repeats CI more slowly, on one platform, and costs every node after it. A project with no CI gets its full validation from the CI agent, once, before the work is marked ready.
 
 ## 8. The pack works for any project
 
