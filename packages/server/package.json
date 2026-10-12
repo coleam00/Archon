@@ -146,6 +146,9 @@
     ],
     [
       "src/routes/workflow-yaml.test.ts"
+    ],
+    [
+      "src/adapters/web/console-attention.integration.test.ts"
     ]
   ]
 }
