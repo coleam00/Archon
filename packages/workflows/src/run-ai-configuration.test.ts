@@ -96,3 +96,15 @@ test('saved AI omissions remain omissions while native and process settings refr
   expect(current.assistants.claude).toEqual({ settingSources: ['user'] });
   expect(current.assistants.pi).toEqual({ env: { API_KEY: 'secret' }, maxConcurrent: 3 });
 });
+
+test('a snapshot without a configured default provider is plain JSON', () => {
+  const current = config();
+  current.assistant = undefined;
+  const snapshot = createRunAiConfigurationSnapshot(
+    providerRegistry,
+    current,
+    buildAiProfile(undefined, {}),
+    {}
+  );
+  expect(JSON.parse(JSON.stringify(snapshot))).toStrictEqual(snapshot);
+});

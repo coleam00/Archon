@@ -316,7 +316,8 @@ export function buildAiProfile(
     }
   }
 
-  return { defaultProvider, aliases };
+  // Profiles are persisted in JSON run metadata, where `undefined` is invalid.
+  return { ...(defaultProvider !== undefined ? { defaultProvider } : {}), aliases };
 }
 
 function presetForOverrideTarget(profile: ResolvedAiProfile, name: string): ModelAliasPreset {
@@ -434,7 +435,7 @@ export function applyResolvedRunModelOverrides(
   overrides: ResolvedRunModelOverrides
 ): ResolvedAiProfile {
   return {
-    defaultProvider: profile.defaultProvider,
+    ...(profile.defaultProvider !== undefined ? { defaultProvider: profile.defaultProvider } : {}),
     aliases: {
       ...profile.aliases,
       ...overrides.tiers,
@@ -506,7 +507,9 @@ export function createRunModelBindingsMetadata(
       ...(overrides.aliases ? { aliases: { ...overrides.aliases } } : {}),
     },
     effective: {
-      defaultProvider: effective.defaultProvider,
+      ...(effective.defaultProvider !== undefined
+        ? { defaultProvider: effective.defaultProvider }
+        : {}),
       aliases: Object.fromEntries(
         Object.entries(effective.aliases).map(([name, preset]) => [name, { ...preset }])
       ),
