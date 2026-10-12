@@ -348,6 +348,41 @@ describe('serializeWorkflowPreservingText', () => {
     );
   });
 
+  test.each(['|', '|-', '|+', '>', '>-', '>+'])(
+    'edits a %s sequence block scalar with its header comment',
+    header => {
+      const prefix = 'name: x\ntags:\n  - ';
+      const suffix = '  - untouched # tag\nother: { a: [ b ] } # untouched\n';
+      const source = `${prefix}${header} # keep\n    old\n${suffix}`;
+      const definition = { name: 'x', tags: ['new', 'untouched'], other: { a: ['b'] } };
+      for (const eol of ['\n', '\r\n']) {
+        const text = serializeWorkflowPreservingText(definition, source.replaceAll('\n', eol));
+        expect(text).toBe(
+          `${prefix}${header[0]}- # keep\n    new\n${suffix}`.replaceAll('\n', eol)
+        );
+        expect(parseYaml(text)).toEqual(definition);
+      }
+    }
+  );
+
+  test.each(['old', "'old'", '"old"'])(
+    'edits a %s flow sequence scalar to a multiline value',
+    scalar => {
+      const prefix = 'name: x\ntags: [ ';
+      const suffix = ' , untouched ] # tags\nother: { a: [ b ] } # untouched\n';
+      const source = `${prefix}${scalar}${suffix}`;
+      const definition = { name: 'x', tags: ['first\nsecond', 'untouched'], other: { a: ['b'] } };
+      const quote = scalar.startsWith("'") ? "'" : '"';
+      for (const eol of ['\n', '\r\n']) {
+        const text = serializeWorkflowPreservingText(definition, source.replaceAll('\n', eol));
+        expect(text).toBe(
+          `${prefix}${quote}first\n\n  second${quote}${suffix}`.replaceAll('\n', eol)
+        );
+        expect(parseYaml(text)).toEqual(definition);
+      }
+    }
+  );
+
   test('multiline quoted edits retain surrounding bytes', () => {
     const source = 'name: x\nvalue: "old" # value\nother: { a: [ b ] }\n';
     const definition = { name: 'x', value: 'first\nsecond', other: { a: ['b'] } };

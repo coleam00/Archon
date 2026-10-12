@@ -1279,12 +1279,13 @@ describe('PUT /api/workflows/:name', () => {
     };
 
     async function putOverCommentedFile(
-      body: typeof definition
+      body: typeof definition & { tags?: string[] },
+      source = commentedYaml
     ): Promise<{ status: number; saved: string }> {
       const testDir = join(tmpdir(), `wf-put-comments-${Date.now()}-${Math.random()}`);
       const filePath = join(testDir, '.archon', 'workflows', 'my-flow.yaml');
       await mkdir(dirname(filePath), { recursive: true });
-      await writeFile(filePath, commentedYaml);
+      await writeFile(filePath, source);
       try {
         const app = createTestApp();
         registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
@@ -1314,6 +1315,16 @@ describe('PUT /api/workflows/:name', () => {
       expect(saved).toBe(
         commentedYaml.replace('command: plan # inline note', 'command: plan-v2 # inline note')
       );
+    });
+
+    test('editing a sequence block scalar saves only the changed tag', async () => {
+      const source = commentedYaml.replace('nodes:', 'tags:\n  - |- # keep\n    old\nnodes:');
+      const { status, saved } = await putOverCommentedFile(
+        { ...definition, tags: ['new'] },
+        source
+      );
+      expect(status).toBe(200);
+      expect(saved).toBe(source.replace('    old\n', '    new\n'));
     });
   });
 });

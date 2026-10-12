@@ -35,7 +35,7 @@ function tryRenderScalarEdits(definition: Plain, source: string): string | undef
   if (doc.errors.length > 0 || !isMap(doc.contents)) return undefined;
   const edits: { start: number; end: number; text: string }[] = [];
 
-  function collect(node: unknown, value: unknown, afterKey: boolean, inFlow: boolean): boolean {
+  function collect(node: unknown, value: unknown, inFlow: boolean): boolean {
     const previous: unknown = isNode(node) ? node.toJS(doc) : node;
     if (Bun.deepEquals(previous, value)) return true;
     // Shared sources need alias settlement; tagged values need schema-aware merging.
@@ -48,7 +48,7 @@ function tryRenderScalarEdits(definition: Plain, source: string): string | undef
           isScalar(key) &&
           typeof key.value === 'string' &&
           keys.includes(key.value) &&
-          collect(child, value[key.value], true, inFlow || node.flow === true)
+          collect(child, value[key.value], inFlow || node.flow === true)
       );
     }
     if (isSeq(node) && Array.isArray(value)) {
@@ -56,7 +56,7 @@ function tryRenderScalarEdits(definition: Plain, source: string): string | undef
       return node.items.every((child, index) => {
         const oldValue: unknown = isNode(child) ? child.toJS(doc) : child;
         if (itemId(oldValue) !== itemId(value[index])) return false;
-        return collect(child, value[index], false, inFlow || node.flow === true);
+        return collect(child, value[index], inFlow || node.flow === true);
       });
     }
     if (
@@ -82,7 +82,8 @@ function tryRenderScalarEdits(definition: Plain, source: string): string | undef
     if (!isScalar(scalar)) return false;
     const replacement = structuredClone(token);
     CST.setScalarValue(replacement, typeof value === 'string' ? value : canonical.trimEnd(), {
-      afterKey,
+      // CST's afterKey adds continuation indentation for both map and sequence values.
+      afterKey: true,
       inFlow,
       type: typeof value !== 'string' ? 'PLAIN' : node.type === 'PLAIN' ? scalar.type : undefined,
     });
@@ -101,7 +102,7 @@ function tryRenderScalarEdits(definition: Plain, source: string): string | undef
     return true;
   }
 
-  if (!collect(doc.contents, definition, false, false)) return undefined;
+  if (!collect(doc.contents, definition, false)) return undefined;
   let text = source;
   let boundary = source.length;
   for (const edit of edits.sort((a, b) => b.start - a.start)) {
