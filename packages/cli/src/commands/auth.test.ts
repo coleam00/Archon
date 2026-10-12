@@ -4,6 +4,7 @@ import * as core from '@archon/core';
 import * as paths from '@archon/paths';
 
 const logError = mock(() => undefined);
+const connectFailure = new Error('connection terminated unexpectedly');
 mock.module('@archon/paths', () => ({
   ...paths,
   createLogger: () => ({ error: logError }),
@@ -16,26 +17,23 @@ mock.module('@archon/core', () => ({
   ...core,
   isPerUserGitHubEnabled: () => true,
   connectGithubForUser: async () => {
-    throw Object.assign(new Error('Failed to store GitHub identity alice'), {
-      code: '23505',
-      detail: 'Key (platform_user_id)=(alice) already exists.',
-    });
+    throw connectFailure;
   },
 }));
 
 import { authGithubCommand } from './auth';
 
-test('a failed GitHub connection logs internal correlation and the error code without identity data', async () => {
+test('a failed GitHub connection logs the error with the internal user id', async () => {
   const output = spyOn(console, 'log').mockImplementation(() => undefined);
   const errorOutput = spyOn(console, 'error').mockImplementation(() => undefined);
   try {
     expect(await authGithubCommand()).toBe(1);
     expect(logError).toHaveBeenCalledWith(
-      { userId: 'user-1', platform: 'github', errorType: 'Error', errorCode: '23505' },
+      { err: connectFailure, userId: 'user-1', platform: 'github' },
       'cli.auth_github_failed'
     );
     expect(errorOutput).toHaveBeenCalledWith(
-      '\n✗ Connect failed: Failed to store GitHub identity alice'
+      '\n✗ Connect failed: connection terminated unexpectedly'
     );
   } finally {
     output.mockRestore();

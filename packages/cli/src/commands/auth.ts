@@ -8,7 +8,6 @@
  * connected GitHub token attaches to the same user across CLI invocations.
  */
 import { createLogger } from '@archon/paths';
-import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import {
   isPerUserGitHubEnabled,
   connectGithubForUser,
@@ -58,10 +57,7 @@ export async function authGithubCommand(): Promise<number> {
     } else if (err instanceof DeviceFlowError) {
       console.error(`\n✗ Device flow failed (${err.code}): ${err.message}`);
     } else {
-      getLog().error(
-        { ...identityErrorLogFields(err), userId: user.id, platform: 'github' },
-        'cli.auth_github_failed'
-      );
+      getLog().error({ err, userId: user.id, platform: 'github' }, 'cli.auth_github_failed');
       console.error(`\n✗ Connect failed: ${(err as Error).message}`);
     }
     return 1;

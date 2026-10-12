@@ -1,4 +1,3 @@
-import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 /**
  * Slack workflow bridge: translates WorkflowEventEmitter events into Slack
@@ -549,10 +548,7 @@ export class SlackWorkflowBridge {
       const user = await findOrCreateUserByPlatformIdentity('slack', slackUserId);
       return { kind: 'user', userId: user.id };
     } catch (err) {
-      getLog().warn(
-        { ...identityErrorLogFields(err), platform: 'slack' },
-        'slack.bridge_actor_resolve_failed'
-      );
+      getLog().warn({ err, platform: 'slack' }, 'slack.bridge_actor_resolve_failed');
       return { kind: 'unidentified' };
     }
   }

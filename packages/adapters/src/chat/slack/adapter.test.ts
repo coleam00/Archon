@@ -569,13 +569,12 @@ describe('SlackAdapter', () => {
     });
 
     test.each(['identity', 'device flow'])(
-      'GitHub connect %s errors log only classification',
+      'GitHub connect %s errors log the error without the Slack user',
       async source => {
         mockCommand.mockClear();
         mockLogger.warn.mockClear();
-        const error = Object.assign(new Error('U_PRIVATE @alice Alice Liddell'), {
-          code: '23505',
-          detail: 'U_PRIVATE',
+        const error = Object.assign(new Error('connection terminated unexpectedly'), {
+          code: '57P01',
         });
         if (source === 'identity') mockFindOrCreateUser.mockRejectedValueOnce(error);
         else mockConnectGithub.mockRejectedValueOnce(error);
@@ -587,7 +586,7 @@ describe('SlackAdapter', () => {
         );
         await new Promise(resolve => setTimeout(resolve, 0));
         expect(mockLogger.warn).toHaveBeenCalledWith(
-          { errorType: 'Error', errorCode: '23505', platform: 'slack' },
+          { err: error, platform: 'slack' },
           source === 'identity'
             ? 'slack.connect_github_identity_failed'
             : 'slack.connect_github_failed'

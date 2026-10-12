@@ -10,7 +10,6 @@
  * The identity bind runs BEFORE token persistence so a contested GitHub account
  * (already linked to another user) fails without leaving an orphan token row.
  */
-import { identityErrorLogFields } from '../utils/identity-error-log-fields';
 import { createLogger } from '@archon/paths';
 import { loadDeviceFlowConfig } from './config';
 import {
@@ -54,10 +53,7 @@ export async function connectGithubForUser(
     });
     return await persistGithubConnection(userId, token);
   } catch (err) {
-    getLog().error(
-      { ...identityErrorLogFields(err), userId, platform: 'github' },
-      'github_connect.failed'
-    );
+    getLog().error({ err, userId, platform: 'github' }, 'github_connect.failed');
     throw err;
   }
 }

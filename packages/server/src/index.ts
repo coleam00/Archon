@@ -61,7 +61,6 @@ import {
   registerCommunityProviders,
 } from '@archon/providers/in-process';
 import { getPluginsPath } from '@archon/paths';
-import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { getVendorCatalog, loadProviderPlugins } from '@archon/core';
 import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
 import { CODEX_BOOT_CHECKED, readCodexBootAuth } from './boot/codex-auth-posture';
@@ -190,7 +189,7 @@ export async function resolveUserId(
     );
     return user.id;
   } catch (err) {
-    getLog().warn({ ...identityErrorLogFields(err), platform }, 'server.user_resolve_failed');
+    getLog().warn({ err, platform }, 'server.user_resolve_failed');
     return undefined;
   }
 }

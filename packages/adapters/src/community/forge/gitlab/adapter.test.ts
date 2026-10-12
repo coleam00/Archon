@@ -712,7 +712,7 @@ describe('GitLabAdapter', () => {
       }
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        { errorType: 'Error', platform: 'gitlab' },
+        { err: expect.objectContaining({ message: 'DB connection failed' }), platform: 'gitlab' },
         'gitlab.user_resolve_failed'
       );
     });

@@ -275,19 +275,20 @@ describe('users', () => {
     test('rethrows non-UNIQUE errors WITHOUT attempting race recovery', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
-      const failure = Object.assign(new Error('serialization failure for U999'), {
-        code: '40001',
-        detail: 'Identity U999 could not be stored',
-      });
+      const failure = Object.assign(
+        new Error('could not serialize access due to concurrent update'),
+        { code: '40001' }
+      );
       mockQuery.mockRejectedValueOnce(failure);
       // No re-SELECT should happen — if the narrowed catch is widened by a
       // future refactor, this assertion catches it.
 
       await expect(findOrCreateUserByPlatformIdentity('slack', 'U999')).rejects.toThrow(
-        'serialization failure'
+        'could not serialize access'
       );
+      // The database error itself is logged, so its message survives for diagnosis.
       expect(logger.error).toHaveBeenCalledWith(
-        { platform: 'slack', errorType: 'Error', errorCode: '40001' },
+        { err: failure, platform: 'slack' },
         'user.create_failed'
       );
       // Exactly 3 queries: initial identity SELECT + INSERT user + INSERT identity (failed).
@@ -354,9 +355,14 @@ describe('users', () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([githubIdentity({ user_id: 'user-other' })])
       );
-      await expect(linkGithubIdentity('user-1', 'alice')).rejects.toBeInstanceOf(
-        GithubIdentityConflictError
+      const conflict: unknown = await linkGithubIdentity('user-1', 'alice').catch(
+        (err: unknown) => err
       );
+      expect(conflict).toBeInstanceOf(GithubIdentityConflictError);
+      // Callers show and log this error, so it must not carry the login.
+      expect(
+        JSON.stringify({ ...(conflict as object), message: (conflict as Error).message })
+      ).not.toContain('alice');
       // Only the SELECT ran — a conflict must not touch the identity row.
       expect(mockQuery).toHaveBeenCalledTimes(1);
     });

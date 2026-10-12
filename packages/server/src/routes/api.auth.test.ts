@@ -576,10 +576,11 @@ describe('per-request auth helpers', () => {
   });
 
   test('session outage permits soft proxy attribution but strict identity returns 503', async () => {
+    const sessionOutage = new Error('session store unavailable');
     authInstance = {
       api: {
         getSession: async () => {
-          throw new Error('session unavailable for @alice session-user');
+          throw sessionOutage;
         },
       },
     };
@@ -590,11 +591,11 @@ describe('per-request auth helpers', () => {
     const result = await requireWebUser(c);
     if (!('error' in result)) throw new Error('Expected backend refusal');
     expect(mockLogger.warn).toHaveBeenCalledWith(
-      { errorType: 'Error', path: c.req.path },
+      { err: sessionOutage, path: c.req.path },
       'web.session_resolve_failed'
     );
     expect(mockLogger.error).toHaveBeenCalledWith(
-      { errorType: 'Error' },
+      { err: sessionOutage },
       'web.session_resolve_failed'
     );
     expect(result.error.status).toBe(503);
@@ -613,29 +614,24 @@ describe('per-request auth helpers', () => {
       const c = await request(source === 'header' ? { 'X-Archon-User': 'proxy-user' } : undefined);
       mockLogger.warn.mockClear();
       mockLogger.error.mockClear();
-      mockFindOrCreateUser.mockRejectedValueOnce(
-        new Error('identity unavailable for @alice proxy-user')
-      );
+      const storageOutage = new Error('identity store unavailable');
+      mockFindOrCreateUser.mockRejectedValueOnce(storageOutage);
       expect(await resolveAuthContext(c)).toBeUndefined();
-      mockFindOrCreateUser.mockRejectedValueOnce(
-        new Error('identity unavailable for @alice proxy-user')
-      );
+      mockFindOrCreateUser.mockRejectedValueOnce(storageOutage);
       expect(await resolveWebUserId(c)).toBeUndefined();
-      mockFindOrCreateUser.mockRejectedValueOnce(
-        new Error('identity unavailable for @alice proxy-user')
-      );
+      mockFindOrCreateUser.mockRejectedValueOnce(storageOutage);
       const result = await requireWebUser(c);
       if (!('error' in result)) throw new Error('Expected backend refusal');
       expect(mockLogger.warn).toHaveBeenCalledWith(
         {
-          errorType: 'Error',
+          err: storageOutage,
           ...(source === 'header' ? { headerPresent: true } : {}),
           path: c.req.path,
         },
         source === 'header' ? 'web.user_resolve_failed' : 'web.session_resolve_failed'
       );
       expect(mockLogger.error).toHaveBeenCalledWith(
-        { errorType: 'Error', ...(source === 'header' ? { headerPresent: true } : {}) },
+        { err: storageOutage, ...(source === 'header' ? { headerPresent: true } : {}) },
         'web.user_resolve_failed'
       );
       expect(result.error.status).toBe(503);

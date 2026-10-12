@@ -2,7 +2,6 @@
  * Slack platform adapter using @slack/bolt with Socket Mode
  * Handles message sending with markdown block formatting for AI responses
  */
-import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { slackPolicy } from './policy';
 import { App, LogLevel, type SlashCommand } from '@slack/bolt';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
@@ -623,10 +622,7 @@ export class SlackAdapter implements IPlatformAdapter {
       const user = await userDb.findOrCreateUserByPlatformIdentity('slack', actorId, displayName);
       archonUserId = user.id;
     } catch (err) {
-      getLog().warn(
-        { ...identityErrorLogFields(err), platform: 'slack' },
-        'slack.connect_github_identity_failed'
-      );
+      getLog().warn({ err, platform: 'slack' }, 'slack.connect_github_identity_failed');
       await respond({
         response_type: 'ephemeral',
         text: 'Could not resolve your Archon identity — try again in a moment.',
@@ -656,10 +652,7 @@ export class SlackAdapter implements IPlatformAdapter {
             : err instanceof DeviceFlowError
               ? `✗ Device flow failed (${err.code}).`
               : '✗ GitHub connect failed — try again.';
-        getLog().warn(
-          { ...identityErrorLogFields(err), platform: 'slack' },
-          'slack.connect_github_failed'
-        );
+        getLog().warn({ err, platform: 'slack' }, 'slack.connect_github_failed');
         await respond({ response_type: 'ephemeral', text });
       });
   }

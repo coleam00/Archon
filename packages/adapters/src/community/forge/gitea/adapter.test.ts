@@ -1151,7 +1151,7 @@ describe('GiteaAdapter', () => {
       }
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        { errorType: 'Error', platform: 'gitea' },
+        { err: expect.objectContaining({ message: 'DB connection failed' }), platform: 'gitea' },
         'gitea.user_resolve_failed'
       );
     });

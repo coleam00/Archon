@@ -87,15 +87,15 @@ describe('connectGithubForUser', () => {
   });
 
   test('does NOT persist a token when the identity bind throws (no orphan row)', async () => {
+    const conflict = Object.assign(new Error('identity conflict'), {
+      name: 'GithubIdentityConflictError',
+    });
     mockLink.mockImplementationOnce(async () => {
-      throw Object.assign(new Error('identity conflict for alice'), {
-        name: 'GithubIdentityConflictError',
-        login: 'alice',
-      });
+      throw conflict;
     });
     await expect(connectGithubForUser('user-1', () => {})).rejects.toThrow('identity conflict');
     expect(logger.error).toHaveBeenCalledWith(
-      { userId: 'user-1', platform: 'github', errorType: 'GithubIdentityConflictError' },
+      { err: conflict, userId: 'user-1', platform: 'github' },
       'github_connect.failed'
     );
     expect(mockSave).not.toHaveBeenCalled();

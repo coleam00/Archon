@@ -2,7 +2,6 @@
  * GitHub platform adapter using Octokit REST API and Webhooks
  * Handles issue and PR comments with @mention detection
  */
-import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
@@ -1186,10 +1185,7 @@ ${userComment}`;
         );
         archonUserId = user.id;
       } catch (err) {
-        getLog().warn(
-          { ...identityErrorLogFields(err), platform: githubPolicy.id },
-          'github.user_resolve_failed'
-        );
+        getLog().warn({ err, platform: githubPolicy.id }, 'github.user_resolve_failed');
       }
     }
 

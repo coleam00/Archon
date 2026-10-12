@@ -4,7 +4,6 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
-import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { gitlabPolicy } from './policy';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -681,10 +680,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         );
         archonUserId = user.id;
       } catch (err) {
-        getLog().warn(
-          { ...identityErrorLogFields(err), platform: gitlabPolicy.id },
-          'gitlab.user_resolve_failed'
-        );
+        getLog().warn({ err, platform: gitlabPolicy.id }, 'gitlab.user_resolve_failed');
       }
     }
 

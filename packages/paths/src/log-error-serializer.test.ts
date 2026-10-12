@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { serializeLoggedError } from './log-error-serializer';
 
 describe('serializeLoggedError', () => {
-  test('drops the failed request a vendor SDK error carries', () => {
+  test('drops the failed request a vendor SDK error carries, and pg detail', () => {
     // grammy GrammyError: payload holds the chat id (the user's id in a private
     // chat) and the message text.
     const grammy = Object.assign(new Error('Call to sendMessage failed! (400: Bad Request)'), {
@@ -24,13 +24,23 @@ describe('serializeLoggedError', () => {
       request: { method: 'POST', url: 'https://api.github.com/x', body: '{"body":"Help @alice"}' },
     });
 
-    const logged = JSON.stringify([grammy, discord, octokit].map(serializeLoggedError));
+    // pg constraint error: detail holds the conflicting row values.
+    const pg = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+      detail: 'Key (platform, platform_user_id)=(telegram, 123456789) already exists.',
+    });
+
+    const logged = JSON.stringify([grammy, discord, octokit, pg].map(serializeLoggedError));
 
     expect(logged).not.toContain('alice');
     expect(logged).not.toContain('123456789');
     expect(serializeLoggedError(grammy)).toMatchObject({ name: 'GrammyError', error_code: 400 });
     expect(serializeLoggedError(discord)).toMatchObject({ code: 50035 });
     expect(serializeLoggedError(octokit)).toMatchObject({ status: 422 });
+    expect(serializeLoggedError(pg)).toMatchObject({
+      message: 'duplicate key value violates unique constraint',
+      code: '23505',
+    });
   });
 
   test('keeps an ordinary error intact', () => {

@@ -4,7 +4,6 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
-import { identityErrorLogFields } from '@archon/core/utils/identity-error-log-fields';
 import { giteaPolicy } from './policy';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
@@ -826,10 +825,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
         );
         archonUserId = user.id;
       } catch (err) {
-        getLog().warn(
-          { ...identityErrorLogFields(err), platform: giteaPolicy.id },
-          'gitea.user_resolve_failed'
-        );
+        getLog().warn({ err, platform: giteaPolicy.id }, 'gitea.user_resolve_failed');
       }
     }
 

@@ -494,7 +494,8 @@ describe('SlackWorkflowBridge', () => {
   test('identity lookup failure passes unidentified without changing cancellation behavior', async () => {
     const { adapter, dispatchAction } = makeFakeAdapter();
     new SlackWorkflowBridge(adapter as never).attach();
-    mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable for U123 @alice'));
+    const lookupFailure = new Error('identity store unavailable');
+    mockFindOrCreateUser.mockRejectedValueOnce(lookupFailure);
     await dispatchAction('cancel:r1', {
       user: { id: 'U123' },
       channel: { id: 'C1' },
@@ -502,7 +503,7 @@ describe('SlackWorkflowBridge', () => {
     });
     expect(mockCancelWorkflow).toHaveBeenCalledWith('r1', { kind: 'unidentified' });
     expect(mockLogger.warn).toHaveBeenCalledWith(
-      { errorType: 'Error', platform: 'slack' },
+      { err: lookupFailure, platform: 'slack' },
       'slack.bridge_actor_resolve_failed'
     );
     expect(mockLogger.info).toHaveBeenCalledWith({ runId: 'r1' }, 'slack.bridge_cancel_dispatched');

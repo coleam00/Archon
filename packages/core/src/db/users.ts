@@ -11,7 +11,6 @@
  * — the UNIQUE constraint causes the second writer to throw, and we recover
  * by re-SELECTing the winner's identity row.
  */
-import { identityErrorLogFields } from '../utils/identity-error-log-fields';
 import { identityPlatformSchema, userRoleSchema } from '../schemas/user';
 import { pool, getDatabase, getDialect } from './connection';
 import type { IdentityPlatform, User, UserIdentity, UserRole } from '../types';
@@ -114,10 +113,10 @@ export async function findOrCreateUserByPlatformIdentity(
   } catch (err) {
     // Narrow recovery: only UNIQUE-constraint violations indicate the concurrent
     // first-sight race we know how to recover from. For anything else, surface
-    // the error type/code and rethrow — silently swallowing it would mask real
+    // the original error and rethrow — silently swallowing it would mask real
     // DB failures behind a misleading "race recovery" path.
     if (!isUniqueViolation(err)) {
-      getLog().error({ ...identityErrorLogFields(err), platform }, 'user.create_failed');
+      getLog().error({ err, platform }, 'user.create_failed');
       throw err;
     }
 
@@ -132,10 +131,7 @@ export async function findOrCreateUserByPlatformIdentity(
     // UNIQUE fired but recovery turned up empty (very unusual — possibly the
     // winner was deleted between the failure and our re-SELECT). Surface the
     // original error rather than silently returning undefined.
-    getLog().error(
-      { ...identityErrorLogFields(err), platform },
-      'user.create_failed_race_recovery_empty'
-    );
+    getLog().error({ err, platform }, 'user.create_failed_race_recovery_empty');
     throw err;
   }
 }
@@ -163,7 +159,7 @@ async function backfillDisplayName(
     }
   } catch (err) {
     getLog().warn(
-      { ...identityErrorLogFields(err), userId: user.id, identityId: identity.id },
+      { err, userId: user.id, identityId: identity.id },
       'user.display_name_backfill_failed'
     );
   }
@@ -196,10 +192,7 @@ async function repairOrphanedIdentity(
       return user;
     });
   } catch (err) {
-    getLog().error(
-      { ...identityErrorLogFields(err), identityId, platform },
-      'user.identity_orphan_repair_failed'
-    );
+    getLog().error({ err, identityId, platform }, 'user.identity_orphan_repair_failed');
     throw err;
   }
 }
@@ -215,10 +208,12 @@ export async function updateUserDisplayName(userId: string, displayName: string)
 /**
  * Raised when a GitHub account is already linked to a different Archon user.
  * Connecting must never silently reassign an identity from one user to another.
+ * The message reaches users and logs, so it names neither the login nor the
+ * other user; the caller already knows which account it just authorized.
  */
 export class GithubIdentityConflictError extends Error {
-  constructor(public readonly login: string) {
-    super(`GitHub account @${login} is already linked to a different Archon user.`);
+  constructor() {
+    super('This GitHub account is already linked to a different Archon user.');
     this.name = 'GithubIdentityConflictError';
   }
 }
@@ -256,7 +251,7 @@ export async function linkGithubIdentity(userId: string, login: string): Promise
   const existing = await selectIdentity(platform, login);
   if (existing) {
     if (existing.user_id !== userId) {
-      throw new GithubIdentityConflictError(login);
+      throw new GithubIdentityConflictError();
     }
     await pool.query(
       'UPDATE remote_agent_user_identities SET platform_display_name = $1 WHERE id = $2',
@@ -280,7 +275,7 @@ export async function linkGithubIdentity(userId: string, login: string): Promise
     if (!isUniqueViolation(err)) throw err;
     const winner = await selectIdentity(platform, login);
     if (winner && winner.user_id !== userId) {
-      throw new GithubIdentityConflictError(login);
+      throw new GithubIdentityConflictError();
     }
     getLog().info({ userId, platform }, 'user.github_identity_link_race_recovered');
   }
