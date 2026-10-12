@@ -12,7 +12,7 @@
  * what is missing, and publish refuses a ready verdict while anything is.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_CONTINUATION, INPUTS_TIER, INPUTS_ERRORS, INPUTS_DOCS, INPUTS_SCOPE_DOCS:
+ * - INPUTS_CONTINUATION, INPUTS_TIER, INPUTS_SEAMS, INPUTS_ERRORS, INPUTS_DOCS, INPUTS_SCOPE_DOCS:
  *   as for the coverage node.
  */
 
@@ -47,6 +47,7 @@ try {
   const required = enabledLenses({
     continuation: process.env.INPUTS_CONTINUATION === 'true',
     tier,
+    seams: process.env.INPUTS_SEAMS ?? '',
     // Without a coverage record the focused reviewer never reported: only seams and
     // focused itself are known to be required.
     focusedFull: coverage.values.at(-1)?.full ?? null,

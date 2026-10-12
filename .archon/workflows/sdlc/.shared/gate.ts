@@ -1,9 +1,8 @@
 /**
  * The green gate: run success never certifies green — this does, deterministically.
  *
- * The delivery tail asks the question after implementation, after corrections, and
- * after the merged tree's project gate. The same decision answers it
- * each time. A node that produced a verdict is not a node that passed; the implement
+ * The delivery tail asks the question of the implementer's verdict and of each
+ * project validation. The same decision answers it each time. A node that produced a verdict is not a node that passed; the implement
  * loop completes on `done`, blocked declines included, so no spend and no public step
  * happens until this reads the verdict itself.
  *
@@ -18,13 +17,10 @@
  * since an unfinished gate is no verdict, but it says so and names resuming the run.
  *
  * The record is the node's own result, kept by the engine as a `green-gate` typed
- * artifact, so every later reader — the pull-request body, the terminal report, and
- * the merged-tree check in archon-pr — finds it by type. A clean green also records
- * the commit it certified (`head`, null when the checkout was dirty), which is what
- * lets a later step cite it instead of running the same gate on the same tree again.
+ * artifact, so every later reader — the pull-request body and the terminal report —
+ * finds it by type.
  */
 
-import { cleanStartCommit } from './checkout.ts';
 import { emit, note, refuse } from './io.ts';
 import { passesRed, unfinishedValidation } from './verdict.ts';
 
@@ -75,13 +71,13 @@ export function greenGate(input: GateInput): void {
   if (refusal !== undefined) {
     refuse(refusal);
   } else if (green === 'true') {
-    emit({ gate: 'green', red_cause: '', stage, summary: '', head: cleanStartCommit() });
+    emit({ gate: 'green', red_cause: '', stage, summary: '' });
   } else {
     note(
       `${stage} is red, and declared that red ${cause} rather than introduced. ` +
         "Proceeding so the pull request's own CI can be observed; the pull request " +
         'is marked ready only when that CI is green.'
     );
-    emit({ gate: 'green', red_cause: cause, stage, summary, head: null });
+    emit({ gate: 'green', red_cause: cause, stage, summary });
   }
 }

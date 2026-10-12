@@ -1,0 +1,17 @@
+# Outcome: failed at the base merge. The preparing agent cannot resolve a conflict with
+# confidence and names the path; the real verification refuses, so nothing is pushed
+# and no pull request opens.
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented; the tests for the changed code pass"
+impl__assert-changed: "3 files changed"
+shape__simplify: { findings: false }
+shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: ["packages/core/src/feature.ts"], summary: "stub: the base rewrote the same function with an incompatible signature; merge aborted" }
+fixture:
+  expect: failed
+  fail-node: pr__synced
+  reached: [pr__prepare]
+exec-code: true

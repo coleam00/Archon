@@ -9,6 +9,7 @@
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_CONTINUATION: whether the round continues a previous one.
  * - INPUTS_TIER: the requested tier.
+ * - INPUTS_SEAMS: the seams input.
  * - INPUTS_FOCUSED: the focused reviewer's output, or `null` when it did not run.
  * - INPUTS_ERRORS / INPUTS_DOCS: the errors and docs inputs.
  * - INPUTS_SCOPE_DOCS: whether the scope node selected docs.
@@ -33,6 +34,7 @@ try {
   const lenses = enabledLenses({
     continuation: continuation === 'true',
     tier,
+    seams: process.env.INPUTS_SEAMS ?? '',
     focusedFull: focused?.full_review ?? null,
     errors: process.env.INPUTS_ERRORS ?? '',
     docs: process.env.INPUTS_DOCS ?? '',

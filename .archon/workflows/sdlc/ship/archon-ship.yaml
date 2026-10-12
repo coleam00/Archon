@@ -55,27 +55,6 @@ nodes:
     depends_on: [triage]
     when: "$triage.output.route == 'investigate'"
 
-  # These route markers form one join into delivery. Expected negative
-  # judgments skip their marker; contract failures inside the advisory package
-  # still fail normally. That keeps "not ready to build" distinct from "the
-  # workflow failed to execute" without weakening the spend boundary.
-  - id: gate-direct
-    bash: echo '{"gate":"direct"}'
-    depends_on: [triage]
-    when: "$triage.output.route == 'deliver'"
-
-  # An open pull request already carries the outcome: delivery continues it,
-  # syncing its branch with the base by merge, instead of opening another.
-  - id: gate-continue
-    bash: echo '{"gate":"continue"}'
-    depends_on: [triage]
-    when: "$triage.output.route == 'continue'"
-
-  - id: gate-rooted
-    bash: echo '{"gate":"rooted"}'
-    depends_on: [inv]
-    when: "$inv.output.verdict == 'rooted'"
-
   - id: planned
     include: archon-plan
     with:
@@ -85,11 +64,6 @@ nodes:
         decide the implementation questions it identified.
     depends_on: [triage]
     when: "$triage.output.route == 'plan'"
-
-  - id: gate-planned
-    bash: echo '{"gate":"planned"}'
-    depends_on: [planned]
-    when: "$planned.output.ready == true"
 
   - id: deliver
     include: archon-deliver
@@ -104,8 +78,13 @@ nodes:
         run to continue an open pull request, the work is to finish that pull
         request.
       pull_request: "$triage.output.pull_request"
-    depends_on: [gate-direct, gate-continue, gate-rooted, gate-planned]
+    # One join into delivery: the direct or continue route, a rooted investigation,
+    # or a ready plan. A negative judgment skips delivery; a failed producer fails
+    # the run.
+    depends_on: [triage, inv, planned]
     trigger_rule: none_failed_min_one_success
+    # `&&` short-circuits, so a skipped producer's output is never read.
+    when: "$triage.output.route == 'deliver' || $triage.output.route == 'continue' || $triage.output.route == 'investigate' && $inv.output.verdict == 'rooted' || $triage.output.route == 'plan' && $planned.output.ready == true"
 
   # One return for every legitimate terminal result. Negative advisory verdicts
   # complete with the report that explains them; a delivery is reported from the
@@ -113,9 +92,8 @@ nodes:
   # branch arrives as null) — see scripts/outcome.ts.
   #
   # The advisory producers are bound with if_skipped: a route that never ran them
-  # reads null. Two dependencies carry the whole graph. `deliver` depends on every spend
-  # gate, which depend on triage, inv and planned in turn, so nothing this node
-  # reports on can settle after it. `triage` is named because
+  # reads null. Two dependencies carry the whole graph. `deliver` depends on triage,
+  # inv and planned, so nothing this node reports on can settle after it. `triage` is named because
   # none_failed_min_one_success needs one completed dependency, and on the no_action
   # route `deliver` is the skipped one.
   #

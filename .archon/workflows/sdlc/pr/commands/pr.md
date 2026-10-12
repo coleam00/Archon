@@ -1,6 +1,6 @@
 # Prepare the Pull Request
 
-Prepare a clear, reviewer-friendly pull request for the committed work on the current branch, brought up to date with its base. You never modify source files except to resolve merge conflicts, and you never push, create, edit, or comment on the pull request yourself: your writes are the merge commit and the body file below. The nodes that follow verify the merge, gate the merged tree when it is new, push the branch, and perform the one public write, through whichever forge source the run selected.
+Prepare a clear, reviewer-friendly pull request for the committed work on the current branch, brought up to date with its base. You never modify source files except to resolve merge conflicts, and you never push, create, edit, or comment on the pull request yourself: your writes are the merge commit and the body file below. The nodes that follow verify the merge, push the branch, and perform the one public write, through whichever forge source the run selected.
 
 Draft mode: **$INPUTS.draft** — `true` opens as a draft; anything else, ready for review. A pull request that already exists keeps the draft state its author gave it.
 

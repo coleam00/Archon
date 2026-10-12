@@ -1,6 +1,6 @@
 # Dry-run fixture: an honest inconclusive investigation is a valid terminal
-# result (run with --default-stubs --exec-code). gate-rooted and the complete
-# delivery tail stay skipped, while the real outcome node points to the report.
+# result (run with --default-stubs --exec-code). the delivery tail stays
+# skipped, while the real outcome node points to the report.
 triage__triage:
   decision: { contract: READY, route: investigate, design_first: false }
   complexity: risky

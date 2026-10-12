@@ -257,28 +257,6 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
   return view.pr;
 }
 
-/** Replace the pull request body, and prove the replacement landed. */
-export function editPrBody(ref: QualifiedPr, bodyPath: string, source: ForgeSource): PrRecord {
-  const body = readFileSync(bodyPath, 'utf8');
-  if (source === 'forge') {
-    const value = forgeResult('pr.edit-body', {
-      ref: { repo: ref.repo, number: ref.number },
-      body,
-    });
-    return parsePrRecord(value.pr);
-  }
-  const number = String(ref.number);
-  const edited = gh('pr', 'edit', number, '--repo', ghRepo(ref.repo), '--body-file', bodyPath);
-  if (!edited.ok) throw new Error(`gh pr edit failed: ${edited.stderr}`);
-  const after = viewPr(ref, source);
-  if (after.body !== body) {
-    throw new Error(
-      `the pull request body read back from ${after.pr.url} does not match what was written; it may need reconciling`
-    );
-  }
-  return after.pr;
-}
-
 /** Take the pull request out of draft, and prove it is no longer a draft. */
 export function markPrReady(ref: QualifiedPr, source: ForgeSource): PrRecord {
   if (source === 'forge') {

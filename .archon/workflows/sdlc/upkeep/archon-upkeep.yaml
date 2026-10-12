@@ -86,7 +86,7 @@ nodes:
         only — this work item explicitly authorizes that lockfile change; the
         no-lockfile-updates default still applies to every other dependency, so
         keep churn minimal and never downgrade anything unrelated. Fix what the
-        bump breaks, validate with the project's own checks, and if reality
+        bump breaks, check it with the project's own tests for what changed, and if reality
         contradicts the assessment (version unavailable, an unlisted peer
         conflict), stop honestly with green false and the contradiction in your
         summary rather than improvising a different version. Carry the

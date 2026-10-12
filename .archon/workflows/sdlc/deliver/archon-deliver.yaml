@@ -1,11 +1,12 @@
 name: archon-deliver
 description: |
-  The delivery tail, autonomous on its green path: implement the work, gate on
-  green, simplify it before anything is public, bring the branch up to date and
-  open a draft PR, review it at the depth its risk earns, correct the findings
-  the owner judges worth fixing, file discoveries as issues, then check CI: green
-  marks the PR ready, and red ends the run not ready with the root cause. A red PR
-  is never marked ready. There is no in-run approval gate — the human gate is PR
+  The delivery tail, autonomous on its green path: implement the work, simplify
+  it before anything is public, bring the branch up to date and open a draft PR,
+  validate the project once, review it at the depth its risk earns, correct the
+  findings the owner judges worth fixing (each round validated once before its
+  review), file discoveries as issues, update the PR description, then check CI:
+  green marks the PR ready, and red ends the run not ready with the root cause. A
+  red PR is never marked ready. There is no in-run approval gate — the human gate is PR
   review and merge on GitHub, outside the run.
 
   Use when: decided work should become a reviewed, ready-to-merge PR —
@@ -43,30 +44,30 @@ inputs:
       Cross-run review continuity: the previous delivery run's review report
       path. Round 1 then verifies prior findings (rejections included) instead
       of relitigating them from scratch. Empty on a first delivery.
-  # Error review can be forced on or off. Seams always runs; code and tests run on
-  # the full tier and one focused reviewer on the focused tier; docs runs only when
-  # the classifier finds shipped documentation in the diff.
+  # Error review can be forced on or off; `auto` leaves it to the routing agent.
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
 
 # A composed caller reads the outcome: ready with the pull request's URL, or not
-# ready with why. Not ready is a valid completion, like `delivered: false` in the
-# callers; a delivery that broke fails instead, naming the node that failed.
+# ready with why (red CI, CI with no result, or a review that asks for a replan).
+# Not ready is a valid completion, like `delivered: false` in the callers; a
+# delivery that broke fails instead, naming the node that failed.
 returns: outcome
 outcome_field: ready
 
 nodes:
+  # The implementer checks its own changes; the project's full validation runs once,
+  # just before review (validate below).
   - id: impl
     include: archon-implement
     with:
       work: "$INPUTS.work"
 
-  # R3's gate: run success never certifies green — this does, deterministically,
-  # before anything public happens. Strict field access: a missing field fails
-  # the node rather than passing the gate. It fails on red the change introduced
-  # and passes red the change cannot have caused, recording that caveat for every
-  # downstream reader — see scripts/gate-green.ts for why that trade is safe.
+  # Run success never certifies the implementer's verdict: its loop completes on a
+  # declared blocker too. This turns a blocker or red the change introduced into a
+  # failed run before anything is published (see ../.shared/gate.ts); red the
+  # change cannot have caused passes, with the cause recorded for the reports.
   - id: gate-green
     script: gate-green
     runtime: bun
@@ -80,10 +81,7 @@ nodes:
         red_cause: { type: string }
         stage: { type: string }
         summary: { type: string }
-        # The commit a clean green certified, so a later step can cite it instead
-        # of gating the same tree again; null for passed red or a dirty tree.
-        head: { type: [string, 'null'] }
-      required: [gate, red_cause, stage, summary, head]
+      required: [gate, red_cause, stage, summary]
     depends_on: [impl]
     with:
       green: "$impl.output.green"
@@ -103,6 +101,8 @@ nodes:
       work_order: "$INPUTS.work"
     depends_on: [gate-green]
 
+  # A decline here is judged by the review; red it leaves is caught by the
+  # validation before that review.
   - id: reshape
     include: archon-implement
     depends_on: [shape]
@@ -121,85 +121,53 @@ nodes:
         Accepted work order:
         $INPUTS.work
 
-  - id: gate-reshape
-    script: gate-green
-    runtime: bun
-    output_type: green-gate
-    output_format: *green_gate
-    depends_on: [reshape]
-    with:
-      green: "$reshape.output.green"
-      red_cause: "$reshape.output.red_cause"
-      summary: "$reshape.output.summary"
-      stage: "The structure correction"
-
   - id: pr
     include: archon-pr
     with:
       draft: "true"
       pull_request: "$INPUTS.pull_request"
-    depends_on: [shape, gate-reshape]
+    depends_on: [shape, reshape]
     trigger_rule: none_failed_min_one_success
 
-  # Initial review: full on a first delivery, light continuation when
-  # the caller passes the previous run's report (adjudications carry across
-  # runs instead of being relitigated).
-  # Review scope is decided from the actual PR, not declared blind at launch:
-  # the diff is information that does not exist until the PR does. classify
-  # picks the review tier from the change's risk (seams runs on every tier) and
-  # judges whether errors and docs warrant their conditional lenses; resolve-scope
-  # then merges the operator's declared error override over that judgment. Its
-  # output feeds the errors gate, while the classifier feeds the docs gate. Round
-  # 1 completes full coverage when focused review detects an engaged risk,
-  # and correction reviews preserve those concerns while one continuation
-  # reviewer judges the prior report and correction delta.
-  - id: review-policy
-    script: review-policy
-    runtime: bun
+  # The project's full validation, once, on the merged tree the review will read.
+  - id: validate
+    include: archon-validate
     depends_on: [pr]
-    output_format:
-      type: object
-      properties:
-        risks: { type: string, minLength: 1 }
-      required: [risks]
 
-  - id: classify
-    command: classify-review-scope
-    # This workflow declares no top-level model, so every AI node here names its
-    # own tier. Choosing between two booleans off a diff is small-tier work.
+  # Turns the validation's verdict into a stop: red this change introduced, or a
+  # validation that did not finish, fails the run before review spends anything.
+  - id: gate-validated
+    script: gate-green
+    runtime: bun
+    output_type: green-gate
+    output_format: *green_gate
+    depends_on: [validate]
+    with:
+      green: "$validate.output.green"
+      red_cause: "$validate.output.red_cause"
+      summary: "$validate.output.summary"
+      stage: "The project validation"
+
+  # Which review lenses this change earns is a quick judgment from the diff and the
+  # work order. It runs nothing.
+  - id: route
+    command: route-review
     model: small
-    depends_on: [review-policy]
+    depends_on: [gate-validated]
     mutates_checkout: false
+    with:
+      work: "$INPUTS.work"
+      errors: "$INPUTS.errors"
     output_type: review-scope
     output_format:
       type: object
       properties:
         tier: { type: string, enum: [focused, full] }
+        seams: { type: boolean }
         errors: { type: boolean }
         docs: { type: boolean }
-        reasons:
-          type: object
-          properties:
-            tier: { type: string }
-            errors: { type: string }
-            docs: { type: string }
-          required: [tier, errors, docs]
-      required: [tier, errors, docs, reasons]
-
-  # Deterministic merge at the boundary: a declared 'true'/'false' beats the
-  # classifier; 'auto' adopts its judgment. The output value is the string the
-  # lens gate compares against.
-  - id: resolve-scope
-    script: resolve-review-scope
-    runtime: bun
-    with:
-      c_errors: "$classify.output.errors"
-    depends_on: [classify]
-    output_format:
-      type: object
-      properties:
-        errors: { type: string, enum: ['true', 'false'] }
-      required: [errors]
+        reason: { type: string, pattern: '\S' }
+      required: [tier, seams, errors, docs, reason]
 
   - id: review
     include: archon-review
@@ -211,36 +179,24 @@ nodes:
       scope: "$pr.output"
       prior_report: "$INPUTS.prior_report"
       work_order: "$INPUTS.work"
-      tier: "$classify.output.tier"
-      errors: "$resolve-scope.output.errors"
-      docs: "$classify.output.docs"
-    depends_on: [resolve-scope]
+      tier: "$route.output.tier"
+      seams: "$route.output.seams"
+      errors: "$route.output.errors"
+      docs: "$route.output.docs"
+    depends_on: [route]
 
-  # Validate the authored verdict before it controls a costly branch. `ready`
-  # remains the review outcome; `action` says what delivery may do about it.
-  # A ready initial review skips this block. Otherwise each iteration corrects
-  # the current canonical findings, proves the correction is green, then runs a
-  # fresh continuation review over the report and delta, so a blocking fix is
-  # never unreviewed. The bound is a runaway backstop, not a pacing device:
-  # until_bash ends the loop the moment a recheck certifies ready, so a healthy
-  # delivery still exits in one or two rounds. Five rounds leaves room for a
-  # feature-sized change whose rechecks keep finding real blockers. A per-lane
-  # bound would need runtime-parameterized composition, which the language
-  # deliberately does not have — the flat bound buys the same outcome.
-  #
-  # Corrections are driven by the review and local validation alone; CI is read
-  # once, after them (the ci node below).
-  # The review's verdict is certified at its producer: `action` is an enum the
-  # engine enforces on synthesize, so it routes here unvalidated. A verdict that
-  # contradicts itself (`ready: true` with `correct`) cannot mislead this graph,
-  # which reads only `action`.
+  # A ready initial review skips this block. Otherwise each round corrects the
+  # current canonical findings, validates the project once, then runs a fresh
+  # continuation review over the report and delta, so a blocking fix is never
+  # unreviewed. until_bash ends the loop the moment a recheck stops asking for a
+  # correction; five rounds is a runaway backstop, and exhausting it fails the run
+  # with the PR still draft and the canonical report carrying the open findings.
+  # The review's `action` is an enum the engine enforces on synthesize, so it routes
+  # here unvalidated.
   - id: corrections
     depends_on: [review]
     when: "$review.output.action == 'correct'"
     loop_group:
-      # `none` converged and `replan` must stop correction. gate-ready below
-      # accepts only `none`; a replan outcome leaves the PR draft and fails with
-      # the canonical report intact instead of spending another correction.
       until_bash: |
         value=$recheck.output.action
         test "$value" != "correct"
@@ -276,22 +232,21 @@ nodes:
               PR's draft state or edit the canonical review comment; the
               following review owns that public verdict.
 
-        # The same gate, same script: a correction can hit inherited or environment
-        # red exactly as the first implementation can, and a
-        # correction refused for a red it did not cause wastes the whole round.
-        - id: gate-correction-green
+        - id: revalidate
+          include: archon-validate
+          depends_on: [fix]
+
+        - id: gate-revalidated
           script: gate-green
           runtime: bun
-          # Every gate that passes red leaves the cause as its own typed artifact;
-          # readers find them by type under nodes/, never through one shared file.
           output_type: green-gate
           output_format: *green_gate
-          depends_on: [fix]
+          depends_on: [revalidate]
           with:
-            green: "$fix.output.green"
-            red_cause: "$fix.output.red_cause"
-            summary: "$fix.output.summary"
-            stage: "The correction"
+            green: "$revalidate.output.green"
+            red_cause: "$revalidate.output.red_cause"
+            summary: "$revalidate.output.summary"
+            stage: "The project validation after a correction"
 
         - id: recheck
           include: archon-review
@@ -301,42 +256,23 @@ nodes:
             work_order: "$INPUTS.work"
             # Continuation mode owns coverage and skips every specialist,
             # regardless of these conditional-lens bindings.
-            tier: "$classify.output.tier"
-            errors: "$resolve-scope.output.errors"
-            docs: "$classify.output.docs"
-          depends_on: [gate-correction-green]
-
-  # none_failed_min_one_success joins the mutually exclusive paths as bound
-  # values: the
-  # initial review's verdict directly, and the correction loop's final verdict
-  # with if_skipped defaults. The loop can stop on `none` (ready) or `replan`
-  # (truthful terminal refusal); the script below owns that final distinction.
-  # A failed loop (bound exhausted) or failed review prevents this node from
-  # running, so lifecycle success alone never certifies readiness. if_skipped
-  # covers only skipped/pending producers, never failed ones.
-  - id: gate-ready
-    script: gate-ready
-    runtime: bun
-    depends_on: [review, corrections]
-    trigger_rule: none_failed_min_one_success
-    with:
-      review_action: "$review.output.action"
-      correction_action: { from: "$corrections.output.action", if_skipped: null }
+            tier: "$route.output.tier"
+            seams: "$route.output.seams"
+            errors: "$route.output.errors"
+            docs: "$route.output.docs"
+          depends_on: [gate-revalidated]
 
   # Work the review proved but this change does not do becomes tracker issues,
   # one per record, each linking back to this run and the pull request. It joins
-  # the final verdict the same way gate-ready does, not gate-ready itself, so a
-  # replan files its discoveries too: that is when a scope conflict matters most.
-  # A review that failed, or a correction loop that exhausted its bound, has no
-  # converged discovery set and blocks this node. Off the ready path: a failed
-  # filing never holds a delivered change back or changes a replan's refusal,
-  # but it does end the run failed, so the unfiled records reach the operator.
+  # the final verdict, so a replan files its discoveries too: that is when a scope
+  # conflict matters most. A review that failed, or a correction loop that
+  # exhausted its bound, has no converged discovery set and blocks this node. Off
+  # the ready path: a failed filing never holds a delivered change back, but it does
+  # end the run failed, so the unfiled records reach the operator.
   #
   # Before filing, a small agent makes a best-effort search of the open issues for
   # ones that already describe the same defect. Its matches are a judgment the
-  # filing script validates; a miss files a duplicate. The matcher failing outright
-  # fails the filing like any node on this off-ready path: the delivery stands, and
-  # the records stay in the review report for the operator.
+  # filing script validates; a miss files a duplicate.
   - id: match-discoveries
     command: match-discoveries
     model: small
@@ -383,123 +319,36 @@ nodes:
             required: [title, issue]
       required: [records]
 
-  # The final local gate runs only on a fork, whose CI can wait for a maintainer's
-  # approval. Otherwise the implementation already ran the project's gate on this
-  # head and CI runs it again.
-  - id: fork
-    script: is-fork
-    runtime: bun
-    depends_on: [gate-ready]
-    with:
-      pr: "$pr.output"
-    output_format:
-      type: object
-      properties:
-        fork: { type: boolean }
-      required: [fork]
-
-  # Correction passes change the diff after `pr` wrote the
-  # description, so concrete claims in the body can be falsified by the very
-  # fixes the review demanded. One resync, once readiness is certified — never per
-  # iteration (that would be repeated public writes describing diffs the next
-  # iteration falsifies). Skipped when none ran: the diff never changed after
-  # the body was written.
-  # The live description, read through the selected source: a human may have
-  # edited the body since this run wrote it, and a resync that silently reverted
-  # that edit would be a write nobody asked for.
-  - id: read-pr-body
-    script: read-pr-body
-    runtime: bun
-    with:
-      pr: "$pr.output"
-    # After the project gate, not beside it: the gates record the red they let
-    # through as typed artifacts, and the body must disclose every one of them,
-    # so this reads once all of them exist instead of racing the last writer.
-    depends_on: [fork, gate-validated]
-    trigger_rule: none_failed_min_one_success
-    when: "$review.output.action != 'none'"
-    output_format:
-      type: object
-      properties:
-        body: { type: string }
-        url: { type: string }
-      required: [body, url]
-
-  - id: sync-pr-body
-    command: sync-pr-body
+  # Corrections and the base merge can falsify claims the description made when the
+  # draft opened, and a validation can pass red the description must disclose. One
+  # agent reads the live description and the final diff, and edits only what is no
+  # longer true. It runs once the review has converged or stopped, never per round.
+  - id: update-pr-body
+    command: update-pr-body
     model: medium
+    depends_on: [review, corrections]
+    trigger_rule: none_failed_min_one_success
     with:
       pr: "$pr.output"
-      current_body: "$read-pr-body.output.body"
-    depends_on: [read-pr-body]
     output_format:
       type: object
       properties:
-        # The complete replacement body, or null when the body is still accurate.
-        body:
-          anyOf:
-            - type: "null"
-            - type: object
-              properties:
-                type: { type: string, enum: [archon_artifact] }
-                run_id: { type: string }
-                path: { type: string, enum: [pr-body-final.md] }
-              required: [type, run_id, path]
-        summary: { type: string }
-      required: [body, summary]
-
-  # The resync node judges which claims the final diff falsified; this node owns
-  # the edit and its read-back, through whichever source the run selected. It runs
-  # without a resync too: the project gate can pass red after the pull request
-  # opened, and the red-cause block must disclose it either way.
-  - id: publish-pr-body
-    script: publish-pr-body
-    runtime: bun
-    with:
-      pr: "$pr.output"
-      body: { from: "$sync-pr-body.output.body", if_skipped: null }
-    depends_on: [fork, gate-validated, sync-pr-body]
-    trigger_rule: none_failed_min_one_success
-    output_format: { type: object }
-
-  # Final local gate, fork pull requests only: the project's own checks via the
-  # validate package, because a fork's CI can wait on a maintainer's approval.
-  - id: validate
-    include: archon-validate
-    depends_on: [fork]
-    when: "$fork.output.fork == true"
-
-  # The third gate on the same script, for the same reason: a local gate that
-  # refuses every red refuses red the change did not cause, and the base break
-  # this branch inherited is exactly the red that survives to here. Introduced red
-  # still stops the run. Inherited or environment red proceeds to the ci node,
-  # where the pull request's own CI decides: an inherited break is red there too,
-  # and the pull request stays draft. A validation that did not finish
-  # (`incomplete`) also stops the run, reported as unfinished rather than red, so
-  # resuming is the action.
-  - id: gate-validated
-    script: gate-green
-    runtime: bun
-    # Every gate that passes red leaves the cause as its own typed artifact;
-    # readers find them by type under nodes/, never through one shared file.
-    output_type: green-gate
-    output_format: *green_gate
-    depends_on: [validate]
-    with:
-      green: "$validate.output.green"
-      red_cause: "$validate.output.red_cause"
-      summary: "$validate.output.summary"
-      stage: "The project gate"
+        changed: { type: boolean }
+        summary: { type: string, pattern: '\S' }
+      required: [changed, summary]
 
   # Whether CI is green on the delivered head is this agent's judgment, waiting
   # included: it reads whatever CI the project has and waits for running checks
-  # itself. It never writes. flip-ready marks the pull request ready only on a
-  # green answer, so a red pull request is never made ready.
+  # itself. It never writes. It runs only when the review converged; flip-ready
+  # marks the pull request ready only on a green answer, so a red pull request is
+  # never made ready.
   - id: ci
     command: check-ci
     model: medium
     mutates_checkout: false
-    depends_on: [publish-pr-body]
+    depends_on: [update-pr-body]
+    # `&&` short-circuits, so the loop's verdict is read only when the loop ran.
+    when: "$review.output.action == 'none' || $review.output.action == 'correct' && $corrections.output.action == 'none'"
     with:
       pr: "$pr.output"
     output_format:
@@ -524,17 +373,19 @@ nodes:
       required: [pr_url]
 
   # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts):
-  # ready with the pull request's URL, or not ready with the CI agent's reason. A
-  # failed flip blocks this join, so the run reports the node that failed.
+  # ready with the pull request's URL, or not ready with why. A failed flip blocks
+  # this join, so the run reports the node that failed.
   - id: outcome
     script: outcome
     runtime: bun
-    depends_on: [ci, flip-ready]
+    depends_on: [update-pr-body, ci, flip-ready]
     trigger_rule: none_failed_min_one_success
     with:
       pr: "$pr.output"
-      state: "$ci.output.state"
-      ci_summary: "$ci.output.summary"
+      review_action: "$review.output.action"
+      correction_action: { from: "$corrections.output.action", if_skipped: null }
+      state: { from: "$ci.output.state", if_skipped: null }
+      ci_summary: { from: "$ci.output.summary", if_skipped: null }
       pr_url: { from: "$flip-ready.output.pr_url", if_skipped: null }
     output_format:
       type: object

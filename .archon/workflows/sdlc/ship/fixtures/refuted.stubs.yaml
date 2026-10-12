@@ -1,6 +1,6 @@
 # Dry-run fixture: the investigation establishes that no change is owed in this
-# repository (run with --default-stubs --exec-code). gate-rooted and the delivery
-# tail stay skipped, and the real outcome node reports no work owed in the
+# repository (run with --default-stubs --exec-code). The delivery
+# tail stays skipped, and the real outcome node reports no work owed in the
 # investigator's words, completing with delivered: false rather than failing.
 triage__triage:
   decision: { contract: READY, route: investigate, design_first: false }

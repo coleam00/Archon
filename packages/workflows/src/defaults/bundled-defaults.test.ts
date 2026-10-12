@@ -139,15 +139,6 @@ describe('bundled-defaults', () => {
       }
     });
 
-    it('classify-review-scope declares only its structured output fields', () => {
-      const content =
-        BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::classify-review-scope'];
-      expect(content).toContain('- `tier` — `focused` or `full`');
-      expect(content).toContain('- `errors`, `docs` — booleans');
-      expect(content).toContain('- `reasons` — `{tier, errors, docs}`');
-      expect(content).not.toContain('`tests`, `errors`, `comments`, `types`, `docs`');
-    });
-
     it('the SDLC investigation, plan, implementation and every review lens own separate discovery records', () => {
       const expected = new Map([
         ['__archon_pack__bundled:sdlc:investigate::investigate', 'discoveries/investigate.json'],
@@ -305,24 +296,15 @@ describe('bundled-defaults', () => {
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
-      const resolveScope = parsed.workflow.nodes.find(node => node.id === 'resolve-scope');
-      expect(resolveScope).toBeDefined();
-      expect(resolveScope?.kind).toBe('exec');
-      if (resolveScope?.kind !== 'exec') throw new Error('resolve-scope is not executable');
-      expect(resolveScope.runtime).toBe('bun');
-      expect(resolveScope.script).toBe('resolve-review-scope');
-      expect(resolveScope.with).toEqual({
-        c_errors: '$classify.output.errors',
-      });
-
       const review = parsed.workflow.nodes.find(node => node.id === 'review');
       expect(review?.kind).toBe('include');
       if (review?.kind !== 'include') throw new Error('review is not an include');
       expect(review.with).toMatchObject({
         scope: '$pr.output',
         work_order: '$INPUTS.work',
-        errors: '$resolve-scope.output.errors',
-        docs: '$classify.output.docs',
+        seams: '$route.output.seams',
+        errors: '$route.output.errors',
+        docs: '$route.output.docs',
       });
       // One typed value carries the target — not the same number bound twice
       // beside a head branch nothing downstream reads (#2968).
@@ -424,15 +406,11 @@ describe('bundled-defaults', () => {
       if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
       expect(corrections.loop_group.nodes.map(body => body.id)).toEqual([
         'fix',
-        'gate-correction-green',
+        'revalidate',
+        'gate-revalidated',
         'recheck',
       ]);
-      expect(node('ci')?.depends_on).toEqual(['publish-pr-body']);
-      expect(node('publish-pr-body')?.depends_on).toEqual([
-        'fork',
-        'gate-validated',
-        'sync-pr-body',
-      ]);
+      expect(node('ci')?.depends_on).toEqual(['update-pr-body']);
       expect(node('flip-ready')).toMatchObject({
         depends_on: ['ci'],
         when: "$ci.output.state == 'green'",
@@ -634,7 +612,7 @@ describe('bundled-defaults', () => {
     });
 
     // The same "does this diff earn a docs review" call is made in two packs — at
-    // delivery time by the classifier, and at review time when `docs` is `auto`. They
+    // delivery time by the routing agent, and at review time when `docs` is `auto`. They
     // drifted once: only the delivery copy carried the trivial-diff carve-out, so the
     // same doc-adjacent typo fix earned the lens through one entry point and not the
     // other. Whitespace-normalized so the guard survives either file being rewrapped.
@@ -642,7 +620,7 @@ describe('bundled-defaults', () => {
       const squash = (text: string): string => text.replace(/\s+/g, ' ');
       const carveOut = 'a version bump, a one-line fix, a rename, a test-only tweak';
       expect(
-        squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::classify-review-scope'])
+        squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::route-review'])
       ).toContain(carveOut);
       expect(
         squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-scope'])
@@ -795,10 +773,10 @@ describe('bundled-defaults', () => {
   });
 
   describe('run-owned public actions (#2909)', () => {
-    it('records a PR identity and uses it for review, the body resync and the ready flip', () => {
+    it('records a PR identity and uses it for review, the body update and the ready flip', () => {
       const pr = BUNDLED_WORKFLOWS['archon-pr'];
       const deliver = BUNDLED_WORKFLOWS['archon-deliver'];
-      const sync = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::sync-pr-body'];
+      const sync = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::update-pr-body'];
 
       expect(pr).toContain('output_type: pull-request');
       expect(deliver).not.toContain('output_type: public-action');
@@ -818,7 +796,6 @@ describe('bundled-defaults', () => {
       // bash/script nodes, and naming it here left the agent reading the literal
       // token with no PR number in it (#2909 R1).
       expect(sync).toContain('$INPUTS.pr');
-      expect(sync).toContain('$INPUTS.current_body');
       expect(sync).not.toContain('INPUTS_PR');
 
       // The public write belongs to a deterministic node, not to a prompt: the
@@ -849,22 +826,11 @@ describe('bundled-defaults', () => {
 
       const deliverParsed = parseWorkflow(deliver, 'archon-deliver.yaml', providerRegistry);
       if (deliverParsed.workflow === null) throw new Error(deliverParsed.error.error);
-      const syncNode = deliverParsed.workflow.nodes.find(node => node.id === 'sync-pr-body');
-      expect(syncNode?.kind).toBe('agent');
-      if (syncNode?.kind !== 'agent') throw new Error('sync-pr-body is not an agent node');
+      const updateNode = deliverParsed.workflow.nodes.find(node => node.id === 'update-pr-body');
+      expect(updateNode?.kind).toBe('agent');
+      if (updateNode?.kind !== 'agent') throw new Error('update-pr-body is not an agent node');
       // A command node carries its bindings on `source`, not the node root.
-      expect(syncNode.source).toMatchObject({
-        kind: 'command',
-        with: { pr: '$pr.output', current_body: '$read-pr-body.output.body' },
-      });
-      expect(
-        deliverParsed.workflow.nodes.find(node => node.id === 'publish-pr-body')
-      ).toMatchObject({
-        kind: 'exec',
-        runtime: 'bun',
-        script: 'publish-pr-body',
-        with: { pr: '$pr.output', body: { from: '$sync-pr-body.output.body' } },
-      });
+      expect(updateNode.source).toMatchObject({ kind: 'command', with: { pr: '$pr.output' } });
       // Composition once dropped that binding while materializing the command body
       // and then reported both names as missing caller inputs, so archon-deliver
       // declared them with empty defaults purely to load inside ship/upkeep

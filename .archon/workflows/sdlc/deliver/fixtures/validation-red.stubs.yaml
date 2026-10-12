@@ -1,0 +1,23 @@
+# Outcome: failed at the project validation. The full validation runs once on the
+# merged tree before review; red the change introduced stops the run there (the real
+# runner and gate decide).
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented; the tests for the changed code pass"
+impl__assert-changed: "3 files changed"
+shape__simplify: { findings: false }
+shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
+pr__synced: "verify-sync: upstream/dev is merged and the tree is clean"
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+validate__discover: { checks: [{ name: "project gate", argv: ["bun", "-e", "process.exitCode = 1"], group: "gate" }], notes: "stub: the project's aggregate gate" }
+validate__classify:
+  red_cause: introduced
+  summary: "stub: the change broke one spec in the project gate"
+fixture:
+  expect: failed
+  fail-node: gate-validated
+  reached: [validate__run, validate__classify, validate__result]
+exec-code: true

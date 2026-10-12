@@ -66,11 +66,7 @@ describe('pushHead', () => {
 });
 
 describe('verify-sync', () => {
-  const verify = (
-    cwd: string,
-    extra: Record<string, string> = {},
-    listing = '{"artifactsByType":{},"errors":[]}'
-  ): ScriptRun =>
+  const verify = (cwd: string, extra: Record<string, string> = {}): ScriptRun =>
     runPackScript('pr/scripts/verify-sync', {
       cwd,
       inputs: {
@@ -78,10 +74,8 @@ describe('verify-sync', () => {
         INPUTS_BASE: 'dev',
         INPUTS_CONFLICTS: '[]',
         INPUTS_SUMMARY: 'stub',
-        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
         ...extra,
       },
-      artifacts: { 'listing.json': listing },
     });
 
   it('refuses a merge that left conflicts, naming the paths', () => {
@@ -97,26 +91,18 @@ describe('verify-sync', () => {
     expect(run.stderr).toContain('upstream/dev is not an ancestor of HEAD');
   });
 
-  it('cites a clean green recorded for this exact commit instead of gating it again', () => {
+  it('passes a branch with the base merged in and a clean tree', () => {
+    const run = verify(gitCheckout());
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain('is merged and the tree is clean');
+  });
+
+  it('refuses a tree the merge left dirty', () => {
     const cwd = gitCheckout();
-    const head = git(cwd, 'rev-parse', 'HEAD');
-    const listing = JSON.stringify({ artifactsByType: { 'green-gate': [{ path: 'gate.json' }] }, errors: [] });
-    const recorded = runPackScript('pr/scripts/verify-sync', {
-      cwd,
-      inputs: {
-        INPUTS_REPO: JSON.stringify(PR.repo),
-        INPUTS_BASE: 'dev',
-        INPUTS_CONFLICTS: '[]',
-        INPUTS_SUMMARY: 'stub',
-        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
-      },
-      artifacts: {
-        'listing.json': listing,
-        'gate.json': JSON.stringify({ gate: 'green', red_cause: '', stage: 'x', summary: '', head }),
-      },
-    });
-    expect(JSON.parse(recorded.stdout)).toEqual({ recorded: true });
-    expect(JSON.parse(verify(cwd).stdout)).toEqual({ recorded: false });
+    writeFileSync(join(cwd, 'a.txt'), 'uncommitted resolution\n');
+    const run = verify(cwd);
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('the tree is not clean');
   });
 });
 

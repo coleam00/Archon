@@ -1,9 +1,9 @@
 name: archon-review
 description: |
   Review a change through parallel specialist lenses and produce one evidence-based
-  verdict. On the first round, seams always runs. A full-tier round adds code,
-  tests, and simplify; a focused round (a low-risk change) adds one general
-  reviewer first. An engaged full-review risk adds the full specialists before
+  verdict. On the first round, seams runs unless the caller turns it off. A
+  full-tier round adds code, tests, and simplify; a focused round (a low-risk
+  change) adds one general reviewer first. An engaged full-review risk adds the full specialists before
   synthesis. Errors judges failure visibility and containment; docs runs only for
   shipped-doc changes.
   Reviews a PR when given one, otherwise the working diff. Every round also holds the change to the accepted contract: each
@@ -45,6 +45,11 @@ inputs:
   errors:
     default: false
     description: Enable the failure visibility and containment lens.
+  seams:
+    default: "true"
+    description: >-
+      The seams lens on a first round; `false` turns it off for a change that
+      touches no type, contract, state or boundary.
   tier:
     default: "full"
     description: >-
@@ -116,15 +121,16 @@ nodes:
   # ── Lenses ────────────────────────────────────────────────────────
   # Every reviewer is read-only by the engine's check, not only by its prompt:
   # lenses run in parallel in one checkout, so a reviewer that edits it can
-  # mislead the others. Seams runs on every tier: a contract two sides must keep
-  # in agreement is as easy to break in a small change as in a large one.
+  # mislead the others. Seams runs on every tier unless the caller turns it off: a
+  # contract two sides must keep in agreement is as easy to break in a small change
+  # as in a large one.
   - id: seams
     output_type: review-lens
     command: review-seams
     context: fresh
     mutates_checkout: false
     depends_on: [scope]
-    when: "$mode.output.continuation == false"
+    when: "$mode.output.continuation == false && $INPUTS.seams != 'false'"
 
   - id: code
     output_type: review-lens
@@ -168,6 +174,7 @@ nodes:
       continuation: "$mode.output.continuation"
       tier: "$INPUTS.tier"
       focused: { from: "$focused.output", if_skipped: null }
+      seams: "$INPUTS.seams"
       errors: "$INPUTS.errors"
       docs: "$INPUTS.docs"
       scope_docs: "$scope.output.docs"
@@ -227,6 +234,7 @@ nodes:
     with:
       continuation: "$mode.output.continuation"
       tier: "$INPUTS.tier"
+      seams: "$INPUTS.seams"
       errors: "$INPUTS.errors"
       docs: "$INPUTS.docs"
       scope_docs: "$scope.output.docs"

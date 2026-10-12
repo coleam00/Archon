@@ -84,8 +84,7 @@ forge source is for host execution: a container execution receives neither
 
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
-request, `publish-pr-body` applies the
-resync, `publish-review` upserts the one marked review comment, `flip-ready` marks it
+request, `publish-review` upserts the one marked review comment, `flip-ready` marks it
 ready once CI is green, and `file-discoveries` files each discovery the review accepted as
 a tracker issue, reusing an open issue the matching agent found for it. The forge
 contract has no issue operation yet, so that one — like triage's labels — goes
@@ -93,9 +92,11 @@ through `gh` whichever source the run selected. Each acts on the values the agen
 before it declared in its typed output, which the engine certified, writes through
 the selected source, and fails unless the result reads back — so "the write
 failed" and "the write may have landed" stay different outcomes, in the pack as in
-the forge contract. The one exception is a correction: the fix agent pushes its own
-commit to the pull request's branch, and the review that follows refuses to publish
-unless the pull request's remote head is the commit it reviewed. No script reads an
+the forge contract. Two agents write directly: the fix agent pushes its own commit
+to the pull request's branch, and the review that follows refuses to publish unless
+the pull request's remote head is the commit it reviewed; and `update-pr-body`
+edits the description with `gh`, because judging which claims are stale and
+rewriting them is the whole job. No script reads an
 agent-written file to find out what to write.
 
 Which remote holds a repository is decided by its configured URL, never by the

@@ -104,6 +104,8 @@ describe("deliver's terminal outcome", () => {
     const run = runPackScript('deliver/scripts/outcome', {
       inputs: {
         INPUTS_PR: JSON.stringify(forgePrRecord()),
+        INPUTS_REVIEW_ACTION: 'none',
+        INPUTS_CORRECTION_ACTION: 'null',
         INPUTS_PR_URL: 'null',
         TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
         ...inputs,
@@ -127,6 +129,17 @@ describe("deliver's terminal outcome", () => {
     expect(result.ready).toBe(false);
     expect(result.pr_url).toBe(PR_URL);
     expect(result.summary).toStartWith('Not ready, red: lint fails in src/a.ts');
+  });
+
+  it('reports a review that ended asking for a replan as not ready, without CI', () => {
+    const result = outcome({
+      INPUTS_REVIEW_ACTION: 'correct',
+      INPUTS_CORRECTION_ACTION: 'replan',
+      INPUTS_STATE: 'null',
+      INPUTS_CI_SUMMARY: 'null',
+    });
+    expect(result.ready).toBe(false);
+    expect(result.summary).toStartWith('Not ready, the review asks for a replan');
   });
 
   it('reports CI with no result as not ready, never as red', () => {
@@ -206,7 +219,7 @@ describe('review lens gating', () => {
     ).text();
     const workflow = Bun.YAML.parse(source) as { nodes: { id: string; when?: string }[] };
     const when = (id: string): string | undefined => workflow.nodes.find(node => node.id === id)?.when;
-    expect(when('seams')).toBe('$mode.output.continuation == false');
+    expect(when('seams')).toBe("$mode.output.continuation == false && $INPUTS.seams != 'false'");
     expect(when('focused')).toBe("$mode.output.continuation == false && $INPUTS.tier == 'focused'");
   });
 

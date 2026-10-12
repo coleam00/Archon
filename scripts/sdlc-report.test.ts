@@ -75,7 +75,7 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
       stage: 'The implementation',
       summary: 'the database was held by a parallel run',
     });
-    gate(dir, 'gate-correction-green', '2026-09-10T09:30:00.000Z', {
+    gate(dir, 'gate-revalidated', '2026-09-10T09:30:00.000Z', {
       gate: 'green',
       red_cause: '',
       stage: 'The correction',

@@ -38,8 +38,9 @@ nodes:
   # STAGE 3: DELIVER. Implement, open a draft PR, review, fix, validate, flip ready
   - id: deliver
     include: archon-deliver
-    depends_on: [gate-direct, gate-rooted, gate-planned]
+    depends_on: [triage, inv, planned]
     trigger_rule: none_failed_min_one_success
+    when: "$triage.output.route == 'deliver' || ..."
 
   # STAGE 4: OUTCOME. Record whether a PR was delivered
   - id: outcome
@@ -47,7 +48,7 @@ nodes:
     depends_on: [triage, deliver]
 ```
 
-That's the shape of it. Each `include:` node pulls in another bundled workflow, and each of those workflows is built from nodes that run a **command** (a markdown file that tells the AI what to do), a script, or a shell step. Nodes declare `depends_on` to express ordering, and `when:` skips a branch the route did not choose. The abridged file omits three small `gate-*` nodes that let `deliver` start only after a route actually succeeded.
+That's the shape of it. Each `include:` node pulls in another bundled workflow, and each of those workflows is built from nodes that run a **command** (a markdown file that tells the AI what to do), a script, or a shell step. Nodes declare `depends_on` to express ordering, and `when:` skips a branch the route did not choose. The abridged `when:` on `deliver` lets it start only after a route actually succeeded: the direct route, a rooted investigation, or a ready plan.
 
 ---
 

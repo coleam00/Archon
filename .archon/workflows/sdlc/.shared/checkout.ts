@@ -21,23 +21,13 @@ export function observedCommit(label: string, value: unknown): string {
   return observation.commit;
 }
 
-function nodeStart(): unknown {
+/** The commit the checkout was at when this node started. */
+export function nodeStartCommit(): string {
   let execution: { attempt?: { checkoutStart?: unknown } };
   try {
     execution = JSON.parse(process.env.ARCHON_NODE_EXECUTION ?? '') as typeof execution;
   } catch {
     throw new Error('this node has no execution record; the engine supplies one to every exec node');
   }
-  return execution.attempt?.checkoutStart ?? null;
-}
-
-/** The commit the checkout was at when this node started. */
-export function nodeStartCommit(): string {
-  return observedCommit('this node start', nodeStart());
-}
-
-/** That commit when the engine observed a clean tree, otherwise null. */
-export function cleanStartCommit(): string | null {
-  const start = nodeStart() as { worktree?: { status?: unknown } } | null;
-  return start?.worktree?.status === 'clean' ? observedCommit('this node start', start) : null;
+  return observedCommit('this node start', execution.attempt?.checkoutStart ?? null);
 }
