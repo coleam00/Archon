@@ -24,7 +24,7 @@ Draw the workflow as nodes and outcomes before building it. Test each outcome on
 
 ## 6. CI is one agent node
 
-Check whether CI is green. If it is green, the PR is marked ready. If it is red, find the root cause and stop. No polling loops, no re-run machinery, no classification scripts. Never leave a red PR ready.
+One agent waits for CI and judges it. Green: it marks the PR ready. Red because of the change: the work goes back to the implementer. Red for any other reason, such as a flake or a broken base branch: the run stops, not ready, with the cause. No polling loops, no re-run machinery, no classification scripts. Every loop has a round limit. Never leave a red PR ready.
 
 ## 7. Validate once
 
