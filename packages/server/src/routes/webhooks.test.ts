@@ -200,6 +200,7 @@ describe('POST /webhooks/sources/:sourceInstanceId', () => {
     ['accepted', 200],
     ['malformed', 400],
     ['unauthenticated', 401],
+    ['conflict', 409],
   ] as const)('maps the durable host result %s to HTTP %s', async (result, status) => {
     const app = new OpenAPIHono();
     const receive = mock(async (_sourceInstanceId: string, _request: unknown) => result);

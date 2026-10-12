@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from '@hono/zod-openapi';
+import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
@@ -35,7 +36,7 @@ export interface WebhookSourcePluginHost {
   receive(
     sourceInstanceId: string,
     request: WebhookSourceRequest
-  ): Promise<'accepted' | 'malformed' | 'unauthenticated'>;
+  ): Promise<'accepted' | 'malformed' | 'unauthenticated' | 'conflict'>;
 }
 
 export interface WebhookSourceHostDependencies {
@@ -117,10 +118,7 @@ export async function loadWebhookSourcePlugins(
 
   return {
     hasSource: sourceInstanceId => plugins.has(sourceInstanceId),
-    async receive(
-      sourceInstanceId,
-      request
-    ): Promise<'accepted' | 'malformed' | 'unauthenticated'> {
+    async receive(sourceInstanceId, request): ReturnType<WebhookSourcePluginHost['receive']> {
       const plugin = plugins.get(sourceInstanceId);
       if (!plugin) throw new Error(`Unknown webhook source instance '${sourceInstanceId}'`);
 
@@ -163,6 +161,13 @@ export async function loadWebhookSourcePlugins(
       try {
         await dependencies.acceptReceipt(result.acceptance);
       } catch (error) {
+        if (error instanceof SourceReceiptDigestConflictError) {
+          log.warn(
+            { sourceInstanceId, stage: 'persist', reason: 'delivery_conflict' },
+            'webhook_source_rejected'
+          );
+          return 'conflict';
+        }
         log.error(
           { err: error as Error, sourceInstanceId, stage: 'persist' },
           'webhook_source_failed'

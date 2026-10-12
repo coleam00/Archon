@@ -1,5 +1,5 @@
 /**
- * Webhook routes — raw forge-to-server ingestion endpoints.
+ * Webhook routes — raw source-to-server ingestion endpoints.
  *
  * Registered outside the OpenAPI surface: webhooks are signed
  * machine-to-machine payloads verified against the raw request body, not part
@@ -68,6 +68,8 @@ export function registerWebhookSourceRoutes(
       });
       if (result === 'unauthenticated') return c.json({ error: 'Unauthenticated' }, 401);
       if (result === 'malformed') return c.json({ error: 'Malformed payload' }, 400);
+      if (result === 'conflict')
+        return c.json({ error: 'Delivery ID reused with different content' }, 409);
       onReceiptAccepted?.();
       return c.text('OK', 200);
     } catch (error) {

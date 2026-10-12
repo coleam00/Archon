@@ -1,3 +1,4 @@
+import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -201,9 +202,26 @@ describe('webhook source plugin host', () => {
     expect(acceptReceipt).not.toHaveBeenCalled();
   });
 
+  test('maps only typed delivery conflicts', async () => {
+    const { configPath } = await fixture({ status: 'received', acceptance: acceptance() });
+    const host = await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt: async () => {
+        throw new SourceReceiptDigestConflictError('conflict');
+      },
+      isKnownUser: async () => true,
+    });
+    expect(
+      await host.receive('source-1', {
+        body: '',
+        headers: {},
+        receivedAt: new Date().toISOString(),
+      })
+    ).toBe('conflict');
+  });
+
   test('does not acknowledge a receipt whose durable acceptance fails', async () => {
     const { configPath } = await fixture({ status: 'received', acceptance: acceptance() });
-    const cause = new Error('database detail');
+    const cause = new Error('Delivery identity was reused with different verified content');
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt: mock(async () => {
         throw cause;
