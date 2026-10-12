@@ -1,3 +1,4 @@
+import { checkoutSharedEventDataSchema, workflowEventRowSchema } from './schemas/workflow-event';
 import { describe, test, expect } from 'bun:test';
 import {
   approvalContextSchema,
@@ -2633,5 +2634,37 @@ describe('resource start resource names', () => {
       expect(schema.safeParse(reserved).success).toBe(false);
       expect(schema.safeParse('deploy-lane').success).toBe(true);
     }
+  });
+});
+
+describe('checkout-sharing event boundary', () => {
+  const data = {
+    parent_run_id: 'parent',
+    parent_node_id: 'work',
+    working_path: '/repo',
+    sibling_run_id: 'peer',
+  };
+  const row = {
+    id: 'event',
+    workflow_run_id: 'child',
+    event_type: 'workflow.checkout_shared',
+    step_index: null,
+    step_name: null,
+    created_at: '2026-10-12T00:00:00Z',
+    data,
+  };
+  test('accepts the complete sharing record', () => {
+    expect(workflowEventRowSchema.parse(row).data).toEqual(data);
+  });
+  test('requires every sharing field on storage and API rows', () => {
+    for (const key of Object.keys(data)) {
+      const incomplete: Record<string, unknown> = { ...data };
+      delete incomplete[key];
+      expect(checkoutSharedEventDataSchema.safeParse(incomplete).success).toBe(false);
+      expect(workflowEventRowSchema.safeParse({ ...row, data: incomplete }).success).toBe(false);
+    }
+    expect(
+      workflowEventRowSchema.safeParse({ ...row, event_type: 'legacy_event', data: {} }).success
+    ).toBe(true);
   });
 });

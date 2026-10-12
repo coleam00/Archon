@@ -2168,12 +2168,12 @@ nodes:
 `mutates_checkout: false` is a **workflow-level** field asserting that the run does not write
 to its checkout, so the engine skips the path lock for it. It defaults to `true` (take the
 lock, serialize runs on the same path). It is author-declared on purpose — the author of a
-review or research workflow is the one who knows it only reads. Every child sharing the
-checkout has to declare it: a sibling that doesn't still runs the lock query, finds the
-others on the path, and cancels itself.
+review or research workflow is the one who knows it only reads. Children launched by
+separate `workflow:` nodes still compete for the path lock unless they declare it.
+Children of the same `fan_out:` node and their nested sub-runs may share the checkout
+without that declaration; see [fanning out over a list](#fanning-out-over-a-list-with-fan_out).
 
-So there are three ways to make concurrent sub-runs work, and picking between them is a
-statement about the children:
+For concurrent 1:1 children launched by different nodes, choose according to the children:
 
 | The children… | Do this |
 |---------------|---------|
@@ -2369,8 +2369,8 @@ above as a real limit rather than a footnote — this is what makes
 Fan-out changes nothing about [`isolation:`](#choosing-the-childs-checkout-with-isolation).
 Without `isolation: worktree`, children share the parent's checkout and run up to
 `max_parallel`, including children that write to it. The engine excludes children of the
-same `fan_out` node from one another's path lock. Agents own coordination of their edits;
-the engine adds no coordination mechanism between them.
+same `fan_out` node and their nested sub-runs from one another's path lock.
+Agents own coordination of their edits; the engine adds no coordination mechanism between them.
 
 Each child's `workflow.checkout_shared` events name its siblings on that checkout through
 `sibling_run_id`, with `parent_run_id`, `parent_node_id`, and `working_path`. This records

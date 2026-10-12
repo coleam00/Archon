@@ -1,6 +1,10 @@
 import { providerRegistry } from '@archon/providers';
 import { InProcessWorkflowEngine } from './in-process-engine';
-import { isApprovalContext, type WorkflowRunOrigin } from './schemas/workflow-run';
+import {
+  readSubrunMetadata,
+  isApprovalContext,
+  type WorkflowRunOrigin,
+} from './schemas/workflow-run';
 import type { InMemoryStoreEvent } from './test-utils';
 import { foldDagResumeSnapshot } from './dag-resume-snapshot';
 import { settlingProvider } from './test-settling-provider';
@@ -3167,8 +3171,7 @@ nodes:
       printf 'did:%s' "$ARGUMENTS"
 `;
 
-  /** The same child, declared read-only — the supported way for N concurrent children to
-   *  share the parent's checkout (`mutates_checkout: false` skips the path lock). */
+  /** The same child, declared read-only (`mutates_checkout: false` skips the path lock). */
   const fanChildEchoReadOnly = `
 name: fan-child-ro
 description: echoes its per-item argument; reads only
@@ -3470,6 +3473,182 @@ nodes:
         expect(new Set(siblings)).toEqual(
           new Set(children.filter(c => c.id !== child.id).map(c => c.id))
         );
+      }
+    },
+    testTimeout(20000)
+  );
+
+  it(
+    'nested fan-out branches share the checkout through both admission orderings',
+    async () => {
+      await writeWorkflow('fan-leaf', fanChildEcho.replace('name: fan-child', 'name: fan-leaf'));
+      await writeWorkflow(
+        'fan-nested',
+        `
+name: fan-nested
+description: delegates work
+nodes:
+  - id: leaf
+    workflow: fan-leaf
+`
+      );
+      await writeWorkflow(
+        'fan-nested-parent',
+        `
+name: fan-nested-parent
+description: shared nested branches
+nodes:
+  - id: plan
+    bash: printf '%s' '["alpha","beta"]'
+  - id: work
+    workflow: fan-nested
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 2
+`
+      );
+      for (const leafFirst of [true, false]) {
+        let releasePair = () => {};
+        const pairReady = new Promise<void>(resolve => {
+          releasePair = resolve;
+        });
+        let releaseLeaf = () => {};
+        const leafReady = new Promise<void>(resolve => {
+          releaseLeaf = resolve;
+        });
+        let releasePeer = () => {};
+        const peerChecked = new Promise<void>(resolve => {
+          releasePeer = resolve;
+        });
+        class NestedStore extends InMemoryStore {
+          getRunAncestry = async (id: string): Promise<WorkflowRun[]> => {
+            const run = this.runs.get(id);
+            if (
+              run?.workflow_name === 'fan-nested' &&
+              readSubrunMetadata(run.metadata).childIndex === 1
+            ) {
+              releasePair();
+              await leafReady;
+            }
+            const ancestors: WorkflowRun[] = [];
+            let current = run;
+            while (current?.parent_run_id) {
+              current = this.runs.get(current.parent_run_id);
+              if (current) ancestors.push(current);
+            }
+            return ancestors;
+          };
+          findChildRuns = async (id: string): Promise<WorkflowRun[]> => {
+            const children = [...this.runs.values()].filter(run => run.parent_run_id === id);
+            if (this.runs.get(id)?.workflow_name === 'fan-nested-parent' && children.length > 0) {
+              if (children.length >= 2) releasePair();
+              await pairReady;
+            }
+            return [...this.runs.values()].filter(run => run.parent_run_id === id);
+          };
+          getActiveWorkflowRunByPath: IWorkflowStore['getActiveWorkflowRunByPath'] = async (
+            path,
+            self
+          ) => {
+            const run = self ? this.runs.get(self.id) : undefined;
+            if (run?.workflow_name === 'fan-leaf') {
+              const parent = run.parent_run_id ? this.runs.get(run.parent_run_id) : undefined;
+              if (parent && readSubrunMetadata(parent.metadata).childIndex === 0) {
+                releaseLeaf();
+                if (!leafFirst) await peerChecked;
+                const active = await super.getActiveWorkflowRunByPath(path, self);
+                if (leafFirst) await peerChecked;
+                return active;
+              }
+            }
+            if (
+              run?.workflow_name === 'fan-nested' &&
+              readSubrunMetadata(run.metadata).childIndex === 1
+            ) {
+              await leafReady;
+              const active = await super.getActiveWorkflowRunByPath(path, self);
+              releasePeer();
+              return active;
+            }
+            return super.getActiveWorkflowRunByPath(path, self);
+          };
+        }
+        const store = new NestedStore();
+        const result = await executeWorkflow(
+          makeDeps(store),
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          await discover('fan-nested-parent'),
+          'goal',
+          { conversationId: 'conv-db' }
+        );
+        expect(result.success).toBe(true);
+        expect([...store.runs.values()].map(run => run.status)).toEqual([
+          'completed',
+          'completed',
+          'completed',
+          'completed',
+          'completed',
+        ]);
+      }
+    },
+    testTimeout(20000)
+  );
+
+  it(
+    'blocks child execution when either reciprocal sharing record cannot persist',
+    async () => {
+      await writeWorkflow('fan-child', fanChildEcho);
+      await writeWorkflow(
+        'fan-audit',
+        `
+name: fan-audit
+description: audit persistence failure
+nodes:
+  - id: plan
+    bash: printf '%s' '["alpha","beta"]'
+  - id: work
+    workflow: fan-child
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+      join: all_success
+`
+      );
+      for (const failAt of [1, 2]) {
+        const store = new InMemoryStore();
+        const persist = store.persistWorkflowEvent;
+        let sharingWrites = 0;
+        store.persistWorkflowEvent = async event => {
+          if (event.event_type === 'workflow.checkout_shared' && ++sharingWrites === failAt) {
+            throw new Error('sharing INSERT rejected');
+          }
+          await persist(event);
+        };
+        const result = await executeWorkflow(
+          makeDeps(store),
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          await discover('fan-audit'),
+          'goal',
+          { conversationId: 'conv-db' }
+        );
+        expect(result.success).toBe(false);
+        const children = [...store.runs.values()].filter(
+          run => run.parent_run_id === result.workflowRunId
+        );
+        expect(children.map(run => run.status)).toEqual(['completed', 'cancelled']);
+        const blocked = children[1];
+        expect(blocked).toBeDefined();
+        expect(
+          store.events.some(
+            event => event.workflow_run_id === blocked?.id && event.event_type === 'node_started'
+          )
+        ).toBe(false);
       }
     },
     testTimeout(20000)

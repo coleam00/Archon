@@ -1,5 +1,5 @@
 import type { IResourceStartStore } from './resource-start-store';
-import type { WorkflowEventRow } from './schemas/workflow-event';
+import type { CheckoutSharedEventData, WorkflowEventRow } from './schemas/workflow-event';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
@@ -228,18 +228,31 @@ export function isDurableWorkflowEventType(
   return DURABLE_WORKFLOW_EVENT_TYPES.some(eventType => eventType === value);
 }
 
+export interface WorkflowEventPayloadMap {
+  'workflow.checkout_shared': CheckoutSharedEventData;
+}
+
 /** The column payload shared by every workflow-event writer. */
-export interface WorkflowEventInput<EventType extends WorkflowEventType = WorkflowEventType> {
+export type WorkflowEventInput<EventType extends WorkflowEventType = WorkflowEventType> = {
   workflow_run_id: string;
-  event_type: EventType;
   step_index?: number;
   step_name?: string;
-  data?: Record<string, unknown>;
-}
+} & (
+  | {
+      event_type: Exclude<EventType, keyof WorkflowEventPayloadMap>;
+      data?: Record<string, unknown>;
+    }
+  | {
+      [Type in Extract<EventType, keyof WorkflowEventPayloadMap>]: {
+        event_type: Type;
+        data: WorkflowEventPayloadMap[Type];
+      };
+    }[Extract<EventType, keyof WorkflowEventPayloadMap>]
+);
 
 export type NodeStateEventInput = SerializedNodeEvent;
 export type ObservabilityEventInput = WorkflowEventInput<
-  Exclude<WorkflowEventType, DurableWorkflowEventType>
+  Exclude<WorkflowEventType, DurableWorkflowEventType | keyof WorkflowEventPayloadMap>
 >;
 
 /**
@@ -670,7 +683,10 @@ export interface IWorkflowStore
 export type GateResolutionEvent =
   | Omit<NodeStateEventInput, 'workflow_run_id'>
   | {
-      event_type: Exclude<WorkflowEventType, NodeStateEventInput['event_type']>;
+      event_type: Exclude<
+        WorkflowEventType,
+        NodeStateEventInput['event_type'] | keyof WorkflowEventPayloadMap
+      >;
       step_name: string;
       data: Record<string, unknown>;
     };
