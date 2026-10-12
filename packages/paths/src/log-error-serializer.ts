@@ -8,6 +8,8 @@ import pino from 'pino';
 // logger drops those fields for every `err`. Message, code and status remain.
 export function serializeLoggedError(err: Error): ReturnType<typeof pino.stdSerializers.err> {
   const serialized = pino.stdSerializers.err(err);
+  // `throw null` and other non-objects reach here as-is.
+  if (typeof serialized !== 'object' || serialized === null) return serialized;
   delete serialized.payload;
   delete serialized.requestBody;
   delete serialized.request;

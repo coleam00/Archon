@@ -1185,7 +1185,10 @@ ${userComment}`;
         );
         archonUserId = user.id;
       } catch (err) {
-        getLog().warn({ err, platform: githubPolicy.id }, 'github.user_resolve_failed');
+        getLog().warn(
+          { err: toError(err), platform: githubPolicy.id },
+          'github.user_resolve_failed'
+        );
       }
     }
 

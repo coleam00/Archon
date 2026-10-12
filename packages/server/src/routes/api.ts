@@ -1725,7 +1725,7 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
     } catch (err) {
       // Proxy-authenticated installs can keep attributing requests during a
       // session-backend outage. Without a header the API gate fails closed.
-      getLog().warn({ err, path: c.req.path }, 'web.session_resolve_failed');
+      getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
     }
   }
 
@@ -1737,7 +1737,10 @@ export async function resolveAuthContext(c: Context): Promise<WebUserContext | u
     return { userId: user.id, role: user.role };
   } catch (err) {
     // Attribution is best-effort; the strict credential guard reports 503.
-    getLog().warn({ err, headerPresent: true, path: c.req.path }, 'web.user_resolve_failed');
+    getLog().warn(
+      { err: err as Error, headerPresent: true, path: c.req.path },
+      'web.user_resolve_failed'
+    );
     return undefined;
   }
 }
@@ -1769,7 +1772,7 @@ export async function requireWebUser(
     try {
       session = await auth.api.getSession({ headers: c.req.raw.headers });
     } catch (err) {
-      getLog().error({ err }, 'web.session_resolve_failed');
+      getLog().error({ err: err as Error }, 'web.session_resolve_failed');
       return { error: apiError(c, 503, 'Could not verify session — backend unavailable') };
     }
     if (session?.user) {
@@ -1781,7 +1784,7 @@ export async function requireWebUser(
         );
         return { userId: user.id, role: user.role };
       } catch (err) {
-        getLog().error({ err }, 'web.user_resolve_failed');
+        getLog().error({ err: err as Error }, 'web.user_resolve_failed');
         return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
       }
     }
@@ -1794,7 +1797,7 @@ export async function requireWebUser(
     const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
     return { userId: user.id, role: user.role };
   } catch (err) {
-    getLog().error({ err, headerPresent: true }, 'web.user_resolve_failed');
+    getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
     return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
   }
 }

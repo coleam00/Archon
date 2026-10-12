@@ -43,6 +43,11 @@ describe('serializeLoggedError', () => {
     });
   });
 
+  test('passes a thrown non-object through', () => {
+    expect(serializeLoggedError(null as unknown as Error) as unknown).toBeNull();
+    expect(serializeLoggedError('boom' as unknown as Error) as unknown).toBe('boom');
+  });
+
   test('keeps an ordinary error intact', () => {
     const err = Object.assign(new Error('spawn failed'), { code: 'ENOENT' });
     expect(serializeLoggedError(err)).toMatchObject({

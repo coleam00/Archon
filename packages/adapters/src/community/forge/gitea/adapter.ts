@@ -825,7 +825,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
         );
         archonUserId = user.id;
       } catch (err) {
-        getLog().warn({ err, platform: giteaPolicy.id }, 'gitea.user_resolve_failed');
+        getLog().warn({ err: toError(err), platform: giteaPolicy.id }, 'gitea.user_resolve_failed');
       }
     }
 

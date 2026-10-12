@@ -680,7 +680,10 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         );
         archonUserId = user.id;
       } catch (err) {
-        getLog().warn({ err, platform: gitlabPolicy.id }, 'gitlab.user_resolve_failed');
+        getLog().warn(
+          { err: toError(err), platform: gitlabPolicy.id },
+          'gitlab.user_resolve_failed'
+        );
       }
     }
 
