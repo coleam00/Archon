@@ -70,6 +70,7 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
   const schema = scope.output_format;
 
   const repo = { host: 'github.com', path: 'coleam00/Archon' };
+  const report = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
   const candidates = [
     { repo, number: 1 },
     { repo, number: 0 },
@@ -89,7 +90,7 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     return {
       pr,
       parserAccepts,
-      schemaAccepts: validateStructuredOutput({ pr }, schema).valid,
+      schemaAccepts: validateStructuredOutput({ pr, report }, schema).valid,
     };
   });
 
