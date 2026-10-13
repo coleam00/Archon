@@ -7,7 +7,11 @@ import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
 const track = trackTempRoots();
 const cliDir = join(import.meta.dir, '..', 'packages', 'cli');
 
-async function runCliTests(home: string, env: NodeJS.ProcessEnv, args: string[] = []) {
+async function runCliTests(
+  home: string,
+  env: NodeJS.ProcessEnv,
+  args: string[] = []
+): Promise<void> {
   const child = Bun.spawn([process.execPath, 'run', 'test', ...args], {
     cwd: cliDir,
     env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: home, ...env },

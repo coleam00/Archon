@@ -274,10 +274,6 @@ const mockResolveFolderBackend = mock(() => ({
   destroy: mockFolderBackendDestroy,
 }));
 
-const mockIsDocker = (env: NodeJS.ProcessEnv = process.env): boolean =>
-  env.WORKSPACE_PATH === '/workspace' ||
-  (env.HOME === '/root' && Boolean(env.WORKSPACE_PATH)) ||
-  env.ARCHON_DOCKER === 'true';
 const mockExpandTilde = (path: string): string =>
   path.startsWith('~') ? join(homedir(), path.slice(1).replace(/^[/\\]/, '')) : path;
 // Identity by default: fixture paths are fake and must keep their spelling on Windows.
@@ -289,9 +285,9 @@ mock.module('@archon/paths', () => ({
   captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
   expandTilde: mockExpandTilde,
-  isDocker: mockIsDocker,
+  isDocker,
   getArchonHome: mock((env: NodeJS.ProcessEnv = process.env) =>
-    mockIsDocker(env) ? '/.archon' : env.ARCHON_HOME ? mockExpandTilde(env.ARCHON_HOME) : testHome
+    isDocker(env) ? '/.archon' : env.ARCHON_HOME ? mockExpandTilde(env.ARCHON_HOME) : testHome
   ),
   getProjectStoragePaths: getProjectStoragePathsReal,
   getRunArtifactsDirForRoot: getRunArtifactsDirForRootReal,
