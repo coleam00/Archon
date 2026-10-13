@@ -113,8 +113,8 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'user',
-    spec: 'user <list|role>',
-    description: 'List users and manage roles as the operator',
+    spec: 'user <list|role|link>',
+    description: 'List users, link identities and manage roles as the operator',
   },
   {
     command: 'trigger',
@@ -518,6 +518,12 @@ const scopedOnlyHelp: HelpEntry[] = [
     subcommand: 'list',
     spec: 'user list',
     description: 'List user ids, roles, display names and identities',
+  },
+  {
+    command: 'user',
+    subcommand: 'link',
+    spec: 'user link <user-id> <platform>:<platform-user-id> [--move]',
+    description: 'Link an identity to an existing user; --move reassigns a conflicting identity',
   },
   {
     command: 'user',
