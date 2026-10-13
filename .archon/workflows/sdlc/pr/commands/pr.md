@@ -1,6 +1,6 @@
 # Prepare the Pull Request
 
-Prepare a clear, reviewer-friendly pull request for the committed work on the current branch, brought up to date with its base. You never modify source files except to resolve merge conflicts, and you never push, create, edit, or comment on the pull request yourself: your writes are the merge commit and the body file below. The nodes that follow verify the merge, push the branch, and perform the one public write, through whichever forge source the run selected.
+Prepare a clear, reviewer-friendly pull request for the committed work on the current branch. You never modify source files, and you never push, create, edit, or comment on the pull request yourself: your one write is the body file below. The node that follows pushes the branch and performs the one public write, through whichever forge source the run selected. You do not merge the base: a conflict with it is found by CI and resolved by the implementer.
 
 Draft mode: **$INPUTS.draft** — `true` opens as a draft; anything else, ready for review. A pull request that already exists keeps the draft state its author gave it.
 
@@ -23,13 +23,7 @@ You do not look up whether this branch already has a pull request. The publishin
 - Confirm the branch is not the base and has commits ahead of it. If intended work sits uncommitted, commit it first following the repository's conventions — staged by name, one coherent outcome per commit, human-sounding message, no AI attribution. Never sweep unrelated changes; if intended and unrelated changes cannot be separated safely, stop and say so.
 - Read the complete merge-base diff — not just the file list — and confirm it matches the work described by the run's artifacts.
 
-## 3. Bring the branch up to date with its base
-
-Fetch the base branch from the remote of the repository you resolved, and merge it into the current branch with a normal merge commit. When the base has not moved, there is nothing to merge. Resolve every conflict keeping the intent of both sides: what this branch changes and what the base changed since. Never rebase, reset, or force anything.
-
-When a conflict cannot be resolved with confidence — the two sides want incompatible behavior, or the resolution needs a decision this work order does not make — abort the merge (`git merge --abort`) so the branch is exactly as it was, and declare each such path in `conflicts` with the reason in `summary`. The run stops there and names them. Never guess a resolution.
-
-## 4. Write it
+## 3. Write it
 
 - Read the run's artifacts for content: `$ARTIFACTS_DIR/implementation.md` and anything else relevant under `$ARTIFACTS_DIR/`.
 - Find the repository's PR template (`.github/pull_request_template.md` and its supported variants). Use it; fill every applicable section with concrete information and delete instructional comments. No template → problem first, then solution focused on behavior, then validation that actually ran.
@@ -38,7 +32,7 @@ When a conflict cannot be resolved with confidence — the two sides want incomp
 - Never add AI attribution, generated-by footers, or robot emoji.
 - Write the complete body to `$ARTIFACTS_DIR/pr-body.md` — never inside the repository. It is published only when a new pull request opens; an existing one keeps its body.
 
-## 5. Declare the target
+## 4. Declare the target
 
 - `repo`: `{ "host", "path" }` of the repository the pull request opens against.
 - `head_repo`: the same shape for the repository the head branch lives in — `repo` itself unless the head is in a fork.
@@ -47,7 +41,6 @@ When a conflict cannot be resolved with confidence — the two sides want incomp
 - `existing`: the number of the pull request this run continues, or `null`.
 - `title`: the title you wrote.
 - `body`: `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "pr-body.md"}`, copied exactly.
-- `conflicts`: the paths you could not merge with confidence; empty after a clean merge or when the base had not moved.
-- `summary`: what the base merge did — not needed, merged cleanly, conflicts resolved (which and how), or aborted (why) — and the target in one sentence.
+- `summary`: the target in one sentence.
 
 Declare no credential and no raw remote URL.

@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
-import { PR, forgePrRecord, gitCheckout, runPackScript, type ScriptRun } from './deliver-checks-harness';
+import { PR, forgePrRecord, gitCheckout, runPackScript } from './deliver-checks-harness';
 
 const track = trackTempRoots();
 
@@ -62,47 +62,6 @@ describe('pushHead', () => {
     const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('ambiguous');
-  });
-});
-
-describe('verify-sync', () => {
-  const verify = (cwd: string, extra: Record<string, string> = {}): ScriptRun =>
-    runPackScript('pr/scripts/verify-sync', {
-      cwd,
-      inputs: {
-        INPUTS_REPO: JSON.stringify(PR.repo),
-        INPUTS_BASE: 'dev',
-        INPUTS_CONFLICTS: '[]',
-        INPUTS_SUMMARY: 'stub',
-        ...extra,
-      },
-    });
-
-  it('refuses a merge that left conflicts, naming the paths', () => {
-    const run = verify(gitCheckout(), { INPUTS_CONFLICTS: JSON.stringify(['a.txt']), INPUTS_SUMMARY: 'both sides rewrote it' });
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('a.txt');
-    expect(run.stderr).toContain('both sides rewrote it');
-  });
-
-  it('refuses a branch the latest base was not merged into', () => {
-    const run = verify(gitCheckout({ conflict: true }));
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('upstream/dev is not an ancestor of HEAD');
-  });
-
-  it('passes a branch with the base merged in and a clean tree', () => {
-    const run = verify(gitCheckout());
-    expect(run.code).toBe(0);
-    expect(run.stdout).toContain('is merged and the tree is clean');
-  });
-
-  it('refuses a tree the merge left dirty', () => {
-    const cwd = gitCheckout();
-    writeFileSync(join(cwd, 'a.txt'), 'uncommitted resolution\n');
-    const run = verify(cwd);
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('the tree is not clean');
   });
 });
 

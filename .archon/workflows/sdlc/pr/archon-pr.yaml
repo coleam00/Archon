@@ -2,10 +2,10 @@ name: archon-pr
 description: |
   Open a pull request for the committed work on the current branch — draft by
   default when composed, template-aware, with the body built from the run's
-  artifacts. Brings the branch up to date with its base by merge first, then
-  pushes and verifies by reading the created PR back. It runs no validation: the
-  caller validates the merged tree. Never sweeps unrelated changes, never rebases
-  and never force-pushes.
+  artifacts — or push to the one it already has. Pushes and verifies by reading
+  the pull request back. It runs no validation and merges no base: CI judges the
+  pushed head. Never sweeps unrelated changes, never rebases and never
+  force-pushes.
 
   Use when: committed work on a branch needs a PR — "open a PR", "create a
   draft PR for this branch".
@@ -26,8 +26,8 @@ returns: publish
 
 nodes:
   # The agent judges: which repository the work is proposed to, the base, whether
-  # the run continues an existing pull request, how to merge the latest base in,
-  # and what the title and body say. It performs no push and no forge write.
+  # the run continues an existing pull request, and what the title and body say.
+  # It performs no push and no forge write.
   - id: prepare
     command: pr
     output_type: pull-request-intent
@@ -52,23 +52,8 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [pr-body.md] }
           required: [type, run_id, path]
-        # Paths the agent could not merge with confidence; empty after a clean merge.
-        conflicts: { type: array, items: { type: string } }
         summary: { type: string }
-      required: [repo, head_repo, head, base, existing, title, body, conflicts, summary]
-
-  # The base merge's result is git state: an unmerged base, an unresolved conflict
-  # or an uncommitted resolution would publish a branch nobody validated, so it is
-  # checked before the push.
-  - id: synced
-    script: verify-sync
-    runtime: bun
-    depends_on: [prepare]
-    with:
-      repo: { from: "$prepare.output.repo" }
-      base: "$prepare.output.base"
-      conflicts: { from: "$prepare.output.conflicts" }
-      summary: "$prepare.output.summary"
+      required: [repo, head_repo, head, base, existing, title, body, summary]
 
   # The durable ownership record for every later public action in delivery and
   # inbound forge event. It pushes the branch, then opens the pull request, or
@@ -79,7 +64,7 @@ nodes:
     runtime: bun
     timeout: 30000
     retry: { max_attempts: 2, delay_ms: 20000 }
-    depends_on: [synced]
+    depends_on: [prepare]
     with:
       repo: { from: "$prepare.output.repo" }
       head_repo: { from: "$prepare.output.head_repo" }

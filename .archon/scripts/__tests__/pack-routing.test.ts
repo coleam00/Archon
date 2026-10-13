@@ -156,7 +156,6 @@ describe("deliver's round", () => {
           INPUTS_REVIEW_ACTION: 'none',
           INPUTS_REVIEW_SUMMARY: 'clean',
           INPUTS_CI: 'green',
-          INPUTS_CAUSED_BY_CHANGE: 'false',
           INPUTS_CI_SUMMARY: 'all passed',
           ...inputs,
         },
@@ -187,8 +186,8 @@ describe("deliver's round", () => {
       done: false,
       reason: 'review_open',
     });
-    expect(round({ INPUTS_CI: 'red', INPUTS_CAUSED_BY_CHANGE: 'true' })).toMatchObject({ done: false, reason: 'ci_pr_caused' });
-    expect(round({ INPUTS_CI: 'red' })).toMatchObject({ done: true, ready: false, reason: 'ci_other' });
+    expect(round({ INPUTS_CI: 'pr_caused' })).toMatchObject({ done: false, reason: 'ci_pr_caused' });
+    expect(round({ INPUTS_CI: 'other' })).toMatchObject({ done: true, ready: false, reason: 'ci_other' });
     expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'replan', INPUTS_CI: 'null' })).toMatchObject({
       done: true,
       reason: 'replan',
@@ -196,7 +195,7 @@ describe("deliver's round", () => {
   });
 
   it('ends typed at the round cap instead of exhausting the loop', () => {
-    expect(round({ INPUTS_PREVIOUS: '2', INPUTS_CI: 'red', INPUTS_CAUSED_BY_CHANGE: 'true' })).toMatchObject({
+    expect(round({ INPUTS_PREVIOUS: '2', INPUTS_CI: 'pr_caused' })).toMatchObject({
       round: 3,
       done: true,
       ready: false,

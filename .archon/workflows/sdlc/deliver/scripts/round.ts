@@ -11,7 +11,7 @@
  * - INPUTS_GREEN / INPUTS_RED_CAUSE: the implementer's verdict on the checks it ran.
  * - INPUTS_PR_URL: this round's pull request.
  * - INPUTS_REVIEW_READY / INPUTS_REVIEW_ACTION: the review verdict.
- * - INPUTS_CI / INPUTS_CAUSED_BY_CHANGE: the CI agent's verdict.
+ * - INPUTS_CI: the CI agent's state.
  * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.
  */
 
@@ -35,7 +35,6 @@ const redCause = text(process.env.INPUTS_RED_CAUSE);
 const reviewReady = text(process.env.INPUTS_REVIEW_READY);
 const reviewAction = text(process.env.INPUTS_REVIEW_ACTION);
 const ci = text(process.env.INPUTS_CI);
-const causedByChange = text(process.env.INPUTS_CAUSED_BY_CHANGE) === 'true';
 const prUrl = text(process.env.INPUTS_PR_URL);
 
 /** The reason this round ended, and whether another round can change it. */
@@ -49,7 +48,7 @@ function decide(): { reason: Ended; again: boolean } {
       : { reason: 'review_open', again: true };
   }
   if (ci === 'green') return { reason: 'delivered', again: false };
-  if (ci === 'red' && causedByChange) return { reason: 'ci_pr_caused', again: true };
+  if (ci === 'pr_caused') return { reason: 'ci_pr_caused', again: true };
   return { reason: 'ci_other', again: false };
 }
 

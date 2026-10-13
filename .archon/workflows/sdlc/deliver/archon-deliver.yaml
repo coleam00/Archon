@@ -4,8 +4,9 @@ description: |
   (focused checks only; CI is the full validation), draft PR, and a review at the
   depth its risk earns. Once a review passes, simplify judges the structure once,
   the implementer adopts or declines its findings, and one CI agent marks the PR
-  ready on green. Open review findings or a CI red the change caused send the
-  work back to implement for another round; every other ending is not ready, with
+  ready on green. Open review findings, a CI red the change caused, or a conflict
+  with the base send the work back to implement for another round, which merges
+  the base on a conflict; every other ending is not ready, with
   its reason. A red PR never stays ready. The PR description is updated once the
   rounds end, and the outcome relays discoveries to the operator. There is no in-run approval
   gate — the human gate is PR review and merge on GitHub, outside the run.
@@ -82,7 +83,9 @@ nodes:
               the requested outcome requires that expansion. When
               $ARTIFACTS_DIR/ci.md records CI red that this change caused on the
               pull request's current head, fix that too, at its cause, never by
-              weakening a test. Record every disposition — fixed, declined with its
+              weakening a test. When it records a conflict with the base, merge the
+              base branch into this branch with a normal merge commit, never a
+              rebase, and resolve every conflict it names. Record every disposition — fixed, declined with its
               reason or evidence, or unrelated — in implementation.md.
 
               Accepted work order:
@@ -175,11 +178,9 @@ nodes:
           output_format:
             type: object
             properties:
-              state: { type: string, enum: [green, red, blocked] }
-              caused_by_change: { type: boolean }
+              state: { type: string, enum: [green, pr_caused, other] }
               summary: { type: string, pattern: '\S' }
-              evidence: { type: string, pattern: '\S' }
-            required: [state, caused_by_change, summary, evidence]
+            required: [state, summary]
 
         # `until_bash` and the loop's output cannot read a skipped node, so this joins
         # the round's verdicts into the value the loop decides on.
@@ -200,7 +201,6 @@ nodes:
             review_action: { from: "$review.output.action", if_skipped: null }
             review_summary: { from: "$review.output.findings_summary", if_skipped: null }
             ci: { from: "$ci.output.state", if_skipped: null }
-            caused_by_change: { from: "$ci.output.caused_by_change", if_skipped: null }
             ci_summary: { from: "$ci.output.summary", if_skipped: null }
           output_format:
             type: object

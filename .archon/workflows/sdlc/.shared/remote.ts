@@ -11,7 +11,7 @@
  */
 
 import { sameRepo, type QualifiedPr } from './forge.ts';
-import { git, gitOrThrow } from './git.ts';
+import { git } from './git.ts';
 
 type Repo = QualifiedPr['repo'];
 
@@ -71,14 +71,5 @@ export function remoteFor(repo: Repo): string {
   const remote = findRemote(repo);
   if (remote === undefined) throw new Error(`no git remote points at ${repo.host}/${repo.path}`);
   return remote;
-}
-
-/** Fetch `branch` from the remote that holds `repo` and return its remote-tracking ref. */
-export function remoteRefFor(repo: Repo, branch: string): string {
-  const remote = remoteFor(repo);
-  // An explicit refspec: a single-branch clone or a narrowed fetch setting would
-  // otherwise update only FETCH_HEAD and leave the tracking ref stale or missing.
-  gitOrThrow('fetch', '--quiet', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`);
-  return `${remote}/${branch}`;
 }
 

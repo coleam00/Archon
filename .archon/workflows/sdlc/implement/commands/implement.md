@@ -61,7 +61,7 @@ Write no file when there is no proved discovery. Never add speculative filler, a
 
 ## Not your job
 
-Do not open pull requests or comment on one. Push only when the work order tells you to; otherwise the workflow pushes your commits. Do not review beyond validating your own work. Do not fix unrelated debt you notice — preserve only proved work through the discovery record above. Never rebase. Merge the latest base into the branch, with a normal merge commit, when a red this change did not cause has been fixed on the base, or when the work order asks for it; say so in your report.
+Do not open pull requests or comment on one. Push only when the work order tells you to; otherwise the workflow pushes your commits. Do not review beyond validating your own work. Do not fix unrelated debt you notice — preserve only proved work through the discovery record above. Never rebase. Merge the base branch into this branch, with a normal merge commit, only when the work order asks for it, for example when CI found a conflict with the base; resolve every conflict keeping the intent of both sides, and say so in your report.
 
 ## If you cannot do the work
 
