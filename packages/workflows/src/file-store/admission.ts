@@ -23,6 +23,7 @@ import {
   SourceReceiptDigestConflictError,
   validateStartReceiptLimit,
   compareStartReceipts,
+  compareCodeUnits,
   type IResourceStartStore,
   type StartBindingInspection,
   type ResourceStartRequestInspection,
@@ -408,7 +409,7 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
               reason: row.reason,
               bindings: await Promise.all(
                 [...row.bindings]
-                  .sort((a, b) => a.bindingId.localeCompare(b.bindingId))
+                  .sort((a, b) => compareCodeUnits(a.bindingId, b.bindingId))
                   .flatMap(item =>
                     (item.requestIds.length ? item.requestIds : [null]).map(requestId =>
                       inspectBinding(tx, item, requestId)
@@ -446,8 +447,8 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
             )
             .sort(
               (a, b) =>
-                a.createdAt.localeCompare(b.createdAt) ||
-                a.binding.bindingId.localeCompare(b.binding.bindingId)
+                compareCodeUnits(a.createdAt, b.createdAt) ||
+                compareCodeUnits(a.binding.bindingId, b.binding.bindingId)
             )
             .slice(0, options.limit ?? 100)
             .map(({ binding }) => inspectBinding(tx, binding))
@@ -463,7 +464,7 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
         Promise.all(
           (await list('requests', requestSchema))
             .filter(row => row.hostId === hostId && row.status === 'queued')
-            .sort((a, b) => a.resource.localeCompare(b.resource) || a.position - b.position)
+            .sort((a, b) => compareCodeUnits(a.resource, b.resource) || a.position - b.position)
             .map(inspect)
         )
       ),

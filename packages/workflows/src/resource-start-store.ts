@@ -84,14 +84,18 @@ export function compareStartReceipts(
   b: Pick<SourceReceiptInput, 'id' | 'receivedAt'>
 ): number {
   return (
-    descending(receiptTimeKey(a.receivedAt), receiptTimeKey(b.receivedAt)) || descending(a.id, b.id)
+    compareCodeUnits(receiptTimeKey(b.receivedAt), receiptTimeKey(a.receivedAt)) ||
+    compareCodeUnits(b.id, a.id)
   );
 }
 
-// Code-unit order, matching SQL's binary `ORDER BY ... DESC`; localeCompare depends on the
-// runtime's collation and can order mixed-case ids differently.
-function descending(a: string, b: string): number {
-  return a < b ? 1 : a > b ? -1 : 0;
+/**
+ * Ascending code-unit order, as SQLite's default BINARY collation sorts text. In-process
+ * stores use it instead of localeCompare, whose result depends on the runtime's locale.
+ * Postgres sorts by the database collation, so mixed-case values may order differently there.
+ */
+export function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 export interface IResourceStartStore {

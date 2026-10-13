@@ -225,3 +225,58 @@ test('admission cannot reuse a deleted run ID', async () => {
   );
   expect(await store.getWorkflowRun(deleted.id)).toBeNull();
 });
+
+// SQLite sorts text by code unit; localeCompare would put 'a' before 'B'.
+test('admission listings order mixed-case keys by code unit', async () => {
+  const { store } = await fixture();
+  const receivedAt = '2026-01-01T00:00:00.000Z';
+  const binding = (bindingId: string) => ({
+    bindingId,
+    bindingRevision: null,
+    hostId: 'host',
+    runAsUserId: 'operator',
+    resource: 'resource',
+    capacity: 1,
+    overlap: 'queue' as const,
+    launch: {
+      cwd: '/test',
+      workflowName: 'test',
+      inputs: {},
+      isolation: { kind: 'in-place' as const },
+    },
+  });
+  const receiptIds = [
+    'aaaaaaaa-0000-4000-8000-000000000000',
+    'BBBBBBBB-0000-4000-8000-000000000000',
+  ];
+  for (const id of receiptIds)
+    await store.acceptStartReceipt({
+      receipt: {
+        id,
+        sourceInstanceId: 'source',
+        deliveryId: null,
+        contentDigest: 'digest',
+        receivedAt,
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [binding('a'), binding('B')],
+    });
+  expect((await store.listStartReceipts()).map(row => row.id)).toEqual(receiptIds);
+  expect((await store.getStartReceipt(receiptIds[0]))?.bindings.map(b => b.bindingId)).toEqual([
+    'B',
+    'a',
+  ]);
+  const pending = await store.listPendingStartBindings({ hostId: 'host' });
+  expect(pending.filter(b => b.receiptId === receiptIds[0]).map(b => b.bindingId)).toEqual([
+    'B',
+    'a',
+  ]);
+  for (const resource of ['a', 'B'])
+    for (let i = 0; i < 2; i++) await store.admitResourceStart({ ...intent(), resource });
+  expect((await store.listQueuedResourceStartsForHost('host')).map(row => row.resource)).toEqual([
+    'B',
+    'a',
+  ]);
+});
