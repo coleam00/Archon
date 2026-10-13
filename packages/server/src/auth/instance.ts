@@ -64,7 +64,6 @@ export function getAuth(env: NodeJS.ProcessEnv = process.env): AuthInstance | nu
 
 // Better Auth 1.6 makes Auth<Options> invariant, so an explicit broad return
 // type loses this instance's concrete options and is not assignable to cached.
-// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
 function buildAuth(env: NodeJS.ProcessEnv) {
   // isWebAuthEnabled guarantees both are present; locals avoid `!` assertions.
   const connectionString = env.DATABASE_URL ?? '';

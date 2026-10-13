@@ -218,6 +218,7 @@ test('receipt preparation and real engine execution use supplied ports without S
     default_cwd: project,
   });
   const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+  if (!user) throw new Error('Expected test identity');
   let accesses = 0;
   const failSql = (): never => {
     accesses++;
@@ -422,6 +423,7 @@ async function prepareTriggerInputs(
     default_cwd: project,
   });
   const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+  if (!user) throw new Error('Expected test identity');
   const receipt = acceptance(
     {
       bindingId: 'mapped',

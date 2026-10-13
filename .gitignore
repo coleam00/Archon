@@ -24,9 +24,6 @@ package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
-# ESLint cache
-.eslintcache
-
 # Environment files
 .env
 .env.local

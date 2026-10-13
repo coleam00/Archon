@@ -1,3 +1,4 @@
+import { FileStoreUnsupportedError } from './file-store/errors';
 import { gateReworkNode } from './gate-rework';
 import {
   type ProviderRegistry,
@@ -353,7 +354,10 @@ export function assertCredentialStatus(
 export async function assertRunCredentials(
   deps: Pick<
     WorkflowDeps,
-    'getAgentProvider' | 'isPerUserProviderKeysEnabled' | 'getUserProviderCredentialStatus'
+    | 'getAgentProvider'
+    | 'isPerUserProviderKeysEnabled'
+    | 'getUserProviderCredentialStatus'
+    | 'credentialStore'
   >,
   prepared: PreparedRunAiConfiguration
 ): Promise<void> {
@@ -361,6 +365,8 @@ export async function assertRunCredentials(
   for (const requirement of prepared.requirements) {
     const { provider, model, vendor } = requirement;
     if (prepared.executionUserId && deps.isPerUserProviderKeysEnabled?.() && vendor) {
+      if (deps.credentialStore === 'files')
+        throw new FileStoreUnsupportedError('stored per-user provider credentials');
       if (!deps.getUserProviderCredentialStatus)
         throw new WorkflowCredentialPreflightError(
           requirement,

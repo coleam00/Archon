@@ -242,6 +242,9 @@ mock.module('@archon/core/db/workflows', () => ({ getWorkflowRun: mockGetWorkflo
 mock.module('@archon/core/db/resource-starts', () => ({
   hasStartReceiptForDelivery: async (): Promise<boolean> => false,
 }));
+mock.module('@archon/core/config/store-selection', () => ({
+  loadStoreSelection: async (): Promise<'database'> => 'database',
+}));
 
 mock.module('@archon/adapters', () => ({
   TelegramAdapter: DisabledAdapter,
