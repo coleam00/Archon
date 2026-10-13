@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
+  applyLoopPrevToBody,
   checkComposedBlockBoundaries,
   checkTriggerRule,
   resolveNodeBindings,
@@ -541,6 +542,12 @@ interface DryRunContext {
    */
   inputs?: Record<string, JsonValue>;
   /**
+   * The enclosing loop_group's previous-iteration outputs, the snapshot a body `when:`
+   * resolves `$LOOP_PREV.*` against. Empty on the first iteration; undefined outside a
+   * loop_group body, where the condition parser rejects `$LOOP_PREV`.
+   */
+  loopPrevOutputs?: ReadonlyMap<string, NodeOutput>;
+  /**
    * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR` / `$LOG_DIR`, under a uniquely named root in
    * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
    * only (#2619). Created lazily before the first `--exec-code` execution (#2617) and
@@ -1022,7 +1029,6 @@ async function simulateLoopGroup(
 ): Promise<void> {
   if (!isLoopGroupNode(node)) return;
   const bodyNodes = resolvedBodyNodes(node.loop_group);
-  const bodyPlan = planGraph(bodyNodes);
   // The executor builds the body's per-iteration context from the group's OWN resolved
   // provider and model (dag-executor.ts), so the body must simulate against those rather
   // than the enclosing workflow's scope. Everything the executor leaves alone — the
@@ -1043,21 +1049,31 @@ async function simulateLoopGroup(
     tier: groupResolution.tier,
     providerOrigin: groupResolution.providerOrigin,
   };
-  // Swap the scope on the context the body is given rather than handing it a copy.
-  // `halted` is the one scalar a nested simulation writes back — a gate inside the body
-  // sets it — so a spread copy would swallow a pause and let the run continue past it.
-  // Restoring in `finally` keeps the group's own trace entry on the enclosing scope and
+  // Swap the scope and loop snapshot on the context the body is given rather than handing
+  // it a copy. `halted` is the one scalar a nested simulation writes back — a gate inside
+  // the body sets it — so a spread copy would swallow a pause and let the run continue past
+  // it. Restoring in `finally` keeps the group's own trace entry on the enclosing scope and
   // nests correctly when a body contains another loop_group.
   const outerScope = ctx.scope;
+  const outerLoopPrevOutputs = ctx.loopPrevOutputs;
+  let loopPrevOutputs: Map<string, NodeOutput> | undefined;
   let lastOutput = '';
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
+    // A dry run never resumes, so `$LOOP_USER_INPUT` is '' on every iteration, as it is
+    // in a real run outside an interactive resume.
+    const bodyPlan = planGraph(
+      applyLoopPrevToBody(bodyNodes, loopPrevOutputs, '', ctx.artifactsDir)
+    );
     const bodyOutputs = new Map(outputs);
     ctx.scope = bodyScope;
+    ctx.loopPrevOutputs = loopPrevOutputs ?? new Map();
     try {
       await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
     } finally {
       ctx.scope = outerScope;
+      ctx.loopPrevOutputs = outerLoopPrevOutputs;
     }
+    loopPrevOutputs = bodyOutputs;
     lastOutput =
       bodyPlan.sinks
         .map(bodyId => bodyOutputs.get(bodyId))
@@ -1121,7 +1137,9 @@ async function simulateNode(
     try {
       // `ctx.inputs` mirrors the executor's `resolveRunInputs` (#2610): a `when:`
       // referencing `$INPUTS.<name>` branches on the same effective map a real run reads.
-      const condition = evaluateCondition(node.when, outputs, ctx.inputs);
+      const condition = evaluateCondition(node.when, outputs, ctx.inputs, {
+        loopPrevOutputs: ctx.loopPrevOutputs,
+      });
       if (!condition.parsed) {
         recordSkipped(
           node,
