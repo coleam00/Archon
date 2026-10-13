@@ -116,7 +116,7 @@ Generate the implementation plan at `.claude/archon/plans/{kebab-case-feature-na
 ## Success Criteria
 - [ ] {Verifiable criterion 1}
 - [ ] {Verifiable criterion 2}
-- [ ] Passes `bun run validate` (type-check + lint + format + tests)
+- [ ] Tests covering the change pass, and the touched packages lint and type-check (CI is the full validation)
 
 ## Affected Packages
 - `@archon/{package}` — {what changes}
