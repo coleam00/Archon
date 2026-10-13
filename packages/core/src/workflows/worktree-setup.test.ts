@@ -206,18 +206,22 @@ test('successful setup uses marked stream tails and omits whitespace-only eviden
   expect(rows[1].data?.stderrTail).toBeUndefined();
 });
 
-test('a command terminated by a signal is an execution failure', async () => {
-  const error = await createRunWorktreeSetupExecutor(
-    deps,
-    run,
-    {}
-  )(input(['kill -TERM $$'])).catch((error: unknown) => error);
-  expect(error).toBeInstanceOf(WorktreePostCreateError);
-  if (!(error instanceof WorktreePostCreateError)) throw new Error('Expected setup failure');
-  expect(error.failureKind).toBe('exit');
-  if (error.signal) expect(error.message).toContain(error.signal);
-  else expect(typeof error.exitCode).toBe('number');
-});
+// Windows has no POSIX signals: Git Bash's `kill -TERM $$` does not terminate the shell.
+test.skipIf(process.platform === 'win32')(
+  'a command terminated by a signal is an execution failure',
+  async () => {
+    const error = await createRunWorktreeSetupExecutor(
+      deps,
+      run,
+      {}
+    )(input(['kill -TERM $$'])).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(WorktreePostCreateError);
+    if (!(error instanceof WorktreePostCreateError)) throw new Error('Expected setup failure');
+    expect(error.failureKind).toBe('exit');
+    if (error.signal) expect(error.message).toContain(error.signal);
+    else expect(typeof error.exitCode).toBe('number');
+  }
+);
 
 for (const scenario of [
   {
