@@ -18,7 +18,8 @@
  *   $INPUTS.name              — a named workflow input (#2470)
  *   $LOOP_PREV.node.output    — prior loop-group body output (loop context only)
  *   <op> is == != <= >= < >, RHS is a single-quoted literal or a bare
- *   number/boolean.
+ *   number/boolean. A numeric operator (<= >= < >) needs an RHS that parses as a
+ *   finite number, quoted or not; anything else could never compare true.
  */
 import {
   assertSupportedOutputRefs,
@@ -50,6 +51,16 @@ export type WhenOperator = (typeof WHEN_OPERATORS)[number];
 
 function isWhenOperator(value: string): value is WhenOperator {
   return (WHEN_OPERATORS as readonly string[]).includes(value);
+}
+
+/**
+ * A numeric operator compares `parseFloat` of both sides. The RHS is a literal, so a
+ * non-numeric one could never compare and would skip the node on every run; rejecting it
+ * here makes the loader report it. Same `parseFloat` rule as the evaluator, so `'80'` and
+ * `80` both qualify.
+ */
+function isComparableLiteral(operator: WhenOperator, expected: string): boolean {
+  return operator === '==' || operator === '!=' || Number.isFinite(parseFloat(expected));
 }
 
 /** A node id may contain hyphens; a path segment (a JSON field name) may not. */
@@ -147,12 +158,26 @@ export function splitOutsideQuotes(expr: string, sep: string): string[] {
 /**
  * Every atom string in a (possibly compound) `when:` expression, in source order.
  *
- * Flattens the `||` / `&&` structure away — callers that need the boolean structure
- * (the evaluator) split with {@link splitOutsideQuotes} themselves; callers that only
- * need to inspect each comparison (the loader) use this.
+ * Flattens the `||` / `&&` structure away for reference diagnostics. Use
+ * {@link parseWhenExpression} to validate syntax or preserve boolean structure.
  */
 export function whenAtoms(expr: string): string[] {
   return splitOutsideQuotes(expr.trim(), '||').flatMap(clause => splitOutsideQuotes(clause, '&&'));
+}
+
+/** Parse the full OR-of-AND expression before any values can short-circuit it. */
+export function parseWhenExpression(expr: string, allowLoopPrev = false): WhenAtom[][] | null {
+  const clauses: WhenAtom[][] = [];
+  for (const clause of splitOutsideQuotes(expr.trim(), '||')) {
+    const atoms: WhenAtom[] = [];
+    for (const text of splitOutsideQuotes(clause, '&&')) {
+      const atom = parseWhenAtomInternal(text, allowLoopPrev);
+      if (atom === null) return null;
+      atoms.push(atom);
+    }
+    clauses.push(atoms);
+  }
+  return clauses;
 }
 
 /** Quoted RHS values are literal data, even when they contain reference-shaped text. */
@@ -181,17 +206,11 @@ export function findUnsupportedNestedWhenRef(expr: string): { reference: string 
 }
 
 /**
- * Parse one ordinary atom. Returns `null` when the text is not a well-formed atom — every
- * caller treats that as a parse failure (the evaluator fails closed and skips the
- * node; the loader leaves the atom to that runtime behaviour).
+ * Parse one ordinary atom. Returns `null` when the text is not a well-formed atom — the loader rejects
+ * malformed expressions and the evaluator fails closed when called directly.
  */
 export function parseWhenAtom(expr: string): WhenAtom | null {
   return parseWhenAtomInternal(expr, false);
-}
-
-/** Parse a loop-group atom, including its scoped `$LOOP_PREV` reference form. */
-export function parseLoopPrevWhenAtom(expr: string): WhenAtom | null {
-  return parseWhenAtomInternal(expr, true);
 }
 
 function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom | null {
@@ -204,7 +223,8 @@ function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom |
         nodeId !== undefined &&
         operator !== undefined &&
         isWhenOperator(operator) &&
-        expected !== undefined
+        expected !== undefined &&
+        isComparableLiteral(operator, expected)
       ) {
         return {
           ref: { kind: 'loop_prev', nodeId, field },
@@ -222,6 +242,7 @@ function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom |
   // Quoted RHS takes precedence; the unquoted alternative covers numbers and booleans.
   const expected = quotedValue !== undefined ? quotedValue : unquotedValue;
   if (operator === undefined || !isWhenOperator(operator) || expected === undefined) return null;
+  if (!isComparableLiteral(operator, expected)) return null;
 
   if (inputName !== undefined) {
     return { ref: { kind: 'input', name: inputName }, operator, expected };
