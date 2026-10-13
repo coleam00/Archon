@@ -278,9 +278,15 @@ function isInCleanup(node: ts.Node, bindings: CleanupBindings): boolean {
   return false;
 }
 
-/** Local names `trackTempRoots` is imported under from the shared test utilities. */
-function trackerNames(sourceFile: ts.SourceFile): Set<string> {
-  const names = new Set<string>();
+/** How `trackTempRoots` is bound from the shared test utilities: by name or through a namespace. */
+interface TrackerBindings {
+  functions: Set<string>;
+  namespaces: Set<string>;
+}
+
+function trackerBindings(sourceFile: ts.SourceFile): TrackerBindings {
+  const functions = new Set<string>();
+  const namespaces = new Set<string>();
   for (const statement of sourceFile.statements) {
     if (
       !ts.isImportDeclaration(statement) ||
@@ -290,13 +296,27 @@ function trackerNames(sourceFile: ts.SourceFile): Set<string> {
       continue;
     }
     const bindings = statement.importClause?.namedBindings;
-    if (bindings === undefined || !ts.isNamedImports(bindings)) continue;
+    if (bindings === undefined) continue;
+    if (ts.isNamespaceImport(bindings)) {
+      namespaces.add(bindings.name.text);
+      continue;
+    }
     for (const element of bindings.elements) {
       const importedName = element.propertyName?.text ?? element.name.text;
-      if (importedName === 'trackTempRoots') names.add(element.name.text);
+      if (importedName === 'trackTempRoots') functions.add(element.name.text);
     }
   }
-  return names;
+  return { functions, namespaces };
+}
+
+function isTrackerCall(call: ts.CallExpression, trackers: TrackerBindings): boolean {
+  if (ts.isIdentifier(call.expression)) return trackers.functions.has(call.expression.text);
+  return (
+    ts.isPropertyAccessExpression(call.expression) &&
+    ts.isIdentifier(call.expression.expression) &&
+    trackers.namespaces.has(call.expression.expression.text) &&
+    call.expression.name.text === 'trackTempRoots'
+  );
 }
 
 /** True when no function encloses the node, so it runs while the module itself loads. */
@@ -311,16 +331,13 @@ export function checkSource(file: string, source: string): DriftViolation[] {
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
   const bindings = fsBindings(sourceFile);
   const cleanup = cleanupBindings(sourceFile);
-  const trackers = TEST_FILE.test(file) ? new Set<string>() : trackerNames(sourceFile);
+  const trackers = TEST_FILE.test(file)
+    ? { functions: new Set<string>(), namespaces: new Set<string>() }
+    : trackerBindings(sourceFile);
   const violations: DriftViolation[] = [];
 
   const visit = (node: ts.Node): void => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      trackers.has(node.expression.text) &&
-      runsAtModuleLoad(node)
-    ) {
+    if (ts.isCallExpression(node) && isTrackerCall(node, trackers) && runsAtModuleLoad(node)) {
       violations.push({
         file,
         line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
