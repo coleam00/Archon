@@ -53,6 +53,7 @@ import { classifyTurnError, describeErrorInfo } from './turn-error';
 import { applyNodeScope, checkThreadMcpScope, readCodexInventory } from './scope';
 import type { JsonValue } from './protocol/serde_json/JsonValue';
 import type { ThreadItem } from './protocol/v2/ThreadItem';
+import type { McpServerStatusUpdatedNotification } from './protocol/v2/McpServerStatusUpdatedNotification';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
 import type { ThreadTokenUsage } from './protocol/v2/ThreadTokenUsage';
 import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown';
@@ -703,6 +704,14 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         break;
       }
 
+      case 'mcpServer/startupStatus/updated':
+        // Startup runs at thread start, before the turn; a null thread id is a
+        // connection-wide server.
+        if (notification.params.threadId === threadId || notification.params.threadId === null) {
+          yield mcpServerStatusOf(notification.params);
+        }
+        break;
+
       case 'turn/completed': {
         const { turn, threadId: completedThreadId } = notification.params;
         if (completedThreadId !== threadId || turn.id !== turnId || parentCompleted) break;
@@ -733,6 +742,27 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   }
   if (pendingFailure) yield pendingFailure;
   throw connection.closedError(await connection.ended, errors);
+}
+
+function mcpServerStatusOf(
+  params: McpServerStatusUpdatedNotification
+): Extract<MessageChunk, { type: 'mcp_server_status' }> {
+  const status = {
+    starting: 'pending',
+    ready: 'connected',
+    failed: params.failureReason === 'reauthenticationRequired' ? 'needs_auth' : 'failed',
+    // A cancelled startup leaves the server unavailable to the turn.
+    cancelled: 'failed',
+  } as const satisfies Record<
+    McpServerStatusUpdatedNotification['status'],
+    Extract<MessageChunk, { type: 'mcp_server_status' }>['status']
+  >;
+  return {
+    type: 'mcp_server_status',
+    server: params.name,
+    status: status[params.status],
+    ...(params.error !== null ? { error: params.error } : {}),
+  };
 }
 
 function* completeTurn(
