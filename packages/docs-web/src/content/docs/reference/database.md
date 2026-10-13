@@ -236,6 +236,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `tiers` / `aliases` are JSON-as-TEXT; folded into model resolution as the highest-precedence layer. `default_model` pins the user's direct-chat model (written atomically with `default_provider`; applied only when the effective chat provider matches — workflows still resolve the `large` tier). Resolution follows the **acting user**: workflow runs use the run starter; chat turns use the message **sender** (the conversation creator's row is only a fallback when no sender identity resolves)
   - Editable via the console "Just me" scope, `archon ai … --scope user`, or `/api/auth/me/ai-prefs*`
 
+- **`remote_agent_web_push_subscriptions`** - Browsers opted in to run-attention Web Push
+  - One row per browser endpoint (`UNIQUE(endpoint)`), owned by the user who enabled it and cascaded on user deletion; only that owner can delete it
+  - Stores the endpoint and its encryption keys; every row on the install receives notices, and the attention router removes rows the push service reports as expired (404/410)
+
 - **`remote_agent_schema_version`** - Diagnostic schema vintage
   - Records the Archon build that created the database and the build that last applied its schema
   - A single row (`id = 1`); databases predating this table retain an unknown creation version
