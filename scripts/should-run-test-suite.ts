@@ -33,9 +33,9 @@ const BUILD_INPUTS = [
  *
  * Deliberately absent, each because a named check reads it: `Dockerfile` and friends plus
  * `.dockerignore` (the `docker-build` job), `.prettierrc`/`.prettierignore` (`format:check`),
- * `homebrew/archon.rb` (`build:checksums`), `scripts/install.ps1` (`test:install`), the web
- * assets that feed the Docker image, and anything under `.github/workflows/` — changing the
- * gate must run the gate.
+ * `biome.jsonc` (`lint`), `homebrew/archon.rb` (`build:checksums`), `scripts/install.ps1`
+ * (`test:install`), the web assets that feed the Docker image, and anything under
+ * `.github/workflows/` — changing the gate must run the gate.
  *
  * An entry ending in `/` matches a directory, anything else matches one file.
  */

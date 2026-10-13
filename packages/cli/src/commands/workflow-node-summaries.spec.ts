@@ -4,8 +4,7 @@
  * `--json` form emits.
  *
  * `.spec.ts` rather than `.test.ts`: `packages/cli/tsconfig.json` excludes
- * `**\/*.test.ts` and the root ESLint config ignores it, so a `.test.ts` here
- * would be neither type-checked nor linted.
+ * `**\/*.test.ts`, so a `.test.ts` here would not be type-checked.
  */
 import { describe, expect, it } from 'bun:test';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';

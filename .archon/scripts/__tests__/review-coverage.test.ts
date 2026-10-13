@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
-import { runPackScript, type ScriptRun } from './deliver-checks-harness';
+import { packScriptRunner, type ScriptRun } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
 
 function coverage(continuation: boolean, tier: string, focused: unknown = null): ScriptRun {
   return runPackScript('review/scripts/resolve-review-coverage', {

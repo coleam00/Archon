@@ -6,8 +6,8 @@ import { requestJson } from '../lib/http';
  * also a logged-out user on a web-auth install — which the panel reads as "hide".
  *
  * Response types are inlined (mirroring `server/.../auth.schemas.ts`) because the
- * device-flow schemas are not yet in `@/lib/api.generated`, and `@/lib/api` is
- * eslint-blocked for the console. Migrate to `components['schemas']['Github*']`
+ * device-flow schemas are not yet in `@/lib/api.generated`, and the console does not
+ * import `@/lib/api`. Migrate to `components['schemas']['Github*']`
  * once a regen lands them.
  */
 

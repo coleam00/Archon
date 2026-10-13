@@ -1,6 +1,6 @@
 import type { IStateDocumentStore } from './state-document-store';
 import type { IResourceStartStore } from './resource-start-store';
-import type { CheckoutSharedEventData, WorkflowEventRow } from './schemas/workflow-event';
+import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
@@ -16,10 +16,10 @@ import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { RunCancelReason, RunExitReason, RunStopSignal } from './schemas/run-terminal-reason';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
 /**
- * IWorkflowStore - trait interface for workflow database operations.
+ * IWorkflowStore - persistence port for workflow operations.
  *
  * Mirrors the IIsolationStore pattern from @archon/isolation.
- * Implementations live in @archon/core (backed by the real DB);
+ * SQL lives in @archon/core; append-only files live in @archon/workflows.
  * the workflow engine depends only on this narrow interface.
  */
 import type {
@@ -126,6 +126,20 @@ export const NODE_STATE_EVENT_TYPES = [
 
 export type NodeStateEventType = (typeof NODE_STATE_EVENT_TYPES)[number];
 
+/** Where an install persists workflow state; selected by `store:` in the global config. */
+export const WORKFLOW_STORE_KINDS = ['database', 'files'] as const;
+export type WorkflowStoreKind = (typeof WORKFLOW_STORE_KINDS)[number];
+
+export function foldActiveNodeIds(
+  active: Set<string>,
+  stepName: string | null,
+  eventType: NodeStateEventType
+): void {
+  if (!stepName) return;
+  if (eventType === 'node_started' || eventType === 'node_suspended') active.add(stepName);
+  else active.delete(stepName);
+}
+
 export const DURABLE_WORKFLOW_EVENT_TYPES = [
   ...NODE_STATE_EVENT_TYPES,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
@@ -147,6 +161,7 @@ export const WORKFLOW_EVENT_TYPES = [
   // Between-run continuation (#2747) — written on the ADOPTING run's log when it
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
+  // Fan-out siblings that shared one checkout (#2777); one row per sibling.
   'workflow.checkout_shared',
   ...DURABLE_WORKFLOW_EVENT_TYPES,
   'node_retry_scheduled',
@@ -229,31 +244,18 @@ export function isDurableWorkflowEventType(
   return DURABLE_WORKFLOW_EVENT_TYPES.some(eventType => eventType === value);
 }
 
-export interface WorkflowEventPayloadMap {
-  'workflow.checkout_shared': CheckoutSharedEventData;
-}
-
 /** The column payload shared by every workflow-event writer. */
-export type WorkflowEventInput<EventType extends WorkflowEventType = WorkflowEventType> = {
+export interface WorkflowEventInput<EventType extends WorkflowEventType = WorkflowEventType> {
   workflow_run_id: string;
+  event_type: EventType;
   step_index?: number;
   step_name?: string;
-} & (
-  | {
-      event_type: Exclude<EventType, keyof WorkflowEventPayloadMap>;
-      data?: Record<string, unknown>;
-    }
-  | {
-      [Type in Extract<EventType, keyof WorkflowEventPayloadMap>]: {
-        event_type: Type;
-        data: WorkflowEventPayloadMap[Type];
-      };
-    }[Extract<EventType, keyof WorkflowEventPayloadMap>]
-);
+  data?: Record<string, unknown>;
+}
 
 export type NodeStateEventInput = SerializedNodeEvent;
 export type ObservabilityEventInput = WorkflowEventInput<
-  Exclude<WorkflowEventType, DurableWorkflowEventType | keyof WorkflowEventPayloadMap>
+  Exclude<WorkflowEventType, DurableWorkflowEventType>
 >;
 
 /**
@@ -684,10 +686,7 @@ export interface IWorkflowStore
 export type GateResolutionEvent =
   | Omit<NodeStateEventInput, 'workflow_run_id'>
   | {
-      event_type: Exclude<
-        WorkflowEventType,
-        NodeStateEventInput['event_type'] | keyof WorkflowEventPayloadMap
-      >;
+      event_type: Exclude<WorkflowEventType, NodeStateEventInput['event_type']>;
       step_name: string;
       data: Record<string, unknown>;
     };

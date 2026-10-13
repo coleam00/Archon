@@ -64,8 +64,7 @@ export function parseGitCredentialPath(pathStr: string): { owner: string; repo: 
   // Belt-and-braces:
   //  - reject `..` segments after match (the regex blocks leading `.` but
   //    not `foo..bar`)
-  //  - reject null bytes (eslint forbids `\x00` in the regex literal, so we
-  //    check the captured groups instead — same outcome at runtime)
+  //  - reject null bytes in the captured groups
   if (owner.includes('..') || repo.includes('..') || owner.includes('\0') || repo.includes('\0')) {
     return null;
   }

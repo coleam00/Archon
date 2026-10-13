@@ -176,6 +176,9 @@
     ],
     [
       "src/commands/state.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-file-store.integration.spec.ts"
     ]
   ]
 }

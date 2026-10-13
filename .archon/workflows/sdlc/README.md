@@ -107,10 +107,10 @@ Every `script:` node here is TypeScript on Bun, under its own component's
 is a workflow or a named script target, and a node that names one fails at load.
 
 The repository validates them where they live. `.archon/workflows/tsconfig.json`
-is the owning configuration — `bun run type-check` compiles that project, and both
-`eslint.config.mjs` and `scripts/lint.ts` derive their globs from its `include`
-rather than restating them. A script placed outside those globs fails
-`pack-scripts.test.ts` rather than going quietly unchecked.
+is the owning configuration — `bun run type-check` compiles that project. Lint
+covers every TypeScript file under `.archon/workflows/`, so it needs no globs of its
+own. A script placed outside the type-check globs fails `pack-scripts-validation.test.ts`
+rather than going quietly unchecked.
 
 Three rules, each protecting something a script cannot get back on its own:
 

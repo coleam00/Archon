@@ -25,19 +25,3 @@ export type DurableWriterAcceptsFanOutSnapshot = AssertTrue<
     ? true
     : false
 >;
-
-export type CheckoutSharingCannotBeBestEffort = AssertNever<
-  Extract<
-    'workflow.checkout_shared',
-    Parameters<IWorkflowStore['createWorkflowEvent']>[0]['event_type']
-  >
->;
-export type CheckoutSharingRequiresPayload = AssertTrue<
-  {
-    workflow_run_id: string;
-    event_type: 'workflow.checkout_shared';
-    data: Record<string, never>;
-  } extends Parameters<IWorkflowStore['persistWorkflowEvent']>[0]
-    ? false
-    : true
->;

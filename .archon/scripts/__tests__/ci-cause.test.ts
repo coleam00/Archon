@@ -4,7 +4,9 @@
  * and any re-run's. The deliver fixtures pin the routes; these pin the rule.
  */
 import { describe, expect, it } from 'bun:test';
-import { runPackScript } from './deliver-checks-harness';
+import { packScriptRunner } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
 
 interface Claim {
   paths?: string[];

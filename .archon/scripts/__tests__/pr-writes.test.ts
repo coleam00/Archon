@@ -14,10 +14,12 @@ import {
   forgeOperation,
   forgeFailure,
   forgePrRecord,
-  runPackScript,
+  packScriptRunner,
   type ScriptOptions,
   type ScriptRun,
 } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
 
 const MARKER = '<!-- archon-review-report -->';
 const REPORT = 'Round 1: ready';

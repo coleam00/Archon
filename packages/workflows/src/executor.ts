@@ -1,6 +1,7 @@
 import { requireProvider } from '@archon/provider-contract';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import type { OwnedWorktree, WorkflowRunOrigin } from './schemas/workflow-run';
+import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
@@ -2452,7 +2453,7 @@ export async function executeWorkflow(
                 parent_node_id: subrun.parentNodeId,
                 working_path: cwd,
                 sibling_run_id: siblingId,
-              },
+              } satisfies CheckoutSharedEventData,
             });
           }
         }
