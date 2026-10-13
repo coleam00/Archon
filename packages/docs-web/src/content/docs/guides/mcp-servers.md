@@ -472,8 +472,9 @@ bun run cli workflow run my-workflow "Review PR #123"
   `allowed_tools` / `denied_tools` restrictions are still ignored by Codex.
 - **Haiku model** — Tool search (lazy loading for many tools) is not supported on
   Haiku. You'll see a warning. Consider using Sonnet or Opus for MCP nodes.
-- **No load-time validation** — The MCP config file is read at execution time, not
-  when the workflow YAML is loaded. A typo in the path won't surface until the node runs.
+- **No load-time validation** — Loading the workflow YAML does not read the MCP config
+  file. `archon validate workflows` checks that a required file exists and is valid JSON;
+  otherwise a typo in the path surfaces when the node runs.
 - **No inline config** — MCP configs must be in a separate JSON file, not inline in YAML.
   This is intentional — it keeps secrets out of version-controlled workflow files.
 
