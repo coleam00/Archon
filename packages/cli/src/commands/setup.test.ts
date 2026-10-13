@@ -26,8 +26,6 @@ import * as setupModule from './setup';
 import * as doctorModule from './doctor';
 import * as prompts from '@clack/prompts';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { parseArgs } from 'util';
-import { cliArgOptions } from '../args';
 import { parse as parseDotenv } from 'dotenv';
 
 // Test directory for file operations
@@ -1018,13 +1016,10 @@ describe('readInstallDefaultModel (#1999)', () => {
 });
 
 describe('setup provider selection', () => {
-  it('--providers codex installs the explicit selection without asking', async () => {
-    const { values } = parseArgs({ args: ['--providers', 'codex'], options: cliArgOptions });
+  it('an explicit selection installs without asking', async () => {
     const install = mock(async (_ids: readonly string[]) => undefined);
     const ask = mock(async () => ['claude']);
-    expect(
-      await selectSetupProviders((values.providers as string).split(','), install, ask)
-    ).toEqual(['codex']);
+    expect(await selectSetupProviders(['codex'], install, ask)).toEqual(['codex']);
     expect(install).toHaveBeenCalledWith(['codex']);
     expect(ask).not.toHaveBeenCalled();
   });

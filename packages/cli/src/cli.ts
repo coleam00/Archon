@@ -686,14 +686,15 @@ async function main(): Promise<number> {
         const { setupCommand } = await loadRoute(() => import('./commands/setup'), {
           database: true,
         });
+        const providers = (values.providers as string | undefined) ?? process.env.ARCHON_PROVIDERS;
         const setupExitCode = await setupCommand({
           spawn: spawnFlag,
           repoPath,
           scope,
           force: forceFlag,
-          ...(values.providers !== undefined
+          ...(providers !== undefined
             ? {
-                providers: (values.providers as string)
+                providers: providers
                   .split(',')
                   .map(id => id.trim())
                   .filter(Boolean),

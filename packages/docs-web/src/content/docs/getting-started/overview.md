@@ -314,7 +314,7 @@ archon workflow run <name> --cwd /path/to/repo "<message>"
 |---------|-------------|
 | `archon chat <message>` | Send a message to the orchestrator |
 | `archon setup` | Interactive setup wizard for credentials and config |
-| `archon doctor` | Verify your setup (Claude/Codex binaries, gh auth, DB, adapters; `--full` also probes the OpenCode runtime) |
+| `archon doctor` | Verify registered provider diagnostics, gh auth, DB, and adapters |
 | `archon workflow list` | List available workflows |
 | `archon workflow run <name> [msg]` | Run a workflow (`--detach` to background it) |
 | `archon workflow status` | Show active runs (running + paused) |

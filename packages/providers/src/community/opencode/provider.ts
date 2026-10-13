@@ -1,4 +1,5 @@
 import { diagnoseOpencode } from './diagnostics';
+import { probeOpencodeRuntime } from './runtime';
 import type { CredentialStatus } from '@archon/provider-contract';
 import { join } from 'node:path';
 
@@ -38,11 +39,12 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 export class OpencodeProvider implements IAgentProvider {
+  constructor(private readonly diagnosticProbe = probeOpencodeRuntime) {}
   diagnose(
     request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
   ): ReturnType<typeof diagnoseOpencode> {
     request.signal.throwIfAborted();
-    return diagnoseOpencode();
+    return diagnoseOpencode(request.signal, this.diagnosticProbe);
   }
 
   async checkCredential(): Promise<CredentialStatus> {
