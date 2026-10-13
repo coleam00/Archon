@@ -72,6 +72,9 @@
       "src/services/resource-start-hosting.integration.test.ts"
     ],
     [
+      "src/services/setup-shutdown.integration.test.ts"
+    ],
+    [
       "src/adapters/web/transport.test.ts"
     ],
     [

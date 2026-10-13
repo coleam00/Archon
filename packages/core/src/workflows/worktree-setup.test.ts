@@ -110,6 +110,16 @@ test('standalone setup merges project variables over file configuration', async 
   expect(rows).toHaveLength(0);
 });
 
+test('setup stdin is empty rather than waiting for its timeout', async () => {
+  await createRunWorktreeSetupExecutor(
+    deps,
+    run,
+    {}
+  )(input(['if read value; then exit 1; else echo empty; fi'], 2000));
+  expect(rows[1].event_type).toBe('worktree_setup_completed');
+  expect(rows[1].data?.stdoutTail).toBe('empty');
+});
+
 test('first nonzero exit stops setup and is not reclassified from output prose', async () => {
   const error = await createRunWorktreeSetupExecutor(
     deps,
@@ -143,24 +153,70 @@ test('timeout is distinct and bounds a command that ignores SIGTERM', async () =
   expect(rows[1].data?.message).toContain('30 ms');
 });
 
-// The shell exits at once, but the background job keeps stdout open, so the subprocess
-// settles only when the timeout destroys the streams, whatever the shell's exit status.
-test.each(['exit 0', 'exit 3'])(
-  "a shell that ends with '%s' while a background job holds its output times out",
-  async exit => {
-    const error = await createRunWorktreeSetupExecutor(
-      deps,
-      run,
-      {}
-    )(input([`(sleep 2; echo late) & echo started; ${exit}`], 200)).catch(
-      (error: unknown) => error
-    );
-    expect(error).toBeInstanceOf(WorktreePostCreateError);
-    expect(rows.map(row => row.event_type)).toEqual([
-      'worktree_setup_started',
-      'worktree_setup_failed',
-    ]);
-    expect(rows[1].data?.failureKind).toBe('timeout');
+for (const background of [false, true]) {
+  test(`timeout ends a ${background ? 'background' : 'foreground'} descendant`, async () => {
+    const descendant =
+      "trap '' TERM INT; touch ready; while [ ! -f go ]; do sleep 0.01; done; touch leaked";
+    const command = background
+      ? `bash -c "${descendant}" & wait`
+      : `true; bash -c "${descendant}"; true`;
+    try {
+      await expect(
+        createRunWorktreeSetupExecutor(
+          deps,
+          run,
+          {}
+        )(input([command], process.platform === 'win32' ? 1000 : 200))
+      ).rejects.toBeInstanceOf(WorktreePostCreateError);
+      expect(await Bun.file(join(root, 'ready')).exists()).toBe(true);
+      expect(rows[1].data?.failureKind).toBe('timeout');
+      await writeFile(join(root, 'go'), '');
+      await Bun.sleep(300);
+      expect(await Bun.file(join(root, 'leaked')).exists()).toBe(false);
+    } finally {
+      // Release a survivor even when running this regression against the old executor.
+      await writeFile(join(root, 'go'), '');
+      await Bun.sleep(100);
+    }
+  });
+}
+
+// Windows taskkill cannot end leftovers once the command has exited.
+test.skipIf(process.platform === 'win32').each([
+  { exitCode: 0, redirect: false },
+  { exitCode: 3, redirect: false },
+  { exitCode: 0, redirect: true },
+])(
+  'command exit $exitCode ends leftovers (redirected output: $redirect)',
+  async ({ exitCode, redirect }) => {
+    try {
+      const error = await createRunWorktreeSetupExecutor(
+        deps,
+        run,
+        {}
+      )(
+        input(
+          [
+            `bash -c 'touch ready; while [ ! -f go ]; do sleep 0.01; done; touch leaked' ${redirect ? '>/dev/null 2>&1' : ''} & while [ ! -f ready ]; do sleep 0.01; done; echo started; exit ${exitCode}`,
+          ],
+          2000
+        )
+      ).catch((error: unknown) => error);
+      if (exitCode === 0) {
+        expect(error).toBeUndefined();
+        expect(rows[1].event_type).toBe('worktree_setup_completed');
+      } else {
+        expect(error).toBeInstanceOf(WorktreePostCreateError);
+        expect(rows[1].data?.failureKind).toBe('exit');
+        expect(rows[1].data?.exitCode).toBe(exitCode);
+      }
+      await writeFile(join(root, 'go'), '');
+      await Bun.sleep(300);
+      expect(await Bun.file(join(root, 'leaked')).exists()).toBe(false);
+    } finally {
+      await writeFile(join(root, 'go'), '');
+      await Bun.sleep(100);
+    }
   }
 );
 
