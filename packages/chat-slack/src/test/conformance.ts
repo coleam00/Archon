@@ -23,45 +23,57 @@ export async function processFixture(command?: string[]): Promise<ChatConformanc
       stderr: 'pipe',
     }
   );
-  const reader = child.stderr.getReader();
-  let logs = '';
-  let url: string | undefined;
-  while (!url) {
-    const chunk = await reader.read();
-    if (chunk.done) throw new Error(`fixture exited before readiness: ${logs}`);
-    logs += new TextDecoder().decode(chunk.value);
-    const index = logs.indexOf('\n');
-    if (index < 0) continue;
-    const line: unknown = JSON.parse(logs.slice(0, index));
-    if (
-      typeof line === 'object' &&
-      line !== null &&
-      'fixtureUrl' in line &&
-      typeof line.fixtureUrl === 'string'
-    )
-      url = line.fixtureUrl;
-    else throw new Error('invalid fixture readiness');
-  }
-  const drainLogs = (async () => {
-    while (!(await reader.read()).done) {
-      /* Drain withheld plugin diagnostics. */
+  // A setup failure returns no fixture, so nothing else would stop the child.
+  async function connect() {
+    const reader = child.stderr.getReader();
+    let logs = '';
+    let url: string | undefined;
+    while (!url) {
+      const chunk = await reader.read();
+      if (chunk.done) throw new Error(`fixture exited before readiness: ${logs}`);
+      logs += new TextDecoder().decode(chunk.value);
+      const index = logs.indexOf('\n');
+      if (index < 0) continue;
+      const line: unknown = JSON.parse(logs.slice(0, index));
+      if (
+        typeof line === 'object' &&
+        line !== null &&
+        'fixtureUrl' in line &&
+        typeof line.fixtureUrl === 'string'
+      )
+        url = line.fixtureUrl;
+      else throw new Error('invalid fixture readiness');
     }
-  })();
-  const chat = await connectChat(
-    {
-      readable: child.stdout,
-      writable: new WritableStream({
-        async write(value) {
-          child.stdin.write(value);
-          await child.stdin.flush();
-        },
-        async close() {
-          await child.stdin.end();
-        },
-      }),
-    },
-    descriptor
-  );
+    const drainLogs = (async () => {
+      while (!(await reader.read()).done) {
+        /* Drain withheld plugin diagnostics. */
+      }
+    })();
+    const chat = await connectChat(
+      {
+        readable: child.stdout,
+        writable: new WritableStream({
+          async write(value) {
+            child.stdin.write(value);
+            await child.stdin.flush();
+          },
+          async close() {
+            await child.stdin.end();
+          },
+        }),
+      },
+      descriptor
+    );
+    return { url, chat, drainLogs };
+  }
+  let connected: Awaited<ReturnType<typeof connect>>;
+  try {
+    connected = await connect();
+  } catch (error) {
+    child.kill();
+    throw error;
+  }
+  const { url, chat, drainLogs } = connected;
   async function drive(path: string, value: unknown = {}): Promise<unknown> {
     const response = await fetch(new URL(path, url), {
       method: 'POST',
