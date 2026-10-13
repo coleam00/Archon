@@ -65,12 +65,13 @@ function createSetupExecutor(
         workingPath: input.workingPath,
         ...attribution,
       };
-      const started = Date.now();
       await emit({
         ...identity,
         type: 'worktree_setup_started',
         message: `Worktree setup ${commandIndex + 1} started: ${safeCommand}`,
       });
+      // After the audit write: the timeout checks below measure the command alone.
+      const started = Date.now();
       let result: Awaited<ReturnType<typeof runSubprocess>>;
       try {
         result = await runSubprocess({ kind: 'host' }, resolveBashPath(), ['-c', command], {
