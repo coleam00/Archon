@@ -6,7 +6,7 @@
  * facts only -- the engine's checkout observations and git objects -- never the
  * project's layout or toolchain.
  *
- * Three ways to pass, in order:
+ * Four ways to pass, in order:
  * 1. New content: some path's content, mode, or type differs from where THIS implement
  *    invocation started. The start is the engine's own observation of the implement
  *    node's invocation, bound as `baseline`. Changes that
@@ -24,9 +24,13 @@
  *    the rounds that already landed. What such a claim is worth is the green gates'
  *    question, not this one; the tolerance lives here only so a change that cannot
  *    exist stops being required.
+ * 4. An explained decline: no new content, not green, no failing check claimed, and a
+ *    summary saying why (a criterion no honest change can meet, a decision the run
+ *    cannot make). The run completes with green=false as its outcome; the spending
+ *    gates still refuse it, quoting the account.
  *
- * Red the loop introduced still fails with nothing to show, and so does red it left
- * unexplained or unevidenced -- the same bar the green gates hold, because a cause
+ * Red the loop introduced still fails with nothing to show, and so does a decline
+ * with no summary or a passable cause with no evidence -- the same bar the green gates hold, because a cause
  * with no failing check named behind it is not a reason. A green claim with neither
  * new content nor a branch lead fails too.
  *
@@ -314,6 +318,18 @@ function decide(): Decision {
     };
   }
 
+  // 4. An explained decline: not green, nothing changed, no failing check claimed,
+  // and the summary says why (seen live: a criterion no honest change could meet,
+  // left for its owner to decide). That is the run's outcome, not a crash: the
+  // implement run completes with green=false, and every gate that spends on the
+  // verdict still refuses non-green work, quoting this account. Failing here only
+  // replaced the agent's reason with a message about unchanged paths.
+  if (green === 'false' && declaredCause === '' && summary !== '') {
+    return {
+      shown: `no new changes this run; implement declined without claiming a red check: ${summary}`,
+    };
+  }
+
   return {
     refusal:
       (unknownReason !== undefined
@@ -324,7 +340,7 @@ function decide(): Decision {
       `(green=${green || 'unknown'}, red_cause=${declaredCause || 'unknown'}).\n` +
       'Nothing to show is only acceptable on red the change did not cause -- declared ' +
       `${PASSES_RED.join(' or ')}, with the failing check named in the summary. Red the ` +
-      'change introduced, red nobody explained, and a cause with no evidence behind it ' +
+      'change introduced, a decline with no summary, and a cause with no evidence behind it ' +
       'fail here rather than reporting success.',
   };
 }
