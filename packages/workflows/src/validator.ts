@@ -29,7 +29,11 @@ import {
   skillSearchRoots,
 } from '@archon/paths/skills';
 import { compileOutputSchema } from './structured-output';
-import { findStrictSchemaIssues, isObjectSchemaNode } from '@archon/provider-contract';
+import {
+  findStrictSchemaIssues,
+  isObjectSchemaNode,
+  mcpServerMap,
+} from '@archon/provider-contract';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -666,17 +670,16 @@ export async function validateWorkflowResources(
           });
         }
       } else {
-        // File exists — check it's valid JSON
         try {
           const content = await readFile(mcpPath, 'utf-8');
-          const parsed = JSON.parse(content);
-          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          const serverMap = mcpServerMap(JSON.parse(content));
+          if (!serverMap.ok) {
             issues.push({
               level: 'error',
               nodeId: node.id,
               field: 'mcp',
-              message: `MCP config file '${mcp.path}' must be a JSON object (Record<string, ServerConfig>)`,
-              hint: 'The file should contain a JSON object where each key is a server name',
+              message: `${serverMap.error}: '${mcp.path}'`,
+              hint: 'The file should contain a JSON object where each key is a server name, optionally wrapped as { "mcpServers": { ... } }',
             });
           }
         } catch (e) {

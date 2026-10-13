@@ -79,7 +79,7 @@ import type {
   ExecutionContext,
 } from '@archon/provider-contract';
 import type { OverlayChangeSummary } from './container-context';
-import { mergeTokenUsage } from '@archon/provider-contract';
+import { mcpServerMap, mergeTokenUsage } from '@archon/provider-contract';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
@@ -602,13 +602,9 @@ function applyPresetOptions(
 }
 
 /**
- * The server names an MCP config file declares, unwrapping the `{ "mcpServers": … }`
- * form the same way the providers' `loadMcpConfig` does (a conformance test holds the
- * two together; `@archon/providers` is not a runtime dependency of this package).
- *
- * `missing` is set only for ENOENT. Any other read or parse failure leaves `servers`
- * undefined and is debug-logged: the provider owns full loading and reports a broken
- * file itself.
+ * The server names an MCP config file declares. `missing` is set only for ENOENT. Any
+ * other read, parse or shape failure leaves `servers` undefined and is debug-logged:
+ * the provider owns full loading and reports a broken file itself.
  */
 async function readMcpServerNames(
   fullPath: string
@@ -621,24 +617,19 @@ async function readMcpServerNames(
     getLog().debug({ err, fullPath }, 'dag.mcp_config_read_failed');
     return { missing: false };
   }
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!isPlainRecord(parsed)) return { missing: false };
-    const keys = Object.keys(parsed);
-    if (keys.length === 1 && keys[0] === 'mcpServers') {
-      return isPlainRecord(parsed.mcpServers)
-        ? { missing: false, servers: Object.keys(parsed.mcpServers) }
-        : { missing: false };
-    }
-    return { missing: false, servers: keys };
+    parsed = JSON.parse(raw);
   } catch (err) {
     getLog().debug({ err, fullPath }, 'dag.mcp_config_read_failed');
     return { missing: false };
   }
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  const serverMap = mcpServerMap(parsed);
+  if (!serverMap.ok) {
+    getLog().debug({ error: serverMap.error, fullPath }, 'dag.mcp_config_read_failed');
+    return { missing: false };
+  }
+  return { missing: false, servers: Object.keys(serverMap.servers) };
 }
 
 /** What a node's `mcp:` declaration hands its provider for one attempt. */

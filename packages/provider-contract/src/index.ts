@@ -118,6 +118,8 @@ export {
 
 export { buildProviderSubprocessEnv } from './agent-provider';
 
+export { mcpServerMap, type McpServerMap } from './mcp-config';
+
 export {
   providerDiagnosticsSchema,
   providerModelListSchema,

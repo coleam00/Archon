@@ -21124,18 +21124,6 @@ describe('resolveNodeMcp', () => {
       servers: new Set(),
     });
   });
-
-  it.each([
-    ['a direct server map', { foo: { command: 'x' }, bar: { command: 'y' } }],
-    ['the mcpServers wrapper', { mcpServers: { foo: { command: 'x' }, bar: { command: 'y' } } }],
-  ])('names the same servers as the provider loader for %s', async (_label, config) => {
-    const { resolveNodeMcp } = await import('./dag-executor');
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
-    const result = await resolveNodeMcp('mcp.json', claude, testDir);
-    const loaded = await loadMcpConfig('mcp.json', testDir);
-    expect(result.kind === 'load' ? [...result.servers] : []).toEqual(loaded.serverNames);
-    expect(loaded.serverNames.sort()).toEqual(['bar', 'foo']);
-  });
 });
 
 // ---------------------------------------------------------------------------
