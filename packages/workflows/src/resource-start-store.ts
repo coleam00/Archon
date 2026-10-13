@@ -1,3 +1,4 @@
+import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
   ResourceStartBindingIntent,
@@ -5,6 +6,8 @@ import type {
   ResourceStartIntent,
   SourceReceiptInput,
   SourceReceiptAcceptance,
+  startBindingPreparationStatusSchema,
+  resourceStartRequestStatusSchema,
 } from './schemas/resource-start';
 import type { WorkflowRunStatus } from './schemas/workflow-run';
 
@@ -28,7 +31,7 @@ export interface StartBindingInspection {
   bindingId: string;
   bindingRevision: string | null;
   hostId: string | null;
-  status: 'pending' | 'preparing' | 'failed' | 'rejected' | 'unmatched' | 'complete';
+  status: z.infer<typeof startBindingPreparationStatusSchema>;
   ownerId: string | null;
   error: string | null;
   intent: ResourceStartBindingIntent | null;
@@ -54,7 +57,7 @@ export interface ResourceStartRequestInspection {
   resource: string;
   hostId: string;
   overlap: ResourceStartIntent['overlap'];
-  status: ResourceStartDisposition['status'] | 'withdrawn';
+  status: z.infer<typeof resourceStartRequestStatusSchema>;
   runStatus: WorkflowRunStatus | null;
   blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker'] | null;
   blockerRunStatus: WorkflowRunStatus | null;

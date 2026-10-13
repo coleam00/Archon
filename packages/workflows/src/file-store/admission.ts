@@ -7,6 +7,10 @@ import { isOwnerProvablyGone, type ProcessOwner } from '@archon/paths/process-ow
 import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
+  resourceStartOverlapSchema,
+  resourceStartRequestStatusSchema,
+  startBindingPreparationStatusSchema,
+  sourceReceiptOutcomeSchema,
   resourceStartBindingIntentSchema,
   resourceStartDispositionSchema,
   sourceReceiptInputSchema,
@@ -22,7 +26,7 @@ import {
   type StartBindingInspection,
   type ResourceStartRequestInspection,
 } from '../resource-start-store';
-import { WorkflowResourceBusyError } from '../store';
+import { WorkflowNotResumableError, WorkflowResourceBusyError } from '../store';
 import { commit, readJson, readSnapshot, recoverBeforeRead } from './commit';
 import { createTransactionView } from './transaction-view';
 
@@ -44,8 +48,8 @@ const requestSchema = z.object({
   id: z.string(),
   resource: z.string(),
   hostId: z.string(),
-  overlap: z.enum(['skip', 'queue']),
-  status: z.enum(['admitted', 'queued', 'skipped', 'withdrawn']),
+  overlap: resourceStartOverlapSchema,
+  status: resourceStartRequestStatusSchema,
   blocker: resourceStartDispositionSchema.options[1].shape.blocker.nullable(),
   launch: preparedWorkflowLaunchSchema,
   position: z.number().int().nonnegative(),
@@ -55,7 +59,7 @@ const bindingSchema = z.object({
   bindingId: z.string(),
   bindingRevision: z.string().nullable(),
   hostId: z.string().nullable(),
-  status: z.enum(['pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete']),
+  status: startBindingPreparationStatusSchema,
   ownerId: z.string().nullable(),
   error: z.string().nullable(),
   intent: resourceStartBindingIntentSchema.nullable(),
@@ -64,7 +68,7 @@ const bindingSchema = z.object({
 const bindingInspectionSchema = bindingSchema.omit({ requestIds: true });
 const receiptFieldsSchema = sourceReceiptInputSchema.strip();
 const receiptSchema = sourceReceiptInputSchema.extend({
-  outcome: z.enum(['matched', 'unmatched', 'unsupported', 'malformed']),
+  outcome: sourceReceiptOutcomeSchema,
   reason: z.string().nullable(),
   bindings: z.array(bindingSchema),
   createdAt: z.string(),
@@ -219,7 +223,9 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
   }
   async function resume(run: WorkflowRun): Promise<void> {
     const row = await request(run.id);
-    if (row?.status !== 'admitted' || (run.status !== 'failed' && run.status !== 'paused')) return;
+    if (row?.status !== 'admitted') return;
+    if (run.status !== 'failed' && run.status !== 'paused')
+      throw new WorkflowNotResumableError(run.id, run.status);
     const resource = await live(row.resource);
     const others = resource.holders.filter(holder => holder.id !== run.id);
     if (others.length >= resource.capacity && others[0])

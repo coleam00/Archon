@@ -179,7 +179,7 @@ export function createInMemoryResourceStartStore(
     ): ReturnType<IResourceStartStore['listStartReceipts']> =>
       structuredClone(
         [...receipts.values()]
-          .reverse()
+          .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt) || b.id.localeCompare(a.id))
           .slice(0, validateStartReceiptLimit(limit))
           .map(({ id, sourceInstanceId, deliveryId, outcome, reason, receivedAt }) => ({
             id,

@@ -1,10 +1,11 @@
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { randomUUID } from 'node:crypto';
-import type {
-  IWorkflowStore,
-  WorkflowNodeSession,
-  WorkflowRunNodeSession,
+import {
+  WorkflowNotResumableError,
+  type IWorkflowStore,
+  type WorkflowNodeSession,
+  type WorkflowRunNodeSession,
 } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
@@ -210,7 +211,14 @@ export function createInMemoryWorkflowStore(
     updateWorkflowActivity: id => write(view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write(view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
-    resumeWorkflowRun: (id, cursor) => write(view => view.resumeWorkflowRun(id, cursor)),
+    resumeWorkflowRun: (id, cursor) =>
+      write(async view => {
+        const run = await view.getWorkflowRun(id);
+        const request = await admission.getResourceStartRequest(id);
+        if (request?.status === 'admitted' && run?.status !== 'failed' && run?.status !== 'paused')
+          throw new WorkflowNotResumableError(id, run?.status ?? 'missing');
+        return view.resumeWorkflowRun(id, cursor);
+      }),
     recoverCancelledFanOutRun: id => write(view => view.recoverCancelledFanOutRun(id)),
     pauseWorkflowRun: (id, approval, extra, suspension) =>
       write(view => view.pauseWorkflowRun(id, approval, extra, suspension)),

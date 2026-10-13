@@ -30,7 +30,10 @@ import { terminalRecordSchema } from './schemas/terminal-record';
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
-  backdate(runId: string, dates: { started_at?: Date; last_activity_at?: Date }): Promise<void>;
+  backdate(
+    runId: string,
+    dates: { started_at?: Date; last_activity_at?: Date | null }
+  ): Promise<void>;
   terminalReports(): string[];
   close(): Promise<void>;
 }
@@ -235,6 +238,45 @@ export function describeWorkflowStoreConformance(
       expect(
         await rejection(harness.store.admitResourceStart(start('queue', 'host', 2)))
       ).toBeInstanceOf(ResourceSlotCapacityConflictError);
+    });
+    for (const activity of ['null', 'stale'] as const) {
+      test(`admitted running runs cannot resume with ${activity} activity`, async () => {
+        const intent = start();
+        const id = intent.launch.run.id;
+        await store.admitResourceStart(intent);
+        await store.updateWorkflowRun(id, { status: 'running' });
+        await harness.backdate(id, {
+          last_activity_at: activity === 'null' ? null : new Date('2020-01-01T00:00:00Z'),
+        });
+        const before = await store.getWorkflowRun(id);
+        expect(before?.last_activity_at).toEqual(
+          activity === 'null' ? null : new Date('2020-01-01T00:00:00Z')
+        );
+        const events = await store.listWorkflowEvents(id);
+        expect(await rejection(store.resumeWorkflowRun(id))).toBeInstanceOf(
+          WorkflowNotResumableError
+        );
+        expect(await store.getWorkflowRun(id)).toEqual(before);
+        expect(await store.listWorkflowEvents(id)).toEqual(events);
+      });
+    }
+    test('receipt listing orders by newest timestamp then ID before limiting', async () => {
+      const receipts = [
+        { id: '00000000-0000-4000-8000-000000000002', receivedAt: '2026-01-02T00:00:00.000Z' },
+        { id: '00000000-0000-4000-8000-000000000003', receivedAt: '2026-01-01T00:00:00.000Z' },
+        { id: '00000000-0000-4000-8000-000000000001', receivedAt: '2026-01-02T00:00:00.000Z' },
+      ];
+      for (const receipt of receipts) {
+        const input = acceptance();
+        await store.acceptStartReceipt({
+          ...input,
+          receipt: { ...input.receipt, ...receipt, deliveryId: receipt.id },
+        });
+      }
+      expect((await store.listStartReceipts(2)).map(row => row.id)).toEqual([
+        receipts[0].id,
+        receipts[2].id,
+      ]);
     });
     test('capacity admits multiple holders and drain fills every released slot in FIFO order', async () => {
       const intents = Array.from({ length: 5 }, () => start('queue', 'host', 2));

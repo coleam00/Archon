@@ -1,5 +1,11 @@
 // @archon-test-isolated
 import { describe, test, expect, afterEach, spyOn } from 'bun:test';
+import {
+  resourceStartOverlapSchema,
+  resourceStartRequestStatusSchema,
+  startBindingPreparationStatusSchema,
+  sourceReceiptOutcomeSchema,
+} from '@archon/workflows/schemas/resource-start';
 import { SqliteAdapter } from './sqlite';
 import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION, readSchemaVersion } from '../schema-version';
@@ -876,6 +882,50 @@ describe('SqliteAdapter', () => {
       db = createTestDb();
       expect(raw_pragma(currentDbPath, 'remote_agent_workflow_runs')).toContain('output_root');
       expect(getSchemaSQL()).toContain('output_root');
+    });
+
+    test('admission CHECK vocabularies match their owning schemas in both dialects', async () => {
+      db = createTestDb();
+      const checks = [
+        {
+          table: 'remote_agent_start_receipts',
+          column: 'outcome',
+          values: sourceReceiptOutcomeSchema.options,
+        },
+        {
+          table: 'remote_agent_start_receipt_bindings',
+          column: 'preparation_status',
+          values: startBindingPreparationStatusSchema.options,
+        },
+        {
+          table: 'remote_agent_resource_start_requests',
+          column: 'overlap_policy',
+          values: resourceStartOverlapSchema.options,
+        },
+        {
+          table: 'remote_agent_resource_start_requests',
+          column: 'status',
+          values: resourceStartRequestStatusSchema.options.map(option => option.value),
+        },
+      ];
+      const postgres = stripSqlComments(getSchemaSQL());
+      for (const { table, column, values } of checks) {
+        const sqlite = await db.query<{ sql: string }>(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = $1",
+          [table]
+        );
+        const declaration = new RegExp(
+          `CREATE TABLE(?:\\s+IF NOT EXISTS)?\\s+${table}\\s*\\(`
+        ).exec(postgres);
+        if (!declaration) throw new Error(`Missing Postgres table ${table}`);
+        const pgBody = readBalancedParens(postgres, declaration.index + declaration[0].length - 1);
+        for (const body of [sqlite.rows[0]?.sql, pgBody]) {
+          const constraint = new RegExp(`${column} IN \\(([^)]+)\\)`).exec(body ?? '');
+          expect(constraint).not.toBeNull();
+          const stored = [...(constraint?.[1] ?? '').matchAll(/'([^']+)'/g)].map(match => match[1]);
+          expect(stored.sort()).toEqual([...values].sort());
+        }
+      }
     });
 
     test('authored outcome is nullable and constrained identically in both schema sources', async () => {
