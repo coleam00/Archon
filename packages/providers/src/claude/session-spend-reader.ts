@@ -67,7 +67,8 @@ export async function readSessionSpendBaseline(
           args,
           {
             timeout: 60_000,
-            maxBuffer: 16 * 1024 * 1024,
+            // Match the host readFile path: long transcripts routinely exceed a fixed cap.
+            maxBuffer: Infinity,
             signal: input.signal,
           },
           (error, stdout) => (error ? reject(error) : resolve(stdout))
