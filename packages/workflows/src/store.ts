@@ -298,6 +298,7 @@ export const FAN_OUT_CANCEL_REASONS = [
   'fan_out_gate',
   'fan_out_sibling',
   'fan_out_orphan',
+  'fan_out_checkout_check',
 ] as const;
 export type FanOutCancelReason = (typeof FAN_OUT_CANCEL_REASONS)[number];
 

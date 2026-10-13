@@ -2320,6 +2320,15 @@ export async function executeWorkflow(
   // Skipped when `workflow.mutates_checkout` is false — the author asserts
   // that concurrent runs will not race (e.g. all writes are per-run-scoped).
   //
+  // Excluded from the lock: this run's ancestors and descendants, which share its
+  // checkout by construction (#2121), and its fan-out siblings — children of the same
+  // parent and `fan_out` node on the same path — plus their descendants (#2777). The
+  // walk repeats for every ancestor that is itself a fan-out child, so a grandchild
+  // does not collide with its parent's siblings in a nested fan-out. Sharing is the
+  // author's choice; agents coordinate their own edits, and every sibling pair is
+  // recorded as `workflow.checkout_shared` events. A fan-out child still runs this
+  // block under `mutates_checkout: false`, only to record those events.
+  //
   // Runs after workflowRun is finalized (pre-created, resumed, or freshly
   // created) so we always have self-ID + started_at for the deterministic
   // older-wins tiebreaker. The query treats `pending` rows older than 5 min
@@ -2472,8 +2481,12 @@ export async function executeWorkflow(
       );
       // Even if notification delivery failed, release this run's lock token.
       // A rejected cleanup must escape rather than become an ordinary guard result.
+      // A fan-out child is cancelled with a fan-out reason so the parent's resume
+      // re-drives it; an untagged cancel reads as a user's and is never re-run (#2180).
       await requireTerminalStatusWrite(
-        deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
+        subrun.childIndex !== undefined
+          ? deps.store.cancelFanOutRun(workflowRun.id, 'fan_out_checkout_check')
+          : deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
         {
           workflowRunId: workflowRun.id,
           site: 'executor.guard_query_failure_cleanup',

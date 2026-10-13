@@ -7825,6 +7825,8 @@ async function executeWorkflowNode(
  * ITSELF (so the cancel is attributable and — unlike a user's out-of-band cancel —
  * recoverable on resume). `fan_out_gate`: a child paused at a gate (#2180).
  * `fan_out_orphan`: a child whose `child_index` fell out of range when the item list shrank.
+ * `fan_out_checkout_check`: a child whose path-lock or checkout-sharing store access failed
+ * before it ran any node (executor.ts).
  *
  * `fan_out_sibling` is READ-ONLY legacy. It marked an in-flight sibling cancelled once an
  * earlier revision's fail-fast sealed the node's fate; nothing writes it any more, because a

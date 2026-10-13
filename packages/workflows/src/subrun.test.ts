@@ -193,7 +193,11 @@ import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import { waitCompletionEvents, WorkflowRunPauseConflictError } from './store';
+import {
+  FAN_OUT_CANCEL_REASONS,
+  waitCompletionEvents,
+  WorkflowRunPauseConflictError,
+} from './store';
 import {
   readRunDispatchMetadata,
   type WorkflowRun,
@@ -418,11 +422,7 @@ class InMemoryStore implements IWorkflowStore {
   recoverCancelledFanOutRun = (id: string): Promise<WorkflowRun> => {
     const r = this.runs.get(id);
     const reason = r?.metadata.cancelled_reason;
-    if (
-      !r ||
-      r.status !== 'cancelled' ||
-      (reason !== 'fan_out_gate' && reason !== 'fan_out_sibling' && reason !== 'fan_out_orphan')
-    ) {
+    if (!r || r.status !== 'cancelled' || !FAN_OUT_CANCEL_REASONS.some(known => known === reason)) {
       throw new Error(`run ${id} is not recoverable`);
     }
     r.status = 'running';
@@ -3671,6 +3671,62 @@ nodes:
     },
     testTimeout(20000)
   );
+
+  it('a child blocked by a failed checkout-sharing write is re-driven when the parent resumes', async () => {
+    await writeWorkflow('fan-child', fanChildEcho);
+    await writeWorkflow(
+      'fan-audit-resume',
+      `
+name: fan-audit-resume
+description: a store failure before the child runs must not cancel it for good
+nodes:
+  - id: plan
+    bash: printf '%s' '["alpha","beta"]'
+  - id: work
+    workflow: fan-child
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+      join: all_success
+`
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-audit-resume');
+    const persist = store.persistWorkflowEvent;
+    let failSharing = true;
+    store.persistWorkflowEvent = async event => {
+      if (failSharing && event.event_type === 'workflow.checkout_shared') {
+        throw new Error('sharing INSERT rejected');
+      }
+      await persist(event);
+    };
+    const first = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
+    expect(first.success).toBe(false);
+    const blocked = [...store.runs.values()].find(
+      run => run.parent_run_id === first.workflowRunId && run.status === 'cancelled'
+    );
+    expect(blocked?.metadata.cancelled_reason).toBe('fan_out_checkout_check');
+
+    failSharing = false;
+    const parentRun = (await store.getWorkflowRun(first.workflowRunId!))!;
+    const hydrated = await hydrateResumableRun(deps, parentRun);
+    const resumed = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      { conversationId: 'conv-db' },
+      hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }
+    );
+    expect(resumed.success).toBe(true);
+    expect((await store.getWorkflowRun(blocked!.id))?.status).toBe('completed');
+  });
 
   it('an orphan-cancelled index is re-driven on resume, not left permanently cancelled', async () => {
     // `fan_out_orphan` is stamped by the ENGINE when the item list shrinks under a child.
