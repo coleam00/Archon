@@ -6,10 +6,8 @@
  * conversation therefore does not move the run — it just sends the resumed segment
  * somewhere the run never references, and the run's own thread stops at the pause.
  *
- * These spawn the real CLI against a scratch `ARCHON_HOME` because the observable
- * outcome is rows: one run, one conversation, across a resume. An in-process test of
- * the options object would assert the call shape instead, which is the thing that was
- * already "correct" at three other sites while this one silently was not.
+ * Foreground commands execute against real SQLite. Detached handoffs keep the CLI
+ * process boundary so the child's conversation routing stays under test.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -18,7 +16,15 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { findRepoRoot } from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
+import {
+  workflowRunCommand,
+  workflowResumeCommand,
+  workflowApproveCommand,
+  type WorkflowRunOptions,
+} from './workflow';
+import { captureWorkflowCommand } from '../test-support/command';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
 const CLI_ENTRY = join(import.meta.dir, '..', 'cli.ts');
@@ -86,6 +92,25 @@ function runCli(fixture: Fixture, args: string[]): { status: number | null; outp
     env: { ...process.env, ARCHON_HOME: fixture.archonHome, ARCHON_TELEMETRY_DISABLED: '1' },
   });
   return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
+}
+
+// The run's working path must be the string the CLI derives from `--cwd`, because
+// `--resume` looks the run up by exact path. The CLI uses git's toplevel, which on
+// Windows differs from realpath (separators, 8.3 short names under %TEMP%).
+async function runForeground(fixture: Fixture, name: string, options: WorkflowRunOptions = {}) {
+  const cwd = (await findRepoRoot(fixture.repo)) ?? fixture.repo;
+  return captureWorkflowCommand(fixture.archonHome, async host =>
+    workflowRunCommand(host, cwd, name, '', {
+      noWorktree: true,
+      ...options,
+    })
+  );
+}
+
+async function resumeForeground(fixture: Fixture, id: string) {
+  return captureWorkflowCommand(fixture.archonHome, host =>
+    workflowResumeCommand(host, id, false, fixture.repo)
+  );
 }
 
 interface ThreadState {
@@ -230,15 +255,8 @@ function countConversations(fixture: Fixture): number {
 }
 
 /** Seed a failed run, optionally attaching chat provenance for same-thread checks. */
-function seedFailedRun(fixture: Fixture, chatOrigin = true): ThreadState {
-  const first = runCli(fixture, [
-    'workflow',
-    'run',
-    WORKFLOW_NAME,
-    '--cwd',
-    fixture.repo,
-    '--no-worktree',
-  ]);
+async function seedFailedRun(fixture: Fixture, chatOrigin = true): Promise<ThreadState> {
+  const first = await runForeground(fixture, WORKFLOW_NAME);
   // The node must genuinely execute and fail here. A non-zero status alone would also
   // accept the workflow never loading, which leaves nothing for a resume to continue.
   expect(first.output).toContain('boom');
@@ -327,12 +345,12 @@ function expectResumedInPlace(after: ThreadState, before: ThreadState): void {
 }
 
 describe('resumed runs keep one conversation', () => {
-  test('a continuation stops when its recorded conversation is missing', () => {
+  test('a continuation stops when its recorded conversation is missing', async () => {
     const fixture = makeFixture();
-    const before = seedFailedRun(fixture);
+    const before = await seedFailedRun(fixture);
     removeRecordedConversation(fixture, before.runConversationId);
 
-    const resumed = runCli(fixture, ['workflow', 'resume', before.runId, '--cwd', fixture.repo]);
+    const resumed = await resumeForeground(fixture, before.runId);
     expect(resumed.status).not.toBe(0);
     expect(resumed.output).toContain(
       `Conversation '${before.runConversationId}' for workflow run '${before.runId}' no longer exists.`
@@ -342,17 +360,11 @@ describe('resumed runs keep one conversation', () => {
 
   // A run created without provenance has no thread to continue. The resume stays
   // headless instead of inventing a CLI conversation and writing history into it.
-  test('workflow resume <run-id> of an origin-free run creates no conversation', () => {
+  test('workflow resume <run-id> of an origin-free run creates no conversation', async () => {
     const fixture = makeFixture();
-    seedFailedRun(fixture, false);
+    await seedFailedRun(fixture, false);
 
-    const resumed = runCli(fixture, [
-      'workflow',
-      'resume',
-      '--cwd',
-      fixture.repo,
-      readThreadState(fixture).runId,
-    ]);
+    const resumed = await resumeForeground(fixture, readThreadState(fixture).runId);
     expect(resumed.output).toContain("Bash node 'boom' failed");
 
     const after = readThreadState(fixture);
@@ -363,9 +375,9 @@ describe('resumed runs keep one conversation', () => {
 
   test('workflow resume <run-id> continues the run existing thread', async () => {
     const fixture = makeFixture();
-    const before = seedFailedRun(fixture);
+    const before = await seedFailedRun(fixture);
 
-    const resumed = runCli(fixture, ['workflow', 'resume', before.runId, '--cwd', fixture.repo]);
+    const resumed = await resumeForeground(fixture, before.runId);
     // The resume re-executes the failed node, so it fails again — the run stays in the
     // same state it started in and the only thing under test is where the output went.
     expect(resumed.output).toContain("Bash node 'boom' failed");
@@ -380,17 +392,9 @@ describe('resumed runs keep one conversation', () => {
 
   test('workflow run <name> --resume continues the run existing thread', async () => {
     const fixture = makeFixture();
-    const before = seedFailedRun(fixture);
+    const before = await seedFailedRun(fixture);
 
-    const resumed = runCli(fixture, [
-      'workflow',
-      'run',
-      WORKFLOW_NAME,
-      '--cwd',
-      fixture.repo,
-      '--no-worktree',
-      '--resume',
-    ]);
+    const resumed = await runForeground(fixture, WORKFLOW_NAME, { resume: true });
     expect(resumed.output).toContain("Bash node 'boom' failed");
 
     expectResumedInPlace(readThreadState(fixture), before);
@@ -401,7 +405,7 @@ describe('resumed runs keep one conversation', () => {
   // the conversation. Nothing else here would catch that pin carrying a fresh id.
   test('workflow run <name> --resume --detach hands the child the run existing thread', async () => {
     const fixture = makeFixture();
-    const before = seedFailedRun(fixture);
+    const before = await seedFailedRun(fixture);
     // Read before the launch: nothing is writing yet, and the thread the ack must name
     // is already decided.
     const platformConversationId = readPlatformConversationId(fixture, before.runConversationId);
@@ -432,7 +436,7 @@ describe('resumed runs keep one conversation', () => {
 
   test('workflow resume <run-id> --detach keeps the child in the run existing thread', async () => {
     const fixture = makeFixture();
-    const before = seedFailedRun(fixture);
+    const before = await seedFailedRun(fixture);
 
     const launched = runCli(fixture, [
       'workflow',
@@ -470,12 +474,12 @@ interface RunRow {
 }
 
 /** Add a workflow to the fixture repo and run it once in the foreground. */
-function seedRun(fixture: Fixture, name: string, nodes: string[]): RunRow {
+async function seedRun(fixture: Fixture, name: string, nodes: string[]): Promise<RunRow> {
   writeFileSync(
     join(fixture.repo, '.archon', 'workflows', `${name}.yaml`),
     [`name: ${name}`, 'description: origin-free continuation', 'nodes:', ...nodes, ''].join('\n')
   );
-  runCli(fixture, ['workflow', 'run', name, '--cwd', fixture.repo, '--no-worktree']);
+  await runForeground(fixture, name);
   return readRun(fixture, name);
 }
 
@@ -516,9 +520,9 @@ function expectNoConversation(fixture: Fixture): void {
 // Every CLI continuation entry point resolves the same destination, so each must stay
 // headless for a run created without provenance.
 describe('origin-free continuations stay headless', () => {
-  test('workflow approve continues an origin-free run without a conversation', () => {
+  test('workflow approve continues an origin-free run without a conversation', async () => {
     const fixture = makeFixture();
-    const seeded = seedRun(fixture, 'approve-origin-free', [
+    const seeded = await seedRun(fixture, 'approve-origin-free', [
       '  - id: review',
       '    approval:',
       '      message: Approve?',
@@ -528,18 +532,20 @@ describe('origin-free continuations stay headless', () => {
     ]);
     expect(seeded.status).toBe('paused');
 
-    const approved = runCli(fixture, ['workflow', 'approve', seeded.id, '--cwd', fixture.repo]);
+    const approved = await captureWorkflowCommand(fixture.archonHome, host =>
+      workflowApproveCommand(host, seeded.id, undefined, false, fixture.repo)
+    );
     expect(approved.status).toBe(0);
     expect(readRun(fixture, 'approve-origin-free').status).toBe('completed');
     expectNoConversation(fixture);
   }, 120_000);
 
   // The owner resumes its own durable wait under the destination it already resolved.
-  test('a durable wait resumed by its owner keeps an origin-free run headless', () => {
+  test('a durable wait resumed by its owner keeps an origin-free run headless', async () => {
     const fixture = makeFixture();
     const marker = join(fixture.repo, 'gate-open');
     // A resume needs a completed node to skip, so `warmup` precedes the failing gate.
-    const seeded = seedRun(fixture, 'wait-origin-free', [
+    const seeded = await seedRun(fixture, 'wait-origin-free', [
       '  - id: warmup',
       '    bash: echo warm',
       '  - id: gate',
@@ -556,7 +562,7 @@ describe('origin-free continuations stay headless', () => {
     expect(seeded.status).toBe('failed');
     writeFileSync(marker, '');
 
-    const resumed = runCli(fixture, ['workflow', 'resume', seeded.id, '--cwd', fixture.repo]);
+    const resumed = await resumeForeground(fixture, seeded.id);
     expect(resumed.output).toContain('this process resumes the run at its deadline');
     expect(resumed.status).toBe(0);
     expect(readRun(fixture, 'wait-origin-free').status).toBe('completed');
@@ -565,7 +571,7 @@ describe('origin-free continuations stay headless', () => {
 
   test('workflow resume --detach hands an origin-free run to the child without a conversation', async () => {
     const fixture = makeFixture();
-    const before = seedFailedRun(fixture, false);
+    const before = await seedFailedRun(fixture, false);
 
     const launched = runCli(fixture, [
       'workflow',

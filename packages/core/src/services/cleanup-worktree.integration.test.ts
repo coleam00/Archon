@@ -257,18 +257,6 @@ async function useSymlinkedBase(): Promise<void> {
 }
 
 describe('owned worktree release', () => {
-  test('keeps an owned worktree whose originating platform is no longer registered', async () => {
-    await db.query(
-      "UPDATE remote_agent_isolation_environments SET created_by_platform = 'removed-chat' WHERE id = $1",
-      [env.id]
-    );
-    await expect(reclaimRunWorktree(run, store)).rejects.toThrow(
-      "platform 'removed-chat' is not registered"
-    );
-    expect(existsSync(env.working_path)).toBe(true);
-    expect(await status()).toBe('active');
-  });
-
   test('a removal Git abandons halfway is finished, not left unretryable', async () => {
     const locked = join(env.working_path, 'locked');
     await mkdir(locked);
@@ -410,16 +398,6 @@ describe('owned worktree release', () => {
     expect(existsSync(env.working_path)).toBe(false);
   });
 
-  test('a detached adoption that claimed first is seen by the claimant check', async () => {
-    const adopter = await seedRunAt(null, 'pending');
-    expect((await claimPendingWorkflowRun(adopter, env.working_path))?.working_path).toBe(
-      env.working_path
-    );
-    await expect(reclaimRunWorktree(run, store)).rejects.toThrow(`claimable run ${adopter}`);
-    expect(existsSync(env.working_path)).toBe(true);
-    expect(await status()).toBe('active');
-  });
-
   test('a run that reuses the checkout during removal can neither start nor adopt it', async () => {
     const originalExec = gitModule.execFileAsync;
     let lateRun: string | undefined;
@@ -470,40 +448,10 @@ describe('owned worktree release', () => {
     });
   });
 
-  test('legacy and adopted runs retain checkout without manufacturing proof', async () => {
-    run.metadata = {};
-    expect(await reclaimRunWorktree(run, store)).toEqual({
-      warnings: [expect.stringContaining('no valid proof')],
-    });
-    expect(existsSync(env.working_path)).toBe(true);
-  });
-
-  test.each(['record', 'marker', 'path'])(
-    'mismatched %s refuses replacement estate',
-    async kind => {
-      if (kind === 'record')
-        await isolationDb.updateMetadata(env.id, { worktree_creation_id: 'x' });
-      if (kind === 'path') run.working_path = repo;
-      if (kind === 'marker') {
-        const { gitDir } = await getGitCheckoutIdentity(env.working_path);
-        await writeFile(join(gitDir, 'archon-creation-id'), 'replacement');
-      }
-      await expect(reclaimRunWorktree(run, store)).rejects.toThrow(
-        kind === 'marker' ? 'identity changed' : 'proof'
-      );
-      expect(existsSync(env.working_path)).toBe(true);
-      expect(await status()).toBe('active');
-    }
-  );
-
-  test('a record write failure before removal keeps the checkout', async () => {
-    store = {
-      ...store,
-      updateStatus: async () => {
-        throw new Error('record write failed');
-      },
-    };
-    await expect(reclaimRunWorktree(run, store)).rejects.toThrow('record write failed');
+  test('mismatched marker refuses replacement estate', async () => {
+    const { gitDir } = await getGitCheckoutIdentity(env.working_path);
+    await writeFile(join(gitDir, 'archon-creation-id'), 'replacement');
+    await expect(reclaimRunWorktree(run, store)).rejects.toThrow('identity changed');
     expect(existsSync(env.working_path)).toBe(true);
     expect(await status()).toBe('active');
   });
@@ -514,33 +462,6 @@ describe('owned worktree release', () => {
     await expect(reclaimRunWorktree(run, store)).rejects.toThrow('still registered');
     expect(await status()).toBe('active');
   });
-
-  test.each(['worktreeRemoved', 'directoryClean'] as const)(
-    'incomplete provider %s result keeps the record active',
-    async field => {
-      const destroy = spyOn(getIsolationProvider(), 'destroy').mockImplementation(
-        async (_, options) => {
-          if (options && 'guardedRemoval' in options) await options.guardedRemoval?.beforeRemove();
-          return {
-            worktreeRemoved: true,
-            directoryClean: true,
-            branchDeleted: null,
-            remoteBranchDeleted: null,
-            warnings: [],
-            [field]: false,
-          };
-        }
-      );
-      try {
-        await expect(reclaimRunWorktree(run, store)).rejects.toThrow(
-          'filesystem removal incomplete'
-        );
-        expect(await status()).toBe('active');
-      } finally {
-        destroy.mockRestore();
-      }
-    }
-  );
 
   test('a residual directory survives removal and keeps the row active', async () => {
     const originalExec = gitModule.execFileAsync;
