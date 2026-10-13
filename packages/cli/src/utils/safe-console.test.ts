@@ -1,44 +1,6 @@
 /**
- * Real-pipe regression tests for #2400 (piped human-readable `console.log`
- * silently truncates against a slow reader).
- *
- * ## Why these tests spawn a shell pipeline
- *
- * The bug only exists when fd 1 is a **non-blocking pipe**, which is what a
- * shell creates for `archon … | less`. The causal chain is identical to
- * `--json` truncation in #2384:
- *
- *  1. Importing `@archon/paths` builds the pino root logger, whose default
- *     destination opens fd 1 in non-blocking mode.
- *  2. On a non-blocking pipe a `console.log` call that exceeds the pipe's
- *     buffer can return a short count, and the stream drops the unwritten tail
- *     without error.
- *
- * That is why `> out.txt` always looked fine: a regular-file fd stays
- * blocking. PR #2389 routed every `--json` payload through `writeStdout`
- * (`utils/stdout.ts`) and closed that gap. #2400 is the symmetrical gap for
- * human-readable `console.log` calls, fixed by monkey-patching `console.log`
- * to delegate through the same `writeStdout` primitive (see
- * `utils/safe-console.ts`).
- *
- * `Bun.spawn` with `stdout: 'pipe'` does NOT reproduce the truncation, and
- * neither does mocking `process.stdout.write` — both replace the exact thing
- * that was broken. These tests therefore drive a genuine
- * `bun … workflow list | { sleep 0.5; cat; } > file` shell pipeline.
- *
- * ## Calibration (measured on macOS/arm64, bun 1.3.11)
- *
- * The payload size and consumer pattern below are not arbitrary. Against the
- * pre-fix code, a ~1.07 MB `workflow list --full` payload piped to
- * `{ sleep 0.5; cat; }` truncated in 5/5 runs (delivery 89–96%). The same
- * harness against the patched code delivered 10/10 byte-identical to the
- * file redirect. The slow consumer (`sleep 0.5` before reading) is what makes
- * the truncation deterministic — a plain `cat` only truncates ~1% of runs at
- * this payload size because cat drains the pipe faster than the writer fills
- * it. Do not "simplify" the consumer back to plain `cat` without re-measuring
- * against a pre-fix build; the test would silently stop catching regressions.
- *
- * POSIX-only: Windows has no equivalent non-blocking-pipe path and no bash.
+ * Unit coverage for pipe-safe console error propagation. The real non-blocking
+ * pipe regressions live in stdout.test.ts.
  */
 import { describe, it, expect, afterAll } from 'bun:test';
 import { consumeWriteError, installPipeSafeConsole, restoreConsole } from './safe-console';
@@ -63,7 +25,7 @@ import { exitWithDrain } from './exit-with-drain';
 describe('safe-console + exit-with-drain — EPIPE unit contract (R5)', () => {
   const originalWrite = process.stdout.write.bind(process.stdout);
 
-  afterAll(async () => {
+  afterAll(() => {
     restoreConsole();
     // Restore process.stdout.write even if a test threw mid-flight so the
     // other test files in this run are not contaminated.
