@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { canonicalizeProjectPath } from '@archon/paths';
+import { findRepoRoot } from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
 import {
   workflowRunCommand,
@@ -94,9 +94,13 @@ function runCli(fixture: Fixture, args: string[]): { status: number | null; outp
   return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 }
 
+// The run's working path must be the string the CLI derives from `--cwd`, because
+// `--resume` looks the run up by exact path. The CLI uses git's toplevel, which on
+// Windows differs from realpath (separators, 8.3 short names under %TEMP%).
 async function runForeground(fixture: Fixture, name: string, options: WorkflowRunOptions = {}) {
+  const cwd = (await findRepoRoot(fixture.repo)) ?? fixture.repo;
   return captureWorkflowCommand(fixture.archonHome, async host =>
-    workflowRunCommand(host, await canonicalizeProjectPath(fixture.repo), name, '', {
+    workflowRunCommand(host, cwd, name, '', {
       noWorktree: true,
       ...options,
     })

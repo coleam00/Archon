@@ -293,6 +293,7 @@ describePosix('CLI human-readable console.log over a real pipe (#2400)', () => {
   it('delivers the whole document to a very-slow consumer (sleep >= 1 s) without truncating', () => {
     const referencePath = join(scratch, 'reference.txt');
     const pipedPath = join(scratch, 'very-slow.txt');
+    expect(listToFile(referencePath)).toBe(0);
     const status = listThroughVerySlowPipe(pipedPath);
     const reference = readFileSync(referencePath);
     const piped = readFileSync(pipedPath);
