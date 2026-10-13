@@ -1,0 +1,12 @@
+# Dry-run fixture: the guard seen RED on a decline that says nothing (run with
+# --exec-code). Not green, nothing changed, no cause and no summary: a run with
+# nothing to show and nothing to say about why fails rather than reporting success.
+implement:
+  done: true
+  green: false
+  red_cause: ""
+  summary: ""
+fixture:
+  expect: failed
+  fail-node: assert-changed
+exec-code: true

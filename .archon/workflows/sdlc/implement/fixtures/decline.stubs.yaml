@@ -1,14 +1,13 @@
-# Dry-run fixture: the decline path — the guard seen RED (run with --exec-code).
-# implement is stubbed as a decline (done, not green, no changes made, and no cause
-# declared for the red); assert-changed executes for real, so
-# assert-changed must fail the run: a run with nothing to show and nothing to say
-# about why fails rather than reporting success.
+# Dry-run fixture: the explained decline (run with --exec-code). implement is stubbed
+# as done, not green, nothing changed, no failing check claimed, and a summary that
+# says why. assert-changed executes for real and lets it through: the run completes
+# with green=false as its outcome, and every gate that spends on the verdict still
+# refuses non-green work. decline-unexplained pins the case that still fails.
 implement:
   done: true
   green: false
   red_cause: ""
-  summary: "stub: declined — the plan file this run was pointed at does not exist"
+  summary: "stub: declined, the plan file this run was pointed at does not exist"
 fixture:
-  expect: failed
-  fail-node: assert-changed
+  expect: completed
 exec-code: true

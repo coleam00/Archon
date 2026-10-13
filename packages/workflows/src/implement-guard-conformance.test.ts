@@ -123,6 +123,20 @@ describe('implement assert-changed guard over engine checkout observations', () 
     expect(verdict.output).toContain('changed no content');
   });
 
+  // Seen live: a criterion no honest change could meet. The agent declined and said
+  // why; that is the run's outcome (green=false), not a crash. The spending gates
+  // still refuse non-green work downstream.
+  test('an explained decline with nothing changed passes as the outcome', async () => {
+    const s = scratch();
+    const baseline = await s.observe();
+    const verdict = await guard(s, baseline, {
+      summary: 'Blocked on an owner decision: criterion 1 contradicts the issue outcome.',
+    });
+    expect(verdict.passed).toBe(true);
+    expect(verdict.output).toContain('declined without claiming a red check');
+    expect(verdict.output).toContain('Blocked on an owner decision');
+  });
+
   // The original defect: the guard compared against HEAD, so dirt that existed before
   // implement started passed as new work with no implementation activity at all.
   test.each([
