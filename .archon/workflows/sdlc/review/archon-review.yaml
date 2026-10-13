@@ -83,6 +83,9 @@ nodes:
     output_format:
       type: object
       properties:
+        # The pull request's remote head is not the commit under review: its
+        # commits were never pushed. publish refuses on it first, naming the cause.
+        pr_behind: { type: boolean }
         # The qualified pull request this round reviewed, or `null` for a working
         # diff. publish below writes to this record and to nothing else, so the
         # comment can never land on an ambient branch→PR mapping. The bounds match
@@ -99,7 +102,7 @@ nodes:
               required: [host, path]
             number: { type: integer, minimum: 1 }
           required: [repo, number]
-      required: [pr]
+      required: [pr_behind, pr]
 
   # The lens decision is quick and separate from scope: a small model reads the diff
   # summary and the work order and answers, with seams on by default. A
@@ -251,6 +254,7 @@ nodes:
       # the scope agent's declaration names it only for a standalone review.
       scope: "$INPUTS.scope"
       pr: "$scope.output.pr"
+      pr_behind: "$scope.output.pr_behind"
       report: "$ARTIFACTS_DIR/review/report.md"
       head: "$mode.output.head"
       ready: "$synthesize.output.ready"

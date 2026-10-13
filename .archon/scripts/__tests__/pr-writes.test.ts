@@ -496,6 +496,30 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
   });
 
+  // An unpushed correction once reached publication with a scope that declared no
+  // pull request; the error named the declaration instead of the unpushed head.
+  it('names an unpushed head before any scope disagreement', () => {
+    const result = publishReview({
+      inputs: {
+        ...report,
+        INPUTS_SCOPE: JSON.stringify(PR),
+        INPUTS_PR: 'null',
+        INPUTS_HEAD: STALE,
+        ARCHON_NODE_EXECUTION: atCommit(STALE),
+      },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('the commits under review were not pushed');
+    expect(result.stderr).not.toContain('delivery recorded');
+  });
+
+  it('refuses when the scope saw the pull request behind the commit under review', () => {
+    const result = publishReview({ inputs: { ...report, INPUTS_PR_BEHIND: 'true' } });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('its commits were not pushed');
+    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+  });
+
   it('refuses when the checkout moved after the round fixed its commit', () => {
     const result = publishReview({
       inputs: { ...report, ARCHON_NODE_EXECUTION: atCommit('moved0000') },

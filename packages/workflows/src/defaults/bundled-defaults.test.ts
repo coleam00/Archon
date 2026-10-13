@@ -466,6 +466,7 @@ describe('bundled-defaults', () => {
       expect(scopeSchema).toEqual({
         type: 'object',
         properties: {
+          pr_behind: { type: 'boolean' },
           pr: {
             type: ['object', 'null'],
             properties: {
@@ -482,12 +483,15 @@ describe('bundled-defaults', () => {
             required: ['repo', 'number'],
           },
         },
-        required: ['pr'],
+        required: ['pr_behind', 'pr'],
       });
-      expect(validateStructuredOutput({ pr: null }, scopeSchema).valid).toBe(true);
+      expect(validateStructuredOutput({ pr_behind: false, pr: null }, scopeSchema).valid).toBe(
+        true
+      );
       expect(
         validateStructuredOutput(
           {
+            pr_behind: false,
             pr: {
               repo: { host: 'github.com', path: 'coleam00/Archon' },
               number: 3557,
@@ -496,7 +500,7 @@ describe('bundled-defaults', () => {
           scopeSchema
         ).valid
       ).toBe(true);
-      expect(validateStructuredOutput({ pr: {} }, scopeSchema).valid).toBe(false);
+      expect(validateStructuredOutput({ pr_behind: false, pr: {} }, scopeSchema).valid).toBe(false);
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
       expect(parsed.workflow.inputs?.tier).toBeUndefined();

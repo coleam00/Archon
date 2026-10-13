@@ -3,6 +3,7 @@
 # route node nor any lens carries a stub, so one that runs anyway fails this fixture.
 mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
 scope:
+  pr_behind: false
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
 review-complete: "settled"

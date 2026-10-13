@@ -3,6 +3,7 @@
 mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
 route: { seams: false, code: false, tests: false, errors: false, docs: true, reason: "stub: only shipped prose changed" }
 scope:
+  pr_behind: false
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
 docs: "0 findings"

@@ -9,7 +9,9 @@
  *
  * A report goes public only about the commit its round fixed at the start
  * (review-round): the checkout must still be at it and the pull request's remote
- * head must be it. Any mismatch refuses, so a verdict about one commit can never
+ * head must be it. The head is checked before the scope agent's declaration, so a
+ * correction that was never pushed is named as that rather than as a scope
+ * mismatch. Any mismatch refuses, so a verdict about one commit can never
  * stand as the verdict on another. This node stamps that commit on the comment
  * itself rather than trusting the report's text to name it. Once published, the
  * commit is recorded beside the report as the next round's cursor.
@@ -19,6 +21,7 @@
  *   pull-request record here, and that record is then the only write target.
  * - INPUTS_PR: the qualified pull request the scope agent declared it reviewed,
  *   or `null` for a working diff. It names the target of a standalone review.
+ * - INPUTS_PR_BEHIND: the scope agent saw the pull request's head behind HEAD.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
@@ -78,14 +81,6 @@ try {
   };
   const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
   const declared = declaredPr(text(process.env.INPUTS_PR));
-  if (
-    recorded &&
-    (declared?.number !== recorded.number || !sameRepo(declared.repo, recorded.repo))
-  ) {
-    throw new Error(
-      `the review scope declared ${label(declared)}, but delivery recorded ${label(recorded)}`
-    );
-  }
   const pr = recorded ?? declared;
   const head = text(process.env.INPUTS_HEAD).trim();
   const reportPath = text(process.env.INPUTS_REPORT);
@@ -95,15 +90,30 @@ try {
   if (checkout !== head) {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
-  if (!pr) {
-    note('publish-review: the review scope is a working diff, so no comment was published.');
-  } else {
+  if (pr) {
     const remote = viewPr(pr, source).pr.head_revision;
     if (remote !== head) {
       throw new Error(
-        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}`
+        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: the commits under review were not pushed`
       );
     }
+  }
+  if (text(process.env.INPUTS_PR_BEHIND) === 'true') {
+    throw new Error(
+      `the review scope saw ${label(pr)} behind ${head}, the commit under review: its commits were not pushed`
+    );
+  }
+  if (
+    recorded &&
+    (declared?.number !== recorded.number || !sameRepo(declared.repo, recorded.repo))
+  ) {
+    throw new Error(
+      `the review scope declared ${label(declared)}, but delivery recorded ${label(recorded)}`
+    );
+  }
+  if (!pr) {
+    note('publish-review: the review scope is a working diff, so no comment was published.');
+  } else {
     const directory = mkdtempSync(join(tmpdir(), 'archon-review-'));
     try {
       const marked = join(directory, 'comment.md');
