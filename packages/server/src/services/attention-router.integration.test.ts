@@ -361,3 +361,14 @@ test('malformed VAPID files do not expose their contents through parser errors',
   });
   expect(() => loadVapidKeys()).toThrow('VAPID key file is not valid JSON');
 });
+
+test('subscription primary keys are required on both database adapters', async () => {
+  const sub = subscription('missing-id');
+  await expect(
+    getDatabase().query(
+      `INSERT INTO remote_agent_web_push_subscriptions
+    (id, user_id, endpoint, p256dh, auth) VALUES (NULL, $1, $2, $3, $4)`,
+      [userId, sub.endpoint, sub.keys.p256dh, sub.keys.auth]
+    )
+  ).rejects.toThrow();
+});

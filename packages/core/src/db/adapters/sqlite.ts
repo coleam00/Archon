@@ -1029,7 +1029,7 @@ export class SqliteAdapter implements IDatabase {
         ON remote_agent_start_receipt_bindings(host_id, preparation_status, created_at);
 
       CREATE TABLE IF NOT EXISTS remote_agent_web_push_subscriptions (
-        id TEXT PRIMARY KEY,
+        id TEXT PRIMARY KEY NOT NULL,
         user_id TEXT NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
         endpoint TEXT NOT NULL UNIQUE,
         p256dh TEXT NOT NULL,
