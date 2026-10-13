@@ -45,7 +45,7 @@ mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: findOrCreate,
 }));
 
-import { resolveUserId } from './index';
+import { resolveUserId } from './chat-host/inbound';
 
 describe('resolveUserId', () => {
   beforeEach(() => {
