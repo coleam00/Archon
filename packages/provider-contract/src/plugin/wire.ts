@@ -12,7 +12,7 @@ import { credentialStatusSchema } from '../credential-status';
 import type { AssertNever } from '../effort';
 import { providerChunkSchema } from '../events';
 import { credentialSpecSchema } from '../registration';
-import { providerStopReasonSchema, type ProviderStopReason } from '../result';
+import { providerResultSchema, providerStopReasonSchema, type ProviderStopReason } from '../result';
 
 export const PROVIDER_PLUGIN_PROTOCOL = 1;
 export { PLUGIN_MAX_MESSAGE_BYTES as PROVIDER_PLUGIN_MAX_MESSAGE_BYTES } from './rpc';
@@ -51,6 +51,7 @@ export const providerSessionRequestSchema = z.strictObject({
   prompt: z.string(),
   cwd: z.string().min(1),
   resumeSessionId: z.string().optional(),
+  sessionState: providerResultSchema.shape.sessionState,
   model: z.string().optional(),
   systemPrompt: systemPromptInputSchema.optional(),
   outputFormat: z.object({ type: z.literal('json_schema'), schema: configSchema }).optional(),

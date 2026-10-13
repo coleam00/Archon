@@ -115,7 +115,9 @@ await serveProvider(
           return;
         }
         if (mode === 'live-eof') return await closeOutput();
-        if (mode === 'resume') {
+        if (mode === 'resume' || mode === 'legacy-resume') {
+          if (mode === 'legacy-resume' && options && 'sessionState' in options)
+            throw new Error('Legacy provider received sessionState');
           yield { type: 'result', sessionId: resume };
           yield { type: 'settled' };
           return;

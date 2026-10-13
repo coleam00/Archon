@@ -55,6 +55,8 @@ export function sessionPreview(sessionId: string): string {
 
 /** The terminal result of one provider turn. Providers stream it as the `result` chunk. */
 export const providerResultSchema = z.object({
+  /** Opaque continuation state for sessionId. Hosts retain it in memory and echo it on resume or fork. */
+  sessionState: z.json().optional(),
   /** Required on every non-failing turn of a provider that declares `sessionResume`. */
   sessionId: z.string().optional(),
   /** Complete reply for this result, when the runtime reports it. */

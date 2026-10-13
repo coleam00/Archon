@@ -1401,10 +1401,11 @@ async function* streamClaudeMessages(
       // Typed as required, but it crosses an IPC boundary (see selectResolvedModelId).
       const modelUsage = (resultMsg.modelUsage as Record<string, ModelUsage> | undefined) ?? {};
       let spend: QuerySpend = { costUsd: undefined, modelUsage };
+      let sessionState: ResultChunk['sessionState'];
       if (typeof resultMsg.total_cost_usd === 'number') {
         const cumulative = { costUsd: resultMsg.total_cost_usd, modelUsage };
         spend = spendSince(spendBaseline, cumulative);
-        sessionSpend.record(resultMsg.session_id, cumulative);
+        sessionState = sessionSpend.record(resultMsg.session_id, cumulative);
         if (spend.costUsd === undefined) {
           getLog().warn(
             {
@@ -1531,6 +1532,7 @@ async function* streamClaudeMessages(
         if (isRealError) result.errorSubtype = resultMsg.subtype;
         result.errors = isRealError && sdkErrors?.length ? sdkErrors : [failure.evidence];
       }
+      if (sessionState !== undefined) result.sessionState = sessionState;
       if (spend.costUsd !== undefined) result.cost = spend.costUsd;
       const stopReason = claudeStopReason(resultMsg);
       if (stopReason !== undefined) result.stopReason = stopReason;
@@ -1774,7 +1776,7 @@ export class ClaudeProvider implements IAgentProvider {
           streamClaudeMessages(
             events,
             toolResultQueue,
-            sessionSpend.baselineFor(resumeSessionId),
+            sessionSpend.baselineFor(resumeSessionId, requestOptions?.sessionState),
             closeInput
           ),
           // A result can arrive while background agents still run their tools.

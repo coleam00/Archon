@@ -456,3 +456,53 @@ test.each(['models', 'diagnose'] as const)(
   },
   testTimeout(18_000)
 );
+
+test('Claude resume and fork retain per-query cost and model across fresh processes and factory lookups', async () => {
+  const { descriptor: claude } = await import('@archon/providers/claude/descriptor');
+  const registration = processProviderRegistration(claude, [
+    process.execPath,
+    join(import.meta.dir, '../../../providers/src/claude/fixtures/process-spend.ts'),
+  ]);
+  async function resultOf(resume?: string, forkSession = false) {
+    const output = await collect(
+      registration.factory().sendQuery('turn', tmpdir(), resume, {
+        forkSession,
+        assistantConfig: { claudeBinaryPath: process.execPath },
+      })
+    );
+    const result = output.find(chunk => chunk.type === 'result');
+    if (!result || result.type !== 'result') throw new Error('missing Claude result');
+    expect(result.isError).not.toBe(true);
+    return result;
+  }
+  const fresh = await resultOf();
+  expect(fresh.cost).toBe(0.13);
+  const fork = await resultOf(fresh.sessionId, true);
+  expect(fork.sessionId).toBe('source-fork');
+  expect(fork.cost).toBeCloseTo(0.22, 10);
+  expect(fork.resolvedModel).toEqual({ id: 'claude-sonnet-4-6' });
+  const resumed = await resultOf(fresh.sessionId);
+  expect(resumed.cost).toBeCloseTo(0.22, 10);
+  expect(resumed.resolvedModel).toEqual({ id: 'claude-sonnet-4-6' });
+  expect(new Set([fresh.text, fork.text, resumed.text]).size).toBe(3);
+  const child = await resultOf(fork.sessionId);
+  expect(child.cost).toBe(0);
+  expect(child.resolvedModel).toBeUndefined();
+  const unseen = await resultOf('unseen');
+  expect(unseen.cost).toBeUndefined();
+  expect(unseen.resolvedModel).toBeUndefined();
+});
+
+test('plugins that return no state never receive the new request field', async () => {
+  const registration = processProviderRegistration(descriptor, [
+    process.execPath,
+    fixture,
+    'legacy-resume',
+  ]);
+  for (let turn = 0; turn < 2; turn++) {
+    expect(await collect(registration.factory().sendQuery('turn', tmpdir(), 'legacy'))).toEqual([
+      { type: 'result', sessionId: 'legacy' },
+      { type: 'settled' },
+    ]);
+  }
+});

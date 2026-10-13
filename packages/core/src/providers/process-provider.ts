@@ -215,6 +215,10 @@ function startProcess(
 }
 
 export class ProcessAgentProvider implements IAgentProvider {
+  private readonly sessionStates = new Map<
+    string,
+    Exclude<SendQueryOptions['sessionState'], undefined>
+  >();
   constructor(
     private readonly descriptor: ProviderPluginDescriptor,
     private readonly argv: readonly [string, ...string[]]
@@ -238,8 +242,24 @@ export class ProcessAgentProvider implements IAgentProvider {
     let settled = false;
     try {
       const connection = await process.connect();
-      for await (const chunk of connection.sendQuery(prompt, cwd, resumeSessionId, options)) {
+      const sessionState =
+        options.sessionState !== undefined
+          ? options.sessionState
+          : resumeSessionId === undefined
+            ? undefined
+            : this.sessionStates.get(resumeSessionId);
+      // Send state only after a provider returned it: older plugins reject unknown request keys.
+      const queryOptions = sessionState === undefined ? options : { ...options, sessionState };
+      for await (const chunk of connection.sendQuery(prompt, cwd, resumeSessionId, queryOptions)) {
         if (options.abortSignal?.aborted) return;
+        if (chunk.type === 'result' && chunk.sessionId && chunk.sessionState !== undefined) {
+          this.sessionStates.delete(chunk.sessionId);
+          this.sessionStates.set(chunk.sessionId, chunk.sessionState);
+          if (this.sessionStates.size > 1000) {
+            const oldest = this.sessionStates.keys().next().value;
+            if (oldest !== undefined) this.sessionStates.delete(oldest);
+          }
+        }
         if (chunk.type === 'settled') {
           settled = true;
           await process.dispose(true);

@@ -377,6 +377,23 @@ describe('ClaudeProvider', () => {
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
+    test('fresh cost and model remain available when SDK model output counts are absent', async () => {
+      mockQuery.mockImplementationOnce(async function* () {
+        yield {
+          type: 'result',
+          session_id: 'spend-missing-output',
+          total_cost_usd: 0.25,
+          modelUsage: { 'claude-sonnet-4-6': {} },
+        };
+      });
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+      expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+        cost: 0.25,
+        resolvedModel: { id: 'claude-sonnet-4-6' },
+      });
+    });
+
     describe('cost of a resumed or forked session is the query’s own spend', () => {
       // Totals recorded from real haiku runs on SDK 0.3.282, whose resumed and forked
       // sessions report total_cost_usd and modelUsage cumulatively.
