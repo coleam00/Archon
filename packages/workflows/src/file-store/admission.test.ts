@@ -212,3 +212,16 @@ test('receipt-linked requests validate their binding and inspection follows ever
   expect(receipt?.bindings[0]).not.toHaveProperty('requestIds');
   expect(await store.getResourceStartRequest(first.launch.run.id)).not.toHaveProperty('position');
 });
+
+test('admission cannot reuse a deleted run ID', async () => {
+  const { store } = await fixture();
+  const deleted = await store.createWorkflowRun({ workflow_name: 'test', user_message: '' });
+  await store.cancelWorkflowRun(deleted.id);
+  await store.deleteWorkflowRun(deleted.id);
+  const start = intent();
+  start.launch.run.id = deleted.id;
+  await expect(store.admitResourceStart(start)).rejects.toThrow(
+    `Run already exists: ${deleted.id}`
+  );
+  expect(await store.getWorkflowRun(deleted.id)).toBeNull();
+});

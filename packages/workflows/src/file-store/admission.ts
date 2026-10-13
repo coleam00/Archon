@@ -28,7 +28,7 @@ import {
   type ResourceStartRequestInspection,
 } from '../resource-start-store';
 import { WorkflowNotResumableError, WorkflowResourceBusyError } from '../store';
-import { commit, readJson, readSnapshot, recoverBeforeRead } from './commit';
+import { commit, isRunArchived, readJson, readSnapshot, recoverBeforeRead } from './commit';
 import { createTransactionView } from './transaction-view';
 
 const ownerSchema = z.object({
@@ -157,7 +157,12 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     row: Request,
     runs: Map<string, WorkflowRun>
   ): Promise<ResourceStartDisposition> {
-    if (runs.has(row.id) || (await readSnapshot(root, row.id)))
+    // A deleted run's ID stays reserved, as in createWorkflowRun.
+    if (
+      runs.has(row.id) ||
+      (await readSnapshot(root, row.id)) ||
+      (await isRunArchived(root, row.id))
+    )
       throw new Error(`Run already exists: ${row.id}`);
     await createTransactionView(runs, [], async () => null).createWorkflowRun(row.launch.run);
     row.status = 'admitted';
