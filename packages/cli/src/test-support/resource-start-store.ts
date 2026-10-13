@@ -16,10 +16,15 @@ import {
   type ResourceStartIntent,
 } from '@archon/workflows/schemas/resource-start';
 
+type ResourceBlocker = NonNullable<ResourceStartRequestInspection['blocker']>;
+
 export function createInMemoryResourceStartStore(
   createRun: IWorkflowStore['createWorkflowRun'],
   getRun: IWorkflowStore['getWorkflowRun']
-): IResourceStartStore {
+): IResourceStartStore & {
+  /** What keeps an admitted failed or paused run from resuming, as the SQL and file stores decide. */
+  resumeBlocker(id: string, status: 'failed' | 'paused'): Promise<ResourceBlocker | null>;
+} {
   const requests = new Map<string, ResourceStartRequestInspection>();
   const receipts = new Map<string, StartReceiptInspection>();
   const capacities = new Map<string, number>();
@@ -106,6 +111,19 @@ export function createInMemoryResourceStartStore(
     return copy;
   };
   return {
+    resumeBlocker: async (id, status) => {
+      const request = requests.get(id);
+      if (request?.status !== 'admitted') return null;
+      const others = (await holders(request.resource)).filter(holder => holder.id !== id);
+      if (others[0] && others.length >= (capacities.get(request.resource) ?? 1))
+        return { kind: 'run', id: others[0].id };
+      // A failed run released its slot and must not bypass promised queued work; a paused
+      // run still holds it.
+      const queued = [...requests.values()].find(
+        row => row.resource === request.resource && row.status === 'queued'
+      );
+      return status === 'failed' && queued ? { kind: 'request', id: queued.id } : null;
+    },
     admitResourceStart: admit,
     drainResourceStarts: async ({
       resource,

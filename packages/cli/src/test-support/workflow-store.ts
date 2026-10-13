@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import {
   WorkflowEventCursorError,
   WorkflowNotResumableError,
+  WorkflowResourceBusyError,
   type IWorkflowStore,
   type WorkflowEventCursor,
   type WorkflowNodeSession,
@@ -224,8 +225,12 @@ export function createInMemoryWorkflowStore(
       write(async view => {
         const run = await view.getWorkflowRun(id);
         const request = await admission.getResourceStartRequest(id);
-        if (request?.status === 'admitted' && run?.status !== 'failed' && run?.status !== 'paused')
-          throw new WorkflowNotResumableError(id, run?.status ?? 'missing');
+        if (request?.status === 'admitted') {
+          if (run?.status !== 'failed' && run?.status !== 'paused')
+            throw new WorkflowNotResumableError(id, run?.status ?? 'missing');
+          const blocker = await admission.resumeBlocker(id, run.status);
+          if (blocker) throw new WorkflowResourceBusyError(id, blocker);
+        }
         return view.resumeWorkflowRun(id, cursor);
       }),
     recoverCancelledFanOutRun: id => write(view => view.recoverCancelledFanOutRun(id)),

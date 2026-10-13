@@ -304,6 +304,27 @@ export function describeWorkflowStoreConformance(
         expect(await store.listWorkflowEvents(id)).toEqual(events);
       });
     }
+    test('a failed admitted run cannot resume past a new holder or a queued promise', async () => {
+      const first = start(),
+        holder = start(),
+        queued = start();
+      const id = first.launch.run.id;
+      await store.admitResourceStart(first);
+      await store.updateWorkflowRun(id, { status: 'running' });
+      await store.failWorkflowRun(id, 'failed');
+      // The failed run released its slot; a queued promise is ahead of its resume.
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      expect(await store.admitResourceStart(queued)).toMatchObject({ status: 'queued' });
+      expect(await rejection(store.resumeWorkflowRun(id))).toMatchObject({
+        blocker: { kind: 'run', id: holder.launch.run.id },
+      });
+      await store.updateWorkflowRun(holder.launch.run.id, { status: 'running' });
+      await store.failWorkflowRun(holder.launch.run.id, 'failed');
+      expect(await rejection(store.resumeWorkflowRun(id))).toMatchObject({
+        blocker: { kind: 'request', id: queued.launch.run.id },
+      });
+      expect((await store.getWorkflowRun(id))?.status).toBe('failed');
+    });
     for (const { name, timestamps } of [
       {
         name: 'mixed fractional precision',
