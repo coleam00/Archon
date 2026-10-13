@@ -3148,7 +3148,7 @@ function utf8SequenceLength(leadByte: number): number {
  * A spill write failure never fails the node — it degrades to preview-only persistence,
  * matching `shellQuoteOrFile`'s existing fallback behavior for the same class of error.
  *
- * Because the spill filename is reused, `getDagResumeSnapshot` (packages/core)
+ * Because the spill filename is reused, `foldDagResumeSnapshot` (dag-resume-snapshot.ts)
  * checks its byte length against the row's `originalBytes`. A later execution can
  * overwrite the file before its event commits; a length mismatch exposes that stale
  * pairing. The check cannot distinguish different contents of the same length.
