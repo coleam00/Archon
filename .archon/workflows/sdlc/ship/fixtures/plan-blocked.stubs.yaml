@@ -1,6 +1,6 @@
 # Sparse guard fixture: run with --default-stubs --exec-code. A plan that still
-# needs a human decision completes honestly, while the delivery tail is skipped
-# and the real outcome node points to plan.md.
+# needs a human decision completes honestly: the planner's open question stops the
+# run before delivery, and the real outcome node relays it with plan.md.
 triage__triage:
   decision: { contract: READY, route: plan }
   complexity: large
@@ -8,10 +8,13 @@ triage__triage:
   area_labels: []
   summary: "stub: material product shape remains undecided"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+intel: "stub: no usage-data source is connected; the open call turns on how often operators edit the field"
 planned__plan:
-  ready: false
+  open_questions:
+    - "stub: keep the new persisted field or derive it? No project document rules on it."
   summary: "stub: owner decision required before implementation"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 fixture:
   expect: completed
+  reached: [intel, planned__verdict, outcome]
 exec-code: true

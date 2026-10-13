@@ -14,7 +14,8 @@
  *   triage's verdict.
  * - INPUTS_INV_VERDICT / INPUTS_INV_SUMMARY: the investigation's verdict and
  *   summary, or "null" when it did not run.
- * - INPUTS_PLAN_SUMMARY: the planner's summary, or "null" when it did not run.
+ * - INPUTS_PLAN_SUMMARY / INPUTS_OPEN_QUESTIONS: the planner's summary and the calls it
+ *   left to a person, or "null" when it did not run.
  * - INPUTS_DELIVERED / INPUTS_DELIVERY: deliver's `ready` and `summary`, or "null"
  *   when the deliver branch was skipped.
  *
@@ -41,36 +42,61 @@ function optional(value: string | undefined): string | null {
 const invVerdict = optional(process.env.INPUTS_INV_VERDICT);
 const invSummary = optional(process.env.INPUTS_INV_SUMMARY);
 const planSummary = optional(process.env.INPUTS_PLAN_SUMMARY);
+const openQuestions = JSON.parse(text(process.env.INPUTS_OPEN_QUESTIONS) || 'null') as
+  | string[]
+  | null;
 const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
 const delivery = text(process.env.INPUTS_DELIVERY);
 
-function stopped(): { readonly text: string; readonly report: string } {
+/** Why no delivery ran. */
+type Stop = 'no_action' | 'blocked' | 'needs_contract' | 'refuted' | 'not_rooted' | 'needs_human';
+
+function stopped(): { readonly reason: Stop; readonly text: string; readonly report: string } {
   if (route === 'no_action') {
-    if (contract === 'NO_ACTION') return { text: `No delivery needed: ${summary}`, report: 'triage.md' };
+    if (contract === 'NO_ACTION') {
+      return { reason: 'no_action', text: `No delivery needed: ${summary}`, report: 'triage.md' };
+    }
     if (contract === 'BLOCKED') {
-      return { text: `Not done: blocked on ${blockedReason}. ${summary}`, report: 'triage.md' };
+      return { reason: 'blocked', text: `Not done: blocked on ${blockedReason}. ${summary}`, report: 'triage.md' };
     }
     return {
+      reason: 'needs_contract',
       text: `Not done: the work item needs contract work before a run can start. ${summary}`,
       report: 'triage.md',
     };
   }
   if (route === 'investigate') {
     if (invVerdict === 'refuted') {
-      return { text: `No work owed in this repository: ${invSummary ?? ''}`, report: 'investigation.md' };
+      return {
+        reason: 'refuted',
+        text: `No work owed in this repository: ${invSummary ?? ''}`,
+        report: 'investigation.md',
+      };
     }
-    return { text: `Not done: the investigation was inconclusive. ${invSummary ?? ''}`, report: 'investigation.md' };
+    return {
+      reason: 'not_rooted',
+      text: `Not done: the investigation was inconclusive. ${invSummary ?? ''}`,
+      report: 'investigation.md',
+    };
   }
-  return { text: `Not done: planning stopped. ${planSummary ?? ''}`, report: 'plan.md' };
+  // Each question carries the direction line that would settle it next time; the
+  // operator decides whether to record it.
+  const questions = (openQuestions ?? []).map(question => `- ${question}`).join('\n');
+  return {
+    reason: 'needs_human',
+    text: `Not done: planning stopped on calls only a person can make. ${planSummary ?? ''}\n${questions}`,
+    report: 'plan.md',
+  };
 }
 
 if (delivered === 'null') {
   const stop = stopped();
   emit({
     delivered: false,
+    reason: stop.reason,
     summary: `${stop.text.trim()}\nReport: ${artifacts}/${stop.report}` + caveats(artifacts, { listingFile }),
   });
 } else {
   // Deliver ran, so its outcome is the report; its summary already carries the caveats.
-  emit({ delivered: delivered === 'true', summary: delivery });
+  emit({ delivered: delivered === 'true', reason: delivered === 'true' ? 'delivered' : 'not_ready', summary: delivery });
 }

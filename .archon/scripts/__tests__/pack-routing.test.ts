@@ -29,7 +29,7 @@ describe('investigate verdict', () => {
 });
 
 describe("ship's terminal outcome", () => {
-  const outcome = (inputs: Record<string, string>): { delivered: boolean; summary: string } => {
+  const outcome = (inputs: Record<string, string>): { delivered: boolean; reason: string; summary: string } => {
     const run = runPackScript('ship/scripts/outcome', {
       inputs: {
         INPUTS_ROUTE: 'no_action',
@@ -39,6 +39,7 @@ describe("ship's terminal outcome", () => {
         INPUTS_INV_VERDICT: 'null',
         INPUTS_INV_SUMMARY: 'null',
         INPUTS_PLAN_SUMMARY: 'null',
+        INPUTS_OPEN_QUESTIONS: 'null',
         INPUTS_DELIVERED: 'null',
         INPUTS_DELIVERY: 'null',
         TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
@@ -47,7 +48,7 @@ describe("ship's terminal outcome", () => {
       artifacts: { 'listing.json': EMPTY_LISTING },
     });
     expect(run.code).toBe(0);
-    return JSON.parse(run.stdout) as { delivered: boolean; summary: string };
+    return JSON.parse(run.stdout) as { delivered: boolean; reason: string; summary: string };
   };
 
   it('reports a refuted investigation as no work owed, in the investigator’s words', () => {
@@ -72,9 +73,15 @@ describe("ship's terminal outcome", () => {
     expect(result.summary).toStartWith('Not done: the investigation was inconclusive. the probe could not authenticate');
   });
 
-  it('reports a planning stop in the planner’s words', () => {
-    const result = outcome({ INPUTS_ROUTE: 'plan', INPUTS_CONTRACT: 'READY', INPUTS_PLAN_SUMMARY: 'needs a product call' });
-    expect(result.summary).toStartWith('Not done: planning stopped. needs a product call');
+  it('relays every open question when planning stops on a person’s call', () => {
+    const result = outcome({
+      INPUTS_ROUTE: 'plan',
+      INPUTS_CONTRACT: 'READY',
+      INPUTS_PLAN_SUMMARY: 'needs a product call',
+      INPUTS_OPEN_QUESTIONS: JSON.stringify(['keep the field?', 'which default?']),
+    });
+    expect(result).toMatchObject({ delivered: false, reason: 'needs_human' });
+    expect(result.summary).toContain('needs a product call\n- keep the field?\n- which default?');
   });
 
   it('names a blocked item as requested work not done', () => {
@@ -91,10 +98,12 @@ describe("ship's terminal outcome", () => {
     const deliver = { INPUTS_ROUTE: 'deliver', INPUTS_CONTRACT: 'READY' };
     expect(outcome({ ...deliver, INPUTS_DELIVERED: 'true', INPUTS_DELIVERY: 'https://x/pull/1' })).toEqual({
       delivered: true,
+      reason: 'delivered',
       summary: 'https://x/pull/1',
     });
     expect(outcome({ ...deliver, INPUTS_DELIVERED: 'false', INPUTS_DELIVERY: 'Not ready, red: lint' })).toEqual({
       delivered: false,
+      reason: 'not_ready',
       summary: 'Not ready, red: lint',
     });
   });

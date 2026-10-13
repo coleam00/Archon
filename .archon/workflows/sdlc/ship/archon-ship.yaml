@@ -55,14 +55,29 @@ nodes:
     depends_on: [triage]
     when: "$triage.output.route == 'investigate'"
 
+  # Usage data for the planner, when the item could turn on it. The node names no
+  # MCP server, so it runs on every provider and in a repository with no MCP
+  # config; until one is named here it judges relevance and reports that no
+  # source is connected when data would have mattered.
+  - id: intel
+    command: intel
+    model: medium
+    mutates_checkout: false
+    depends_on: [triage]
+    when: "$triage.output.route == 'plan'"
+
+  # The planner makes the design calls. Calls only a person can make come back as
+  # open questions, which stop the run before delivery.
   - id: planned
     include: archon-plan
     with:
       work: >-
         Plan the current work item from $ARTIFACTS_DIR/triage.md. Read that
         assessment first, preserve its verified outcome and constraints, and
-        decide the implementation questions it identified.
-    depends_on: [triage]
+        decide the implementation questions it identified. Read
+        $ARTIFACTS_DIR/intel.md too: what usage data says about this work, or
+        why there is none.
+    depends_on: [triage, intel]
     when: "$triage.output.route == 'plan'"
 
   - id: deliver
@@ -112,11 +127,15 @@ nodes:
       inv_verdict: { from: "$inv.output.verdict", if_skipped: null }
       inv_summary: { from: "$inv.output.summary", if_skipped: null }
       plan_summary: { from: "$planned.output.summary", if_skipped: null }
+      open_questions: { from: "$planned.output.open_questions", if_skipped: null }
       delivered: { from: "$deliver.output.ready", if_skipped: null }
       delivery: { from: "$deliver.output.summary", if_skipped: null }
     output_format:
       type: object
       properties:
         delivered: { type: boolean }
+        reason:
+          type: string
+          enum: [delivered, not_ready, no_action, blocked, needs_contract, refuted, not_rooted, needs_human]
         summary: { type: string }
-      required: [delivered, summary]
+      required: [delivered, reason, summary]

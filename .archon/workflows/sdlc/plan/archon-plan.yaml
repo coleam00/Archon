@@ -26,14 +26,14 @@ inputs:
 
 # ready:false is a valid completion (see the plan node): the run succeeds with
 # an authored outcome of false — lifecycle status and work outcome are separate facts.
-returns: plan
+returns: verdict
 outcome_field: ready
 
 nodes:
 
-  # Blocked is a valid outcome, not a failure: ready:false naming exactly what
-  # is missing beats a plan built on guesses. Consumers gate on
-  # $plan.output.ready before building.
+  # Open questions are a valid outcome, not a failure: the calls only a person can
+  # make, named, beat a plan built on guesses. Consumers gate on
+  # $plan.output.ready before building and relay $plan.output.open_questions.
   - id: plan
     command: plan
     # Advisory on both counts, and the engine holds both: it fails this node with
@@ -44,8 +44,9 @@ nodes:
     output_format:
       type: object
       properties:
-        ready:
-          type: boolean
+        open_questions:
+          type: array
+          items: { type: string, pattern: '\S' }
         summary:
           type: string
         report:
@@ -59,4 +60,29 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [plan.md] }
           required: [type, run_id, path]
-      required: [ready, summary, report]
+      required: [open_questions, summary, report]
+
+  # `when:` cannot read an array, so this derives the boolean callers route on from
+  # the one list the planner declares; a declared boolean beside it could disagree.
+  - id: verdict
+    script: verdict
+    runtime: bun
+    depends_on: [plan]
+    with:
+      open_questions: { from: "$plan.output.open_questions" }
+      summary: "$plan.output.summary"
+      report: { from: "$plan.output.report" }
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        open_questions: { type: array, items: { type: string } }
+        summary: { type: string }
+        report:
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [plan.md] }
+          required: [type, run_id, path]
+      required: [ready, open_questions, summary, report]
