@@ -48,16 +48,21 @@ function history(): { cwd: string; older: string; newer: string } {
   return { cwd, older, newer };
 }
 
+/** The engine identity review-round passes through for synthesis to count lenses by. */
+function execution(head: string): object {
+  return {
+    path: 'review__mode',
+    invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
+    attempt: { checkoutStart: { kind: 'git', commit: head } },
+  };
+}
+
 function round(cwd: string, head: string, cursor?: string): ScriptRun {
   return runPackScript('review/scripts/review-round', {
     cwd,
     inputs: {
       INPUTS_PRIOR_REPORT: cursor === undefined ? '' : '{ARTIFACTS}/review/report.md',
-      ARCHON_NODE_EXECUTION: JSON.stringify({
-        path: 'review__mode',
-        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
-        attempt: { checkoutStart: { kind: 'git', commit: head } },
-      }),
+      ARCHON_NODE_EXECUTION: JSON.stringify(execution(head)),
     },
     artifacts:
       cursor === undefined
@@ -76,6 +81,7 @@ describe('review-round', () => {
       head: newer,
       cursor: '',
       risks: FULL_REVIEW_RISKS,
+      execution: execution(newer),
     });
   });
 
@@ -88,6 +94,7 @@ describe('review-round', () => {
       head: newer,
       cursor: older,
       risks: FULL_REVIEW_RISKS,
+      execution: execution(newer),
     });
   });
 
