@@ -867,6 +867,7 @@ const coreCapabilities = await import('@archon/core');
 const { createSqlWorkflowOperations } = await import('@archon/core/workflows/sql-host');
 function createTestWorkflowHost(): import('@archon/core/workflows/host-store').WorkflowHost {
   const host = createSqlWorkflowHost();
+  host.deps.store.pruneStateRevisions = mock(async () => ({ count: 0 }));
   host.deps.store.createWorkflowEvent = mockCreateWorkflowEvent;
   host.deps.store.persistWorkflowEvent = mockPersistWorkflowEvent;
   host.deps.loadConfig = coreCapabilities.loadConfig;
@@ -11401,7 +11402,12 @@ describe('workflowCleanupCommand', () => {
       count: 5,
     });
 
-    await workflowCleanupCommand(createTestWorkflowHost(), 30);
+    const host = createTestWorkflowHost();
+    const prune = mock(async () => ({ count: 7 }));
+    host.deps.store.pruneStateRevisions = prune;
+    await workflowCleanupCommand(host, 30);
+    expect(prune).toHaveBeenCalledWith(30);
+    expect(consoleSpy).toHaveBeenCalledWith('Pruned 7 state revision(s) older than 30 days.');
 
     expect(consoleSpy).toHaveBeenCalledWith('Deleted 5 workflow run(s) older than 30 days.');
   });
@@ -11417,6 +11423,20 @@ describe('workflowCleanupCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('No workflow runs older than 7 days to clean up.');
   });
 
+  it('reports committed run deletion when state pruning fails', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      count: 5,
+    });
+    const host = createTestWorkflowHost();
+    host.deps.store.pruneStateRevisions = mock(async () => {
+      throw new Error('state unavailable');
+    });
+    await expect(workflowCleanupCommand(host, 7)).rejects.toThrow(
+      'Deleted 5 workflow run(s) older than 7 days, but failed to prune state revisions: state unavailable'
+    );
+  });
+
   it('should throw when deleteOldWorkflowRuns fails', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockRejectedValueOnce(
@@ -11424,7 +11444,7 @@ describe('workflowCleanupCommand', () => {
     );
 
     await expect(workflowCleanupCommand(createTestWorkflowHost(), 7)).rejects.toThrow(
-      'Failed to clean up workflow runs: disk full'
+      'Failed to clean up workflow history: disk full'
     );
   });
 });
