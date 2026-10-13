@@ -1,3 +1,4 @@
+import { legacyDestination } from '@/routes/LegacyRedirect';
 import type { components } from '@/lib/api.generated';
 import { expect, mock, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -61,6 +62,9 @@ test('click opens the run with no console tab, or navigates and focuses an exist
   const closed = worker();
   await closed.dispatch('notificationclick', event);
   expect(closed.openWindow).toHaveBeenCalledWith('https://archon.example/runs/run-1');
+  const openedUrl = closed.openWindow.mock.calls[0]?.[0];
+  if (!openedUrl) throw new Error('The notification did not open a window');
+  expect(legacyDestination(new URL(openedUrl).pathname, '')).toBe('/console/r/run-1');
   const focus = mock(async () => {});
   const navigate = mock(async (_url: string) => ({ focus }));
   const open = worker([{ url: 'https://archon.example/settings', navigate }]);

@@ -3,7 +3,7 @@ import type { ReactNode, ErrorInfo } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@/lib/query-client';
-import { LegacyRedirect } from '@/routes/LegacyRedirect';
+import { LegacyRedirect, PUSH_RUN_PATH } from '@/routes/LegacyRedirect';
 import { LoginPage } from '@/routes/LoginPage';
 import { ConsoleApp } from '@/experiments/console/ConsoleApp';
 import { SessionGate } from '@/components/auth/SessionGate';
@@ -72,6 +72,7 @@ export function App(): React.ReactElement {
                 </SessionGate>
               }
             />
+            <Route path={PUSH_RUN_PATH} element={<LegacyRedirect />} />
             <Route path="/legacy/*" element={<LegacyRedirect />} />
             <Route path="/workflows/*" element={<LegacyRedirect />} />
             <Route path="/settings" element={<Navigate to="/console/settings" replace />} />
