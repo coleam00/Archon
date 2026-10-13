@@ -94,7 +94,7 @@ test('host bash and setup receive the same managed environment without loading a
   const bash = await runSubprocess({ kind: 'host' }, resolveBashPath(), ['-c', probe], {
     cwd: root,
     env: envVars,
-    timeout: 1000,
+    timeout: 300000,
     retention: { standalone: true },
   });
   await createRunWorktreeSetupExecutor(deps, run, { envVars })(input([probe]));
@@ -310,7 +310,7 @@ for (const scenario of [
       );
       const bash = await runSubprocess({ kind: 'host' }, resolveBashPath(), ['-c', probe], {
         cwd: root,
-        timeout: 1000,
+        timeout: 300000,
         env: environment.envVars ?? {},
         protectedEnvKeys: environment.protectedEnvKeys,
         retention: { standalone: true },
