@@ -3,6 +3,7 @@ import { describe, test, expect, afterEach, spyOn } from 'bun:test';
 import { SqliteAdapter } from './sqlite';
 import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION, readSchemaVersion } from '../schema-version';
+import { webPushSubscriptionRowSchema } from '../../schemas/web-push';
 import { Database, SQLiteError, type Statement } from 'bun:sqlite';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
@@ -730,6 +731,16 @@ describe('SqliteAdapter', () => {
       );
       return new Map(result.rows.map(r => [r.name, new Set(raw_pragma(currentDbPath, r.name))]));
     }
+
+    test('the subscription row schema matches both persisted table shapes', async () => {
+      db = createTestDb();
+      const table = 'remote_agent_web_push_subscriptions';
+      const expected = Object.keys(webPushSubscriptionRowSchema.shape).sort();
+      const sqliteColumns = (await sqliteSchemaColumns()).get(table);
+      const postgresColumns = postgresArchonColumns().get(table);
+      expect([...(sqliteColumns ?? [])].sort()).toEqual(expected);
+      expect([...(postgresColumns ?? [])].sort()).toEqual(expected);
+    });
 
     test('every non-auth Postgres table is created by the SQLite schema', async () => {
       db = createTestDb();

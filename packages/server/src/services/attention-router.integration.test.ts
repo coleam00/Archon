@@ -218,6 +218,12 @@ test.each([404, 410])(
     });
     await new AttentionRouter([destination], new Set()).scan();
     expect(sender).toHaveBeenCalledTimes(2);
+    for (const call of sender.mock.calls)
+      expect(JSON.parse(String(call[1]))).toEqual({
+        runId,
+        workflowName: 'nightly',
+        kind: 'action_required',
+      });
     expect((await listWebPushSubscriptions()).map(row => row.endpoint)).toEqual([
       subscription('live').endpoint,
     ]);
@@ -304,12 +310,12 @@ test('subscription routes require identity, validate shared schemas and create/d
   );
   registerApiRoutes(app, adapter, new ConversationLockManager());
   const body = JSON.stringify(subscription('api'));
-  const request = (method: string, identity = true, data = body) =>
+  const request = (method: string, identity: string | false = 'push-test-operator', data = body) =>
     app.request('/api/web-push/subscriptions', {
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...(identity ? { 'X-Archon-User': 'push-test-operator' } : {}),
+        ...(identity ? { 'X-Archon-User': identity } : {}),
       },
       body: data,
     });
@@ -318,17 +324,25 @@ test('subscription routes require identity, validate shared schemas and create/d
     (
       await request(
         'POST',
-        true,
+        'push-test-operator',
         JSON.stringify({ ...subscription('api'), endpoint: 'http://insecure.example' })
       )
     ).status
   ).toBe(400);
   expect(
-    (await request('POST', true, JSON.stringify({ ...subscription('api'), endpoint: 'not-a-url' })))
-      .status
+    (
+      await request(
+        'POST',
+        'push-test-operator',
+        JSON.stringify({ ...subscription('api'), endpoint: 'not-a-url' })
+      )
+    ).status
   ).toBe(400);
   for (let i = 0; i < 2; i++) expect((await request('POST')).status).toBe(200);
-  expect((await listWebPushSubscriptions()).length).toBe(1);
+  const ownedSubscriptions = await listWebPushSubscriptions();
+  expect(ownedSubscriptions.length).toBe(1);
+  expect((await request('DELETE', 'another-push-operator')).status).toBe(200);
+  expect(await listWebPushSubscriptions()).toEqual(ownedSubscriptions);
   for (let i = 0; i < 2; i++) expect((await request('DELETE')).status).toBe(200);
   expect(await listWebPushSubscriptions()).toEqual([]);
   transport.stop();

@@ -1,10 +1,20 @@
 import { afterAll, describe, test, expect } from 'bun:test';
 import { Hono } from 'hono';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { webPushPayloadSchema } from '@archon/core/schemas/web-push';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { HTML_CACHE_CONTROL, IMMUTABLE_ASSET_CACHE_CONTROL, serveWebUi } from './static-cache';
+
+test('the shipped worker supports exactly the payload schema attention kinds', () => {
+  const script = readFileSync(new URL('../../web/public/attention-sw.js', import.meta.url), 'utf8');
+  const workerKinds: unknown = runInNewContext(`${script}\nObject.keys(attentionBodies).sort()`, {
+    self: { addEventListener: () => {} },
+  });
+  expect(workerKinds).toEqual([...webPushPayloadSchema.shape.kind.options].sort());
+});
 
 // Each describe reads its tree across several tests, so clean up once at the end.
 const tempRoots: string[] = [];
