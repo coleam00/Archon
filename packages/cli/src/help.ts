@@ -83,6 +83,11 @@ const forgeOperationDescriptions = {
 // live here so the global Commands block does not grow).
 const commandHelp: HelpEntry[] = [
   {
+    command: 'state',
+    spec: 'state <get|put|patch|log|delete>',
+    description: 'Read and audit durable project JSON documents',
+  },
+  {
     command: 'forge',
     subcommand: 'resolve',
     spec: 'forge resolve',
@@ -108,8 +113,8 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'user',
-    spec: 'user <list|role>',
-    description: 'List users and manage roles as the operator',
+    spec: 'user <list|role|link>',
+    description: 'List users, link identities and manage roles as the operator',
   },
   {
     command: 'trigger',
@@ -292,6 +297,12 @@ const commandHelp: HelpEntry[] = [
     description: 'Install archon-cli into .claude/skills and .agents/skills',
   },
   {
+    command: 'provider',
+    subcommand: 'install',
+    spec: 'provider install <id...>',
+    description: 'Install maintained providers matching this Archon release',
+  },
+  {
     command: 'plugin',
     subcommand: 'install',
     spec: 'plugin install <owner/repo[/path][@tag]>',
@@ -454,6 +465,36 @@ const commandHelp: HelpEntry[] = [
 // "no flag documentation is lost" invariant honest — nothing here ships in
 // global help that was not in the original.
 const scopedOnlyHelp: HelpEntry[] = [
+  {
+    command: 'state',
+    subcommand: 'get',
+    spec: 'state get <name>',
+    description: 'Read the latest value and revision as JSON',
+  },
+  {
+    command: 'state',
+    subcommand: 'put',
+    spec: 'state put <name> --if-revision <n>',
+    description: 'Replace the value with JSON from stdin; 0 creates it',
+  },
+  {
+    command: 'state',
+    subcommand: 'patch',
+    spec: 'state patch <name>',
+    description: 'Apply {ops:[...]} from stdin to the latest value',
+  },
+  {
+    command: 'state',
+    subcommand: 'delete',
+    spec: 'state delete <name> [--if-revision <n>]',
+    description: 'Append an audited tombstone',
+  },
+  {
+    command: 'state',
+    subcommand: 'log',
+    spec: 'state log <name> [--limit <n>]',
+    description: 'Read revisions newest first, including writers and operations',
+  },
   ...Object.entries(forgeOperationDescriptions)
     .filter(([op]) => op !== 'resolve')
     .map(([subcommand, description]) => ({
@@ -477,6 +518,12 @@ const scopedOnlyHelp: HelpEntry[] = [
     subcommand: 'list',
     spec: 'user list',
     description: 'List user ids, roles, display names and identities',
+  },
+  {
+    command: 'user',
+    subcommand: 'link',
+    spec: 'user link <user-id> <platform>:<platform-user-id> [--move]',
+    description: 'Link an identity to an existing user; --move reassigns a conflicting identity',
   },
   {
     command: 'user',

@@ -28,6 +28,8 @@
     "./codex/descriptor": "./src/codex/descriptor.ts",
     "./codex": "./src/codex/index.ts",
     "./pi/plugin": "./src/community/pi/plugin.ts",
+    "./pi/extension-error-broker": "./src/community/pi/extension-error-broker.ts",
+    "./pi/model-ref": "./src/community/pi/model-ref.ts",
     "./pi/config": "./src/community/pi/config.ts",
     "./pi/descriptor": "./src/community/pi/descriptor.ts",
     "./pi": "./src/community/pi/index.ts",

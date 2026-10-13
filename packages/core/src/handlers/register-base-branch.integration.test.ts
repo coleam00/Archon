@@ -70,6 +70,9 @@ async function fixture(name: string): Promise<{ remote: string; local: string }>
   git(local, 'remote', 'set-head', 'origin', '-a');
   git(local, 'checkout', '-qb', 'private-feature');
   process.env.ARCHON_HOME = join(root, name, '.archon-home');
+  // Conversations need a configured default provider.
+  await mkdir(process.env.ARCHON_HOME);
+  await writeFile(join(process.env.ARCHON_HOME, 'config.yaml'), 'defaultAssistant: claude\n');
   return { remote, local };
 }
 async function worktree(local: string, id: string, identifier: string): Promise<string> {

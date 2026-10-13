@@ -202,6 +202,24 @@ import { TerminalStatusWriteError } from './terminal-status-write';
 
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
+    getStateDocument: mock<IWorkflowStore['getStateDocument']>(() => {
+      throw new Error('Unexpected getStateDocument');
+    }),
+    putStateDocument: mock<IWorkflowStore['putStateDocument']>(() => {
+      throw new Error('Unexpected putStateDocument');
+    }),
+    patchStateDocument: mock<IWorkflowStore['patchStateDocument']>(() => {
+      throw new Error('Unexpected patchStateDocument');
+    }),
+    deleteStateDocument: mock<IWorkflowStore['deleteStateDocument']>(() => {
+      throw new Error('Unexpected deleteStateDocument');
+    }),
+    listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(() => {
+      throw new Error('Unexpected listStateRevisions');
+    }),
+    pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
+      throw new Error('Unexpected pruneStateRevisions');
+    }),
     admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
       throw new Error('Unexpected admitResourceStart');
     }),
@@ -2030,7 +2048,7 @@ describe('executeWorkflow', () => {
           'test message',
           { conversationId: 'db-conv-1' }
         )
-      ).rejects.toThrow(/unknown provider 'claud'/);
+      ).rejects.toThrow(/Unknown provider: 'claud'/);
     });
   });
 
@@ -2400,11 +2418,11 @@ describe('executeWorkflow', () => {
           { conversationId: 'db-conv-1' },
           { preCreatedRun, priorCompletedNodes: new Map() }
         )
-      ).rejects.toThrow(/unknown provider 'removed-provider'/);
+      ).rejects.toThrow(/Unknown provider: 'removed-provider'/);
 
       expect(failRun).toHaveBeenCalledWith(
         'resume-removed-provider-run',
-        expect.stringContaining("unknown provider 'removed-provider'")
+        expect.stringContaining("Unknown provider: 'removed-provider'")
       );
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
     });

@@ -143,11 +143,37 @@ async function fixture(
   // The loader distinguishes an absent optional ID from an explicitly invalid one.
   // The entry removes only this test's suppressed empty value after Bun loads env.
   const source = (p: string): string => JSON.stringify(join(repo, p));
+  const providerEntry = join(root, 'provider.ts');
+  const expectedTokenFile = join(root, 'expected-token');
+  writeFileSync(
+    providerEntry,
+    `
+import { appendFileSync, readFileSync } from 'node:fs';
+import { serveProvider } from ${source('packages/provider-contract/src/plugin/index.ts')};
+import { claudeDescriptor } from ${source('packages/providers/src/index.ts')};
+await serveProvider({
+  descriptor: claudeDescriptor,
+  create: () => ({
+    getType: () => claudeDescriptor.id,
+    getCapabilities: () => claudeDescriptor.capabilities,
+    checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+    async *sendQuery(_prompt, _cwd, _session, options) {
+      const expected = ${deliveryMode === 'user' ? "'stub-user-credential'" : deliveryMode === 'scrub' ? "''" : deliveryMode === 'absent' ? "'explicit-fixture'" : `readFileSync(${JSON.stringify(expectedTokenFile)}, 'utf8')`};
+      if (options?.env?.GH_TOKEN !== expected || options?.env?.GITHUB_TOKEN !== expected) throw new Error('AI credential delivery failed');
+      if (${deliveryMode !== 'absent'} && !['GH_TOKEN', 'GITHUB_TOKEN'].every(key => options?.protectedEnvKeys?.includes(key))) throw new Error('Injected credentials unprotected');
+      appendFileSync(${JSON.stringify(marker)}, 'ai\\n');
+      yield { type: 'result', text: 'verified', sessionId: 'fixture-session' };
+      yield { type: 'settled' };
+    },
+  }),
+});
+`
+  );
   writeFileSync(
     entry,
     `
 import { mock } from 'bun:test';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 if (process.env.GITHUB_APP_INSTALLATION_ID === '') delete process.env.GITHUB_APP_INSTALLATION_ID;
 let currentToken;
 let minted = 0;
@@ -162,6 +188,7 @@ mock.module(${JSON.stringify(Bun.resolveSync('@octokit/rest', join(repo, 'packag
     if (route !== 'POST /app/installations/{installation_id}/access_tokens' || args.installation_id !== 42) throw new Error('Unexpected GitHub request');
     if (${options.mintFailure === true}) throw new Error('Stub installation mint refused');
     currentToken = 'stub-installation-' + (++minted) + '-' + process.pid;
+    writeFileSync(${JSON.stringify(expectedTokenFile)}, currentToken);
     appendFileSync(${JSON.stringify(join(root, 'mint'))}, 'minted\\n');
     return { data: { token: currentToken, expires_at: new Date(Date.now() + 1000).toISOString() } };
   }
@@ -172,16 +199,14 @@ mock.module(${source('packages/core/src/db/user-github-token-store.ts')}, () => 
   getDecryptedAccessToken: async () => ${mode === 'user' ? "'stub-user-credential'" : 'null'},
   getUserGithubAuthor: async () => undefined,
 }));
-const { ClaudeProvider } = await import(${source('packages/providers/src/claude/provider.ts')});
-ClaudeProvider.prototype.checkCredential = async () => ({ state: 'valid' });
-ClaudeProvider.prototype.sendQuery = async function* (_prompt, _cwd, _session, options) {
-  const expected = ${deliveryMode === 'user' ? "'stub-user-credential'" : deliveryMode === 'scrub' ? "''" : deliveryMode === 'absent' ? "'explicit-fixture'" : 'currentToken'};
-  if (options?.env?.GH_TOKEN !== expected || options?.env?.GITHUB_TOKEN !== expected) throw new Error('AI credential delivery failed');
-  if (${deliveryMode !== 'absent'} && !['GH_TOKEN', 'GITHUB_TOKEN'].every(key => options?.protectedEnvKeys?.includes(key))) throw new Error('Injected credentials unprotected');
-  appendFileSync(${JSON.stringify(marker)}, 'ai\\n');
-  yield { type: 'result', text: 'verified', sessionId: 'fixture-session' };
-  yield { type: 'settled' };
-};
+const paths = await import(${source('packages/paths/src/index.ts')});
+const { MAINTAINED_PROVIDER_IDS } = await import(${source('packages/provider-contract/src/index.ts')});
+const sourceEntries = Object.fromEntries(MAINTAINED_PROVIDER_IDS.map(id => [id, paths.getSourceProviderEntry(id)]));
+sourceEntries.claude = ${JSON.stringify(providerEntry)};
+mock.module(${JSON.stringify(Bun.resolveSync('@archon/paths', join(repo, 'packages/core')))}, () => ({
+  ...paths,
+  getSourceProviderEntry: id => sourceEntries[id],
+}));
 if (process.argv[2] === 'seed') {
   const { createCodebase } = await import(${source('packages/core/src/db/codebases.ts')});
   const { closeDatabase } = await import(${source('packages/core/src/db/connection.ts')});
@@ -191,7 +216,7 @@ if (process.argv[2] === 'seed') {
   appendFileSync(${JSON.stringify(join(root, 'user'))}, user.id);
   await closeDatabase();
 } else if (process.argv[2] === 'pause') {
-  const { registerBuiltinProviders } = await import(${source('packages/providers/src/in-process.ts')});
+  const { registerHostProviders } = await import(${source('packages/core/src/providers/register-host-providers.ts')});
   const { createCliWorkflowDeps } = await import(${source('packages/cli/src/utils/workflow-deps.ts')});
   const { createCodebase } = await import(${source('packages/core/src/db/codebases.ts')});
   const { getOrCreateConversation } = await import(${source('packages/core/src/db/conversations.ts')});
@@ -204,7 +229,7 @@ if (process.argv[2] === 'seed') {
   const { HeadlessPlatform } = await import(${source('packages/core/src/workflows/headless-platform.ts')});
   const { setPlatformPolicies } = await import(${source('packages/core/src/platforms/registry.ts')});
   setPlatformPolicies([]);
-  registerBuiltinProviders();
+  await registerHostProviders();
   const cwd = ${JSON.stringify(project)};
   const codebase = await createCodebase({ name: 'pause', default_cwd: cwd, kind: '${options.git ? 'repo' : 'folder'}', repository_url: 'https://github.com/fixture-owner/fixture-repo' });
   const user = await findOrCreateUserByPlatformIdentity('cli', 'app-fixture');
@@ -270,7 +295,7 @@ ${options.wait === 'event' ? '      event: ready\n      deadline_ms: 60000' : ' 
   );
   writeFileSync(
     join(project, '.archon/config.yaml'),
-    'env:\n  GH_TOKEN: explicit-fixture\n  GITHUB_TOKEN: explicit-fixture\n' +
+    'assistant: claude\nenv:\n  GH_TOKEN: explicit-fixture\n  GITHUB_TOKEN: explicit-fixture\n' +
       (options.git ? 'worktree:\n  path: .worktrees\n  baseBranch: main\n' : '')
   );
   if (options.git) {

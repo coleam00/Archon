@@ -215,12 +215,39 @@ function createNotePayload(overrides?: {
 
 describe('GitLabAdapter', () => {
   beforeEach(() => {
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.warn.mockClear();
     mockGetOrCreateConversation.mockClear();
     mockHandleMessage.mockClear();
     mockOnConversationClosed.mockClear();
     mockFetch.mockClear();
     // Reset env
     delete process.env.GITLAB_ALLOWED_USERS;
+  });
+
+  test('initialization logs only operational configuration', () => {
+    createAdapter();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { gitlabUrl: 'https://gitlab.example.com' },
+      'gitlab.adapter_initialized'
+    );
+  });
+
+  test.each(['own', 'marked'])('suppresses %s comments without logging identities', async kind => {
+    const adapter = createAdapter({ botMention: 'private-bot' });
+    await adapter.handleWebhook(
+      createNotePayload({
+        username: kind === 'own' ? 'private-bot' : 'alice',
+        note:
+          kind === 'marked' ? '@archon hello <!-- archon-bot-response -->' : '@private-bot hello',
+      }),
+      'test-secret'
+    );
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      kind === 'own' ? 'gitlab.ignoring_own_comment' : 'gitlab.ignoring_marked_comment'
+    );
+    expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
   describe('basic interface', () => {
@@ -250,9 +277,15 @@ describe('GitLabAdapter', () => {
   describe('webhook token verification', () => {
     test('rejects invalid token', async () => {
       const adapter = createAdapter({ secret: 'correct-secret' });
+      mockLogger.error.mockClear();
       await adapter.handleWebhook('{}', 'wrong-token');
       // Should log error and return without processing
       expect(mockHandleMessage).not.toHaveBeenCalled();
+      // A rejected token is often a real but stale secret: no fragment of it is logged.
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { payloadSize: 2 },
+        'gitlab.invalid_webhook_token'
+      );
     });
 
     test('rejects empty token', async () => {
@@ -679,44 +712,50 @@ describe('GitLabAdapter', () => {
       }
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ gitlabUsername: 'testuser' }),
+        { err: expect.objectContaining({ message: 'DB connection failed' }), platform: 'gitlab' },
         'gitlab.user_resolve_failed'
       );
     });
 
-    test('passes resolved archonUserId to handleMessage', async () => {
-      // Seed DB mocks so handleWebhook reaches handleMessage
-      mockGetOrCreateConversation.mockImplementation(async () => ({
-        id: 'conv-test-uuid',
-        codebase_id: 'codebase-test-uuid',
-        cwd: '/tmp/project',
-        platform_type: 'gitlab',
-        platform_conversation_id: 'mygroup/myproject#1',
-      }));
-      mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
-        id: 'codebase-test-uuid',
-        repository_url: 'https://gitlab.example.com/mygroup/myproject',
-        default_cwd: '/tmp/test-workspaces/mygroup/myproject/source',
-        name: 'myproject',
-      }));
+    test.each(['fix this', '/workflow run @alice'])(
+      'dispatches %s with internal identity and private logs',
+      async message => {
+        // Seed DB mocks so handleWebhook reaches handleMessage
+        mockGetOrCreateConversation.mockImplementation(async () => ({
+          id: 'conv-test-uuid',
+          codebase_id: 'codebase-test-uuid',
+          cwd: '/tmp/project',
+          platform_type: 'gitlab',
+          platform_conversation_id: 'mygroup/myproject#1',
+        }));
+        mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
+          id: 'codebase-test-uuid',
+          repository_url: 'https://gitlab.example.com/mygroup/myproject',
+          default_cwd: '/tmp/test-workspaces/mygroup/myproject/source',
+          name: 'myproject',
+        }));
 
-      const adapter = createAdapter();
-      const payload = createNotePayload({ username: 'testuser' });
+        const adapter = createAdapter();
+        const payload = createNotePayload({ username: 'testuser', note: `@archon ${message}` });
 
-      await adapter.handleWebhook(payload, 'test-secret');
+        await adapter.handleWebhook(payload, 'test-secret');
 
-      expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
-        'gitlab',
-        expect.any(String),
-        'codebase-test-uuid'
-      );
-      expect(mockHandleMessage).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.objectContaining({ actor: { kind: 'user', userId: 'user-test-uuid' } })
-      );
-    });
+        if (message.startsWith('/'))
+          expect(mockLogger.debug).toHaveBeenCalledWith('gitlab.slash_command_processing');
+
+        expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
+          'gitlab',
+          expect.any(String),
+          'codebase-test-uuid'
+        );
+        expect(mockHandleMessage).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ actor: { kind: 'user', userId: 'user-test-uuid' } })
+        );
+      }
+    );
 
     test('skips user resolution when sender username is missing', async () => {
       // Seed DB mocks so handleWebhook reaches handleMessage
