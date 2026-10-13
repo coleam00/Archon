@@ -77,7 +77,8 @@ function createSetupExecutor(
           cwd: input.workingPath,
           timeout: input.timeout,
           // SIGKILL so a command that traps SIGTERM cannot outlive its bound. It reaches
-          // only the shell; processes the command started in the background survive it.
+          // only the `bash -c` process: the step the shell was running (an installer, a
+          // `sleep`, a script's child) and any background job keep running after it.
           killSignal: 'SIGKILL',
           env: environment.envVars ?? {},
           protectedEnvKeys: environment.protectedEnvKeys,
@@ -87,6 +88,18 @@ function createSetupExecutor(
               ? retention
               : { ...retention, nodeId: `setup-${attemptId}-${commandIndex}` },
         });
+        // A shell that exits 0 while a background child still holds its stdout or stderr
+        // settles as a success only when the timeout destroys the streams. Reaching the
+        // bound is a timeout whatever the exit status.
+        if (Date.now() - started >= input.timeout) {
+          throw Object.assign(new Error(`Command timed out after ${input.timeout} ms`), {
+            killed: true,
+            code: null,
+            signal: null,
+            stdout: result.stdout,
+            stderr: result.stderr,
+          });
+        }
       } catch (error) {
         const rejection = redactSubprocessError(
           error instanceof Error ? error : new Error(String(error)),
