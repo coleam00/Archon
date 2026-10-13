@@ -173,7 +173,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 
 - **`remote_agent_workflow_runs`** - Workflow execution tracking
   - Tracks active workflows per conversation
-  - Locks concurrent execution per `working_path`: a second dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Stale `pending` rows older than 5 minutes are treated as orphaned and ignored. A `workflow:` sub-run shares its parent's checkout unless the node declares `isolation: worktree`, so the path-lock excludes both the run's ancestor chain and its descendants (via `parent_run_id`) — a child never contends with its own parent. Siblings are **not** excluded.
+  - Locks concurrent execution per `working_path`: a second dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Stale `pending` rows older than 5 minutes are treated as orphaned and ignored. A `workflow:` sub-run shares its parent's checkout unless the node declares `isolation: worktree`, so the path-lock excludes both the run's ancestor chain and its descendants (via `parent_run_id`) — a child never contends with its own parent. Children of the same `fan_out` node share the checkout by design, so the lock also excludes them, their descendants, and the fan-out siblings of each ancestor; each such pair is recorded as `workflow.checkout_shared` events. Other runs on the path, including children of a different node, still contend.
   - Stores workflow state, step progress, and parent conversation linkage
   - Nullable `user_id` records which user triggered the run
   - Nullable `parent_run_id` (#2121 Phase 2) — self-referential FK (`ON DELETE SET NULL`) linking a `workflow:` sub-run to the run that spawned it; null for top-level runs. Makes the run tree walkable (`findChildRuns`/`getRunAncestry`) for the abandon cascade and cost roll-up.
@@ -249,6 +249,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_start_receipt_bindings`** - Per-binding preparation state for a source receipt
   - Keyed by `(receipt_id, binding_id)`; deleted with the owning receipt
   - Tracks binding revision, host, intent, preparation status, owner, and error
+  - `event_input_names` lists which of the intent's inputs came from the source event; preparation passes those only to a workflow that declares them
 
 - **`remote_agent_resource_slots`** - Keyed resource capacity
   - Stores capacity per `resource_key` for workflow and provider-attempt admission

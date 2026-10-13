@@ -4,13 +4,12 @@ import { join } from 'node:path';
 
 /**
  * The bundled packs' deterministic scripts are validated where they live:
- * `.archon/workflows/tsconfig.json` is the owning configuration, `bun run
- * type-check` compiles that project, and eslint.config.mjs and scripts/lint.ts
- * derive their globs from its `include` rather than restating them. What no config
- * can notice on its own is a pack script placed somewhere the globs do not reach;
- * it would simply go unchecked, with nothing failing. This is that check, and it is
- * repository tooling, not engine behaviour: the engine never learns which packs
- * exist.
+ * `.archon/workflows/tsconfig.json` is the owning configuration and `bun run
+ * type-check` compiles that project. Lint covers the whole `.archon/workflows`
+ * tree, so it cannot miss a script. Type-check can: a pack script placed somewhere
+ * the tsconfig globs do not reach would simply go untype-checked, with nothing
+ * failing. This is that check, and it is repository tooling, not engine behaviour:
+ * the engine never learns which packs exist.
  */
 const REPO_ROOT = join(import.meta.dir, '..');
 const PACKS_ROOT = join(REPO_ROOT, '.archon', 'workflows');
@@ -46,7 +45,7 @@ function includedByOwningProject(): string[] {
 }
 
 describe('workflow pack scripts are validated where they live', () => {
-  it('selects the same script family for type-check, lint and execution', () => {
+  it('type-checks every tracked pack script', () => {
     expect(includedByOwningProject()).toEqual(trackedPackScripts());
   });
 

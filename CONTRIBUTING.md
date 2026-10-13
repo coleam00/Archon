@@ -24,14 +24,16 @@ share one process. Run package test scripts to preserve isolation; requested sel
 are forwarded to Bun verbatim and bypass default grouping.
 
 CI is the full validation gate. While working, choose checks for the files and packages
-you changed: package `type-check` and `test` scripts, `bun run lint --max-warnings 0`,
+you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
 `generated-files`, `type-check`, `lint`, `installer` (POSIX only), and `tests`.
 The generated group checks bundled defaults, the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
-platform. Lint runs two separate typed ESLint processes at a time with their default heaps.
+platform. Lint runs Biome (`biome.jsonc`) after two TypeScript-API checks Biome cannot
+express: test-cleanup drift and the workflow persistence boundary. Install the Biome
+extension for in-editor diagnostics; ESLint extensions no longer find a config.
 
 ```bash
 bun run validate                            # optional local checks
@@ -66,8 +68,9 @@ drop; never run destructive verification against a configured live database.
 | CI job | Needs | Run it yourself |
 | --- | --- | --- |
 | `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
-| `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts`, and `packages/core/src/db/state-documents.postgres.integration.test.ts`; then `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/users.postgres.integration.test.ts` |
+| `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts`, `packages/core/src/db/state-documents.postgres.integration.test.ts`, and `packages/core/src/db/codebase-rename.postgres.integration.test.ts`; then `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/users.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
+| Linux `test` Slack conformance and smoke | compiled Slack plugin with a stubbed client for conformance, and the unmodified release binary for initialization and missing-token smoke | CI only; source conformance runs in `cd packages/chat-slack && bun run test` |
 | `serve-binary` | compiled CLI and server artifacts; CI runs the build and smoke on Linux and Windows | CI only; no local compilation on macOS |
 | `docs-build` | Node (Astro's CLI does not run under Bun); path-filtered to `packages/docs-web/` | `bun run build:docs` — run it when you change the docs site |
 | `file-store-primitives-macos` | GitHub Actions for the compiled probe, and a macOS runner for filesystem behavior; ordinary tests also run under `validate` | `bun run --cwd packages/workflows test src/file-store` and `bun run --cwd packages/cli test src/commands/workflow-file-store.integration.spec.ts`; the compiled probe skips locally |

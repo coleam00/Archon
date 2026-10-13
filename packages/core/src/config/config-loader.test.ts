@@ -326,6 +326,30 @@ workflows:
   });
 
   describe('loadRepoConfig', () => {
+    test('loads post-create commands and per-command timeout', async () => {
+      mockFsReadFile.mockResolvedValue(
+        'worktree:\n  postCreate: ["  bun install  ", "./setup.sh"]\n  postCreateTimeout: 75000'
+      );
+      expect((await loadRepoConfig('/repo')).worktree).toEqual({
+        postCreate: ['  bun install  ', './setup.sh'],
+        postCreateTimeout: 75000,
+      });
+    });
+
+    test.each([
+      'postCreate: false',
+      'postCreate: [42]',
+      'postCreate: [" "]',
+      'postCreateTimeout: 0',
+      'postCreateTimeout: -1',
+      'postCreateTimeout: 1.5',
+      'postCreateTimeout: "300000"',
+      'postCreateTimeout: .inf',
+    ])('rejects invalid provisioning setting: %s', async setting => {
+      mockFsReadFile.mockResolvedValue(`worktree:\n  ${setting}`);
+      await expect(loadRepoConfig('/repo')).rejects.toThrow('worktree.postCreate');
+    });
+
     test('loads from .archon/config.yaml', async () => {
       mockFsReadFile.mockResolvedValue('assistant: codex');
 

@@ -703,9 +703,8 @@ function parseDagNode(
   const node = result.data;
 
   // `mutates_checkout:` is workflow-level, so Zod strips a misplaced node-level value
-  // before superRefine runs. Ordinary includes inherit the parent declaration; composed
-  // fan-out instead consumes the included workflow's declaration for block-level
-  // parallelism, so its correction points to that target rather than the parent run.
+  // before superRefine runs. A composed block, fanned out or not, runs inside the
+  // composing run and shares its checkout, so the declaration belongs to that run.
   if (isIncludeDirective(node) && (raw as Record<string, unknown>).mutates_checkout !== undefined) {
     errors.push(
       `Node '${id}': 'mutates_checkout' is not supported on an include node: a composed block shares the run's single checkout, so concurrency safety is the composing workflow's to declare. Set it at workflow level, or use a 'workflow:' node when you want a separate governed run.`
@@ -717,7 +716,7 @@ function parseDagNode(
     (raw as Record<string, unknown>).mutates_checkout !== undefined
   ) {
     errors.push(
-      `Node '${id}': 'mutates_checkout' is not supported on a composed fan-out node. Declare 'mutates_checkout: false' at the root of the included workflow when its whole block is safe to run concurrently, or set 'fan_out.max_parallel: 1'.`
+      `Node '${id}': 'mutates_checkout' is not supported on a composed fan-out node: its instances run inside this run and share its checkout. Set 'fan_out.max_parallel: 1' to run them one at a time, or use a 'workflow:' fan-out for separate governed runs.`
     );
     return null;
   }

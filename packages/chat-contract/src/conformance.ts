@@ -1,4 +1,5 @@
 import { PluginRemoteError } from '@archon/provider-contract/plugin';
+export { PluginRemoteError } from '@archon/provider-contract/plugin';
 import { chatPluginDescriptorSchema } from './descriptor';
 import type { ConnectedChat } from './connect';
 import { ChatStartError } from './serve';

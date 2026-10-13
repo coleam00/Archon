@@ -441,7 +441,6 @@ function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
   // (The drop-warning is indifferent: it already filters `!== undefined`.) The key set is
   // this module's own const tuple list, never caller input.
   for (const [wfKey] of NODE_AFFECTING_WORKFLOW_FIELDS) {
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
     delete scope[wfKey];
   }
   return collapsed;
@@ -905,7 +904,6 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
 const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
-const COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
 
 /**
  * What remains of the included file's workflow-level configuration after the collapse is
@@ -931,16 +929,10 @@ const COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mu
  */
 function warnDroppedWorkflowLevelFields(
   includeNode: IncludeDirective,
-  child: ResolvedWorkflow,
-  consumedFields?: ReadonlySet<string>
+  child: ResolvedWorkflow
 ): void {
   const droppedFields = Object.entries(child)
-    .filter(
-      ([key, value]) =>
-        !NON_DROPPED_WORKFLOW_KEYS.has(key) &&
-        consumedFields?.has(key) !== true &&
-        value !== undefined
-    )
+    .filter(([key, value]) => !NON_DROPPED_WORKFLOW_KEYS.has(key) && value !== undefined)
     .map(([key]) => key)
     .sort();
   if (droppedFields.length === 0) return;
@@ -1157,8 +1149,7 @@ export function expandWorkflowIncludes(
         }
         warnDroppedWorkflowLevelFields(
           { id: node.id, kind: 'include', include: node.include },
-          child,
-          COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS
+          child
         );
         // Exercise the exact ordinary-include instantiation once at load time. Width is
         // still deferred, but the block's input contract and packaged command resources

@@ -1,3 +1,21 @@
+import type { WorktreeSetupFailureKind } from '@archon/workflows/schemas/worktree-setup';
+
+export class WorktreePostCreateError extends Error {
+  constructor(
+    readonly commandIndex: number,
+    readonly command: string,
+    readonly failureKind: WorktreeSetupFailureKind,
+    detail: string,
+    readonly exitCode?: number,
+    readonly errno?: string,
+    readonly signal?: string,
+    cause?: unknown
+  ) {
+    super(`worktree.postCreate command ${commandIndex + 1} (${command}) ${detail}`, { cause });
+    this.name = 'WorktreePostCreateError';
+  }
+}
+
 import type { IsolationBlockReason } from './types';
 
 export class MissingProjectDirectoryError extends Error {
@@ -219,6 +237,10 @@ export function recordCleanupFailure(err: Error, detail: string): void {
  * Classify isolation creation errors into user-friendly messages.
  */
 export function classifyIsolationError(err: Error): string {
+  if (err instanceof WorktreePostCreateError) {
+    const cleanup = (err as ErrorWithCleanupFailure).cleanupFailure;
+    return `**Error:** ${err.message}${cleanup ? ` ${cleanup}` : ''}`;
+  }
   if (err instanceof MissingProjectDirectoryError) return `**Error:** ${err.message}`;
 
   const stderr = (err as Error & { stderr?: string }).stderr ?? '';
@@ -244,7 +266,8 @@ export function classifyIsolationError(err: Error): string {
  * so they are visible as crashes rather than silent workspace failures.
  */
 export function isKnownIsolationError(err: Error): boolean {
-  if (err instanceof MissingProjectDirectoryError) return true;
+  if (err instanceof WorktreePostCreateError || err instanceof MissingProjectDirectoryError)
+    return true;
 
   const stderr = (err as Error & { stderr?: string }).stderr ?? '';
   const errorLower = `${err.message} ${stderr}`.toLowerCase();

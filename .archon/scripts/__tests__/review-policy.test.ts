@@ -2,7 +2,9 @@ import { expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { FULL_REVIEW_RISKS } from '../../workflows/sdlc/.shared/review-policy';
-import { runPackScript } from './deliver-checks-harness';
+import { packScriptRunner } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
 
 it('delivery exposes the owned policy unchanged', () => {
   const run = runPackScript('deliver/scripts/review-policy');

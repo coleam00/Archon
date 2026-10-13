@@ -21,7 +21,7 @@ PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 
 ### Read the project's rules
 
-Read the repo's `CLAUDE.md` (project-level). It's the source of truth for engineering principles, type-safety rules, eslint policy, error-handling conventions, and forbidden patterns.
+Read the repo's `CLAUDE.md` (project-level). It's the source of truth for engineering principles, type-safety rules, lint policy, error-handling conventions, and forbidden patterns.
 
 ### Read the gate decision
 

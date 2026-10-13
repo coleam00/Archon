@@ -88,6 +88,9 @@
     ],
     [
       "src/platform-policies.test.ts"
+    ],
+    [
+      "src/sources/standard-webhooks/"
     ]
   ]
 }

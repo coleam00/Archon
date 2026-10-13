@@ -1,3 +1,4 @@
+import type { WorktreeCreateConfig } from '@archon/isolation';
 import type { WorkflowStoreKind } from '@archon/workflows/store';
 import type { ResolvedWorkflowPolicy } from '@archon/workflows/schemas/run-config';
 /**
@@ -248,69 +249,7 @@ export interface RepoConfig {
   /**
    * Worktree settings for this repository
    */
-  worktree?: {
-    /**
-     * Base branch for worktrees (e.g., 'main', 'develop')
-     * @default auto-detected from repo
-     */
-    baseBranch?: string;
-
-    /**
-     * Git-ignored files/directories to copy from main repo to new worktrees.
-     * Tracked files are already in worktrees — only use this for git-ignored files.
-     * @example [".env", ".archon", "data/fixtures/"]
-     */
-    copyFiles?: string[];
-
-    /**
-     * Initialize git submodules in new worktrees.
-     * Runs `git submodule update --init --recursive` after worktree creation
-     * when the repo contains a `.gitmodules` file. Repos without submodules
-     * pay zero cost (the check short-circuits).
-     *
-     * Set to `false` to skip submodule init (e.g., when submodules are not
-     * needed by any workflow or when fetch cost is prohibitive).
-     * @default true
-     */
-    initSubmodules?: boolean;
-
-    /**
-     * Per-project worktree directory (relative to repo root). When set,
-     * worktrees are created at `<repoRoot>/<path>/<branch>` instead of under
-     * `~/.archon/worktrees/` or the workspaces layout.
-     *
-     * Opt-in — co-locates worktrees with the repo so they appear in the IDE
-     * file tree. The user is responsible for adding the directory to their
-     * `.gitignore` (no automatic file mutation).
-     *
-     * Path resolution precedence (highest to lowest):
-     *   1. this `worktree.path` (repo-local)
-     *   2. global `paths.worktrees` (absolute override in `~/.archon/config.yaml`)
-     *   3. auto-detected project-scoped (`~/.archon/workspaces/owner/repo/...`)
-     *   4. default global (`~/.archon/worktrees/`)
-     *
-     * Must be a safe relative path: no leading `/`, no `..` segments. Absolute
-     * or escaping values fail loudly at worktree creation (Fail Fast — no silent
-     * fallback).
-     *
-     * @example '.worktrees'
-     */
-    path?: string;
-
-    /**
-     * Git remote name for fetch/push operations.
-     *
-     * When set, all git operations (fetch, push, branch tracking) use this
-     * remote instead of 'origin'. Useful for repos with multiple remotes or
-     * non-standard naming conventions.
-     *
-     * When omitted, auto-detected: 'origin' if it exists, otherwise the sole
-     * remote if only one is configured.
-     *
-     * @example 'upstream'
-     */
-    remote?: string;
-  };
+  worktree?: WorktreeCreateConfig;
 
   /**
    * Documentation directory settings

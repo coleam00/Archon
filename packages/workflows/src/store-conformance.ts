@@ -922,10 +922,15 @@ export function describeWorkflowStoreConformance(
       expect(harness.terminalReports()).toEqual([pending.id, pending.id, paused.id, completed.id]);
     });
     test('fan-out recovery retracts only engine cancellations', async () => {
+      for (const reason of FAN_OUT_CANCEL_REASONS) {
+        const recovered = await running(store);
+        await store.cancelFanOutRun(recovered.id, reason);
+        expect((await store.recoverCancelledFanOutRun(recovered.id)).status).toBe('running');
+        expect(await types(store, recovered.id)).toEqual([]);
+      }
       const run = await running(store);
       await store.cancelFanOutRun(run.id, 'fan_out_gate');
       expect((await store.recoverCancelledFanOutRun(run.id)).status).toBe('running');
-      expect(await types(store, run.id)).toEqual([]);
       await store.cancelWorkflowRun(run.id);
       expect(await rejection(store.recoverCancelledFanOutRun(run.id))).toBeInstanceOf(Error);
       expect(await types(store, run.id)).toEqual(['workflow_cancelled']);

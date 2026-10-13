@@ -138,6 +138,7 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 | GET | `/api/codebases` | List registered codebases |
 | GET | `/api/codebases/{id}` | Get a single codebase |
 | POST | `/api/codebases` | Register a codebase (clone or local path) |
+| PATCH | `/api/codebases/{id}` | Rename a codebase |
 | DELETE | `/api/codebases/{id}` | Delete a codebase and clean up resources |
 | GET | `/api/codebases/{id}/environments` | List isolation environments for a codebase |
 
@@ -164,6 +165,16 @@ curl -X POST http://localhost:3090/api/codebases \
   -H "Content-Type: application/json" \
   -d '{"path": "/home/user/projects/my-repo"}'
 ```
+
+### Rename a Codebase
+
+```bash
+curl -X PATCH http://localhost:3090/api/codebases/{id} \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-repo"}'
+```
+
+Returns the updated codebase. The name is trimmed and must be 1 to 255 characters. The response is `409` when another codebase already uses the name, or when the new name would change where Archon stores the project's worktrees, state, logs and artifacts. That location comes from the name: an `owner/repo` name maps to `owner/repo`, any other name to `_local/<directory name>`, and a folder project to the slug of its name. The Web UI renames from the project's **More actions** menu or by double-clicking its name.
 
 ### Delete a Codebase
 

@@ -20,3 +20,15 @@ export const workflowEventRowSchema = z.object({
 });
 
 export type WorkflowEventRow = z.infer<typeof workflowEventRowSchema>;
+
+/** `workflow.checkout_shared` data: one fan-out sibling that shared this run's checkout. */
+export const checkoutSharedEventDataSchema = z
+  .object({
+    parent_run_id: z.string().min(1),
+    parent_node_id: z.string().min(1),
+    working_path: z.string().min(1),
+    sibling_run_id: z.string().min(1),
+  })
+  .catchall(z.unknown());
+
+export type CheckoutSharedEventData = z.infer<typeof checkoutSharedEventDataSchema>;

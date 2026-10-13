@@ -122,6 +122,20 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Compile Slack chat conformance fixture
+        if: runner.os == 'Linux'
+        run: bun packages/chat-slack/src/test/build-conformance.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
+
+      - name: Run compiled Slack chat conformance
+        if: runner.os == 'Linux'
+        run: bun packages/chat-slack/src/test/conformance-cli.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
+
+      - name: Build and smoke-test Slack chat release binary
+        if: runner.os == 'Linux'
+        run: |
+          bun build --compile packages/chat-slack/src/main.ts --outfile "$RUNNER_TEMP/archon-chat-slack"
+          bun packages/chat-slack/src/test/smoke.ts "$RUNNER_TEMP/archon-chat-slack"
+
       # No Windows Defender exclusion step here on purpose. It was the named
       # remaining suspect behind the downloadWebDist stalls (#2924), so one was
       # added and run on windows-latest — and its own readback disproved the
@@ -374,6 +388,11 @@ jobs:
         env:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: bun test packages/core/src/db/state-documents.postgres.integration.test.ts
+
+      - name: Run Postgres codebase rename test
+        env:
+          ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: bun test packages/core/src/db/codebase-rename.postgres.integration.test.ts
 
   docker-build:
     needs: changes

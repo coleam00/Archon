@@ -19,8 +19,6 @@ import { WorkflowNotResumableError } from './store';
 export { WorkflowNotResumableError } from './store';
 import type { ResolvedWorkflow, WorkflowDefinition, WorkflowRun } from './schemas';
 
-const trackTempRoot = trackTempRoots();
-
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -215,6 +213,7 @@ function resumableStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore
 }
 
 async function capturedRun(
+  trackTempRoot: (root: string) => string,
   workflowYaml: string,
   overrides: Partial<WorkflowRun> = {}
 ): Promise<WorkflowRun> {
@@ -254,6 +253,10 @@ export function runWorkflowEngineContractTests(
   observations: WorkflowEngineContractObservations
 ): void {
   describe('IWorkflowEngine contract', () => {
+    // Registered here, in the calling test file's scope: a hook registered while this shared
+    // module is first imported would clean up after one importing file only.
+    const trackTempRoot = trackTempRoots();
+
     it('submits a fresh run with constructor-bound dependencies', async () => {
       const createdRuns: Record<string, unknown>[] = [];
       const messages: string[] = [];
@@ -472,13 +475,16 @@ export function runWorkflowEngineContractTests(
     });
 
     it('executes the captured graph when the supplied same-name graph conflicts', async () => {
-      const run = await capturedRun(`
+      const run = await capturedRun(
+        trackTempRoot,
+        `
 name: test-workflow
 description: Captured
 nodes:
   - id: captured-node
     prompt: Run the captured graph
-`);
+`
+      );
       const resumed = { ...run, status: 'running' as const };
       const store = resumableStore({
         resumeWorkflowRun: async () => resumed,

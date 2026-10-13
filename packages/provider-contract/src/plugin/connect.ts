@@ -139,13 +139,17 @@ export async function connectProvider(
     getCapabilities: () => descriptor.capabilities,
     close: () => rpc.close(),
     async diagnose(request): Promise<ProviderDiagnostics> {
+      request.signal.throwIfAborted();
       return rpc.parse(
         providerDiagnosticsSchema,
-        await rpc.request(
-          '_archon/diagnose',
-          diagnoseRequestSchema.parse({
-            assistantConfig: omitUndefinedFields(request.assistantConfig),
-          })
+        await abortable(
+          rpc.request(
+            '_archon/diagnose',
+            diagnoseRequestSchema.parse({
+              assistantConfig: omitUndefinedFields(request.assistantConfig),
+            })
+          ),
+          request.signal
         )
       );
     },

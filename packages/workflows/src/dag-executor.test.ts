@@ -924,6 +924,7 @@ describe('planGraph', () => {
     expect(workflow.plan.sinks).toEqual(['left', 'right']);
     expect(workflow.nodes).toBe(workflow.plan.nodes);
 
+    // biome-ignore lint/correctness/noConstantCondition: compile-time assertions that never run
     if (false) {
       // @ts-expect-error Resolved workflow nodes are immutable after planning.
       workflow.nodes.push(node('late'));
@@ -32389,6 +32390,8 @@ describe('retained exec output', () => {
 describe('executeDagWorkflow -- container write-back gate', () => {
   const CONTAINER_EXEC = { kind: 'container' as const, containerId: 'cid-1' };
   const wbTestDir = join(tmpdir(), `dag-wb-test-${Date.now()}`);
+  // The executor creates `logs/` under the run's cwd, so this path becomes a real tree.
+  afterEach(() => removeTempTree(wbTestDir));
 
   function makeWritebackBackend(over?: Partial<Record<string, unknown>>) {
     return {
@@ -37892,6 +37895,46 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(JSON.parse(String(wrapper?.data.node_output))).toEqual(['done-a', 'done-b']);
   });
 
+  it('runs concurrent instances of a writing block in the shared checkout (#2777)', async () => {
+    await writeBlock(
+      [
+        'name: compose-blk',
+        'description: writes to the checkout',
+        'nodes:',
+        '  - id: work',
+        "    bash: 'echo $INPUTS.item > out-$INPUTS.item.txt && echo wrote-$INPUTS.item'",
+      ].join('\n')
+    );
+    const mockDeps = createMockDeps();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform: createMockPlatform(),
+        conversationId: 'conv-compose',
+        cwd: testDir,
+        workflow: {
+          name: 'compose-parent',
+          nodes: [
+            { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a","b"]'` },
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              depends_on: ['list'],
+              fan_out: { items: '$list.output', as: 'item', max_parallel: 2, join: 'all_success' },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('compose-writing-run-id'),
+      })
+    );
+
+    const wrapper = eventsOf(mockDeps.store).find(
+      e => e.event_type === 'node_completed' && e.step_name === 'fan'
+    );
+    expect(wrapper?.data.structured_output).toEqual(['wrote-a', 'wrote-b']);
+  });
+
   it('a persist_session node inside a composed body continues the scope session', async () => {
     // The parent has no persisted node of its own; only the fan-out's body persists.
     await writeBlock(
@@ -39415,53 +39458,6 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(eventsOf(mockDeps.store).some(e => e.step_name.startsWith(composeScope()))).toBe(false);
   });
 
-  it('fails closed when concurrent instances share the parent checkout of a mutating body', async () => {
-    // No mutates_checkout declaration: the body may write, so max_parallel > 1 must be
-    // refused before any instance expands (#2180/#2512).
-    await writeBlock(
-      [
-        'name: compose-blk',
-        'description: test block',
-        'nodes:',
-        '  - id: work',
-        "    bash: 'echo done'",
-      ].join('\n')
-    );
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-compose',
-        cwd: testDir,
-        workflow: {
-          name: 'compose-parent',
-          nodes: [
-            { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a", "b"]'` },
-            {
-              id: 'fan',
-              kind: 'compose_fan_out',
-              include: 'compose-blk',
-              depends_on: ['list'],
-              fan_out: { items: '$list.output', as: 'item', max_parallel: 2, join: 'all_done' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('compose-checkout-id'),
-      })
-    );
-
-    const failed = eventsOf(mockDeps.store).find(
-      e => e.event_type === 'node_failed' && e.step_name === 'fan'
-    );
-    expect(failed).toBeDefined();
-    expect(String(failed?.data.error)).toContain('mutates_checkout');
-    expect(eventsOf(mockDeps.store).some(e => e.event_type === 'fan_out_instances')).toBe(false);
-    expect(eventsOf(mockDeps.store).some(e => e.step_name.startsWith(composeScope()))).toBe(false);
-  });
-
   it('fails the node under join: all_success when an instance fails', async () => {
     await writeBlock(
       'name: compose-blk\ndescription: test block\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "exit 1"'
@@ -40647,10 +40643,10 @@ describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
       },
     };
 
-    const runChildWorkflow = mock(async (args: any) => ({
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async args => ({
       status: 'completed' as const,
       output: 'child-output',
-      childRunId: `subrun-${args.nodeId ?? 'child'}`,
+      childRunId: `subrun-${args.nodeId}`,
     }));
 
     await executeDagWorkflow(

@@ -11,10 +11,13 @@ const RETRY_OPTIONS = new Set(['maxRetries', 'retryDelay']);
 
 /**
  * `retry-options` is repo-wide law: Bun parses and ignores `maxRetries`/`retryDelay`, so any
- * occurrence is inert code. `recursive-cleanup` predates the shared helpers and still has a
- * frozen inventory, so it is scoped per file against `LEGACY_RECURSIVE_CLEANUP`.
+ * occurrence is inert code. `shared-tracker` is repo-wide law too: `trackTempRoots()` at the top
+ * level of a shared test helper registers its `afterEach` while the first importing test file
+ * loads, so every later file in the same `bun test` process leaks all of its roots.
+ * `recursive-cleanup` predates the shared helpers and still has a frozen inventory, so it is
+ * scoped per file against `LEGACY_RECURSIVE_CLEANUP`.
  */
-export type DriftRule = 'retry-options' | 'recursive-cleanup';
+export type DriftRule = 'retry-options' | 'shared-tracker' | 'recursive-cleanup';
 
 export interface DriftViolation {
   file: string;
@@ -275,13 +278,74 @@ function isInCleanup(node: ts.Node, bindings: CleanupBindings): boolean {
   return false;
 }
 
+/** How `trackTempRoots` is bound from the shared test utilities: by name or through a namespace. */
+interface TrackerBindings {
+  functions: Set<string>;
+  namespaces: Set<string>;
+}
+
+function trackerBindings(sourceFile: ts.SourceFile): TrackerBindings {
+  const functions = new Set<string>();
+  const namespaces = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== '@archon/paths/test-utils'
+    ) {
+      continue;
+    }
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings === undefined) continue;
+    if (ts.isNamespaceImport(bindings)) {
+      namespaces.add(bindings.name.text);
+      continue;
+    }
+    for (const element of bindings.elements) {
+      const importedName = element.propertyName?.text ?? element.name.text;
+      if (importedName === 'trackTempRoots') functions.add(element.name.text);
+    }
+  }
+  return { functions, namespaces };
+}
+
+function isTrackerCall(call: ts.CallExpression, trackers: TrackerBindings): boolean {
+  if (ts.isIdentifier(call.expression)) return trackers.functions.has(call.expression.text);
+  return (
+    ts.isPropertyAccessExpression(call.expression) &&
+    ts.isIdentifier(call.expression.expression) &&
+    trackers.namespaces.has(call.expression.expression.text) &&
+    call.expression.name.text === 'trackTempRoots'
+  );
+}
+
+/** True when no function encloses the node, so it runs while the module itself loads. */
+function runsAtModuleLoad(node: ts.Node): boolean {
+  for (let current = node.parent; current !== undefined; current = current.parent) {
+    if (ts.isFunctionLike(current)) return false;
+  }
+  return true;
+}
+
 export function checkSource(file: string, source: string): DriftViolation[] {
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
   const bindings = fsBindings(sourceFile);
   const cleanup = cleanupBindings(sourceFile);
+  const trackers = TEST_FILE.test(file)
+    ? { functions: new Set<string>(), namespaces: new Set<string>() }
+    : trackerBindings(sourceFile);
   const violations: DriftViolation[] = [];
 
   const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && isTrackerCall(node, trackers) && runsAtModuleLoad(node)) {
+      violations.push({
+        file,
+        line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+        rule: 'shared-tracker',
+        message:
+          'trackTempRoots() at the top level of a shared test module cleans up after the first importing file only; call it from each test file or from a function the test file calls',
+      });
+    }
     if (ts.isCallExpression(node)) {
       const name = rmCallName(node, bindings);
       if (name !== undefined) {
@@ -341,8 +405,6 @@ export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger
   ['packages/cli/src/commands/telemetry.test.ts', 2],
   ['packages/cli/src/commands/validate.test.ts', 1],
   ['packages/cli/src/commands/workflow.test.ts', 5],
-  ['packages/cli/src/utils/safe-console.test.ts', 1],
-  ['packages/cli/src/utils/stdout.test.ts', 1],
   ['packages/core/src/config/run-config.test.ts', 1],
   ['packages/core/src/credentials/config.test.ts', 1],
   ['packages/core/src/github-auth/auth.test.ts', 3],
@@ -393,7 +455,7 @@ function repositorySources(root: string): Set<string> {
 }
 
 /**
- * Scans the whole working tree rather than the changed files: both rules are repository law, and
+ * Scans the whole working tree rather than the changed files: every rule is repository law, and
  * a diff-scoped check would accept drift that an earlier merge already introduced.
  */
 export function checkRepository(root = REPO_ROOT, baseline = LEGACY_RECURSIVE_CLEANUP): string[] {
@@ -406,6 +468,7 @@ export function checkRepository(root = REPO_ROOT, baseline = LEGACY_RECURSIVE_CL
     for (const violation of checkSource(file, readFileSync(path, 'utf8'))) {
       switch (violation.rule) {
         case 'retry-options':
+        case 'shared-tracker':
           failures.push(`${file}:${violation.line} ${violation.message}`);
           break;
         case 'recursive-cleanup':

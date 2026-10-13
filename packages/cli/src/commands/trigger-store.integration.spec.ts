@@ -397,6 +397,108 @@ test('receipt inspection rejects invalid limits through the in-memory store', as
   expect(await store.listStartReceipts(1000)).toEqual([]);
 });
 
+/** Accept one binding for `workflowYaml` and drain it; returns the prepared request or the error. */
+async function prepareTriggerInputs(
+  workflowYaml: string,
+  inputs: ResourceStartBindingIntent['launch']['inputs'],
+  eventInputs?: ResourceStartBindingIntent['eventInputs']
+): Promise<{
+  host: WorkflowHost;
+  receiptId: string;
+  prepared?: Awaited<ReturnType<WorkflowHost['deps']['store']['getResourceStartRequest']>>;
+  error?: unknown;
+}> {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-store-')));
+  const project = join(root, 'project');
+  await mkdir(join(project, '.archon/workflows'), { recursive: true });
+  await writeFile(join(project, '.archon/workflows/portable.yaml'), workflowYaml);
+  const previousHome = process.env.ARCHON_HOME;
+  process.env.ARCHON_HOME = join(root, 'home');
+  registerBuiltinProviders();
+  setPlatformPolicies([]);
+  const host = hostForTest();
+  await host.records.codebases.createCodebase({
+    name: 'portable',
+    kind: 'folder',
+    default_cwd: project,
+  });
+  const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+  if (!user) throw new Error('Expected test identity');
+  const receipt = acceptance(
+    {
+      bindingId: 'mapped',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: user.id,
+      resource: 'portable',
+      capacity: 1,
+      overlap: 'queue',
+      launch: { cwd: project, workflowName: 'portable', inputs, isolation: { kind: 'in-place' } },
+      ...(eventInputs ? { eventInputs } : {}),
+    },
+    'mapped'
+  );
+  await host.deps.store.acceptStartReceipt(receipt);
+  const admitted: string[] = [];
+  try {
+    await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        admitted.push(id);
+      },
+    });
+  } catch (error) {
+    return { host, receiptId: receipt.receipt.id, error };
+  } finally {
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
+  }
+  const [id] = admitted;
+  return {
+    host,
+    receiptId: receipt.receipt.id,
+    prepared: id ? await host.deps.store.getResourceStartRequest(id) : undefined,
+  };
+}
+
+const undeclaredWorkflow =
+  'name: portable\ndescription: No inputs\nnodes:\n  - id: result\n    bash: echo done\n';
+
+test('preparation refuses event-mapped inputs for a workflow that declares none', async () => {
+  const { host, receiptId, error } = await prepareTriggerInputs(
+    undeclaredWorkflow,
+    {},
+    { order_id: 'from-the-event' }
+  );
+  expect(error).toBeInstanceOf(AggregateError);
+  expect((error as AggregateError).errors[0]).toMatchObject({
+    message: expect.stringContaining(
+      "Workflow 'portable' declares no inputs; a trigger cannot pass event-mapped input 'order_id'"
+    ),
+  });
+  expect((await host.deps.store.getStartReceipt(receiptId))?.bindings[0]).toMatchObject({
+    status: 'rejected',
+    error: 'launch_preparation_failed',
+  });
+});
+
+test('preparation passes literal inputs through to a workflow that declares none', async () => {
+  const { error, prepared } = await prepareTriggerInputs(undeclaredWorkflow, { mode: 'nightly' });
+  expect(error).toBeUndefined();
+  expect(prepared?.launch.run.metadata).toMatchObject({ inputs: { mode: 'nightly' } });
+});
+
+test('preparation passes event-mapped inputs to a workflow that declares them', async () => {
+  const { error, prepared } = await prepareTriggerInputs(
+    'name: portable\ndescription: Declared\ninputs:\n  order_id:\n    type: string\n    required: true\nnodes:\n  - id: result\n    bash: echo done\n',
+    {},
+    { order_id: 'from-the-event' }
+  );
+  expect(error).toBeUndefined();
+  expect(prepared?.launch.run.metadata).toMatchObject({ inputs: { order_id: 'from-the-event' } });
+});
+
 test('preparation preserves both failures when rejection cannot be persisted', async () => {
   const host = hostForTest();
   const statusError = new Error('status write unavailable');

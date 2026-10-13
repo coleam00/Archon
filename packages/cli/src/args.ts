@@ -22,6 +22,7 @@ export const cliArgOptions: CliArgOptions = {
   supersedes: { type: 'string' },
   open: { type: 'boolean' },
   spawn: { type: 'boolean' },
+  providers: { type: 'string' },
   quiet: { type: 'boolean', short: 'q' },
   verbose: { type: 'boolean', short: 'v' },
   json: { type: 'boolean' },

@@ -1,3 +1,4 @@
+import { createReleaseRepo, serveFixtureGit } from '../test-support/plugin-fixture';
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
@@ -52,21 +53,6 @@ const checksumsFor = (assets: Record<string, Uint8Array>): string =>
     .map(([name, bytes]) => `${sha256(bytes)}  ${name}\n`)
     .join('');
 
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const child = Bun.spawn(['git', '-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], {
-    cwd,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  if (code !== 0) throw new Error(`git ${args.join(' ')} failed: ${stderr}`);
-  return stdout.trim();
-}
-
 // Compiles the same forge fixture as forge's discovery.test.ts, so it takes the same
 // compile-sized budget.
 beforeAll(async () => {
@@ -77,22 +63,14 @@ beforeAll(async () => {
   pluginBinary = new Uint8Array(await readFile(binaryPath));
 
   const repo = join(fixtureRoot, 'repo');
-  await mkdir(repo);
-  await git(repo, 'init', '-q');
-  // HEAD stays v4.0.0, a forge manifest; pack-0.1.0 is an older commit whose
-  // manifest turned the plugin into a workflow pack.
-  for (const [tag, annotated] of [
-    ['pack-0.1.0', false],
-    ['v1.0.0', true],
-    ['v2.0.0', false],
-    ['v3.0.0', false],
-    ['v4.0.0', false],
-  ] as const) {
-    await git(repo, 'commit', '-q', '--allow-empty', '-m', tag);
-    await git(repo, 'tag', ...(annotated ? ['-a', '-m', tag] : []), tag);
-    commits.set(tag, await git(repo, 'rev-parse', 'HEAD'));
-  }
-  await git(repo, 'update-server-info');
+  const fixtureCommits = await createReleaseRepo(repo, [
+    { tag: 'pack-0.1.0' },
+    { tag: 'v1.0.0', annotated: true },
+    { tag: 'v2.0.0' },
+    { tag: 'v3.0.0' },
+    { tag: 'v4.0.0' },
+  ]);
+  for (const [tag, commit] of fixtureCommits) commits.set(tag, commit);
 
   server = Bun.serve({
     hostname: '127.0.0.1',
@@ -105,11 +83,8 @@ beforeAll(async () => {
           headers: { location: `/owner/repo/releases/tag/${latestTag}` },
         });
       }
-      const gitFile = /^\/owner\/repo\.git\/(.+)$/.exec(path);
-      if (gitFile) {
-        const file = Bun.file(join(repo, '.git', gitFile[1]));
-        return (await file.exists()) ? new Response(file) : new Response(null, { status: 404 });
-      }
+      const gitResponse = await serveFixtureGit(repo, path);
+      if (gitResponse) return gitResponse;
       const download = /^\/owner\/repo\/releases\/download\/([^/]+)\/(.+)$/.exec(path);
       if (download) {
         const release = releases.get(download[1]);

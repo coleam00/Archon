@@ -1,3 +1,4 @@
+import { createReleaseRepo, serveFixtureGit } from '../test-support/plugin-fixture';
 import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
@@ -53,20 +54,6 @@ let latest = 'v1';
 const commits = new Map<string, string>();
 const manifests = new Map<string, ChatManifest>();
 
-async function git(...args: string[]): Promise<string> {
-  const child = Bun.spawn(
-    ['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args],
-    { cwd: repo, stdout: 'pipe', stderr: 'pipe' }
-  );
-  const [out, err, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  if (code) throw new Error(err);
-  return out.trim();
-}
-
 beforeAll(async () => {
   if (!enabled) return;
   root = await mkdtemp(join(tmpdir(), 'archon-chat-release-'));
@@ -113,12 +100,8 @@ setInterval(() => {}, 1000);
       `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)}\n`
     );
   }
-  await mkdir(repo);
-  await git('init', '-q');
-  for (const tag of ['v1', 'v2']) {
-    await git('commit', '--allow-empty', '-qm', tag);
-    await git('tag', tag);
-    const commit = await git('rev-parse', 'HEAD');
+  const fixtureCommits = await createReleaseRepo(repo, [{ tag: 'v1' }, { tag: 'v2' }]);
+  for (const [tag, commit] of fixtureCommits) {
     commits.set(tag, commit);
     manifests.set(commit, {
       schemaVersion: 1,
@@ -128,7 +111,6 @@ setInterval(() => {}, 1000);
       executable: tag === 'v2' ? 'archon-chat-renamed' : 'archon-chat-fixture',
     });
   }
-  await git('update-server-info');
   server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -139,11 +121,8 @@ setInterval(() => {}, 1000);
           status: 302,
           headers: { location: `/owner/repo/releases/tag/${latest}` },
         });
-      const gitPath = /^\/owner\/repo\.git\/(.+)$/.exec(path);
-      if (gitPath) {
-        const file = Bun.file(join(repo, '.git', gitPath[1]));
-        return (await file.exists()) ? new Response(file) : new Response(null, { status: 404 });
-      }
+      const gitResponse = await serveFixtureGit(repo, path);
+      if (gitResponse) return gitResponse;
       const raw = /^\/raw\/owner\/repo\/([a-f0-9]{40})(?:\/alternate)?\/archon-plugin.json$/.exec(
         path
       );

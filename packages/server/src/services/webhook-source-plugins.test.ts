@@ -1,3 +1,4 @@
+import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -78,6 +79,7 @@ describe('webhook source plugin host', () => {
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt,
       isKnownUser: mock(async () => true),
+      hasDeliveryReceipt: async () => false,
     });
 
     const result = host.receive('source-1', {
@@ -103,6 +105,7 @@ describe('webhook source plugin host', () => {
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt,
       isKnownUser: mock(async () => true),
+      hasDeliveryReceipt: async () => false,
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -116,6 +119,7 @@ describe('webhook source plugin host', () => {
     const first = await loadWebhookSourcePlugins(unauthenticated.configPath, {
       acceptReceipt,
       isKnownUser: mock(async () => false),
+      hasDeliveryReceipt: async () => false,
     });
     expect(
       await first.receive('source-1', {
@@ -129,6 +133,7 @@ describe('webhook source plugin host', () => {
     const second = await loadWebhookSourcePlugins(unknownUser.configPath, {
       acceptReceipt,
       isKnownUser: mock(async () => false),
+      hasDeliveryReceipt: async () => false,
     });
     await expect(
       second.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -149,6 +154,7 @@ describe('webhook source plugin host', () => {
       const host = await loadWebhookSourcePlugins(configPath, {
         acceptReceipt,
         isKnownUser: mock(async () => true),
+        hasDeliveryReceipt: async () => false,
       });
       await expect(
         host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -168,6 +174,7 @@ describe('webhook source plugin host', () => {
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt,
       isKnownUser: mock(async () => true),
+      hasDeliveryReceipt: async () => false,
     });
     expect(
       await host.receive('source-1', {
@@ -194,6 +201,7 @@ describe('webhook source plugin host', () => {
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt,
       isKnownUser: mock(async () => true),
+      hasDeliveryReceipt: async () => false,
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -201,14 +209,55 @@ describe('webhook source plugin host', () => {
     expect(acceptReceipt).not.toHaveBeenCalled();
   });
 
+  test('acknowledges a recorded delivery even after its run-as user is removed', async () => {
+    const { configPath } = await fixture({ status: 'received', acceptance: acceptance() });
+    const acceptReceipt = mock(async () => ({ receiptId: 'first', replay: true }));
+    const isKnownUser = mock(async () => false);
+    const host = await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt,
+      isKnownUser,
+      hasDeliveryReceipt: async (sourceInstanceId, deliveryId) =>
+        sourceInstanceId === 'source-1' && deliveryId === 'delivery-1',
+    });
+    expect(
+      await host.receive('source-1', {
+        body: '',
+        headers: {},
+        receivedAt: new Date().toISOString(),
+      })
+    ).toBe('accepted');
+    // The store, not the lookup, still decides replay versus conflict.
+    expect(acceptReceipt).toHaveBeenCalledTimes(1);
+    expect(isKnownUser).not.toHaveBeenCalled();
+  });
+
+  test('maps only typed delivery conflicts', async () => {
+    const { configPath } = await fixture({ status: 'received', acceptance: acceptance() });
+    const host = await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt: async () => {
+        throw new SourceReceiptDigestConflictError('conflict');
+      },
+      isKnownUser: async () => true,
+      hasDeliveryReceipt: async () => false,
+    });
+    expect(
+      await host.receive('source-1', {
+        body: '',
+        headers: {},
+        receivedAt: new Date().toISOString(),
+      })
+    ).toBe('conflict');
+  });
+
   test('does not acknowledge a receipt whose durable acceptance fails', async () => {
     const { configPath } = await fixture({ status: 'received', acceptance: acceptance() });
-    const cause = new Error('database detail');
+    const cause = new Error('Delivery identity was reused with different verified content');
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt: mock(async () => {
         throw cause;
       }),
       isKnownUser: mock(async () => true),
+      hasDeliveryReceipt: async () => false,
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })

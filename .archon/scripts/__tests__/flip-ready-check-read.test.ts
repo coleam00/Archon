@@ -10,9 +10,11 @@ import {
   forgeOperation,
   forgePrRecord,
   forgeResponse,
-  runDeliverScript,
+  packScriptRunner,
   type GhFake,
 } from './deliver-checks-harness';
+
+const { runDeliverScript } = packScriptRunner();
 
 const READY_REFUSAL = 'Only draft pull requests can be marked as "ready for review"';
 const flip = runDeliverScript.bind(null, 'flip-ready');

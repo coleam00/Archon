@@ -1,3 +1,4 @@
+import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
 import { RunActionForbiddenError } from '../operations/run-authorization';
 /**
  * Command handler for slash commands
@@ -400,6 +401,7 @@ async function handleWorktreeCommand(
 
       try {
         // Use isolation provider for worktree creation
+        ensureIsolationConfigured();
         const provider = getIsolationProvider();
         const env = await provider.create({
           codebaseId: conversation.codebase_id,

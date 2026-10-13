@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
-import { forgeResponse, runDeliverScript, type ForgeFake } from './deliver-checks-harness';
+import { forgeResponse, packScriptRunner, type ForgeFake } from './deliver-checks-harness';
+
+const { runDeliverScript } = packScriptRunner();
 
 const probe = runDeliverScript.bind(null, 'check-ci');
 
