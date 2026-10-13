@@ -491,7 +491,7 @@ when: "$nodeId.output != 'VALUE'"
 when: "$nodeId.output.field == 'VALUE'"    # JSON dot notation for output_format nodes
 ```
 
-**Numeric operators** (both sides must parse as numbers; fail-closed if not):
+**Numeric operators** (the right-hand side must be a number; a non-numeric output at run time skips the node):
 ```yaml
 when: "$nodeId.output > '80'"
 when: "$nodeId.output >= '0.9'"
@@ -507,6 +507,11 @@ when: "$a.output == 'X' || $b.output == 'Y'"
 when: "$score.output > '80' && $flag.output == 'true'"
 # Precedence: (A && B) || C
 when: "$a.output == 'X' && $b.output == 'Y' || $c.output == 'Z'"
+```
+
+To express `A && (B || C)`, expand it to `A && B || A && C`:
+```yaml
+when: "$a.output == 'x' && $b.output == 'y' || $a.output == 'x' && $c.output == 'z'"
 ```
 
 **Declared inputs** (see [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)):
@@ -533,9 +538,9 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
   run's `--input`). A name this run does not carry **fails the node** — it never quietly
   becomes an empty string. `INPUTS` is a reserved scope: a node cannot be given that id
   (the loader rejects it), so `$INPUTS.x` always means an input.
-- Invalid or unparseable expressions default to `false` (fail-closed — node is skipped with a warning)
-- Numeric operators fail-closed if either side is not a finite number
-- Parentheses are not supported — use standard AND/OR precedence to structure conditions
+- Invalid or unsupported expression syntax is rejected when workflows load and by `archon validate workflows`.
+- A numeric operator (`<`, `>`, `<=`, `>=`) needs a number on the right-hand side, quoted or bare; any other literal is rejected at load. If the left-hand value is not a number at run time, the node is skipped (fail-closed).
+- Grouping parentheses are not supported. Use AND/OR precedence or compute a decision in a `script:` node and gate on its scalar output.
 - Skipped nodes propagate their skipped state to dependants
 - A **failed** producer's output is never evaluated, fielded or whole-text — a `when:`
   joined past a failure via `trigger_rule: all_done` must branch on a different node's
@@ -1423,7 +1428,8 @@ lost updates — the read happened before either write.
 
 This is an **authoring** concern, not an engine one. Options, in order of preference:
 
-- **Append-only ledger.** Concurrent small `O_APPEND` writes are atomic on POSIX, so each
+- **Durable state documents.** Use `archon state` for concurrent JSON updates with audit history, including multiple hosts sharing PostgreSQL. See below.
+- **Append-only file ledger.** Concurrent small `O_APPEND` writes are atomic on POSIX, so each
   run appends its own lines and readers fold the file. This is the fix if lost updates
   matter.
 - **Accept last-writer-wins.** Fine when the state is a cache or a cursor that self-corrects.
@@ -1435,6 +1441,76 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
 
 Put the state write in a `script:` node, not in an AI node's Write tool. A `script:` node is
 a guarantee; a prompt instructing an AI node to append is a convention it may not follow.
+
+## Durable state documents
+
+Use `archon state` for a standing agent's small JSON ledger, cursor or index when updates
+can overlap, need audit history, or run on several hosts. `$STATE_DIR` remains the free-form
+file area for caches and non-JSON data, with its existing concurrency limitations.
+State documents currently require the SQL store (SQLite or PostgreSQL); file-store support
+is separate follow-up work. AI nodes do not yet receive `WORKFLOW_ID`, so a write an agent
+makes by calling `archon state` from its shell is recorded as the operator (`ARCHON_USER_ID`
+or `USER`), not as its run and node. Commit through a bash or script node when the run must
+be recorded. Container runs are not supported because the CLI and store are not delivered there.
+
+A document belongs to a project, shared by all its workflows. Choose names such as
+`review/acme/123` with slash-separated lowercase letters, digits, `.`, `_`, or `-`
+(1–200 characters total). Use artifact pointers for large content: a document's serialized
+JSON is capped at 64 KiB. Values are fetched explicitly; the engine adds no state to prompts.
+
+`put --if-revision 0` creates a document; subsequent whole-document changes must name the
+revision read. Concurrent replacements have one winner; losers exit `3`. `patch` applies
+JSON Pointer `set`, `remove`, or `append` operations to the latest revision, retrying races.
+An absent document starts as `{}`; appending to `/seen` creates the array. Invalid patches
+or oversized values exit `4` and write nothing. Exit `1` means usage or storage failure.
+The [CLI reference](/reference/cli/#state) describes pointer and tombstone semantics.
+
+Let the agent judge what to remember, then commit its structured output in a script node
+when the write must happen. For example, a review agent returns a completed PR identifier;
+its dependent host-side node appends that identifier to a ledger:
+
+```yaml
+nodes:
+  - id: review
+    prompt: Review the supplied PR and return its identifier after completing the review.
+    output_format:
+      type: object
+      properties:
+        completed_pr: { type: string }
+      required: [completed_pr]
+  - id: commit-state
+    depends_on: [review]
+    runtime: bun
+    with:
+      completed_pr: $review.output.completed_pr
+    script: |
+      const command: string[] = JSON.parse(process.env.ARCHON_CLI_COMMAND!);
+      const child = Bun.spawn([...command, 'state', 'patch', 'review/ledger'], {
+        stdin: 'pipe', stdout: 'inherit', stderr: 'inherit',
+      });
+      child.stdin.write(JSON.stringify({ops: [
+        {op: 'append', path: '/seen', value: process.env.INPUTS_COMPLETED_PR},
+      ]}));
+      child.stdin.end();
+      if (await child.exited !== 0) throw new Error('State commit failed');
+```
+
+This recipe runs on the host. Container-isolated nodes cannot use `archon state` in
+this release: they do not receive the host's `ARCHON_CLI_COMMAND` or access to its store.
+Commit state in a host-side step. `$STATE_DIR` remains available for free-form files on
+the host, but it also is not mounted into container runs.
+
+Bash/script nodes already receive `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION`; writes
+record their run ID and node path. Invoke the JSON argv in `ARCHON_CLI_COMMAND` instead
+of assuming `archon` is on PATH. If the nested CLI opens a store that does not know the
+run, it refuses the write instead of writing to another project. Operators can inspect
+`archon state log review/ledger` and correct a value using `put --if-revision`.
+
+The ledger prevents lost state updates; it does not make an external review/comment and
+the state commit one transaction. Use resource admission to serialize work that must not
+repeat an external action. Retention is operator-run: `archon workflow cleanup <days>`
+removes old history but retains each latest revision, including tombstones. Keeping the
+tombstone prevents a recreated document from reusing an old revision and accepting a stale write.
 
 ### When you *want* output in the repository
 

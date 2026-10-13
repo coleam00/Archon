@@ -28,6 +28,12 @@ export const detailFixture: Detail = {
     parent_conversation_id: null,
     codebase_id: null,
     status: 'completed',
+    attention: {
+      kind: 'terminal',
+      runId: 'run-1',
+      status: 'completed',
+      at: '2026-10-05T10:01:00Z',
+    },
     outcome: 'failed',
     user_message: '',
     metadata: {},

@@ -43,6 +43,7 @@ export interface Run {
   workflow: string;
   origin: RunOrigin;
   status: RunStatus;
+  attention: components['schemas']['WorkflowRun']['attention'];
   outcome: RunOutcome;
   terminalRecord: components['schemas']['WorkflowRunDetail']['run']['terminal_record'];
   startedAt: string;
@@ -118,6 +119,7 @@ type RawWorkflowRun = Pick<
       | 'working_path'
       | 'user_message'
       | 'metadata'
+      | 'attention'
       | 'parent_run_id'
     >
   > &
@@ -214,6 +216,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     workflow: raw.workflow_name,
     origin: normalizeOrigin(raw.platform_type),
     status: normalizeStatus(raw.status),
+    attention: raw.attention ?? null,
     outcome: raw.outcome ?? null,
     terminalRecord: raw.terminal_record ?? null,
     startedAt: raw.started_at,

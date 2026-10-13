@@ -3,6 +3,8 @@
 Conventions for this pack specifically. Project-wide judgment lives in
 [`AGENTS.md`](../../../AGENTS.md); the YAML surface is governed by
 [`.archon/workflow-language-constitution.md`](../../workflow-language-constitution.md).
+How we decide what a workflow should be, agents first, is in
+[`CONSTITUTION.md`](CONSTITUTION.md).
 
 ## Guards
 
