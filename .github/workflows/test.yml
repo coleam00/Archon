@@ -186,7 +186,12 @@ jobs:
 
       - name: Validate (Windows)
         if: runner.os == 'Windows'
-        run: bun run validate --only cli-import-boundary,package-edges,generated-files,tests
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
+          bun run validate --only cli-import-boundary,package-edges,generated-files,tests
 
       - name: TEMP diag collect (Windows)
         if: always() && runner.os == 'Windows'
