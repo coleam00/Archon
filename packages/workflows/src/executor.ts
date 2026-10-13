@@ -3,6 +3,7 @@ import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import type { OwnedWorktree, WorkflowRunOrigin } from './schemas/workflow-run';
 import {
   prepareRunAiConfiguration,
+  effectiveDbCredentialValues,
   assertRunCredentials,
   type RunCredentialRequirement,
   assertCredentialStatus,
@@ -2959,11 +2960,8 @@ export async function executeWorkflow(
     if (protectedEnvKeys.size > 0) {
       config.protectedEnvKeys = [...protectedEnvKeys];
     }
-    const effectiveDbCredentialValues = Object.entries(dbEnvVars).flatMap(([key, value]) =>
-      config.envVars?.[key] === value ? [value] : []
-    );
     const protectedCredentialValues = [
-      ...new Set([...effectiveDbCredentialValues, ...protectedValues]),
+      ...new Set([...effectiveDbCredentialValues(dbEnvVars, config.envVars), ...protectedValues]),
     ];
     if (protectedCredentialValues.length > 0) {
       config.protectedCredentialValues = protectedCredentialValues;

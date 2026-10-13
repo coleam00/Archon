@@ -57,6 +57,20 @@ export interface RunAiConfigurationOptions {
 
 // The resolvers that throw NoDefaultProviderError are pure and shared with the executor
 // and validator, which hold no registry. Preflight does, so it adds the install hint here.
+/**
+ * Managed database values still in effect: a value a later layer replaced is no longer
+ * delivered, so it is not protected. Preflight and the executor both apply this rule,
+ * the executor again after it layers GitHub and provider credentials over the env.
+ */
+export function effectiveDbCredentialValues(
+  dbEnvVars: Record<string, string>,
+  envVars: Record<string, string> | undefined
+): string[] {
+  return Object.entries(dbEnvVars).flatMap(([key, value]) =>
+    envVars?.[key] === value ? [value] : []
+  );
+}
+
 export async function prepareRunAiConfiguration(
   ...args: Parameters<typeof prepareAiConfiguration>
 ): Promise<PreparedRunAiConfiguration> {
@@ -118,9 +132,7 @@ async function prepareAiConfiguration(
   config.protectedCredentialValues = [
     ...new Set([
       ...(config.protectedCredentialValues ?? []),
-      ...Object.entries(dbEnvVars).flatMap(([key, value]) =>
-        config.envVars?.[key] === value ? [value] : []
-      ),
+      ...effectiveDbCredentialValues(dbEnvVars, config.envVars),
     ]),
   ];
   const snapshot =
