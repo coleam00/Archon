@@ -6,7 +6,7 @@ The pull request is this branch's open pull request in the repository `origin` p
 
 ## Mark it ready, then wait
 
-Confirm the pull request's head is this checkout's `HEAD`; if it is not, the push never landed, so stop with `other` and say so.
+Never judge CI against a stale head. First confirm the pull request's head is this checkout's `HEAD`. A head behind `HEAD` (an ancestor of it) means a commit made after the last push never reached the pull request, such as the simplify pass's edits: push it with `git push origin HEAD:refs/heads/<branch>`, naming the branch so git never selects an upstream, never force, and read the pull request's head back until it equals `HEAD`. If that push fails, or the head has diverged from `HEAD` rather than fallen behind it, stop with `other` and record the two revisions and the push's output.
 
 Then confirm the pull request merges cleanly with its base (`gh pr view <number> --repo <owner>/<repo> --json mergeable,mergeStateStatus`; the forge may report the state as unknown for a moment after a push, so read it again until it is known). A pull request that conflicts with its base gets no CI run, so there is nothing to wait for: the conflict is this pull request's own problem. Declare `pr_caused` without marking it ready, and write to `$ARTIFACTS_DIR/ci.md` the base branch, the conflicting files, and the instruction for the next round: merge the base branch into this branch, resolve every conflict, and check what the resolution touched.
 
