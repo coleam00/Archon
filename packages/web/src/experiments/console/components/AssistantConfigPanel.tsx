@@ -32,7 +32,7 @@ function seedForm(config: SafeConfig, providers: ProviderInfo[]): AssistantConfi
   for (const p of providers) models[p.id] = readStr(config.assistants[p.id], 'model');
   const codex = config.assistants.codex;
   return {
-    assistant: config.assistant,
+    assistant: config.assistant ?? '',
     models,
     modelReasoningEffort: readStr(codex, 'modelReasoningEffort'),
     webSearchMode: readStr(codex, 'webSearchMode'),
@@ -179,6 +179,11 @@ export function AssistantConfigPanel(): ReactElement {
             }}
             className={`${SELECT_CLASS_COMPACT} py-[11px] pl-3.5 text-[13.5px]`}
           >
+            {form.assistant === '' && (
+              <option value="" disabled>
+                Select a default provider
+              </option>
+            )}
             {providers.map(p => (
               <option key={p.id} value={p.id}>
                 {p.displayName}
@@ -186,21 +191,23 @@ export function AssistantConfigPanel(): ReactElement {
             ))}
           </select>
         </SelectShell>
-        <ModelPickerField
-          // Re-key per agent so picker-internal state never bleeds across a switch.
-          key={form.assistant}
-          agentId={form.assistant}
-          value={form.models[form.assistant] ?? ''}
-          onChange={v => {
-            setModel(form.assistant, v);
-          }}
-          placeholder="model — blank = tier default"
-          selectEmptyLabel="tier default"
-          ariaLabel="Install default chat model"
-          className="min-w-[160px] flex-1"
-          agents={keyData?.agents}
-          piModels={piModels}
-        />
+        {form.assistant !== '' && (
+          <ModelPickerField
+            // Re-key per agent so picker-internal state never bleeds across a switch.
+            key={form.assistant}
+            agentId={form.assistant}
+            value={form.models[form.assistant] ?? ''}
+            onChange={v => {
+              setModel(form.assistant, v);
+            }}
+            placeholder="model — blank = tier default"
+            selectEmptyLabel="tier default"
+            ariaLabel="Install default chat model"
+            className="min-w-[160px] flex-1"
+            agents={keyData?.agents}
+            piModels={piModels}
+          />
+        )}
       </label>
 
       {userScope.kind === 'load-failed' ? (

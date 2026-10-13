@@ -238,6 +238,9 @@ async function bindingOf(delivery: string): Promise<{
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'archon-server-resource-host-')));
   process.env.ARCHON_HOME = join(root, 'home');
+  // Conversations need a configured default provider.
+  await mkdir(process.env.ARCHON_HOME);
+  await writeFile(join(process.env.ARCHON_HOME, 'config.yaml'), 'defaultAssistant: claude\n');
   delete process.env.DATABASE_URL;
   setPlatformPolicies([]);
   resetDatabase();

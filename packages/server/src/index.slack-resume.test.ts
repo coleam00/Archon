@@ -12,7 +12,6 @@ import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowResumeTarget } from './services/workflow-resume-service';
-import { providerCapabilitiesSchema, type ProviderRegistration } from '@archon/provider-contract';
 
 let pluginsDir: string;
 let expectedSlackRetention: 'age-based' | 'retain' = 'age-based';
@@ -66,6 +65,19 @@ const mockWorkflowResumeTargetForRun = mock(
 );
 const mockResumeWorkflowRunFromServer = mock(async (): Promise<boolean> => true);
 
+const hostedPlugins: string[][] = [];
+const mockChatHostStart = mock(() => {});
+const mockChatHostStop = mock(async () => {});
+const mockWebStop = mock(async () => {});
+const mockSlackStop = mock(() => {});
+const mockBridgeDetach = mock(() => {});
+mock.module('./chat-host/runtime', () => ({
+  createChatHost: (installed: { descriptor: { id: string } }[]) => {
+    hostedPlugins.push(installed.map(plugin => plugin.descriptor.id));
+    return { start: mockChatHostStart, stop: mockChatHostStop };
+  },
+}));
+
 let capturedResume: SlackWorkflowResume | undefined;
 let slackAdapterInstance: MockSlackAdapter | undefined;
 
@@ -91,7 +103,9 @@ class MockSlackAdapter implements IWorkflowPlatform {
     return undefined;
   }
   async start(): Promise<void> {}
-  stop(): void {}
+  stop(): void {
+    mockSlackStop();
+  }
   async sendMessage(): Promise<void> {}
   getStreamingMode(): 'batch' {
     return 'batch';
@@ -107,7 +121,9 @@ class MockSlackWorkflowBridge {
   }
 
   attach(): void {}
-  detach(): void {}
+  detach(): void {
+    mockBridgeDetach();
+  }
 }
 
 class DisabledAdapter {
@@ -124,36 +140,9 @@ mock.module('@archon/paths/env-loader', () => ({ loadArchonEnv: (): void => unde
 mock.module('@archon/paths/cli-command', () => ({
   publishArchonCliCommand: (): void => undefined,
 }));
-const mockRegisterBuiltinProviders = mock((): void => undefined);
-const mockRegisterCommunityProviders = mock((): void => undefined);
-const mockRegisterProvider = mock((_registration: ProviderRegistration): void => undefined);
-const installedProvider: ProviderRegistration = {
-  id: 'installed-provider',
-  displayName: 'Installed provider',
-  builtIn: false,
-  capabilities: providerCapabilitiesSchema.parse({
-    ...Object.fromEntries(Object.keys(providerCapabilitiesSchema.shape).map(key => [key, false])),
-    backgroundWork: 'none',
-    sessionFork: undefined,
-    knownToolNames: undefined,
-    renamedTools: undefined,
-  }),
-  credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
-  parseConfig: raw => raw,
-  factory: () => {
-    throw new Error('Boot must not spawn the installed provider');
-  },
-};
-const mockLoadProviderPlugins = mock(
-  async (_pluginsDir: string): Promise<ProviderRegistration[]> => [installedProvider]
-);
-mock.module('@archon/providers', () => ({
-  registerProvider: mockRegisterProvider,
-}));
-mock.module('@archon/providers/in-process', () => ({
-  claimPiExtensionProcessError: (): boolean => false,
-  registerBuiltinProviders: mockRegisterBuiltinProviders,
-  registerCommunityProviders: mockRegisterCommunityProviders,
+const mockRegisterHostProviders = mock(async (): Promise<void> => undefined);
+mock.module('@archon/core/providers/register-host-providers', () => ({
+  registerHostProviders: mockRegisterHostProviders,
 }));
 
 interface TestLogger {
@@ -194,6 +183,7 @@ mock.module('@archon/paths', () => ({
   shutdownTelemetry: async (): Promise<void> => undefined,
   captureArchonStarted: (): void => undefined,
   captureArchonActive: (): void => undefined,
+  captureApprovalResolved: (): void => undefined,
   getSourceWebDistDir: (): string => '/tmp/web-dist',
 }));
 
@@ -210,13 +200,6 @@ class MockConversationLockManager {
 }
 
 mock.module('@archon/core', () => ({
-  loadProviderPlugins: mockLoadProviderPlugins,
-  getVendorCatalog: (): object => {
-    expect(mockLoadProviderPlugins).toHaveBeenCalledWith(pluginsDir);
-    expect(mockRegisterProvider).toHaveBeenCalledTimes(1);
-    expect(mockRegisterProvider.mock.calls[0]?.[0]).toBe(installedProvider);
-    return {};
-  },
   handleMessage: async (): Promise<void> => undefined,
   pool: {
     query: async (): Promise<object> => ({}),
@@ -230,6 +213,7 @@ mock.module('@archon/core', () => ({
   stopCleanupScheduler: (): void => undefined,
   getDbNotificationListener: (): null => null,
   loadConfig: async (): Promise<{ botName: string }> => {
+    expect(mockRegisterHostProviders).toHaveBeenCalledTimes(1);
     expect(
       getRegisteredPlatformPolicies()
         .map(policy => policy.id)
@@ -291,7 +275,9 @@ class MockWebAdapter implements IWorkflowPlatform {
   ) {}
 
   async start(): Promise<void> {}
-  async stop(): Promise<void> {}
+  async stop(): Promise<void> {
+    await mockWebStop();
+  }
   async sendMessage(): Promise<void> {}
   getStreamingMode(): 'stream' {
     return 'stream';
@@ -340,6 +326,9 @@ mock.module('./services/resource-start-hosting', () => ({
 const workflowHost = {} as import('@archon/core/workflows/host-store').WorkflowHost;
 mock.module('@archon/core/workflows/sql-host', () => ({
   createSqlWorkflowHost: () => workflowHost,
+  createSqlWorkflowOperations: () => {
+    throw new Error('No plugin action expected during boot');
+  },
 }));
 
 mock.module('./services/workflow-resume-service', () => ({
@@ -429,8 +418,7 @@ describe('Slack workflow resume composition', () => {
     try {
       const { startServer } = await import('./index');
       await startServer({ port: 12345, skipPlatformAdapters: true });
-      expect(mockRegisterBuiltinProviders).toHaveBeenCalledTimes(1);
-      expect(mockRegisterCommunityProviders).toHaveBeenCalledTimes(1);
+      expect(mockRegisterHostProviders).toHaveBeenCalledTimes(1);
       expect(retainsWorkspace('telegram')).toBe(true);
     } finally {
       serveSpy.mockRestore();
@@ -490,6 +478,57 @@ describe('Slack workflow resume composition', () => {
     }
   });
 
+  test('an installed Slack receipt supersedes the bundled adapter and its bridge at boot', async () => {
+    const file = join(pluginsDir, 'installed', 'owner', 'chat-fixture', 'receipt.json');
+    await mkdir(dirname(file), { recursive: true });
+    const executable = 'archon-chat-fixture' + (process.platform === 'win32' ? '.exe' : '');
+    await writeFile(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: 'owner/chat-fixture',
+        manifest: {
+          schemaVersion: 1,
+          kind: 'chat',
+          name: 'fixture',
+          description: 'Fixture',
+          executable: 'archon-chat-fixture',
+        },
+        tag: 'v1',
+        commit: 'a'.repeat(40),
+        installedAt: new Date(0).toISOString(),
+        files: [{ path: executable, sha256: 'b'.repeat(64) }],
+        descriptor: {
+          protocol: 'archon-chat/1',
+          id: 'slack',
+          displayName: 'Fixture',
+          version: '1',
+          capabilities: { defaultWorkflowDispatch: 'background' },
+          policy: { workspaceRetention: 'retain' },
+        },
+      })
+    );
+    capturedResume = undefined;
+    slackAdapterInstance = undefined;
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 12345,
+    })) as unknown as typeof Bun.serve);
+    try {
+      expectedSlackRetention = 'retain';
+      const { startServer } = await import('./index');
+      mockChatHostStart.mockClear();
+      await startServer({ port: 12345 });
+      expect(mockChatHostStart).toHaveBeenCalledTimes(1);
+      expect(hostedPlugins.at(-1)).toEqual(['slack']);
+      expect(capturedResume).toBeUndefined();
+      expect(slackAdapterInstance).toBeUndefined();
+    } finally {
+      serveSpy.mockRestore();
+      await unlink(file);
+      expectedSlackRetention = 'age-based';
+    }
+  });
+
   test('server startup injects the persisted, destination-aware resume path', async () => {
     const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
       port: 12345,
@@ -521,4 +560,39 @@ describe('Slack workflow resume composition', () => {
       serveSpy.mockRestore();
     }
   });
+});
+
+test('a chat host stop error preserves diagnostics and still stops bundled and web adapters', async () => {
+  const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+    port: 12345,
+  })) as unknown as typeof Bun.serve);
+  const exitSpy = spyOn(process, 'exit').mockImplementation(
+    (() => undefined) as typeof process.exit
+  );
+  const logSpy = spyOn(logger, 'error');
+  const failure = new Error('tree termination failed');
+  const previous = new Set(processEmitter.listeners('SIGTERM'));
+  mockSlackStop.mockClear();
+  mockBridgeDetach.mockClear();
+  mockWebStop.mockClear();
+  mockChatHostStop.mockRejectedValueOnce(failure);
+  try {
+    const { startServer } = await import('./index');
+    await startServer({ port: 12345 });
+    const shutdown = processEmitter.listeners('SIGTERM').find(listener => !previous.has(listener));
+    expect(shutdown).toBeDefined();
+    shutdown?.();
+    for (let i = 0; i < 100 && exitSpy.mock.calls.length === 0; i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    expect(mockSlackStop).toHaveBeenCalledTimes(1);
+    expect(mockBridgeDetach).toHaveBeenCalledTimes(1);
+    expect(mockWebStop).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith({ err: failure }, 'chat_host_stop_error');
+    expect(exitSpy).toHaveBeenCalledWith(0);
+  } finally {
+    serveSpy.mockRestore();
+    exitSpy.mockRestore();
+    logSpy.mockRestore();
+  }
 });

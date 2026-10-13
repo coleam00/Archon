@@ -37,6 +37,7 @@ import { validationErrorHook } from './openapi-defaults';
 import {
   dashboardWorkflowRunSchema as apiDashboardWorkflowRunSchema,
   workflowRunSchema as apiWorkflowRunSchema,
+  runsNeedingAttentionResponseSchema,
 } from './schemas/workflow.schemas';
 import {
   makeDashboardRunsResult,
@@ -98,6 +99,7 @@ type ListWorkflowRunsOptions = Parameters<
 const mockListWorkflowRuns = mock<
   (_options?: ListWorkflowRunsOptions) => Promise<MockWorkflowRun[]>
 >(async () => []);
+const mockListRunsNeedingAttention = mock(async (): Promise<DashboardWorkflowRun[]> => []);
 const mockListDashboardRuns = makeListDashboardRunsMock();
 const mockGetWorkflowRunByWorkerPlatformId = mock(
   async (_id: string) => null as null | MockWorkflowRun
@@ -437,6 +439,7 @@ const mockSignalWorkflowWait = mock(async (_id: string, _wait: unknown, _payload
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
   listDashboardRuns: mockListDashboardRuns,
+  listRunsNeedingAttention: mockListRunsNeedingAttention,
   getWorkflowRun: mockGetWorkflowRun,
   findChildRuns: mockFindChildRuns,
   cancelWorkflowRun: mockCancelWorkflowRun,
@@ -4648,4 +4651,39 @@ describe('starter or admin authorization on every HTTP run action', () => {
       });
     }
   }
+});
+
+test('the attention endpoint and detail expose the shared projection with wire dates', async () => {
+  const run: WorkflowRun = {
+    ...MOCK_RUNNING_RUN,
+    status: 'paused',
+    metadata: {
+      wait: {
+        owner: 'node',
+        nodeId: 'hold',
+        kind: 'attention',
+        waitingSince: '2026-10-12T00:00:00.000Z',
+        message: 'Rotate key',
+      },
+    },
+  };
+  mockListRunsNeedingAttention.mockImplementationOnce(async () => [makeDashboardWorkflowRun(run)]);
+  mockGetWorkflowRun.mockImplementationOnce(async () => run);
+  const { app } = makeApp();
+  const list = await app.request('/api/runs/attention');
+  expect(list.status).toBe(200);
+  const body = runsNeedingAttentionResponseSchema.parse(await list.json());
+  expect(body.runs[0]?.attention).toEqual({
+    kind: 'action_required',
+    runId: run.id,
+    nodeId: 'hold',
+    occurrence: 'wait:2026-10-12T00:00:00.000Z',
+    message: 'Rotate key',
+  });
+  mockListWorkflowEvents.mockResolvedValueOnce([]);
+  mockGetConversationById.mockResolvedValueOnce(null);
+  const detail = await app.request(`/api/workflows/runs/${run.id}`);
+  expect(detail.status).toBe(200);
+  const detailBody = (await detail.json()) as { run: unknown };
+  expect(apiWorkflowRunSchema.parse(detailBody.run).attention).toEqual(body.runs[0]?.attention);
 });

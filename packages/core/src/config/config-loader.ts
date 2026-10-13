@@ -1,4 +1,6 @@
 import { validateWorktreePostCreate } from '@archon/isolation';
+import { missingProviderMessage } from '@archon/provider-contract';
+import { providerRegistry } from '@archon/providers';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '@archon/workflows/schemas/run-config';
 /**
  * Configuration loader for Archon YAML config files
@@ -498,12 +500,6 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
  * Get default configuration
  */
 function getDefaults(): MergedConfig {
-  // Seed one empty entry per registered provider — built-in OR community.
-  // No per-provider listing here: adding a new provider must not require
-  // editing this function. `registerBuiltinProviders()` + any community
-  // registrations run at process bootstrap (see `packages/providers/src/
-  // registry.ts#registerCommunityProviders`), so by the time this runs the
-  // registry is populated.
   const providers = getRegisteredProviders();
   const registeredAssistants: AssistantDefaults = { claude: {}, codex: {} };
   for (const provider of providers) {
@@ -519,7 +515,7 @@ function getDefaults(): MergedConfig {
 
   return {
     botName: 'Archon',
-    assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
+    assistant: providers.length === 1 ? providers[0].id : undefined,
     assistants: registeredAssistants,
     streaming,
     paths: {
@@ -573,8 +569,7 @@ function applyEnvOverrides(
         config.assistant = envAssistant;
       } else {
         throw new Error(
-          `DEFAULT_AI_ASSISTANT='${envAssistant}' is not a registered provider. ` +
-            `Available providers: ${getRegisteredProviderNames().join(', ')}`
+          `DEFAULT_AI_ASSISTANT='${envAssistant}': ${missingProviderMessage(providerRegistry, envAssistant)}`
         );
       }
     } else if (!isRegisteredProvider(envAssistant)) {
@@ -628,8 +623,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
       result.assistant = global.defaultAssistant;
     } else {
       throw new Error(
-        `defaultAssistant: '${global.defaultAssistant}' in global config (~/.archon/config.yaml) ` +
-          `is not a registered provider. Available: ${getRegisteredProviderNames().join(', ')}`
+        `defaultAssistant in global config (~/.archon/config.yaml): ${missingProviderMessage(providerRegistry, global.defaultAssistant)}`
       );
     }
   }
@@ -681,8 +675,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
       result.assistant = repo.assistant;
     } else {
       throw new Error(
-        `assistant: '${repo.assistant}' in repo config (.archon/config.yaml) ` +
-          `is not a registered provider. Available: ${getRegisteredProviderNames().join(', ')}`
+        `assistant in repo config (.archon/config.yaml): ${missingProviderMessage(providerRegistry, repo.assistant)}`
       );
     }
   }
@@ -957,7 +950,7 @@ export async function updateGlobalConfig(
  * unset tier resolves to. Never throws — an unknown/odd provider (or a throw)
  * yields `undefined` (every consumer uses optional chaining).
  */
-function tierDefaultsFor(provider: string): RawTiersConfig | undefined {
+function tierDefaultsFor(provider: string | undefined): RawTiersConfig | undefined {
   try {
     const profile = buildAiProfile(provider);
     const out: RawTiersConfig = {};

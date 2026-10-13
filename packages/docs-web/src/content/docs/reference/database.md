@@ -117,6 +117,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Records step transitions, artifacts, and errors per workflow run
   - Every provider event a workflow node streams, as `provider_event` rows: the engine envelope (`attemptId`, `seq`, `observedAt`, `event`) in `data`, the node in `step_name`. The same envelope is a `provider_event` line in the run's JSONL log. `GET /api/workflows/runs/{runId}/provider-events` serves them; the run-detail route leaves them out
   - Enables workflow run detail views and debugging
+  - On PostgreSQL, `event_order` follows commit order: a row committed later always has a higher value. A deferred constraint trigger (`archon_workflow_event_order`) assigns it at commit while holding an advisory lock, so committing event writers draw values one at a time. On SQLite the value is `MAX(event_order) + 1` under the single writer. It increases with commit order, but deleting the newest event lets the next insert reuse its value
   - Indexed on `created_at` (`idx_workflow_events_created_at`) for the dashboard event poller's cross-run tail. On PostgreSQL an `AFTER INSERT` trigger (`archon_workflow_event_notify`) calls `pg_notify('archon_dashboard_event', …)` so runs started out of process (the `archon` CLI / `--detach`) stream live to the console; on SQLite the poller picks them up within its interval. The trigger is Postgres-only and best-effort (a role without `CREATE TRIGGER` degrades to poll-only, not a boot failure).
 
 - **`remote_agent_messages`** - Conversation message history
@@ -169,6 +170,11 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_schema_version`** - Diagnostic schema vintage
   - Records the Archon build that created the database and the build that last applied its schema
   - A single row (`id = 1`); databases predating this table retain an unknown creation version
+
+- **`remote_agent_state_revisions`** - Durable project JSON documents and their audit history
+  - Primary key: `(project_key, name, revision)`; optimistic writes append a revision
+  - Full JSON value (up to 64 KiB), operation, writer identity or run/node, and creation time
+  - SQL `NULL` value is a tombstone; run IDs have no foreign key so run cleanup preserves state
 
 - **`remote_agent_start_receipts`** - Source delivery receipts
   - Records source instance, delivery ID, content digest, timestamps, and matching outcome

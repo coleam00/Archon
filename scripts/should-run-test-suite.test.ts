@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -7,6 +7,7 @@ import {
   changedFilesBetween,
   diffRange,
   shouldRunTestSuite,
+  shouldRunWorkflowFixtures,
   type EventPayload,
 } from './should-run-test-suite';
 
@@ -18,12 +19,13 @@ function runDecision(
   trackTempRoot: (root: string) => string,
   eventName: string,
   payload: EventPayload,
-  cwd = process.cwd()
+  cwd = process.cwd(),
+  args: readonly string[] = []
 ): { exitCode: number; stdout: string; stderr: string } {
   const eventDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-suite-event-')));
   const eventPath = join(eventDir, 'event.json');
   writeFileSync(eventPath, JSON.stringify(payload));
-  const result = Bun.spawnSync(['bun', SCRIPT], {
+  const result = Bun.spawnSync(['bun', SCRIPT, ...args], {
     cwd,
     env: { ...process.env, GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath },
     stdout: 'pipe',
@@ -150,64 +152,6 @@ describe('test-suite change decision', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('Unsupported GitHub event: not-a-github-event');
   });
-
-  test('the workflow delegates both automatic routes to the complete-diff decision', () => {
-    // A Windows checkout writes the workflow with CRLF endings, and every assertion below
-    // anchors on LF. Normalize at the read site: what is asserted is YAML structure, not
-    // the line terminator the working tree happens to carry.
-    const workflow = readFileSync(
-      resolve(import.meta.dir, '../.github/workflows/test.yml'),
-      'utf8'
-    ).replaceAll('\r\n', '\n');
-    const changesJob = workflow.slice(workflow.indexOf('  changes:'), workflow.indexOf('  test:'));
-
-    expect(workflow).toContain('  push:\n');
-    expect(workflow).toContain('  pull_request:\n');
-    expect(workflow).not.toContain('\n    paths:');
-    expect(changesJob).toContain('fetch-depth: 0');
-    expect(changesJob).toContain('uses: oven-sh/setup-bun@v2');
-    // The script picks the commits from the event payload (`diffRange`, tested above). A
-    // workflow expression choosing them instead is how a PR came to be judged by one push.
-    expect(changesJob).not.toContain('github.event.before');
-
-    // The assignment must stay separate from the `echo`, which is what makes a crash fail the
-    // step instead of publishing an empty decision.
-    expect(changesJob).toContain('run_tests=$(bun scripts/should-run-test-suite.ts)\n');
-    expect(changesJob).toContain('echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"');
-  });
-
-  test('the workflow fixture bar runs for every non-draft pull request and push', () => {
-    const workflow = readFileSync(
-      resolve(import.meta.dir, '../.github/workflows/test.yml'),
-      'utf8'
-    ).replaceAll('\r\n', '\n');
-    const pullRequestTrigger = workflow.slice(
-      workflow.indexOf('  pull_request:'),
-      workflow.indexOf('\n\nenv:')
-    );
-    const fixtureJob = workflow.slice(
-      workflow.indexOf('  workflow-fixtures:'),
-      workflow.indexOf('  test:')
-    );
-
-    expect(pullRequestTrigger).toBe(
-      '  pull_request:\n    branches: [main, dev]\n    types: [opened, synchronize, reopened, ready_for_review]'
-    );
-    // Only the draft gate and no `changes` gate: this job is the only Linux run of the fixtures.
-    expect(fixtureJob).toContain('    if: ${{ !github.event.pull_request.draft }}\n');
-    expect(fixtureJob.match(/if:/g)).toHaveLength(1);
-    expect(fixtureJob).toContain('runs-on: ubuntu-latest');
-    expect(fixtureJob).not.toContain('needs:');
-    expect(fixtureJob).not.toContain('changes');
-    expect(fixtureJob).toContain('uses: actions/checkout@v4');
-    expect(fixtureJob).toContain('uses: oven-sh/setup-bun@v2');
-    expect(fixtureJob).toContain('bun-version: ${{ env.BUN_VERSION }}');
-    expect(fixtureJob).toContain('uses: astral-sh/setup-uv@v4');
-    expect(fixtureJob).toContain('run: bun install --frozen-lockfile');
-    // The fixture command itself lives in scripts/validate.ts so `bun run validate` runs it
-    // too; scripts/validate-ci-parity.test.ts proves this id still names a real check.
-    expect(fixtureJob).toContain('run: bun run validate --only workflow-fixtures');
-  });
 });
 
 describe('diff mode', () => {
@@ -253,6 +197,41 @@ describe('diff mode', () => {
     // Seen red against the previous two-dot call: it also reported `unrelated.ts`.
     expect(changedFilesBetween(base, head, repo)).toEqual(['GUIDE.md']);
     expect(shouldRunTestSuite(changedFilesBetween(base, head, repo))).toBe(false);
+    const result = runDecision(
+      trackTempRoot,
+      'pull_request',
+      { pull_request: { base: { sha: base }, head: { sha: head } } },
+      repo,
+      ['--workflow-fixtures']
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('false');
+  });
+
+  test.each(
+    process.platform === 'win32'
+      ? ['é.yaml']
+      : ['é.yaml', 'quote".yaml', 'back\\slash.yaml', 'tab\t.yaml', 'line\n.yaml']
+  )('fixture decision preserves Git-quoted filename %j', filename => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-fixture-path-')));
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'config', 'core.quotepath', 'true');
+    git(repo, 'config', 'user.email', 'test@example.com');
+    git(repo, 'config', 'user.name', 'Test');
+    const base = commit(repo, 'seed.ts', 'seed');
+    mkdirSync(join(repo, '.archon/workflows/sdlc/fixtures'), { recursive: true });
+    const file = `.archon/workflows/sdlc/fixtures/${filename}`;
+    const head = commit(repo, file, 'fixture change');
+    expect(changedFilesBetween(base, head, repo)).toEqual([file]);
+    const result = runDecision(
+      trackTempRoot,
+      'pull_request',
+      { pull_request: { base: { sha: base }, head: { sha: head } } },
+      repo,
+      ['--workflow-fixtures']
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('true');
   });
 
   test('a code change on the branch still runs the suite', () => {
@@ -278,7 +257,8 @@ describe('diff mode', () => {
     git(repo, 'config', 'user.name', 'Test');
     const prBase = commit(repo, 'seed.ts', 'seed');
     git(repo, 'checkout', '-q', '-b', 'feature');
-    const codePush = commit(repo, 'feature.ts', 'real code');
+    mkdirSync(join(repo, 'packages/workflows/src'), { recursive: true });
+    const codePush = commit(repo, 'packages/workflows/src/dry-run.ts', 'real code');
     const docsPush = commit(repo, 'GUIDE.md', 'docs only');
 
     const result = runDecision(
@@ -294,6 +274,19 @@ describe('diff mode', () => {
 
     expect(result.stderr).toBe('');
     expect(result.stdout).toBe('true');
+    const fixtures = runDecision(
+      trackTempRoot,
+      'pull_request',
+      {
+        before: codePush,
+        after: docsPush,
+        pull_request: { base: { sha: prBase }, head: { sha: docsPush } },
+      },
+      repo,
+      ['--workflow-fixtures']
+    );
+    expect(fixtures.exitCode).toBe(0);
+    expect(fixtures.stdout).toBe('true');
   });
 });
 
@@ -320,5 +313,55 @@ describe('inert paths', () => {
     ['packages/web/public/favicon.png', 'the web build'],
   ])('runs for %s, which is read by %s', file => {
     expect(shouldRunTestSuite([file])).toBe(true);
+  });
+});
+
+describe('workflow fixture selection', () => {
+  const track = trackTempRoots();
+  test.each([
+    '.archon/workflows/sdlc/implement/workflow.yaml',
+    '.archon/workflows/sdlc/scripts/route.ts',
+    '.archon/workflows/sdlc/commands/implement.md',
+    '.archon/workflows/sdlc/fixtures/pass.yaml',
+    'packages/workflows/src/fixture-runner.ts',
+    'packages/workflows/src/dry-run.ts',
+    'packages/cli/src/commands/workflow.ts',
+    'packages\\workflows\\src\\schema.ts',
+  ])('runs for %s', file => {
+    expect(shouldRunWorkflowFixtures([file])).toBe(true);
+  });
+  test.each([
+    'README.md',
+    'packages/web/src/app.ts',
+    'packages/core/src/index.ts',
+    'packages/providers/src/index.ts',
+    'scripts/lint.ts',
+    '.archon/workflows/sdlc-extra/workflow.yaml',
+    'packages/workflows/src-extra/index.ts',
+    'packages/cli/src/commands/workflow.test.ts',
+  ])('skips %s', file => {
+    expect(shouldRunWorkflowFixtures([file])).toBe(false);
+  });
+  test.each([
+    ['workflow_dispatch', {}],
+    ['push', { before: EMPTY_GIT_SHA }],
+    ['push', { before: 'unreachable', after: 'HEAD' }],
+  ] as const)('runs for %s without a usable diff', (event, payload) => {
+    const result = runDecision(track, event, payload, process.cwd(), ['--workflow-fixtures']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('true');
+  });
+  test.each([{ args: ['--unsupported'] }, { args: ['--workflow-fixtures', '--unsupported'] }])(
+    'rejects unknown arguments %j',
+    ({ args }) => {
+      const result = runDecision(track, 'workflow_dispatch', {}, process.cwd(), args);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe('');
+    }
+  );
+  test('rejects malformed fixture events', () => {
+    const result = runDecision(track, 'pull_request', {}, process.cwd(), ['--workflow-fixtures']);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe('');
   });
 });

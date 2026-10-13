@@ -563,6 +563,17 @@ export function getSourceWebDistDir(): string {
   return join(getSourceRepoRoot(), 'packages', 'web', 'dist');
 }
 
+export function getSourceProviderEntry(id: string): string {
+  return join(
+    getSourceRepoRoot(),
+    'packages',
+    'providers',
+    'src',
+    ...(id === 'pi' ? ['community', 'pi'] : [id]),
+    'plugin.ts'
+  );
+}
+
 export function getSourceServerEntry(): string {
   return join(getSourceRepoRoot(), 'packages', 'server', 'src', 'bin.ts');
 }
@@ -823,8 +834,8 @@ export function resolveProjectStorageKey(
  * root. For `artifacts/` and `logs/` that is benign — both are keyed by run id,
  * so the two projects' runs never touch the same file. `stateRoot` is NOT:
  * `$STATE_DIR` is per project by design and has no run-id segment, so two local
- * repos both called `api` share one `state/` and therefore one
- * `triage-state.json`. Register a colliding project with a distinct name, or
+ * repos both called `api` share one `state/` and every file in it.
+ * Register a colliding project with a distinct name, or
  * namespace inside `$STATE_DIR` (`$STATE_DIR/<something-unique>/`), if that
  * matters. Same caveat applies to `_folder` slug collisions.
  */

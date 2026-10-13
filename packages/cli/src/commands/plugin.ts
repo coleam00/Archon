@@ -19,6 +19,8 @@ import { chmod, cp, lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises
 import { dirname, join } from 'node:path';
 import { execFileAsync, findRepoRoot } from '@archon/git';
 import {
+  isMaintainedProviderPlugin,
+  maintainedProviderPluginId,
   describeIssues,
   pluginReleaseAsset,
   isBinaryReceipt,
@@ -43,14 +45,16 @@ import {
 } from '@archon/plugin-manifest/store';
 import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-plugin';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
+import { isMaintainedProvider, providerVersionMismatchMessage } from '@archon/provider-contract';
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
 import { inspectChatPlugin } from './inspect-chat-plugin';
-import { publishChatPlugin } from './publish-chat-plugin';
+import { publishPlugin } from './publish-plugin';
 import {
   RESERVED_CHAT_PLATFORMS,
   type ChatPluginDescriptor,
 } from '@archon/chat-contract/descriptor';
 import { withPluginMutationLock } from './plugin-mutation-lock';
+import { removeUnlocked } from './unlocked-file';
 import { assertProviderRegistrationAllowed, getRegisteredProviders } from '@archon/providers';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
@@ -279,18 +283,29 @@ async function inspectInstallableProvider(
   stagedBinary: string,
   manifest: ProviderManifest,
   receipts: readonly PluginReceipt[],
-  id: string
+  id: string,
+  version: string
 ): Promise<ProviderPluginDescriptor> {
   const descriptor = await inspectProviderPlugin(stagedBinary);
   if (manifest.executable !== `archon-provider-${descriptor.id}`) {
     throw new Error(`Provider plugin ${id}: descriptor id must match ${manifest.executable}`);
+  }
+  const providerId = descriptor.id;
+  const maintained = isMaintainedProvider(providerId);
+  if (maintained && !isMaintainedProviderPlugin(id, providerId)) {
+    throw new Error(
+      `Provider '${descriptor.id}' installs only from ${maintainedProviderPluginId(providerId)}. Nothing was installed.`
+    );
+  }
+  if (maintained && descriptor.version !== version) {
+    throw new Error(providerVersionMismatchMessage(descriptor.id, descriptor.version, version));
   }
   const registration = processProviderRegistration(descriptor, [stagedBinary]);
   registerBuiltinProviders();
   registerCommunityProviders();
   const installed = receipts.filter(isProviderReceipt).filter(receipt => receipt.id !== id);
   const registrations = [
-    ...getRegisteredProviders(),
+    ...getRegisteredProviders().filter(provider => !maintained || provider.id !== descriptor.id),
     ...installed.map(receipt => processProviderRegistration(receipt.descriptor, [stagedBinary])),
   ];
   assertProviderRegistrationAllowed(registration, registrations);
@@ -367,7 +382,13 @@ async function installBinaryPlugin(
     await chmod(stagedBinary, 0o755);
     const descriptor =
       manifest.kind === 'provider'
-        ? await inspectInstallableProvider(stagedBinary, manifest, receipts, ref.id)
+        ? await inspectInstallableProvider(
+            stagedBinary,
+            manifest,
+            receipts,
+            ref.id,
+            env.archonVersion
+          )
         : manifest.kind === 'chat'
           ? await inspectInstallableChat(stagedBinary, receipts, ref.id)
           : undefined;
@@ -382,32 +403,27 @@ async function installBinaryPlugin(
       ...(descriptor ? { descriptor } : {}),
     });
     await writeFile(stagedReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
-    if (manifest.kind === 'chat') {
-      await publishChatPlugin({
-        stagedReceipt,
-        receiptFile,
-        stagedBinary,
-        target,
-        previousFiles:
-          previous && isBinaryReceipt(previous)
-            ? previous.files.map(file => join(env.pluginsDir, file.path))
-            : [],
-      });
-    } else {
-      // Receipt first: if the binary rename then fails, the receipt still owns the
-      // name and `update` or `remove` can recover. The other order could strand a
-      // binary no receipt owns, which every later install would refuse to replace.
-      await rename(stagedReceipt, receiptFile);
-      await rename(stagedBinary, target);
+    await publishPlugin({
+      stagedReceipt,
+      receiptFile,
+      stagedBinary,
+      target,
+      previousFiles:
+        previous && isBinaryReceipt(previous)
+          ? previous.files.map(file => join(env.pluginsDir, file.path))
+          : [],
+    });
+  } catch (error) {
+    // Cleanup runs only on failure (success renamed both staged files away) and must
+    // not replace the reason the install failed.
+    for (const staged of [stagedBinary, stagedReceipt]) {
+      try {
+        await removeUnlocked(staged);
+      } catch (cleanup) {
+        console.warn(`Could not remove ${staged}: ${(cleanup as Error).message}`);
+      }
     }
-  } finally {
-    await rm(stagedBinary, { force: true });
-    await rm(stagedReceipt, { force: true });
-  }
-  if (manifest.kind !== 'chat' && previous && isBinaryReceipt(previous)) {
-    for (const file of previous.files) {
-      if (file.path !== fileName) await rm(join(env.pluginsDir, file.path), { force: true });
-    }
+    throw error;
   }
 
   const from = `github.com/${ref.owner}/${ref.repo} ${tag} (commit ${commit})`;
@@ -701,7 +717,7 @@ async function installPack(
 
 async function installPlugin(
   ref: PluginRef,
-  mode: 'install' | 'update',
+  mode: 'install' | 'update' | 'replace',
   env: PluginEnvironment
 ): Promise<void> {
   const receipts = await readReceipts(env.pluginsDir);
@@ -729,6 +745,12 @@ async function installPlugin(
     const packReceipt = previous && !isBinaryReceipt(previous) ? previous : undefined;
     await installPack(ref, source, receipts, packReceipt, env);
   }
+}
+
+export async function replacePlugin(ref: string, env: PluginEnvironment): Promise<void> {
+  await withPluginMutationLock(env.pluginsDir, () =>
+    installPlugin(parsePluginRef(ref), 'replace', env)
+  );
 }
 
 async function removePlugin(ref: PluginRef, env: PluginEnvironment): Promise<void> {

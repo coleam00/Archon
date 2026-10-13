@@ -952,6 +952,20 @@ export class SqliteAdapter implements IDatabase {
         checkout_baseline TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
+        project_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        value TEXT,
+        operation TEXT NOT NULL,
+        writer_kind TEXT NOT NULL CHECK (writer_kind IN ('run', 'operator')),
+        writer_run_id TEXT,
+        writer_node_path TEXT,
+        writer_identity TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (project_key, name, revision)
+      );
+
       CREATE TABLE IF NOT EXISTS remote_agent_start_receipts (
         id TEXT PRIMARY KEY,
         source_instance_id TEXT NOT NULL,
@@ -1004,6 +1018,8 @@ export class SqliteAdapter implements IDatabase {
         admitted_at TEXT,
         FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
       );
+
+      CREATE INDEX IF NOT EXISTS idx_state_revisions_created_at ON remote_agent_state_revisions(created_at);
 
       CREATE INDEX IF NOT EXISTS idx_resource_start_queue
         ON remote_agent_resource_start_requests(resource_key, status, queue_position);

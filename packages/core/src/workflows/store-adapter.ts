@@ -2,6 +2,8 @@
  * WorkflowStore adapter — bridges @archon/core DB modules to the
  * IWorkflowStore trait defined in @archon/workflows.
  */
+import { createSqlStateDocumentStore } from '../db/state-documents';
+import { getDatabase } from '../db/connection';
 import { providerRegistry } from '@archon/providers';
 import type { CredentialStatus } from '@archon/provider-contract';
 import type { IWorkflowStore } from '@archon/workflows/store';
@@ -85,6 +87,7 @@ function collectOAuthCredentialValues(
 
 export function createWorkflowStore(): IWorkflowStore {
   return {
+    ...createSqlStateDocumentStore(getDatabase),
     setToolCallAttention: workflowDb.setToolCallAttention,
     admitResourceStart: resourceStarts.admitResourceStart,
     drainResourceStarts: resourceStarts.drainResourceStarts,

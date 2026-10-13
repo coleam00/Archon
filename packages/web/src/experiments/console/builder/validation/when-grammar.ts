@@ -6,7 +6,7 @@
  * declared workflow input), where `<rhs>` is a single-quoted string literal or a
  * bare number/boolean. `||` joins OR-clauses (outer, lower precedence) and `&&`
  * joins atoms within a clause (inner, higher precedence). Six operators:
- * `== != < > <= >=`. No parentheses. This mirrors the engine's one atom parser
+ * `== != < > <= >=`; the four numeric ones need a numeric RHS. No parentheses. This mirrors the engine's one atom parser
  * (`WHEN_ATOM_PATTERN` plus the follow-up rules in `parseWhenAtom`,
  * packages/workflows/src/when-atom.ts) so the builder and the runtime agree on
  * what parses.
@@ -122,6 +122,14 @@ function parseAtom(raw: string): { ok: true; atom: AtomNode } | { ok: false; err
   const rhs = quoted !== undefined ? quoted : bare;
   if (rhs === undefined) {
     return { ok: false, error: `cannot parse condition: "${trimmed}"` };
+  }
+  // A numeric operator compares `parseFloat` of both sides, so a non-numeric literal
+  // could never compare true. The engine's parseWhenAtom rejects it the same way.
+  if (op !== '==' && op !== '!=' && !Number.isFinite(parseFloat(rhs))) {
+    return {
+      ok: false,
+      error: `cannot parse condition: "${trimmed}" ('${op}' compares numbers, so the right-hand side must be a number)`,
+    };
   }
   const spelling = quoted === undefined ? { bare: true as const } : {};
 

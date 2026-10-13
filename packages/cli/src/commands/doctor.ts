@@ -1,3 +1,4 @@
+import { noDefaultProviderMessage } from '@archon/provider-contract';
 /**
  * Doctor command - Verifies the local Archon setup.
  *
@@ -80,12 +81,14 @@ export async function checkProviderDeprecation(
   load: (cwd: string) => Promise<Pick<MergedConfig, 'assistant'>> = defaultLoadMergedConfig
 ): Promise<CheckResult> {
   const label = 'Provider support';
-  let assistant: string;
+  let assistant: string | undefined;
   try {
     assistant = (await load(cwd)).assistant;
   } catch {
     return { label, status: 'skip', message: 'config did not load' };
   }
+  if (assistant === undefined)
+    return { label, status: 'skip', message: 'no default provider configured' };
   const { getRegistration } = await import('@archon/providers');
   const notice = getRegistration(assistant).deprecationNotice;
   return notice
@@ -493,6 +496,8 @@ export async function checkAssistantLogin(
 
 async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<AssistantLoginDeps> {
   const config = await defaultLoadMergedConfig(process.cwd());
+  if (config.assistant === undefined)
+    throw new Error(noDefaultProviderMessage((await import('@archon/providers')).providerRegistry));
   const { getRegistration, normalizeCredentialVendor } = await import('@archon/providers');
   const configuredModel = config.assistants[config.assistant]?.model;
   const model = typeof configuredModel === 'string' ? configuredModel : undefined;

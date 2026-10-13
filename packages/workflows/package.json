@@ -49,7 +49,9 @@
     "./container-context": "./src/container-context.ts",
     "./structured-output": "./src/structured-output.ts",
     "./dag-resume-snapshot": "./src/dag-resume-snapshot.ts",
-    "./store-conformance": "./src/store-conformance.ts"
+    "./store-conformance": "./src/store-conformance.ts",
+    "./state-document-store": "./src/state-document-store.ts",
+    "./state-document-conformance": "./src/state-document-conformance.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -214,6 +216,10 @@
     ],
     [
       "src/file-store/"
+    ],
+    [
+      "src/state-document-store.test.ts",
+      "src/state-document-conformance.test.ts"
     ]
   ]
 }

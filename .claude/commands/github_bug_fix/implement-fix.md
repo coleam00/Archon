@@ -68,19 +68,14 @@ Following the "Testing Requirements" from RCA:
 - Place tests alongside source files or in existing test directories
 - Follow existing test patterns in the affected package
 
-### 5. Run Validation
+### 5. Check Your Changes
 
-```bash
-bun run type-check
-bun run lint
-bun run test
-bun run validate
-```
+Run the tests that cover what you changed, and lint and type-check the packages you touched. CI is the full validation; don't run `bun run validate`.
 
-**If validation fails:**
-- Fix the issues
-- Re-run validation
-- Don't proceed until all pass
+**If a check fails because of your change:**
+- Fix it
+- Re-run that check
+- Don't proceed until it passes
 
 ### 6. Verify Fix Manually
 

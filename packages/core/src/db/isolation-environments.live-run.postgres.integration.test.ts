@@ -15,11 +15,7 @@
 import { describe, test, expect, beforeAll, afterAll, mock } from 'bun:test';
 import type { Pool as PgPool } from 'pg';
 
-// The barrel is fully replaced (no partial merge), so re-export the constants
-// the real module graph needs: bundled-schema reads BUNDLED_IS_BINARY. The
-// '@archon/paths/bundled-build' subpath is a separate specifier and stays real.
 mock.module('@archon/paths', () => ({
-  BUNDLED_IS_BINARY: false,
   createLogger: () => ({
     info() {},
     warn() {},
