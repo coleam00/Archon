@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
-import { runPackScript } from './deliver-checks-harness';
+import { packScriptRunner } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
 
 // A dry run executes one loop iteration, so the round counter, the cap and what one
 // round carries into the next are proved here, against the script itself.
