@@ -5,6 +5,8 @@
  */
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { VALIDATE_CHECKS, parseOnly, selectChecks, runCheckCommands } from './validate';
 
 const track = trackTempRoots();
@@ -43,6 +45,20 @@ describe('validate check selection', () => {
 
   test('an unknown id fails instead of selecting nothing', () => {
     expect(() => selectChecks(['docs_build'])).toThrow(/Unknown check id: docs_build/);
+  });
+
+  test('every check is selected by a CI job', () => {
+    // CI is the full validation, so a check no job selects runs nowhere.
+    const workflow = Bun.YAML.parse(
+      readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
+    ) as { jobs: Record<string, { steps?: { run?: string }[] }> };
+    const selected = new Set(
+      Object.values(workflow.jobs)
+        .flatMap(job => job.steps ?? [])
+        .flatMap(step => [...(step.run ?? '').matchAll(/bun run validate --only (\S+)/g)])
+        .flatMap(match => match[1].split(','))
+    );
+    expect(VALIDATE_CHECKS.map(check => check.id).filter(id => !selected.has(id))).toEqual([]);
   });
 
   test('check ids are unique', () => {
