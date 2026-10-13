@@ -424,6 +424,9 @@ import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import {
   workflowRunSchema,
   dashboardWorkflowRunSchema,
+  runsNeedingAttentionResponseSchema,
+  runAttentionSchema,
+  RUN_ATTENTION_SCHEMA_NAME,
   workflowRunStatusSchema,
 } from './schemas/workflow.schemas';
 
@@ -962,6 +965,20 @@ const listRunArtifactsRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getRunsNeedingAttentionRoute = createRoute({
+  method: 'get',
+  path: '/api/runs/attention',
+  tags: ['Workflows'],
+  summary: 'List every run needing a human response or action',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: runsNeedingAttentionResponseSchema } },
+      description: 'OK',
+    },
     500: jsonError('Server error'),
   },
 });
@@ -1825,6 +1842,7 @@ export function registerApiRoutes(
   } = createSqlWorkflowOperations();
 
   app.openAPIRegistry.register('DagNodeSseEvent', dagNodeSseEventSchema);
+  app.openAPIRegistry.register(RUN_ATTENTION_SCHEMA_NAME, runAttentionSchema);
 
   /**
    * Validate a run request's declared-inputs map (#2554): a flat object whose every
@@ -2000,7 +2018,10 @@ export function registerApiRoutes(
       if (err instanceof DeviceFlowError) {
         return c.json({ status: 'error' as const, detail: err.code });
       }
-      getLog().error({ err: err as Error }, 'auth.github_device_poll_failed');
+      getLog().error(
+        { err, userId: web.userId, platform: 'github' },
+        'auth.github_device_poll_failed'
+      );
       return apiError(c, 500, 'Failed to poll GitHub device flow');
     }
   });
@@ -2743,9 +2764,17 @@ export function registerApiRoutes(
     return { ...row, metadata: boundMetadataToolOutputs(metadata) };
   }
 
+  function toApiRunAttention(row: WorkflowRun): ApiWorkflowRun['attention'] {
+    const attention = runAttention(row);
+    return attention?.kind === 'terminal'
+      ? { ...attention, at: toISOString(attention.at) }
+      : attention;
+  }
+
   function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
     return {
       ...row,
+      attention: toApiRunAttention(row),
       started_at: toISOString(row.started_at),
       completed_at: toISOString(row.completed_at),
       last_activity_at: toISOString(row.last_activity_at),
@@ -2755,6 +2784,7 @@ export function registerApiRoutes(
   function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
     return {
       ...row,
+      attention: toApiRunAttention(row),
       started_at: toISOString(row.started_at),
       completed_at: toISOString(row.completed_at),
       last_activity_at: toISOString(row.last_activity_at),
@@ -3734,6 +3764,16 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error }, 'run_workflow_failed');
       return apiError(c, 500, 'Failed to run workflow');
+    }
+  });
+
+  registerOpenApiRoute(getRunsNeedingAttentionRoute, async c => {
+    try {
+      const runs = await workflowDb.listRunsNeedingAttention();
+      return c.json({ runs: runs.map(toApiDashboardWorkflowRun) });
+    } catch (error) {
+      getLog().error({ err: error }, 'list_runs_needing_attention_failed');
+      return apiError(c, 500, 'Failed to list runs needing attention');
     }
   });
 

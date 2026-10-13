@@ -95,7 +95,7 @@ This file is the canonical project guidance for coding agents. Keep it short, du
 
 ## Workflow-language boundary
 
-The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md) before changing the YAML surface.
+The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md) before changing the YAML surface. Read [`.archon/workflows/sdlc/CONSTITUTION.md`](.archon/workflows/sdlc/CONSTITUTION.md) before changing the SDLC pack.
 
 - YAML should expose only what the engine must see to govern a run: topology, gates, joins, retries, sessions, artifacts, durable waits, and reusable structure.
 - Computation belongs inside a `bash:`, `script:`, or `prompt:` node. Choosing a script instead of a prompt is an ordinary reliability and maintainability decision, not a constitutional rule.
@@ -167,9 +167,9 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Spawn a subprocess only when the subprocess is the subject under test. To suppress an inherited env key for a Bun child, pass it as `''`; deleting it allows `.env` loading to restore it.
 - Bun's module mocks pollute the process cache. Use the package test scripts that preserve isolation; do not run `bun test` from the repository root.
 - Always run lint through `bun run lint` or `bun run lint:fix`; the wrapper isolates packages to keep typed lint within its memory budget.
-- Run the narrow checks that prove the changed behavior while iterating.
-- CI is the full validation gate. Default `bun run validate` runs local checks; format and workflow fixtures require `bun run validate --only format,workflow-fixtures`. `scripts/validate.ts` owns the check list and CI selects from it.
-- CI-only service and build jobs are listed in [`CONTRIBUTING.md`](CONTRIBUTING.md) with the command to run each one yourself. Schema changes require the PostgreSQL upgrade check from that list.
+- Check what you changed: run the tests that cover it, and lint and type-check the packages you touched.
+- CI is the full validation. Don't run `bun run validate` to finish a change. `scripts/validate.ts` owns the check list and CI selects from it; format and workflow fixtures run locally only through `--only`.
+- Schema changes also need the PostgreSQL upgrade check. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists it with its command.
 - For visual or runtime behavior, add direct evidence when static tests cannot prove the outcome.
 - Destructive verification, including DDL, migrations, and data writes, runs only against a scratch database you create and drop. A configured live DSN is read-only at most; when only a live resource exists, stop and surface it to the operator.
 

@@ -57,7 +57,7 @@ export async function authGithubCommand(): Promise<number> {
     } else if (err instanceof DeviceFlowError) {
       console.error(`\n✗ Device flow failed (${err.code}): ${err.message}`);
     } else {
-      getLog().error({ err: err as Error }, 'cli.auth_github_failed');
+      getLog().error({ err, userId: user.id, platform: 'github' }, 'cli.auth_github_failed');
       console.error(`\n✗ Connect failed: ${(err as Error).message}`);
     }
     return 1;

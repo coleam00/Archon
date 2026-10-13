@@ -42,8 +42,8 @@ export async function resolveUserId(
     return (
       await userDb.findOrCreateUserByPlatformIdentity(platform, String(platformUserId), displayName)
     ).id;
-  } catch {
-    getLog().warn({ platform }, 'server.user_resolve_failed');
+  } catch (err) {
+    getLog().warn({ err, platform }, 'server.user_resolve_failed');
     return undefined;
   }
 }
@@ -54,11 +54,11 @@ export function createMessageErrorHandler(
   conversationId: string
 ): (error: unknown) => Promise<void> {
   return async error => {
-    getLog().error({ platform }, 'message_processing_failed');
+    getLog().error({ err: error, platform }, 'message_processing_failed');
     try {
       await adapter.sendMessage(conversationId, classifyAndFormatError(error as Error, adapter));
-    } catch {
-      getLog().error({ platform }, 'error_message_send_failed');
+    } catch (sendError) {
+      getLog().error({ err: sendError, platform }, 'error_message_send_failed');
     }
   };
 }

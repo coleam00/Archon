@@ -148,6 +148,9 @@
       "src/routes/workflow-yaml.test.ts"
     ],
     [
+      "src/adapters/web/console-attention.integration.test.ts"
+    ],
+    [
       "src/chat-host/inbound.test.ts"
     ],
     [
