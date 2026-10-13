@@ -512,6 +512,37 @@ CREATE SEQUENCE IF NOT EXISTS remote_agent_workflow_events_event_order_seq
 ALTER TABLE remote_agent_workflow_events
   ALTER COLUMN event_order SET DEFAULT nextval('remote_agent_workflow_events_event_order_seq');
 
+-- event_order follows commit order (#3334). The column default draws nextval()
+-- at insert time, so a transaction that inserts first and commits last would
+-- land below an order a reader has already passed. This deferred trigger
+-- replaces that value at commit instead: it takes a transaction-scoped advisory
+-- lock, which is held until the commit completes, and then draws a new value.
+-- Committing event writers therefore draw in commit order. A transaction draws
+-- once per event, in insert order, so its own events keep their order.
+--
+-- Deferred on purpose. The lock is global, so a transaction holding it must
+-- never wait on another lock. At commit it has finished all of its work and
+-- only updates its own new rows, so it cannot join a deadlock. Taking the lock
+-- at insert time could, through any row lock taken later in the transaction.
+--
+-- The trigger also orders inserts from older binaries, which never name
+-- event_order. The values are unique, but the sequence leaves gaps.
+CREATE OR REPLACE FUNCTION archon_assign_workflow_event_order() RETURNS trigger AS $$
+BEGIN
+  -- 3334 is arbitrary; it only has to differ from the schema lock (1796).
+  PERFORM pg_advisory_xact_lock(3334);
+  UPDATE remote_agent_workflow_events
+     SET event_order = nextval('remote_agent_workflow_events_event_order_seq')
+   WHERE id = NEW.id;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS archon_workflow_event_order ON remote_agent_workflow_events;
+CREATE CONSTRAINT TRIGGER archon_workflow_event_order
+  AFTER INSERT ON remote_agent_workflow_events
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION archon_assign_workflow_event_order();
+
 -- ============================================================================
 -- Schema vintage (#2316)
 -- ============================================================================
