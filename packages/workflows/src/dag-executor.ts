@@ -5234,6 +5234,7 @@ async function executeLoopNode(
     workflowSourceRoots,
   } = ctx;
   const loop = node.loop;
+  const retryConfig = getEffectiveNodeRetryConfig(node);
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name when this loop node runs inside a loop_group body
   // ('' → node.id at top level, #2090). The loop's own per-iteration number lives in
@@ -5598,12 +5599,12 @@ async function executeLoopNode(
         return false;
       const message = failure.error;
       const maxRetries = effectiveRetryMaxRetries(
-        DEFAULT_NODE_MAX_RETRIES,
+        retryConfig.maxRetries,
         retryClass,
         iterSawRateLimit
       );
       if (attempt >= maxRetries) return false;
-      const delayMs = getRetryDelayMs(retryClass, attempt, DEFAULT_NODE_RETRY_DELAY_MS);
+      const delayMs = getRetryDelayMs(retryClass, attempt, retryConfig.delayMs);
       getLog().warn(
         {
           nodeId: node.id,

@@ -4002,6 +4002,31 @@ nodes:
       });
     });
 
+    it('loads zero-delay retry config on a loop without warnings', async () => {
+      await writeWorkflowFile(
+        testDir,
+        'retry-loop.yaml',
+        `
+name: retry-loop
+description: Loop iteration retry
+nodes:
+  - id: work
+    retry:
+      max_attempts: 1
+      delay_ms: 0
+    loop:
+      prompt: Work
+      until_bash: "true"
+      max_iterations: 2
+`
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflow.nodes[0].retry).toEqual({ max_attempts: 1, delay_ms: 0 });
+      expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
+    });
+
     it('should reject retry with missing max_attempts', async () => {
       await writeWorkflowFile(
         testDir,

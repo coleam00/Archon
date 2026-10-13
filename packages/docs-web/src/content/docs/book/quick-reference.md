@@ -144,7 +144,7 @@ All nodes share these base fields:
 | `allowed_tools` | No | string[] | Restrict available tools to this list (Claude only) |
 | `denied_tools` | No | string[] | Remove specific tools from this node's context (Claude only) |
 | `idle_timeout` | No | number | Per-node idle timeout in milliseconds (default: 30 minutes) |
-| `retry` | No | object | Retry configuration for transient failures (see Retry Options). **Hard error on loop nodes** |
+| `retry` | No | object | Retry configuration for transient failures (see Retry Options). On `loop:` nodes, retries the failed iteration |
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
 | `mcp` | No | string | Path to MCP server config JSON file (Claude, Codex and Copilot; other providers fail the run) |
 | `skills` | No | string[] | Declared skill names for this node; Claude omission/`[]` selects none |
@@ -259,15 +259,15 @@ become defaults for body AI nodes.
 
 ### Retry Options
 
-Defined under `retry:` inside a node:
+Defined under `retry:` inside a node. Without a declaration, AI nodes and loop iterations use two retries with a 3000 ms base delay. Loop retries stay in the failed iteration and reset their budget after each successful iteration; they do not consume `max_iterations`:
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `max_attempts` | Yes | — | Retry attempts after the initial failure (max: 5) |
-| `delay_ms` | No | 3000 | Initial delay in milliseconds for ordinary retries; doubles each attempt (1000-60000). Rate limits and capacity use independent delays. |
-| `on_error` | No | `transient` | `transient` retries transient, rate-limited and capacity (`overloaded`) failures and timeouts; `all` retries everything except fatal errors |
+| `max_attempts` | Yes | — | Retry attempts after the initial attempt (1–5); required when declaring `retry:` |
+| `delay_ms` | No | 3000 | Initial delay in milliseconds for ordinary retries; doubles each attempt (0–60000 on loops, 1000–60000 otherwise). Rate limits and capacity use independent delays. |
+| `on_error` | No | `transient` | `transient` retries transient, rate-limited and capacity (`overloaded`) failures and timeouts; `all` retries everything except fatal errors. Loops reject `all` |
 
-Capacity failures get at least five retries with delay centers of 45, 90, 180, 300 and 300 seconds, each with ±50% jitter (up to 450 seconds per wait). Node `delay_ms` does not change this schedule; the larger budget applies only while the current failure is capacity. Rate limits retain a five-retry minimum and flat 45-second delay with ±50% jitter. See [Retry Configuration](/guides/authoring-workflows/#retry-configuration) for the full policy and audit events.
+Capacity failures get at least five retries with delay centers of 45, 90, 180, 300 and 300 seconds, each with ±50% jitter (up to 450 seconds per wait). Node `delay_ms` (including zero on loops) does not change this schedule; the larger budget applies only while the current failure is capacity. Rate limits retain a five-retry minimum and flat 45-second delay with ±50% jitter, keeping the larger budget for the rest of the iteration or node attempt sequence. See [Retry Configuration](/guides/authoring-workflows/#retry-configuration) for the full policy and audit events.
 
 > **Fatal errors are never retried**: auth failures, exhausted credit balances, cancellation, and configuration errors (a missing command file, a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable MCP config file) fail immediately regardless of retry config. Retry follows the kind of failure Archon recorded, never the error message.
 

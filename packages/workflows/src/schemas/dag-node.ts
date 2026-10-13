@@ -13,7 +13,7 @@
 import { z } from '@hono/zod-openapi';
 import { agentDefinitionSchema, type ProviderCapabilities } from '@archon/provider-contract';
 export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
-import { stepRetryConfigSchema } from './retry';
+import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
 import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { effortLevelSchema, rejectRetiredThinking } from './effort';
 export { MAX_DURABLE_WAIT_MS } from './durable-wait';
@@ -486,10 +486,11 @@ const loopAiAuthoringSchema = dagNodeBaseSchema.pick({
 /**
  * Loop node schema — extends base with `loop` config.
  * The authored AI projection selects fields consumed by each iteration; remaining
- * AI fields warn as ignored. retry is rejected because the loop owns iteration.
+ * AI fields warn as ignored. Retry policy applies to each failed iteration.
  */
 export const loopNodeSchema = dagNodeBaseSchema.extend({
   kind: z.literal('loop'),
+  retry: loopRetryConfigSchema.optional(),
   loop: loopNodeConfigSchema,
   timeout: execNodeSchema.shape.timeout,
 });
@@ -542,8 +543,8 @@ export const loopGroupNodeConfigSchema: z.ZodType<LoopGroupNodeConfig> = loopCon
 
 /**
  * Loop-group node schema — extends base with `loop_group` config (iteration control + body).
- * Like `loop:`, AI-specific base fields are ignored at runtime with a warning, and `retry`
- * is not supported (the loop manages its own iteration). `model`/`provider` are forwarded
+ * AI-specific base fields are ignored at runtime with a warning, and `retry`
+ * is not supported (the group manages its own iteration). `model`/`provider` are forwarded
  * to body AI nodes unless overridden per-node (same forwarding `loop:` uses).
  */
 export const loopGroupNodeSchema = dagNodeBaseSchema.extend({
@@ -1117,6 +1118,9 @@ export const WORKFLOW_NODE_IGNORED_FIELDS: readonly string[] = [
  * its shape, and for any future use that needs the pre-validation object type.
  */
 export const dagNodeFlatSchema = dagNodeBaseSchema.extend({
+  retry: stepRetryConfigSchema
+    .extend({ delay_ms: loopRetryConfigSchema.shape.delay_ms })
+    .optional(),
   // Mode fields (exactly one required)
   command: z.string().optional(),
   prompt: z.string().optional(),
@@ -1170,7 +1174,7 @@ export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set(
  * - Exactly one of command/prompt/bash/loop/loop_group/approval/cancel/script (mutual exclusivity)
  * - command name validity (via isValidCommandName)
  * - idle_timeout must be a finite positive number
- * - retry not allowed on loop or loop_group nodes
+ * - mode-specific retry validation; retry not allowed on loop_group nodes
  * - timeout on bash must be positive
  *
  * Note: provider identity is validated in loader.ts (workflow-level) and
@@ -1675,13 +1679,17 @@ export const dagNodeSchema = z
       }
     }
 
-    // Loop node: retry not supported
-    if (hasLoop && data.retry !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "'retry' is not supported on loop nodes (loop manages its own iteration)",
-        path: ['retry'],
-      });
+    if (data.retry !== undefined) {
+      const retrySchema = hasLoop ? loopRetryConfigSchema : stepRetryConfigSchema;
+      const result = retrySchema.safeParse(data.retry);
+      if (!result.success) {
+        addSchemaIssues(
+          result.error.issues.map(issue => ({
+            message: issue.message,
+            path: ['retry', ...issue.path],
+          }))
+        );
+      }
     }
 
     // Loop-group node: retry not supported (the loop_group manages its own iteration)
@@ -1969,10 +1977,11 @@ export const dagNodeSchema = z
     return {
       ...base,
       ...loopAiAuthoringSchema.parse(data),
+      ...(data.retry !== undefined ? { retry: loopRetryConfigSchema.parse(data.retry) } : {}),
       kind: 'loop',
       loop: data.loop,
       ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
-    } as LoopNode;
+    } satisfies LoopNode;
   })
   .openapi('DagNode');
 
