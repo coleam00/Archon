@@ -409,3 +409,33 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
   );
   return foldDagResumeSnapshot(result.rows, workflowRunId);
 }
+
+export async function getWorkflowEventHead(): Promise<string> {
+  const result = await pool.query<{ head: string | number | null }>(
+    `SELECT MAX(head) AS head FROM (
+       SELECT value AS head FROM remote_agent_workflow_event_sequence WHERE id = 1
+       UNION ALL
+       SELECT MAX(event_order) AS head FROM remote_agent_workflow_events
+       UNION ALL
+       SELECT MAX(event_order) AS head FROM remote_agent_workflow_event_archive
+     ) committed`
+  );
+  const row = result.rows[0];
+  if (row?.head == null) throw new Error('Workflow event head is missing');
+  return String(row.head);
+}
+
+export async function readWorkflowEventsAfter(
+  after: string,
+  limit: number
+): Promise<WorkflowEventRow[]> {
+  const result = await pool.query<WorkflowEventRow>(
+    `SELECT * FROM (
+       SELECT * FROM remote_agent_workflow_events WHERE event_order > $1
+       UNION ALL
+       SELECT * FROM remote_agent_workflow_event_archive WHERE event_order > $1
+     ) feed ORDER BY event_order LIMIT $2`,
+    [after, limit]
+  );
+  return result.rows.map(parseEventRow);
+}
