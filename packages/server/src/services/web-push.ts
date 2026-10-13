@@ -51,7 +51,17 @@ export function loadVapidKeys(home: string = getArchonHome()): z.infer<typeof va
 
   function readKeys(): z.infer<typeof vapidSchema> {
     chmodSync(path, 0o600);
-    return vapidSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+    let value: unknown;
+    try {
+      value = JSON.parse(readFileSync(path, 'utf8'));
+    } catch (err) {
+      // JSON parser diagnostics can quote private bytes from a malformed key file.
+      if (err instanceof SyntaxError) throw new Error('VAPID key file is not valid JSON');
+      throw err;
+    }
+    const parsed = vapidSchema.safeParse(value);
+    if (!parsed.success) throw new Error('VAPID key file does not contain a valid key pair');
+    return parsed.data;
   }
 }
 

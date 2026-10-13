@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test';
-import { mkdtempSync, statSync } from 'node:fs';
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import webPush from 'web-push';
@@ -349,4 +349,11 @@ test('if every subscription expired, no delivery is recorded', async () => {
   expect(sender).toHaveBeenCalledTimes(1);
   expect(await listAttentionNotices([runId])).toEqual([]);
   expect(await listWebPushSubscriptions()).toEqual([]);
+});
+
+test('malformed VAPID files do not expose their contents through parser errors', () => {
+  writeFileSync(join(root, 'web-push-vapid.json'), 'recognizablePrivateKeyFixture', {
+    mode: 0o600,
+  });
+  expect(() => loadVapidKeys()).toThrow('VAPID key file is not valid JSON');
 });
