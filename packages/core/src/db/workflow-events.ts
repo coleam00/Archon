@@ -11,7 +11,6 @@
 import { pool, getDialect, getDatabaseType } from './connection';
 import type { QueryResult } from './adapters/types';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
-import { checkoutSharedEventDataSchema } from '@archon/workflows/schemas/workflow-event';
 import { createLogger } from '@archon/paths';
 import { foldDagResumeSnapshot } from '@archon/workflows/dag-resume-snapshot';
 import {
@@ -59,27 +58,16 @@ function toDbDateParam(d: Date): string {
     : d.toISOString();
 }
 
-function hydrateEventRow(row: WorkflowEventRow): WorkflowEventRow {
-  const data: Record<string, unknown> =
-    typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
-  return {
-    ...row,
-    data:
-      row.event_type === 'workflow.checkout_shared'
-        ? checkoutSharedEventDataSchema.parse(data)
-        : data,
-  };
-}
-
 /**
- * Dashboard batches tolerate malformed ordinary telemetry so a bad row cannot freeze
- * polling. Required checkout-sharing evidence must remain distinguishable from `{}`.
+ * Parse a row's `data` JSON defensively. A single malformed row must not abort a
+ * whole batch — for the dashboard poller that would freeze the cursor and stop
+ * all live updates (the same query keeps re-throwing). Bad data degrades to `{}`.
  */
 function parseEventRow(row: WorkflowEventRow): WorkflowEventRow {
+  if (typeof row.data !== 'string') return row;
   try {
-    return hydrateEventRow(row);
+    return { ...row, data: JSON.parse(row.data) as Record<string, unknown> };
   } catch (err) {
-    if (row.event_type === 'workflow.checkout_shared') throw err;
     getLog().warn(
       { err: err as Error, eventId: row.id, runId: row.workflow_run_id },
       'db.workflow_event_data_parse_failed'
@@ -111,9 +99,6 @@ export async function insertWorkflowEvent(
   query: EventInsertQuery,
   data: WorkflowEventInput
 ): Promise<void> {
-  if (data.event_type === 'workflow.checkout_shared') {
-    checkoutSharedEventDataSchema.parse(data.data);
-  }
   const dialect = getDialect();
   const id = dialect.generateUuid();
   await query(
@@ -171,9 +156,6 @@ export async function persistWorkflowEventIfRunning(
   data: WorkflowEventInput,
   options?: { allowPaused?: boolean }
 ): Promise<{ persisted: boolean }> {
-  if (data.event_type === 'workflow.checkout_shared') {
-    checkoutSharedEventDataSchema.parse(data.data);
-  }
   const lockClause = getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
   const statusPredicate =
     options?.allowPaused === true ? "status IN ('running', 'paused')" : "status = 'running'";
@@ -214,7 +196,10 @@ export async function listWorkflowEvents(
        ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
       [workflowRunId, ...excluded]
     );
-    return [...result.rows].map(hydrateEventRow);
+    return [...result.rows].map(row => ({
+      ...row,
+      data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data,
+    }));
   } catch (error) {
     getLog().error({ err: error as Error, runId: workflowRunId }, 'db.workflow_events_list_failed');
     throw new Error(`Failed to list workflow events: ${(error as Error).message}`);
@@ -418,7 +403,10 @@ export async function listRecentEvents(
          ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
         [workflowRunId, toDbDateParam(since)]
       );
-      return [...result.rows].map(hydrateEventRow);
+      return [...result.rows].map(row => ({
+        ...row,
+        data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data,
+      }));
     }
     return await listWorkflowEvents(workflowRunId);
   } catch (error) {

@@ -190,15 +190,13 @@ export const workflowRunListResponseSchema = z
 
 /** A workflow event record (wire shape). */
 export const workflowEventSchema = workflowEventRowSchema
-  .and(
-    z.object({
-      created_at: z.string().datetime(),
-      cost_scope: nodeCostScopeSchema.optional().openapi({
-        description:
-          "What `data.cost_usd` measures, by the engine's rule: `own` is the node's own spend; `total` restates spend other rows of the run carry. Present only on rows with a `cost_usd`.",
-      }),
-    })
-  )
+  .extend({
+    created_at: z.string().datetime(),
+    cost_scope: nodeCostScopeSchema.optional().openapi({
+      description:
+        "What `data.cost_usd` measures, by the engine's rule: `own` is the node's own spend; `total` restates spend other rows of the run carry. Present only on rows with a `cost_usd`.",
+    }),
+  })
   .openapi('WorkflowEvent');
 
 /** GET /api/workflows/runs/:runId response. */

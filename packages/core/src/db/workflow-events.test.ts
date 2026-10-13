@@ -200,35 +200,6 @@ describe('workflow-events', () => {
   });
 
   describe('persistWorkflowEvent', () => {
-    test('persists required checkout-sharing fields and propagates INSERT rejection', async () => {
-      mockQuery.mockRejectedValueOnce(new Error('sharing INSERT rejected'));
-      await expect(
-        persistWorkflowEvent({
-          workflow_run_id: 'child-a',
-          event_type: 'workflow.checkout_shared',
-          data: {
-            parent_run_id: 'parent',
-            parent_node_id: 'work',
-            working_path: '/repo',
-            sibling_run_id: 'child-b',
-          },
-        })
-      ).rejects.toThrow('sharing INSERT rejected');
-      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), [
-        expect.any(String),
-        'child-a',
-        'workflow.checkout_shared',
-        null,
-        null,
-        JSON.stringify({
-          parent_run_id: 'parent',
-          parent_node_id: 'work',
-          working_path: '/repo',
-          sibling_run_id: 'child-b',
-        }),
-      ]);
-    });
-
     test('propagates a storage failure for correctness-critical events', async () => {
       mockQuery.mockRejectedValueOnce(new Error('disk full'));
 
@@ -260,47 +231,6 @@ describe('workflow-events', () => {
        ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
         ['run-456']
       );
-    });
-
-    test('validates sharing data while preserving PostgreSQL timestamp objects', async () => {
-      const createdAt = new Date('2026-10-12T00:00:00Z');
-      const data = {
-        parent_run_id: 'parent',
-        parent_node_id: 'work',
-        working_path: '/repo',
-        sibling_run_id: 'peer',
-      };
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          {
-            ...mockEvent,
-            event_type: 'workflow.checkout_shared',
-            created_at: createdAt,
-            data,
-          },
-        ])
-      );
-      const rows = await listWorkflowEvents('run-456');
-      const persistedTimestamp: unknown = rows[0]?.created_at;
-      expect(persistedTimestamp).toBe(createdAt);
-      expect(rows[0]?.data).toEqual(data);
-    });
-
-    test('rejects a persisted checkout-sharing event missing its sibling', async () => {
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          {
-            ...mockEvent,
-            event_type: 'workflow.checkout_shared',
-            data: JSON.stringify({
-              parent_run_id: 'parent',
-              parent_node_id: 'work',
-              working_path: '/repo',
-            }),
-          },
-        ])
-      );
-      await expect(listWorkflowEvents('run-456')).rejects.toThrow('sibling_run_id');
     });
 
     test('returns empty array for no results', async () => {

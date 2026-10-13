@@ -5547,40 +5547,18 @@ export interface components {
       };
       events: components['schemas']['WorkflowEvent'][];
     };
-    WorkflowEvent: (
-      | {
-          id: string;
-          workflow_run_id: string;
-          /** @enum {string} */
-          event_type: 'workflow.checkout_shared';
-          step_index: number | null;
-          step_name: string | null;
-          data: {
-            parent_run_id: string;
-            parent_node_id: string;
-            working_path: string;
-            sibling_run_id: string;
-          } & {
-            [key: string]: unknown;
-          };
-          created_at: string;
-          event_order?: number | null;
-        }
-      | {
-          id: string;
-          workflow_run_id: string;
-          event_type: string;
-          step_index: number | null;
-          step_name: string | null;
-          data: {
-            [key: string]: unknown;
-          };
-          created_at: string;
-          event_order?: number | null;
-        }
-    ) & {
+    WorkflowEvent: {
+      id: string;
+      workflow_run_id: string;
+      event_type: string;
+      step_index: number | null;
+      step_name: string | null;
+      data: {
+        [key: string]: unknown;
+      };
       /** Format: date-time */
       created_at: string;
+      event_order?: number | null;
       /**
        * @description What `data.cost_usd` measures, by the engine's rule: `own` is the node's own spend; `total` restates spend other rows of the run carry. Present only on rows with a `cost_usd`.
        * @enum {string}
