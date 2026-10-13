@@ -1,3 +1,9 @@
+import {
+  useBrowserPush,
+  refreshBrowserPush,
+  enableBrowserPush,
+  disableBrowserPush,
+} from '../lib/web-push';
 import { useEffect, type ReactElement } from 'react';
 import {
   disableAttentionAlerts,
@@ -12,9 +18,11 @@ import { SettingsSection } from './SettingsSection';
 /** Per-browser toggle for run attention alerts, and what the browser blocked (#1699). */
 export function AttentionAlertsPanel(): ReactElement {
   const alerts = useAttentionAlerts();
+  const push = useBrowserPush();
 
   useEffect(() => {
     refreshNotificationAccess();
+    void refreshBrowserPush();
   }, []);
 
   const problems = [
@@ -22,6 +30,7 @@ export function AttentionAlertsPanel(): ReactElement {
     alerts.soundError,
     alerts.notificationError,
     alerts.watchError,
+    push.error,
   ].filter((p): p is string => p !== null);
 
   return (
@@ -45,6 +54,29 @@ export function AttentionAlertsPanel(): ReactElement {
             Saved in this browser only.
           </span>
         </label>
+
+        <label className="flex cursor-pointer items-start gap-2 text-text-secondary">
+          <input
+            type="checkbox"
+            checked={push.enabled}
+            disabled={push.busy || push.unsupported !== null}
+            className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[color:var(--accent-bright)]"
+            onChange={e => {
+              if (e.target.checked) void enableBrowserPush();
+              else void disableBrowserPush();
+            }}
+          />
+          <span>
+            Also notify this browser when the console is closed
+            <br />
+            Requires a signed-in user. Every opted-in browser on this install receives notices.
+          </span>
+        </label>
+        {push.unsupported ? (
+          <p role="alert" className="text-error">
+            {push.unsupported}
+          </p>
+        ) : null}
 
         {alerts.enabled ? <NotificationStatus access={alerts.notifications} /> : null}
 

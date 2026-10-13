@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@archon/adapters": "workspace:*",
+    "@archon/chat-contract": "workspace:*",
     "@archon/core": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
@@ -25,13 +26,14 @@
     "dotenv": "^17.2.3",
     "hono": "^4.12.16",
     "pg": "^8.11.0",
+    "web-push": "^3.6.7",
     "yaml": "^2.8.2",
-    "zod": "^4.4.3",
-    "@archon/chat-contract": "workspace:*"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/pg": "^8.11.0"
+    "@types/pg": "^8.11.0",
+    "@types/web-push": "^3.6.4"
   },
   "testGroups": [
     [
@@ -167,6 +169,9 @@
     ],
     [
       "src/chat-host/runtime.test.ts"
+    ],
+    [
+      "src/services/attention-router.integration.test.ts"
     ]
   ]
 }

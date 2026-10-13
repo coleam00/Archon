@@ -1128,6 +1128,15 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_start_binding_preparation
         ON remote_agent_start_receipt_bindings(host_id, preparation_status, created_at);
 
+      CREATE TABLE IF NOT EXISTS remote_agent_web_push_subscriptions (
+        id TEXT PRIMARY KEY NOT NULL,
+        user_id TEXT NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+        endpoint TEXT NOT NULL UNIQUE,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
       -- Workflow events table
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

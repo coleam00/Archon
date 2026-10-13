@@ -88,6 +88,8 @@ import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
 import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
+import { AttentionRouter } from './services/attention-router';
+import { WebPushDestination } from './services/web-push';
 import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import { hasStartReceiptForDelivery } from '@archon/core/db/resource-starts';
@@ -363,6 +365,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const activePlatforms: string[] = ['Web'];
   const chatPlugins = opts.skipPlatformAdapters ? [] : await loadChatPlugins(getPluginsPath());
   const installedChatIds = new Set(chatPlugins.map(plugin => plugin.descriptor.id));
+  const inlinePlatforms = new Set(
+    chatPlugins
+      .filter(plugin => plugin.descriptor.capabilities.runEvents)
+      .map(plugin => plugin.descriptor.id)
+  );
+  const webPush = new WebPushDestination(inlinePlatforms);
+  const attentionRouter = new AttentionRouter([webPush], inlinePlatforms);
   const chatHost = createChatHost(
     chatPlugins,
     config.streaming,
@@ -732,7 +741,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   // Register Web UI API routes
-  registerApiRoutes(app, webAdapter, lockManager, activePlatforms);
+  registerApiRoutes(app, webAdapter, lockManager, activePlatforms, {
+    webPush,
+    router: attentionRouter,
+  });
 
   // GitHub webhook endpoint
   if (github) {
@@ -1000,6 +1012,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       })
       .then(async () => {
         try {
+          await attentionRouter.stop();
           await chatHost.stop();
         } catch (error) {
           getLog().error({ err: error }, 'chat_host_stop_error');
@@ -1042,6 +1055,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
   chatHost.start();
+  attentionRouter.start();
 
   // Every unhandled rejection or exception exits: vendor error text (such as the Claude
   // SDK's "Operation aborted") must not decide what gets suppressed. The one exception is
