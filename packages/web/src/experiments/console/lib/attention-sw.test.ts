@@ -4,7 +4,13 @@ import { expect, mock, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
-function worker(windows: unknown[] = []) {
+interface WindowClient {
+  url: string;
+  controlled: boolean;
+  navigate: (url: string) => Promise<unknown>;
+}
+
+function worker(windows: WindowClient[] = []) {
   const listeners = new Map<string, (event: unknown) => void>();
   const showNotification = mock(async (_title: string, _options: NotificationOptions) => {});
   const openWindow = mock(async (_url: string) => {});
@@ -17,7 +23,12 @@ function worker(windows: unknown[] = []) {
         addEventListener: (name: string, listener: (event: unknown) => void) =>
           listeners.set(name, listener),
         registration: { showNotification },
-        clients: { matchAll: async () => windows, openWindow },
+        // Mirrors Clients.matchAll: uncontrolled tabs are listed only on request.
+        clients: {
+          matchAll: async (options: { includeUncontrolled?: boolean } = {}) =>
+            windows.filter(client => client.controlled || options.includeUncontrolled),
+          openWindow,
+        },
       },
     }
   );
@@ -67,9 +78,21 @@ test('click opens the run with no console tab, or navigates and focuses an exist
   expect(legacyDestination(new URL(openedUrl).pathname, '')).toBe('/console/r/run-1');
   const focus = mock(async () => {});
   const navigate = mock(async (_url: string) => ({ focus }));
-  const open = worker([{ url: 'https://archon.example/settings', navigate }]);
+  const open = worker([{ url: 'https://archon.example/settings', controlled: true, navigate }]);
   await open.dispatch('notificationclick', event);
   expect(navigate).toHaveBeenCalledWith('https://archon.example/runs/run-1');
   expect(focus).toHaveBeenCalledTimes(1);
   expect(open.openWindow).not.toHaveBeenCalled();
+});
+
+test('click opens a new window when the open console tab is not controlled by the worker', async () => {
+  const event = { notification: { close: mock(() => {}), data: { runId: 'run-1' } } };
+  // Browsers reject navigate() on a tab the worker does not control.
+  const navigate = mock(async (_url: string) => {
+    throw new TypeError("This service worker is not the client's active service worker.");
+  });
+  const sw = worker([{ url: 'https://archon.example/console', controlled: false, navigate }]);
+  await sw.dispatch('notificationclick', event);
+  expect(navigate).not.toHaveBeenCalled();
+  expect(sw.openWindow).toHaveBeenCalledWith('https://archon.example/runs/run-1');
 });
