@@ -324,3 +324,42 @@ describe('revalidate after an abandoned in-flight load', () => {
     unsubscribeB();
   });
 });
+
+describe('invalidation during a subscribed load', () => {
+  test.each(['initial', 'revalidation', 'cancellation'] as const)(
+    '%s retains the lifecycle cue and reads again after the stale response',
+    async timing => {
+      const key = `test-trailing:${timing}`;
+      const before = timing === 'cancellation' ? ['paused'] : [];
+      const after = timing === 'cancellation' ? [] : ['paused'];
+      if (timing !== 'initial') set(key, before);
+      let settle: (value: string[]) => void = () => {};
+      let reads = 0;
+      const unsubscribe = subscribeKey(
+        key,
+        () => {},
+        () => {
+          reads++;
+          return reads === 1
+            ? new Promise<string[]>(resolve => {
+                settle = resolve;
+              })
+            : Promise.resolve(after);
+        }
+      );
+      try {
+        if (timing !== 'initial') invalidate(key);
+        invalidate('test-trailing');
+        invalidate('test-trailing');
+        expect(reads).toBe(1);
+        settle(before);
+        await flush();
+        expect(reads).toBe(2);
+        expect(get(key)).toEqual(after);
+      } finally {
+        unsubscribe();
+        invalidate(key);
+      }
+    }
+  );
+});

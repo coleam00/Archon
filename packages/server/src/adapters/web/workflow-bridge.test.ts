@@ -314,3 +314,27 @@ test('attention publication and clearing invalidate existing dashboard readers w
       });
   }
 });
+
+test.each([
+  ['wait_started', 'paused'],
+  ['wait_completed', 'running'],
+] as const)(
+  'persisted %s cues the dashboard without wait message contents',
+  (event_type, status) => {
+    const mapped = mapWorkflowEventRow({
+      id: 'event',
+      workflow_run_id: 'detached',
+      event_type,
+      step_index: null,
+      step_name: 'hold',
+      created_at: new Date().toISOString(),
+      data: { message: 'MESSAGE_SENTINEL' },
+    });
+    expect(JSON.parse(mapped!)).toMatchObject({
+      type: 'workflow_status',
+      runId: 'detached',
+      status,
+    });
+    expect(mapped).not.toContain('MESSAGE_SENTINEL');
+  }
+);

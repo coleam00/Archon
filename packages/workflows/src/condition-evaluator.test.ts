@@ -363,7 +363,7 @@ describe('evaluateCondition', () => {
     expect(res.parsed).toBe(false);
   });
 
-  it('numeric operator: fail-closed when expected is not numeric', () => {
+  it('numeric operator: a non-numeric literal is a parse failure, not a comparison', () => {
     const res = evaluateCondition("$n.output > 'abc'", new Map([['n', makeOutput('10')]]));
     expect(res.result).toBe(false);
     expect(res.parsed).toBe(false);
@@ -479,14 +479,24 @@ describe('evaluateCondition', () => {
     expect(res.parsed).toBe(false);
   });
 
-  it('|| operator: short-circuits on true first clause — invalid second clause is not evaluated', () => {
-    // When the first OR clause is true, the second clause (even if invalid) is not reached.
-    // This is intentional short-circuit OR behavior. A typo in a later OR clause will still
-    // surface as a parse error on runs where the earlier clauses are false.
+  it('rejects invalid syntax even in a clause that would short-circuit', () => {
     const outputs = new Map([['a', makeOutput('X')]]);
-    const res = evaluateCondition("$a.output == 'X' || not-valid", outputs);
-    expect(res.result).toBe(true);
-    expect(res.parsed).toBe(true); // short-circuit: invalid second clause never reached
+    expect(evaluateCondition("$a.output == 'X' || not-valid", outputs)).toEqual({
+      result: false,
+      parsed: false,
+    });
+  });
+
+  it('short-circuits value resolution after validating syntax', () => {
+    const outputs = new Map([['a', makeOutput('X')]]);
+    expect(evaluateCondition("$a.output == 'X' || $missing.output.field == 'Y'", outputs)).toEqual({
+      result: true,
+      parsed: true,
+    });
+    expect(evaluateCondition("$a.output == 'Z' && $missing.output.field == 'Y'", outputs)).toEqual({
+      result: false,
+      parsed: true,
+    });
   });
 
   // --- splitOutsideQuotes guard: operators inside quoted values are not treated as splitters ---
@@ -857,6 +867,18 @@ describe('parseWhenAtom', () => {
     expect(parseWhenAtom("$classify.output = 'BUG'")).toBeNull();
     expect(parseWhenAtom('not an atom')).toBeNull();
     expect(parseWhenAtom('$classify.output ==')).toBeNull();
+  });
+
+  it('rejects a numeric operator whose literal is not a finite number', () => {
+    for (const op of ['<=', '>=', '<', '>'] as const) {
+      expect(parseWhenAtom(`$score.output ${op} 'high'`)).toBeNull();
+      expect(parseWhenAtom(`$score.output ${op} ''`)).toBeNull();
+      expect(parseWhenAtom(`$score.output ${op} true`)).toBeNull();
+      expect(parseWhenAtom(`$INPUTS.limit ${op} 'many'`)).toBeNull();
+    }
+    // Equality has no numeric reading, so any literal stays valid.
+    expect(parseWhenAtom("$score.output == 'high'")).not.toBeNull();
+    expect(parseWhenAtom("$score.output != ''")).not.toBeNull();
   });
 });
 

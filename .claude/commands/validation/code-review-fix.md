@@ -20,13 +20,9 @@ For each fix:
 2. Show the fix with before/after context
 3. Create and run relevant tests to verify
 
-After all fixes, run validation:
+After all fixes, check what you changed: run the tests that cover it, and lint and type-check the packages you touched. CI is the full validation; don't run `bun run validate`.
 
-```bash
-bun run validate
-```
-
-Fix any issues that arise until all checks pass:
+Fix any issues your change caused until those checks pass:
 - Type checking: `bun run type-check`
 - Linting: `bun run lint` (zero warnings enforced)
 - Formatting: `bun run format:check`

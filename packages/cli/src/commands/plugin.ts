@@ -45,12 +45,13 @@ import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-p
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
 import { inspectChatPlugin } from './inspect-chat-plugin';
-import { publishChatPlugin } from './publish-chat-plugin';
+import { publishPlugin } from './publish-plugin';
 import {
   RESERVED_CHAT_PLATFORMS,
   type ChatPluginDescriptor,
 } from '@archon/chat-contract/descriptor';
 import { withPluginMutationLock } from './plugin-mutation-lock';
+import { removeUnlocked } from './unlocked-file';
 import { assertProviderRegistrationAllowed, getRegisteredProviders } from '@archon/providers';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
@@ -382,32 +383,27 @@ async function installBinaryPlugin(
       ...(descriptor ? { descriptor } : {}),
     });
     await writeFile(stagedReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
-    if (manifest.kind === 'chat') {
-      await publishChatPlugin({
-        stagedReceipt,
-        receiptFile,
-        stagedBinary,
-        target,
-        previousFiles:
-          previous && isBinaryReceipt(previous)
-            ? previous.files.map(file => join(env.pluginsDir, file.path))
-            : [],
-      });
-    } else {
-      // Receipt first: if the binary rename then fails, the receipt still owns the
-      // name and `update` or `remove` can recover. The other order could strand a
-      // binary no receipt owns, which every later install would refuse to replace.
-      await rename(stagedReceipt, receiptFile);
-      await rename(stagedBinary, target);
+    await publishPlugin({
+      stagedReceipt,
+      receiptFile,
+      stagedBinary,
+      target,
+      previousFiles:
+        previous && isBinaryReceipt(previous)
+          ? previous.files.map(file => join(env.pluginsDir, file.path))
+          : [],
+    });
+  } catch (error) {
+    // Cleanup runs only on failure (success renamed both staged files away) and must
+    // not replace the reason the install failed.
+    for (const staged of [stagedBinary, stagedReceipt]) {
+      try {
+        await removeUnlocked(staged);
+      } catch (cleanup) {
+        console.warn(`Could not remove ${staged}: ${(cleanup as Error).message}`);
+      }
     }
-  } finally {
-    await rm(stagedBinary, { force: true });
-    await rm(stagedReceipt, { force: true });
-  }
-  if (manifest.kind !== 'chat' && previous && isBinaryReceipt(previous)) {
-    for (const file of previous.files) {
-      if (file.path !== fileName) await rm(join(env.pluginsDir, file.path), { force: true });
-    }
+    throw error;
   }
 
   const from = `github.com/${ref.owner}/${ref.repo} ${tag} (commit ${commit})`;

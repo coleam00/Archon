@@ -229,6 +229,24 @@ function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
 function createMockStore(): MockWorkflowStore {
   const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(async _data => {});
   return {
+    getStateDocument: mock<IWorkflowStore['getStateDocument']>(() => {
+      throw new Error('Unexpected getStateDocument');
+    }),
+    putStateDocument: mock<IWorkflowStore['putStateDocument']>(() => {
+      throw new Error('Unexpected putStateDocument');
+    }),
+    patchStateDocument: mock<IWorkflowStore['patchStateDocument']>(() => {
+      throw new Error('Unexpected patchStateDocument');
+    }),
+    deleteStateDocument: mock<IWorkflowStore['deleteStateDocument']>(() => {
+      throw new Error('Unexpected deleteStateDocument');
+    }),
+    listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(() => {
+      throw new Error('Unexpected listStateRevisions');
+    }),
+    pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
+      throw new Error('Unexpected pruneStateRevisions');
+    }),
     setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
     admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
       throw new Error('Unexpected admitResourceStart');
@@ -30411,10 +30429,12 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     async mode => {
       const deliver = {
         ...buildWf('deliver-block', [
+          { id: 'gate-input', bash: 'printf ready' },
           {
             id: 'gate-validated',
             bash: 'exit 1',
-            ...(mode === 'condition' ? { when: 'false' } : {}),
+            depends_on: ['gate-input'],
+            ...(mode === 'condition' ? { when: "$gate-input.output == 'never'" } : {}),
           },
           { id: 'checks', bash: 'echo checks', depends_on: ['gate-validated'] },
           { id: 'result', bash: 'echo delivered', depends_on: ['checks'] },
@@ -30474,6 +30494,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
         cwd: testDir,
         stubs: {
           pr: 'ready',
+          'deliver__gate-input': 'ready',
           'flip-ready': 'fallback',
           report: 'fallback',
           action__entry: 'entry',

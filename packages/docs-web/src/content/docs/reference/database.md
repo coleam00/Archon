@@ -170,6 +170,11 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Records the Archon build that created the database and the build that last applied its schema
   - A single row (`id = 1`); databases predating this table retain an unknown creation version
 
+- **`remote_agent_state_revisions`** - Durable project JSON documents and their audit history
+  - Primary key: `(project_key, name, revision)`; optimistic writes append a revision
+  - Full JSON value (up to 64 KiB), operation, writer identity or run/node, and creation time
+  - SQL `NULL` value is a tombstone; run IDs have no foreign key so run cleanup preserves state
+
 - **`remote_agent_start_receipts`** - Source delivery receipts
   - Records source instance, delivery ID, content digest, timestamps, and matching outcome
   - Deduplicates deliveries by `(source_instance_id, delivery_id)` when the source supplies a delivery ID; `delivery_id` is nullable, and the unique constraint does not deduplicate receipts without one

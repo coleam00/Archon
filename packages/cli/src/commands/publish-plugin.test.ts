@@ -6,10 +6,13 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 const real = { ...fs };
 let fail: (operation: string, path: string) => boolean = () => false;
+/** Fails a rename by its target with an EBUSY code, as Windows does for a held file. */
+let busy: (target: string) => boolean = () => false;
 mock.module('node:fs/promises', () => ({
   ...real,
   async rename(source: string, target: string) {
     if (fail('rename', source)) throw new Error('injected rename failure');
+    if (busy(target)) throw Object.assign(new Error('injected EBUSY'), { code: 'EBUSY' });
     return real.rename(source, target);
   },
   async rm(path: string, options: Parameters<typeof fs.rm>[1]) {
@@ -17,15 +20,16 @@ mock.module('node:fs/promises', () => ({
     return real.rm(path, options);
   },
 }));
-const { publishChatPlugin } = await import('./publish-chat-plugin');
+const { publishPlugin } = await import('./publish-plugin');
 const trackRoot = trackTempRoots();
 afterEach(() => {
   fail = () => false;
+  busy = () => false;
   mock.restore();
 });
 
 async function fixture(update: boolean, renamed: boolean) {
-  const root = trackRoot(await real.mkdtemp(join(tmpdir(), 'archon-chat-publication-')));
+  const root = trackRoot(await real.mkdtemp(join(tmpdir(), 'archon-plugin-publication-')));
   const receiptFile = join(root, 'receipt.json');
   const target = join(root, 'binary');
   const oldBinary = renamed ? join(root, 'old-binary') : target;
@@ -67,7 +71,7 @@ for (const update of [false, true]) {
         }
         return false;
       };
-      await expect(publishChatPlugin(fixtureData)).rejects.toThrow('previous install restored');
+      await expect(publishPlugin(fixtureData)).rejects.toThrow('previous install restored');
       expect(injected).toBe(true);
       expect(await Bun.file(target).exists()).toBe(false);
       if (update) {
@@ -84,14 +88,14 @@ for (const update of [false, true]) {
 test('failed same-name update restores executable bytes', async () => {
   const data = await fixture(true, false);
   fail = (op, path) => op === 'rename' && path === data.stagedBinary;
-  await expect(publishChatPlugin(data)).rejects.toThrow('previous install restored');
+  await expect(publishPlugin(data)).rejects.toThrow('previous install restored');
   expect(await Bun.file(data.target).text()).toBe('old binary');
   expect(await Bun.file(data.receiptFile).text()).toBe('old receipt');
 });
 
 test('successful same-name update replaces receipt and executable without leftover staging files', async () => {
   const data = await fixture(true, false);
-  await publishChatPlugin(data);
+  await publishPlugin(data);
   expect(await Bun.file(data.receiptFile).text()).toBe('new receipt');
   expect(await Bun.file(data.target).text()).toBe('new binary');
   expect((await real.readdir(data.root)).sort()).toEqual(['binary', 'receipt.json']);
@@ -101,12 +105,15 @@ test('rollback failure reports recovery paths and preserves the usable backup', 
   const data = await fixture(true, false);
   fail = (op, path) =>
     op === 'rename' && (path === data.stagedBinary || path.startsWith(data.receiptFile + '.'));
-  const error = await publishChatPlugin(data).then(
+  const error = await publishPlugin(data).then(
     () => undefined,
     (error: unknown) => error
   );
   expect(String(error)).toContain('rollback failed; recovery required');
   expect(String(error)).toContain(data.receiptFile);
+  // The publication failure that triggered the rollback is the reason to act on.
+  expect(String(error)).toContain('injected rename failure');
+  expect((error as Error).cause).toBeInstanceOf(Error);
   const backup = (await real.readdir(data.root)).find(name => name.startsWith('receipt.json.'));
   expect(backup).toBeDefined();
   expect(await Bun.file(join(data.root, backup ?? '')).text()).toBe('old receipt');
@@ -116,9 +123,30 @@ test('backup cleanup after commit warns and preserves installed success', async 
   const data = await fixture(true, true);
   fail = (op, path) => op === 'rm' && /[a-f0-9]{12}\.partial$/.test(path);
   const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
-  await publishChatPlugin(data);
+  await publishPlugin(data);
   expect(await Bun.file(data.receiptFile).text()).toBe('new receipt');
   expect(await Bun.file(data.target).text()).toBe('new binary');
   expect(await Bun.file(data.oldBinary).exists()).toBe(false);
-  expect(warn.mock.calls.flat().join('\n')).toContain('Chat plugin backup cleanup failed:');
+  expect(warn.mock.calls.flat().join('\n')).toContain('Plugin backup cleanup failed:');
+});
+
+test('rollback waits out a briefly locked receipt', async () => {
+  const data = await fixture(true, false);
+  const sleep = spyOn(Bun, 'sleep').mockResolvedValue(undefined);
+  let binaryFailed = false;
+  let receiptFailures = 0;
+  fail = (op, path) => {
+    if (op === 'rename' && path === data.stagedBinary) binaryFailed = true;
+    return binaryFailed && path === data.stagedBinary;
+  };
+  busy = target => {
+    if (!binaryFailed || target !== data.receiptFile || receiptFailures >= 3) return false;
+    receiptFailures++;
+    return true;
+  };
+  await expect(publishPlugin(data)).rejects.toThrow('previous install restored');
+  expect(receiptFailures).toBe(3);
+  expect(sleep).toHaveBeenCalledTimes(3);
+  expect(await Bun.file(data.receiptFile).text()).toBe('old receipt');
+  expect(await Bun.file(data.target).text()).toBe('old binary');
 });

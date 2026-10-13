@@ -157,7 +157,7 @@ archon plugin list
 
 A provider plugin records its descriptor in the receipt and registers on the next CLI invocation or server restart. A workflow names its descriptor id in `provider:`. See [Provider plugins](/guides/publishing-plugins/#provider-plugins) for executable naming, capabilities, credentials, and the process environment.
 
-A chat plugin records its validated descriptor after an initialization-only handshake. Hosts do not yet load installed chat plugins. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
+A chat plugin records its validated descriptor after an initialization-only handshake. On server restart, each installed chat receipt starts one supervised plugin process. Install, update, and removal take effect at the next restart. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
 
 A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. Nothing updates in the background. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
 
@@ -1110,7 +1110,10 @@ archon workflow reject <run-id> --json
 
 ### `workflow cleanup`
 
-Delete old terminal workflow run records from the database.
+Delete old terminal workflow run records and prune state-document revisions from the
+database. Every latest revision survives, including tombstones: removing a tombstone
+would allow revision numbers to repeat and a stale replacement to overwrite recreated state.
+The command reports both counts.
 
 ```bash
 archon workflow cleanup        # Default: 7 days
@@ -1481,3 +1484,49 @@ archon isolation list
 # Clean up old worktrees
 archon isolation cleanup
 ```
+
+### state
+
+Durable, audited JSON documents scoped to the current project. SQL storage supports
+SQLite and PostgreSQL. Values are read on demand; the engine never injects them into prompts.
+
+```bash
+archon state get review/123
+printf '{"seen":[]}' | archon state put review/123 --if-revision 0
+printf '{"ops":[{"op":"append","path":"/seen","value":123}]}' | archon state patch review/123
+archon state log review/123 --limit 100
+archon state delete review/123 --if-revision 2
+```
+
+Every command writes JSON. `get` returns `{name, revision, value}`; an absent document
+returns revision `0` and value `null`. A deleted document returns value `null`,
+`deleted: true` and its tombstone revision, which is the revision a recreating `put` must
+name. `put`, `patch`, and `delete` return the new full revision. `log` returns all
+revisions newest first (use a positive `--limit` to bound the result), including
+tombstones, operation, writer and timestamp.
+
+`put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
+that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
+stdin to the latest value, initially `{}`, retrying up to five times on contention.
+Operations are `set`, `remove`, and `append`, using RFC 6901 JSON Pointer paths. `set`
+replaces a value, `remove` deletes an existing member (or array element), and `append`
+adds one value to an array, creating it when missing. Missing intermediate objects are
+created for `set` and `append`. Array indices must be canonical, in-range integers;
+`-` is unsupported. The empty pointer addresses the entire document. Root `null` is
+reserved for deletion; nested nulls are ordinary JSON values.
+
+Names contain 1–200 lowercase letters, digits, `.`, `_`, `-`, and slash-separated segments.
+Values are limited to 64 KiB of serialized UTF-8 JSON. Exit codes: `0` success, `1` usage
+or storage failure, `3` revision conflict, `4` oversized value or invalid patch. Failures
+return `{ok:false, error, code}` and rejected writes append no revision.
+
+Inside a bash/script node, `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` resolve the run's
+project and writer. Missing runs fail loudly with the opened store kind; a missing project
+or node identity also fails. There is no project override. Outside a run, the current
+checkout (auto-registered when needed) or registered folder resolves the project and `ARCHON_USER_ID`, `USER`, or
+`USERNAME` identifies the operator. Projects with colliding storage names share state,
+just as with `$STATE_DIR`; register them with distinct names.
+
+`archon workflow cleanup <days>` also prunes old state revisions, keeps each live document's latest
+revision, retains the latest tombstone of deleted documents, and reports both counts.
+See [Durable state documents](/guides/authoring-workflows/#durable-state-documents).

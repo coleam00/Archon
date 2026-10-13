@@ -45,7 +45,7 @@ mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: findOrCreate,
 }));
 
-import { resolveUserId } from './index';
+import { resolveUserId } from './chat-host/inbound';
 
 describe('resolveUserId', () => {
   beforeEach(() => {
@@ -90,13 +90,16 @@ describe('resolveUserId', () => {
   });
 
   test('logs failure as static server.user_resolve_failed event (not platform-templated)', async () => {
-    findOrCreate.mockRejectedValueOnce(new Error('connection refused'));
+    const failure = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+    });
+    findOrCreate.mockRejectedValueOnce(failure);
     await resolveUserId('telegram', 999, undefined);
 
     const failedCall = warnCalls.find(c => c.evt === 'server.user_resolve_failed');
     expect(failedCall).toBeDefined();
     expect(failedCall?.obj).toHaveProperty('platform', 'telegram');
-    expect(failedCall?.obj).toHaveProperty('platformUserId', '999');
+    expect(failedCall?.obj).toEqual({ err: failure, platform: 'telegram' });
     // Confirm we did NOT use a per-platform event name (would collide with the
     // GitHub adapter's own `github.user_resolve_failed` event).
     expect(warnCalls.find(c => c.evt === 'telegram.user_resolve_failed')).toBeUndefined();

@@ -181,8 +181,22 @@ Chat plugins run as your operating-system user and inherit the ambient environme
 Plugin stderr and plugin-controlled error details are withheld because they may contain
 credentials or user messages. The process boundary is not a security sandbox.
 
-Chat installation currently records the binary and descriptor only. Running hosts do not
-yet load these chat plugins; installing one does not replace a bundled chat adapter.
+Restart the server after installing, updating, or removing a chat plugin. The server
+starts one supervised process per installed chat receipt and verifies its live descriptor
+against the receipt. A matching installed platform supersedes its bundled adapter;
+for Slack, this also skips the bundled workflow bridge. The server logs that replacement.
+Without a matching receipt, bundled adapters continue to work as before.
+
+The host enforces the descriptor's allowlist for messages and run actions before creating
+an Archon identity. Run actions require the run's starter or an admin. Run events go only
+to the plugin that owns the run's conversation, for runs executing in the server process.
+There is no webhook ingress for chat plugins.
+
+Crashes and retryable start failures restart with backoff from one to thirty seconds.
+A non-retryable start failure requires a server restart after correcting the configuration.
+Outbound requests time out after thirty seconds; two consecutive timeouts restart the
+process. Shutdown closes stdin and allows ten seconds for exit before terminating the
+recorded process tree. Plugin stderr and remote failure text are withheld from host logs.
 Remove chat installs before downgrading to an Archon release without chat receipts.
 
 ## Listing and refresh

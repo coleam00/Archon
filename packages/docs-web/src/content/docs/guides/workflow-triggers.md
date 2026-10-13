@@ -20,6 +20,12 @@ Every binding names a `hostId`. A host prepares accepted work for its own ID, ad
 
 Both hosts use the same admission records, so a server and a scheduled CLI command can serve the same host ID without starting a run twice.
 
+## Find runs needing your input
+
+The console's **Needs your input** banner lists every run waiting for a human, including triggered runs and runs older than the first page of the feed. Approval gates keep their decision and response controls. A `wait: attention` run shows its message with **Resume** and **Abandon** actions.
+
+Keep the console open to receive live updates from runs started by another process. **Dismiss** hides an occurrence for this browser session; reloading or a new pause brings it back. Resuming still requires the server to have access to the run's working path.
+
 ## Find your run-as user ID
 
 Every binding names the Archon user whose provider configuration and credentials the run uses, as `runAsUserId`. To use your own CLI identity, run:

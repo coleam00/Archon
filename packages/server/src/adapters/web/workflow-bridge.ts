@@ -209,9 +209,14 @@ function dataSkipCause(data: Record<string, unknown>): SkipCause | undefined {
 }
 
 /** DB event_type → run-level status, emitted as a `workflow_status` SSE event. */
-const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'cancelled'> = {
+const ROW_WORKFLOW_STATUS: Record<
+  string,
+  'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
+> = {
   workflow_started: 'running',
   run_attention_changed: 'running',
+  wait_started: 'paused',
+  wait_completed: 'running',
   workflow_completed: 'completed',
   workflow_failed: 'failed',
   workflow_cancelled: 'cancelled',
