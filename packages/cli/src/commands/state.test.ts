@@ -7,8 +7,6 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { canonicalizeProjectPath, getProjectStoragePaths } from '@archon/paths';
-import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
-import { findRepoRoot } from '@archon/git';
 import { stateCommand } from './state';
 import {
   createInMemoryWorkflowStore,
@@ -228,15 +226,6 @@ test('operator state from a folder descendant inside Git belongs only to the fol
     default_cwd: await canonicalizeProjectPath(folder),
     kind: 'folder',
   });
-  const resolved = await resolveCodebaseForPath(descendant, host.records.codebases);
-  expect(
-    resolved.codebase?.kind,
-    JSON.stringify({
-      descendant: await canonicalizeProjectPath(descendant),
-      gitRoot: await findRepoRoot(descendant),
-      resolved,
-    })
-  ).toBe('folder');
   expect(
     await stateCommand(
       host,

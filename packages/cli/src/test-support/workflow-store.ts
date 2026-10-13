@@ -1,6 +1,8 @@
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
+import { isPathInside } from '@archon/paths';
 import { WorkflowEventCursorError, type WorkflowEventCursor } from '@archon/workflows/store';
 import type {
   IWorkflowStore,
@@ -35,8 +37,8 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
         [...codebases.values()].find(row => row.default_cwd === cwd) ?? null,
       findCodebaseByPathPrefix: async cwd =>
         [...codebases.values()]
-          .filter(row => cwd.startsWith(`${row.default_cwd}/`))
-          .sort((a, b) => b.default_cwd.length - a.default_cwd.length)[0] ?? null,
+          .filter(row => isPathInside(row.default_cwd, cwd, { includeRoot: true, lexical: true }))
+          .sort((a, b) => resolve(b.default_cwd).length - resolve(a.default_cwd).length)[0] ?? null,
       findCodebaseByName: async name =>
         [...codebases.values()].find(row => row.name === name) ?? null,
       findCodebaseByRepoUrl: async url =>
