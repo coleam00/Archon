@@ -1,6 +1,9 @@
 // @archon-test-isolated
 import { test } from 'bun:test';
-import { assertStateProcessRaces } from './state-documents.process-contract';
+import {
+  assertPatchSurvivesInterleavedWrites,
+  assertStateProcessRaces,
+} from './state-documents.process-contract';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,3 +42,16 @@ test('eight separate SQLite processes retain every patch and have one CAS winner
     await removeTempTree(root);
   }
 });
+
+test('a patch survives a write committed after each of its reads', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'state-interleave-')));
+  const db = new SqliteAdapter(join(root, 'state.db'));
+  const other = new SqliteAdapter(join(root, 'state.db'));
+  try {
+    await assertPatchSurvivesInterleavedWrites(db, other);
+  } finally {
+    await other.close();
+    await db.close();
+    await removeTempTree(root);
+  }
+}, 30_000);

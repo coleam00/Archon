@@ -62,3 +62,51 @@ export async function assertStateProcessRaces(
   expect(puts.filter(code => code === 3)).toHaveLength(7);
   expect(await store.listStateRevisions('process', 'put')).toHaveLength(1);
 }
+
+/**
+ * Forces the race a patch must survive: after each of writer A's reads of the latest
+ * revision, writer B (a second connection) patches the same document before A continues.
+ * Six interleavings exceed any bounded retry budget. A backend that blocks B until A
+ * commits may let A proceed after a short wait; B's patch then lands afterwards.
+ */
+export async function assertPatchSurvivesInterleavedWrites(
+  db: IDatabase,
+  other: IDatabase
+): Promise<void> {
+  const writerB = createSqlStateDocumentStore(() => other);
+  const document = { project: 'interleave', name: 'ledger' };
+  const started: Promise<unknown>[] = [];
+  const interleave =
+    (query: IDatabase['query']): IDatabase['query'] =>
+    async <T>(sql: string, params?: unknown[]) => {
+      const result = await query<T>(sql, params);
+      if (started.length < 6 && sql.endsWith('ORDER BY revision DESC LIMIT 1')) {
+        const write = writerB.patchStateDocument({
+          ...document,
+          writer: { kind: 'operator', identity: 'b' },
+          ops: [{ op: 'append', path: '/seen', value: `b${started.length}` }],
+        });
+        started.push(write);
+        await Promise.race([write, Bun.sleep(200)]);
+      }
+      return result;
+    };
+  const interleaved: Pick<IDatabase, 'dialect' | 'query' | 'withTransaction'> = {
+    dialect: db.dialect,
+    query: interleave(db.query.bind(db)),
+    withTransaction: fn => db.withTransaction(query => fn(interleave(query))),
+  };
+  const store = createSqlStateDocumentStore(() => interleaved);
+  await store.patchStateDocument({
+    ...document,
+    writer: { kind: 'operator', identity: 'a' },
+    ops: [{ op: 'append', path: '/seen', value: 'a' }],
+  });
+  await Promise.all(started);
+  const rows = await store.listStateRevisions(document.project, document.name);
+  expect(rows).toHaveLength(started.length + 1);
+  const value = rows[0]?.value;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !Array.isArray(value.seen))
+    throw new Error('Missing interleaved ledger');
+  expect([...value.seen].sort()).toEqual(['a', ...started.map((_, i) => `b${i}`)].sort());
+}

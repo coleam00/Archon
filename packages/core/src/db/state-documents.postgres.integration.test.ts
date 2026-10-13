@@ -1,5 +1,8 @@
 // @archon-test-isolated
-import { assertStateProcessRaces } from './state-documents.process-contract';
+import {
+  assertPatchSurvivesInterleavedWrites,
+  assertStateProcessRaces,
+} from './state-documents.process-contract';
 import { afterAll, beforeAll, describe, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
@@ -47,6 +50,16 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL state documents', () => {
     try {
       await assertStateProcessRaces(harness.db, { kind: 'postgres', address: harness.url });
     } finally {
+      await harness.close();
+    }
+  });
+  test('a patch survives a write committed after each of its reads', async () => {
+    const harness = await makeHarness();
+    const other = new PostgresAdapter(harness.url);
+    try {
+      await assertPatchSurvivesInterleavedWrites(harness.db, other);
+    } finally {
+      await other.close();
       await harness.close();
     }
   });
