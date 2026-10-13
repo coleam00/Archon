@@ -1,7 +1,7 @@
 import { NODE_LIFECYCLE_EVENT_TYPES, foldActiveNodeIds } from '../store';
 import { FileStoreUnsupportedError } from './errors';
 import { createHash } from 'node:crypto';
-import { readdir, stat } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -25,6 +25,7 @@ import {
 import {
   commit,
   createFileEventFeed,
+  isRunArchived,
   openFileStore,
   readJson,
   readRun,
@@ -172,12 +173,7 @@ export async function createFileWorkflowStore(
     createWorkflowRun: data => {
       const input = { ...data, id: data.id ?? crypto.randomUUID() };
       return write([input.id], async view => {
-        const archived = await stat(join(root, 'archived-runs', input.id)).catch(error => {
-          if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
-            return undefined;
-          throw error;
-        });
-        if (archived) throw new Error('Duplicate run');
+        if (await isRunArchived(root, input.id)) throw new Error('Duplicate run');
         return view.createWorkflowRun(input);
       });
     },

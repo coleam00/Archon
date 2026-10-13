@@ -5,7 +5,7 @@ import {
   type WorkflowEventPage,
   type IWorkflowEventFeed,
 } from '../store';
-import { mkdir, open, readFile, readdir, rm, truncate, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rm, stat, truncate, unlink } from 'node:fs/promises';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
@@ -48,10 +48,10 @@ type FeedIndex = z.infer<typeof feedIndexSchema>;
 // Cleanup transfers logs to the feed archive; the index remains disposable.
 async function rebuildFeedIndex(root: string, seq: number): Promise<FeedIndex> {
   const runs: FeedIndex['runs'] = {};
-  await mkdir(join(root, 'archived-runs'), { recursive: true });
+  await mkdir(archiveRoot(root), { recursive: true });
   const dirs = [
     ...(await readdir(join(root, 'runs'), { withFileTypes: true })),
-    ...(await readdir(join(root, 'archived-runs'), { withFileTypes: true })),
+    ...(await readdir(archiveRoot(root), { withFileTypes: true })),
   ];
   for (let start = 0; start < dirs.length; start += 64) {
     await Promise.all(
@@ -101,6 +101,24 @@ export function runPath(root: string, id: string): string {
   if (!/^[a-zA-Z0-9-]+$/.test(id)) throw new Error(`Invalid file store run id: ${id}`);
   return join(root, 'runs', id);
 }
+// Deletion moves a run's log here; the ID stays reserved so the feed never loses its history.
+function archiveRoot(root: string): string {
+  return join(root, 'archived-runs');
+}
+function archivedRunPath(root: string, id: string): string {
+  runPath(root, id);
+  return join(archiveRoot(root), id);
+}
+/** Whether `id` belonged to a deleted run. Callers creating a run must hold the store lock. */
+export async function isRunArchived(root: string, id: string): Promise<boolean> {
+  try {
+    await stat(archivedRunPath(root, id));
+    return true;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
 function documentPath(root: string, path: string): string {
   const target = resolve(root, path);
   const rel = relative(root, target);
@@ -148,8 +166,7 @@ async function readLog(
 ): Promise<{ lines: RunCommitLine[]; bytes: number; total: number }> {
   let contents: Buffer;
   try {
-    const dir = runPath(root, id);
-    const path = join(archived ? join(root, 'archived-runs', id) : dir, 'log.jsonl');
+    const path = join(archived ? archivedRunPath(root, id) : runPath(root, id), 'log.jsonl');
     contents = (await retryFileStoreHandles('read', path, () => readFile(path))).value;
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
@@ -173,7 +190,7 @@ async function readFeedLog(root: string, id: string): ReturnType<typeof readLog>
 }
 async function archiveRunLog(root: string, id: string): Promise<void> {
   const source = runPath(root, id);
-  const target = join(root, 'archived-runs', id);
+  const target = archivedRunPath(root, id);
   await mkdir(target, { recursive: true });
   await syncDirectory(root);
   await syncDirectory(dirname(target));
