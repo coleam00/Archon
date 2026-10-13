@@ -56,6 +56,14 @@
         "typescript": "^5.0.0",
       },
     },
+    "packages/chat-slack": {
+      "name": "@archon/chat-slack",
+      "version": "0.11.1",
+      "dependencies": {
+        "@archon/chat-contract": "workspace:*",
+        "@slack/bolt": "^4.6.0",
+      },
+    },
     "packages/cli": {
       "name": "@archon/cli",
       "version": "0.11.1",
@@ -341,6 +349,8 @@
     "@archon/adapters": ["@archon/adapters@workspace:packages/adapters"],
 
     "@archon/chat-contract": ["@archon/chat-contract@workspace:packages/chat-contract"],
+
+    "@archon/chat-slack": ["@archon/chat-slack@workspace:packages/chat-slack"],
 
     "@archon/cli": ["@archon/cli@workspace:packages/cli"],
 

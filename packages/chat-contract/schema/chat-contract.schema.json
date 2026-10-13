@@ -575,6 +575,14 @@
             "pauseId": {
               "type": "string",
               "minLength": 1
+            },
+            "authoredOutcome": {
+              "type": "string",
+              "enum": [
+                "succeeded",
+                "failed",
+                "unavailable"
+              ]
             }
           },
           "required": [

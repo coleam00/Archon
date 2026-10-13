@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Slack is available as an optional Socket Mode chat plugin: `archon plugin install coleam00/Archon/plugins/chat-slack`. Restart the server after installing. In the plugin, `/archon connect github` now points to the Web UI or `archon auth github`; the bundled Slack adapter remains available during the transition. (#3646)
+
 - The CLI no longer bundles the server or chat adapters. `archon serve` downloads the version-matched server and web UI on first use, verifies embedded checksums, and runs the server as a child. `--download-only` caches both. (#3644)
 
 ### Breaking

@@ -17,6 +17,7 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   // External providers can depend on the contract without pulling in implementations.
   'provider-contract': { runtime: [] },
   'chat-contract': { runtime: ['provider-contract'] },
+  'chat-slack': { runtime: ['chat-contract'] },
   // Git operations use the shared paths and process helpers.
   git: { runtime: ['paths'] },
   // SDK implementations adapt the provider contract.

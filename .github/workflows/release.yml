@@ -146,6 +146,25 @@ jobs:
             console.log("::notice::Forge plugin metadata", JSON.stringify(metadata));
           '
 
+      - name: Build Slack chat plugin
+        id: chat-plugin
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          ASSET=$(bun -e '
+            const { pluginReleaseAsset } = await import("./packages/plugin-manifest/src/index.ts");
+            const manifest = await Bun.file("plugins/chat-slack/archon-plugin.json").json();
+            console.log(pluginReleaseAsset(manifest.executable, process.env.TARGET));
+          ')
+          bun build --compile --target="$TARGET" packages/chat-slack/src/main.ts --outfile "dist/${ASSET}"
+          echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test Slack chat plugin
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        env:
+          ASSET: ${{ steps.chat-plugin.outputs.asset }}
+        run: bun packages/chat-slack/src/test/smoke.ts "dist/${ASSET}"
+
       - name: Smoke-test server launch refusal
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
         env:
@@ -324,6 +343,7 @@ jobs:
             dist/${{ matrix.binary }}
             dist/archon-server-*
             dist/${{ steps.forge-plugin.outputs.asset }}
+            dist/${{ steps.chat-plugin.outputs.asset }}
           retention-days: 1
 
   release:
@@ -451,6 +471,7 @@ jobs:
           | `archon-<os>-<arch>[.exe]` | CLI |
           | `archon-server-<os>-<arch>[.exe]` | Version-matched server executable fetched by `archon serve` |
           | `archon-forge-github-<os>-<arch>[.exe]` | GitHub forge plugin |
+          | `archon-chat-slack-<os>-<arch>[.exe]` | Slack chat plugin |
           | `archon-web.tar.gz` | Web UI |
           | `checksums.txt` | SHA-256 checksums for every asset |
 

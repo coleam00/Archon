@@ -40,6 +40,24 @@ const DEPENDENCY_INSTALL = 'bun install';
  */
 const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
   {
+    command: 'bun packages/chat-slack/src/test/build-conformance.ts',
+    reason:
+      'Compiles the Slack entry point with a stubbed client; compilation stays in CI to avoid macOS syspolicyd stalls.',
+  },
+  {
+    command: 'bun packages/chat-slack/src/test/conformance-cli.ts',
+    reason:
+      'Exercises the CI-compiled Slack conformance binary; source conformance runs in the package tests.',
+  },
+  {
+    command: 'bun build --compile packages/chat-slack/src/main.ts',
+    reason: 'Builds the unmodified Slack release entry point for its CI-only smoke.',
+  },
+  {
+    command: 'bun packages/chat-slack/src/test/smoke.ts',
+    reason: 'Needs the compiled Slack release executable; compilation is CI-only.',
+  },
+  {
     command: 'bun test packages/core/src/db/state-documents.postgres.integration.test.ts',
     reason:
       'Exercises state-document CAS in scratch PostgreSQL databases with database creation permission.',

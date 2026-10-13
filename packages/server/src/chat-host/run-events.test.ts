@@ -103,6 +103,12 @@ test.each([false, true])(
           `UPDATE remote_agent_workflow_runs SET outcome = 'succeeded' WHERE id = $1`,
           [run.id]
         );
+        emitter.emit({
+          type: 'approval_pending',
+          runId: run.id,
+          nodeId: 'gate',
+          message: 'Choose',
+        });
         emitter.unregisterRun(run.id);
         emitter.emit({
           type: 'workflow_completed',
@@ -112,14 +118,15 @@ test.each([false, true])(
         });
       }
       const deadline = Date.now() + 2000;
-      while (first.length < 3 || second.length < 3) {
+      while (first.length < 4 || second.length < 4) {
         if (Date.now() > deadline) throw new Error('Events were not forwarded');
         await new Promise(resolve => setTimeout(resolve, 5));
       }
-      expect(first.map(event => event.runId)).toEqual(Array(3).fill(runs[0]!.id));
-      expect(second.map(event => event.runId)).toEqual(Array(3).fill(runs[1]!.id));
+      expect(first.map(event => event.runId)).toEqual(Array(4).fill(runs[0]!.id));
+      expect(second.map(event => event.runId)).toEqual(Array(4).fill(runs[1]!.id));
       expect(first[0]).toMatchObject({ conversationId: 'thread-fixture-chat' });
-      expect(first[2]).toMatchObject({
+      expect(first[2]).toMatchObject({ type: 'approval_pending', authoredOutcome: 'succeeded' });
+      expect(first[3]).toMatchObject({
         type: 'terminal',
         authoredOutcome: 'succeeded',
         totalCostUsd: 0.25,
@@ -136,7 +143,7 @@ test.each([false, true])(
         duration: 0,
       });
       await new Promise(resolve => setTimeout(resolve, 0));
-      expect(first).toHaveLength(3);
+      expect(first).toHaveLength(4);
     } finally {
       unsubscribe();
     }
@@ -236,4 +243,40 @@ test('a cancelled run carries its cancellation reason to the plugin', async () =
   } finally {
     unsubscribe();
   }
+});
+
+test('suspended and prior-success nodes retain the Slack rendering states', () => {
+  expect(
+    projectRunEvent({
+      type: 'node_suspended',
+      runId: 'run',
+      nodeId: 'node',
+      nodeName: 'Node',
+      execution: {
+        runId: 'run',
+        path: 'node',
+        node: { id: 'node', kind: 'workflow' },
+        invocation: { id: 'inv', startedAt: '2026-10-13T00:00:00Z', loopPath: [] },
+        attempt: { id: 'attempt', startedAt: '2026-10-13T00:00:00Z' },
+        binding: {},
+        timing: { startedAt: '2026-10-13T00:00:00Z' },
+        spend: {
+          tokens: { source: 'unavailable', reason: 'not_applicable' },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting: 'node',
+        lifecycle: { status: 'suspended', point: 'child_workflow' },
+      },
+    })
+  ).toMatchObject({ type: 'node_state', state: 'running' });
+  expect(
+    projectRunEvent({
+      type: 'node_skipped_prior_success',
+      runId: 'run',
+      nodeId: 'node',
+      nodeName: 'Node',
+    })
+  ).toMatchObject({ type: 'node_state', state: 'completed' });
 });

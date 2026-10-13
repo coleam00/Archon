@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const id = z.string().min(1);
+const authoredOutcome = z.enum(['succeeded', 'failed', 'unavailable']);
 export const chatApprovalDecisionSchema = z.object({ id, label: z.string().optional() });
 export const chatRunEventSchema = z.discriminatedUnion('type', [
   z.object({
@@ -25,13 +26,14 @@ export const chatRunEventSchema = z.discriminatedUnion('type', [
     message: z.string(),
     decisions: z.array(chatApprovalDecisionSchema).optional(),
     pauseId: id.optional(),
+    authoredOutcome: authoredOutcome.optional(),
   }),
   z.object({
     type: z.literal('terminal'),
     runId: id,
     status: z.enum(['completed', 'failed', 'cancelled']),
     error: z.string().optional(),
-    authoredOutcome: z.enum(['succeeded', 'failed', 'unavailable']).optional(),
+    authoredOutcome: authoredOutcome.optional(),
     totalCostUsd: z.number().nonnegative().optional(),
   }),
 ]);

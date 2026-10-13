@@ -37,6 +37,20 @@ test('generated schema and runtime agree on actor and action constraints', () =>
     ],
     ChatRunEvent: [
       { type: 'provider_event', runId: 'r' },
+      {
+        type: 'approval_pending',
+        runId: 'r',
+        nodeId: 'n',
+        message: 'Choose',
+        authoredOutcome: 'succeeded',
+      },
+      {
+        type: 'approval_pending',
+        runId: 'r',
+        nodeId: 'n',
+        message: 'Choose',
+        authoredOutcome: 'invalid',
+      },
       { type: 'terminal', runId: 'r', status: 'completed', authoredOutcome: 'succeeded' },
     ],
   };
