@@ -2992,12 +2992,11 @@ export async function executeWorkflow(
     if (protectedEnvKeys.size > 0) {
       config.protectedEnvKeys = [...protectedEnvKeys];
     }
-    const protectedCredentialValues = [
+    // Recomputed rather than appended to preflight's list: GitHub and provider credentials
+    // layered above may have replaced a database value, which is then no longer delivered.
+    config.protectedCredentialValues = [
       ...new Set([...effectiveDbCredentialValues(dbEnvVars, config.envVars), ...protectedValues]),
     ];
-    if (protectedCredentialValues.length > 0) {
-      config.protectedCredentialValues = protectedCredentialValues;
-    }
 
     // Capture the loaded graph on both fresh execution and resume before any node runs.
     const graph = runGraphSchema.parse({

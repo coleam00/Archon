@@ -143,21 +143,26 @@ test('timeout is distinct and bounds a command that ignores SIGTERM', async () =
   expect(rows[1].data?.message).toContain('30 ms');
 });
 
-test('a shell that exits while a background child holds its output still times out', async () => {
-  // The shell exits 0 at once, but the background job keeps stdout open, so the
-  // subprocess only settles when the timeout destroys the streams.
-  const error = await createRunWorktreeSetupExecutor(
-    deps,
-    run,
-    {}
-  )(input(['(sleep 2; echo late) & echo started'], 200)).catch((error: unknown) => error);
-  expect(error).toBeInstanceOf(WorktreePostCreateError);
-  expect(rows.map(row => row.event_type)).toEqual([
-    'worktree_setup_started',
-    'worktree_setup_failed',
-  ]);
-  expect(rows[1].data?.failureKind).toBe('timeout');
-});
+// The shell exits at once, but the background job keeps stdout open, so the subprocess
+// settles only when the timeout destroys the streams, whatever the shell's exit status.
+test.each(['exit 0', 'exit 3'])(
+  "a shell that ends with '%s' while a background job holds its output times out",
+  async exit => {
+    const error = await createRunWorktreeSetupExecutor(
+      deps,
+      run,
+      {}
+    )(input([`(sleep 2; echo late) & echo started; ${exit}`], 200)).catch(
+      (error: unknown) => error
+    );
+    expect(error).toBeInstanceOf(WorktreePostCreateError);
+    expect(rows.map(row => row.event_type)).toEqual([
+      'worktree_setup_started',
+      'worktree_setup_failed',
+    ]);
+    expect(rows[1].data?.failureKind).toBe('timeout');
+  }
+);
 
 test('an invalid configured bash path records a spawn failure', async () => {
   process.env.ARCHON_BASH_PATH = join(root, 'missing-bash');

@@ -88,9 +88,8 @@ function createSetupExecutor(
               ? retention
               : { ...retention, nodeId: `setup-${attemptId}-${commandIndex}` },
         });
-        // A shell that exits 0 while a background child still holds its stdout or stderr
-        // settles as a success only when the timeout destroys the streams. Reaching the
-        // bound is a timeout whatever the exit status.
+        // A shell that exits 0 while a background job holds its output resolves only
+        // when the timeout destroys the streams; classify it below as a timeout.
         if (Date.now() - started >= input.timeout) {
           throw Object.assign(new Error(`Command timed out after ${input.timeout} ms`), {
             killed: true,
@@ -105,13 +104,16 @@ function createSetupExecutor(
           error instanceof Error ? error : new Error(String(error)),
           credentials
         );
-        const failureKind = isSubprocessTimeout(rejection)
-          ? 'timeout'
-          : rejection.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
-            ? 'output_limit'
-            : typeof rejection.code === 'number' || rejection.signal
-              ? 'exit'
-              : 'spawn';
+        // Reaching the bound is a timeout whatever the shell reported: a shell that
+        // exits while a background job holds its output settles only at the timeout.
+        const failureKind =
+          isSubprocessTimeout(rejection) || Date.now() - started >= input.timeout
+            ? 'timeout'
+            : rejection.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+              ? 'output_limit'
+              : typeof rejection.code === 'number' || rejection.signal
+                ? 'exit'
+                : 'spawn';
         const exitCode = typeof rejection.code === 'number' ? rejection.code : undefined;
         const errno = typeof rejection.code === 'string' ? rejection.code : undefined;
         const signal = rejection.signal ?? undefined;
