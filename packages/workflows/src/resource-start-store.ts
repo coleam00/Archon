@@ -84,9 +84,14 @@ export function compareStartReceipts(
   b: Pick<SourceReceiptInput, 'id' | 'receivedAt'>
 ): number {
   return (
-    receiptTimeKey(b.receivedAt).localeCompare(receiptTimeKey(a.receivedAt)) ||
-    b.id.localeCompare(a.id)
+    descending(receiptTimeKey(a.receivedAt), receiptTimeKey(b.receivedAt)) || descending(a.id, b.id)
   );
+}
+
+// Code-unit order, matching SQL's binary `ORDER BY ... DESC`; localeCompare depends on the
+// runtime's collation and can order mixed-case ids differently.
+function descending(a: string, b: string): number {
+  return a < b ? 1 : a > b ? -1 : 0;
 }
 
 export interface IResourceStartStore {
