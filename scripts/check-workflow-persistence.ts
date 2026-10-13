@@ -72,8 +72,18 @@ export function findPersistenceImports(root: string, consumers: readonly string[
 
   const pathOf = (file: string): string => relative(root, file).replaceAll('\\', '/');
   const violations: string[] = [];
+  // The owning tsconfigs differ only in module resolution, so the programs share parsed
+  // files instead of each parsing the overlapping workspace graph again.
+  const parsed = new Map<string, ts.SourceFile | undefined>();
   for (const [configPath, files] of groups) {
-    const program = ts.createProgram(files, loadOptions(configPath));
+    const options = loadOptions(configPath);
+    const host = ts.createCompilerHost(options);
+    const parse = host.getSourceFile.bind(host);
+    host.getSourceFile = (fileName, ...rest) => {
+      if (!parsed.has(fileName)) parsed.set(fileName, parse(fileName, ...rest));
+      return parsed.get(fileName);
+    };
+    const program = ts.createProgram(files, options, host);
     const checker = program.getTypeChecker();
     const reachesPersistence = (symbol: ts.Symbol, visited = new Set<ts.Symbol>()): boolean => {
       if (visited.has(symbol)) return false;
