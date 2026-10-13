@@ -377,22 +377,42 @@ test('invalid provider initialize, ids, capabilities and vendors preserve the pr
  * Holds the staged executable the way Windows does after the install probe ran it: its
  * rename fails with EBUSY `times` times. Retry delays are skipped.
  */
+/**
+ * Skips only the retry wait that follows an injected lock. A real Windows lock on another
+ * file, such as a scanner holding a backup the update just copied, keeps its full budget.
+ */
+function skipInjectedWaits(): { injected: () => void; restore: () => void } {
+  const realSleep = Bun.sleep;
+  let skip = false;
+  const sleep = spyOn(Bun, 'sleep').mockImplementation(async ms => {
+    if (!skip) return realSleep(ms);
+    skip = false;
+  });
+  return {
+    injected: () => {
+      skip = true;
+    },
+    restore: () => sleep.mockRestore(),
+  };
+}
+
 function lockStagedBinary(times: number): () => void {
   const realRename = fs.rename;
   let failures = 0;
+  const waits = skipInjectedWaits();
   const rename = spyOn(fs, 'rename').mockImplementation(async (source, target) => {
     if (String(source).includes(`.${executable}.`) && failures < times) {
       failures++;
+      waits.injected();
       throw Object.assign(new Error(`EBUSY: resource busy or locked, rename '${String(source)}'`), {
         code: 'EBUSY',
       });
     }
     return realRename(source, target);
   });
-  const sleep = spyOn(Bun, 'sleep').mockResolvedValue(undefined);
   return () => {
     rename.mockRestore();
-    sleep.mockRestore();
+    waits.restore();
   };
 }
 
@@ -449,10 +469,13 @@ test('a failed update restores the previous receipt even when the receipt is bri
   const realRename = fs.rename;
   let binaryFailed = false;
   let receiptFailures = 0;
-  const busy = (path: unknown): Error =>
-    Object.assign(new Error(`EBUSY: resource busy or locked, '${String(path)}'`), {
+  const waits = skipInjectedWaits();
+  const busy = (path: unknown): Error => {
+    waits.injected();
+    return Object.assign(new Error(`EBUSY: resource busy or locked, '${String(path)}'`), {
       code: 'EBUSY',
     });
+  };
   const rename = spyOn(fs, 'rename').mockImplementation(async (source, target) => {
     if (String(source).includes(`.${executable}.`)) {
       binaryFailed = true;
@@ -464,13 +487,12 @@ test('a failed update restores the previous receipt even when the receipt is bri
     }
     return realRename(source, target);
   });
-  const sleep = spyOn(Bun, 'sleep').mockResolvedValue(undefined);
   try {
     const failed = await plugin(env, 'update', [`${ID}@v2`]);
     expect(failed.code).toBe(1);
     expect(failed.err).toMatch(/Could not rename .*\.archon-provider-test-provider.*still EBUSY/);
   } finally {
-    sleep.mockRestore();
+    waits.restore();
     rename.mockRestore();
   }
   expect(receiptFailures).toBe(3);
