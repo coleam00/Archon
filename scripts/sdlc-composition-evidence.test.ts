@@ -34,11 +34,12 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.toString().trim();
 }
 
-let template: { root: string; cwd: string; original: string; head: string; base: string };
+let templateRoot: string;
+let template: { cwd: string; original: string; head: string; base: string };
 
 beforeAll(() => {
-  const root = mkdtempSync(join(tmpdir(), 'composition-template-'));
-  const cwd = join(root, 'repo');
+  templateRoot = mkdtempSync(join(tmpdir(), 'composition-template-'));
+  const cwd = join(templateRoot, 'repo');
   mkdirSync(cwd);
   git(cwd, 'init', '-b', 'main');
   git(cwd, 'config', 'user.name', 'Test');
@@ -57,11 +58,11 @@ beforeAll(() => {
   git(cwd, 'add', '.');
   git(cwd, 'commit', '-qm', 'move value');
   const base = git(cwd, 'rev-parse', 'HEAD');
-  template = { root, cwd, original, head, base };
+  template = { cwd, original, head, base };
 });
 
 afterAll(async () => {
-  if (template) await removeTempTree(template.root);
+  if (templateRoot) await removeTempTree(templateRoot);
 });
 
 function fixture(): { cwd: string; artifacts: string; request: CompositionRequest } {
