@@ -2210,3 +2210,53 @@ mock.module(setupPath, () => ({
     });
   }
 });
+
+it('file-only commands inspect Git files when the registry cannot open', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-file-only-'));
+  const repo = join(root, 'repo');
+  const home = join(root, 'home');
+  mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+  mkdirSync(join(repo, '.archon', 'commands'), { recursive: true });
+  mkdirSync(join(home, 'archon.db'), { recursive: true });
+  expect(spawnSync('git', ['init', '-q', repo]).status).toBe(0);
+  writeFileSync(
+    join(repo, '.archon', 'config.yaml'),
+    'defaults:\n  loadDefaultCommands: false\n  loadDefaultWorkflows: false\n'
+  );
+  writeFileSync(
+    join(repo, '.archon', 'workflows', 'probe.yaml'),
+    'name: probe\ndescription: File-only probe\nnodes:\n  - id: probe\n    bash: echo probe\n'
+  );
+  writeFileSync(join(repo, '.archon', 'commands', 'probe.md'), 'Run the probe.\n');
+  try {
+    for (const args of [
+      ['workflow', 'list'],
+      ['validate', 'workflows'],
+      ['validate', 'commands'],
+    ]) {
+      const result = spawnSync(process.execPath, [CLI_ENTRY, ...args], {
+        cwd: repo,
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain('probe');
+    }
+    const execution = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'run', 'probe'], {
+      cwd: repo,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, ARCHON_HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+    expect(execution.status).toBe(1);
+    expect(execution.stdout + execution.stderr).toContain('Could not verify project registration');
+  } finally {
+    await removeTempTree(root);
+  }
+}, 30_000);

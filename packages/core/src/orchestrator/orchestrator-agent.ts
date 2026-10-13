@@ -344,7 +344,8 @@ export interface OrchestratorCommands {
 // ─── Command Parsing ────────────────────────────────────────────────────────
 
 function parseProjectRegistration(message: string): ProjectRegistration | null {
-  const { args } = parseSlashCommand(message);
+  const { command, args } = parseSlashCommand(message);
+  if (command !== 'register-project') return null;
   const folder = args[0] === '--folder';
   const [projectName, ...pathParts] = folder ? args.slice(1) : args;
   if (!projectName || pathParts.length === 0) return null;
@@ -625,7 +626,7 @@ export function parseOrchestratorCommands(
     }
   }
 
-  const registerMatch = /^\/register-project[^\r\n]+/m.exec(normalizedResponse);
+  const registerMatch = /^\/register-project\s+[^\r\n]+/m.exec(normalizedResponse);
   if (registerMatch) result.projectRegistration = parseProjectRegistration(registerMatch[0]);
 
   return result;

@@ -43,7 +43,7 @@ export function parseSlashCommand(text: string): { command: string; args: string
       continue;
     }
 
-    if (char === '"' || char === "'") {
+    if (!hasToken && (char === '"' || char === "'")) {
       quote = char;
       hasToken = true;
       continue;

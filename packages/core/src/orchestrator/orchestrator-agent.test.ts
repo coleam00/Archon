@@ -7488,3 +7488,35 @@ test('direct explicit folder command uses the folder primitive and refuses an ex
     .join('\n');
   expect(messages).toContain('already registered as a repo');
 });
+
+for (const mode of ['stream', 'batch'] as const) {
+  test(`${mode}: another registration command name cannot register a folder`, async () => {
+    mockRegisterFolder.mockClear();
+    mockCreateCodebase.mockClear();
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: '/register-project-backup --folder Platform /\n' };
+      yield { type: 'result', sessionId: 'other-command' };
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    await handleMessage(platform, 'conv-1', 'save project instructions', { actor: operator });
+    expect(mockRegisterFolder).not.toHaveBeenCalled();
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+  });
+
+  test(`${mode}: explicit folder registration preserves an apostrophe in an unquoted path`, async () => {
+    mockRegisterFolder.mockClear();
+    mockListCodebases.mockResolvedValueOnce([]);
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: "/register-project --folder demo /tmp/O'Brien\n" };
+      yield { type: 'result', sessionId: 'literal-path' };
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    await handleMessage(platform, 'conv-1', 'register my folder', { actor: operator });
+    expect(mockRegisterFolder).toHaveBeenCalledWith(
+      await canonicalizeProjectPath("/tmp/O'Brien"),
+      'demo'
+    );
+  });
+}

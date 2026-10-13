@@ -529,39 +529,46 @@ async function main(): Promise<number> {
       if (folderFlag && command === 'workflow' && subcommand === 'run') {
         effectiveCwd = realCwd;
       } else if (dryRunFlag && command === 'workflow' && subcommand === 'run') {
-        const { findRepoRoot } = await import('@archon/git');
-        effectiveCwd = (await findRepoRoot(realCwd)) ?? realCwd;
+        const { resolveDiscoveryCwd } = await import('./utils/project-cwd');
+        effectiveCwd = await resolveDiscoveryCwd(realCwd);
       } else {
         const databaseLookup = await usesDatabaseStore();
         try {
           if (databaseLookup) databaseRouteLoaded = true;
           const { createCliWorkflowHost } = await import('./utils/workflow-host');
+          const { resolveCodebaseForPath } =
+            await import('@archon/core/services/codebase-checkout-resolver');
           const host = await createCliWorkflowHost();
-          const exact = await host.records.codebases.findCodebaseByDefaultCwd(realCwd);
-          if (exact?.kind === 'folder') {
-            effectiveCwd = exact.default_cwd;
-          } else {
+          const { codebase, repoRoot } = await resolveCodebaseForPath(
+            realCwd,
+            host.records.codebases
+          );
+          if (!repoRoot && codebase?.kind !== 'folder') {
+            return await fail(
+              jsonFlag,
+              'Error: Not in a git repository.\n' +
+                'Register this folder as a project: run with --folder, or use /register-project in chat.'
+            );
+          }
+          effectiveCwd = codebase?.kind === 'folder' ? codebase.default_cwd : (repoRoot ?? realCwd);
+        } catch (error) {
+          if (command === 'validate' || (command === 'workflow' && subcommand === 'list')) {
             const { findRepoRoot } = await import('@archon/git');
             const repoRoot = await findRepoRoot(realCwd);
             if (repoRoot) {
               effectiveCwd = repoRoot;
             } else {
-              const parent = await host.records.codebases.findCodebaseByPathPrefix(realCwd);
-              if (parent?.kind !== 'folder') {
-                return await fail(
-                  jsonFlag,
-                  'Error: Not in a git repository.\n' +
-                    'Register this folder as a project: run with --folder, or use /register-project in chat.'
-                );
-              }
-              effectiveCwd = parent.default_cwd;
+              return await fail(
+                jsonFlag,
+                `Error: Could not verify project registration: ${(error as Error).message}`
+              );
             }
+          } else {
+            return await fail(
+              jsonFlag,
+              `Error: Could not verify project registration: ${(error as Error).message}`
+            );
           }
-        } catch (error) {
-          return await fail(
-            jsonFlag,
-            `Error: Could not verify project registration: ${(error as Error).message}`
-          );
         }
       }
     }

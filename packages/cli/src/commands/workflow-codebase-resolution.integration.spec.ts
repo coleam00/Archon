@@ -344,9 +344,78 @@ test('git-root folder runs in place, retains identity, and leaves nested repos i
       status: 'completed',
       working_path: canonicalSubdirectory,
     });
+    const descendant = join(subdirectory, 'ordinary');
+    mkdirSync(descendant);
+    const descendantRun = run(descendant);
+    expect(descendantRun.status, descendantRun.stdout + descendantRun.stderr).toBe(0);
+    expect(runs.all().filter(row => row.codebase_id === subdirectoryProject?.id)).toHaveLength(2);
+    expect(runs.all().at(-1)).toMatchObject({
+      codebase_id: subdirectoryProject?.id,
+      status: 'completed',
+      working_path: canonicalSubdirectory,
+    });
+    expect(db.query('SELECT id FROM remote_agent_isolation_environments').all()).toHaveLength(1);
     expect(git(folder, ['show-ref'])).toBe(refs);
     expect(git(folder, ['worktree', 'list', '--porcelain'])).toBe(worktrees);
   } finally {
     db.close();
   }
 }, 120_000);
+
+test('first detached git-root folder registration completes in place without Git changes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-detached-folder-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const folder = join(root, 'platform');
+  initRepo(folder, join(root, 'remote.git'), 'platform.txt');
+  const refs = git(folder, ['show-ref']);
+  const worktrees = git(folder, ['worktree', 'list', '--porcelain']);
+  const launched = spawnSync(
+    process.execPath,
+    [
+      join(import.meta.dir, '..', 'cli.ts'),
+      'workflow',
+      'run',
+      'probe',
+      '--folder',
+      '--detach',
+      '--json',
+    ],
+    {
+      cwd: folder,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, ARCHON_HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1' },
+    }
+  );
+  expect(launched.status, launched.stdout + launched.stderr).toBe(0);
+  const receipt = z.object({ runId: z.string() }).parse(JSON.parse(launched.stdout));
+  const db = new Database(join(home, 'archon.db'), { readonly: true });
+  try {
+    const runs = db.query<RunRow, [string]>(
+      'SELECT codebase_id, working_path, status FROM remote_agent_workflow_runs WHERE id = ?'
+    );
+    const deadline = Date.now() + 30_000;
+    while (runs.get(receipt.runId)?.status !== 'completed' && Date.now() < deadline) {
+      await Bun.sleep(100);
+    }
+    const project = db
+      .query<
+        CodebaseRow & { kind: string },
+        []
+      >('SELECT id, default_cwd, kind FROM remote_agent_codebases')
+      .get();
+    const canonicalFolder = await canonicalizeProjectPath(folder);
+    expect(project).toMatchObject({ kind: 'folder', default_cwd: canonicalFolder });
+    expect(runs.get(receipt.runId)).toMatchObject({
+      codebase_id: project?.id,
+      working_path: canonicalFolder,
+      status: 'completed',
+    });
+    expect(db.query('SELECT id FROM remote_agent_isolation_environments').all()).toEqual([]);
+    expect(git(folder, ['show-ref'])).toBe(refs);
+    expect(git(folder, ['worktree', 'list', '--porcelain'])).toBe(worktrees);
+  } finally {
+    db.close();
+  }
+}, 60_000);

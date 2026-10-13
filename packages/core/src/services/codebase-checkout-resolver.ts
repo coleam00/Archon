@@ -1,7 +1,8 @@
 import type { Codebase } from '../types';
-import { resolve } from 'node:path';
+import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
 import {
+  findRepoRoot,
   CanonicalRepoPathUnavailableError,
   getCanonicalRepoPath,
   getGitCheckoutIdentity,
@@ -69,4 +70,35 @@ export async function findCodebaseForCheckoutPath(
     );
   }
   return matches[0] ?? null;
+}
+
+export async function resolveCodebaseForPath(
+  cwd: string,
+  deps: Pick<CodebaseCheckoutResolverDeps, 'findCodebaseByDefaultCwd' | 'listCodebases'> & {
+    findCodebaseByPathPrefix: (cwd: string) => Promise<Codebase | null>;
+  }
+): Promise<{ codebase: Codebase | null; repoRoot: string | null }> {
+  cwd = await canonicalizeProjectPath(cwd);
+  const exact = await deps.findCodebaseByDefaultCwd(cwd);
+  if (exact) return { codebase: exact, repoRoot: exact.kind === 'repo' ? cwd : null };
+  const repoRoot = await findRepoRoot(cwd);
+  const parent = await deps.findCodebaseByPathPrefix(cwd);
+  if (parent?.kind === 'folder') {
+    const insideFolder = repoRoot ? relative(parent.default_cwd, repoRoot) : null;
+    // A nested repository owns its checkout; an enclosing repository cannot
+    // override a folder the operator explicitly registered inside it.
+    if (
+      insideFolder === null ||
+      insideFolder === '..' ||
+      insideFolder.startsWith(`..${sep}`) ||
+      isAbsolute(insideFolder) ||
+      insideFolder === ''
+    ) {
+      return { codebase: parent, repoRoot: null };
+    }
+  }
+  return {
+    codebase: repoRoot ? await findCodebaseForCheckoutPath(repoRoot, deps) : parent,
+    repoRoot,
+  };
 }

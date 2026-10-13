@@ -101,7 +101,10 @@ import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 
 import { mkdir, open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
-import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
+import {
+  findCodebaseForCheckoutPath,
+  resolveCodebaseForPath,
+} from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
 import {
@@ -1360,8 +1363,8 @@ export async function workflowTestCommand(
   target: string | undefined,
   options: { json?: boolean } = {}
 ): Promise<number> {
-  // Discovery uses the repository root; explicit relative targets use the caller's directory.
-  const cwd = (await git.findRepoRoot(invokingCwd)) ?? invokingCwd;
+  const { resolveDiscoveryCwd } = await import('../utils/project-cwd');
+  const cwd = await resolveDiscoveryCwd(invokingCwd);
   const { workflows, errors } = await loadWorkflows(cwd);
   // The fixture runner freezes this repo's source before executing anything, exactly as
   // `workflow run` does, and this config decides which directories get frozen. A malformed
@@ -1547,9 +1550,8 @@ export async function workflowListCommand(
 /**
  * Resolve the project this run belongs to: look it up, else register it.
  *
- * Git paths resolve at the nearest repository root, with linked worktrees mapped
- * to their registered source through Git checkout identity. Only non-Git paths
- * use ancestor-prefix lookup, so a registered parent cannot capture a nested repo.
+ * Registered folders own descendants unless a nested repository starts inside
+ * them. Repository checkouts resolve through Git identity.
  *
  * One implementation because two callers need the same answer: the `--detach`
  * pre-flight, which must resolve the project before it can create the run row or
@@ -1579,13 +1581,11 @@ async function resolveRunCodebase(
   cwd = await canonicalizeProjectPath(cwd);
   let repoRoot: string | null = null;
   try {
-    codebase = await host.records.codebases.findCodebaseByDefaultCwd(cwd);
-    if (!options.folder && !codebase) repoRoot = await git.findRepoRoot(cwd);
-    codebase ??= repoRoot
-      ? await findCodebaseForCheckoutPath(repoRoot, host.records.codebases)
-      : options.folder
-        ? null
-        : await host.records.codebases.findCodebaseByPathPrefix(cwd);
+    if (options.folder) {
+      codebase = await host.records.codebases.findCodebaseByDefaultCwd(cwd);
+    } else {
+      ({ codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases));
+    }
   } catch (error) {
     if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
     const err = error as Error;

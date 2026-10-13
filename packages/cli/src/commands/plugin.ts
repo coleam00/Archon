@@ -17,7 +17,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { chmod, cp, lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { execFileAsync, findRepoRoot } from '@archon/git';
+import { execFileAsync } from '@archon/git';
 import {
   isMaintainedProviderPlugin,
   maintainedProviderPluginId,
@@ -775,7 +775,15 @@ async function copyPlugin(ref: PluginRef, env: PluginEnvironment): Promise<void>
   if (receipt.manifest.kind !== 'workflow-pack') {
     throw new Error(`${ref.id} is a ${receipt.manifest.kind} plugin; only workflow packs copy`);
   }
-  const project = (await findRepoRoot(env.projectDir)) ?? env.projectDir;
+  const { createCliWorkflowHost } = await import('../utils/workflow-host');
+  const { resolveCodebaseForPath } =
+    await import('@archon/core/services/codebase-checkout-resolver');
+  const host = await createCliWorkflowHost();
+  const { codebase, repoRoot } = await resolveCodebaseForPath(
+    env.projectDir,
+    host.records.codebases
+  );
+  const project = codebase?.kind === 'folder' ? codebase.default_cwd : (repoRoot ?? env.projectDir);
   const target = join(project, '.archon', 'workflows', receipt.manifest.name);
   if (await pathExists(target)) {
     throw new Error(`${target} already exists. Move or delete it, then retry.`);

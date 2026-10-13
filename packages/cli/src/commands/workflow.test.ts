@@ -10786,7 +10786,7 @@ describe('workflowResumeCommand', () => {
         'the working path from the run no longer exists'
       );
       expect(exact).toHaveBeenCalledWith('/registered/root');
-      expect(codebaseDb.findCodebaseByPathPrefix).not.toHaveBeenCalled();
+      expect(codebaseDb.findCodebaseByPathPrefix).toHaveBeenCalledWith(worktree);
       expect(registerRepository).not.toHaveBeenCalled();
     } finally {
       exact.mockReset().mockResolvedValue(null);
@@ -15075,7 +15075,6 @@ describe('run codebase resolution', () => {
     expect(
       (executor.executeWorkflow as ReturnType<typeof mock>).mock.calls.at(-1)?.[7]
     ).toMatchObject({ codebaseId: child.id });
-    expect(codebases.findCodebaseByPathPrefix).not.toHaveBeenCalled();
   }
 
   it('passes the registration choice while leaving this run base unset', async () => {
@@ -15179,7 +15178,6 @@ describe('run codebase resolution', () => {
         expect.objectContaining({ codebase_id: child.id })
       );
       expect(core.registerRepository).toHaveBeenCalledWith(childRoot, { baseBranch: undefined });
-      expect(codebases.findCodebaseByPathPrefix).not.toHaveBeenCalled();
     } finally {
       jest.useRealTimers();
       spawnSpy.mockRestore();
@@ -15305,7 +15303,6 @@ describe('run codebase resolution', () => {
     await expect(
       workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go')
     ).rejects.toThrow('checkout identity unavailable');
-    expect(codebases.findCodebaseByPathPrefix).not.toHaveBeenCalled();
     expect(core.registerRepository).not.toHaveBeenCalled();
   });
 });
