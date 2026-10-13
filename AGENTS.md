@@ -168,7 +168,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Bun's module mocks pollute the process cache. Use the package test scripts that preserve isolation; do not run `bun test` from the repository root.
 - Always run lint through `bun run lint` or `bun run lint:fix`; the wrapper isolates packages to keep typed lint within its memory budget.
 - Check what you changed: run the tests that cover it, and lint and type-check the packages you touched.
-- CI is the full validation. Don't run `bun run validate` to finish a change; it runs every pull-request gate locally, and `scripts/validate.ts` owns that list.
+- CI is the full validation. Don't run `bun run validate` to finish a change. `scripts/validate.ts` owns the check list and CI selects from it; format and workflow fixtures run locally only through `--only`.
 - Schema changes also need the PostgreSQL upgrade check. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists it with its command.
 - For visual or runtime behavior, add direct evidence when static tests cannot prove the outcome.
 - Destructive verification, including DDL, migrations, and data writes, runs only against a scratch database you create and drop. A configured live DSN is read-only at most; when only a live resource exists, stop and surface it to the operator.
