@@ -11,6 +11,7 @@
  * Bound inputs (canonical text; a skipped producer arrives as "null"):
  * - INPUTS_ROUTE / INPUTS_SUMMARY: triage's verdict.
  * - INPUTS_OPEN_QUESTIONS: the planner's open questions, or "null" off the plan route.
+ *   A ready plan may still carry non-blocking questions; every ending relays them.
  * - INPUTS_ROUNDS: the rounds loop's final `round` output, or "null" when delivery
  *   never started.
  */
@@ -82,12 +83,17 @@ function discoveries(): string {
   );
 }
 
+// Each question carries the direction line that would settle it next time; the
+// operator decides whether to record it.
+const questions = (openQuestions ?? []).map(question => `- ${question}`).join('\n');
+const relayedQuestions = questions === '' ? '' : `\n\nOpen questions for the owner:\n${questions}`;
+
 function stopped(reason: string, why: string, report: string): void {
   emit({
     ready: false,
     reason,
     pr_url: '',
-    summary: `${why}\nReport: ${artifacts}/${report}${discoveries()}`,
+    summary: `${why}\nReport: ${artifacts}/${report}${relayedQuestions}${discoveries()}`,
   });
 }
 
@@ -96,7 +102,7 @@ if (rounds !== null) {
     ready: rounds.ready,
     reason: rounds.reason,
     pr_url: rounds.pr_url,
-    summary: `${rounds.ready ? 'Ready' : 'Not ready'}: ${rounds.summary}${discoveries()}`,
+    summary: `${rounds.ready ? 'Ready' : 'Not ready'}: ${rounds.summary}${relayedQuestions}${discoveries()}`,
   });
 } else if (route === 'no_action') {
   stopped('no_action', `No delivery: ${summary}`, 'triage.md');
@@ -107,12 +113,9 @@ if (rounds !== null) {
     'investigation.md'
   );
 } else {
-  // Each question carries the direction line that would settle it next time; the
-  // operator decides whether to record it.
-  const questions = (openQuestions ?? []).map(question => `- ${question}`).join('\n');
   stopped(
     'needs_human',
-    `No delivery started: planning stopped on calls only a person can make.\n${questions || '- The planner named no question; read the plan.'}`,
+    `No delivery started: planning stopped on a call only a person can make.${questions === '' ? ' The planner named no question; read the plan.' : ''}`,
     'plan.md'
   );
 }

@@ -40,7 +40,7 @@ Settle every call you can. A call is a person's only when one of these holds, an
 - Two project documents disagree on it.
 - It changes a shipped contract — a persisted shape, a public API, a configuration or language surface users write — and no project document already rules on that change.
 
-Each such call is an open question. Write the plan up to it and stop there; never fill the gap with a guess. Do not edit the project's documents to settle it: the answer is the owner's.
+Each such call is an open question. Then judge whether it blocks the plan. A question blocks when no responsible choice exists without the owner's answer: write the plan up to it and stop there, and never fill the gap with a guess. A question does not block when the plan can proceed on a choice that is cheap to reverse and does not commit a shipped contract: make that choice, say in the plan that it is provisional, and still declare the question so the owner sees it. Do not edit the project's documents to settle either kind: the answer is the owner's.
 
 ## The plan
 
@@ -68,8 +68,8 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
 
 ## Declare the verdict
 
-- `ready` — true exactly when `open_questions` is empty: the plan is complete enough to execute without asking anyone.
-- `open_questions` — one entry per call that belongs to a person, empty when there is none. Each entry states the decision, the options and what each one costs, which of the three conditions above makes it a person's call, and one line the project's direction document could carry so that a later run settles the same call without asking.
+- `ready` — your judgment: true when the plan can be executed as written, with every open question either absent or non-blocking; false when a question blocks it. When false, `open_questions` names at least the blocking question.
+- `open_questions` — one entry per call that belongs to a person, blocking or not, empty when there is none. Say in each entry whether it blocks. Each entry states the decision, the options and what each one costs, which of the three conditions above makes it a person's call, and one line the project's direction document could carry so that a later run settles the same call without asking.
 - `summary` — a few sentences: the chosen approach (or the open questions), and that the full plan is at `$ARTIFACTS_DIR/plan.md`.
 - `report` — a pointer to the report you just wrote, copied exactly:
 

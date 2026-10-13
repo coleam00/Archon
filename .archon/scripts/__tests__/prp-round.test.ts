@@ -124,3 +124,35 @@ describe("archon-prp's triage labels", () => {
     }
   });
 });
+
+// The planner judges `ready` itself, so a ready plan may still carry questions for
+// the owner; the outcome relays them whether delivery ran or not.
+describe("archon-prp's outcome", () => {
+  function outcome(inputs: Record<string, string>): { ready: boolean; reason: string; summary: string } {
+    const run = runPackScript('prp/scripts/outcome', {
+      inputs: { INPUTS_ROUTE: 'plan', INPUTS_SUMMARY: 'Ready', INPUTS_ROUNDS: 'null', ...inputs },
+    });
+    expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+    return JSON.parse(run.stdout) as { ready: boolean; reason: string; summary: string };
+  }
+
+  it("relays a ready plan's non-blocking questions on a delivered ending", () => {
+    const result = outcome({
+      INPUTS_OPEN_QUESTIONS: JSON.stringify(['Keep the default timeout? Non-blocking.']),
+      INPUTS_ROUNDS: JSON.stringify({
+        ready: true,
+        reason: 'delivered',
+        pr_url: 'https://github.com/example/repo/pull/1',
+        summary: 'Round 1: delivered.',
+      }),
+    });
+    expect(result).toMatchObject({ ready: true, reason: 'delivered' });
+    expect(result.summary).toContain('- Keep the default timeout? Non-blocking.');
+  });
+
+  it('stops needs_human with the blocking question when the plan is not ready', () => {
+    const result = outcome({ INPUTS_OPEN_QUESTIONS: JSON.stringify(['Which storage shape?']) });
+    expect(result).toMatchObject({ ready: false, reason: 'needs_human' });
+    expect(result.summary).toContain('- Which storage shape?');
+  });
+});
