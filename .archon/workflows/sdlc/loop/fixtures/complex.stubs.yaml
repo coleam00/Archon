@@ -1,0 +1,137 @@
+# Dry-run fixture: the complex route. pick routes the issue to archon-ship, which
+# runs inline (stubs copied from ship's direct-delivered fixture, prefixed ship__);
+# the in-loop builder stays skipped (no build stub), and the black-box check and
+# reviewer still run after ship. Here the holdout catches what ship's own review passed.
+pick:
+  route: complex
+  target: https://github.com/example/app/issues/6
+  pr: ''
+  confidence: high
+  reason: 'stub: tags need a migration and search across modules'
+ship__triage__triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item:
+    repo:
+      host: ''
+      path: ''
+    number: 0
+  area_labels: []
+  proposed_edits:
+    title: ''
+    body: ''
+  blocked_reason: ''
+  blocked_by: []
+  summary: 'stub: current code confirms a complete work order'
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: triage.md
+ship__gate-direct: '{"gate":"direct"}'
+ship__deliver__impl__implement:
+  done: true
+  green: true
+  red_cause: ''
+  summary: 'stub: direct work implemented and green'
+ship__deliver__review__synthesize:
+  ready: true
+  action: none
+  findings_summary: 'stub: no open findings'
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: review/report.md
+ship__deliver__review__publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: no open findings'
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: review/report.md
+ship__deliver__review-policy:
+  risks: fixture-owned-policy
+ship__deliver__classify:
+  tier: full
+  errors: false
+  docs: false
+  reasons:
+    tier: 'stub: touches persisted state'
+    errors: 'stub: no failure paths'
+    docs: 'stub: no doc-facing changes'
+ship__deliver__resolve-scope: '{"errors":"false"}'
+ship__deliver__gate-ready: '{"gate":"ready"}'
+ship__deliver__impl__assert-changed: 2 files changed
+ship__deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
+ship__deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
+ship__deliver__flip-ready:
+  pr_url: https://github.com/example/repo/pull/4
+ship__deliver__outcome:
+  pr_url: https://github.com/example/repo/pull/4
+  summary: https://github.com/example/repo/pull/4
+ship__deliver__pr__pr:
+  intent: /fixture/pr-intent.json
+ship__deliver__pr__publish:
+  schemaVersion: 1
+  repo:
+    host: github.com
+    path: example/repo
+  number: 4
+  url: https://github.com/example/repo/pull/4
+  head: fixture-branch
+  base: dev
+  is_draft: true
+  state: open
+  head_repo:
+    host: github.com
+    path: example/repo
+  head_revision: fixturehead
+  base_revision: fixturebase
+  maintainer_can_modify: null
+ship__deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"deliver__review__mode","invocation":{"loopPath":[]}}}'
+ship__deliver__review__coverage:
+  full: true
+ship__deliver__review__scope:
+  docs: false
+  pr:
+    repo:
+      host: github.com
+      path: example/repo
+    number: 4
+ship__deliver__review__code: 0 findings
+ship__deliver__review__simplify__simplify:
+  findings: false
+ship__deliver__review__seams: 0 findings
+ship__deliver__shape__simplify:
+  findings: false
+ship__deliver__review__tests: 0 findings
+ship__deliver__review__review-complete: settled
+check-app: 'APP CHECK https://github.com/example/app/pull/11 at fixturehead
+
+  C1 PASS  tag a note  tagged
+
+  H1 FAIL  H1  search by tag returns notes from other users
+
+  Overall: FAIL (H1)'
+review:
+  outcome: sent-back
+  pr: https://github.com/example/app/pull/11
+  reason: 'stub: holdout H1 failed'
+fixture:
+  expect: completed
+  reached:
+  - pick
+  - ship__triage__triage
+  - ship__deliver__impl__implement
+  - ship__outcome
+  - check-app
+  - review
+  resolved-text-contains:
+    ship__triage__triage: https://github.com/example/app/issues/6
+    review: H1 FAIL
+  inputs:
+    runtime: /private/run-the-app.md
+    holdout: /private/holdout.md
+exec-code: true

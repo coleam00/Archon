@@ -1,0 +1,52 @@
+# Dry-run fixture: ship fails at its green gate (run with --exec-code: the real gate
+# refuses). check-app joins with all_done, so both reviewers still run and the
+# reviewer records the attempt on the work item instead of a silent failed run.
+pick:
+  route: complex
+  target: https://github.com/example/app/issues/6
+  pr: ''
+  confidence: high
+  reason: 'stub: tags need a migration and search across modules'
+ship__triage__triage:
+  contract: READY
+  route: deliver
+  design_first: false
+  complexity: small
+  item:
+    repo:
+      host: ''
+      path: ''
+    number: 0
+  area_labels: []
+  proposed_edits:
+    title: ''
+    body: ''
+  blocked_reason: ''
+  blocked_by: []
+  summary: 'stub: current code confirms a complete work order'
+  report:
+    type: archon_artifact
+    run_id: fixture-run
+    path: triage.md
+ship__gate-direct: '{"gate":"direct"}'
+ship__deliver__impl__implement:
+  done: true
+  green: false
+  red_cause: ''
+  summary: 'stub: criterion 2 cannot be met as written'
+ship__deliver__impl__assert-changed: 2 files changed
+check-app: NO PR the issue has no open pull request; the pipeline stopped before publishing
+review:
+  outcome: nothing
+  pr: ''
+  reason: 'stub: ship stopped at its green gate'
+fixture:
+  expect: failed
+  fail-node: ship__deliver__gate-green
+  reached:
+  - pick
+  - check-app
+  - review
+  resolved-text-contains:
+    review: NO PR the issue has no open pull request
+exec-code: true

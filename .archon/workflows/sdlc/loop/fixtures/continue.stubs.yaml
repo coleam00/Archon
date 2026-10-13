@@ -1,0 +1,23 @@
+# Dry-run fixture: the continue route. pick names an open pull request with
+# findings; the builder is told which one, and both reviewers see the builder's report.
+pick:
+  route: continue
+  target: "https://github.com/example/app/issues/3"
+  pr: "https://github.com/example/app/pull/7"
+  confidence: high
+  reason: "stub: review findings outstanding on a loop-owned pull request"
+build: "Fixed the review findings on the open pull request.\nPR: https://github.com/example/app/pull/7"
+check-app: "APP CHECK https://github.com/example/app/pull/7 at def5678\nOverall: PASS"
+review:
+  outcome: sent-back
+  pr: "https://github.com/example/app/pull/7"
+  reason: "stub: a test was skipped to get green"
+fixture:
+  expect: completed
+  reached: [pick, build, check-app, review]
+  resolved-text-contains:
+    build: "https://github.com/example/app/pull/7"
+    check-app: "PR: https://github.com/example/app/pull/7"
+    review: "Fixed the review findings"
+  inputs:
+    runtime: "/private/run-the-app.md"

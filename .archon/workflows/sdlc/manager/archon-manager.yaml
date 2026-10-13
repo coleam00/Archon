@@ -4,7 +4,8 @@ description: |
   system (issues, pull requests, what merged, CI, the product itself) and fixes
   what a single ticket cannot see: duplicates, impossible criteria, stuck or
   orphaned work, recurring causes that need one redesign instead of more
-  patches, and the order of work. Owner questions go into one issue.
+  patches, defects that got past review, and the order of work. Owner
+  questions go into one issue with a stated default; one metrics line per pass.
 
   Use when: on a slower schedule than archon-loop (every few hours), or when the
   loop stops making progress.
@@ -19,6 +20,12 @@ inputs:
     description: >-
       How to run the app and what to look at: a path to the project's runtime
       instructions or scenario file, or plain text.
+  holdout:
+    default: ""
+    description: >-
+      Optional path to the reviewer-only holdout scenarios kept outside the
+      repository. The manager adds a scenario for each defect that got past
+      review.
 
 nodes:
   - id: manage
@@ -27,3 +34,4 @@ nodes:
     idle_timeout: 2700000
     with:
       runtime: "$INPUTS.runtime"
+      holdout: "$INPUTS.holdout"

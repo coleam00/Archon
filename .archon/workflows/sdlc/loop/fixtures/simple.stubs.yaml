@@ -1,0 +1,26 @@
+# Dry-run fixture: the simple route. pick chooses a contained issue, the in-loop
+# builder builds it, the black-box check and the reviewer run in order, and ship
+# and deploy stay skipped (no ship stubs: a ship node that ran would fail the
+# fixture as a reached node without a stub).
+pick:
+  route: simple
+  target: "https://github.com/example/app/issues/5"
+  pr: ""
+  confidence: high
+  reason: "stub: next unblocked issue, one module, clear criteria"
+build: "Built the notes endpoint.\nPR: https://github.com/example/app/pull/9"
+check-app: "APP CHECK https://github.com/example/app/pull/9 at abc1234\nC1 PASS  saves a note  POST /notes returned 201\nOverall: PASS"
+review:
+  outcome: merged
+  pr: "https://github.com/example/app/pull/9"
+  reason: "stub: every criterion passed, CI green"
+fixture:
+  expect: completed
+  reached: [pick, build, check-app, review]
+  resolved-text-contains:
+    build: "Route: simple"
+    check-app: "/private/holdout.md"
+    review: "C1 PASS  saves a note"
+  inputs:
+    runtime: "/private/run-the-app.md"
+    holdout: "/private/holdout.md"
