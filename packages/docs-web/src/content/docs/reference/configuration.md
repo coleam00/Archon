@@ -274,17 +274,7 @@ uses — with `archon ai tier set`, the console AI Settings -> Model Tiers panel
 `tiers:` block — or resolving `small`, `medium`, or `large` fails with a configuration
 error that names those surfaces.
 
-### Worktree provisioning
-
-`worktree.postCreate` runs sequentially through `bash -c` in the new worktree root, after submodule initialization and `copyFiles`, before the checkout becomes available. It also runs when Archon creates a checkout of an existing branch. Reusing or adopting a checkout already on disk skips provisioning. Commands use ordinary shell expansion; workflow variables and node outputs are unavailable. Put setup logic in a script.
-
-Each command has a timeout of `worktree.postCreateTimeout` milliseconds (default `300000`). The first nonzero exit, timeout, spawn error, or audit-write failure aborts creation. The error includes the command and captured output with known credentials redacted. Cleanup removes only a clean checkout owned by this attempt; installer output or other changes may leave it locked. Inspect the reported path before unlocking or removing it. A worktree does not sandbox commands or undo external side effects.
-
-Setup uses the same host subprocess environment as `bash:` nodes: the cleaned host environment plus effective run configuration and managed project variables. Project variables override file-config values; run credential restrictions remain in force. Archon does not automatically load the target repository's `.env`, including one copied by `copyFiles`. A setup script can explicitly source it.
-
-Started, completed, and failed commands appear in the run audit trail and `workflow logs`. Child setup is recorded on the parent run with the spawning node and child index. Manual worktree creation has no workflow run and writes structured application logs instead.
-
-## Claude settingSources
+### Claude settingSources
 
 Controls which sources the Claude Agent SDK discovers during sessions — `CLAUDE.md`, skills, commands, agents, and hooks. In workflow nodes, discovery does not activate ambient skills: the node's `skills:` list remains the exact active set, and omission/`[]` selects none.
 
@@ -339,6 +329,16 @@ To change the configuration a run uses:
 - **Edit `.archon/config.yaml` before launching.** Committing is not needed; the launch reads your working tree.
 - **A running run keeps its launch config.** To use new config, start a new run, or use `archon workflow run --supersedes <run-id>` to replace a finished one with fresh config.
 - **Use `--config <file>`** for a one-off layer on a fresh run. It covers the settings listed in [Run-scoped configuration](#run-scoped-configuration).
+
+### Worktree provisioning
+
+`worktree.postCreate` runs sequentially through `bash -c` in the new worktree root, after submodule initialization and `copyFiles`, before the checkout becomes available. It also runs when Archon creates a checkout of an existing branch. Reusing or adopting a checkout already on disk skips provisioning. Commands use ordinary shell expansion; workflow variables and node outputs are unavailable. Put setup logic in a script.
+
+Each command has a timeout of `worktree.postCreateTimeout` milliseconds (default `300000`). At the timeout Archon kills the command's shell; processes the command left running in the background are not stopped. The first nonzero exit, timeout, spawn error, or audit-write failure aborts creation. The error includes the command and captured output with known credentials redacted. Cleanup removes only a clean checkout owned by this attempt; installer output or other changes may leave it locked. Inspect the reported path before unlocking or removing it. A worktree does not sandbox commands or undo external side effects.
+
+Setup uses the same host subprocess environment as `bash:` nodes: the cleaned host environment plus effective run configuration and managed project variables. Project variables override file-config values; run credential restrictions remain in force. Archon does not automatically load the target repository's `.env`, including one copied by `copyFiles`. A setup script can explicitly source it.
+
+Started, completed, and failed commands appear in the run audit trail and `workflow logs`. Child setup is recorded on the parent run with the spawning node and child index. Manual worktree creation has no workflow run and writes structured application logs instead.
 
 ### Worktree file copying (`worktree.copyFiles`)
 

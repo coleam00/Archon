@@ -130,12 +130,14 @@ test('first nonzero exit stops setup and is not reclassified from output prose',
   expect(rows[1].data?.stderrTail).toContain('timeout permission denied');
 });
 
-test('timeout is distinct and honors the configured per-command bound', async () => {
+test('timeout is distinct and bounds a command that ignores SIGTERM', async () => {
+  const startedAt = Date.now();
   const error = await createRunWorktreeSetupExecutor(
     deps,
     run,
     {}
-  )(input(['while :; do :; done'], 30)).catch((error: unknown) => error);
+  )(input(["trap '' TERM; sleep 5"], 30)).catch((error: unknown) => error);
+  expect(Date.now() - startedAt).toBeLessThan(3000);
   expect(error).toBeInstanceOf(WorktreePostCreateError);
   expect(rows[1].data?.failureKind).toBe('timeout');
   expect(rows[1].data?.message).toContain('30 ms');

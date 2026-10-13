@@ -76,6 +76,9 @@ function createSetupExecutor(
         result = await runSubprocess({ kind: 'host' }, resolveBashPath(), ['-c', command], {
           cwd: input.workingPath,
           timeout: input.timeout,
+          // SIGKILL so a command that traps SIGTERM cannot outlive its bound. It reaches
+          // only the shell; processes the command started in the background survive it.
+          killSignal: 'SIGKILL',
           env: environment.envVars ?? {},
           protectedEnvKeys: environment.protectedEnvKeys,
           protectedCredentialValues: environment.protectedCredentialValues,

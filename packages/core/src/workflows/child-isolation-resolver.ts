@@ -140,6 +140,9 @@ export function createCodebaseChildResolver(
 ): ChildIsolationResolver | undefined {
   if (codebase.kind === 'folder') return undefined;
 
+  // Configure here, not in the caller: a `--no-worktree` parent skips the CLI and
+  // orchestrator configuration, and an unconfigured provider silently ignores the
+  // repo's `worktree:` block (copyFiles, postCreate) for the child's worktree.
   configureWorktreeIsolation();
 
   return {

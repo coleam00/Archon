@@ -131,10 +131,6 @@ This is the full lifecycle close-out. Run it after merging and you're back to a 
 
 **Don't run the same branch twice simultaneously.** Each branch name maps to exactly one worktree. Starting a second workflow on the same branch will conflict with the first.
 
----
-
-Now that you understand how isolation protects your work, you're ready to start building. In [Chapter 6: Creating Your First Command →](/book/first-command/), you'll write the atomic unit of Archon — the command file — from scratch.
-
 ## Provisioning new worktrees
 
 Use repository configuration to prepare dependencies and generated files before agents start:
@@ -148,6 +144,10 @@ worktree:
   postCreateTimeout: 300000
 ```
 
-Commands run in order in the new checkout, after submodules and copied files. The timeout applies to each command. Existing checkouts are reused without running setup again. Managed project environment variables are available, with the same precedence and credential restrictions as host `bash:` nodes. Copied `.env` files are not loaded automatically; scripts may source them explicitly.
+Commands run in order in the new checkout, after submodules and copied files. The timeout applies to each command; on timeout Archon kills the command's shell, but not processes it started in the background. Existing checkouts are reused without running setup again. Managed project environment variables are available, with the same precedence and credential restrictions as host `bash:` nodes. Copied `.env` files are not loaded automatically; scripts may source them explicitly.
 
 A failed command stops creation, with its exit code or timeout and redacted output reported. Setup events are retained on the workflow run, or the parent for an isolated child, and rendered in `workflow logs`. Manual `/worktree` creation writes application logs. Failed setup that leaves files or changes can leave a locked checkout; inspect the path reported in the error before unlocking or removing it. Worktrees separate checkouts and do not sandbox setup commands.
+
+---
+
+Now that you understand how isolation protects your work, you're ready to start building. In [Chapter 6: Creating Your First Command →](/book/first-command/), you'll write the atomic unit of Archon — the command file — from scratch.

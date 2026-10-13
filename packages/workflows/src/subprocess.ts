@@ -140,6 +140,8 @@ export async function runSubprocess(
   options: {
     cwd: string;
     timeout: number;
+    /** Host-only signal sent at `timeout`; execFile's default SIGTERM can be ignored. */
+    killSignal?: NodeJS.Signals;
     env: NodeJS.ProcessEnv;
     protectedEnvKeys?: readonly string[];
     protectedCredentialValues?: readonly string[];
@@ -175,6 +177,7 @@ export async function runSubprocess(
         : await execFileAsync(cmd, args, {
             cwd: options.cwd,
             timeout: options.timeout,
+            ...(options.killSignal ? { killSignal: options.killSignal } : {}),
             env: subprocessEnv,
           });
 

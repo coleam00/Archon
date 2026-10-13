@@ -444,7 +444,7 @@ async function handleWorktreeCommand(
         const shortPath = shortenPath(env.workingPath, mainPath);
         return {
           success: true,
-          message: `Worktree created!\n\nBranch: ${env.branchName ?? branchName}\nPath: ${shortPath}\n\nThis conversation now works in isolation.`,
+          message: `Worktree created!\n\nBranch: ${env.branchName ?? branchName}\nPath: ${shortPath}\n\nThis conversation now works in isolation.\nRun dependency install if needed (e.g., bun install).`,
           modified: true,
         };
       } catch (error) {
