@@ -1,6 +1,13 @@
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  writeFileSync,
+  readFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir, hostname } from 'node:os';
@@ -243,7 +250,8 @@ test('non-git folder lookup reports the file lock holder and path', async () => 
   const result = await cli(f, ['workflow', 'run', 'portable', '--quiet']);
   expect(result.code).toBe(1);
   expect(result.output + result.error).not.toContain('Not in a git repository');
-  expect(result.output + result.error).toContain(join(root, 'lock'));
+  // The lock names its canonical path; Windows temp dirs can be 8.3 short names (RUNNER~1).
+  expect(result.output + result.error).toContain(join(realpathSync.native(root), 'lock'));
   expect(result.output + result.error).toContain(String(owner.pid));
   expect(readFileSync(join(root, 'lock'), 'utf8')).toBe(JSON.stringify(owner));
   expect(existsSync(f.trap)).toBe(false);
