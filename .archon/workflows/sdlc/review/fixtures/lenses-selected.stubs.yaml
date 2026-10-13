@@ -1,0 +1,30 @@
+# Dry-run fixture: the route agent picks seams, code and docs for a change that edits a
+# typed contract and its user docs. The lenses it left out carry no stub, so one that
+# runs anyway fails this fixture instead of passing quietly.
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
+route: { seams: true, code: true, tests: false, errors: false, docs: true, reason: "stub: a typed contract and its docs changed" }
+scope:
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: null
+seams: "0 findings"
+code: "0 findings"
+docs: "0 findings"
+review-complete: "settled"
+synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+publish:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+fixture:
+  expect: completed
+  reached: [route, seams, code, docs, synthesize]
+  resolved-text-contains:
+    route: "operator's setting is `auto`"

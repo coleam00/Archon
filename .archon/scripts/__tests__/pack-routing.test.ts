@@ -6,7 +6,6 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
-import { LENSES } from '../../workflows/sdlc/.shared/review-lenses';
 import { PR_URL, runPackScript } from './deliver-checks-harness';
 
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
@@ -211,88 +210,28 @@ describe("deliver's round", () => {
   });
 });
 
-describe('lens-status', () => {
-  const lensStatus = (
-    entries: object[],
-    inputs: Record<string, string> = {}
-  ): { required: string[]; missing: string[] } => {
-    const listing = {
-      runId: 'run',
-      artifactsByType: {
-        'review-coverage': [{ nodeId: 'review__coverage', path: 'coverage.json' }],
-        'review-lens': entries.filter(entry => !('structure' in entry)),
-        'structure-review': entries.filter(entry => 'structure' in entry),
-      },
-      errors: [],
-    };
-    const run = runPackScript('review/scripts/lens-status', {
-      inputs: {
-        INPUTS_CONTINUATION: 'false',
-        INPUTS_TIER: 'full',
-        INPUTS_ERRORS: 'true',
-        INPUTS_DOCS: 'false',
-        INPUTS_SCOPE_DOCS: 'false',
-        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
-        ARCHON_NODE_EXECUTION: JSON.stringify({ path: 'review__lens-status', invocation: { loopPath: [] } }),
-        ...inputs,
-      },
-      artifacts: {
-        'listing.json': JSON.stringify(listing),
-        'coverage.json': JSON.stringify({ full: true, errors: true, docs: false, lenses: [] }),
-      },
-    });
-    expect(run.code).toBe(0);
-    return JSON.parse(run.stdout) as { required: string[]; missing: string[] };
-  };
-  const lens = (nodeId: string, extra: object = {}): object => ({ nodeId, path: `${nodeId}.md`, ...extra });
-
-  it('names every enabled lens that left no completed artifact', () => {
-    const status = lensStatus([
-      lens('review__seams'),
-      lens('review__tests'),
-    ]);
-    expect(status.required).toEqual(['seams', 'code', 'tests', 'errors']);
-    expect(status.missing).toEqual(['code', 'errors']);
-  });
-
-  it("never counts another review's or another loop iteration's lens", () => {
-    const status = lensStatus([
-      lens('review__seams'),
-      lens('recheck__code'),
-      lens('review__tests', { loopGroupPath: [{ groupId: 'corrections', iteration: 1 }] }),
-      lens('review__errors'),
-    ]);
-    expect(status.missing).toEqual(['code', 'tests']);
-  });
-
-  it('requires nothing on a continuation round', () => {
-    expect(lensStatus([], { INPUTS_CONTINUATION: 'true' })).toMatchObject({ required: [], missing: [] });
-  });
-});
-
 describe('review lens gating', () => {
-  // Seams and focused gate before the coverage node exists, so their `when:` restates
-  // the first two lines of enabledLenses; this holds the two in step.
-  it("keeps seams' and focused's gates in step with enabledLenses", async () => {
-    const source = await Bun.file(
-      join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml')
-    ).text();
-    const workflow = Bun.YAML.parse(source) as { nodes: { id: string; when?: string }[] };
-    const when = (id: string): string | undefined => workflow.nodes.find(node => node.id === id)?.when;
-    expect(when('seams')).toBe("$mode.output.continuation == false && $INPUTS.seams != 'false'");
-    expect(when('focused')).toBe("$mode.output.continuation == false && $INPUTS.tier == 'focused'");
-  });
-
-  it('names exactly the lens nodes the review graph declares', async () => {
+  // The route agent's schema and the lens nodes must name the same lenses; this holds
+  // the pair in step.
+  it('gates every lens node on the route boolean of the same name', async () => {
     const source = await Bun.file(
       join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml')
     ).text();
     const workflow = Bun.YAML.parse(source) as {
-      nodes: { id: string; output_type?: string; include?: string }[];
+      nodes: {
+        id: string;
+        when?: string;
+        output_type?: string;
+        output_format?: { properties: Record<string, unknown> };
+      }[];
     };
-    const lensNodes = workflow.nodes
-      .filter(node => node.output_type === 'review-lens' || node.include === 'archon-simplify')
-      .map(node => node.id);
-    expect<string[]>([...LENSES].sort()).toEqual(lensNodes.sort());
+    const lenses = workflow.nodes.filter(node => node.output_type === 'review-lens');
+    const route = workflow.nodes.find(node => node.id === 'route');
+    expect(Object.keys(route?.output_format?.properties ?? {}).sort()).toEqual(
+      [...lenses.map(node => node.id), 'reason'].sort()
+    );
+    for (const lens of lenses) {
+      expect(lens.when).toBe(`$mode.output.continuation == false && $route.output.${lens.id} == true`);
+    }
   });
 });

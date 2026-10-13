@@ -48,14 +48,6 @@ From the originating contract, list every **acceptance** item (how completed beh
 
 An explicit narrowing in the operator's trigger, or a plan the trigger explicitly names as this delivery, is an accepted boundary. Preserve all originating items and their sources; mark items explicitly assigned to future parts deferred with their authorization and owning part. Do not infer an assignment from a plan merely used to explain a broad request. Unassigned or unexplained omissions remain current requirements. A derived document without that authorization cannot drop originating acceptance: record its narrowing as a conflict. Correctness, truth, documentation and proof inside the delivered slice remain required.
 
-## Select docs review
-
-Set `docs` true when the reviewed diff changes shipped documentation, unless the
-diff is small, mechanical, and likely-correct — a version bump, a one-line fix, a
-rename, a test-only tweak — in which case a doc-adjacent touch alone does not
-earn the lens. Otherwise set it false. This selection applies only when the
-workflow's `docs` input is `auto`; an explicit input overrides it.
-
 ## Light mode (a prior report exists)
 
 When a prior-report path is supplied, read it in full. The cursor is the previous round's reviewed commit given above, not a SHA you read from the report. For a PR target, this round's diff is **only the delta**: `git diff <cursor>..<commit under review>`. For a working-diff target, include that delta plus any uncommitted changes. The prior report remains the sole owner of earlier findings and review coverage; do not copy or rebuild them in scope.md. The accepted contract is not among them: resolve it from its source as above, never by copying the prior report's contract section.
@@ -75,5 +67,4 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 
 Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract's source, has all three of its Acceptance, Invariants, and Steering subsections, names the head SHA, and that the diff commands in it actually produce output in this checkout. Then declare:
 
-- `docs`: the boolean selected above.
 - `pr`: the qualified pull request this round reviews, as `{"repo": {"host": ..., "path": "owner/repo"}, "number": N}` — the same identity scope.md records. For a working-diff target, `null`. The node that publishes the review report writes to this record and to nothing else, so a wrong or guessed identity would put the report on the wrong pull request.

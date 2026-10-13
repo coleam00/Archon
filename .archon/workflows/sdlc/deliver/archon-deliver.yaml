@@ -31,7 +31,7 @@ inputs:
       an existing pull request when this run was launched on its branch
       (`--adopt`, or from the pull request). Empty means the run's trigger
       message is the work.
-  # Error review can be forced on or off; `auto` leaves it to the routing agent.
+  # Error review can be forced on or off; `auto` leaves it to review's route agent.
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
@@ -100,30 +100,9 @@ nodes:
             draft: "true"
             pull_request: "$INPUTS.pull_request"
 
-        # Which review lenses this change earns is a quick judgment from the diff and
-        # the work order. It runs nothing.
-        - id: route
-          command: route-review
-          model: small
-          depends_on: [pr]
-          mutates_checkout: false
-          with:
-            work: "$INPUTS.work"
-            errors: "$INPUTS.errors"
-          output_type: review-scope
-          output_format:
-            type: object
-            properties:
-              tier: { type: string, enum: [focused, full] }
-              seams: { type: boolean }
-              errors: { type: boolean }
-              docs: { type: boolean }
-              reason: { type: string, pattern: '\S' }
-            required: [tier, seams, errors, docs, reason]
-
         - id: review
           include: archon-review
-          depends_on: [route]
+          depends_on: [pr]
           with:
             # The PR node's structured read-back names the pull request, so review
             # never rediscovers an ambient branch→PR mapping. It does not name the
@@ -133,10 +112,7 @@ nodes:
             # A later round continues from the previous round's published report.
             prior_report: "$LOOP_PREV.round.output.prior_report"
             work_order: "$INPUTS.work"
-            tier: "$route.output.tier"
-            seams: "$route.output.seams"
-            errors: "$route.output.errors"
-            docs: "$route.output.docs"
+            errors: "$INPUTS.errors"
 
         # After a review passes, before CI. Once per run: a later round finds the
         # earlier shape.md and declares no findings (see simplify.md).

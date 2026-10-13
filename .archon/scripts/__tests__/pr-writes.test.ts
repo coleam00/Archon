@@ -297,7 +297,6 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
         path: 'review/report.md',
       }),
       INPUTS_DISCOVERIES: '[]',
-      INPUTS_MISSING: '[]',
       ...options.inputs,
     },
     artifacts: { 'review-report.md': REPORT, ...options.artifacts },
@@ -495,29 +494,6 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.stderr).toContain(`is at ${REVIEWED}`);
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
     expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
-  });
-
-  it('refuses a ready verdict while an enabled lens did not complete', () => {
-    const result = publishReview({ inputs: { ...report, INPUTS_MISSING: JSON.stringify(['code']) } });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('enabled lenses did not complete: code');
-    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
-  });
-
-  it('refuses action none while a lens is missing, whatever the ready field says', () => {
-    const result = publishReview({
-      inputs: { ...report, INPUTS_READY: 'false', INPUTS_ACTION: 'none', INPUTS_MISSING: JSON.stringify(['code']) },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('enabled lenses did not complete: code');
-  });
-
-  it('publishes a not-ready verdict that names a missing lens', () => {
-    const result = publishReview({
-      inputs: { ...report, INPUTS_READY: 'false', INPUTS_ACTION: 'correct', INPUTS_MISSING: JSON.stringify(['code']) },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ready: false });
   });
 
   it('refuses when the checkout moved after the round fixed its commit', () => {

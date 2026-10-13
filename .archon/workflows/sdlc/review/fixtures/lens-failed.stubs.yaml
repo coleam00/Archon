@@ -1,0 +1,30 @@
+# Dry-run fixture: a selected lens fails (its stub is deliberately missing). The
+# barrier still settles, synthesis is told to require a completed artifact for every
+# selected lens, and it reports the gap as not ready.
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
+route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: lifecycle ownership changed" }
+scope:
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: null
+seams: "0 findings"
+code: "0 findings"
+review-complete: "settled"
+synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: a selected lens did not complete"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: a selected lens did not complete"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+fixture:
+  expect: failed
+  fail-node: tests
+  reached: [route, seams, code, synthesize, publish]
+  resolved-text-contains:
+    synthesize: "Require a completed `review-lens` artifact for every lens the route agent selected"

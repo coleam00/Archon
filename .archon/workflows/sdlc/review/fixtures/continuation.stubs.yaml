@@ -1,19 +1,8 @@
-# Dry-run fixture: a continuation round runs no specialist at all. One reviewer
-# verifies the prior report and the correction delta itself, so the whole fan-out
-# stays gated off — including the docs lens the scope node would otherwise select
-# here (`docs: true`).
-#
-# That is the structural half of the loop guard: when a correction delta adds
-# user-facing surface, the continuation reviewer re-evaluates a gated-off lens
-# against the delta in its own judgment, and there is no route by which an
-# already-passed lens can rerun. No lens carries a stub, so one that runs anyway
-# fails this fixture instead of passing quietly. The judgment itself — which
-# surface earns a re-evaluation, and whether the finding resolves as a follow-up —
-# is model reasoning that no fixture can assert.
-mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy"}'
-coverage: { full: false, errors: false, docs: false, lenses: [] }
+# Dry-run fixture: a continuation round runs no route agent and no specialist. One
+# reviewer verifies the prior report and the correction delta itself. Neither the
+# route node nor any lens carries a stub, so one that runs anyway fails this fixture.
+mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
 scope:
-  docs: true
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
 review-complete: "settled"
@@ -29,7 +18,6 @@ publish:
   findings_summary: "stub: prior findings verified against the delta; nothing open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
-lens-status: { required: [], completed: [], missing: [] }
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed

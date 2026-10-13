@@ -147,7 +147,6 @@ describe('bundled-defaults', () => {
         ['__archon_pack__bundled:sdlc:review::review-code', 'discoveries/review-code.json'],
         ['__archon_pack__bundled:sdlc:review::review-seams', 'discoveries/review-seams.json'],
         ['__archon_pack__bundled:sdlc:simplify::simplify', 'discoveries/review-simplify.json'],
-        ['__archon_pack__bundled:sdlc:review::review-focused', 'discoveries/review-focused.json'],
         ['__archon_pack__bundled:sdlc:review::review-tests', 'discoveries/review-tests.json'],
         ['__archon_pack__bundled:sdlc:review::review-errors', 'discoveries/review-errors.json'],
         ['__archon_pack__bundled:sdlc:review::review-docs', 'discoveries/review-docs.json'],
@@ -199,7 +198,6 @@ describe('bundled-defaults', () => {
       const lenses = [
         '__archon_pack__bundled:sdlc:review::review-code',
         '__archon_pack__bundled:sdlc:review::review-seams',
-        '__archon_pack__bundled:sdlc:review::review-focused',
         '__archon_pack__bundled:sdlc:simplify::simplify',
         '__archon_pack__bundled:sdlc:review::review-tests',
         '__archon_pack__bundled:sdlc:review::review-errors',
@@ -236,7 +234,7 @@ describe('bundled-defaults', () => {
             !key.endsWith('review-scope')) ||
           key === '__archon_pack__bundled:sdlc:simplify::simplify'
       );
-      expect(reviewers.length).toBeGreaterThanOrEqual(7);
+      expect(reviewers.length).toBeGreaterThanOrEqual(6);
       expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
         '## Severity'
       );
@@ -306,9 +304,7 @@ describe('bundled-defaults', () => {
       expect(review.with).toMatchObject({
         scope: '$pr.output',
         work_order: '$INPUTS.work',
-        seams: '$route.output.seams',
-        errors: '$route.output.errors',
-        docs: '$route.output.docs',
+        errors: '$INPUTS.errors',
       });
       // One typed value carries the target — not the same number bound twice
       // beside a head branch nothing downstream reads (#2968).
@@ -415,7 +411,6 @@ describe('bundled-defaults', () => {
       expect(rounds.loop_group.nodes.map(body => body.id)).toEqual([
         'implement',
         'pr',
-        'route',
         'review',
         'simplify',
         'reshape',
@@ -471,7 +466,6 @@ describe('bundled-defaults', () => {
       expect(scopeSchema).toEqual({
         type: 'object',
         properties: {
-          docs: { type: 'boolean' },
           pr: {
             type: ['object', 'null'],
             properties: {
@@ -488,13 +482,12 @@ describe('bundled-defaults', () => {
             required: ['repo', 'number'],
           },
         },
-        required: ['docs', 'pr'],
+        required: ['pr'],
       });
-      expect(validateStructuredOutput({ docs: false, pr: null }, scopeSchema).valid).toBe(true);
+      expect(validateStructuredOutput({ pr: null }, scopeSchema).valid).toBe(true);
       expect(
         validateStructuredOutput(
           {
-            docs: false,
             pr: {
               repo: { host: 'github.com', path: 'coleam00/Archon' },
               number: 3557,
@@ -503,20 +496,18 @@ describe('bundled-defaults', () => {
           scopeSchema
         ).valid
       ).toBe(true);
-      expect(validateStructuredOutput({ docs: false, pr: {} }, scopeSchema).valid).toBe(false);
-      expect(parsed.workflow.inputs?.docs?.default).toBe('auto');
-      const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
-      expect(docs?.when).toBe('$coverage.output.docs == true');
+      expect(validateStructuredOutput({ pr: {} }, scopeSchema).valid).toBe(false);
+      // One route agent picks the lenses; no tier, coverage script or lens-status node.
+      expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
+      expect(parsed.workflow.inputs?.tier).toBeUndefined();
+      for (const id of ['focused', 'coverage', 'lens-status']) {
+        expect(parsed.workflow.nodes.find(node => node.id === id)).toBeUndefined();
+      }
 
-      const specialists = ['seams', 'code', 'tests', 'focused', 'errors', 'docs'];
+      const specialists = ['seams', 'code', 'tests', 'errors', 'docs'];
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
       expect(reviewComplete?.kind).toBe('exec');
-      expect(reviewComplete?.depends_on).toEqual(['coverage', ...specialists]);
-      const lensWhen = (id: string) => parsed.workflow?.nodes.find(node => node.id === id)?.when;
-      expect(lensWhen('seams')).not.toContain('tier');
-      expect(lensWhen('code')).toContain('$coverage.output.full == true');
-      expect(lensWhen('tests')).toContain('$coverage.output.full == true');
-      expect(lensWhen('focused')).toContain("$INPUTS.tier == 'focused'");
+      expect(reviewComplete?.depends_on).toEqual(['scope', 'route', ...specialists]);
       // Structure is judged once, by delivery after a review passes, not as a lens.
       expect(parsed.workflow.nodes.find(node => node.id === 'simplify')).toBeUndefined();
       // Reviewers are read-only by the engine's check, not only by their prompts.
@@ -525,7 +516,7 @@ describe('bundled-defaults', () => {
         'seams',
         'code',
         'tests',
-        'focused',
+        'route',
         'errors',
         'docs',
         'synthesize',
@@ -538,7 +529,7 @@ describe('bundled-defaults', () => {
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
       expect(synthesize?.kind).toBe('agent');
       if (synthesize?.kind !== 'agent') throw new Error('synthesize is not an agent');
-      expect(synthesize.depends_on).toEqual(['scope', 'review-complete', 'lens-status']);
+      expect(synthesize.depends_on).toEqual(['scope', 'review-complete']);
       expect(synthesize.trigger_rule).toBeUndefined();
       expect(synthesize.output_format).toMatchObject({
         properties: {
@@ -577,12 +568,13 @@ describe('bundled-defaults', () => {
       );
 
       for (const lens of specialists) {
-        const key =
-          lens === 'simplify'
-            ? '__archon_pack__bundled:sdlc:simplify::simplify'
-            : `__archon_pack__bundled:sdlc:review::review-${lens}`;
-        expect(commands[key]).toContain(`sources: [${lens}]`);
+        expect(commands[`__archon_pack__bundled:sdlc:review::review-${lens}`]).toContain(
+          `sources: [${lens}]`
+        );
       }
+      expect(commands['__archon_pack__bundled:sdlc:simplify::simplify']).toContain(
+        'sources: [simplify]'
+      );
     });
 
     // Attribution is only measurable if it lands somewhere a script can read (#2898):
@@ -618,20 +610,13 @@ describe('bundled-defaults', () => {
       expect(synthesize).toContain('An unmet contract item is a blocking finding');
     });
 
-    // The same "does this diff earn a docs review" call is made in two packs — at
-    // delivery time by the routing agent, and at review time when `docs` is `auto`. They
-    // drifted once: only the delivery copy carried the trivial-diff carve-out, so the
-    // same doc-adjacent typo fix earned the lens through one entry point and not the
-    // other. Whitespace-normalized so the guard survives either file being rewrapped.
-    it('applies the trivial-diff carve-out in both docs classifiers', () => {
+    // A small mechanical change rarely earns the errors or docs lens; the route agent,
+    // the one place the lens decision is made, carries that carve-out.
+    it('applies the trivial-diff carve-out in the lens decision', () => {
       const squash = (text: string): string => text.replace(/\s+/g, ' ');
-      const carveOut = 'a version bump, a one-line fix, a rename, a test-only tweak';
       expect(
-        squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::route-review'])
-      ).toContain(carveOut);
-      expect(
-        squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-scope'])
-      ).toContain(carveOut);
+        squash(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::route-review'])
+      ).toContain('a version bump, a one-line fix, a rename, a test-only tweak');
     });
 
     // Calibration lesson 4 (#2898): the run that motivated this rewrite produced a false

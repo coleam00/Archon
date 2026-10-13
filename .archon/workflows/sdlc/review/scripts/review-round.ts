@@ -52,8 +52,11 @@ function descends(head: string, cursor: string): boolean {
 try {
   const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
   const head = nodeStartCommit();
+  // The engine's identity for this node, which synthesis uses to count only this
+  // round's lens artifacts.
+  const execution: unknown = JSON.parse(process.env.ARCHON_NODE_EXECUTION ?? '');
   if (prior === '') {
-    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS });
+    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
     const recorded = join(dirname(prior), REVIEWED_HEAD);
@@ -68,7 +71,7 @@ try {
         `the checkout is at ${head}, which does not descend from ${cursor}, the commit the previous round reviewed; reviewing it would diff backwards or skip commits`
       );
     }
-    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS });
+    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, execution });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);

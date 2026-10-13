@@ -14,9 +14,6 @@
  * itself rather than trusting the report's text to name it. Once published, the
  * commit is recorded beside the report as the next round's cursor.
  *
- * A ready verdict while an enabled lens did not complete (lens-status) refuses:
- * readiness without the coverage the round required is not a verdict to publish.
- *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_SCOPE: the review's requested scope. Delivery passes its verified
  *   pull-request record here, and that record is then the only write target.
@@ -26,8 +23,6 @@
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
  *   INPUTS_DISCOVERIES: the certified verdict fields this node forwards.
- * - INPUTS_MISSING: the enabled lenses that did not complete; `[]` on a
- *   continuation round.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -81,13 +76,6 @@ try {
     report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as unknown,
     discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
   };
-  const missing = JSON.parse(text(process.env.INPUTS_MISSING)) as string[];
-  // Delivery routes on `action`, so a verdict that is ready by either field counts.
-  if ((verdict.ready || verdict.action === 'none') && missing.length > 0) {
-    throw new Error(
-      `the review declared ready while enabled lenses did not complete: ${missing.join(', ')}`
-    );
-  }
   const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
   const declared = declaredPr(text(process.env.INPUTS_PR));
   if (
