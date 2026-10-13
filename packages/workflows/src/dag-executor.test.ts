@@ -918,6 +918,7 @@ describe('planGraph', () => {
     expect(workflow.plan.sinks).toEqual(['left', 'right']);
     expect(workflow.nodes).toBe(workflow.plan.nodes);
 
+    // biome-ignore lint/correctness/noConstantCondition: compile-time assertions that never run
     if (false) {
       // @ts-expect-error Resolved workflow nodes are immutable after planning.
       workflow.nodes.push(node('late'));
@@ -40643,10 +40644,10 @@ describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
       },
     };
 
-    const runChildWorkflow = mock(async (args: any) => ({
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async args => ({
       status: 'completed' as const,
       output: 'child-output',
-      childRunId: `subrun-${args.nodeId ?? 'child'}`,
+      childRunId: `subrun-${args.nodeId}`,
     }));
 
     await executeDagWorkflow(

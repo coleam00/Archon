@@ -441,7 +441,6 @@ function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
   // (The drop-warning is indifferent: it already filters `!== undefined`.) The key set is
   // this module's own const tuple list, never caller input.
   for (const [wfKey] of NODE_AFFECTING_WORKFLOW_FIELDS) {
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
     delete scope[wfKey];
   }
   return collapsed;

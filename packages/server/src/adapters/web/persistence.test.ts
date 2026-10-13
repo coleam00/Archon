@@ -483,12 +483,10 @@ describe('MessagePersistence', () => {
       // at flush time. With the shared helper, the new field reaches the DB
       // without editing this adapter.
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
+      // The assertion admits a field MessageMetadata does not declare yet.
       persistence.appendText('conv-1', 'plain text', {
         category: 'workflow_status',
-        // Cast widens the input — same trick the production callers will use
-        // when a real new field lands on MessageMetadata.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ...({ traceId: 'trace-abc' } as any),
+        traceId: 'trace-abc',
       } as Parameters<typeof persistence.appendText>[2]);
 
       await persistence.flush('conv-1');
