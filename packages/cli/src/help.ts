@@ -540,8 +540,15 @@ const scopedOnlyHelp: HelpEntry[] = [
   {
     command: 'trigger',
     subcommand: 'fire',
-    spec: 'trigger fire --config <file>',
-    description: 'Record a configured timer start and drain its execution host',
+    spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>]',
+    description: 'Record a configured start and drain its execution host',
+    scopedFlags: [
+      {
+        spec: '--delivery-id <key>',
+        description: 'Deduplicate this delivery within the configured source',
+      },
+      { spec: '--inputs <file>', description: 'Read event input values from a JSON object' },
+    ],
   },
   {
     command: 'trigger',

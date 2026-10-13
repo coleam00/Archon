@@ -69,6 +69,8 @@ export const cliArgOptions: CliArgOptions = {
   model: { type: 'string', multiple: true },
   config: { type: 'string' },
   host: { type: 'string' },
+  'delivery-id': { type: 'string' },
+  inputs: { type: 'string' },
   owner: { type: 'string' },
   // Private sealed handoff appended by the parent of a detached workflow run.
   'internal-detached-run-config': { type: 'string' },

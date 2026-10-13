@@ -1226,3 +1226,164 @@ function processAlive(pid: number): boolean {
     return false;
   }
 }
+
+test('poll-style CLI fires deduplicate event inputs and preserve unkeyed starts', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-poll-')));
+  tempRoots.push(root);
+  const archonHome = join(root, 'home');
+  const projectRoot = join(root, 'project');
+  const workflowsDir = join(projectRoot, '.archon', 'workflows');
+  mkdirSync(workflowsDir, { recursive: true });
+  const gitInit = Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot });
+  expect(await gitInit.exited).toBe(0);
+  const workflowPath = join(workflowsDir, 'process-order.yaml');
+  writeFileSync(
+    workflowPath,
+    `name: process-order
+description: Record a polled order.
+mutates_checkout: false
+inputs:
+  order_id: { type: string, required: true }
+  mode: { type: string, required: true }
+nodes:
+  - id: record
+    bash: printf '%s\\n' "$INPUTS_ORDER_ID:$INPUTS_MODE" > "$ARTIFACTS_DIR/order.txt"
+`
+  );
+  const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
+  const databasePath = join(archonHome, 'archon.db');
+  await runCli(cliPath, projectRoot, archonHome, ['trigger', 'list']);
+  const userId = crypto.randomUUID();
+  const database = new Database(databasePath);
+  try {
+    database
+      .query('INSERT INTO remote_agent_users (id, display_name) VALUES (?, ?)')
+      .run(userId, 'Poll integration actor');
+  } finally {
+    database.close();
+  }
+  const configPath = join(root, 'trigger.json');
+  const inputsPath = join(root, 'inputs.json');
+  const config = {
+    version: 1,
+    sourceInstanceId: 'polled-orders',
+    binding: {
+      bindingId: 'process-order',
+      bindingRevision: null,
+      hostId: 'poll-host',
+      runAsUserId: userId,
+      resource: 'orders:processing',
+      overlap: 'queue',
+      launch: {
+        cwd: projectRoot,
+        workflowName: 'process-order',
+        inputs: { order_id: 'literal-order', mode: 'poll' },
+        isolation: { kind: 'in-place' },
+      },
+    },
+    schedule: { intervalSeconds: 60, runAtLoad: false },
+  };
+  writeFileSync(configPath, JSON.stringify(config));
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'order-123' }));
+  const fire = ['trigger', 'fire', '--config', configPath, '--inputs', inputsPath];
+  const keyed = [...fire, '--delivery-id', 'order-123@1'];
+  for (let tick = 0; tick < 2; tick++) {
+    await runCli(cliPath, projectRoot, archonHome, keyed);
+    config.binding.launch.inputs.mode = 'edited-after-acceptance';
+    writeFileSync(configPath, JSON.stringify(config));
+  }
+  const runs = (): RunRow[] =>
+    readRows<RunRow>(
+      databasePath,
+      'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs'
+    );
+  const completed = await waitFor(() => {
+    const rows = runs();
+    return rows.length === 1 && rows[0]?.status === 'completed' ? rows[0] : undefined;
+  }, 'one completed polled run');
+  expect(JSON.parse(completed.metadata)).toMatchObject({
+    inputs: { order_id: 'order-123', mode: 'poll' },
+  });
+  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(1);
+  expect(
+    readRows(databasePath, 'SELECT id FROM remote_agent_resource_start_requests')
+  ).toHaveLength(1);
+  const stored = readRows<{ intent: string; event_input_names: string }>(
+    databasePath,
+    'SELECT intent,event_input_names FROM remote_agent_start_receipt_bindings'
+  )[0];
+  if (!stored) throw new Error('Missing stored binding');
+  expect(JSON.parse(stored.intent)).not.toHaveProperty('eventInputs');
+  expect(JSON.parse(stored.event_input_names)).toEqual(['order_id']);
+
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'changed-order' }));
+  const conflict = await runCli(cliPath, projectRoot, archonHome, keyed, false);
+  expect(conflict.exitCode).not.toBe(0);
+  expect(conflict.stderr).toContain(
+    "Delivery ID 'order-123@1' was already used with different inputs"
+  );
+  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(1);
+
+  for (const invalid of ['[]', 'null', '{bad json', '{"":1}']) {
+    writeFileSync(inputsPath, invalid);
+    const result = await runCli(cliPath, projectRoot, archonHome, fire, false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('--inputs');
+  }
+  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(1);
+
+  writeFileSync(inputsPath, JSON.stringify({ undeclared: 'event' }));
+  const rejected = await runCli(
+    cliPath,
+    projectRoot,
+    archonHome,
+    [...fire, '--delivery-id', 'undeclared@1'],
+    false
+  );
+  expect(rejected.exitCode).not.toBe(0);
+  expect(
+    readRows<{ preparation_status: string }>(
+      databasePath,
+      "SELECT preparation_status FROM remote_agent_start_receipt_bindings WHERE preparation_status='rejected'"
+    )
+  ).toHaveLength(1);
+  expect(runs()).toHaveLength(1);
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'unkeyed-event' }));
+  await runCli(cliPath, projectRoot, archonHome, fire);
+  await waitFor(
+    () => (runs().filter(row => row.status === 'completed').length === 2 ? true : undefined),
+    'inputs-only run completion'
+  );
+  const inputsOnlyRun = runs().find(row => row.id !== completed.id);
+  if (!inputsOnlyRun) throw new Error('Missing inputs-only run');
+  expect(JSON.parse(inputsOnlyRun.metadata)).toMatchObject({
+    inputs: { order_id: 'unkeyed-event' },
+  });
+  writeFileSync(
+    workflowPath,
+    'name: process-order\ndescription: No declared inputs\nnodes:\n  - id: record\n    bash: echo done\n'
+  );
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'event' }));
+  const noDeclaration = await runCli(
+    cliPath,
+    projectRoot,
+    archonHome,
+    [...fire, '--delivery-id', 'undeclared@2'],
+    false
+  );
+  expect(noDeclaration.exitCode).not.toBe(0);
+  expect(runs()).toHaveLength(2);
+
+  for (let tick = 0; tick < 2; tick++) {
+    await runCli(cliPath, projectRoot, archonHome, ['trigger', 'fire', '--config', configPath]);
+    await waitFor(
+      () =>
+        runs().filter(row => row.status === 'completed').length === tick + 3 ? true : undefined,
+      'unkeyed run completion'
+    );
+  }
+  expect(
+    readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts WHERE delivery_id IS NULL')
+  ).toHaveLength(3);
+  expect(runs()).toHaveLength(4);
+});

@@ -11,6 +11,8 @@ import {
   drainResourceStartHost,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
+import { jsonValueSchema } from '@archon/workflows/output-ref';
+import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
@@ -104,7 +106,15 @@ export async function triggerCommand(
   host: WorkflowHost,
   action: string | undefined,
   args: string[],
-  options: { config?: string; host?: string; owner?: string; yes?: boolean; limit?: string },
+  options: {
+    config?: string;
+    host?: string;
+    owner?: string;
+    yes?: boolean;
+    limit?: string;
+    deliveryId?: string;
+    inputs?: string;
+  },
   dispatch: (requestId: string, hostId: string) => Promise<void> = (requestId, hostId) =>
     triggerCommand(host, 'execute', [requestId], { host: hostId })
 ): Promise<void> {
@@ -128,24 +138,51 @@ export async function triggerCommand(
   if (action === 'fire') {
     if (!options.config)
       throw new Error('Usage: archon trigger fire --config <timer-binding.json>');
+    if (options.deliveryId !== undefined && options.deliveryId.length === 0)
+      throw new Error('--delivery-id must not be empty.');
+    let eventInputs: z.infer<typeof resourceStartBindingIntentSchema>['eventInputs'];
+    if (options.inputs !== undefined) {
+      try {
+        eventInputs = z
+          .record(z.string().min(1), jsonValueSchema)
+          .parse(JSON.parse(await readFile(options.inputs, 'utf8')) as unknown);
+      } catch (error) {
+        throw new Error(
+          '--inputs must name a readable file containing a JSON object with non-empty input names.',
+          { cause: error }
+        );
+      }
+    }
     const config = await loadTimerConfig(host, options.config);
     const binding = {
       ...config.binding,
+      ...(eventInputs !== undefined ? { eventInputs } : {}),
       bindingRevision: createHash('sha256').update(JSON.stringify(config.binding)).digest('hex'),
     };
-    const receipt = await host.deps.store.acceptStartReceipt({
-      receipt: {
-        id: randomUUID(),
-        sourceInstanceId: config.sourceInstanceId,
-        deliveryId: null,
-        contentDigest: createHash('sha256').update(JSON.stringify(config)).digest('hex'),
-        receivedAt: new Date().toISOString(),
-        occurredAt: null,
-        sourceActor: null,
-      },
-      outcome: 'matched',
-      bindings: [binding],
-    });
+    const receipt = await host.deps.store
+      .acceptStartReceipt({
+        receipt: {
+          id: randomUUID(),
+          sourceInstanceId: config.sourceInstanceId,
+          deliveryId: options.deliveryId ?? null,
+          contentDigest: createHash('sha256')
+            .update(JSON.stringify(options.deliveryId === undefined ? config : (eventInputs ?? {})))
+            .digest('hex'),
+          receivedAt: new Date().toISOString(),
+          occurredAt: null,
+          sourceActor: null,
+        },
+        outcome: 'matched',
+        bindings: [binding],
+      })
+      .catch((error: unknown) => {
+        if (error instanceof SourceReceiptDigestConflictError)
+          throw new Error(
+            `Delivery ID '${options.deliveryId}' was already used with different inputs`,
+            { cause: error }
+          );
+        throw error;
+      });
     try {
       await drainHost(host, binding.hostId, dispatch);
     } catch (error) {
