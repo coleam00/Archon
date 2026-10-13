@@ -10723,7 +10723,6 @@ type ScopedCapability = (typeof SCOPED_CAPABILITIES)[number];
 
 function namesScopedCapability(node: DagNode, capability: ScopedCapability): boolean {
   switch (capability) {
-    // An optional declaration is not a requirement: the node runs without it.
     case 'mcp':
       return 'mcp' in node && mcpDeclaration(node.mcp)?.optional === false;
     // `skills: []` and `plugins: []` name nothing, so they need no capability.
