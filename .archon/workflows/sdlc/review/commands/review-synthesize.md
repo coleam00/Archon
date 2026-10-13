@@ -125,7 +125,7 @@ Never emit `ready:true` with `correct` or `replan`, or `ready:false` with `none`
 
 ## Write the report
 
-Write `$ARTIFACTS_DIR/review/report.md`, then write the identical complete report to `$ARTIFACTS_DIR/review/report-round-N.md`, where `N` is one greater than the highest existing `report-round-N.md` in that directory (or `1` when none exists). The canonical `report.md` remains the latest report; the round artifact is immutable history.
+Write `$ARTIFACTS_DIR/review/report.md`, then write the identical complete report to `$ARTIFACTS_DIR/review/report-round-N.md`, where `N` is one greater than the highest existing `report-round-N.md` in that directory (or `1` when none exists). The canonical `report.md` remains the latest report; the round artifact is immutable history. Copy the report of every lens this round ran the same way, to `$ARTIFACTS_DIR/review/<lens>-round-N.md` with the same `N` (`code-round-N.md`, for example), so each round's lens evidence survives the next round's rewrite.
 
 Then write `$ARTIFACTS_DIR/review/findings.json`, the same findings as machine-readable records. A JSON array of `{id, severity, sources, claim, status, round}`: `severity` is `blocking` or `note`; `sources` is the lens list that finding carries in the report; `claim` is its one-sentence claim; `status` is `open`, `fixed`, `declined` (a note the owner declined with a reason), or `disproved` (the finding was shown not to be one); `round` is the round that first raised it (`N` for one new this round). Include every finding this round accounts for, carried-forward and rejected ones included, so the latest file is the complete attributed record. Write an empty array when there are no findings. This file is what makes lens value measurable by reading artifacts instead of reconstructing history from edited PR comments, so a finding without its `sources` is an incomplete record.
 
@@ -146,7 +146,7 @@ The node after this one publishes the complete report to the recorded pull reque
 
 ## Verify before finishing
 
-Confirm both report files and `findings.json` exist, that `findings.json` parses and holds one record per finding in the report with the same IDs and `sources`, every accepted finding has `sources` and evidence you checked, every prior finding is accounted for in continuation mode, and every contract item in scope.md has a coverage row and every unmet one names its finding. Then declare:
+Confirm both report files, this round's lens copies and `findings.json` exist, that `findings.json` parses and holds one record per finding in the report with the same IDs and `sources`, every accepted finding has `sources` and evidence you checked, every prior finding is accounted for in continuation mode, and every contract item in scope.md has a coverage row and every unmet one names its finding. Then declare:
 
 - `ready`: the verdict above.
 - `action`: exactly `none`, `correct`, or `replan`.

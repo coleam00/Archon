@@ -30,10 +30,12 @@ Then declare one state:
 
 ## Act
 
-- `green`: leave the pull request ready.
+- `green`: leave the pull request ready, and write the checks and the head they passed on to `$ARTIFACTS_DIR/ci.md`.
 - `pr_caused` or `other`: first put the pull request back to draft (`gh pr ready <number> --repo <owner>/<repo> --undo`) and read it back to confirm it is a draft, so a red pull request never stays ready. Then write the failing checks, their log lines, the file each points at, and the cause with its evidence to `$ARTIFACTS_DIR/ci.md`. On `pr_caused` the next round's implementer fixes from that file, and review sees the correction again. If a draft flip fails, say so in the summary; the state stays what CI showed.
 
 ## Declare
+
+First copy the `$ARTIFACTS_DIR/ci.md` you wrote to `$ARTIFACTS_DIR/ci-round-N.md`, where `N` is the highest `N` among `$ARTIFACTS_DIR/review/report-round-N.md` (the review round this CI follows). `ci.md` stays the latest result; the round copy is history the next round never overwrites.
 
 - `state` — `green`, `pr_caused`, or `other`.
 - `summary` — two to four sentences: the checks and their conclusions, the cause with the log lines, runs, and commits that show it, and the pull request's draft state when you finished.
