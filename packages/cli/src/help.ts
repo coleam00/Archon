@@ -113,8 +113,8 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'user',
-    spec: 'user <list|role>',
-    description: 'List users and manage roles as the operator',
+    spec: 'user <list|role|link>',
+    description: 'List users, link identities and manage roles as the operator',
   },
   {
     command: 'trigger',
@@ -335,9 +335,8 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'doctor',
-    spec: 'doctor [--full]',
-    description:
-      'Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)',
+    spec: 'doctor',
+    description: 'Verify installed provider diagnostics, gh auth, DB, and adapters',
   },
   {
     command: 'auth',
@@ -518,6 +517,12 @@ const scopedOnlyHelp: HelpEntry[] = [
     subcommand: 'list',
     spec: 'user list',
     description: 'List user ids, roles, display names and identities',
+  },
+  {
+    command: 'user',
+    subcommand: 'link',
+    spec: 'user link <user-id> <platform>:<platform-user-id> [--move]',
+    description: 'Link an identity to an existing user; --move reassigns a conflicting identity',
   },
   {
     command: 'user',
@@ -766,6 +771,12 @@ const orderedFlags: FlagHelp[] = [
     spec: '--pause-at-gates',
     description: 'Stop a dry-run at approval gates instead of auto-approving',
     owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
+    spec: '--providers <ids>',
+    description:
+      'Install comma-separated maintained providers, skipping the setup provider question',
+    owners: [{ command: 'setup' }],
   },
   {
     spec: '--spawn',

@@ -200,6 +200,7 @@ test('bidirectional requests preserve messages, every action result, send, foote
       nodeId: 'gate',
       pauseId: 'pause',
       message: 'Choose',
+      authoredOutcome: 'succeeded',
       decisions: [{ id: 'ship', label: 'Ship it' }],
     };
     await f.chat.runEvent(event);
@@ -461,3 +462,23 @@ for (const invalid of [
     await rpc.close();
   });
 }
+
+test('approval projections preserve the persisted authored outcome without engine data', () => {
+  const event = {
+    type: 'approval_pending',
+    runId: 'run',
+    nodeId: 'gate',
+    message: 'Choose',
+    decisions: [{ id: 'ship' }],
+    authoredOutcome: 'succeeded',
+  } satisfies ChatRunEvent;
+  expect(chatRunEventSchema.parse(event)).toEqual(event);
+});
+
+test('approval wire events require resolved decisions', () => {
+  const event = { type: 'approval_pending', runId: 'run', nodeId: 'gate', message: 'Choose' };
+  expect(chatRunEventSchema.safeParse(event).success).toBe(false);
+  expect(chatRunEventSchema.safeParse({ ...event, decisions: [{ id: 'ship' }] }).success).toBe(
+    true
+  );
+});

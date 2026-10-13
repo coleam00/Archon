@@ -1,6 +1,7 @@
 import { requireProvider } from '@archon/provider-contract';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import type { OwnedWorktree, WorkflowRunOrigin } from './schemas/workflow-run';
+import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
@@ -2319,49 +2320,55 @@ export async function executeWorkflow(
   // Skipped when `workflow.mutates_checkout` is false — the author asserts
   // that concurrent runs will not race (e.g. all writes are per-run-scoped).
   //
+  // Excluded from the lock: this run's ancestors and descendants, which share its
+  // checkout by construction (#2121), and its fan-out siblings — children of the same
+  // parent and `fan_out` node on the same path — plus their descendants (#2777). The
+  // walk repeats for every ancestor that is itself a fan-out child, so a grandchild
+  // does not collide with its parent's siblings in a nested fan-out. Sharing is the
+  // author's choice; agents coordinate their own edits, and every sibling pair is
+  // recorded as `workflow.checkout_shared` events. A fan-out child still runs this
+  // block under `mutates_checkout: false`, only to record those events.
+  //
   // Runs after workflowRun is finalized (pre-created, resumed, or freshly
   // created) so we always have self-ID + started_at for the deterministic
   // older-wins tiebreaker. The query treats `pending` rows older than 5 min
   // as orphaned, so leaks from crashed dispatches or resume orphans don't
   // permanently block the path.
-  if (workflow.mutates_checkout !== false) {
+  const subrun = readSubrunMetadata(workflowRun.metadata);
+  if (workflow.mutates_checkout !== false || subrun.childIndex !== undefined) {
     try {
-      // A `workflow:` sub-run and its children share ONE checkout (#2121), so the
-      // path-lock must not treat another run in this run's OWN vertical tree line as
-      // a conflict. Exclude both directions:
-      //   • ANCESTORS (upward via parent_run_id) — a child must not self-block against
-      //     its own running/paused parent on that path.
-      //   • DESCENDANTS (downward via a bounded walk) — a parent resumed while still
-      //     blocked on a paused child must re-pause on it, not self-cancel against it.
-      // Siblings are intentionally NOT excluded (see #2180). The ancestor lookup fails
-      // OPEN (skip the best-effort lock) — a false self-collision against the parent is
-      // worse than a briefly-unenforced lock; the descendant lookup fails CLOSED (run
-      // the lock with whatever we have) — most runs have no descendants, so a lost set
-      // only risks a legitimate-looking collision, never a self-collision.
-      const pathLockExclude: string[] = [];
-      let skipPathLock = false;
-      if (workflowRun.parent_run_id) {
-        try {
-          const ancestry = await deps.store.getRunAncestry(workflowRun.id);
-          pathLockExclude.push(...ancestry.map(a => a.id));
-        } catch (err) {
-          getLog().error(
-            { err: err as Error, workflowRunId: workflowRun.id, cwd },
-            'workflow.path_lock_ancestry_lookup_failed'
+      const ancestry = workflowRun.parent_run_id
+        ? await deps.store.getRunAncestry(workflowRun.id)
+        : [];
+      const pathLockExclude = ancestry.map(run => run.id);
+      const sharedCheckoutSiblings: WorkflowRun[] = [];
+      for (const branch of [workflowRun, ...ancestry]) {
+        const branchMetadata = readSubrunMetadata(branch.metadata);
+        if (
+          branch.working_path !== cwd ||
+          !branch.parent_run_id ||
+          branchMetadata.parentNodeId === undefined ||
+          branchMetadata.childIndex === undefined
+        ) {
+          continue;
+        }
+        const siblings = (await deps.store.findChildRuns(branch.parent_run_id)).filter(peer => {
+          const peerMetadata = readSubrunMetadata(peer.metadata);
+          return (
+            peer.id !== branch.id &&
+            peer.working_path === cwd &&
+            peerMetadata.parentNodeId === branchMetadata.parentNodeId &&
+            peerMetadata.childIndex !== undefined
           );
-          skipPathLock = true;
+        });
+        if (branch.id === workflowRun.id) sharedCheckoutSiblings.push(...siblings);
+        for (const sibling of siblings) {
+          pathLockExclude.push(sibling.id, ...(await gatherDescendantRunIds(deps, sibling.id)));
         }
       }
+      const skipPathLock = workflow.mutates_checkout === false;
       if (!skipPathLock) {
-        try {
-          const descendantIds = await gatherDescendantRunIds(deps, workflowRun.id);
-          pathLockExclude.push(...descendantIds);
-        } catch (err) {
-          getLog().warn(
-            { err: err as Error, workflowRunId: workflowRun.id, cwd },
-            'workflow.path_lock_descendant_lookup_failed'
-          );
-        }
+        pathLockExclude.push(...(await gatherDescendantRunIds(deps, workflowRun.id)));
       }
       const activeWorkflow = skipPathLock
         ? null
@@ -2439,6 +2446,27 @@ export async function executeWorkflow(
           error: `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
         };
       }
+      if (workflowRun.parent_run_id && subrun.parentNodeId !== undefined) {
+        for (const sibling of sharedCheckoutSiblings) {
+          // Append on both runs: the earlier child may already have finished before
+          // this child exists. No read/modify/write metadata race is needed.
+          for (const [runId, siblingId] of [
+            [workflowRun.id, sibling.id],
+            [sibling.id, workflowRun.id],
+          ]) {
+            await deps.store.persistWorkflowEvent({
+              workflow_run_id: runId,
+              event_type: 'workflow.checkout_shared',
+              data: {
+                parent_run_id: workflowRun.parent_run_id,
+                parent_node_id: subrun.parentNodeId,
+                working_path: cwd,
+                sibling_run_id: siblingId,
+              } satisfies CheckoutSharedEventData,
+            });
+          }
+        }
+      }
     } catch (error) {
       if (error instanceof TerminalStatusWriteError) throw error;
       const err = error as Error;
@@ -2453,8 +2481,12 @@ export async function executeWorkflow(
       );
       // Even if notification delivery failed, release this run's lock token.
       // A rejected cleanup must escape rather than become an ordinary guard result.
+      // A fan-out child is cancelled with a fan-out reason so the parent's resume
+      // re-drives it; an untagged cancel reads as a user's and is never re-run (#2180).
       await requireTerminalStatusWrite(
-        deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
+        subrun.childIndex !== undefined
+          ? deps.store.cancelFanOutRun(workflowRun.id, 'fan_out_checkout_check')
+          : deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
         {
           workflowRunId: workflowRun.id,
           site: 'executor.guard_query_failure_cleanup',
@@ -2493,8 +2525,8 @@ export async function executeWorkflow(
   // so:
   //   • a later resume re-derives once the registry is healthy and the
   //     `!workflowRun.output_root` guard above writes the now-correct root;
-  //   • the state-preflight gate (#2200), maintainer-triage, and anyone reading the
-  //     row can tell "unregistered" apart from "we could not tell";
+  //   • anyone reading the row can tell "unregistered" apart from "we could not
+  //     tell";
   //   • the write-once invariant is preserved everywhere else (a row with a
   //     resolved or unregistered identity is still protected across a #1192
   //     rename — only the empty faulted shape is scoped differently).

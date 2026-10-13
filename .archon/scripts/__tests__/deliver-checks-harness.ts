@@ -19,8 +19,6 @@ export const CLI_ENTRY = resolve(import.meta.dir, '../../../packages/cli/src/cli
 export const PR = { repo: { host: 'ghe.example.com', path: 'example/repo' }, number: 42 };
 export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 
-const trackTempRoot = trackTempRoots();
-
 /** One row of `gh api .../issues/<n>/comments`. */
 export interface GhCommentRow {
   readonly id: number;
@@ -251,9 +249,27 @@ export interface ScriptOptions {
   readonly cwd?: string;
 }
 
-/** Run one pack script the way the engine does: `<pack>/<relative>.ts`. */
-export function runPackScript(relative: string, options: ScriptOptions = {}): ScriptRun {
-  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-script-')));
+export interface PackScriptRunner {
+  /** Run one pack script the way the engine does: `<pack>/<relative>.ts`. */
+  readonly runPackScript: (relative: string, options?: ScriptOptions) => ScriptRun;
+}
+
+/**
+ * The script runner for one test file. Call it once at the file's module scope.
+ *
+ * The scratch roots are tracked here rather than at this module's top level because a
+ * hook registered while a shared module is first imported belongs to that one test
+ * file. Every later file in the same `bun test` process would leak all of its roots.
+ */
+export function packScriptRunner(): PackScriptRunner {
+  const trackTempRoot = trackTempRoots();
+  return {
+    runPackScript: (relative, options = {}) =>
+      runPackScriptIn(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-script-'))), relative, options),
+  };
+}
+
+function runPackScriptIn(root: string, relative: string, options: ScriptOptions): ScriptRun {
   const ghLog = join(root, 'gh.log');
   const forgeLog = join(root, 'forge.log');
   const requestLog = join(root, 'forge-requests');
@@ -363,11 +379,11 @@ function git(cwd: string, ...args: string[]): string {
  * the recorded repository's URL, is a local bare repository (`url.insteadOf`), so a
  * script finds the remote by URL and fetches the base without a network. With
  * `conflict`, the base has since changed the same line the feature changed. `track`
- * owns the temp root's removal; by default it is removed after the current test.
+ * owns the temp root's removal: pass the calling test file's own `trackTempRoots()`.
  */
 export function gitCheckout(
-  options: { readonly conflict?: boolean } = {},
-  track: (root: string) => string = trackTempRoot
+  options: { readonly conflict?: boolean },
+  track: (root: string) => string
 ): string {
   const root = track(mkdtempSync(join(tmpdir(), 'archon-pack-git-')));
   const bare = join(root, 'remote.git');

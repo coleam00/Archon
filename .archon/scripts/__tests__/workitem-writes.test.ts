@@ -3,8 +3,11 @@ import {
   forgeFailure,
   forgeOperation,
   PR,
-  runPackScript,
+  packScriptRunner,
 } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
+
 const inputs = {
   INPUTS_ITEM: JSON.stringify({ repo: PR.repo, number: 7 }),
   INPUTS_PUBLISH: 'true',

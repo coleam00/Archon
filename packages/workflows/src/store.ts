@@ -16,10 +16,10 @@ import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { RunCancelReason, RunExitReason, RunStopSignal } from './schemas/run-terminal-reason';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
 /**
- * IWorkflowStore - trait interface for workflow database operations.
+ * IWorkflowStore - persistence port for workflow operations.
  *
  * Mirrors the IIsolationStore pattern from @archon/isolation.
- * Implementations live in @archon/core (backed by the real DB);
+ * SQL lives in @archon/core; append-only files live in @archon/workflows.
  * the workflow engine depends only on this narrow interface.
  */
 import type {
@@ -126,6 +126,20 @@ export const NODE_STATE_EVENT_TYPES = [
 
 export type NodeStateEventType = (typeof NODE_STATE_EVENT_TYPES)[number];
 
+/** Where an install persists workflow state; selected by `store:` in the global config. */
+export const WORKFLOW_STORE_KINDS = ['database', 'files'] as const;
+export type WorkflowStoreKind = (typeof WORKFLOW_STORE_KINDS)[number];
+
+export function foldActiveNodeIds(
+  active: Set<string>,
+  stepName: string | null,
+  eventType: NodeStateEventType
+): void {
+  if (!stepName) return;
+  if (eventType === 'node_started' || eventType === 'node_suspended') active.add(stepName);
+  else active.delete(stepName);
+}
+
 export const DURABLE_WORKFLOW_EVENT_TYPES = [
   ...NODE_STATE_EVENT_TYPES,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
@@ -147,6 +161,8 @@ export const WORKFLOW_EVENT_TYPES = [
   // Between-run continuation (#2747) — written on the ADOPTING run's log when it
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
+  // Fan-out siblings that shared one checkout (#2777); one row per sibling.
+  'workflow.checkout_shared',
   ...DURABLE_WORKFLOW_EVENT_TYPES,
   'node_retry_scheduled',
   'loop_iteration_started',
@@ -282,6 +298,7 @@ export const FAN_OUT_CANCEL_REASONS = [
   'fan_out_gate',
   'fan_out_sibling',
   'fan_out_orphan',
+  'fan_out_checkout_check',
 ] as const;
 export type FanOutCancelReason = (typeof FAN_OUT_CANCEL_REASONS)[number];
 

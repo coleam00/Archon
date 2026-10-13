@@ -6,7 +6,9 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
-import { PR_URL, runPackScript } from './deliver-checks-harness';
+import { PR_URL, packScriptRunner } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
 
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 

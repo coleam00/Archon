@@ -1593,8 +1593,11 @@ export class ClaudeProvider implements IAgentProvider {
     request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
   ): Promise<ProviderDiagnostics> {
     const config = parseClaudeConfig(request.assistantConfig ?? {});
-    return diagnoseBinary('claude-binary', 'Claude binary', () =>
-      resolveClaudeBinaryWithSource(config.claudeBinaryPath)
+    return diagnoseBinary(
+      'claude-binary',
+      'Claude binary',
+      () => resolveClaudeBinaryWithSource(config.claudeBinaryPath),
+      request.signal
     );
   }
 

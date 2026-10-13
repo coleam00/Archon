@@ -35,6 +35,12 @@ export const addCodebaseBodySchema = z
   )
   .openapi('AddCodebaseBody');
 
+/** PATCH /api/codebases/:id request body. */
+export const renameCodebaseBodySchema = z
+  .object({ name: z.string().trim().min(1).max(255) })
+  .strict()
+  .openapi('RenameCodebaseBody');
+
 /** DELETE /api/codebases/:id response. */
 export const deleteCodebaseResponseSchema = z
   .object({ success: z.boolean() })

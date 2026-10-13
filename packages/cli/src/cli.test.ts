@@ -2112,3 +2112,91 @@ mock.module(${JSON.stringify(join(repoRoot, 'packages/cli/src/commands/ai.ts'))}
     }
   );
 });
+
+describe('setup provider selection dispatch', () => {
+  const cases = [
+    { name: 'flag', args: ['--providers', 'codex'], env: '', selected: ['codex'] },
+    { name: 'environment', args: [], env: ' codex, pi ', selected: ['codex', 'pi'] },
+    { name: 'flag precedence', args: ['--providers', 'codex'], env: 'claude', selected: ['codex'] },
+    { name: 'explicit empty flag', args: ['--providers='], env: 'claude', selected: [] },
+    { name: 'empty environment', args: [], env: '', selected: [] },
+    { name: 'invalid environment', args: [], env: 'codex,unknown', selected: null },
+  ];
+  for (const entry of cases) {
+    it(`forwards ${entry.name} through setup validation without prompting`, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-setup-dispatch-'));
+      const preload = join(root, 'preload.ts');
+      writeFileSync(
+        preload,
+        `
+import { mock } from 'bun:test';
+mock.module('@archon/core/providers/register-host-providers', () => ({ registerHostProviders: async () => {} }));
+const setupPath = ${JSON.stringify(join(repoRoot, 'packages/cli/src/commands/setup.ts'))};
+const { selectSetupProviders } = await import(setupPath);
+mock.module(setupPath, () => ({
+  setupCommand: async options => {
+    let prompts = 0;
+    const installs = [];
+    try {
+      const selected = await selectSetupProviders(options.providers,
+        async ids => { installs.push(...ids); },
+        async () => { prompts++; return ['claude']; });
+      console.log(JSON.stringify({ providers: options.providers, selected, installs, prompts }));
+      return 0;
+    } catch (error) {
+      console.log(JSON.stringify({ error: error.message, installs, prompts }));
+      return 1;
+    }
+  },
+}));
+`
+      );
+      try {
+        const result = spawnSync(
+          process.execPath,
+          ['--no-env-file', '--preload', preload, CLI_ENTRY, 'setup', ...entry.args, '--cwd', root],
+          {
+            cwd: root,
+            encoding: 'utf8',
+            timeout: testTimeout(10_000),
+            env: {
+              ...process.env,
+              HOME: root,
+              USERPROFILE: root,
+              ARCHON_HOME: root,
+              CODEX_HOME: join(root, 'codex'),
+              CLAUDE_CONFIG_DIR: join(root, 'claude'),
+              PI_CODING_AGENT_DIR: join(root, 'pi'),
+              ARCHON_TELEMETRY_DISABLED: '1',
+              ARCHON_PROVIDERS: entry.env,
+            },
+          }
+        );
+        expect({ status: result.status, stderr: result.stderr }).toMatchObject({
+          status: entry.selected === null ? 1 : 0,
+        });
+        const line = result.stdout
+          .trim()
+          .split('\n')
+          .find(line => line.startsWith('{'));
+        expect(line).toBeDefined();
+        const dispatched: unknown = JSON.parse(line!);
+        expect(dispatched).toMatchObject({ prompts: 0 });
+        if (entry.selected === null) {
+          expect(dispatched).toMatchObject({
+            installs: [],
+            error: expect.stringContaining("Unknown maintained provider 'unknown'"),
+          });
+        } else {
+          expect(dispatched).toMatchObject({
+            providers: entry.selected,
+            selected: entry.selected,
+            installs: entry.selected,
+          });
+        }
+      } finally {
+        await removeTempTree(root);
+      }
+    });
+  }
+});

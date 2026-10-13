@@ -9,6 +9,7 @@ import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   PR,
   PR_URL,
@@ -16,10 +17,13 @@ import {
   forgeFailure,
   forgePrRecord,
   gitCheckout,
-  runPackScript,
+  packScriptRunner,
   type ScriptOptions,
   type ScriptRun,
 } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
+const trackTempRoot = trackTempRoots();
 
 const MARKER = '<!-- archon-review-report -->';
 const REPORT = 'Round 1: ready';
@@ -40,7 +44,7 @@ interface Target {
  */
 function publishPr(options: ScriptOptions & { target?: Target } = {}): ScriptRun & { head: string; cwd: string } {
   const { target = {}, ...rest } = options;
-  const cwd = gitCheckout();
+  const cwd = gitCheckout({}, trackTempRoot);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
     ...rest,

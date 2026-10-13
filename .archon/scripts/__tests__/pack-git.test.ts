@@ -10,8 +10,9 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
-import { PR, forgePrRecord, gitCheckout, runPackScript } from './deliver-checks-harness';
+import { PR, forgePrRecord, gitCheckout, packScriptRunner } from './deliver-checks-harness';
 
+const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
 
 function git(cwd: string, ...args: string[]): string {
@@ -39,7 +40,7 @@ describe('remote identity', () => {
 // pushHead is publish-pr's push; a driver runs it alone against real git remotes.
 describe('pushHead', () => {
   it('pushes to the remote that holds the head repository, whatever it is named, and reads it back', () => {
-    const cwd = gitCheckout();
+    const cwd = gitCheckout({}, track);
     git(cwd, 'remote', 'add', 'origin', 'https://github.com/someone/fork.git');
     const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
     expect(run.code).toBe(0);
@@ -47,7 +48,7 @@ describe('pushHead', () => {
   });
 
   it('refuses a push the remote rejects instead of skipping it', () => {
-    const cwd = gitCheckout();
+    const cwd = gitCheckout({}, track);
     git(cwd, 'push', '-q', 'upstream', 'feature');
     git(cwd, 'commit', '-q', '--allow-empty', '-m', 'local');
     git(cwd, 'checkout', '-q', '--detach', 'HEAD~2');
@@ -57,7 +58,7 @@ describe('pushHead', () => {
   });
 
   it('refuses when two remotes claim the same repository', () => {
-    const cwd = gitCheckout();
+    const cwd = gitCheckout({}, track);
     git(cwd, 'remote', 'add', 'mirror', `git@${PR.repo.host}:${PR.repo.path}.git`);
     const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
     expect(run.code).not.toBe(0);
@@ -67,7 +68,7 @@ describe('pushHead', () => {
 
 describe('prune-scratch', () => {
   it('removes a symlinked scratch directory as a link, leaving its target', () => {
-    const cwd = gitCheckout();
+    const cwd = gitCheckout({}, track);
     const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
     const target = track(mkdtempSync(join(tmpdir(), 'archon-scratch-target-')));
     writeFileSync(join(target, 'keep.txt'), 'kept');
@@ -85,7 +86,7 @@ describe('prune-scratch', () => {
   });
 
   it("removes the run's scratch worktrees and nothing else", () => {
-    const cwd = gitCheckout();
+    const cwd = gitCheckout({}, track);
     const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
     const scratch = join(artifacts, 'scratch', 'code');
     mkdirSync(scratch, { recursive: true });

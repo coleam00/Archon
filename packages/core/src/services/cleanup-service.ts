@@ -1089,12 +1089,16 @@ export interface RunWorktreeRelease {
 
 async function reclaimOwnedWorktree(
   run: WorkflowRun,
-  store: IIsolationStore
+  store: IIsolationStore,
+  readers: {
+    getCodebase: typeof codebaseDb.getCodebase;
+    getLiveRunOwningEnv: typeof isolationEnvDb.getLiveRunOwningEnv;
+  }
 ): Promise<RunWorktreeRelease> {
   const proof = readOwnedWorktree(run.metadata);
   if (!proof) {
     if (run.metadata?.isolation === 'container') return { warnings: [] };
-    const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+    const codebase = run.codebase_id ? await readers.getCodebase(run.codebase_id) : null;
     if (codebase?.kind === 'folder') return { warnings: [] };
     return {
       warnings: run.working_path
@@ -1118,7 +1122,7 @@ async function reclaimOwnedWorktree(
   }
   const reason = unknownPlatformReason(env.created_by_platform);
   if (reason) return refuse(reason);
-  const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+  const codebase = run.codebase_id ? await readers.getCodebase(run.codebase_id) : null;
   if (!codebase) return refuse('canonical repository is unavailable');
   const repo = toRepoPath(codebase.default_cwd);
   const path = toWorktreePath(env.working_path);
@@ -1151,7 +1155,7 @@ async function reclaimOwnedWorktree(
         beforeRemove: async () => {
           await store.updateStatus(env.id, 'destroyed');
           marked = true;
-          const user = await isolationEnvDb.getLiveRunOwningEnv(env.id);
+          const user = await readers.getLiveRunOwningEnv(env.id);
           if (user) refuse(`claimable run ${user.id} (${user.status}) also uses this checkout`);
         },
       },
@@ -1171,10 +1175,14 @@ async function reclaimOwnedWorktree(
  */
 export async function reclaimRunWorktree(
   run: WorkflowRun,
-  store: IIsolationStore
+  store: IIsolationStore,
+  readers = {
+    getCodebase: codebaseDb.getCodebase,
+    getLiveRunOwningEnv: isolationEnvDb.getLiveRunOwningEnv,
+  }
 ): Promise<RunWorktreeRelease> {
   try {
-    return await reclaimOwnedWorktree(run, store);
+    return await reclaimOwnedWorktree(run, store, readers);
   } catch (err) {
     const proof = readOwnedWorktree(run.metadata);
     // A leftover Git no longer tracks cannot be finished by a retry; its message says so.

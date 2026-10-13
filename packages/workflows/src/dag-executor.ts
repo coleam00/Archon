@@ -3148,7 +3148,7 @@ function utf8SequenceLength(leadByte: number): number {
  * A spill write failure never fails the node — it degrades to preview-only persistence,
  * matching `shellQuoteOrFile`'s existing fallback behavior for the same class of error.
  *
- * Because the spill filename is reused, `getDagResumeSnapshot` (packages/core)
+ * Because the spill filename is reused, `foldDagResumeSnapshot` (dag-resume-snapshot.ts)
  * checks its byte length against the row's `originalBytes`. A later execution can
  * overwrite the file before its event commits; a length mismatch exposes that stale
  * pairing. The check cannot distinguish different contents of the same length.
@@ -7825,6 +7825,8 @@ async function executeWorkflowNode(
  * ITSELF (so the cancel is attributable and — unlike a user's out-of-band cancel —
  * recoverable on resume). `fan_out_gate`: a child paused at a gate (#2180).
  * `fan_out_orphan`: a child whose `child_index` fell out of range when the item list shrank.
+ * `fan_out_checkout_check`: a child whose path-lock or checkout-sharing store access failed
+ * before it ran any node (executor.ts).
  *
  * `fan_out_sibling` is READ-ONLY legacy. It marked an in-flight sibling cancelled once an
  * earlier revision's fail-fast sealed the node's fate; nothing writes it any more, because a
@@ -7917,43 +7919,7 @@ function fanOutAmbiguousChildMessage(
         `wait for it to finish and resume, or abandon run ${child.id} if it is stuck.`;
 }
 
-/**
- * Concurrent fan-out children sharing the parent checkout collide on the path-exclusive
- * lock (`executor.ts`, guarded by `mutates_checkout !== false`): siblings are deliberately
- * NOT excluded from it, so all but one self-cancel — and a lock-cancelled child is threaded
- * as terminal on re-entry, which makes the failure permanent (#2180 Defect A). The engine
- * cannot infer which way out the author wants, so it names all three and refuses to spend
- * the money finding out.
- */
-function fanOutSharedCheckoutMessage(node: WorkflowNode, concurrency: number): string {
-  return (
-    `fan_out node '${node.id}': up to ${String(concurrency)} children of '${node.workflow}' ` +
-    'would run at once in the parent checkout, and that workflow does not declare ' +
-    '`mutates_checkout: false`. Concurrent runs on one checkout take a path-exclusive lock, ' +
-    'so all but the first would cancel themselves — and a lock-cancelled child is not ' +
-    'recoverable by resume (#2180). Choose one: add `mutates_checkout: false` to ' +
-    `'${node.workflow}' if it only reads the repo; set \`isolation: worktree\` on '${node.id}' ` +
-    'if the children write to it; or set `fan_out.max_parallel: 1` to run them one at a time.'
-  );
-}
-
-/**
- * Resolve the fan-out target's definition for the shared-checkout preflight, using the
- * same discovery + name resolution `runChildWorkflow` performs at spawn — sub-run targets
- * resolve at spawn time by design (#2200), so this reads the definition the children will
- * actually get rather than one captured at load.
- *
- * Reports WHY it could not resolve rather than collapsing every cause to `undefined`. The
- * preflight it feeds is the only thing standing between a shared-checkout fan-out and a
- * path-lock cascade the engine cannot recover from, so "we could not check" must not read
- * the same as "we checked and it is fine" — that is the silent fallback the engineering
- * principles forbid. An unknown or ambiguous name reaches here without any exception being
- * thrown, so this is not a rare path.
- *
- * The caller still must not report a COLLISION on this branch: the author's actual problem
- * is the unresolvable target, and pointing them at `mutates_checkout` would send them to
- * the wrong file. It fails closed with a message about the resolution instead.
- */
+/** Resolve the target at spawn time, when runtime-authored child workflows are available. */
 export async function resolveFanOutChildDefinition(
   deps: WorkflowDeps,
   cwd: string,
@@ -8073,9 +8039,6 @@ async function findFanOutChildRuns(
  *   - spawn/re-drive the incomplete indices through mapWithLimit(max_parallel); a
  *     fan-out-cancelled (gate/sibling) child is recoverable → re-driven, a user-cancelled
  *     one stays terminal;
- *   - #2180 (Defect A): before ANY child is created, refuse a shared-checkout expansion
- *     that would run >1 child at once over a target not declaring `mutates_checkout: false`
- *     — those siblings would self-cancel on the path lock, unrecoverably;
  *   - #2180 (D5): a fan-out child that PAUSES at a gate FAILS the node (autonomous fan-out
  *     — the single parent gate slot can't hold N children) and is cancelled tagged
  *     `fan_out_gate` (removing the gate + resuming re-drives it). A `running`/`pending`
@@ -8155,7 +8118,7 @@ async function executeFanOutWorkflowNode(
   };
 
   // Notify the platform immediately of a fan-out failure (S3). Every early-failure branch
-  // uses this — items resolution, both gate paths, the child-lookup error, the collision
+  // uses this — items resolution, both gate paths, the child-lookup error, the interactive
   // preflight and the join — so a fan-out failure never reaches the user through the
   // end-of-run digest alone.
   const notify = async (text: string): Promise<void> => {
@@ -8374,31 +8337,7 @@ async function executeFanOutWorkflowNode(
     return failResult(msg, 'unknown', undefined, undefined, child.id);
   }
 
-  // 5. Shared-checkout preflight (#2180 Defect A) AND interactive-class preflight (#2707
-  //    step 2, issue #2474). Isolation is explicit-only, so a fan-out with no `isolation:
-  //    worktree` puts N children in the parent's checkout, where the path lock cancels
-  //    every sibling but one — permanently, since resume threads a cancelled child as
-  //    terminal. A fan-out target that can pause has a different, unconditional problem:
-  //    the parent has a SINGLE approval-gate slot, so N children racing to pause cannot
-  //    all be presented — this holds even at `max_parallel: 1` or `isolation: worktree`,
-  //    since it is a governance problem, not a checkout problem. Both are caught HERE,
-  //    before a single child row exists: the child target (and therefore its
-  //    `mutates_checkout`/`interactive`) only resolves at spawn time by design (#2200), so
-  //    load time cannot see either.
-  //
-  //    Resolved ONCE, unconditionally — both checks below share the one resolution rather
-  //    than each paying their own discovery scan. #2474's own analysis anticipated walking
-  //    the target's node tree for a gate; the class declaration (#2707 step 2) makes that
-  //    unnecessary — an unattended-class workflow is GUARANTEED gate-free by the load-time
-  //    class-placement check (loader.ts), so "is the target unattended-class" is a
-  //    one-field read, cheaper than the tree walk #2474 originally scoped.
-  const pendingCount = items.reduce<number>((n, _item, i) => {
-    const existing = existingByIndex.get(i);
-    if (existing?.status === 'completed') return n;
-    if (existing?.status === 'cancelled' && !isFanOutRecoverableCancel(existing)) return n;
-    return n + 1;
-  }, 0);
-  const plannedConcurrency = Math.min(fanOut.max_parallel, pendingCount);
+  // A fan-out has one approval-gate slot, even for serial or isolated children.
   {
     // The fan-out target is a not-yet-started child, so it resolves from the parent's
     // AUTHORING directory (live) rather than the parent's frozen copy — same rule as a
@@ -8413,7 +8352,7 @@ async function executeFanOutWorkflowNode(
       installed === undefined ? origin : liveSourceRoots(origin ?? cwd, undefined, installed)
     );
     if ('unresolved' in resolved) {
-      // Fail CLOSED. Skipping the check here would let either hazard through unguarded on
+      // Fail CLOSED. Skipping the check here would let a pausing target through unguarded on
       // the strength of a lookup that did not happen, and the spawn is about to fail on
       // this same unresolvable target anyway — so the only thing failing open buys is a
       // worse message. Names the resolution problem, not a hazard the author cannot yet act on.
@@ -8443,24 +8382,6 @@ async function executeFanOutWorkflowNode(
       getLog().warn(
         { parentRunId: parentRun.id, nodeId: node.id, childWorkflow: node.workflow },
         'workflow.fan_out_interactive_target'
-      );
-      await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-      return failResult(msg, 'config');
-    }
-    if (
-      node.isolation !== 'worktree' &&
-      plannedConcurrency > 1 &&
-      resolved.definition.mutates_checkout !== false
-    ) {
-      const msg = fanOutSharedCheckoutMessage(node, plannedConcurrency);
-      getLog().warn(
-        {
-          parentRunId: parentRun.id,
-          nodeId: node.id,
-          childWorkflow: node.workflow,
-          plannedConcurrency,
-        },
-        'workflow.fan_out_shared_checkout_collision'
       );
       await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
       return failResult(msg, 'config');
@@ -8543,18 +8464,8 @@ async function executeFanOutWorkflowNode(
         if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
         throw error;
       });
-      // A paused child is cancelled HERE rather than at the join, and the timing is
-      // load-bearing rather than tidiness. A pause is not terminal, and a non-terminal run
-      // keeps holding its working path: `getActiveWorkflowRunByPath` counts `paused` as
-      // active. On a shared checkout the very next sibling then loses the path lock and
-      // self-cancels — with NO reason tag, so it reads as a user cancel, is never re-driven,
-      // and the parent fails identically on every resume. Removing the fail-fast is what
-      // exposed this: before, a pause sealed the node and no later sibling ever spawned.
-      //
-      // This is not one child's outcome ending another's — the cancel is decided by the
-      // paused child's own state, it is the same cancel the gate path (#2180/#2438) applies
-      // at the join a moment later, and every sibling still runs to its own terminal state.
-      // All it changes is that the lock is released before the next child starts.
+      // The parent cannot present N child gates. Make this child's pause terminal
+      // without deciding any sibling's outcome; the reason tag permits re-entry.
       if (outcome.status === 'paused') await cancelChild(outcome.childRunId, 'fan_out_gate');
       return outcome;
     }
@@ -8929,26 +8840,6 @@ async function executeComposeFanOutNode(
         : [...persistedSnapshots];
   }
   const snapshots = persistedSnapshots ?? computedSnapshots;
-
-  // Concurrent instances share the parent checkout. Use the authoritative persisted
-  // width on resume so a changed producer cannot bypass the original safety preflight.
-  const plannedConcurrency = Math.min(fanOut.max_parallel, snapshots.length);
-  if (plannedConcurrency > 1 && resolved.definition.mutates_checkout !== false) {
-    const msg =
-      `composed fan-out node '${node.id}': up to ${String(plannedConcurrency)} instances of ` +
-      `'${node.include}' would run at once in this run's checkout, and that block does not ` +
-      'declare `mutates_checkout: false`. Concurrent runs on one checkout take a ' +
-      'path-exclusive lock, so all but the first would cancel themselves — and a ' +
-      'lock-cancelled instance is not recoverable by resume (#2180). Choose one: add ' +
-      `\`mutates_checkout: false\` to '${node.include}' if it only reads the repo; or set ` +
-      `\`fan_out.max_parallel: 1\` on '${node.id}' to run the instances one at a time.`;
-    getLog().warn(
-      { parentRunId: parentRun.id, nodeId: node.id, include: node.include, plannedConcurrency },
-      'workflow.compose_fan_out_shared_checkout_collision'
-    );
-    await notify(`❌ **Composed fan-out blocked** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'config');
-  }
 
   if (persistedSnapshots === undefined) {
     try {
@@ -11165,7 +11056,7 @@ async function suspendContainerForPause(
  * its content. Truncated to keep one entry from dominating the message.
  */
 function sanitizeGateText(value: string): string {
-  // eslint-disable-next-line no-control-regex -- deliberately matching control chars to neutralize them
+  // Matches control characters on purpose, to neutralize them.
   const noControl = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
   const capped = noControl.length > 300 ? `${noControl.slice(0, 300)}…` : noControl;
   return `\`${capped.replace(/`/g, "'")}\``;

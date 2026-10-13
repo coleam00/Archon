@@ -56,6 +56,9 @@
       "src/commands/workflow.test.ts"
     ],
     [
+      "src/commands/doctor-dispatch.test.ts"
+    ],
+    [
       "src/commands/setup-exit.test.ts"
     ],
     [
@@ -176,6 +179,9 @@
     ],
     [
       "src/commands/state.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-file-store.integration.spec.ts"
     ]
   ]
 }

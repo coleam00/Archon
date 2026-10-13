@@ -17,12 +17,13 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   PR,
   gitCheckout,
-  runPackScript,
+  packScriptRunner,
   type ScriptOptions,
   type ScriptRun,
 } from './deliver-checks-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
 
+const { runPackScript } = packScriptRunner();
 const trackTempRoot = trackTempRoots();
 const REPO_ROOT = resolve(import.meta.dir, '../../..');
 const FORGE_COMMAND = join(REPO_ROOT, 'packages/cli/src/commands/forge.ts');
@@ -32,7 +33,7 @@ const FAKE_GITHUB = join(import.meta.dir, 'fake-github-fetch.ts');
 const MARKER = '<!-- archon-review-report -->';
 // A real checkout whose recorded remote is a local bare repository: publish-pr pushes
 // it before it creates.
-const CHECKOUT = gitCheckout();
+const CHECKOUT = gitCheckout({}, trackTempRoot);
 const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: CHECKOUT, encoding: 'utf8' }).stdout.trim();
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const OPENING_BODY = 'Opening body: the change adds a guard.';

@@ -10,7 +10,7 @@ import {
 } from '@archon/forge';
 import { normalizeGitHubWebhook } from './normalize-event';
 export { githubSourceCapabilities as capabilities } from './normalize-event';
-import { jsonValueSchema } from '@archon/workflows/output-ref';
+import { jsonValueSchema, type JsonValue } from '@archon/workflows/output-ref';
 import {
   resourceStartBindingIntentSchema,
   type ResourceStartBindingIntent,
@@ -22,10 +22,12 @@ import type {
 } from '@archon/workflows/webhook-source-plugin';
 import { verifyGitHubWebhookSignature } from './webhook-signature';
 
-const bindingSchema = resourceStartBindingIntentSchema.omit({ bindingRevision: true }).extend({
-  selector: forgeEventSelectorSchema,
-  inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),
-});
+const bindingSchema = resourceStartBindingIntentSchema
+  .omit({ bindingRevision: true, eventInputs: true })
+  .extend({
+    selector: forgeEventSelectorSchema,
+    inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),
+  });
 
 export const githubWebhookSourceConfigSchema = z
   .object({
@@ -160,6 +162,12 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
           });
           continue;
         }
+        // Field mappings carry event content; literal mappings are the operator's own values.
+        const literalInputs: Record<string, JsonValue> = {};
+        const eventInputs: Record<string, JsonValue> = {};
+        for (const [name, value] of Object.entries(mapped.inputs))
+          (binding.inputMapping[name]?.source === 'field' ? eventInputs : literalInputs)[name] =
+            value;
         bindings.push(
           resourceStartBindingIntentSchema.parse({
             bindingId: binding.bindingId,
@@ -169,7 +177,8 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
             resource: binding.resource,
             capacity: binding.capacity,
             overlap: binding.overlap,
-            launch: { ...binding.launch, inputs: { ...binding.launch.inputs, ...mapped.inputs } },
+            launch: { ...binding.launch, inputs: { ...binding.launch.inputs, ...literalInputs } },
+            eventInputs,
           })
         );
       }
