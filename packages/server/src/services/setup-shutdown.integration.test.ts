@@ -147,7 +147,7 @@ test.skipIf(process.platform === 'win32')(
       await exited;
       expect(server.exitCode).toBe(0);
       expect(server.signalCode).toBeNull();
-      expect(output).toContain('database_pool_closed');
+      await waitFor(() => output.includes('database_pool_closed'));
       await waitFor(() => !processExists(descendantPid));
       writeFileSync(join(root, 'go'), '');
       expect(existsSync(join(root, 'leaked'))).toBe(false);
