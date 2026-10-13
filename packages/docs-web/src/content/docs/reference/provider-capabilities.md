@@ -25,7 +25,8 @@ behavior is feature-specific: some optional fields are ignored with a warning, w
 strict contracts fail closed. In particular, a node naming `mcp:`, `skills:` or
 `plugins:` on a provider without that capability fails the run before any node
 starts, and `context.resume` rejects an explicitly unsupported provider at load
-time and an implicitly resolved one at runtime.
+time and an implicitly resolved one at runtime. An `mcp:` declared `optional: true`
+instead runs the node without its servers and records why.
 
 Installed provider plugins declare capabilities in their install-time descriptor.
 The CLI and server register them alongside these bundled providers; they are not

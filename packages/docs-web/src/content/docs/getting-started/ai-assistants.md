@@ -344,7 +344,7 @@ assistants:
 | Sandbox | ❌ | Not native in the SDK; Archon uses worktree isolation |
 | Cost limits (`maxBudgetUsd`) | ❌ | Cost tracked in result chunks, but no runtime budget enforcement |
 
-Unsupported YAML fields that are ignored trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored. A node that names `mcp:`, `skills:` or `plugins:` on a provider that can't honour them fails the run at start instead, before any spend.
+Unsupported YAML fields that are ignored trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored. A node that names `mcp:`, `skills:` or `plugins:` on a provider that can't honour them fails the run at start instead, before any spend. An `mcp:` declared `optional: true` is the exception: the node runs without its servers and the run records why.
 
 ### Usage in workflows
 
@@ -714,7 +714,7 @@ nodes:
 | Fallback model | ❌ | not native in Pi |
 | Sandbox | ❌ | not native in Pi |
 
-Unsupported YAML fields that are ignored trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored. A node that names `mcp:`, `skills:` or `plugins:` on a provider that can't honour them fails the run at start instead, before any spend.
+Unsupported YAML fields that are ignored trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored. A node that names `mcp:`, `skills:` or `plugins:` on a provider that can't honour them fails the run at start instead, before any spend. An `mcp:` declared `optional: true` is the exception: the node runs without its servers and the run records why.
 
 ### See also
 
