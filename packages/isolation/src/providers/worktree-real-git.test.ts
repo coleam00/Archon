@@ -20,7 +20,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { toBranchName, toRepoPath } from '@archon/git';
+import { execFileAsync, resolveBashPath, toBranchName, toRepoPath } from '@archon/git';
 import { setLogLevel } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 
@@ -202,6 +202,54 @@ describe('WorktreeProvider against real git', () => {
   afterEach(() => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  test('post-create sees copied files in a new checkout of an existing branch and skips reuse', async () => {
+    await writeFile(join(repoPath, '.seed'), 'seed');
+    let executions = 0;
+    provider = new WorktreeProvider(
+      async () => ({ copyFiles: ['.seed'], postCreate: ['test -f .seed'] }),
+      async input => {
+        executions++;
+        expect(input.workingPath).toBe(worktreePath);
+        expect(input.timeout).toBe(300000);
+        expect(await readFile(join(input.workingPath, '.seed'), 'utf8')).toBe('seed');
+        expect(await lockReasonOf(input.workingPath)).toContain('setup in progress');
+      }
+    );
+    await provider.create(request);
+    await provider.create(request);
+    expect(executions).toBe(1);
+    expect(await lockReasonOf(worktreePath)).toBeNull();
+  });
+
+  test.each([false, true])(
+    'failed post-create preserves installer output when present (%s)',
+    async writesOutput => {
+      provider = new WorktreeProvider(
+        async () => ({
+          postCreate: [writesOutput ? 'echo valuable > installer-output; exit 7' : 'exit 7'],
+        }),
+        async input => {
+          await execFileAsync(resolveBashPath(), ['-c', input.commands[0]], {
+            cwd: input.workingPath,
+          });
+        }
+      );
+      await expect(provider.create(request)).rejects.toThrow();
+      expect(existsSync(worktreePath)).toBe(writesOutput);
+      if (writesOutput) {
+        expect(await readFile(join(worktreePath, 'installer-output'), 'utf8')).toBe('valuable\n');
+        expect(await lockReasonOf(worktreePath)).toContain('setup in progress');
+        await expect(provider.create(request)).rejects.toThrow('its setup did not finish');
+      }
+    }
+  );
+
+  test('configured commands without an executor fail before adding a checkout', async () => {
+    provider = new WorktreeProvider(async () => ({ postCreate: ['true'] }));
+    await expect(provider.create(request)).rejects.toThrow('requires a worktree setup executor');
+    expect(await registeredWorktrees()).toEqual([repoPath]);
   });
 
   test('ordinary destruction preserves a replacement clone', async () => {

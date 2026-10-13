@@ -149,7 +149,7 @@ for (const { descriptor, path, parse, valid, invalid } of providers) {
       );
       expect(client.descriptor).toEqual(descriptor);
       for (let call = 0; call < 2; call++) {
-        expect(await client.diagnose({})).toEqual({
+        expect(await client.diagnose({ signal: new AbortController().signal })).toEqual({
           checks: [{ id: 'fixture', label: 'Fixture', status: 'ok', message: 'Ready' }],
         });
       }
@@ -204,14 +204,24 @@ test('binary diagnostics report resolution failures with redacted evidence and s
   const previous = process.env.ARCHON_P4_SECRET;
   process.env.ARCHON_P4_SECRET = 'diagnostic-secret';
   try {
-    const failure = await diagnoseBinary('binary', 'Provider binary', () => {
-      throw new Error('resolver failed: diagnostic-secret');
-    });
+    const failure = await diagnoseBinary(
+      'binary',
+      'Provider binary',
+      () => {
+        throw new Error('resolver failed: diagnostic-secret');
+      },
+      new AbortController().signal
+    );
     expect(failure.checks[0]).toMatchObject({
       status: 'fail',
       message: 'Provider binary could not resolve or spawn: resolver failed: [REDACTED]',
     });
-    const absent = await diagnoseBinary('binary', 'Provider binary', async () => undefined);
+    const absent = await diagnoseBinary(
+      'binary',
+      'Provider binary',
+      async () => undefined,
+      new AbortController().signal
+    );
     expect(absent.checks[0].status).toBe('skip');
   } finally {
     if (previous === undefined) delete process.env.ARCHON_P4_SECRET;

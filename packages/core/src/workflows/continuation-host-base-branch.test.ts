@@ -96,9 +96,15 @@ for (const choice of [null, '', ' release ']) {
     expect(captured?.options?.baseBranch).toBe(choice?.trim() || undefined);
     const resolver = captured?.options?.resolveChildIsolation;
     if (!resolver) throw new Error('Child resolver missing');
-    await resolver.resolve({ parentRun: run, nodeId: 'child', codebaseId: 'cb' });
+    await resolver.resolve({
+      setupEnvironment: {},
+      parentRun: run,
+      nodeId: 'child',
+      codebaseId: 'cb',
+    });
     expect(providerCreate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ baseBranch: choice?.trim() || undefined })
+      expect.objectContaining({ baseBranch: choice?.trim() || undefined }),
+      expect.any(Function)
     );
   });
 }

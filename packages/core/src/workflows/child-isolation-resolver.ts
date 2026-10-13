@@ -1,3 +1,8 @@
+import {
+  configureWorktreeIsolation,
+  createRunWorktreeSetupExecutor,
+  type WorktreeSetupDeps,
+} from './worktree-setup';
 /**
  * Child-isolation resolver factory (#2121 slice 2, PR-A).
  *
@@ -24,13 +29,11 @@ import type {
 import { createHash } from 'node:crypto';
 import {
   getIsolationProvider,
-  configureIsolation,
   classifyIsolationError,
   worktreeRegistrationMetadata,
 } from '@archon/isolation';
 import * as git from '@archon/git';
 import { createLogger } from '@archon/paths';
-import { loadRepoConfig } from '../config/config-loader';
 import type { IIsolationStore } from '@archon/isolation';
 import type { Codebase } from '../schemas/codebase';
 
@@ -132,33 +135,15 @@ export function createCodebaseChildResolver(
     createdByPlatform: string;
     /** Archon user id recorded as the environment creator (attribution). */
     createdByUserId: string | undefined;
-  }
+  },
+  deps: WorktreeSetupDeps
 ): ChildIsolationResolver | undefined {
   if (codebase.kind === 'folder') return undefined;
 
-  // Configure the isolation provider HERE rather than relying on the caller.
-  //
-  // `configureIsolation` is what gives `WorktreeProvider` the repo-config loader;
-  // without it the factory falls back to `() => Promise.resolve(null)` and the
-  // repo's ENTIRE `worktree:` block is silently ignored — `baseBranch`, `path`,
-  // `remote`, and `copyFiles` (the sting: files the repo seeds into worktrees,
-  // e.g. `.env`, simply never arrive, and the child's build fails confusingly).
-  //
-  // Both existing callers only configure it on paths that create a TOP-LEVEL
-  // worktree: the CLI inside `else if (wantsIsolation && codebase)`, the
-  // orchestrator via `getResolver()`. A `--no-worktree` parent — the shape the
-  // authoring guide explicitly endorses, "a parent started with --no-worktree can
-  // still hand an isolated child its own worktree" — skips both and would create
-  // the child's worktree unconfigured. Binding it to the resolver instead means
-  // every surface is covered, including ones added later.
-  //
-  // Idempotent and cheap: it swaps the loader and drops the provider singleton,
-  // which is rebuilt lazily. Re-running it after the CLI/orchestrator already
-  // configured it is a no-op in effect — all three loaders are the same function.
-  configureIsolation(async (repoPath: string) => {
-    const repoConfig = await loadRepoConfig(repoPath);
-    return repoConfig?.worktree ?? null;
-  });
+  // Configure here, not in the caller: a `--no-worktree` parent skips the CLI and
+  // orchestrator configuration, and an unconfigured provider silently ignores the
+  // repo's `worktree:` block (copyFiles, postCreate) for the child's worktree.
+  configureWorktreeIsolation();
 
   return {
     async resolve(req: ChildIsolationRequest): Promise<ChildIsolationResult> {
@@ -181,15 +166,21 @@ export function createCodebaseChildResolver(
 
       try {
         const provider = getIsolationProvider();
-        const isolatedEnv = await provider.create({
-          workflowType: 'task',
-          identifier,
-          baseBranch: surface.baseBranch ? git.toBranchName(surface.baseBranch) : undefined,
-          codebaseId: codebase.id,
-          codebaseName: codebase.name,
-          canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
-          description: `sub-run child ${String(childIndex)} (node ${req.nodeId})`,
-        });
+        const isolatedEnv = await provider.create(
+          {
+            workflowType: 'task',
+            identifier,
+            baseBranch: surface.baseBranch ? git.toBranchName(surface.baseBranch) : undefined,
+            codebaseId: codebase.id,
+            codebaseName: codebase.name,
+            canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
+            description: `sub-run child ${String(childIndex)} (node ${req.nodeId})`,
+          },
+          createRunWorktreeSetupExecutor(deps, req.parentRun, req.setupEnvironment, {
+            parentNodeId: req.nodeId,
+            childIndex,
+          })
+        );
 
         // Register the env so `isolation list`/`cleanup`/`complete <branch>` see it.
         const envRecord = await isolation.create({

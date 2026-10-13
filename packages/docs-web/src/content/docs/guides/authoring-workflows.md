@@ -1574,7 +1574,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `inputs`, `returns` | **Consumed** by composition — `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
 | `interactive`, `worktree`, `container`, `evidence_policy` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
-| `mutates_checkout` | **Run-owned for ordinary `include:` composition.** It is dropped with the same warning. The one exception is `include:` + `fan_out:`, where the engine consumes the target block's `mutates_checkout: false` declaration to allow concurrent instances in the shared checkout. |
+| `mutates_checkout` | **Run-owned.** It is dropped with the same warning, including under `include:` + `fan_out:`, whose instances run inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow — where it then applies to every node in the run. |
 
 Two consequences worth knowing:
@@ -2220,8 +2220,9 @@ directories, separate branches.
 Children **sharing the parent's checkout** meet the engine's path-exclusive lock. Every run
 takes a lock on its working path at start, and a run that finds the path already held by
 another active run **cancels itself**. The lock excludes a run's own ancestors and
-descendants — a child never blocks against its own parent — but **siblings are not
-excluded**. Two sub-run children in one layer over one checkout are therefore a collision:
+descendants — a child never blocks against its own parent. Children of the **same
+`fan_out` node** are also excluded and may share the checkout. Children of different
+`workflow:` nodes are not excluded. Two such children in one layer over one checkout collide:
 the older run keeps the path, the younger one cancels itself, and the parent run fails.
 
 > **Resume does not recover from this.** A parent's resume re-drives a *failed* child, but a
@@ -2244,12 +2245,12 @@ nodes:
 `mutates_checkout: false` is a **workflow-level** field asserting that the run does not write
 to its checkout, so the engine skips the path lock for it. It defaults to `true` (take the
 lock, serialize runs on the same path). It is author-declared on purpose — the author of a
-review or research workflow is the one who knows it only reads. Every child sharing the
-checkout has to declare it: a sibling that doesn't still runs the lock query, finds the
-others on the path, and cancels itself.
+review or research workflow is the one who knows it only reads. Children launched by
+separate `workflow:` nodes still compete for the path lock unless they declare it.
+Children of the same `fan_out:` node and their nested sub-runs may share the checkout
+without that declaration; see [fanning out over a list](#fanning-out-over-a-list-with-fan_out).
 
-So there are three ways to make concurrent sub-runs work, and picking between them is a
-statement about the children:
+For concurrent 1:1 children launched by different nodes, choose according to the children:
 
 | The children… | Do this |
 |---------------|---------|
@@ -2440,40 +2441,25 @@ Bound the list in the producer node if that matters, and treat the abandon-casca
 above as a real limit rather than a footnote — this is what makes
 [#1961](https://github.com/coleam00/Archon/issues/1961)'s budget ceiling load-bearing.
 
-#### Isolation: the same explicit rule, and one sharp edge
+#### Sharing a checkout or choosing isolation
 
 Fan-out changes nothing about [`isolation:`](#choosing-the-childs-checkout-with-isolation).
-The engine does not infer a worktree from `fan_out:` — how many children a node spawns says
-nothing about whether they write. N review or research children over the parent's checkout
-is the ordinary case and needs no isolation at all.
+Without `isolation: worktree`, children share the parent's checkout and run up to
+`max_parallel`, including children that write to it. The engine excludes children of the
+same `fan_out` node and their nested sub-runs from one another's path lock.
+Agents own coordination of their edits; the engine adds no coordination mechanism between them.
 
-But N children sharing one checkout **are siblings of each other**, so they meet the path
-lock described in [Running sub-runs side by side](#running-sub-runs-side-by-side): all but
-one would cancel themselves, and a lock-cancelled child is not recoverable by resume. So
-Archon refuses that expansion **before creating a single child**:
+Each child's `workflow.checkout_shared` events name its siblings on that checkout through
+`sibling_run_id`, with `parent_run_id`, `parent_node_id`, and `working_path`. This records
+checkout sharing, including children that use it at different times, rather than claiming
+their execution overlapped. Unrelated runs and children of different nodes still compete
+for the path lock.
 
-```text
-fan_out node 'review-each': up to 3 children of 'review-one-file' would run at once in the
-parent checkout, and that workflow does not declare `mutates_checkout: false`. Concurrent
-runs on one checkout take a path-exclusive lock, so all but the first would cancel
-themselves — and a lock-cancelled child is not recoverable by resume (#2180). Choose one:
-add `mutates_checkout: false` to 'review-one-file' if it only reads the repo; set
-`isolation: worktree` on 'review-each' if the children write to it; or set
-`fan_out.max_parallel: 1` to run them one at a time.
-```
-
-Three ways out, and which one is right is a statement about the children:
-
-| The children… | Do this |
-|---------------|---------|
-| only read the repo (review, research, summarize) | `mutates_checkout: false` on the **child workflow** |
-| write to the repo | `isolation: worktree` on the **fan-out node** — every child gets its own worktree and branch, at the [cost described above](#what-isolation-worktree-gives-you-and-what-it-costs), multiplied by N |
-| write, but can be serialized | `fan_out.max_parallel: 1` — one child at a time in the parent checkout, so no two ever contend |
-
-The check runs at **spawn** time, not load time: the child target resolves when the node
-executes (that is deliberate — it's what lets a workflow generate another workflow and then
-run it), so `archon validate workflows` cannot see the child's `mutates_checkout`. What it
-can guarantee is that you find out before any child exists and before any money is spent.
+Use `isolation: worktree` explicitly when every child should have its own checkout and
+branch, or `max_parallel: 1` when children should run serially. Workflow-level
+`mutates_checkout: false` still skips the path lock; node-level `mutates_checkout: false`
+still enforces the checkout guard. Neither declaration is required to share a checkout
+within one fan-out.
 
 #### Gates: around a fan-out, never inside one
 
@@ -2498,10 +2484,8 @@ A paused child is the single case where a fan-out cancels a run it did not have 
 is not a terminal state and the parent cannot hand its one approval slot to N children, so
 the child would wait for something it can never be given — cancelling it (tagged
 `fan_out_gate`, so removing the gate and resuming re-drives it) is what makes it terminal.
-It happens as soon as the pause is seen rather than at the end, because a non-terminal run
-still holds its working path: left paused, it would take the path lock out from under the
-next sibling on a shared checkout. Its siblings are unaffected either way — they run to
-their own terminal states, and the node fails afterwards.
+The child is cancelled as soon as the pause is seen. Its siblings still run to their own
+terminal states, and the node fails afterwards.
 
 #### Resume, and what `child_index` keys
 
@@ -2605,9 +2589,9 @@ Two hard limits, both enforced at load time before any upstream node can spend:
   interactive fan-out instances are a possible future extension tracked in
   [#2810](https://github.com/coleam00/Archon/issues/2810), not a promise of the current shape.
 - **No `isolation:`** — a composed block runs inside this run and has no checkout of its own
-  to isolate. Instances share the parent's checkout, so as with a `workflow:` fan-out,
-  concurrent instances over a mutating body fail closed unless the block declares
-  `mutates_checkout: false`; `fan_out.max_parallel: 1` remains the serial escape.
+  to isolate. Instances share the parent's checkout and run concurrently up to
+  `max_parallel`, as `workflow:` fan-out children do; instances that write must coordinate
+  their edits. `fan_out.max_parallel: 1` runs them one at a time.
 
 Cancellation stops the pool from claiming new items. An in-flight item may still reach its
 own terminal event; under `all_done`, a cancelled slot is represented by the same reserved

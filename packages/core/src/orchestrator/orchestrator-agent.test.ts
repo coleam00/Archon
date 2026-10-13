@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WORKFLOW_SOURCE_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
@@ -337,6 +338,19 @@ const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+  finalizeWorkflowSource: mock(
+    async (_deps: unknown, source: WorkflowExecutor.PreparedWorkflowSource) => source
+  ),
+  preparedWorkflowSourceRecord: (source: WorkflowExecutor.PreparedWorkflowSource) => ({
+    version: 1,
+    root: source.anchor.root,
+    origin: source.origin,
+    captured_at: source.manifest.captured_at,
+    digest: source.manifest.digest,
+    source_config: source.anchor.config,
+    file_count: source.manifest.file_count,
+    byte_count: source.manifest.byte_count,
+  }),
   hydrateResumableRun: mockHydrateResumableRun,
   inspectResumableRun: mockInspectResumableRun,
   // Source capture runs before dispatch and does real filesystem work; stub it so these
@@ -430,10 +444,28 @@ mock.module('../utils/error', () => ({
   toError: mock((e: unknown) => (e instanceof Error ? e : new Error(String(e)))),
 }));
 
+const mockFailPreparedRun = mock<
+  import('@archon/workflows/store').IWorkflowStore['failWorkflowRun']
+>(async () => {});
+
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
     providers: providerRegistry,
-    store: { getCodebaseEnvVars: async () => ({}) },
+    store: {
+      getCodebaseEnvVars: async () => ({}),
+      createWorkflowRun: async (
+        data: Parameters<import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']>[0]
+      ) =>
+        makeRun({
+          id: data.id,
+          workflow_name: data.workflow_name,
+          status: 'pending',
+          metadata: data.metadata ?? {},
+          working_path: null,
+        }),
+      updateWorkflowRun: async () => {},
+      failWorkflowRun: mockFailPreparedRun,
+    },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
       version: 1,
       ciphertext: 'sealed',
@@ -2298,6 +2330,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetWorkflowRunDb.mockReset();
     mockGetWorkflowRunDb.mockImplementation(async id => resumableRuns.get(id) ?? null);
     capturedSourceOwnerCalls.length = 0;
+    mockFailPreparedRun.mockReset();
+    mockFailPreparedRun.mockResolvedValue(undefined);
     mockExecuteWorkflow.mockClear();
     mockDispatchBackgroundWorkflow.mockClear();
     mockFindResumableRunByParentConversation.mockClear();
@@ -2321,7 +2355,12 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
     mockGetCodebase.mockReset();
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
-    mockValidateAndResolveIsolation.mockClear();
+    mockValidateAndResolveIsolation.mockReset();
+    mockValidateAndResolveIsolation.mockResolvedValue({
+      status: 'none',
+      cwd: '/test/cwd',
+      env: null,
+    });
     mockResolveWorkflowAdoption.mockClear();
     mockUpdateConversation.mockClear();
     mockResolveWorkflowSourceRoot.mockClear();
@@ -2336,6 +2375,22 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockCloseRunLiveOwner.mockClear();
   });
 
+  test('a terminal status write failure during worktree preparation is not retried', async () => {
+    const { IsolationBlockedError } = await import('@archon/isolation');
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult(true));
+    mockValidateAndResolveIsolation.mockRejectedValueOnce(
+      new IsolationBlockedError('setup failed', 'creation_failed')
+    );
+    mockFailPreparedRun.mockRejectedValueOnce(new Error('database write unavailable'));
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
+    expect(mockFailPreparedRun).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
+  });
+
   test('calls executeWorkflow (not dispatchBackground) for interactive workflow on web', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(
@@ -2348,7 +2403,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
-    expect(mockWithRunLiveOwner).toHaveBeenCalledWith('prepared-run-id', {}, expect.any(Function));
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('prepared-run-id');
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     const opts = callArgs[callArgs.length - 1] as {
       baseBranch?: string;
@@ -2551,6 +2606,53 @@ describe('workflow dispatch routing — interactive flag', () => {
     };
     expect(captureArg.sourceRoot).toBe('/adopted/snapshot');
     expect(mockResolveWorkflowSourceRoot).not.toHaveBeenCalledWith('/wt/from-branch');
+  });
+
+  // The run row exists before the worktree, so its recorded source must be rewritten
+  // with the created worktree as origin; the executor keeps a recorded source as-is.
+  test('adopt with checkout-branch records the created worktree as the run source origin', async () => {
+    const adapter = await import('../workflows/store-adapter');
+    const original = adapter.createWorkflowDeps();
+    const updates: Array<Record<string, unknown>> = [];
+    const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+      ...original,
+      store: {
+        ...original.store,
+        updateWorkflowRun: async (_id: string, data: { metadata?: Record<string, unknown> }) => {
+          if (data.metadata) updates.push(data.metadata);
+        },
+      },
+    }));
+    mockValidateAndResolveIsolation.mockImplementationOnce(() =>
+      Promise.resolve({ cwd: '/wt/from-branch', status: 'new', env: makeIsolationEnvironment() })
+    );
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+    );
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        lane: {
+          kind: 'checkout-branch',
+          taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') },
+        },
+      })
+    );
+    try {
+      await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+        workflowAdoptRunId: 'prior-run',
+      });
+      const recorded = updates
+        .map(metadata => metadata[WORKFLOW_SOURCE_METADATA_KEY] as { origin?: string } | undefined)
+        .filter(record => record !== undefined);
+      expect(recorded.at(-1)?.origin).toBe('/wt/from-branch');
+    } finally {
+      factory.mockRestore();
+      (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
   });
 
   // F1: the deferred capture swaps the executed graph for the branch's vintage, so the
@@ -3525,7 +3627,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     });
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
-    expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'adopt']);
+    expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'hold:/capture', 'adopt', 'adopt']);
   });
 
   test('keeps holding the capture when the dispatch refuses after taking it', async () => {
@@ -4051,7 +4153,11 @@ describe('workflow dispatch routing — interactive flag', () => {
       preCreatedRun?: unknown;
       priorCompletedNodes?: unknown;
     };
-    expect(opts.preCreatedRun).toBeUndefined();
+    expect(opts.preCreatedRun).toMatchObject({
+      id: 'prepared-run-id',
+      status: 'pending',
+      working_path: null,
+    });
     expect(opts.priorCompletedNodes).toBeUndefined();
   });
 });

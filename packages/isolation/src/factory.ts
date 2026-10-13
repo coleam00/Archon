@@ -5,9 +5,10 @@
  * Currently only supports WorktreeProvider (git worktrees).
  */
 
-import type { IIsolationProvider, RepoConfigLoader } from './types';
+import type { IIsolationProvider, RepoConfigLoader, WorktreeSetupExecutor } from './types';
 import { WorktreeProvider } from './providers/worktree';
 
+let configuredExecutor: WorktreeSetupExecutor | undefined;
 let provider: IIsolationProvider | null = null;
 let configuredLoader: RepoConfigLoader = () => Promise.resolve(null);
 
@@ -16,8 +17,12 @@ let configuredLoader: RepoConfigLoader = () => Promise.resolve(null);
  * Must be called before getIsolationProvider() for full functionality.
  * If not called, WorktreeProvider uses a no-op loader (no custom baseBranch, copyFiles, or path).
  */
-export function configureIsolation(loader: RepoConfigLoader): void {
+export function configureIsolation(
+  loader: RepoConfigLoader,
+  setupExecutor?: WorktreeSetupExecutor
+): void {
   configuredLoader = loader;
+  configuredExecutor = setupExecutor;
   provider = null; // Reset singleton so it picks up new loader
 }
 
@@ -26,7 +31,7 @@ export function configureIsolation(loader: RepoConfigLoader): void {
  * Currently only returns WorktreeProvider.
  */
 export function getIsolationProvider(): IIsolationProvider {
-  provider ??= new WorktreeProvider(configuredLoader);
+  provider ??= new WorktreeProvider(configuredLoader, configuredExecutor);
   return provider;
 }
 

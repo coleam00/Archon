@@ -713,11 +713,20 @@ async function main(): Promise<number> {
         const { setupCommand } = await loadRoute(() => import('./commands/setup'), {
           database: true,
         });
+        const providers = (values.providers as string | undefined) ?? process.env.ARCHON_PROVIDERS;
         const setupExitCode = await setupCommand({
           spawn: spawnFlag,
           repoPath,
           scope,
           force: forceFlag,
+          ...(providers !== undefined
+            ? {
+                providers: providers
+                  .split(',')
+                  .map(id => id.trim())
+                  .filter(Boolean),
+              }
+            : {}),
         });
         if (setupExitCode !== 0) return setupExitCode;
         break;
@@ -1354,7 +1363,7 @@ async function main(): Promise<number> {
         const { doctorCommand } = await loadRoute(() => import('./commands/doctor'), {
           database: true,
         });
-        return await doctorCommand(undefined, Boolean(values.full));
+        return await doctorCommand();
       }
 
       case 'auth': {

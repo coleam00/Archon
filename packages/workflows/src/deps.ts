@@ -154,6 +154,11 @@ export interface WorkflowConfig {
 // Agent provider factory type
 // ---------------------------------------------------------------------------
 
+export type WorkflowEnvironment = Pick<
+  WorkflowConfig,
+  'envVars' | 'protectedEnvKeys' | 'protectedCredentialValues'
+>;
+
 export type AgentProviderFactory = (provider: string) => IAgentProvider;
 
 // ---------------------------------------------------------------------------

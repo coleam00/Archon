@@ -255,7 +255,10 @@ export interface DestroyResult {
 export interface IIsolationProvider {
   readonly providerType: IsolationProviderType;
 
-  create(request: IsolationRequest): Promise<WorktreeCreationEnvironment>;
+  create(
+    request: IsolationRequest,
+    setupExecutor?: WorktreeSetupExecutor
+  ): Promise<WorktreeCreationEnvironment>;
 
   /**
    * Best-effort cleanup. Throws only for unexpected errors (permissions, git failures).
@@ -328,7 +331,20 @@ export interface IsolationEnvironmentRow {
 
 // --- Config Injection ---
 
+export interface WorktreeSetupInput {
+  workingPath: string;
+  canonicalRepoPath: string;
+  codebaseId: string;
+  commands: readonly string[];
+  timeout: number;
+}
+
+export type WorktreeSetupExecutor = (input: WorktreeSetupInput) => Promise<void>;
+
 export interface WorktreeCreateConfig {
+  postCreate?: string[];
+  /** Per-command timeout in milliseconds; defaults to 300000. */
+  postCreateTimeout?: number;
   baseBranch?: string;
   copyFiles?: string[];
   /**
@@ -405,6 +421,7 @@ export interface CreateEnvironmentParams {
 // --- Resolver Types ---
 
 export interface ResolveRequest {
+  setupExecutor?: WorktreeSetupExecutor;
   existingEnvId: string | null;
   codebase: {
     id: string;

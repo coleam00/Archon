@@ -1,3 +1,4 @@
+import { WORKTREE_SETUP_EVENT_TYPES } from '@archon/workflows/schemas/worktree-setup';
 import { PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
 import { createRunAiConfigurationSnapshot } from '@archon/workflows/run-ai-configuration';
 import { buildAiProfile } from '@archon/workflows/model-validation';
@@ -344,7 +345,7 @@ mock.module('@archon/core', () => ({
   ),
   generateAndSetTitle: mock(() => Promise.resolve()),
   resolveTitleRequest: mock((provider: string) => Promise.resolve({ provider, options: {} })),
-  loadRepoConfig: mock(() => Promise.resolve(null)),
+  loadRepoConfig: mock(() => Promise.resolve({})),
   getUserAiPrefs: mock(() => Promise.resolve({})),
   createWorkflowStore: mock(() => ({
     getCodebaseEnvVars: async () => ({}),
@@ -483,6 +484,18 @@ mock.module('@archon/workflows/executor', () => ({
   recordSelectedWorkflow: mock(() => Promise.resolve()),
   disposeWorkflowSource: mock(() => Promise.resolve()),
   finalizeWorkflowSource: mock((_deps: unknown, prepared: unknown) => Promise.resolve(prepared)),
+  preparedWorkflowSourceRecord: (
+    prepared: import('@archon/workflows/executor').PreparedWorkflowSource
+  ) => ({
+    version: 1,
+    root: prepared.anchor.root,
+    origin: prepared.origin,
+    captured_at: prepared.manifest.captured_at,
+    digest: prepared.manifest.digest,
+    source_config: prepared.anchor.config,
+    file_count: prepared.manifest.file_count,
+    byte_count: prepared.manifest.byte_count,
+  }),
   // The container dispatch resolves the run's artifacts directory to bind it into the
   // container and creates it on the host first, so hand it a real, reclaimed temp path.
   resolveProjectPaths: mock(() =>
@@ -613,11 +626,12 @@ mock.module('@archon/core/db/messages', () => ({
 const mockCreateWorkflowRun = mock(
   (data: {
     workflow_name: string;
+    id?: string;
     origin?: import('@archon/workflows/schemas/workflow-run').WorkflowRunOrigin;
   }) =>
     Promise.resolve({
       origin: data.origin ?? null,
-      id: 'run-detached-created',
+      id: data.id ?? 'run-detached-created',
       workflow_name: data.workflow_name,
       conversation_id: data.origin?.conversationId ?? null,
       status: 'pending',
@@ -3389,7 +3403,8 @@ describe('workflowRunCommand', () => {
           branch: 'test-adapters',
           fromBranch: 'feature/extract-adapters',
         },
-      })
+      }),
+      expect.any(Function)
     );
   });
 
@@ -3616,6 +3631,69 @@ describe('workflowRunCommand', () => {
     const findActiveCallsAfter = (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mock
       .calls.length;
     expect(findActiveCallsAfter).toBe(findActiveCallsBefore);
+  });
+
+  it('keeps a failed worktree launch queryable and retains its source without executing nodes', async () => {
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const isolation = await import('@archon/isolation');
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
+      errors: [],
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-setup',
+      default_cwd: '/test/path',
+    });
+    const create = mock(async () => {
+      expect(mockCreateWorkflowRun.mock.calls.at(-1)?.[0]).toMatchObject({ id: 'test-run-id' });
+      throw new Error('post-create failed with exit code 7');
+    });
+    (isolation.getIsolationProvider as ReturnType<typeof mock>).mockReturnValueOnce({
+      create,
+      healthCheck: async () => true,
+    });
+    const executeCount = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
+    capturedSourceOwnerCalls.length = 0;
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'go')
+    ).rejects.toThrow('exit code 7');
+    expect((executeWorkflow as ReturnType<typeof mock>).mock.calls).toHaveLength(executeCount);
+    expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
+      'test-run-id',
+      expect.stringContaining('exit code 7'),
+      { exitReason: 'launch_failed' }
+    );
+    expect(capturedSourceOwnerCalls).toContain('adopt');
+    expect(capturedSourceOwnerCalls.some(call => call.startsWith('reclaim:'))).toBe(false);
+  });
+
+  it('records a preparation failure before releasing its live-owner lock', async () => {
+    const isolation = await import('@archon/isolation');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
+      errors: [],
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-owner',
+      default_cwd: '/test/path',
+    });
+    (isolation.configureIsolation as ReturnType<typeof mock>)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error('child resolver configuration failed');
+      });
+    const closesBefore = mockRunLiveOwnerClose.mock.calls.length;
+    (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      expect(mockRunLiveOwnerClose.mock.calls).toHaveLength(closesBefore);
+    });
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'go')
+    ).rejects.toThrow('child resolver configuration failed');
+    expect(mockRunLiveOwnerClose.mock.calls).toHaveLength(closesBefore + 1);
   });
 
   it('surfaces a classified worktree creation failure, not the raw error', async () => {
@@ -6876,10 +6954,44 @@ describe('workflowLogsCommand', () => {
     expect(workflowDb.resumeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('renders the complete schema-owned setup event vocabulary', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const messages = WORKTREE_SETUP_EVENT_TYPES.map(type => `Setup evidence for ${type}`);
+    writeFileSync(
+      transcriptPath,
+      WORKTREE_SETUP_EVENT_TYPES.map((type, index) =>
+        JSON.stringify({ type, setup: { message: messages[index] } })
+      ).join('\n') + '\n'
+    );
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run('failed'));
+    expect(
+      await workflowLogsCommand(
+        createTestWorkflowHost(),
+        run('failed').id,
+        false,
+        undefined,
+        'text'
+      )
+    ).toBe(0);
+    expect(stdoutText()).toBe(messages.join('\n') + '\n');
+  });
+
   it('renders every transcript row kind as text and skips rows it cannot render', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const rows = [
       { type: 'workflow_start', workflow_name: 'fix-issue', content: 'fix #1' },
+      {
+        type: 'worktree_setup_started',
+        setup: { message: 'Worktree setup 1 started: ./setup.sh' },
+      },
+      {
+        type: 'worktree_setup_completed',
+        setup: { message: 'Worktree setup 1 completed: ./setup.sh' },
+      },
+      {
+        type: 'worktree_setup_failed',
+        setup: { message: 'Worktree setup 2 failed with exit code 7' },
+      },
       { type: 'node_start', step: 'plan', content: 'plan-cmd' },
       { type: 'node_start', step: 'lint', content: '<bash>' },
       { type: 'assistant', content: 'Reading the issue.\n\nThen planning.' },
@@ -6934,6 +7046,9 @@ describe('workflowLogsCommand', () => {
     expect(stdoutText()).toBe(
       [
         '[workflow] Started fix-issue',
+        'Worktree setup 1 started: ./setup.sh',
+        'Worktree setup 1 completed: ./setup.sh',
+        'Worktree setup 2 failed with exit code 7',
         '[plan] Started (plan-cmd)',
         '[lint] Started',
         '  Reading the issue.',
@@ -7478,6 +7593,53 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     expect(consoleSpy).toHaveBeenCalledWith(
       `Event submitted (best-effort): workflow_started for run ${FULL_ID}`
     );
+  });
+
+  it('validates and persists checkout-sharing events before reporting success', async () => {
+    const data = {
+      parent_run_id: 'parent',
+      parent_node_id: 'work',
+      working_path: '/repo',
+      sibling_run_id: 'peer',
+    };
+    await workflowEventEmitCommand(
+      createTestWorkflowHost(),
+      FULL_ID,
+      'workflow.checkout_shared',
+      data
+    );
+    expect(mockPersistWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: FULL_ID,
+      event_type: 'workflow.checkout_shared',
+      data,
+    });
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      `Event persisted: workflow.checkout_shared for run ${FULL_ID}`
+    );
+  });
+
+  it('rejects incomplete checkout-sharing data before any write', async () => {
+    await expect(
+      workflowEventEmitCommand(createTestWorkflowHost(), FULL_ID, 'workflow.checkout_shared', {})
+    ).rejects.toThrow();
+    expect(mockPersistWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
+  it('propagates checkout-sharing persistence failure without reporting success', async () => {
+    mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('sharing INSERT rejected'));
+    await expect(
+      workflowEventEmitCommand(createTestWorkflowHost(), FULL_ID, 'workflow.checkout_shared', {
+        parent_run_id: 'parent',
+        parent_node_id: 'work',
+        working_path: '/repo',
+        sibling_run_id: 'peer',
+      })
+    ).rejects.toThrow('sharing INSERT rejected');
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 
   it.each(['node_completed', 'node_deferred_usage'] as const)(
@@ -13969,7 +14131,8 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       expect.objectContaining({
         workflowType: 'task',
         taskBranch: { kind: 'existing', branch: 'feature/live-pr' },
-      })
+      }),
+      expect.any(Function)
     );
     const executed = (executeWorkflow as ReturnType<typeof mock>).mock.calls.at(-1) as unknown[];
     expect(executed[3]).toBe('/wt/recreated');

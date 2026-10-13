@@ -853,8 +853,11 @@ export class CodexProvider implements IAgentProvider {
     request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
   ): Promise<ProviderDiagnostics> {
     const config = parseCodexConfig(request.assistantConfig ?? {});
-    const diagnostics = await diagnoseBinary('codex-binary', 'Codex binary', () =>
-      resolveCodexBinaryWithSource(config.codexBinaryPath)
+    const diagnostics = await diagnoseBinary(
+      'codex-binary',
+      'Codex binary',
+      () => resolveCodexBinaryWithSource(config.codexBinaryPath),
+      request.signal
     );
     const { deprecated } = readCodexSetupEnv(process.env);
     diagnostics.checks.push({

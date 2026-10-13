@@ -1,3 +1,5 @@
+import { runSubprocess, isSubprocessTimeout, type RawSubprocessRejection } from './subprocess';
+export { containerCommandName, buildSubprocessDockerArgs } from './subprocess';
 import { gateReworkNode } from './gate-rework';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
@@ -47,10 +49,7 @@ import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/provider-contract';
-import {
-  collectCredentialValues,
-  redactCredentialValues,
-} from '@archon/paths/credential-redaction';
+import { redactCredentialValues } from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
@@ -79,7 +78,7 @@ import type {
   ExecutionContext,
 } from '@archon/provider-contract';
 import type { OverlayChangeSummary } from './container-context';
-import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/provider-contract';
+import { mergeTokenUsage } from '@archon/provider-contract';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
@@ -206,7 +205,6 @@ import {
 } from './node-model-resolution';
 import {
   logNodeComplete,
-  logExecOutput,
   logWorkflowComplete,
   logWorkflowError,
   logWorkflowEvent,
@@ -232,7 +230,6 @@ import {
   stripCompletionTags,
   isInlineScript,
   formatSubprocessFailure,
-  retainStreamTail,
   safeSendMessage,
   type SendMessageContext,
 } from './executor-shared';
@@ -2913,211 +2910,6 @@ async function executeNodeInternal(
 
 /** Default timeout for subprocess nodes (bash, script): 2 minutes */
 const SUBPROCESS_DEFAULT_TIMEOUT = 120_000;
-
-/**
- * Reduce a host-resolved command to the name the container image exposes on
- * PATH: strip any directory (a host absolute path like the Windows Git-Bash
- * `bash.exe` doesn't exist in the Linux runner) and a trailing `.exe`. `bash`,
- * `bun`, and `uv` all live on the runner image's PATH.
- */
-export function containerCommandName(cmd: string): string {
-  const base = cmd.replace(/\\/g, '/').split('/').pop() ?? cmd;
-  return base.replace(/\.exe$/i, '');
-}
-
-/**
- * Run a deterministic subprocess (bash/script node body, loop `until_bash`) under
- * the given execution context.
- *
- * `options.env` is the ARCHON-MANAGED env only (node vars + codebase env + creds)
- * — NEVER pre-merged with `process.env`. The host path layers it over the
- * (already-cleaned) host `process.env`, byte-identical to before. The container
- * path delivers ONLY that managed env via `docker exec -e` (host `process.env`
- * never crosses the boundary — the isolation invariant) and runs the command
- * in-container at the same absolute cwd, so `bash:`/`script:` nodes have no
- * host-escape hole.
- */
-/**
- * Build the `docker exec` argv for a deterministic subprocess (bash/script) in a
- * container. Env is delivered ONLY via `-e` flags (never merged with the docker
- * CLI's own env / host process.env — the isolation invariant); the command name
- * is normalized to the in-container binary. Exported for the env-isolation
- * enforcement test.
- */
-export function buildSubprocessDockerArgs(
-  execContext: Extract<ExecutionContext, { kind: 'container' }>,
-  cmd: string,
-  args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv }
-): string[] {
-  const dockerArgs = ['exec', '-w', options.cwd];
-  if (execContext.execUser) dockerArgs.push('-u', execContext.execUser);
-  for (const [key, value] of Object.entries(options.env)) {
-    // Skip the denylist (PATH/HOME/…): a project env var must not clobber the
-    // in-container binary/home resolution — same policy as the Claude spawn path.
-    if (value === undefined || CONTAINER_ENV_DENYLIST.has(key)) continue;
-    dockerArgs.push('-e', `${key}=${value}`);
-  }
-  dockerArgs.push(execContext.containerId, containerCommandName(cmd), ...args);
-  return dockerArgs;
-}
-
-/** The shape `execFile` rejects with: argv-bearing fields plus the classifier fields. */
-type RawSubprocessRejection = Error & {
-  stdout?: string;
-  stderr?: string;
-  cmd?: string;
-  spawnargs?: string[];
-  /**
-   * Numeric exit code, or a symbol (`'ENOENT'`, `'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'`).
-   * `null` on a timeout kill — Node reports that one through `signal` instead.
-   */
-  code?: number | string | null;
-  /** True when Node killed the child after the configured `execFile` timeout elapsed. */
-  killed?: boolean;
-  /** Set (with `code: null`) when the child was killed, which for `execFile` is a timeout. */
-  signal?: string | null;
-};
-
-function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
-  return error.killed === true && error.code === null;
-}
-
-/**
- * Scrub credentials from every subprocess rejection field that can carry
- * subprocess text. The exact values come from the engine's injected-credential
- * provenance plus secret-named project env entries, so provider credentials are
- * removed even when the failed process echoes them without their env key.
- *
- * Mutates in place rather than returning a fresh Error: callers classify the
- * rejection by reading `killed` (timeout) and `code` (ENOENT/EACCES) off
- * the original object, and a replacement would silently drop those and turn every
- * timeout into a generic failure.
- *
- * `cmd` and `spawnargs` are not redundant with `message`. They can be the only
- * carriers when the rejection
- * is not a non-zero exit: a maxBuffer overflow rejects with `message` = 'stdout
- * maxBuffer length exceeded' — no argv at all — so the credentials survive solely
- * in `cmd`. Pino serializes every enumerable `err` property, so an unredacted `cmd`
- * writes the token to the detached-run log even when `message` is already clean.
- */
-function redactSubprocessError(
-  e: RawSubprocessRejection,
-  credentialValues: readonly string[]
-): RawSubprocessRejection {
-  e.message = redactCredentialValues(e.message, credentialValues);
-  if (e.stack) e.stack = redactCredentialValues(e.stack, credentialValues);
-  if (typeof e.stdout === 'string') {
-    e.stdout = redactCredentialValues(e.stdout, credentialValues);
-  }
-  if (typeof e.stderr === 'string') {
-    e.stderr = redactCredentialValues(e.stderr, credentialValues);
-  }
-  if (typeof e.cmd === 'string') e.cmd = redactCredentialValues(e.cmd, credentialValues);
-  if (Array.isArray(e.spawnargs)) {
-    e.spawnargs = e.spawnargs.map(arg => redactCredentialValues(arg, credentialValues));
-  }
-  return e;
-}
-
-/**
- * Who a retained subprocess-output row belongs to (#2967).
- *
- * Required on every `runSubprocess` call, so a new deterministic-exec call site cannot
- * silently opt out of retention — the type carries the invariant instead of a comment.
- */
-interface SubprocessRetention {
-  logDir: string;
-  workflowRunId: string;
-  /**
-   * Transcript step id. Loop probes use `<node>-iteration-<i>`, matching the loop's own
-   * transcript rows.
-   *
-   * A node body uses the bare `node.id`, NOT the namespaced `stepName` the persisted
-   * events carry. That is a deliberate trade: it keeps this row correlated with the
-   * `node_start`/`node_complete` rows beside it, which have always used the bare id, at
-   * the cost of collapsing fan-out instances and loop_group body iterations of one node
-   * onto the same `step` — those are then told apart by row order.
-   */
-  nodeId: string;
-  /** `<bash>` / `<script>` / `<until_bash>`, matching the transcript's other rows. */
-  label: string;
-}
-
-async function runSubprocess(
-  execContext: ExecutionContext,
-  cmd: string,
-  args: string[],
-  options: {
-    cwd: string;
-    timeout: number;
-    env: NodeJS.ProcessEnv;
-    protectedEnvKeys?: readonly string[];
-    protectedCredentialValues?: readonly string[];
-    retention: SubprocessRetention;
-  }
-): Promise<{ stdout: string; stderr: string; credentialValues: readonly string[] }> {
-  const subprocessEnv =
-    execContext.kind === 'container' ? options.env : { ...process.env, ...options.env };
-  // Both outcomes redact against the same values, so the credential set is resolved
-  // once here rather than separately per path — a success path that redacted less than
-  // the failure path would be the security hole, not a style difference.
-  const credentialValues = collectCredentialValues(
-    subprocessEnv,
-    options.protectedEnvKeys,
-    options.protectedCredentialValues
-  );
-  const { logDir, workflowRunId, nodeId, label } = options.retention;
-  // Container env is delivered in argv, while either execution mode can echo a
-  // credential in output. Sanitize at the shared boundaries below so every downstream
-  // reader — the rejection's consumers and the retained evidence alike — sees the same
-  // safe text.
-  try {
-    const result =
-      execContext.kind === 'container'
-        ? await execFileAsync(
-            'docker',
-            buildSubprocessDockerArgs(execContext, cmd, args, {
-              cwd: options.cwd,
-              env: options.env,
-            }),
-            { timeout: options.timeout }
-          )
-        : await execFileAsync(cmd, args, {
-            cwd: options.cwd,
-            timeout: options.timeout,
-            env: subprocessEnv,
-          });
-
-    result.stderr = redactCredentialValues(result.stderr, credentialValues);
-    // Retention is the EVIDENCE copy, taken from a redacted-then-capped copy of the
-    // streams. The caller's `stdout` remains the node's full-fidelity value channel
-    // (#2726), while `stderr` shares the exact redacted copy used for retention because
-    // callers broadcast it to the operator.
-    await logExecOutput(logDir, workflowRunId, nodeId, label, {
-      stdoutTail: retainStreamTail(redactCredentialValues(result.stdout, credentialValues)),
-      stderrTail: retainStreamTail(result.stderr),
-      exitCode: 0,
-    });
-    // `credentialValues` rides along so a caller that quotes stdout back (a contract
-    // failure's preview) redacts against exactly this set rather than resolving its own.
-    return { ...result, credentialValues };
-  } catch (err) {
-    const rejection = redactSubprocessError(err as RawSubprocessRejection, credentialValues);
-    // `redactSubprocessError` already scrubbed these fields in place, so retention reads
-    // the same safe values every other failure consumer sees.
-    await logExecOutput(logDir, workflowRunId, nodeId, label, {
-      stdoutTail: retainStreamTail(rejection.stdout),
-      stderrTail: retainStreamTail(rejection.stderr),
-      // A timeout kill reports `code: null` and names the signal instead. An
-      // `until_bash` probe has no sibling `node_error` row to say so, and a probe that
-      // was killed is exactly the case a reader needs distinguished from one that
-      // simply answered "not yet".
-      exitCode: rejection.code ?? rejection.signal ?? 'unknown',
-    });
-    throw rejection;
-  }
-}
 
 /** Threshold (bytes) above which $nodeId.output values are written to a temp file
  *  instead of inlined as bash -c arguments, to avoid silent data corruption. */
@@ -7825,6 +7617,8 @@ async function executeWorkflowNode(
  * ITSELF (so the cancel is attributable and — unlike a user's out-of-band cancel —
  * recoverable on resume). `fan_out_gate`: a child paused at a gate (#2180).
  * `fan_out_orphan`: a child whose `child_index` fell out of range when the item list shrank.
+ * `fan_out_checkout_check`: a child whose path-lock or checkout-sharing store access failed
+ * before it ran any node (executor.ts).
  *
  * `fan_out_sibling` is READ-ONLY legacy. It marked an in-flight sibling cancelled once an
  * earlier revision's fail-fast sealed the node's fate; nothing writes it any more, because a
@@ -7917,43 +7711,7 @@ function fanOutAmbiguousChildMessage(
         `wait for it to finish and resume, or abandon run ${child.id} if it is stuck.`;
 }
 
-/**
- * Concurrent fan-out children sharing the parent checkout collide on the path-exclusive
- * lock (`executor.ts`, guarded by `mutates_checkout !== false`): siblings are deliberately
- * NOT excluded from it, so all but one self-cancel — and a lock-cancelled child is threaded
- * as terminal on re-entry, which makes the failure permanent (#2180 Defect A). The engine
- * cannot infer which way out the author wants, so it names all three and refuses to spend
- * the money finding out.
- */
-function fanOutSharedCheckoutMessage(node: WorkflowNode, concurrency: number): string {
-  return (
-    `fan_out node '${node.id}': up to ${String(concurrency)} children of '${node.workflow}' ` +
-    'would run at once in the parent checkout, and that workflow does not declare ' +
-    '`mutates_checkout: false`. Concurrent runs on one checkout take a path-exclusive lock, ' +
-    'so all but the first would cancel themselves — and a lock-cancelled child is not ' +
-    'recoverable by resume (#2180). Choose one: add `mutates_checkout: false` to ' +
-    `'${node.workflow}' if it only reads the repo; set \`isolation: worktree\` on '${node.id}' ` +
-    'if the children write to it; or set `fan_out.max_parallel: 1` to run them one at a time.'
-  );
-}
-
-/**
- * Resolve the fan-out target's definition for the shared-checkout preflight, using the
- * same discovery + name resolution `runChildWorkflow` performs at spawn — sub-run targets
- * resolve at spawn time by design (#2200), so this reads the definition the children will
- * actually get rather than one captured at load.
- *
- * Reports WHY it could not resolve rather than collapsing every cause to `undefined`. The
- * preflight it feeds is the only thing standing between a shared-checkout fan-out and a
- * path-lock cascade the engine cannot recover from, so "we could not check" must not read
- * the same as "we checked and it is fine" — that is the silent fallback the engineering
- * principles forbid. An unknown or ambiguous name reaches here without any exception being
- * thrown, so this is not a rare path.
- *
- * The caller still must not report a COLLISION on this branch: the author's actual problem
- * is the unresolvable target, and pointing them at `mutates_checkout` would send them to
- * the wrong file. It fails closed with a message about the resolution instead.
- */
+/** Resolve the target at spawn time, when runtime-authored child workflows are available. */
 export async function resolveFanOutChildDefinition(
   deps: WorkflowDeps,
   cwd: string,
@@ -8073,9 +7831,6 @@ async function findFanOutChildRuns(
  *   - spawn/re-drive the incomplete indices through mapWithLimit(max_parallel); a
  *     fan-out-cancelled (gate/sibling) child is recoverable → re-driven, a user-cancelled
  *     one stays terminal;
- *   - #2180 (Defect A): before ANY child is created, refuse a shared-checkout expansion
- *     that would run >1 child at once over a target not declaring `mutates_checkout: false`
- *     — those siblings would self-cancel on the path lock, unrecoverably;
  *   - #2180 (D5): a fan-out child that PAUSES at a gate FAILS the node (autonomous fan-out
  *     — the single parent gate slot can't hold N children) and is cancelled tagged
  *     `fan_out_gate` (removing the gate + resuming re-drives it). A `running`/`pending`
@@ -8155,7 +7910,7 @@ async function executeFanOutWorkflowNode(
   };
 
   // Notify the platform immediately of a fan-out failure (S3). Every early-failure branch
-  // uses this — items resolution, both gate paths, the child-lookup error, the collision
+  // uses this — items resolution, both gate paths, the child-lookup error, the interactive
   // preflight and the join — so a fan-out failure never reaches the user through the
   // end-of-run digest alone.
   const notify = async (text: string): Promise<void> => {
@@ -8374,31 +8129,7 @@ async function executeFanOutWorkflowNode(
     return failResult(msg, 'unknown', undefined, undefined, child.id);
   }
 
-  // 5. Shared-checkout preflight (#2180 Defect A) AND interactive-class preflight (#2707
-  //    step 2, issue #2474). Isolation is explicit-only, so a fan-out with no `isolation:
-  //    worktree` puts N children in the parent's checkout, where the path lock cancels
-  //    every sibling but one — permanently, since resume threads a cancelled child as
-  //    terminal. A fan-out target that can pause has a different, unconditional problem:
-  //    the parent has a SINGLE approval-gate slot, so N children racing to pause cannot
-  //    all be presented — this holds even at `max_parallel: 1` or `isolation: worktree`,
-  //    since it is a governance problem, not a checkout problem. Both are caught HERE,
-  //    before a single child row exists: the child target (and therefore its
-  //    `mutates_checkout`/`interactive`) only resolves at spawn time by design (#2200), so
-  //    load time cannot see either.
-  //
-  //    Resolved ONCE, unconditionally — both checks below share the one resolution rather
-  //    than each paying their own discovery scan. #2474's own analysis anticipated walking
-  //    the target's node tree for a gate; the class declaration (#2707 step 2) makes that
-  //    unnecessary — an unattended-class workflow is GUARANTEED gate-free by the load-time
-  //    class-placement check (loader.ts), so "is the target unattended-class" is a
-  //    one-field read, cheaper than the tree walk #2474 originally scoped.
-  const pendingCount = items.reduce<number>((n, _item, i) => {
-    const existing = existingByIndex.get(i);
-    if (existing?.status === 'completed') return n;
-    if (existing?.status === 'cancelled' && !isFanOutRecoverableCancel(existing)) return n;
-    return n + 1;
-  }, 0);
-  const plannedConcurrency = Math.min(fanOut.max_parallel, pendingCount);
+  // A fan-out has one approval-gate slot, even for serial or isolated children.
   {
     // The fan-out target is a not-yet-started child, so it resolves from the parent's
     // AUTHORING directory (live) rather than the parent's frozen copy — same rule as a
@@ -8413,7 +8144,7 @@ async function executeFanOutWorkflowNode(
       installed === undefined ? origin : liveSourceRoots(origin ?? cwd, undefined, installed)
     );
     if ('unresolved' in resolved) {
-      // Fail CLOSED. Skipping the check here would let either hazard through unguarded on
+      // Fail CLOSED. Skipping the check here would let a pausing target through unguarded on
       // the strength of a lookup that did not happen, and the spawn is about to fail on
       // this same unresolvable target anyway — so the only thing failing open buys is a
       // worse message. Names the resolution problem, not a hazard the author cannot yet act on.
@@ -8443,24 +8174,6 @@ async function executeFanOutWorkflowNode(
       getLog().warn(
         { parentRunId: parentRun.id, nodeId: node.id, childWorkflow: node.workflow },
         'workflow.fan_out_interactive_target'
-      );
-      await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-      return failResult(msg, 'config');
-    }
-    if (
-      node.isolation !== 'worktree' &&
-      plannedConcurrency > 1 &&
-      resolved.definition.mutates_checkout !== false
-    ) {
-      const msg = fanOutSharedCheckoutMessage(node, plannedConcurrency);
-      getLog().warn(
-        {
-          parentRunId: parentRun.id,
-          nodeId: node.id,
-          childWorkflow: node.workflow,
-          plannedConcurrency,
-        },
-        'workflow.fan_out_shared_checkout_collision'
       );
       await notify(`❌ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
       return failResult(msg, 'config');
@@ -8543,18 +8256,8 @@ async function executeFanOutWorkflowNode(
         if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
         throw error;
       });
-      // A paused child is cancelled HERE rather than at the join, and the timing is
-      // load-bearing rather than tidiness. A pause is not terminal, and a non-terminal run
-      // keeps holding its working path: `getActiveWorkflowRunByPath` counts `paused` as
-      // active. On a shared checkout the very next sibling then loses the path lock and
-      // self-cancels — with NO reason tag, so it reads as a user cancel, is never re-driven,
-      // and the parent fails identically on every resume. Removing the fail-fast is what
-      // exposed this: before, a pause sealed the node and no later sibling ever spawned.
-      //
-      // This is not one child's outcome ending another's — the cancel is decided by the
-      // paused child's own state, it is the same cancel the gate path (#2180/#2438) applies
-      // at the join a moment later, and every sibling still runs to its own terminal state.
-      // All it changes is that the lock is released before the next child starts.
+      // The parent cannot present N child gates. Make this child's pause terminal
+      // without deciding any sibling's outcome; the reason tag permits re-entry.
       if (outcome.status === 'paused') await cancelChild(outcome.childRunId, 'fan_out_gate');
       return outcome;
     }
@@ -8929,26 +8632,6 @@ async function executeComposeFanOutNode(
         : [...persistedSnapshots];
   }
   const snapshots = persistedSnapshots ?? computedSnapshots;
-
-  // Concurrent instances share the parent checkout. Use the authoritative persisted
-  // width on resume so a changed producer cannot bypass the original safety preflight.
-  const plannedConcurrency = Math.min(fanOut.max_parallel, snapshots.length);
-  if (plannedConcurrency > 1 && resolved.definition.mutates_checkout !== false) {
-    const msg =
-      `composed fan-out node '${node.id}': up to ${String(plannedConcurrency)} instances of ` +
-      `'${node.include}' would run at once in this run's checkout, and that block does not ` +
-      'declare `mutates_checkout: false`. Concurrent runs on one checkout take a ' +
-      'path-exclusive lock, so all but the first would cancel themselves — and a ' +
-      'lock-cancelled instance is not recoverable by resume (#2180). Choose one: add ' +
-      `\`mutates_checkout: false\` to '${node.include}' if it only reads the repo; or set ` +
-      `\`fan_out.max_parallel: 1\` on '${node.id}' to run the instances one at a time.`;
-    getLog().warn(
-      { parentRunId: parentRun.id, nodeId: node.id, include: node.include, plannedConcurrency },
-      'workflow.compose_fan_out_shared_checkout_collision'
-    );
-    await notify(`❌ **Composed fan-out blocked** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'config');
-  }
 
   if (persistedSnapshots === undefined) {
     try {

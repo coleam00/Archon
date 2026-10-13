@@ -2,7 +2,7 @@
  * Setup command - Interactive CLI wizard for Archon credential configuration
  *
  * Guides users through configuring:
- * - AI assistants (Claude and/or Codex)
+ * - Selected maintained AI providers and their native authentication
  * - Platform connections (GitHub, Telegram, Slack — all skippable)
  *
  * SQLite is the implicit default; no database prompt. PostgreSQL users set
@@ -43,7 +43,10 @@ import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
 import { execFileAsync } from '@archon/git';
-import { getRegisteredProviders } from '@archon/providers';
+import { getRegisteredProviders, registerProvider, providerRegistry } from '@archon/providers';
+import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
+import { providerCommand } from './provider';
+import { checkProviderDiagnostics, type CheckResult } from './doctor';
 import {
   CODEX_SETUP_ENV,
   migrateCodexSetupEnv,
@@ -55,6 +58,9 @@ import {
   getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
   getArchonHome as pathsGetArchonHome,
   createLogger,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+  getPluginsPath,
 } from '@archon/paths';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -163,9 +169,7 @@ interface SetupConfig {
     /** Canonical env var name for the chosen Pi backend, e.g. 'ANTHROPIC_API_KEY' */
     piApiKeyEnvVar?: string;
     defaultAssistant: string | undefined;
-    /** True when defaultAssistant came from an actual user selection — gates
-     *  the config.yaml write in writeInstallDefaults. Left unset on the
-     *  no-assistant early return and in 'add' mode, preserving the saved default. */
+    /** Gates the config.yaml write so an empty selection preserves the saved default. */
     defaultAssistantSelected?: boolean;
     /** Default CHAT model for the default assistant — written to
      *  ~/.archon/config.yaml as `assistants.<defaultAssistant>.model` (#1999).
@@ -222,6 +226,7 @@ interface ExistingConfig {
 
 interface SetupOptions {
   spawn?: boolean;
+  providers?: readonly string[];
   repoPath: string;
   /** Which archon-owned file to target. Default: 'home'. */
   scope?: 'home' | 'project';
@@ -266,19 +271,6 @@ function hasEnvValue(content: string, key: string): boolean {
   const regex = new RegExp(`^${key}=(.+)$`, 'm');
   const match = content.match(regex);
   return match !== null && match[1].trim().length > 0;
-}
-
-/**
- * Check if a CLI command is available in PATH
- */
-function isCommandAvailable(command: string): boolean {
-  try {
-    const checkCmd = process.platform === 'win32' ? 'where' : 'which';
-    execSync(`${checkCmd} ${command}`, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -359,72 +351,6 @@ export function detectClaudeExecutablePath(): string | null {
 
   return null;
 }
-
-/**
- * Get Node.js version if installed, or null if not
- */
-function getNodeVersion(): { major: number; minor: number; patch: number } | null {
-  try {
-    const output = execSync('node --version', { encoding: 'utf-8' }).trim();
-    // Output is like "v18.17.0" or "v22.1.0"
-    const match = /^v(\d+)\.(\d+)\.(\d+)/.exec(output);
-    if (match) {
-      return {
-        major: parseInt(match[1], 10),
-        minor: parseInt(match[2], 10),
-        patch: parseInt(match[3], 10),
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * CLI installation instructions
- */
-const CLI_INSTALL_INSTRUCTIONS = {
-  claude: {
-    name: 'Claude Code',
-    checkCommand: 'claude',
-    instructions: `Claude Code CLI is not installed.
-
-Install using one of these methods:
-
-  Recommended (native installer):
-    curl -fsSL https://claude.ai/install.sh | bash
-
-  Or via npm:
-    npm install -g @anthropic-ai/claude-code
-
-After installation, run: claude /login`,
-  },
-  codex: {
-    name: 'Codex CLI',
-    checkCommand: 'codex',
-    instructions:
-      process.platform === 'darwin'
-        ? `Codex CLI is not installed.
-
-Install using one of these methods:
-
-  Recommended for macOS (no Node.js required):
-    brew install codex
-
-  Or via npm (requires Node.js 18+):
-    npm install -g @openai/codex
-
-After installation, run 'codex' to authenticate.`
-        : `Codex CLI is not installed.
-
-Install via npm:
-    npm install -g @openai/codex
-
-Requires Node.js 18 or later.
-After installation, run 'codex' to authenticate.`,
-  },
-};
 
 /**
  * Check for existing configuration at the selected scope's archon-owned env
@@ -735,12 +661,11 @@ async function collectDefaultChatModel(provider: string): Promise<string | undef
  * so a stale config.yaml defaultAssistant from an earlier `archon ai default`
  * would otherwise silently override the wizard's fresh selection.
  *
- * Gated on `defaultAssistantSelected`: 'add' mode and a no-assistant result
- * must preserve an existing config.yaml value. Non-fatal on failure — the env write has already succeeded, so warn + log instead of
+ * An empty selection preserves the existing config.yaml default. Non-fatal
+ * on failure: the env write has already succeeded, so warn and log instead of
  * aborting setup. Returns true when the config was written.
  *
- * The `write` parameter is injected in tests (same convention as
- * checkPiModule's loader) so this path is testable without `mock.module()`.
+ * The `write` parameter keeps config writes testable without module mocks.
  */
 export async function writeInstallDefaults(
   ai: SetupConfig['ai'],
@@ -758,27 +683,6 @@ export async function writeInstallDefaults(
     log.warning(`Could not write default assistant config: ${e.message}${code}`);
     getLog().warn({ err: e }, 'setup.default_assistant_config_write_failed');
     return false;
-  }
-}
-
-/**
- * Verify the Pi npm module is loadable. Pi is bundled as a transitive dep of
- * `@archon/providers` so this should always pass, but catching broken compiled
- * builds at setup time is preferable to a silent runtime failure.
- *
- * The `loader` parameter is injected in tests so we don't need
- * `mock.module()` on `@archon/providers` (which would pollute other tests).
- */
-export async function checkPiModule(
-  loader: () => Promise<unknown> = () => import('@archon/providers')
-): Promise<{ ok: boolean; error?: string }> {
-  try {
-    await loader();
-    return { ok: true };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    getLog().warn({ err }, 'setup.pi_module_load_failed');
-    return { ok: false, error: message };
   }
 }
 
@@ -1045,140 +949,78 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   };
 }
 
-/**
- * Collect AI assistant configuration
- */
-async function collectAIConfig(): Promise<SetupConfig['ai']> {
-  const assistants = await multiselect({
-    message: 'Which AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
-    options: [
-      { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
-      { value: 'codex', label: 'Codex', hint: 'OpenAI Codex CLI' },
-      {
-        value: 'pi',
-        label: 'Pi (community)',
-        hint: '~20 LLM backends via provider/model refs',
-      },
-    ],
-    required: false,
+async function installSetupProviders(ids: readonly string[], repoPath: string): Promise<void> {
+  if (!BUNDLED_IS_BINARY) return;
+  const pluginsDir = getPluginsPath();
+  const result = await providerCommand('install', ids, {
+    pluginsDir,
+    archonVersion: BUNDLED_VERSION,
+    projectDir: repoPath,
   });
+  if (result !== 0)
+    throw new Error(
+      `Provider installation failed. Run: archon provider install <${MAINTAINED_PROVIDER_IDS.join('|')}>`
+    );
+  const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
+  for (const registration of await loadProviderPlugins(pluginsDir, { maintained: 'installed' })) {
+    if (!providerRegistry.get(registration.id)) registerProvider(registration);
+  }
+}
 
-  if (isCancel(assistants)) {
+export async function selectSetupProviders(
+  providers: readonly string[] | undefined,
+  install: (ids: readonly string[]) => Promise<void>,
+  ask: () => Promise<string[] | symbol> = () =>
+    multiselect({
+      message: 'Which AI provider(s) should Archon install?',
+      options: MAINTAINED_PROVIDER_IDS.map(id => ({
+        value: id,
+        label: providerRegistry.get(id)?.displayName ?? id,
+      })),
+      required: false,
+    })
+): Promise<string[]> {
+  const selection = providers ?? (await ask());
+  if (isCancel(selection)) {
     cancel('Setup cancelled.');
     exitSetup(0);
   }
-
-  let hasClaude = assistants.includes('claude');
-  let hasCodex = assistants.includes('codex');
-  let hasPi = assistants.includes('pi');
-
-  // Check if selected CLI tools are installed
-  if (hasClaude && !isCommandAvailable('claude')) {
-    note(CLI_INSTALL_INSTRUCTIONS.claude.instructions, 'Claude Code Not Found');
-    const continueWithoutClaude = await confirm({
-      message: 'Continue setup without Claude?',
-      initialValue: false,
-    });
-    if (isCancel(continueWithoutClaude)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-    if (!continueWithoutClaude) {
-      cancel('Please install Claude Code and run setup again.');
-      exitSetup(0);
-    }
-    hasClaude = false;
-  }
-
-  if (hasCodex && !isCommandAvailable('codex')) {
-    // On non-macOS platforms, npm is the only install method and requires Node.js 18+
-    if (process.platform !== 'darwin') {
-      const nodeVersion = getNodeVersion();
-      if (!nodeVersion) {
-        note(
-          `Node.js is required to install Codex CLI via npm.
-
-Install Node.js 18 or later from:
-    https://nodejs.org/
-
-Or use a version manager like nvm:
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash
-    nvm install 18
-
-After installing Node.js, run 'archon setup' again.`,
-          'Node.js Not Found'
-        );
-        const continueWithoutCodex = await confirm({
-          message: 'Continue setup without Codex?',
-          initialValue: false,
-        });
-        if (isCancel(continueWithoutCodex)) {
-          cancel('Setup cancelled.');
-          exitSetup(0);
-        }
-        if (!continueWithoutCodex) {
-          cancel('Please install Node.js 18+ and run setup again.');
-          exitSetup(0);
-        }
-        hasCodex = false;
-      } else if (nodeVersion.major < 18) {
-        note(
-          `Node.js ${nodeVersion.major}.${nodeVersion.minor}.${nodeVersion.patch} is installed, but Codex CLI requires Node.js 18 or later.
-
-Upgrade Node.js from:
-    https://nodejs.org/
-
-Or use a version manager like nvm:
-    nvm install 18
-    nvm use 18
-
-After upgrading, run 'archon setup' again.`,
-          'Node.js Version Too Old'
-        );
-        const continueWithoutCodex = await confirm({
-          message: 'Continue setup without Codex?',
-          initialValue: false,
-        });
-        if (isCancel(continueWithoutCodex)) {
-          cancel('Setup cancelled.');
-          exitSetup(0);
-        }
-        if (!continueWithoutCodex) {
-          cancel('Please upgrade Node.js to 18+ and run setup again.');
-          exitSetup(0);
-        }
-        hasCodex = false;
-      }
-    }
-
-    // If we still want Codex (Node check passed or on macOS), show install instructions
-    if (hasCodex) {
-      note(CLI_INSTALL_INSTRUCTIONS.codex.instructions, 'Codex CLI Not Found');
-      const continueWithoutCodex = await confirm({
-        message: 'Continue setup without Codex?',
-        initialValue: false,
-      });
-      if (isCancel(continueWithoutCodex)) {
-        cancel('Setup cancelled.');
-        exitSetup(0);
-      }
-      if (!continueWithoutCodex) {
-        cancel('Please install Codex CLI and run setup again.');
-        exitSetup(0);
-      }
-      hasCodex = false;
+  if (typeof selection === 'symbol') throw new Error('Invalid provider selection');
+  const ids = [...new Set(selection)];
+  for (const id of ids) {
+    if (!isMaintainedProvider(id)) {
+      throw new Error(
+        `Unknown maintained provider '${id}'. Choose: ${MAINTAINED_PROVIDER_IDS.join(', ')}`
+      );
     }
   }
-
-  if (!hasClaude && !hasCodex && !hasPi) {
-    log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
-    return {
-      claude: false,
-      codex: false,
-      pi: false,
-      defaultAssistant: undefined,
-    };
+  if (ids.length === 0) {
+    log.warning(
+      `No providers selected. Run: archon provider install <${MAINTAINED_PROVIDER_IDS.join('|')}>`
+    );
+  } else {
+    await install(ids);
   }
+  return ids;
+}
+
+export async function collectAIConfig(
+  options: Pick<SetupOptions, 'providers' | 'repoPath'>,
+  install: (ids: readonly string[]) => Promise<void> = ids =>
+    installSetupProviders(ids, options.repoPath),
+  diagnose: (id: string) => Promise<CheckResult[]> = id => checkProviderDiagnostics(id)
+): Promise<SetupConfig['ai']> {
+  const selectedProviders = await selectSetupProviders(options.providers, install);
+  for (const id of selectedProviders) {
+    for (const check of await diagnose(id)) {
+      const message = `${check.label}: ${check.message}`;
+      if (check.status === 'fail' || check.status === 'warn') log.warning(message);
+      else log.info(message);
+    }
+  }
+  const hasClaude = selectedProviders.includes('claude');
+  const hasCodex = selectedProviders.includes('codex');
+  const hasPi = selectedProviders.includes('pi');
 
   let claudeAuthType: 'global' | 'apiKey' | 'oauthToken' | undefined;
   let claudeApiKey: string | undefined;
@@ -1204,50 +1046,14 @@ After upgrading, run 'archon setup' again.`,
     codexTokens = tokens ?? undefined;
   }
 
-  // Collect Pi config if selected. Pi is bundled, so there's no PATH check —
-  // instead we module-load test it to catch broken compiled builds.
   if (hasPi) {
     const piConfig = await collectPiConfig();
     piModel = piConfig.model;
     piApiKey = piConfig.apiKey;
     piApiKeyEnvVar = piConfig.apiKeyEnvVar;
-
-    const piSpin = spinner();
-    piSpin.start('Verifying Pi provider...');
-    const piCheck = await checkPiModule();
-    if (!piCheck.ok) {
-      piSpin.stop('Pi provider check failed (non-fatal)');
-      log.warning(`Pi: ${piCheck.error ?? 'module load failed'}`);
-      const continueWithoutPi = await confirm({
-        message: 'Continue setup without Pi?',
-        initialValue: true,
-      });
-      if (isCancel(continueWithoutPi)) {
-        cancel('Setup cancelled.');
-        exitSetup(0);
-      }
-      if (!continueWithoutPi) {
-        cancel('Please check your Archon installation and run setup again.');
-        exitSetup(0);
-      }
-      hasPi = false;
-      piModel = undefined;
-      piApiKey = undefined;
-      piApiKeyEnvVar = undefined;
-    } else {
-      piSpin.stop('Pi provider available');
-    }
   }
 
   let defaultAssistant: string | undefined;
-
-  // `hasPi` may have been cleared above by a failed module check, so build the
-  // selectedProviders list AFTER the Pi block.
-  const selectedProviders = [
-    ...(hasClaude ? ['claude'] : []),
-    ...(hasCodex ? ['codex'] : []),
-    ...(hasPi ? ['pi'] : []),
-  ];
 
   if (selectedProviders.length > 1) {
     const providerChoices = selectedProviders.map(id => {
@@ -1255,7 +1061,7 @@ After upgrading, run 'archon setup' again.`,
       const displayName = reg?.displayName ?? id;
       return {
         value: id,
-        label: id === 'claude' ? `${displayName} (Recommended)` : displayName,
+        label: displayName,
       };
     });
 
@@ -2011,10 +1817,10 @@ function trySpawn(
  * Spawn a new terminal window with the setup command on Windows
  * Tries: Windows Terminal -> cmd.exe with start
  */
-function spawnWindowsTerminal(repoPath: string): SpawnResult {
+function spawnWindowsTerminal(repoPath: string, command: string): SpawnResult {
   // Try Windows Terminal first (modern Windows 10/11)
   if (
-    trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', 'archon setup'], {
+    trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', command], {
       detached: true,
       stdio: 'ignore',
     })
@@ -2024,7 +1830,7 @@ function spawnWindowsTerminal(repoPath: string): SpawnResult {
 
   // Fallback to cmd.exe with start command (works on all Windows)
   if (
-    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', 'archon setup'], {
+    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', command], {
       detached: true,
       stdio: 'ignore',
     })
@@ -2039,10 +1845,10 @@ function spawnWindowsTerminal(repoPath: string): SpawnResult {
  * Spawn terminal on macOS
  * Uses osascript to open Terminal.app (works with default terminal)
  */
-function spawnMacTerminal(repoPath: string): SpawnResult {
+function spawnMacTerminal(repoPath: string, command: string): SpawnResult {
   // Escape single quotes in path for AppleScript
   const escapedPath = repoPath.replace(/'/g, "'\"'\"'");
-  const script = `tell application "Terminal" to do script "cd '${escapedPath}' && archon setup"`;
+  const script = `tell application "Terminal" to do script "cd '${escapedPath}' && ${command}"`;
 
   if (trySpawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' })) {
     return { success: true };
@@ -2055,8 +1861,8 @@ function spawnMacTerminal(repoPath: string): SpawnResult {
  * Spawn terminal on Linux
  * Tries: x-terminal-emulator -> gnome-terminal -> konsole -> xterm
  */
-function spawnLinuxTerminal(repoPath: string): SpawnResult {
-  const setupCmd = 'archon setup; exec bash';
+function spawnLinuxTerminal(repoPath: string, command: string): SpawnResult {
+  const setupCmd = `${command}; exec bash`;
 
   // Try x-terminal-emulator first (Debian/Ubuntu default)
   if (
@@ -2111,15 +1917,21 @@ function spawnLinuxTerminal(repoPath: string): SpawnResult {
 /**
  * Spawn a new terminal window with archon setup
  */
-export function spawnTerminalWithSetup(repoPath: string): SpawnResult {
+export function spawnTerminalWithSetup(
+  repoPath: string,
+  providers?: readonly string[]
+): SpawnResult {
+  if (providers?.some(id => !isMaintainedProvider(id)))
+    throw new Error('Invalid setup provider selection');
+  const command = `archon setup${providers === undefined ? '' : ` --providers=${providers.join(',')}`}`;
   const platform = process.platform;
 
   if (platform === 'win32') {
-    return spawnWindowsTerminal(repoPath);
+    return spawnWindowsTerminal(repoPath, command);
   } else if (platform === 'darwin') {
-    return spawnMacTerminal(repoPath);
+    return spawnMacTerminal(repoPath, command);
   } else {
-    return spawnLinuxTerminal(repoPath);
+    return spawnLinuxTerminal(repoPath, command);
   }
 }
 
@@ -2158,7 +1970,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
   // Handle --spawn flag
   if (options.spawn) {
     console.log('Opening setup wizard in a new terminal window...');
-    const result = spawnTerminalWithSetup(options.repoPath);
+    const result = spawnTerminalWithSetup(options.repoPath, options.providers);
 
     if (result.success) {
       console.log('Setup wizard opened. Complete the setup in the new terminal window.');
@@ -2166,7 +1978,9 @@ async function runSetup(options: SetupOptions): Promise<void> {
       console.log('');
       console.log('Next step: run the setup wizard in a separate terminal.');
       console.log('');
-      console.log(`    cd ${options.repoPath} && archon setup`);
+      console.log(
+        `    cd ${options.repoPath} && archon setup${options.providers === undefined ? '' : ` --providers=${options.providers.join(',')}`}`
+      );
       console.log('');
       console.log(
         'Come back here and let me know when you finish so I can verify your configuration.'
@@ -2222,7 +2036,11 @@ async function runSetup(options: SetupOptions): Promise<void> {
     const modeChoice = await select({
       message: 'What would you like to do?',
       options: [
-        { value: 'add', label: 'Add platforms', hint: 'Keep existing config, add new platforms' },
+        {
+          value: 'add',
+          label: 'Add providers or platforms',
+          hint: 'Keep existing credentials, configure selected providers and new platforms',
+        },
         { value: 'update', label: 'Update config', hint: 'Modify existing settings' },
         { value: 'fresh', label: 'Start fresh', hint: 'Replace all configuration' },
       ],
@@ -2238,21 +2056,15 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
   // Collect configuration based on mode
   const s = spinner();
+  const ai = await collectAIConfig(options);
 
   let config: SetupConfig;
 
   if (mode === 'add') {
-    // For 'add' mode, we keep existing and only collect new platforms
     s.start('Loading existing configuration...');
 
-    // Read existing config values - for simplicity, start with defaults and merge
     config = {
-      ai: {
-        claude: existing?.hasClaude ?? false,
-        codex: existing?.hasCodex ?? false,
-        pi: existing?.hasPi ?? false,
-        defaultAssistant: undefined,
-      },
+      ai,
       platforms: {
         github: existing?.platforms.github ?? false,
         telegram: existing?.platforms.telegram ?? false,
@@ -2285,7 +2097,6 @@ async function runSetup(options: SetupOptions): Promise<void> {
       config.slack = await collectSlackConfig();
     }
   } else {
-    const ai = await collectAIConfig();
     const platforms = await collectPlatforms();
 
     config = {
