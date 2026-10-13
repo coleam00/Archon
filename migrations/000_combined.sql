@@ -512,6 +512,34 @@ CREATE SEQUENCE IF NOT EXISTS remote_agent_workflow_events_event_order_seq
 ALTER TABLE remote_agent_workflow_events
   ALTER COLUMN event_order SET DEFAULT nextval('remote_agent_workflow_events_event_order_seq');
 
+-- event_order follows commit order (#3334). nextval() alone runs at insert time,
+-- so a transaction that inserts first and commits last lands below an order a
+-- reader has already passed. The transaction-scoped advisory lock is held until
+-- commit, so the next event-writing transaction waits and draws a higher value.
+-- SQLite gets the same guarantee from its single writer.
+--
+-- The run row is locked FOR KEY SHARE before the advisory lock. The foreign key
+-- check takes that row lock anyway, but only after this trigger; taking the order
+-- lock first deadlocks against a transaction that holds the run row FOR UPDATE
+-- and then writes its own event. A transaction must therefore not lock a run row
+-- after its first event insert.
+--
+-- The trigger overwrites the column default, so it also orders inserts from older
+-- binaries that never name event_order.
+CREATE OR REPLACE FUNCTION archon_assign_workflow_event_order() RETURNS trigger AS $$
+BEGIN
+  PERFORM 1 FROM remote_agent_workflow_runs WHERE id = NEW.workflow_run_id FOR KEY SHARE;
+  -- 3334 is arbitrary; it only has to differ from the schema lock (1796).
+  PERFORM pg_advisory_xact_lock(3334);
+  NEW.event_order := nextval('remote_agent_workflow_events_event_order_seq');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS archon_workflow_event_order ON remote_agent_workflow_events;
+CREATE TRIGGER archon_workflow_event_order
+  BEFORE INSERT ON remote_agent_workflow_events
+  FOR EACH ROW EXECUTE FUNCTION archon_assign_workflow_event_order();
+
 -- ============================================================================
 -- Schema vintage (#2316)
 -- ============================================================================
