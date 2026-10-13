@@ -96,8 +96,11 @@ def main():
                 fail("render: target item was not found by the forge search.")
         elif target is not None:
             fail("render: new and stale proposals must not name a target item.")
-        if cls == "new" and matches:
-            fail("render: a new proposal cannot ignore related existing work.")
+        # A new proposal may sit beside related work the search found without covering
+        # the same problem. It is never silently detached from that work: the matches
+        # travel with it as related items, in the record and in any published text.
+        related = ([{"number": m["number"], "url": m["url"]} for m in matches]
+                   if cls == "new" else [])
         if classified.get("disclosure_safe") is not True:
             fail("render: model has not cleared the proposed text for public disclosure.")
         title = public_text(classified.get("public_title"))
@@ -111,7 +114,7 @@ def main():
             "classification": cls, "model_verdict": checked["verdict"],
             "evidence_status": checked["evidence_status"], "revision": context["revision"],
             "evidence_refs": checked["evidence_refs"] if checked["evidence_status"] == "source-bound" else [],
-            "target_item": target, "marker": item["marker"] if cls != "stale" else None,
+            "target_item": target, "related_items": related, "marker": item["marker"] if cls != "stale" else None,
             "forge_checked": search["forge_checked"], "actionable": actionable,
             "publication_authorized": False,
         })
@@ -133,6 +136,7 @@ def main():
                      for ref in row["evidence_refs"])
         if row["target_item"]:
             lines.append("Related: " + row["target_item"]["url"])
+        lines.extend("Related: " + item["url"] for item in row["related_items"])
         if row["marker"]:
             lines.append("Proposed marker: <!-- archon-discovery:" + row["marker"] + " -->")
         lines.append("")

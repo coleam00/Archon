@@ -8,7 +8,8 @@ Return an object with entries, exactly one per item_index. Classify as:
 - stale only when the revalidation model verdict is disproved
 - duplicate when a search match covers the same problem
 - update-existing when a related match should receive the new information
-- new when no related match is known
+- new when no match covers the same problem; related matches the search found
+  stay linked to the proposal as related items, so name them in the rationale
 
 An inconclusive verdict, unverified citations, or incomplete search means a
 tentative local proposal, never proved new work. Retain that uncertainty in

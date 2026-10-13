@@ -15,7 +15,8 @@ each write. Skip stale/duplicate work and incomplete searches. Keep private raw
 evidence and local paths out of published text.
 
 For new work, use the repository's issue template and gh issue create with a body
-file. Include the proposal's archon-discovery marker. For update-existing, add
+file. Include the proposal's archon-discovery marker and a `Related: #n` line
+for each of its related_items. For update-existing, add
 only the new evidence as a comment to the verified target; preserve its body and
 labels. If the marker already exists, return its URL instead of posting again.
 After an uncertain write, read back before retrying. Never retry a create blindly.

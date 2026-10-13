@@ -15,6 +15,7 @@ const refreshScript = join(workflowRoot, 'merge-queue', 'scripts', 'refresh-merg
 const holdsScript = join(workflowRoot, 'merge-queue', 'scripts', 'publish-holds.ts');
 const publishPrScript = join(workflowRoot, 'pr', 'scripts', 'publish-pr.ts');
 const fileDiscoveriesScript = join(workflowRoot, 'deliver', 'scripts', 'file-discoveries.ts');
+const renderProposalsScript = join(workflowRoot, 'discoveries', 'scripts', 'render-proposals.py');
 
 let root: string;
 let fakeBin: string;
@@ -167,6 +168,125 @@ function runBun(script: string, values: Record<string, string>): ReturnType<type
     stderr: 'pipe',
   });
 }
+
+describe('discovery proposals keep related work instead of failing the run', () => {
+  // Seen live: a lap whose PR passed runtime and holdout verification never merged,
+  // because its one review note was classified new while the search had found
+  // related (not identical) work, and the renderer failed the whole discoveries run.
+  const url = (n: number, kind = 'issues'): string => `https://github.com/owner/repo/${kind}/${n}`;
+  let repo: string;
+  let head: string;
+
+  beforeAll(async () => {
+    repo = join(root, 'render-repo');
+    await mkdir(repo);
+    const git = (...args: string[]): string => {
+      const out = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe' });
+      if (out.exitCode !== 0) throw new Error(out.stderr.toString());
+      return out.stdout.toString().trim();
+    };
+    git('init', '-q', '-b', 'main');
+    await writeFile(join(repo, 'a.cs'), 'class A {}\n');
+    git('add', '.');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init');
+    head = git('rev-parse', 'HEAD');
+  });
+
+  async function render(
+    classification: string,
+    matches: { number: number; url: string }[],
+    target: unknown = null
+  ) {
+    const artifacts = await mkdtemp(join(root, 'render-'));
+    await mkdir(join(artifacts, 'discoveries'));
+    await writeFile(
+      join(artifacts, 'discoveries', 'normalized.json'),
+      JSON.stringify([
+        { item_index: 0, title: 't', claim: 'c', evidence: ['a.cs:1'], marker: 'm'.repeat(64) },
+      ])
+    );
+    await writeFile(
+      join(artifacts, 'discoveries', 'context.json'),
+      JSON.stringify({
+        revision: head,
+        forge: { available: true, host: 'github.com', path: 'owner/repo', reason: '' },
+      })
+    );
+    await writeFile(
+      join(artifacts, 'evidence-check.json'),
+      JSON.stringify([
+        {
+          item_index: 0,
+          verdict: 'supported',
+          evidence_status: 'source-bound',
+          evidence_refs: [{ path: 'a.cs', line: 1 }],
+        },
+      ])
+    );
+    const result = runPython(
+      renderProposalsScript,
+      {
+        ARTIFACTS_DIR: artifacts,
+        INPUTS_SEARCH_RESULTS: JSON.stringify([
+          {
+            item_index: 0,
+            forge_checked: true,
+            matches: matches.map(m => ({ ...m, title: 'x', similarity_note: 'related' })),
+          },
+        ]),
+        INPUTS_CLASSIFICATION: JSON.stringify([
+          {
+            item_index: 0,
+            classification,
+            target_item: target,
+            public_title: 'Bind the wire sentinel',
+            public_summary: 'Writer and reader declare the same literal.',
+            rationale: 'Related to #94 and #206, not the same problem.',
+            disclosure_safe: true,
+          },
+        ]),
+      },
+      repo
+    );
+    const read = (name: string): string =>
+      existsSync(join(artifacts, name)) ? readFileSync(join(artifacts, name), 'utf8') : '';
+    return {
+      result,
+      document: read('discovery-proposals.json'),
+      markdown: read('discovery-proposals.md'),
+    };
+  }
+
+  test('a new proposal with related matches renders, links each match and stays actionable', async () => {
+    const matches = [
+      { number: 206, url: url(206, 'pull') },
+      { number: 94, url: url(94) },
+    ];
+    const { result, document, markdown } = await render('new', matches);
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    const row = JSON.parse(document).proposals[0];
+    expect(row.classification).toBe('new');
+    expect(row.related_items).toEqual(matches);
+    expect(row.actionable).toBe(true);
+    expect(markdown).toContain(`Related: ${url(206, 'pull')}`);
+    expect(markdown).toContain(`Related: ${url(94)}`);
+  });
+
+  test('a new proposal with no matches has no related items', async () => {
+    const { result, document } = await render('new', []);
+    expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    expect(JSON.parse(document).proposals[0].related_items).toEqual([]);
+  });
+
+  test('a duplicate still has to name a target the search found', async () => {
+    const { result } = await render('duplicate', [{ number: 94, url: url(94) }], {
+      number: 95,
+      url: url(95),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr?.toString()).toContain('target item was not found by the forge search');
+  });
+});
 
 describe('review discoveries honor the publication mode and are filed once', () => {
   // Seen live: a lifecycle launched with discovery_publication=preview still filed every
