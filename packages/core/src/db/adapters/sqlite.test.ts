@@ -4,7 +4,7 @@ import { SqliteAdapter } from './sqlite';
 import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION, readSchemaVersion } from '../schema-version';
 import { Database, SQLiteError, type Statement } from 'bun:sqlite';
-import { unlinkSync } from 'fs';
+import { readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { mkdtemp } from 'fs/promises';
@@ -1429,5 +1429,87 @@ describe('SqliteAdapter busy locks', () => {
       })
     ).rejects.toMatchObject({ code: 'SQLITE_CONSTRAINT_PRIMARYKEY' });
     expect(attempts).toBe(1);
+  });
+});
+
+describe('SqliteAdapter fresh schema', () => {
+  /** Commit frames in the WAL: one per committed write transaction since the last checkpoint. */
+  function walCommits(path: string): number {
+    const wal = readFileSync(`${path}-wal`);
+    const pageSize = wal.readUInt32BE(8);
+    let commits = 0;
+    for (let offset = 32; offset + 24 <= wal.length; offset += 24 + pageSize) {
+      if (wal.readUInt32BE(offset + 4) !== 0) commits++;
+    }
+    return commits;
+  }
+
+  test('a fresh database receives its tables in one commit, not one per table', async () => {
+    // Each commit is an fsync; per-statement commits made a first open cost seconds on
+    // a slow disk.
+    const path = await upgradeFixturePath();
+    const adapter = new SqliteAdapter(path);
+    try {
+      const tables = raw_query(
+        path,
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'"
+      ) as { n: number }[];
+      expect(walCommits(path)).toBeLessThan(Number(tables[0]?.n) / 2);
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  test('opening waits out another process that holds a fresh file instead of failing', async () => {
+    // Switching a file to WAL fails with SQLITE_BUSY at once, without busy_timeout,
+    // while another connection holds a write lock on it.
+    const path = await upgradeFixturePath();
+    const holder = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `const { Database } = require('bun:sqlite');
+const db = new Database(${JSON.stringify(path)});
+db.run('CREATE TABLE IF NOT EXISTS held (a)');
+db.run('BEGIN IMMEDIATE');
+db.run('INSERT INTO held VALUES (1)');
+console.log('held');
+await Bun.sleep(300);
+db.run('COMMIT');`,
+      ],
+      { stdout: 'pipe', stderr: 'inherit' }
+    );
+    const reader = holder.stdout.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain('held');
+    const adapter = new SqliteAdapter(path);
+    try {
+      expect(await holder.exited).toBe(0);
+      await adapter.query('SELECT COUNT(*) FROM remote_agent_codebases');
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  test('processes opening the same fresh file at once all get the full schema', async () => {
+    const path = await upgradeFixturePath();
+    const source = `const { SqliteAdapter } = await import(${JSON.stringify(join(import.meta.dir, 'sqlite.ts'))});
+await new SqliteAdapter(${JSON.stringify(path)}).close();`;
+    const children = Array.from({ length: 4 }, () =>
+      Bun.spawn([process.execPath, '-e', source], { stdout: 'ignore', stderr: 'pipe' })
+    );
+    const results = await Promise.all(
+      children.map(async child => ({
+        code: await child.exited,
+        stderr: await new Response(child.stderr).text(),
+      }))
+    );
+    expect(results.filter(result => result.code !== 0)).toEqual([]);
+    const reopened = new SqliteAdapter(path);
+    try {
+      await reopened.query('SELECT COUNT(*) FROM remote_agent_codebases');
+    } finally {
+      await reopened.close();
+    }
   });
 });
