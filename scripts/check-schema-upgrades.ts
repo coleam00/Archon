@@ -166,6 +166,7 @@ const CATALOG_QUERIES: Record<string, string> = {
                  WHERE d.objid = (schemaname||'.'||sequencename)::regclass AND d.deptype = 'a'),
                 '-')
               FROM pg_sequences WHERE schemaname = 'public' ORDER BY 1`,
+  triggers: 'SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1',
 };
 
 /**

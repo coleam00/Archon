@@ -1,3 +1,4 @@
+import * as checkout from './checkout-observation';
 import { prepareRunAiConfiguration } from './run-preflight';
 import type { ExecuteWorkflowOptions } from './executor';
 /**
@@ -4427,8 +4428,8 @@ describe('executeWorkflow', () => {
     // #2304 — the contract is "Cleared by the same persistence block the moment
     // a later resume writes a real root". The faulted arm stamps `true`; the
     // else arm MUST ride the same atomic metadata write with `false` on the
-    // heal, or a row that has resolved leaves the flag set and the
-    // state-preflight gate (#2200) / maintainer-triage read it as still faulted.
+    // heal, or a row that has resolved leaves the flag set and every reader
+    // treats it as still faulted.
     it('clears metadata.identity_unresolved when a faulted row heals (resolved on resume)', async () => {
       const updateSpy = mock(async () => {});
       const store = makeStore({
@@ -5857,27 +5858,28 @@ describe('resolveScopeArtifactsDir', () => {
 describe('run checkout baseline (#3305)', () => {
   let repo: string;
 
+  const commit = 'a'.repeat(40);
+  let sampler: ReturnType<typeof spyOn<typeof checkout, 'sampleCheckout'>>;
+
   beforeEach(async () => {
     mockExecuteDagWorkflow.mockClear();
     mockExecuteDagWorkflow.mockImplementation(async () => undefined);
     repo = await mkdtemp(join(tmpdir(), 'archon-run-baseline-'));
-    for (const args of [
-      ['init', '-q'],
-      ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'],
-    ]) {
-      const result = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe' });
-      if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-    }
+    sampler = spyOn(checkout, 'sampleCheckout').mockResolvedValue({
+      observation: {
+        kind: 'git',
+        sampledAt: new Date().toISOString(),
+        commit,
+        tree: 'b'.repeat(40),
+      },
+      worktree: { status: 'clean' },
+    });
   });
 
   afterEach(async () => {
+    sampler.mockRestore();
     await removeTempTree(repo);
   });
-
-  const head = (): string =>
-    Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: repo, stdout: 'pipe' })
-      .stdout.toString()
-      .trim();
 
   it('records one baseline after the execution claim and before the first node', async () => {
     const store = makeStore();
@@ -5896,7 +5898,7 @@ describe('run checkout baseline (#3305)', () => {
       order.push('first node');
       return undefined;
     });
-    const cutFrom = head();
+    const cutFrom = commit;
 
     await executeWorkflow(
       makeDeps(store),
@@ -5910,6 +5912,8 @@ describe('run checkout baseline (#3305)', () => {
     );
 
     expect(order).toEqual(['claim', 'baseline', 'first node']);
+    expect(sampler).toHaveBeenCalledTimes(1);
+    expect(sampler).toHaveBeenCalledWith(repo, { kind: 'host' });
     // The claim carries the checkout so a pre-created row without a path is fenced by it.
     expect(store.claimPendingWorkflowRun).toHaveBeenCalledWith('run-123', repo);
     expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledTimes(1);

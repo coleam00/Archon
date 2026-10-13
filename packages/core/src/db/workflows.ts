@@ -1220,6 +1220,9 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
       : "json_remove(metadata, '$.cancelled_reason')";
   const eventReason =
     getDatabaseType() === 'postgresql' ? "data->>'reason'" : "json_extract(data, '$.reason')";
+  // Placeholders follow the reason list, so a new fan-out cancel reason needs no SQL edit.
+  const reasonPlaceholders = (first: number): string =>
+    FAN_OUT_CANCEL_REASONS.map((_, i) => `$${String(first + i)}`).join(', ');
 
   try {
     return await getDatabase().withTransaction(async query => {
@@ -1229,14 +1232,14 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
              completed_at = NULL,
              started_at = ${dialect.now()},
              last_activity_at = ${dialect.now()},
-             metadata = ${dialect.jsonMerge(metadataWithoutCancelledReason, 5)}
+             metadata = ${dialect.jsonMerge(metadataWithoutCancelledReason, 2)}
          WHERE id = $1
            AND status = 'cancelled'
-           AND ${cancelledReason} IN ($2, $3, $4)`,
+           AND ${cancelledReason} IN (${reasonPlaceholders(3)})`,
         [
           id,
-          ...FAN_OUT_CANCEL_REASONS,
           JSON.stringify({ [TOOL_CALL_ATTENTION_METADATA_KEY]: null }),
+          ...FAN_OUT_CANCEL_REASONS,
         ]
       );
       if ((result.rowCount ?? 0) === 0) {
@@ -1246,7 +1249,7 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
         `DELETE FROM remote_agent_workflow_events
          WHERE workflow_run_id = $1
            AND event_type = 'workflow_cancelled'
-           AND ${eventReason} IN ($2, $3, $4)`,
+           AND ${eventReason} IN (${reasonPlaceholders(2)})`,
         [id, ...FAN_OUT_CANCEL_REASONS]
       );
       const recovered = await query<WorkflowRunRow>(

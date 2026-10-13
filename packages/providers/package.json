@@ -185,6 +185,9 @@
       "src/community/opencode/provider.test.ts"
     ],
     [
+      "src/community/opencode/diagnostics.test.ts"
+    ],
+    [
       "src/community/opencode/runtime.test.ts"
     ],
     [

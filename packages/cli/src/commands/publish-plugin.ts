@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { copyFile, lstat, rename, rm } from 'node:fs/promises';
+import { copyFile, lstat, rename } from 'node:fs/promises';
 import { removeUnlocked, renameUnlocked } from './unlocked-file';
 
 interface Publication {
@@ -18,16 +18,25 @@ interface Publication {
 export async function publishPlugin(publication: Publication): Promise<void> {
   const { stagedReceipt, receiptFile, stagedBinary, target, previousFiles } = publication;
   const backups = new Map<string, string>();
-  const published: string[] = [];
-  const discardBackups = async (): Promise<void> => {
-    for (const backup of backups.values()) {
+  // Paths this publication has replaced, created or removed, in order. A step that
+  // throws leaves its path untouched, so rollback restores exactly these.
+  const changed: string[] = [];
+  /** Removes the backups of `paths` and returns a description of each one left behind. */
+  const discardBackups = async (paths: Iterable<string>): Promise<string[]> => {
+    const leftovers: string[] = [];
+    for (const path of paths) {
+      const backup = backups.get(path);
+      if (backup === undefined) continue;
       try {
-        await rm(backup, { force: true });
-      } catch {
-        console.warn(`Plugin backup cleanup failed: ${backup}`);
+        await removeUnlocked(backup);
+      } catch (error) {
+        leftovers.push(`${backup} (${(error as Error).message})`);
       }
     }
+    return leftovers;
   };
+  const leftoverNote = (leftovers: string[]): string =>
+    leftovers.length ? ` Remove leftover backups: ${leftovers.join(', ')}.` : '';
   try {
     for (const path of new Set([receiptFile, ...previousFiles])) {
       try {
@@ -40,51 +49,54 @@ export async function publishPlugin(publication: Publication): Promise<void> {
       backups.set(path, backup);
       await copyFile(path, backup);
     }
-  } catch {
-    await discardBackups();
-    throw new Error(`Plugin could not back up installed files: ${receiptFile}`);
+  } catch (error) {
+    const leftovers = await discardBackups(backups.keys());
+    throw new Error(
+      `Plugin could not back up installed files: ${receiptFile}. ${(error as Error).message}${leftoverNote(leftovers)}`,
+      { cause: error }
+    );
   }
 
   try {
     // Receipt first: the other order could strand a binary no receipt owns, which
     // every later install would refuse to replace.
     await rename(stagedReceipt, receiptFile);
-    published.push(receiptFile);
+    changed.push(receiptFile);
     await renameUnlocked(stagedBinary, target);
-    published.push(target);
+    changed.push(target);
     for (const path of previousFiles) {
-      if (path !== target) await removeUnlocked(path);
+      if (path === target) continue;
+      await removeUnlocked(path);
+      changed.push(path);
     }
   } catch (error) {
     const recovery: string[] = [];
-    for (const path of published) {
-      if (backups.has(path)) continue;
+    for (const path of changed) {
+      const backup = backups.get(path);
       try {
-        await removeUnlocked(path);
+        if (backup === undefined) await removeUnlocked(path);
+        else await renameUnlocked(backup, path);
       } catch {
-        recovery.push(path);
+        recovery.push(backup === undefined ? path : `${path} (backup: ${backup})`);
       }
     }
-    for (const [path, backup] of backups) {
-      try {
-        await renameUnlocked(backup, path);
-      } catch {
-        recovery.push(`${path} (backup: ${backup})`);
-      }
-    }
+    // An untouched file needs no restore, so its backup is only discarded. Renaming it
+    // back would race the same lock that may have failed the publication.
+    const leftovers = await discardBackups([...backups.keys()].filter(p => !changed.includes(p)));
     const reason = (error as Error).message;
     if (recovery.length) {
       throw new Error(
-        `Plugin publication failed and rollback failed; recovery required: ${recovery.join(', ')}. ${reason}`,
+        `Plugin publication failed and rollback failed; recovery required: ${recovery.join(', ')}. ${reason}${leftoverNote(leftovers)}`,
         { cause: error }
       );
     }
-    await discardBackups();
     throw new Error(
-      `Plugin publication failed; previous install restored: ${receiptFile}. ${reason}`,
+      `Plugin publication failed; previous install restored: ${receiptFile}. ${reason}${leftoverNote(leftovers)}`,
       { cause: error }
     );
   }
   // Publication has committed; leftover backups must not turn success into refusal.
-  await discardBackups();
+  for (const leftover of await discardBackups(backups.keys())) {
+    console.warn(`Plugin backup cleanup failed: ${leftover}`);
+  }
 }

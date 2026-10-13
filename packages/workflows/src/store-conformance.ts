@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
+  FAN_OUT_CANCEL_REASONS,
   WorkflowNotResumableError,
   WorkflowRunPauseConflictError,
   type GateResolutionEvent,
@@ -437,6 +438,24 @@ export function describeWorkflowStoreConformance(
       expect(await types(store, signaled.id)).toEqual(['wait_started', 'wait_signaled']);
       expect(await due(new Date())).toContain(signaled.id);
     });
+    test('due continuations come earliest first, so a limit keeps the most overdue', async () => {
+      const later = await running(store);
+      await store.pauseWorkflowRunForWait(
+        later.id,
+        { ...wait, resumeAt: new Date(Date.parse(wait.resumeAt) + 60_000).toISOString() },
+        { kind: 'started', stepName: 'wait' }
+      );
+      const earlier = await running(store);
+      await store.pauseWorkflowRunForWait(earlier.id, wait, { kind: 'started', stepName: 'wait' });
+      const now = new Date(Date.parse(wait.resumeAt) + 120_000);
+      expect((await store.listDueWorkflowContinuations(now, 1)).map(run => run.id)).toEqual([
+        earlier.id,
+      ]);
+      expect((await store.listDueWorkflowContinuations(now, 10)).map(run => run.id)).toEqual([
+        earlier.id,
+        later.id,
+      ]);
+    });
     test('attention failure matches its exact owner and reports only the winner', async () => {
       const run = await running(store);
       const attention = {
@@ -685,10 +704,15 @@ export function describeWorkflowStoreConformance(
       expect(harness.terminalReports()).toEqual([pending.id, pending.id, paused.id, completed.id]);
     });
     test('fan-out recovery retracts only engine cancellations', async () => {
+      for (const reason of FAN_OUT_CANCEL_REASONS) {
+        const recovered = await running(store);
+        await store.cancelFanOutRun(recovered.id, reason);
+        expect((await store.recoverCancelledFanOutRun(recovered.id)).status).toBe('running');
+        expect(await types(store, recovered.id)).toEqual([]);
+      }
       const run = await running(store);
       await store.cancelFanOutRun(run.id, 'fan_out_gate');
       expect((await store.recoverCancelledFanOutRun(run.id)).status).toBe('running');
-      expect(await types(store, run.id)).toEqual([]);
       await store.cancelWorkflowRun(run.id);
       expect(await rejection(store.recoverCancelledFanOutRun(run.id))).toBeInstanceOf(Error);
       expect(await types(store, run.id)).toEqual(['workflow_cancelled']);

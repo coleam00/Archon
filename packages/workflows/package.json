@@ -44,11 +44,14 @@
     "./node-execution": "./src/node-execution.ts",
     "./node-record-serialization": "./src/node-record-serialization.ts",
     "./node-event-write": "./src/node-event-write.ts",
+    "./subprocess": "./src/subprocess.ts",
     "./logger": "./src/logger.ts",
     "./container-context": "./src/container-context.ts",
     "./structured-output": "./src/structured-output.ts",
     "./dag-resume-snapshot": "./src/dag-resume-snapshot.ts",
     "./store-conformance": "./src/store-conformance.ts",
+    "./file-store": "./src/file-store/index.ts",
+    "./provider-event-reader": "./src/provider-event-reader.ts",
     "./state-document-store": "./src/state-document-store.ts",
     "./state-document-conformance": "./src/state-document-conformance.ts"
   },
@@ -105,7 +108,8 @@
       "src/event-emitter.test.ts"
     ],
     [
-      "src/executor-shared.test.ts"
+      "src/executor-shared.test.ts",
+      "src/subprocess.test.ts"
     ],
     [
       "src/provider-events.test.ts"

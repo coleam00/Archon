@@ -113,8 +113,8 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'user',
-    spec: 'user <list|role>',
-    description: 'List users and manage roles as the operator',
+    spec: 'user <list|role|link>',
+    description: 'List users, link identities and manage roles as the operator',
   },
   {
     command: 'trigger',
@@ -335,9 +335,8 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'doctor',
-    spec: 'doctor [--full]',
-    description:
-      'Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)',
+    spec: 'doctor',
+    description: 'Verify installed provider diagnostics, gh auth, DB, and adapters',
   },
   {
     command: 'auth',
@@ -521,6 +520,12 @@ const scopedOnlyHelp: HelpEntry[] = [
   },
   {
     command: 'user',
+    subcommand: 'link',
+    spec: 'user link <user-id> <platform>:<platform-user-id> [--move]',
+    description: 'Link an identity to an existing user; --move reassigns a conflicting identity',
+  },
+  {
+    command: 'user',
     subcommand: 'role',
     spec: `user role <id> <${userRoleSchema.options.join('|')}>`,
     description: 'Set a user role using the full user id',
@@ -534,8 +539,15 @@ const scopedOnlyHelp: HelpEntry[] = [
   {
     command: 'trigger',
     subcommand: 'fire',
-    spec: 'trigger fire --config <file>',
-    description: 'Record a configured timer start and drain its execution host',
+    spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>]',
+    description: 'Record a configured start and drain its execution host',
+    scopedFlags: [
+      {
+        spec: '--delivery-id <key>',
+        description: 'Deduplicate this delivery within the configured source',
+      },
+      { spec: '--inputs <file>', description: 'Read event input values from a JSON object' },
+    ],
   },
   {
     command: 'trigger',
@@ -766,6 +778,12 @@ const orderedFlags: FlagHelp[] = [
     spec: '--pause-at-gates',
     description: 'Stop a dry-run at approval gates instead of auto-approving',
     owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
+    spec: '--providers <ids>',
+    description:
+      'Install comma-separated maintained providers, skipping the setup provider question',
+    owners: [{ command: 'setup' }],
   },
   {
     spec: '--spawn',

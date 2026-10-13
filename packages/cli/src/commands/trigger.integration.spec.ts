@@ -13,6 +13,12 @@ import { join, resolve } from 'node:path';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { timerTriggerConfigSchema } from './trigger';
+import { standardWebhooksSourceConfigSchema } from '@archon/adapters/sources/standard-webhooks/source-plugin';
+import {
+  isTerminalRunStatus,
+  type WorkflowRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
 const tempRoots: string[] = [];
@@ -89,7 +95,7 @@ interface RequestRow {
 
 interface RunRow {
   id: string;
-  status: string;
+  status: WorkflowRunStatus;
   metadata: string;
   output_root: string | null;
 }
@@ -128,7 +134,217 @@ nodes:
 }
 
 describe('trigger CLI durable execution', () => {
-  test('cold-drains typed queued work from its frozen source after every launcher exits', async () => {
+  test.skipIf(process.platform === 'win32')(
+    'published polling recipes distinguish delimiter collisions and replay on both hosts',
+    async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-poll-recipes-')));
+      tempRoots.push(root);
+      const archonHome = join(root, 'home');
+      const projectRoot = join(root, 'project');
+      const workflowsDir = join(projectRoot, '.archon', 'workflows');
+      mkdirSync(workflowsDir, { recursive: true });
+      expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
+      const packagesRoot = resolve(import.meta.dir, '../../..');
+      const guide = readFileSync(
+        join(packagesRoot, 'docs-web/src/content/docs/guides/workflow-triggers.md'),
+        'utf8'
+      );
+      const section = guide
+        .split('## Poll a system that cannot send webhooks')[1]
+        ?.split('## Preparation')[0];
+      if (!section) throw new Error('Polling guide section missing');
+      const yaml = section.match(/```yaml\n([\s\S]*?)```/)?.[1];
+      const configJson = section.match(/```json\n([\s\S]*?)```/)?.[1];
+      const scripts = [...section.matchAll(/```bash\n(#!\/bin\/sh[\s\S]*?)```/g)].map(
+        match => match[1]
+      );
+      expect(scripts).toHaveLength(2);
+      if (!yaml || !configJson) throw new Error('Polling workflow or config missing');
+      writeFileSync(join(workflowsDir, 'process-order.yaml'), yaml);
+      const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
+      await runCli(cliPath, projectRoot, archonHome, [
+        'validate',
+        'workflows',
+        'process-order',
+        '--cwd',
+        projectRoot,
+      ]);
+      const identity = JSON.parse(
+        (await runCli(cliPath, projectRoot, archonHome, ['trigger', 'whoami'])).stdout
+      ) as { runAsUserId: string };
+      const config = timerTriggerConfigSchema.parse(JSON.parse(configJson));
+      config.binding.runAsUserId = identity.runAsUserId;
+      config.binding.launch.cwd = projectRoot;
+      // The server recipe defers to the guide's Standard Webhooks source; only
+      // installation-local values are replaced.
+      const webhookJson = guide
+        .split('## Start workflows from any signed webhook')[1]
+        ?.split('### Sign a delivery')[0]
+        ?.match(/```json\n([\s\S]*?)```/)?.[1];
+      if (!webhookJson) throw new Error('Webhook source config missing');
+      const webhookSource = (
+        JSON.parse(webhookJson) as {
+          sources: [{ sourceInstanceId: string; config: unknown }];
+        }
+      ).sources[0];
+      const webhookConfig = standardWebhooksSourceConfigSchema.parse(webhookSource.config);
+      for (const binding of webhookConfig.bindings) {
+        binding.runAsUserId = identity.runAsUserId;
+        binding.launch.cwd = projectRoot;
+      }
+      const configPath = join(root, 'trigger.json');
+      writeFileSync(configPath, JSON.stringify(config));
+      const shellQuote = (value: string): string => "'" + value.replaceAll("'", "'\\''") + "'";
+      const wrapper = join(root, 'archon');
+      writeFileSync(
+        wrapper,
+        `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(cliPath)} "$@"\n`,
+        { mode: 0o700 }
+      );
+      const cliScript = join(root, 'cli-poll.sh');
+      const serverScript = join(root, 'server-poll.sh');
+      writeFileSync(
+        cliScript,
+        scripts[0]
+          .replaceAll('/opt/archon/bin/archon', shellQuote(wrapper))
+          .replaceAll('/srv/archon/polled-orders.json', shellQuote(configPath))
+      );
+      writeFileSync(serverScript, scripts[1]);
+      const items = [
+        { id: 'order-123', version: '1' },
+        { id: 'a@b', version: 'c' },
+        { id: 'a', version: 'b@c' },
+      ];
+      const portPath = join(root, 'port');
+      const fixturePath = join(root, 'server.ts');
+      writeFileSync(
+        fixturePath,
+        `
+        import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
+        import createSource from ${JSON.stringify(join(packagesRoot, 'adapters/src/sources/standard-webhooks/source-plugin.ts'))};
+        import { SourceReceiptDigestConflictError } from ${JSON.stringify(join(packagesRoot, 'workflows/src/resource-start-store.ts'))};
+        const host = createSqlWorkflowHost();
+        const source = await createSource({ sourceInstanceId: ${JSON.stringify(webhookSource.sourceInstanceId)}, config: ${JSON.stringify(webhookConfig)} });
+        const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+          if (new URL(request.url).pathname === '/items') return Response.json(${JSON.stringify(items)});
+          const result = await source.receive({ body: await request.text(), headers: Object.fromEntries(request.headers), receivedAt: new Date().toISOString() });
+          if (result.status === 'rejected') return new Response('Invalid signature', { status: 401 });
+          try {
+            return new Response(JSON.stringify(await host.deps.store.acceptStartReceipt(result.acceptance)) + '\\n');
+          } catch (error) {
+            if (error instanceof SourceReceiptDigestConflictError) return new Response('Delivery conflict', { status: 409 });
+            throw error;
+          }
+        }});
+        await Bun.write(${JSON.stringify(portPath)}, String(server.port));
+      `
+      );
+      const env = {
+        ...process.env,
+        ARCHON_HOME: archonHome,
+        DATABASE_URL: '',
+        TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32),
+        GITHUB_TOKEN: '',
+        GH_TOKEN: '',
+        GITHUB_APP_ID: '',
+        [webhookConfig.signingSecretEnv]:
+          'whsec_' + Buffer.from('recipe-test-key').toString('base64'),
+      };
+      const server = Bun.spawn([process.execPath, fixturePath], {
+        cwd: projectRoot,
+        env,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const serverOutput = new Response(server.stderr).text();
+      try {
+        const port = await waitFor(
+          () => (existsSync(portPath) ? readFileSync(portPath, 'utf8') : undefined),
+          'recipe fixture port'
+        );
+        const runScript = async (path: string, syntaxOnly = false): Promise<string> => {
+          const child = Bun.spawn(['sh', ...(syntaxOnly ? ['-n'] : []), path], {
+            cwd: projectRoot,
+            env: {
+              ...env,
+              ORDERS_URL: `http://127.0.0.1:${port}/items`,
+              ARCHON_WEBHOOK_URL: `http://127.0.0.1:${port}/webhook`,
+            },
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+          const [code, stdout, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+          ]);
+          expect(code, stderr || stdout).toBe(0);
+          return stdout;
+        };
+        await runScript(cliScript, true);
+        await runScript(serverScript, true);
+        await runScript(cliScript);
+        await runScript(cliScript);
+        const databasePath = join(archonHome, 'archon.db');
+        const runs = await waitFor(() => {
+          const rows = readRows<RunRow>(
+            databasePath,
+            'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs'
+          );
+          for (const row of rows) if (row.status !== 'completed') activeRuns.add(row.id);
+          return rows.length === items.length && rows.every(row => row.status === 'completed')
+            ? rows
+            : undefined;
+        }, 'polled runs to complete');
+        expect(
+          runs
+            .map(row => {
+              if (!row.output_root) throw new Error('Polled run has no output root');
+              return readFileSync(
+                join(getRunArtifactsDirForRoot(row.output_root, row.id), 'order.txt'),
+                'utf8'
+              ).trim();
+            })
+            .sort()
+        ).toEqual(items.map(item => item.id).sort());
+        for (const run of runs) activeRuns.delete(run.id);
+        const first = (await runScript(serverScript))
+          .trim()
+          .split('\n')
+          .map(line => JSON.parse(line) as { receiptId: string; replay: boolean });
+        const replay = (await runScript(serverScript))
+          .trim()
+          .split('\n')
+          .map(line => JSON.parse(line) as { receiptId: string; replay: boolean });
+        expect(first).toHaveLength(items.length);
+        expect(replay).toEqual(first.map(result => ({ ...result, replay: true })));
+        expect(first.every(result => result.replay === false)).toBe(true);
+        for (const source of [config.sourceInstanceId, webhookSource.sourceInstanceId]) {
+          const receipts = readRows<{ delivery_id: string; outcome: string }>(
+            databasePath,
+            `SELECT delivery_id,outcome FROM remote_agent_start_receipts WHERE source_instance_id='${source}'`
+          );
+          // A guide mapping that no longer resolves against the recipe body records unmatched receipts.
+          expect(receipts.map(row => row.outcome)).toEqual(items.map(() => 'matched'));
+          const keys = receipts.map(row => row.delivery_id);
+          expect(new Set(keys).size).toBe(items.length);
+        }
+      } finally {
+        for (const run of readRows<RunRow>(
+          join(archonHome, 'archon.db'),
+          'SELECT id,status FROM remote_agent_workflow_runs'
+        ))
+          if (!isTerminalRunStatus(run.status)) activeRuns.add(run.id);
+        server.kill();
+        await server.exited;
+        const stderr = await serverOutput;
+        if (stderr) console.error(stderr);
+      }
+    },
+    30_000
+  );
+
+  test('keyed replay without inputs drains the frozen host and queued source after binding edits', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-integration-')));
     tempRoots.push(root);
     const archonHome = join(root, 'home');
@@ -200,7 +416,9 @@ describe('trigger CLI durable execution', () => {
     }, 'first trigger run to claim execution');
     activeRuns.add(firstRun.id);
 
-    await runCli(cliPath, projectRoot, archonHome, ['trigger', 'fire', '--config', configPath]);
+    const keyedFire = ['trigger', 'fire', '--config', configPath, '--delivery-id', 'queued-item'];
+    const accepted = await runCli(cliPath, projectRoot, archonHome, keyedFire);
+    const originalReceipt = JSON.parse(accepted.stdout) as { id: string };
     const queued = await waitFor(() => {
       const rows = readRows<RequestRow>(
         databasePath,
@@ -222,6 +440,9 @@ describe('trigger CLI durable execution', () => {
       runConfigPath,
       JSON.stringify({ env: { TRIGGER_CONFIG_PROOF: 'edited-config' } })
     );
+    config.binding.hostId = 'edited-host';
+    config.binding.launch.inputs.count = 999;
+    writeFileSync(configPath, JSON.stringify(config));
     writeFileSync(release, '');
     await waitFor(() => {
       const row = readRows<RunRow>(
@@ -232,12 +453,24 @@ describe('trigger CLI durable execution', () => {
     }, 'first trigger run to complete');
     activeRuns.delete(firstRun.id);
 
-    await runCli(cliPath, projectRoot, archonHome, [
-      'trigger',
-      'drain',
-      '--host',
-      'integration-host',
-    ]);
+    const replay = await runCli(cliPath, projectRoot, archonHome, keyedFire);
+    expect(JSON.parse(replay.stdout)).toMatchObject({
+      id: originalReceipt.id,
+      deliveryId: 'queued-item',
+      bindings: [
+        expect.objectContaining({
+          hostId: 'integration-host',
+          requestStatus: 'admitted',
+          intent: expect.objectContaining({
+            launch: expect.objectContaining({ inputs: { count: 7 } }),
+          }),
+        }),
+      ],
+    });
+    expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(2);
+    expect(
+      readRows(databasePath, 'SELECT id FROM remote_agent_resource_start_requests')
+    ).toHaveLength(2);
     const runs = await waitFor(() => {
       const rows = readRows<RunRow>(
         databasePath,
@@ -271,6 +504,7 @@ describe('trigger CLI durable execution', () => {
       ).map(row => row.status)
     ).toEqual(['admitted', 'admitted']);
 
+    config.binding.hostId = 'integration-host';
     const forgeConfigPath = join(root, 'forge.json');
     const { bindingRevision, ...bindingWithoutRevision } = config.binding;
     void bindingRevision;
@@ -319,10 +553,12 @@ describe('trigger CLI durable execution', () => {
       import { registerWebhookSourceRoutes } from ${JSON.stringify(join(packagesRoot, 'server/src/routes/webhooks.ts'))};
       import { closeDatabase } from ${JSON.stringify(join(packagesRoot, 'core/src/db/connection.ts'))};
       import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
+      import { hasStartReceiptForDelivery } from ${JSON.stringify(join(packagesRoot, 'core/src/db/resource-starts.ts'))};
       const workflowHost = createSqlWorkflowHost();
       const host = await loadWebhookSourcePlugins(${JSON.stringify(forgeConfigPath)}, {
         acceptReceipt: workflowHost.deps.store.acceptStartReceipt,
         isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
+        hasDeliveryReceipt: hasStartReceiptForDelivery,
       });
       const app = new OpenAPIHono();
       registerWebhookSourceRoutes(app, host);
@@ -335,6 +571,14 @@ describe('trigger CLI durable execution', () => {
         },
       });
       if(response.status !== 200) throw Error('Not accepted: '+response.status);
+      const changed = payload + ' ';
+      const conflict = await app.request('/webhooks/sources/integration-github', {
+        method: 'POST', body: changed, headers: {
+          'x-hub-signature-256': 'sha256='+createHmac('sha256','test-secret').update(changed).digest('hex'),
+          'x-github-delivery': 'delivery-one', 'x-github-event': 'pull_request',
+        },
+      });
+      if(conflict.status !== 409) throw Error('Not a conflict: '+conflict.status);
       await closeDatabase();
     `
     );
@@ -394,6 +638,206 @@ describe('trigger CLI durable execution', () => {
       ).trim()
     ).toBe('EDITED-9-edited-config');
   }, 45_000);
+
+  test('a bundled Standard Webhooks source authenticates, deduplicates and starts a governed run', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-standard-webhooks-integration-')));
+    tempRoots.push(root);
+    const archonHome = join(root, 'home');
+    const projectRoot = join(root, 'project');
+    const workflowsDir = join(projectRoot, '.archon', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(
+      join(workflowsDir, 'order.yaml'),
+      `name: order
+description: Standard Webhooks integration proof.
+mutates_checkout: false
+inputs:
+  count:
+    required: true
+nodes:
+  - id: record
+    bash: echo "$INPUTS_COUNT" > "$ARTIFACTS_DIR/result.txt"
+`
+    );
+    // No `inputs:` declaration: a source must not pass event values to it.
+    writeFileSync(
+      join(workflowsDir, 'plain.yaml'),
+      `name: plain
+description: Declares no inputs.
+mutates_checkout: false
+nodes:
+  - id: record
+    bash: echo plain
+`
+    );
+    const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
+    const identity = await runCli(cliPath, projectRoot, archonHome, ['trigger', 'whoami']);
+    const { runAsUserId } = JSON.parse(identity.stdout) as { runAsUserId: string };
+    const databasePath = join(archonHome, 'archon.db');
+    const packagesRoot = resolve(import.meta.dir, '../../..');
+    const bindingWithoutRevision = {
+      bindingId: 'order',
+      hostId: 'integration-host',
+      runAsUserId,
+      resource: 'integration:orders',
+      overlap: 'queue',
+      launch: {
+        cwd: projectRoot,
+        workflowName: 'order',
+        inputs: { count: 0 },
+        isolation: { kind: 'in-place' },
+      },
+    };
+    const standardInstall = join(root, 'installed-standard-webhooks-plugin');
+    const standardBuild = await Bun.build({
+      entrypoints: [join(packagesRoot, 'adapters/src/sources/standard-webhooks/source-plugin.ts')],
+      outdir: standardInstall,
+      target: 'bun',
+      naming: 'source-plugin.mjs',
+    });
+    if (!standardBuild.success) throw new Error(standardBuild.logs.map(String).join('\n'));
+    const standardConfigPath = join(root, 'standard-webhooks.json');
+    writeFileSync(
+      standardConfigPath,
+      JSON.stringify({
+        version: 1,
+        sources: [
+          {
+            sourceInstanceId: 'integration-orders',
+            module: join(standardInstall, 'source-plugin.mjs'),
+            config: {
+              version: 1,
+              signingSecretEnv: 'ARCHON_STANDARD_WEBHOOKS_TEST_SECRET',
+              bindings: [
+                {
+                  ...bindingWithoutRevision,
+                  bindingId: 'order',
+                  inputMapping: { count: '/order/count' },
+                },
+                {
+                  ...bindingWithoutRevision,
+                  bindingId: 'undeclared',
+                  inputMapping: { undeclared: '/order/count' },
+                },
+                {
+                  ...bindingWithoutRevision,
+                  bindingId: 'undeclared-workflow',
+                  resource: 'integration:plain',
+                  launch: { ...bindingWithoutRevision.launch, workflowName: 'plain', inputs: {} },
+                  inputMapping: { count: '/order/count' },
+                },
+              ],
+            },
+          },
+        ],
+      })
+    );
+    const standardScript = join(root, 'receive-standard.ts');
+    writeFileSync(
+      standardScript,
+      `
+      import { createHmac } from 'node:crypto';
+      import { OpenAPIHono } from ${JSON.stringify(import.meta.resolve('@hono/zod-openapi'))};
+      import { loadWebhookSourcePlugins } from ${JSON.stringify(join(packagesRoot, 'server/src/services/webhook-source-plugins.ts'))};
+      import { registerWebhookSourceRoutes } from ${JSON.stringify(join(packagesRoot, 'server/src/routes/webhooks.ts'))};
+      import { closeDatabase } from ${JSON.stringify(join(packagesRoot, 'core/src/db/connection.ts'))};
+      import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
+      import { hasStartReceiptForDelivery } from ${JSON.stringify(join(packagesRoot, 'core/src/db/resource-starts.ts'))};
+      const workflowHost = createSqlWorkflowHost();
+      process.env.ARCHON_STANDARD_WEBHOOKS_TEST_SECRET = 'whsec_' + Buffer.from('test-secret').toString('base64');
+      let runAsUserRemoved = false;
+      const host = await loadWebhookSourcePlugins(${JSON.stringify(standardConfigPath)}, {
+        acceptReceipt: workflowHost.deps.store.acceptStartReceipt,
+        isKnownUser: async id => !runAsUserRemoved && (await workflowHost.records.users.getUserById(id)) !== null,
+        hasDeliveryReceipt: hasStartReceiptForDelivery,
+      });
+      const app = new OpenAPIHono();
+      registerWebhookSourceRoutes(app, host);
+      const payload = JSON.stringify({order:{count:12},workflowName:'evil',cwd:'/evil',runAsUserId:'evil',hostId:'evil',resource:'evil',isolation:{kind:'worktree'}});
+      const id = 'order-one';
+      const timestamp = String(Math.floor(Date.now()/1000));
+      const headers = (body, ts = timestamp, deliveryId = id) => ({
+        'webhook-id': deliveryId, 'webhook-timestamp': ts,
+        'webhook-signature': 'v1,'+createHmac('sha256','test-secret').update(deliveryId+'.'+ts+'.'+body).digest('base64'),
+      });
+      const post = async (body, hdrs, expected) => {
+        // Bytes, as on the wire: Bun keeps a string body's BOM in text() where HTTP bytes lose it.
+        const response = await app.request('/webhooks/sources/integration-orders', {method:'POST',body:new TextEncoder().encode(body),headers:hdrs});
+        if(response.status !== expected) throw Error('Expected '+expected+', got '+response.status+' for '+hdrs['webhook-id']+' '+JSON.stringify(body.slice(0,12)));
+      };
+      await post(payload, {}, 401);
+      await post(payload+' ', headers(payload), 401);
+      await post(payload, headers(payload, String(Number(timestamp)-301)), 401);
+      // A UTF-8 BOM is part of the received bytes: prefixing one changes the signed content.
+      await post('\\uFEFF'+payload, headers(payload), 401);
+      if ((await workflowHost.deps.store.listStartReceipts()).some(r => r.sourceInstanceId === 'integration-orders')) throw Error('Unauthenticated receipt persisted');
+      await post(payload, headers(payload), 200);
+      // A replay keeps its first acceptance even when today's run-as check would fail.
+      runAsUserRemoved = true;
+      await post(payload, headers(payload), 200);
+      runAsUserRemoved = false;
+      // Signed with its BOM, the delivery authenticates; JSON forbids a BOM, so it is malformed.
+      const bomBody = '\\uFEFF'+JSON.stringify({order:{count:1}});
+      await post(bomBody, headers(bomBody, timestamp, 'bom-one'), 400);
+      const changed = JSON.stringify({order:{count:13}});
+      await post(changed, headers(changed), 409);
+      await closeDatabase();
+    `
+    );
+    await runCli(standardScript, projectRoot, archonHome, []);
+    expect(
+      readRows<{ delivery_id: string; outcome: string }>(
+        databasePath,
+        "SELECT delivery_id, outcome FROM remote_agent_start_receipts WHERE source_instance_id='integration-orders' ORDER BY delivery_id"
+      )
+    ).toEqual([
+      { delivery_id: 'bom-one', outcome: 'malformed' },
+      { delivery_id: 'order-one', outcome: 'matched' },
+    ]);
+    const drained = await runCli(
+      cliPath,
+      projectRoot,
+      archonHome,
+      ['trigger', 'drain', '--host', 'integration-host'],
+      false
+    );
+    expect(drained.exitCode).toBe(1);
+    expect(
+      readRows(
+        databasePath,
+        'SELECT binding_id,preparation_status FROM remote_agent_start_receipt_bindings ORDER BY binding_id'
+      )
+    ).toEqual([
+      { binding_id: 'order', preparation_status: 'complete' },
+      { binding_id: 'undeclared', preparation_status: 'rejected' },
+      { binding_id: 'undeclared-workflow', preparation_status: 'rejected' },
+    ]);
+
+    const standardRun = await waitFor(() => {
+      const rows = readRows<RunRow>(
+        databasePath,
+        'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs ORDER BY started_at'
+      );
+      if (rows[0] && !['completed', 'failed'].includes(rows[0].status)) activeRuns.add(rows[0].id);
+      return rows[0]?.status === 'completed' ? rows[0] : undefined;
+    }, 'signed Standard Webhooks delivery to execute after host drain');
+    activeRuns.delete(standardRun.id);
+    expect(JSON.parse(standardRun.metadata)).toMatchObject({ inputs_values: { count: 12 } });
+    if (!standardRun.output_root) throw new Error('Standard Webhooks run has no output root');
+    expect(
+      readFileSync(
+        join(getRunArtifactsDirForRoot(standardRun.output_root, standardRun.id), 'result.txt'),
+        'utf8'
+      ).trim()
+    ).toBe('12');
+    expect(
+      readRows<RequestRow>(
+        databasePath,
+        'SELECT id,status,launch FROM remote_agent_resource_start_requests'
+      )
+    ).toHaveLength(1);
+  }, 30_000);
 
   // Windows has no POSIX signal delivery, and Git Bash's $PPID is an MSYS PID, not a Windows one.
   test.skipIf(process.platform === 'win32')(
@@ -1016,3 +1460,164 @@ function processAlive(pid: number): boolean {
     return false;
   }
 }
+
+test('poll-style CLI fires deduplicate event inputs and preserve unkeyed starts', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-poll-')));
+  tempRoots.push(root);
+  const archonHome = join(root, 'home');
+  const projectRoot = join(root, 'project');
+  const workflowsDir = join(projectRoot, '.archon', 'workflows');
+  mkdirSync(workflowsDir, { recursive: true });
+  const gitInit = Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot });
+  expect(await gitInit.exited).toBe(0);
+  const workflowPath = join(workflowsDir, 'process-order.yaml');
+  writeFileSync(
+    workflowPath,
+    `name: process-order
+description: Record a polled order.
+mutates_checkout: false
+inputs:
+  order_id: { type: string, required: true }
+  mode: { type: string, required: true }
+nodes:
+  - id: record
+    bash: printf '%s\\n' "$INPUTS_ORDER_ID:$INPUTS_MODE" > "$ARTIFACTS_DIR/order.txt"
+`
+  );
+  const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
+  const databasePath = join(archonHome, 'archon.db');
+  await runCli(cliPath, projectRoot, archonHome, ['trigger', 'list']);
+  const userId = crypto.randomUUID();
+  const database = new Database(databasePath);
+  try {
+    database
+      .query('INSERT INTO remote_agent_users (id, display_name) VALUES (?, ?)')
+      .run(userId, 'Poll integration actor');
+  } finally {
+    database.close();
+  }
+  const configPath = join(root, 'trigger.json');
+  const inputsPath = join(root, 'inputs.json');
+  const config = {
+    version: 1,
+    sourceInstanceId: 'polled-orders',
+    binding: {
+      bindingId: 'process-order',
+      bindingRevision: null,
+      hostId: 'poll-host',
+      runAsUserId: userId,
+      resource: 'orders:processing',
+      overlap: 'queue',
+      launch: {
+        cwd: projectRoot,
+        workflowName: 'process-order',
+        inputs: { order_id: 'literal-order', mode: 'poll' },
+        isolation: { kind: 'in-place' },
+      },
+    },
+    schedule: { intervalSeconds: 60, runAtLoad: false },
+  };
+  writeFileSync(configPath, JSON.stringify(config));
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'order-123' }));
+  const fire = ['trigger', 'fire', '--config', configPath, '--inputs', inputsPath];
+  const keyed = [...fire, '--delivery-id', 'order-123@1'];
+  for (let tick = 0; tick < 2; tick++) {
+    await runCli(cliPath, projectRoot, archonHome, keyed);
+    config.binding.launch.inputs.mode = 'edited-after-acceptance';
+    writeFileSync(configPath, JSON.stringify(config));
+  }
+  const runs = (): RunRow[] =>
+    readRows<RunRow>(
+      databasePath,
+      'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs'
+    );
+  const completed = await waitFor(() => {
+    const rows = runs();
+    return rows.length === 1 && rows[0]?.status === 'completed' ? rows[0] : undefined;
+  }, 'one completed polled run');
+  expect(JSON.parse(completed.metadata)).toMatchObject({
+    inputs: { order_id: 'order-123', mode: 'poll' },
+  });
+  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(1);
+  expect(
+    readRows(databasePath, 'SELECT id FROM remote_agent_resource_start_requests')
+  ).toHaveLength(1);
+  const stored = readRows<{ intent: string; event_input_names: string }>(
+    databasePath,
+    'SELECT intent,event_input_names FROM remote_agent_start_receipt_bindings'
+  )[0];
+  if (!stored) throw new Error('Missing stored binding');
+  expect(JSON.parse(stored.intent)).not.toHaveProperty('eventInputs');
+  expect(JSON.parse(stored.event_input_names)).toEqual(['order_id']);
+
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'changed-order' }));
+  const conflict = await runCli(cliPath, projectRoot, archonHome, keyed, false);
+  expect(conflict.exitCode).not.toBe(0);
+  expect(conflict.stderr).toContain(
+    "Delivery ID 'order-123@1' was already used with different inputs"
+  );
+  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(1);
+
+  for (const invalid of ['[]', 'null', '{bad json', '{"":1}']) {
+    writeFileSync(inputsPath, invalid);
+    const result = await runCli(cliPath, projectRoot, archonHome, fire, false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('--inputs');
+  }
+  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(1);
+
+  writeFileSync(inputsPath, JSON.stringify({ undeclared: 'event' }));
+  const rejected = await runCli(
+    cliPath,
+    projectRoot,
+    archonHome,
+    [...fire, '--delivery-id', 'undeclared@1'],
+    false
+  );
+  expect(rejected.exitCode).not.toBe(0);
+  expect(
+    readRows<{ preparation_status: string }>(
+      databasePath,
+      "SELECT preparation_status FROM remote_agent_start_receipt_bindings WHERE preparation_status='rejected'"
+    )
+  ).toHaveLength(1);
+  expect(runs()).toHaveLength(1);
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'unkeyed-event' }));
+  await runCli(cliPath, projectRoot, archonHome, fire);
+  await waitFor(
+    () => (runs().filter(row => row.status === 'completed').length === 2 ? true : undefined),
+    'inputs-only run completion'
+  );
+  const inputsOnlyRun = runs().find(row => row.id !== completed.id);
+  if (!inputsOnlyRun) throw new Error('Missing inputs-only run');
+  expect(JSON.parse(inputsOnlyRun.metadata)).toMatchObject({
+    inputs: { order_id: 'unkeyed-event' },
+  });
+  writeFileSync(
+    workflowPath,
+    'name: process-order\ndescription: No declared inputs\nnodes:\n  - id: record\n    bash: echo done\n'
+  );
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'event' }));
+  const noDeclaration = await runCli(
+    cliPath,
+    projectRoot,
+    archonHome,
+    [...fire, '--delivery-id', 'undeclared@2'],
+    false
+  );
+  expect(noDeclaration.exitCode).not.toBe(0);
+  expect(runs()).toHaveLength(2);
+
+  for (let tick = 0; tick < 2; tick++) {
+    await runCli(cliPath, projectRoot, archonHome, ['trigger', 'fire', '--config', configPath]);
+    await waitFor(
+      () =>
+        runs().filter(row => row.status === 'completed').length === tick + 3 ? true : undefined,
+      'unkeyed run completion'
+    );
+  }
+  expect(
+    readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts WHERE delivery_id IS NULL')
+  ).toHaveLength(3);
+  expect(runs()).toHaveLength(4);
+});

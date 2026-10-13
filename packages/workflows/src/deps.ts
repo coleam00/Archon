@@ -8,7 +8,7 @@ import type { ResolvedWorkflowPolicy } from './schemas/run-config';
  * Provider types are imported directly from @archon/provider-contract.
  */
 import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
-import type { IWorkflowStore } from './store';
+import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type {
   IAgentProvider,
@@ -154,6 +154,11 @@ export interface WorkflowConfig {
 // Agent provider factory type
 // ---------------------------------------------------------------------------
 
+export type WorkflowEnvironment = Pick<
+  WorkflowConfig,
+  'envVars' | 'protectedEnvKeys' | 'protectedCredentialValues'
+>;
+
 export type AgentProviderFactory = (provider: string) => IAgentProvider;
 
 // ---------------------------------------------------------------------------
@@ -211,6 +216,8 @@ export interface WorkflowDeps {
    * the shared process-global keys.
    */
   isPerUserProviderKeysEnabled?: () => boolean;
+  /** Where stored per-user credentials live; `files` has none, so preflight refuses them. */
+  credentialStore?: WorkflowStoreKind;
   /**
    * Optional: resolve the required connected provider credentials into a
    * delivery bag (env vars + files to write under `artifactsDir`) plus the

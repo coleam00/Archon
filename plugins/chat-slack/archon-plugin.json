@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "chat",
+  "name": "chat-slack",
+  "description": "Slack conversations, workflow progress and run actions over Socket Mode.",
+  "executable": "archon-chat-slack"
+}

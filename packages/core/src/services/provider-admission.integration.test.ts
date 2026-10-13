@@ -572,7 +572,7 @@ test('forwards the provider-owned credential model resolver with its receiver', 
 
 test('forwards provider diagnostics and model listing without acquiring capacity', async () => {
   const provider = getAgentProvider(PROVIDER);
-  expect(await provider.diagnose?.({})).toEqual({
+  expect(await provider.diagnose?.({ signal: new AbortController().signal })).toEqual({
     checks: [{ id: PROVIDER, label: 'Provider', status: 'ok', message: 'Ready' }],
   });
   expect(await provider.listModels?.({ signal: new AbortController().signal })).toEqual({

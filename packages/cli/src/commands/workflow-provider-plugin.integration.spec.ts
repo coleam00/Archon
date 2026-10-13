@@ -1,3 +1,8 @@
+import {
+  createReleaseRepo,
+  serveFixtureGit,
+  fixtureGit as git,
+} from '../test-support/plugin-fixture';
 import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
@@ -32,20 +37,6 @@ let server: ReturnType<typeof Bun.serve>;
 let binary: Uint8Array<ArrayBuffer>;
 let beforeAssetDownload: (() => Promise<void>) | undefined;
 
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const child = Bun.spawn(
-    ['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args],
-    { cwd, stdout: 'pipe', stderr: 'pipe' }
-  );
-  const [out, err, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  if (code !== 0) throw new Error(err);
-  return out.trim();
-}
-
 async function runnable(source: string, name: string): Promise<Uint8Array<ArrayBuffer>> {
   const script = join(root, `${name}.js`);
   await writeFile(script, source);
@@ -74,12 +65,11 @@ beforeAll(async () => {
   if (!build.success) throw new Error('test provider bundle failed');
   binary = await runnable(await build.outputs[0].text(), 'provider');
   const repo = join(root, 'repo');
-  await mkdir(repo);
-  await git(repo, 'init', '-q');
-  for (const tag of ['v1', 'v2', 'invalid']) {
-    await git(repo, 'commit', '--allow-empty', '-qm', tag);
-    await git(repo, 'tag', tag);
-    const commit = await git(repo, 'rev-parse', 'HEAD');
+  const fixtureCommits = await createReleaseRepo(
+    repo,
+    ['v1', 'v2', 'invalid'].map(tag => ({ tag }))
+  );
+  for (const [tag, commit] of fixtureCommits) {
     commits.set(tag, commit);
     manifests.set(commit, {
       schemaVersion: 1,
@@ -90,7 +80,6 @@ beforeAll(async () => {
     });
     assets.set(tag, binary);
   }
-  await git(repo, 'update-server-info');
   server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -101,11 +90,8 @@ beforeAll(async () => {
           status: 302,
           headers: { location: '/owner/repo/releases/tag/v1' },
         });
-      const gitPath = /^\/(?:owner\/repo|coleam00\/Archon)\.git\/(.+)$/.exec(path);
-      if (gitPath) {
-        const file = Bun.file(join(repo, '.git', gitPath[1]));
-        return (await file.exists()) ? new Response(file) : new Response(null, { status: 404 });
-      }
+      const gitResponse = await serveFixtureGit(repo, path, ['owner/repo', 'coleam00/Archon']);
+      if (gitResponse) return gitResponse;
       const raw =
         /^\/raw\/(?:owner\/repo|coleam00\/Archon)\/([a-f0-9]{40})(?:\/alternate|\/plugins\/provider-codex)?\/archon-plugin.json$/.exec(
           path
@@ -157,6 +143,11 @@ async function cli(
   const child = Bun.spawn([process.execPath, entry, ...args], {
     env: {
       ...process.env,
+      HOME: dirname(env.pluginsDir),
+      USERPROFILE: dirname(env.pluginsDir),
+      CODEX_HOME: join(dirname(env.pluginsDir), '.codex'),
+      CLAUDE_CONFIG_DIR: join(dirname(env.pluginsDir), '.claude'),
+      PI_CODING_AGENT_DIR: join(dirname(env.pluginsDir), '.pi', 'agent'),
       ARCHON_HOME: dirname(env.pluginsDir),
       ARCHON_TELEMETRY_DISABLED: '1',
       DATABASE_URL: '',
@@ -377,22 +368,42 @@ test('invalid provider initialize, ids, capabilities and vendors preserve the pr
  * Holds the staged executable the way Windows does after the install probe ran it: its
  * rename fails with EBUSY `times` times. Retry delays are skipped.
  */
+/**
+ * Skips only the retry wait that follows an injected lock. A real Windows lock on another
+ * file, such as a scanner holding a backup the update just copied, keeps its full budget.
+ */
+function skipInjectedWaits(): { injected: () => void; restore: () => void } {
+  const realSleep = Bun.sleep;
+  let skip = false;
+  const sleep = spyOn(Bun, 'sleep').mockImplementation(async ms => {
+    if (!skip) return realSleep(ms);
+    skip = false;
+  });
+  return {
+    injected: () => {
+      skip = true;
+    },
+    restore: () => sleep.mockRestore(),
+  };
+}
+
 function lockStagedBinary(times: number): () => void {
   const realRename = fs.rename;
   let failures = 0;
+  const waits = skipInjectedWaits();
   const rename = spyOn(fs, 'rename').mockImplementation(async (source, target) => {
     if (String(source).includes(`.${executable}.`) && failures < times) {
       failures++;
+      waits.injected();
       throw Object.assign(new Error(`EBUSY: resource busy or locked, rename '${String(source)}'`), {
         code: 'EBUSY',
       });
     }
     return realRename(source, target);
   });
-  const sleep = spyOn(Bun, 'sleep').mockResolvedValue(undefined);
   return () => {
     rename.mockRestore();
-    sleep.mockRestore();
+    waits.restore();
   };
 }
 
@@ -449,10 +460,13 @@ test('a failed update restores the previous receipt even when the receipt is bri
   const realRename = fs.rename;
   let binaryFailed = false;
   let receiptFailures = 0;
-  const busy = (path: unknown): Error =>
-    Object.assign(new Error(`EBUSY: resource busy or locked, '${String(path)}'`), {
+  const waits = skipInjectedWaits();
+  const busy = (path: unknown): Error => {
+    waits.injected();
+    return Object.assign(new Error(`EBUSY: resource busy or locked, '${String(path)}'`), {
       code: 'EBUSY',
     });
+  };
   const rename = spyOn(fs, 'rename').mockImplementation(async (source, target) => {
     if (String(source).includes(`.${executable}.`)) {
       binaryFailed = true;
@@ -464,13 +478,12 @@ test('a failed update restores the previous receipt even when the receipt is bri
     }
     return realRename(source, target);
   });
-  const sleep = spyOn(Bun, 'sleep').mockResolvedValue(undefined);
   try {
     const failed = await plugin(env, 'update', [`${ID}@v2`]);
     expect(failed.code).toBe(1);
     expect(failed.err).toMatch(/Could not rename .*\.archon-provider-test-provider.*still EBUSY/);
   } finally {
-    sleep.mockRestore();
+    waits.restore();
     rename.mockRestore();
   }
   expect(receiptFailures).toBe(3);
@@ -537,7 +550,11 @@ test('a process holding the install lock excludes competing install, update and 
   expect((await loadProviderPlugins(env.pluginsDir)).map(provider => provider.id)).toEqual([
     'test-provider',
   ]);
-  expect((await cli(env, ['doctor', '--json'])).code).toBe(0);
+  const doctor = await cli(env, ['doctor', '--json']);
+  expect(doctor.output).toContain('✓ Installed providers:');
+  expect(doctor.output).toContain('test-provider: Configuration: Configuration inspected');
+  expect(doctor.output).toContain('opencode: OpenCode runtime:');
+  expect(doctor.output).not.toContain('Plugin mutation locked');
   expect((await spawnMutation('update', `${ID}@v2`))[0]).toBe(0);
   expect((await spawnMutation('remove', ID))[0]).toBe(0);
   expect(await readReceipts(env.pluginsDir)).toEqual([]);

@@ -746,6 +746,22 @@ export class SqliteAdapter implements IDatabase {
       allApplied = false;
     }
 
+    // Names of event-derived inputs live beside the binding intent, not in it: older
+    // binaries parse `intent` strictly and would refuse an extra key.
+    try {
+      const cols = this.prepareAll<{ name: string }>(
+        "PRAGMA table_info('remote_agent_start_receipt_bindings')"
+      );
+      if (!new Set(cols.map(c => c.name)).has('event_input_names')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN event_input_names TEXT'
+        );
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_receipt_bindings_columns_failed');
+      allApplied = false;
+    }
+
     return allApplied;
   }
 
@@ -986,6 +1002,7 @@ export class SqliteAdapter implements IDatabase {
         binding_revision TEXT,
         host_id TEXT,
         intent TEXT,
+        event_input_names TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
         preparation_error TEXT,

@@ -92,6 +92,7 @@ import { AttentionRouter } from './services/attention-router';
 import { WebPushDestination } from './services/web-push';
 import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
+import { hasStartReceiptForDelivery } from '@archon/core/db/resource-starts';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import {
@@ -186,6 +187,12 @@ export interface ServerOptions {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
+  const { loadStoreSelection } = await import('@archon/core/config/store-selection');
+  if ((await loadStoreSelection()) === 'files') {
+    const { FileStoreUnsupportedError: fileStoreUnsupportedError } =
+      await import('@archon/workflows/file-store');
+    throw new fileStoreUnsupportedError('the server (server routes read SQL)');
+  }
   setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
@@ -678,6 +685,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         acceptReceipt: input => resourceStartWorkflowHost.deps.store.acceptStartReceipt(input),
         isKnownUser: async id =>
           (await resourceStartWorkflowHost.records.users.getUserById(id)) !== null,
+        hasDeliveryReceipt: hasStartReceiptForDelivery,
       })
     : undefined;
   // Explicit only: bindings choose their execution host, so the server never guesses one.
