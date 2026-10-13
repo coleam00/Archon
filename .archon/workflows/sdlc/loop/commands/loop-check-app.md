@@ -28,7 +28,7 @@ pull request's description, is what you test.
 - Check out the pull request's head (`gh pr checkout <n>`; if another worktree holds the branch, `git checkout -B <branch> origin/<branch> --ignore-other-worktrees`). Note the commit.
 - Build it and run the app the way a user would, on its real code path rather than a test shortcut. Where the project has a normal mode and a test or harness mode, check what you can in normal mode too: a feature that only works under the harness is not done. How to run it: $INPUTS.runtime
 - Check every contract criterion against the running app, one by one. Save evidence (command output, screenshots, measured values) in the run's artifacts directory, never inside the repository.
-- Holdout scenarios: $INPUTS.holdout. If that names a file, read it and run every scenario in it too. The holdout is private to the reviewers: never quote it, its scenario text, or its thresholds anywhere public (pull requests, issues, commits). In your report, name each holdout scenario only by its id, and describe a failure as the behaviour a user would see.
+- Holdout scenarios: $INPUTS.holdout. If that names a file, read it and run every scenario in it too. The holdout is private to the reviewers: never quote it, its scenario text, or its thresholds anywhere public (pull requests, issues, commits). In your report, name each holdout scenario only by its id, and describe a failure as the behaviour a user would see. When a holdout scenario fails, run it on the default branch too and say whether the failure is new with this change or already there (`FAIL (pre-existing)`).
 - Only then, if a failure needs explaining, look at the diff to locate it.
 
 ## Never
@@ -43,7 +43,7 @@ pull request's description, is what you test.
 APP CHECK <pull request URL> at <commit>
 C1 PASS|FAIL  <criterion, short>  <the command or observation, the value seen>
 C2 ...
-H1 PASS|FAIL  <holdout id>  <what a user sees, no scenario text>
+H1 PASS|FAIL|FAIL (pre-existing)  <holdout id>  <what a user sees, no scenario text>
 Overall: PASS | FAIL (<the main reason>)
 ```
 
