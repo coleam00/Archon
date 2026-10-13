@@ -40,13 +40,17 @@ Use `archon forge resolve --data <json>` for an explicit remote, `archon forge c
 
 ## Users and roles
 
-`archon user` manages persisted roles as the local operator. It requires no git repository and uses the install's configured database (`DATABASE_URL` for PostgreSQL, otherwise `ARCHON_HOME/archon.db`).
+`archon user` manages identities and persisted roles as the local operator. It requires no git repository and uses the install's configured database (`DATABASE_URL` for PostgreSQL, otherwise `ARCHON_HOME/archon.db`).
 
 ```bash
 archon user list                    # Full ids, roles, display names and platform identities
 archon user role <id> admin         # Designate an admin using a full Archon user id
 archon user role <id> member        # Demote a user
+archon user link <id> slack:U123    # Link a platform identity to an existing user
+archon user link <id> slack:U123 --move # Reassign an identity from another user
 ```
+
+Linking requires an existing full user id and a valid platform id. The first colon separates the platform from its opaque user id. A conflicting link fails and names both Archon users unless `--move` is supplied. Moving changes only the identity mapping; both users, their roles and their other data remain unchanged. Linking to the run starter lets chat actions use that user’s existing permissions and record that user as the actor.
 
 Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non-zero exit code. New users are members, while upgrades preserve existing roles. There is no last-admin restriction because the CLI is the operator. Only a run's starter or an admin can act on it; the local operator can always act through the CLI. See [Who can act on a run](/reference/security/#who-can-act-on-a-run) for the action policy and [Users and roles](/reference/security/#users-and-roles) for the upgrade policy and Docker commands.
 
