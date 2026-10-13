@@ -26,20 +26,22 @@ Archon builds this from parts that already exist:
 
 The Archon repository ships one complete example: [`.archon/workflows/examples/proactive-issue-investigation.yaml`](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/examples/proactive-issue-investigation.yaml). It is not part of the bundled pack. Copy it into your project's `.archon/workflows/` to use it.
 
-When an issue opens, it runs four nodes:
+When an issue opens, it runs these nodes:
 
 1. **`classify`** reads the issue on the `small` tier and returns `route` (`investigate` or `skip`) and a one-sentence `reason`. Most issues need no investigation, so the cheap model reads every issue and the stronger model reads only the ones routed onward.
 2. **`investigate`** runs only when `$classify.output.route == 'investigate'`. It reads the issue and the code in the checkout and returns a draft `comment`. Its prompt tells it not to change files or write to GitHub.
 3. **`review`** is an approval gate. Its message shows the classifier's reason and the full draft. Approving continues the run. Rejecting cancels it, so nothing is posted.
 4. **`post`** sends the draft with `gh issue comment`. It is a `bash:` node rather than an agent because the person approved that exact text, and an agent could reword it after approval.
 
-The workflow declares `repository` and `issue_number` as required [inputs](/guides/authoring-workflows/#workflow-signature-inputs-returns-and-inputs), so the trigger binding supplies them. It declares `interactive: true` because `archon validate workflows` requires that of any workflow with an approval gate. The flag changes nothing for a triggered run, which has no chat to stream to.
+The workflow declares `repository` and `issue_number` as required [inputs](/guides/authoring-workflows/#workflow-signature-inputs-returns-and-inputs), so the trigger binding supplies them. It declares `interactive: true` because a workflow that can pause for a person must say so; `archon validate workflows` warns when an approval gate lacks it. The flag changes nothing for a triggered run, which has no chat to stream to.
 
 Every agent node returns a small typed object. Nodes never parse another node's prose, and the `when:` condition compares an enum field, not free text.
 
 ## Start it when an issue opens
 
-Bind the workflow to GitHub issue openings in your [webhook source configuration](/guides/workflow-triggers/#configure-github-event-starts). This binding maps the issue number from the event and the repository from a literal:
+Bind the workflow to GitHub issue openings in your [webhook source configuration](/guides/workflow-triggers/#configure-github-event-starts). GitHub is the maintained event source today; starting runs from signed webhooks and polled events from other systems is tracked in [issue 3975](https://github.com/coleam00/Archon/issues/3975).
+
+This binding maps the issue number from the event and the repository from a literal:
 
 ```json
 {
@@ -71,11 +73,11 @@ A run waiting at the approval gate is `paused`, and a paused run keeps holding i
 
 The run uses the provider configuration and credentials of `runAsUserId`. The `gh` CLI must be authenticated for that user on the execution host, because both agents and the `post` node call it.
 
-To run the same pattern on a timer instead, use a [schedule binding](/guides/workflow-triggers/#configure-a-native-macos-schedule). A schedule has no event to map from, so the workflow's first node has to find its own work, such as listing issues opened since the last run.
+To run the same pattern on a timer instead, use a [schedule binding](/guides/workflow-triggers/#configure-a-native-macos-schedule). A schedule has no event to map from, so the workflow's first node has to find its own work, such as listing issues opened since the last run. Keep that cursor in a [durable state document](/guides/authoring-workflows/#durable-state-documents) and update it from a `bash:` or `script:` node, so the next run starts where this one stopped.
 
 ## Review the draft
 
-A triggered run has no chat conversation, so the gate message is not posted to a chat. Find paused runs and read the draft with the CLI or the Web UI:
+A triggered run has no chat conversation, so the gate message is not posted to a chat. The console's [Needs your input](/guides/workflow-triggers/#find-runs-needing-your-input) banner lists the paused run with its gate message and approve and reject controls. From the CLI, find paused runs and read the draft with:
 
 ```bash
 archon workflow status --all
@@ -91,7 +93,7 @@ archon workflow reject <run-id> "Wrong root cause"
 
 ## Check the routes before deploying
 
-Two fixtures beside the workflow cover its outcomes. `posted` routes an issue to investigation, auto-approves the gate, and checks that the gate message and the `post` node both carry the draft. `skipped` routes an issue to `skip` and fails if any later node runs. Run them without calling a model or GitHub:
+The fixtures beside the workflow cover its outcomes. `posted` routes an issue to investigation, auto-approves the gate, and checks that the gate message and the `post` node both carry the draft. `skipped` routes an issue to `skip` and fails if any later node runs. Run them without calling a model or GitHub:
 
 ```bash
 archon workflow test proactive-issue-investigation
