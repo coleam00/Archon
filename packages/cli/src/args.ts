@@ -22,6 +22,7 @@ export const cliArgOptions: CliArgOptions = {
   supersedes: { type: 'string' },
   open: { type: 'boolean' },
   spawn: { type: 'boolean' },
+  providers: { type: 'string' },
   quiet: { type: 'boolean', short: 'q' },
   verbose: { type: 'boolean', short: 'v' },
   json: { type: 'boolean' },
@@ -69,6 +70,8 @@ export const cliArgOptions: CliArgOptions = {
   model: { type: 'string', multiple: true },
   config: { type: 'string' },
   host: { type: 'string' },
+  'delivery-id': { type: 'string' },
+  inputs: { type: 'string' },
   owner: { type: 'string' },
   // Private sealed handoff appended by the parent of a detached workflow run.
   'internal-detached-run-config': { type: 'string' },

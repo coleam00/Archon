@@ -593,12 +593,14 @@ export class PiProvider implements IAgentProvider {
   async diagnose(
     request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
   ): Promise<ProviderDiagnostics> {
+    request.signal.throwIfAborted();
     const checks: ProviderDiagnostics['checks'] = [];
     try {
       ensurePiPackageDirShim();
       await import('@earendil-works/pi-coding-agent');
       checks.push({ id: 'pi-sdk', label: 'Pi SDK', status: 'ok', message: 'Pi SDK loaded' });
     } catch (error) {
+      request.signal.throwIfAborted();
       return {
         checks: [
           {
@@ -618,8 +620,9 @@ export class PiProvider implements IAgentProvider {
           (entry): entry is [string, string] => entry[1] !== undefined
         )
       ),
-      signal: new AbortController().signal,
+      signal: request.signal,
     });
+    request.signal.throwIfAborted();
     checks.push({
       id: 'pi-credentials',
       label: 'Pi backend credentials',
@@ -760,8 +763,7 @@ export class PiProvider implements IAgentProvider {
     // reads a package.json that doesn't exist next to the executable).
     //
     // Class constructors (AuthStorage, ModelRegistry, SettingsManager) are
-    // accessed via `piCodingAgent.X` rather than destructured, because
-    // destructured PascalCase bindings trip eslint's naming-convention rule.
+    // accessed via `piCodingAgent.X` rather than destructured.
     const [
       piCodingAgent,
       { bridgeSession },

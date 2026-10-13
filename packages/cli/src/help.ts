@@ -335,9 +335,8 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'doctor',
-    spec: 'doctor [--full]',
-    description:
-      'Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)',
+    spec: 'doctor',
+    description: 'Verify installed provider diagnostics, gh auth, DB, and adapters',
   },
   {
     command: 'auth',
@@ -540,8 +539,15 @@ const scopedOnlyHelp: HelpEntry[] = [
   {
     command: 'trigger',
     subcommand: 'fire',
-    spec: 'trigger fire --config <file>',
-    description: 'Record a configured timer start and drain its execution host',
+    spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>]',
+    description: 'Record a configured start and drain its execution host',
+    scopedFlags: [
+      {
+        spec: '--delivery-id <key>',
+        description: 'Deduplicate this delivery within the configured source',
+      },
+      { spec: '--inputs <file>', description: 'Read event input values from a JSON object' },
+    ],
   },
   {
     command: 'trigger',
@@ -772,6 +778,12 @@ const orderedFlags: FlagHelp[] = [
     spec: '--pause-at-gates',
     description: 'Stop a dry-run at approval gates instead of auto-approving',
     owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
+    spec: '--providers <ids>',
+    description:
+      'Install comma-separated maintained providers, skipping the setup provider question',
+    owners: [{ command: 'setup' }],
   },
   {
     spec: '--spawn',

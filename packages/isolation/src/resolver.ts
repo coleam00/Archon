@@ -1,3 +1,4 @@
+import type { WorktreeSetupExecutor } from './types';
 /**
  * IsolationResolver — encapsulates all isolation resolution logic.
  *
@@ -226,7 +227,8 @@ export class IsolationResolver {
       hints,
       canonicalPath,
       request.platformType,
-      request.userId
+      request.userId,
+      request.setupExecutor
     );
   }
 
@@ -474,7 +476,8 @@ export class IsolationResolver {
     hints: IsolationHints | undefined,
     canonicalPath: RepoPath,
     platformType: string,
-    userId: string | undefined
+    userId: string | undefined,
+    setupExecutor?: WorktreeSetupExecutor
   ): Promise<IsolationResolution> {
     // Construct request based on workflow type
     const baseRequest = {
@@ -509,7 +512,7 @@ export class IsolationResolver {
 
     let isolatedEnv: Awaited<ReturnType<typeof this.provider.create>>;
     try {
-      isolatedEnv = await this.provider.create(isolationRequest);
+      isolatedEnv = await this.provider.create(isolationRequest, setupExecutor);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
 

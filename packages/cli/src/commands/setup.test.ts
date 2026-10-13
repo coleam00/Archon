@@ -1,14 +1,15 @@
 /**
  * Tests for setup command utility functions
  */
-import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   bootstrapProjectConfig,
+  selectSetupProviders,
+  collectAIConfig,
   checkExistingConfig,
-  checkPiModule,
   generateEnvContent,
   generateWebhookSecret,
   detectClaudeExecutablePath,
@@ -19,8 +20,12 @@ import {
   buildDefaultModelChoices,
   readInstallDefaultModel,
   writeInstallDefaults,
+  setupCommand,
 } from './setup';
 import * as setupModule from './setup';
+import * as doctorModule from './doctor';
+import * as prompts from '@clack/prompts';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { parse as parseDotenv } from 'dotenv';
 
 // Test directory for file operations
@@ -865,21 +870,6 @@ describe('writeHomePiModelConfig', () => {
   });
 });
 
-describe('checkPiModule', () => {
-  it('returns ok:true when loader resolves', async () => {
-    const result = await checkPiModule(async () => ({}));
-    expect(result.ok).toBe(true);
-  });
-
-  it('returns ok:false when loader throws (Pi binary missing)', async () => {
-    const result = await checkPiModule(async () => {
-      throw new Error('Cannot find module @earendil-works/pi-coding-agent');
-    });
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain('pi-coding-agent');
-  });
-});
-
 describe('buildDefaultModelChoices (#1999)', () => {
   it('leads with "Keep SDK default" when no current model and ends with the free-text escape', () => {
     const choices = buildDefaultModelChoices('claude', undefined);
@@ -1023,4 +1013,120 @@ describe('readInstallDefaultModel (#1999)', () => {
     // Best-effort hint read: a hand-edited broken config must not break setup.
     expect(readInstallDefaultModel('claude', configAt(':: not yaml ::\n\t{ nope'))).toBeUndefined();
   });
+});
+
+describe('setup provider selection', () => {
+  it('an explicit selection installs without asking', async () => {
+    const install = mock(async (_ids: readonly string[]) => undefined);
+    const ask = mock(async () => ['claude']);
+    expect(await selectSetupProviders(['codex'], install, ask)).toEqual(['codex']);
+    expect(install).toHaveBeenCalledWith(['codex']);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('the maintained-provider multiselect drives installation', async () => {
+    const prompt = spyOn(prompts, 'multiselect').mockResolvedValue(['codex', 'pi']);
+    const install = mock(async (_ids: readonly string[]) => undefined);
+    try {
+      expect(await selectSetupProviders(undefined, install)).toEqual(['codex', 'pi']);
+      expect(install).toHaveBeenCalledWith(['codex', 'pi']);
+      expect(prompt.mock.calls[0][0].options.map(option => option.value)).toEqual([
+        'claude',
+        'codex',
+        'pi',
+      ]);
+    } finally {
+      prompt.mockRestore();
+    }
+  });
+
+  it('an empty selection installs nothing and prints the install command', async () => {
+    const install = mock(async (_ids: readonly string[]) => undefined);
+    const warning = spyOn(prompts.log, 'warning').mockImplementation(() => undefined);
+    try {
+      expect(await selectSetupProviders([], install)).toEqual([]);
+      expect(install).not.toHaveBeenCalled();
+      expect(warning.mock.calls.flat().join('')).toContain('archon provider install');
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it('validates the whole selection before installing and propagates install failure', async () => {
+    const install = mock(async (_ids: readonly string[]) => {
+      throw new Error('download failed');
+    });
+    await expect(selectSetupProviders(['codex', 'unknown'], install)).rejects.toThrow(
+      'Unknown maintained provider'
+    );
+    expect(install).not.toHaveBeenCalled();
+    await expect(selectSetupProviders(['codex'], install)).rejects.toThrow('download failed');
+  });
+
+  it.each(['fresh', 'add'] as const)(
+    '%s setup uses diagnostics and persists the selected default for multiple providers',
+    async mode => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-setup-providers-'));
+      const saved = {
+        HOME: process.env.HOME,
+        USERPROFILE: process.env.USERPROFILE,
+        ARCHON_HOME: process.env.ARCHON_HOME,
+      };
+      process.env.HOME = root;
+      process.env.USERPROFILE = root;
+      process.env.ARCHON_HOME = join(root, 'archon');
+      if (mode === 'add') {
+        mkdirSync(join(root, 'archon'));
+        writeFileSync(join(root, 'archon', '.env'), 'SLACK_BOT_TOKEN=preserved\n');
+      }
+      const selection = spyOn(prompts, 'select').mockImplementation(async options => {
+        const wanted =
+          options.message === 'What would you like to do?'
+            ? 'add'
+            : options.message.startsWith('How do you want')
+              ? 'global'
+              : options.message.startsWith('Which should')
+                ? 'codex'
+                : '__keep__';
+        const chosen = options.options.find(option => option.value === wanted);
+        if (!chosen) throw new Error(`Unexpected prompt: ${options.message}`);
+        return chosen.value;
+      });
+      const input = spyOn(prompts, 'text').mockResolvedValue('');
+      const confirm = spyOn(prompts, 'confirm').mockResolvedValue(false);
+      const detect = spyOn(setupModule, 'detectClaudeExecutablePath').mockReturnValue(null);
+      const info = spyOn(prompts.log, 'info').mockImplementation(() => undefined);
+      const install = mock(async (_ids: readonly string[]) => undefined);
+      const diagnose = mock(async (id: string) => [
+        { label: id, status: 'pass' as const, message: 'provider-owned check' },
+      ]);
+      const originalCollect = collectAIConfig;
+      const collect = spyOn(setupModule, 'collectAIConfig').mockImplementation(options =>
+        originalCollect(options, install, diagnose)
+      );
+      const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+      const doctor = spyOn(doctorModule, 'doctorCommand').mockResolvedValue(0);
+      try {
+        expect(await setupCommand({ repoPath: root, providers: ['claude', 'codex'] })).toBe(0);
+        expect(install).toHaveBeenCalledWith(['claude', 'codex']);
+        expect(diagnose.mock.calls).toEqual([['claude'], ['codex']]);
+        expect(info.mock.calls.flat().join('')).toContain('provider-owned check');
+        const written = Bun.YAML.parse(readFileSync(join(root, 'archon', 'config.yaml'), 'utf8'));
+        expect(written).toMatchObject({ defaultAssistant: 'codex' });
+        if (mode === 'add') {
+          expect(readFileSync(join(root, 'archon', '.env'), 'utf8')).toContain(
+            'SLACK_BOT_TOKEN=preserved'
+          );
+        }
+      } finally {
+        for (const spy of [selection, input, confirm, detect, info, collect, platforms, doctor])
+          spy.mockRestore();
+        for (const key of ['HOME', 'USERPROFILE', 'ARCHON_HOME'] as const) {
+          if (saved[key] === undefined) delete process.env[key];
+          else process.env[key] = saved[key];
+        }
+        await removeTempTree(root);
+      }
+    }
+  );
 });

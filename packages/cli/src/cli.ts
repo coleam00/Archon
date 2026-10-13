@@ -647,6 +647,9 @@ async function main(): Promise<number> {
             config: typeof values.config === 'string' ? values.config : undefined,
             host: typeof values.host === 'string' ? values.host : undefined,
             owner: typeof values.owner === 'string' ? values.owner : undefined,
+            deliveryId:
+              typeof values['delivery-id'] === 'string' ? values['delivery-id'] : undefined,
+            inputs: typeof values.inputs === 'string' ? values.inputs : undefined,
             limit: typeof values.limit === 'string' ? values.limit : undefined,
             yes: values.yes === true,
           },
@@ -710,11 +713,20 @@ async function main(): Promise<number> {
         const { setupCommand } = await loadRoute(() => import('./commands/setup'), {
           database: true,
         });
+        const providers = (values.providers as string | undefined) ?? process.env.ARCHON_PROVIDERS;
         const setupExitCode = await setupCommand({
           spawn: spawnFlag,
           repoPath,
           scope,
           force: forceFlag,
+          ...(providers !== undefined
+            ? {
+                providers: providers
+                  .split(',')
+                  .map(id => id.trim())
+                  .filter(Boolean),
+              }
+            : {}),
         });
         if (setupExitCode !== 0) return setupExitCode;
         break;
@@ -1351,7 +1363,7 @@ async function main(): Promise<number> {
         const { doctorCommand } = await loadRoute(() => import('./commands/doctor'), {
           database: true,
         });
-        return await doctorCommand(undefined, Boolean(values.full));
+        return await doctorCommand();
       }
 
       case 'auth': {

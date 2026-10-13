@@ -202,6 +202,30 @@ test('ignores a recursive helper that is never passed to a hook', () => {
   expect(checkSource('packages/example/src/example.test.ts', source)).toEqual([]);
 });
 
+test('rejects trackTempRoots() at the top level of a shared test module only', () => {
+  const topLevel = `
+    import { trackTempRoots as track } from '@archon/paths/test-utils';
+    const trackTempRoot = track();
+  `;
+  const namespaced = `
+    import * as paths from '@archon/paths/test-utils';
+    const trackTempRoot = paths.trackTempRoots();
+  `;
+  const perCaller = `
+    import { trackTempRoots } from '@archon/paths/test-utils';
+    export function runner() { const trackTempRoot = trackTempRoots(); return trackTempRoot; }
+  `;
+
+  expect(checkSource('packages/example/src/harness.ts', topLevel)).toEqual([
+    expect.objectContaining({ rule: 'shared-tracker', line: 3 }),
+  ]);
+  expect(checkSource('packages/example/src/harness.ts', namespaced)).toEqual([
+    expect.objectContaining({ rule: 'shared-tracker', line: 3 }),
+  ]);
+  expect(checkSource('packages/example/src/example.test.ts', topLevel)).toEqual([]);
+  expect(checkSource('packages/example/src/harness.ts', perCaller)).toEqual([]);
+});
+
 test('rejects a malformed or duplicated ledger entry at construction', () => {
   expect(() =>
     buildLedger([

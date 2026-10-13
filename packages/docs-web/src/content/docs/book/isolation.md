@@ -131,6 +131,27 @@ This is the full lifecycle close-out. Run it after merging and you're back to a 
 
 **Don't run the same branch twice simultaneously.** Each branch name maps to exactly one worktree. Starting a second workflow on the same branch will conflict with the first.
 
+## Provisioning new worktrees
+
+Use repository configuration to prepare dependencies and generated files before agents start:
+
+```yaml
+worktree:
+  copyFiles: ['.env']
+  postCreate:
+    - bun install --frozen-lockfile
+    - ./scripts/setup.sh
+  postCreateTimeout: 300000
+```
+
+Commands run in order in the new checkout, after submodules and copied files, with empty stdin. The timeout applies to each command. On macOS and Linux a command owns a process group: timeout, command exit (including success), or the owning Archon process ending kills the whole group, including background jobs. This covers Ctrl-C, stopping a detached owner, server exit, and even owner SIGKILL. Setup confirms the group is gone before settling. Processes that create their own session or group, such as `setsid` or a daemon, and external services such as `docker compose up -d`, escape cleanup. Setup provisions a checkout; it should not leave a server running.
+
+On Windows the timeout uses `taskkill /T /F` on the command's live tree. It can miss descendants whose parent already exited, and command exit leaves background jobs running; redirect their output so setup can finish. Windows owner-stop paths keep their existing behavior. Cooperative cancellation while a foreground or server owner stays alive does not interrupt setup.
+
+Existing checkouts are reused without running setup again. Managed project environment variables are available, with the same precedence and credential restrictions as host `bash:` nodes. Copied `.env` files are not loaded automatically; scripts may source them explicitly.
+
+A failed command stops creation, with its exit code or timeout and redacted output reported. Setup events are retained on the workflow run, or the parent for an isolated child, and rendered in `workflow logs`. Manual `/worktree` creation writes application logs. Failed setup that leaves files or changes can leave a locked checkout; inspect the path reported in the error before unlocking or removing it. Worktrees separate checkouts and do not sandbox setup commands.
+
 ---
 
 Now that you understand how isolation protects your work, you're ready to start building. In [Chapter 6: Creating Your First Command →](/book/first-command/), you'll write the atomic unit of Archon — the command file — from scratch.

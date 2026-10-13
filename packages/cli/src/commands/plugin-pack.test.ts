@@ -1,3 +1,4 @@
+import { createPluginRepo } from '../test-support/plugin-fixture';
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -79,8 +80,7 @@ function commitTree(entries: Record<string, { mode: string; oid: string }>, tag:
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'plugin-pack-fixture-'));
   repo = join(root, 'owner', 'packs.git');
-  await mkdir(repo, { recursive: true });
-  git(['init', '-q']);
+  await createPluginRepo(repo);
   await write('README.md', 'not part of any plugin\n');
   const kit = 'packs/review-kit';
   await write(

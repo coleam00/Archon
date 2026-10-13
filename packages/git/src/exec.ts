@@ -94,6 +94,7 @@ export async function execFileAsync(
     maxBuffer?: number;
     env?: NodeJS.ProcessEnv;
     windowsHide?: boolean;
+    killSignal?: NodeJS.Signals;
   }
 ): Promise<{ stdout: string; stderr: string }> {
   const result = await promisifiedExecFile(cmd, args, { windowsHide: true, ...options });

@@ -10,9 +10,11 @@ const execFileAsync = promisify(execFile);
 export async function diagnoseBinary(
   id: string,
   label: string,
-  resolve: () => Promise<{ path: string; source: string } | undefined>
+  resolve: () => Promise<{ path: string; source: string } | undefined>,
+  signal: AbortSignal
 ): Promise<ProviderDiagnostics> {
   try {
+    signal.throwIfAborted();
     const binary = await resolve();
     if (!binary)
       return {
@@ -20,13 +22,14 @@ export async function diagnoseBinary(
           { id, label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' },
         ],
       };
-    await execFileAsync(binary.path, ['--version'], { timeout: 5000 });
+    await execFileAsync(binary.path, ['--version'], { timeout: 5000, signal });
     return {
       checks: [
         { id, label, status: 'ok', message: `${binary.path} (via ${binary.source}, spawns OK)` },
       ],
     };
   } catch (error) {
+    signal.throwIfAborted();
     return {
       checks: [
         {

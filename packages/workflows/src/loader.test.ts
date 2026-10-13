@@ -6209,7 +6209,7 @@ nodes:
       expect(result.workflows.some(w => w.workflow.name === 'mc-parent')).toBe(false);
     });
 
-    it("points misplaced composed fan-out 'mutates_checkout' to the included workflow", async () => {
+    it("rejects a node-level 'mutates_checkout' on a composed fan-out", async () => {
       await writeWorkflowFile(
         testDir,
         'mc-fan-block.yaml',
@@ -6223,7 +6223,7 @@ nodes:
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const err = result.errors.find(e => e.filename === 'mc-fan-parent.yaml');
-      expect(err?.error).toContain('root of the included workflow');
+      expect(err?.error).toContain('share its checkout');
       expect(err?.error).toContain('fan_out.max_parallel: 1');
     });
 
@@ -6368,7 +6368,7 @@ nodes:
       expect(payload.webSearchModeNote).toContain('no per-node form');
     });
 
-    it('consumes target mutates_checkout for composed fan-out instead of warning it was dropped', async () => {
+    it('warns that a composed fan-out drops the block mutates_checkout, like any include', async () => {
       await writeWorkflowFile(
         testDir,
         'read-only-block.yaml',
@@ -6387,7 +6387,9 @@ nodes:
           c[1] === 'include.workflow_level_fields_dropped' &&
           (c[0] as { include?: string }).include === 'fan'
       );
-      expect(call).toBeUndefined();
+      expect((call?.[0] as { droppedFields?: string[] } | undefined)?.droppedFields).toContain(
+        'mutates_checkout'
+      );
     });
 
     it('does not warn that an included block dropped its deprecated: notice', async () => {
@@ -7257,7 +7259,6 @@ nodes:
             containerExec: false,
             requiresAllPropertiesRequired: false,
           }),
-          // eslint-disable-next-line require-yield
           async *sendQuery() {
             return;
           },
@@ -7358,7 +7359,6 @@ nodes:
             containerExec: false,
             requiresAllPropertiesRequired: false,
           }),
-          // eslint-disable-next-line require-yield
           async *sendQuery() {
             return;
           },
