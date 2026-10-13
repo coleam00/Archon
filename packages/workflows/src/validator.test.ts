@@ -509,7 +509,7 @@ describe('validateWorkflowResources — loop.command', () => {
     // command-nodes already get.
     const command = formatPackagedResourceReference(
       { source: 'bundled', pack: 'sdlc', workflow: 'deliver' },
-      'route-review'
+      'ci'
     );
     const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', command)]);
     const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
