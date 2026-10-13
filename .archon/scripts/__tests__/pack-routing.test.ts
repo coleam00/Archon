@@ -139,7 +139,7 @@ describe("deliver's terminal outcome", () => {
 });
 
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; next_review: string }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -202,6 +202,13 @@ describe("deliver's round", () => {
     });
   });
 
+  it('reviews the next round light only after a CI fix', () => {
+    expect(round({ INPUTS_CI: 'pr_caused' }).next_review).toBe('light');
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI: 'null' }).next_review).toBe(
+      'delta'
+    );
+  });
+
   it('points the next round at the published review report', () => {
     expect(round({}).prior_report).toEndWith('/review/report.md');
     expect(round({ INPUTS_GREEN: 'false', INPUTS_PRIOR_REPORT: '/earlier/report.md', INPUTS_REVIEW_READY: 'null' }).prior_report).toBe(
@@ -211,9 +218,9 @@ describe("deliver's round", () => {
 });
 
 describe('review lens gating', () => {
-  // The route agent's schema and the lens nodes must name the same lenses; this holds
-  // the pair in step.
-  it('gates every lens node on the route boolean of the same name', async () => {
+  // The route agent's schema, the mode node's rerun selection and the lens nodes must
+  // name the same lenses; this holds the three in step.
+  it('gates every lens node on the route or rerun boolean of the same name', async () => {
     const source = await Bun.file(
       join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml')
     ).text();
@@ -227,11 +234,14 @@ describe('review lens gating', () => {
     };
     const lenses = workflow.nodes.filter(node => node.output_type === 'review-lens');
     const route = workflow.nodes.find(node => node.id === 'route');
-    expect(Object.keys(route?.output_format?.properties ?? {}).sort()).toEqual(
-      [...lenses.map(node => node.id), 'reason'].sort()
-    );
+    const ids = lenses.map(node => node.id);
+    expect(Object.keys(route?.output_format?.properties ?? {}).sort()).toEqual([...ids, 'reason'].sort());
+    const mode = Object.keys(workflow.nodes.find(node => node.id === 'mode')?.output_format?.properties ?? {});
+    expect(mode).toEqual(expect.arrayContaining(ids));
     for (const lens of lenses) {
-      expect(lens.when).toBe(`$mode.output.continuation == false && $route.output.${lens.id} == true`);
+      expect(lens.when).toBe(
+        `$mode.output.route == true && $route.output.${lens.id} == true || $mode.output.${lens.id} == true`
+      );
     }
   });
 });

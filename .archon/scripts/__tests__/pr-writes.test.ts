@@ -498,6 +498,16 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
 
   // An unpushed correction once reached publication with a scope that declared no
   // pull request; the error named the declaration instead of the unpushed head.
+  it('records the route selection beside the report for the next round to rerun', () => {
+    const lenses = { seams: true, code: true, tests: false, errors: false, docs: false, reason: 'r' };
+    const first = publishReview({ inputs: { ...report, INPUTS_LENSES: JSON.stringify(lenses) } });
+    expect(first.code).toBe(0);
+    const recorded = join(first.artifacts, 'lenses.json');
+    expect(JSON.parse(readFileSync(recorded, 'utf8'))).toEqual(lenses);
+    const later = publishReview({ inputs: { ...report, INPUTS_LENSES: 'null' } });
+    expect(existsSync(join(later.artifacts, 'lenses.json'))).toBe(false);
+  });
+
   it('names an unpushed head before any scope disagreement', () => {
     const result = publishReview({
       inputs: {

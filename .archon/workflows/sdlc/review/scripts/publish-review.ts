@@ -25,6 +25,8 @@
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
  *   INPUTS_DISCOVERIES: the certified verdict fields this node forwards.
+ * - INPUTS_LENSES: the route agent's selection, or `null` when it did not run this
+ *   round. Recorded beside the report so a later round reruns the same lenses.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -118,8 +120,12 @@ try {
       rmSync(directory, { recursive: true, force: true });
     }
   }
-  // review-round reads this as the next round's cursor.
+  // review-round reads these as the next round's cursor and lens selection.
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
+  const lenses = text(process.env.INPUTS_LENSES);
+  if (lenses !== '' && lenses !== 'null') {
+    writeFileSync(join(dirname(reportPath), 'lenses.json'), `${lenses}\n`);
+  }
   emit(verdict);
 } catch (error) {
   refuse(`publish-review: ${error instanceof Error ? error.message : String(error)}`);

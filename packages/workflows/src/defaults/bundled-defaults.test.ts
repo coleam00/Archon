@@ -305,6 +305,9 @@ describe('bundled-defaults', () => {
         scope: '$pr.output',
         work_order: '$INPUTS.work',
         errors: '$INPUTS.errors',
+        // Later rounds review the delta since the last reviewed commit.
+        prior_report: '$LOOP_PREV.round.output.prior_report',
+        depth: '$LOOP_PREV.round.output.next_review',
       });
       // One typed value carries the target — not the same number bound twice
       // beside a head branch nothing downstream reads (#2968).
@@ -312,9 +315,10 @@ describe('bundled-defaults', () => {
       expect(review.with).not.toHaveProperty('pr_head');
     });
 
-    // Every implementation pass is reviewed before CI, with one named exception: the
-    // post-review reshape, which adopts or declines the structure pass's findings and
-    // goes straight to CI. Its edits reaching CI unreviewed is the delivery design.
+    // Every implementation pass before CI is reviewed: the first by the full routed
+    // review, later ones by delta (the same lenses after review findings, the general
+    // code reviewer after a CI fix). One named exception: the post-review reshape,
+    // which adopts or declines the structure pass's findings and goes straight to CI.
     it('archon-deliver reviews every implementation pass except the post-review reshape', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],

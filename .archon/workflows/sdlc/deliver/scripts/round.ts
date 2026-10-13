@@ -4,6 +4,8 @@
  * A loop_group that exhausts max_iterations fails the run instead of ending it with
  * a reason, so this node counts rounds itself and declares the run done at ROUND_CAP.
  * Everything else is read from the round's own typed outputs; nothing here judges.
+ * It also says how the next round's review runs: after a CI fix, the general code
+ * reviewer alone on the delta (`light`); otherwise the same lenses on the delta.
  *
  * Bound inputs (canonical text; a skipped producer arrives as "null"):
  * - INPUTS_PREVIOUS / INPUTS_PRIOR_REPORT / INPUTS_PREVIOUS_PR_URL: the previous round's
@@ -72,6 +74,7 @@ emit({
   // A round whose implementer stopped opens no pull request; an earlier round's stands.
   pr_url: prUrl === 'null' ? text(process.env.INPUTS_PREVIOUS_PR_URL) : prUrl,
   // The next round's review continues from the last published report, if any.
+  next_review: reason === 'ci_pr_caused' ? 'light' : 'delta',
   prior_report:
     reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
   summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(process.env[`INPUTS_${SUMMARY_OF[reason]}`])}`,

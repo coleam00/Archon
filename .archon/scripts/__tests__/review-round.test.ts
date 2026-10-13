@@ -57,17 +57,27 @@ function execution(head: string): object {
   };
 }
 
-function round(cwd: string, head: string, cursor?: string): ScriptRun {
+function round(
+  cwd: string,
+  head: string,
+  cursor?: string,
+  extra: { depth?: string; lenses?: object } = {}
+): ScriptRun {
   return runPackScript('review/scripts/review-round', {
     cwd,
     inputs: {
       INPUTS_PRIOR_REPORT: cursor === undefined ? '' : '{ARTIFACTS}/review/report.md',
+      INPUTS_DEPTH: extra.depth ?? '',
       ARCHON_NODE_EXECUTION: JSON.stringify(execution(head)),
     },
     artifacts:
       cursor === undefined
         ? {}
-        : { 'review/report.md': 'Round 1', 'review/reviewed-head': `${cursor}\n` },
+        : {
+            'review/report.md': 'Round 1',
+            'review/reviewed-head': `${cursor}\n`,
+            ...(extra.lenses ? { 'review/lenses.json': JSON.stringify(extra.lenses) } : {}),
+          },
   });
 }
 
@@ -82,6 +92,7 @@ describe('review-round', () => {
       cursor: '',
       risks: FULL_REVIEW_RISKS,
       execution: execution(newer),
+      route: true, seams: false, code: false, tests: false, errors: false, docs: false,
     });
   });
 
@@ -95,6 +106,26 @@ describe('review-round', () => {
       cursor: older,
       risks: FULL_REVIEW_RISKS,
       execution: execution(newer),
+      route: true, seams: false, code: false, tests: false, errors: false, docs: false,
+    });
+  });
+
+  it('reruns the recorded lenses on a later round, and the code reviewer alone after a CI fix', () => {
+    const { cwd, older, newer } = history();
+    const recorded = { seams: true, code: true, tests: false, errors: true, docs: false, reason: 'r' };
+    expect(JSON.parse(round(cwd, newer, older, { lenses: recorded }).stdout)).toMatchObject({
+      route: false,
+      seams: true,
+      code: true,
+      tests: false,
+      errors: true,
+      docs: false,
+    });
+    expect(JSON.parse(round(cwd, newer, older, { lenses: recorded, depth: 'light' }).stdout)).toMatchObject({
+      route: false,
+      seams: false,
+      code: true,
+      errors: false,
     });
   });
 
