@@ -18,13 +18,11 @@ export const PUSH_DESTINATION_STATES = [
   'misconfigured',
 ] as const;
 export type PushDestinationState = (typeof PUSH_DESTINATION_STATES)[number];
+export type PushDeliveryResult = Pick<AttentionNoticeData, 'conversationId'>;
 export interface PushDestination {
   readonly id: string;
   state(): Promise<PushDestinationState>;
-  deliver(
-    notice: AttentionNotice,
-    previous?: AttentionNoticeData
-  ): Promise<{ conversationId?: string }>;
+  deliver(notice: AttentionNotice, previous?: AttentionNoticeData): Promise<PushDeliveryResult>;
 }
 
 export class AttentionRouter {
@@ -89,7 +87,11 @@ export class AttentionRouter {
         await persistWorkflowEvent({
           workflow_run_id: notice.run.id,
           event_type: 'attention_notice_sent',
-          data: { destination: destination.id, key: notice.key, ...result },
+          data: {
+            destination: destination.id,
+            key: notice.key,
+            conversationId: result.conversationId,
+          },
         });
         this.log.info('attention.notice_sent');
       } catch (err) {

@@ -21,7 +21,7 @@ import {
   type AttentionNotice,
 } from '@archon/core/services/attention-notices';
 import type { WebPushSubscription, WebPushPayload } from '@archon/core/schemas/web-push';
-import type { PushDestination, PushDestinationState } from './attention-router';
+import type { PushDestination, PushDestinationState, PushDeliveryResult } from './attention-router';
 
 const vapidSchema = z.object({ publicKey: z.string().min(1), privateKey: z.string().min(1) });
 export function loadVapidKeys(home: string = getArchonHome()): z.infer<typeof vapidSchema> {
@@ -113,7 +113,7 @@ export class WebPushDestination implements PushDestination {
     return (await listWebPushSubscriptions()).length > 0 ? 'active' : 'no_subscribers';
   }
 
-  async deliver(notice: AttentionNotice): Promise<{ conversationId?: string }> {
+  async deliver(notice: AttentionNotice): Promise<PushDeliveryResult> {
     const subscriptions = await listWebPushSubscriptions();
     if (subscriptions.length === 0) throw new Error('Web push has no subscribers');
     const keys = loadVapidKeys();
