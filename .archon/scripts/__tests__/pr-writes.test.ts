@@ -6,7 +6,8 @@
  * not read back is reported as a failure rather than a delivery.
  */
 import { describe, expect, it } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   PR,
@@ -95,6 +96,67 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(result.stderr).toContain('already has this head');
+  });
+
+  // The branch is already pushed when publish runs: an intent the agent wrote badly
+  // must not fail the delivery, because the checkout answers what it restates.
+  describe('completes an unreadable or partial intent from the checkout', () => {
+    function checkout(): { dir: string; sha: string } {
+      const dir = mkdtempSync(join(tmpdir(), 'archon-publish-pr-'));
+      const run = (...args: string[]): string => {
+        const result = Bun.spawnSync(['git', ...args], { cwd: dir, stdout: 'pipe', stderr: 'pipe' });
+        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+        return result.stdout.toString().trim();
+      };
+      run('init', '-q', '-b', 'feature');
+      run('config', 'user.email', 'test@example.com');
+      run('config', 'user.name', 'test');
+      run('remote', 'add', 'origin', 'https://ghe.example.com/example/repo.git');
+      writeFileSync(join(dir, 'a.txt'), 'a');
+      run('add', '.');
+      run('commit', '-q', '-m', 'Add the thing');
+      run('update-ref', 'refs/remotes/origin/dev', 'HEAD');
+      run('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/dev');
+      return { dir, sha: run('rev-parse', 'HEAD') };
+    }
+
+    it('publishes when the intent file is not JSON at all', () => {
+      const { dir, sha } = checkout();
+      try {
+        const result = publishPr({
+          cwd: dir,
+          artifacts: { 'pr-intent.json': '{ "repo": oops' },
+          gh: { noOpenPr: true, pr: { headRefName: 'feature', headRefOid: sha, isDraft: true } },
+        });
+        expect(result.stderr).toContain('could not read the PR intent');
+        expect(result.code).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+        const create = result.gh.find(call => call.startsWith('pr create')) ?? '';
+        expect(create).toContain('--head feature');
+        expect(create).toContain('--base dev');
+        expect(create).toContain('Add the thing');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('fills missing fields, reads a string draft, and keeps what the agent did write', () => {
+      const { dir, sha } = checkout();
+      try {
+        const result = publishPr({
+          cwd: dir,
+          intent: { repo: PR.repo, head: 'feature', title: 'Agent title', draft: 'true' },
+          gh: { noOpenPr: true, pr: { headRefName: 'feature', headRefOid: sha, isDraft: true } },
+        });
+        expect(result.code).toBe(0);
+        expect(result.stderr).toContain('filled headRevision, base');
+        const create = result.gh.find(call => call.startsWith('pr create')) ?? '';
+        expect(create).toContain('Agent title');
+        expect(create).toContain('--draft');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it('refuses when a create reports success but no pull request has that head', () => {
@@ -278,6 +340,26 @@ describe('publish-pr-body applies the resync and proves it landed', () => {
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('does not match what was written');
+  });
+
+  // The body is a description: a badly written intent must not fail a finished delivery.
+  it('publishes the written body when the intent cannot be read', () => {
+    const result = publishBody({
+      inputs: { INPUTS_PR: record },
+      artifacts: { 'pr-body-intent.json': '{ change: yes' },
+    });
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain('could not read the body intent');
+    expect(result.gh.some(call => call.startsWith('pr edit 42 --repo'))).toBe(true);
+  });
+
+  it('leaves the body alone when the intent is unreadable and no body was written', () => {
+    const result = publishBody({
+      inputs: { INPUTS_PR: record, INPUTS_INTENT: '{ARTIFACTS}/elsewhere/body-intent.json' },
+    });
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain('the current body stays as it is');
+    expect(result.gh.some(call => call.startsWith('pr edit'))).toBe(false);
   });
 
   it('writes nothing at all when the body was already accurate', () => {

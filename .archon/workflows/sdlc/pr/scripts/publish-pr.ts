@@ -14,7 +14,7 @@
  * - INPUTS_INTENT: path to the JSON intent the preparing node wrote.
  */
 
-import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { contractPath, parseAgentJson } from '../../.shared/agent-json.ts';
 import { createPr, findOpenPrByHead, viewPr, type CreatePrIntent } from '../../.shared/pr.ts';
@@ -51,11 +51,85 @@ function required(value: unknown, field: string): string {
   return value;
 }
 
+function git(...args: string[]): string | undefined {
+  const result = Bun.spawnSync(['git', ...args], { stdout: 'pipe', stderr: 'pipe' });
+  const out = result.stdout.toString().trim();
+  return result.exitCode === 0 && out !== '' ? out : undefined;
+}
+
+/** `https://host/owner/repo(.git)` or `git@host:owner/repo(.git)`, without credentials. */
+function remoteRepo(): QualifiedPr['repo'] | undefined {
+  const url = git('remote', 'get-url', 'origin');
+  const match = url && /^(?:[a-z+]+:\/\/(?:[^@/]+@)?|[^@]+@)([^/:]+)[/:](.+?)(?:\.git)?\/?$/i.exec(url);
+  return match ? { host: match[1], path: match[2] } : undefined;
+}
+
+/**
+ * The fields the checkout itself can answer. An agent-written intent that cannot
+ * be read, or leaves one of these out, is completed from here instead of failing
+ * a delivery whose branch was already pushed: the checkout is the truth the
+ * intent was only restating.
+ */
+function fromCheckout(): Record<string, unknown> {
+  const derived: Record<string, unknown> = {};
+  const repoFromRemote = remoteRepo();
+  if (repoFromRemote) derived.repo = repoFromRemote;
+  const branch = git('rev-parse', '--abbrev-ref', 'HEAD');
+  if (branch && branch !== 'HEAD') derived.head = branch;
+  const revision = git('rev-parse', 'HEAD');
+  if (revision) derived.headRevision = revision;
+  const base = git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD');
+  if (base) derived.base = base.replace(/^origin\//, '');
+  const subject = git('log', '-1', '--format=%s');
+  if (subject) derived.title = subject;
+  return derived;
+}
+
+/** The agent's intent, completed from the checkout where it is unreadable or incomplete. */
+function readIntent(intentPath: string): Record<string, unknown> {
+  let written: Record<string, unknown> | undefined;
+  try {
+    written = record(parseAgentJson(readFileSync(intentPath, 'utf8')));
+    if (!written) note('publish-pr: the PR intent is not a JSON object; using the checkout.');
+  } catch (error) {
+    note(
+      `publish-pr: could not read the PR intent (${error instanceof Error ? error.message : String(error)}); using the checkout.`
+    );
+  }
+  const intent: Record<string, unknown> = { ...(written ?? {}) };
+  const derived = fromCheckout();
+  const filled: string[] = [];
+  for (const [field, value] of Object.entries(derived)) {
+    const current = intent[field];
+    const missing =
+      current === undefined ||
+      current === null ||
+      (typeof current === 'string' && current.trim() === '');
+    if (missing) {
+      intent[field] = value;
+      filled.push(field);
+    }
+  }
+  if (intent.bodyPath === undefined || intent.bodyPath === '') {
+    intent.bodyPath = join(dirname(intentPath), 'pr-body.md');
+    filled.push('bodyPath');
+  }
+  if (intent.draft === 'true' || intent.draft === 'false') intent.draft = intent.draft === 'true';
+  if (intent.draft === undefined) {
+    intent.draft = true; // archon-pr's default; a ready flip is a later, explicit step
+    filled.push('draft');
+  }
+  if (typeof intent.existing === 'string' && /^\d+$/.test(intent.existing.trim())) {
+    intent.existing = Number(intent.existing.trim());
+  }
+  if (filled.length > 0) note(`publish-pr: filled ${filled.join(', ')} from the checkout.`);
+  return intent;
+}
+
 function publish(): PrRecord {
   const source = forgeSource();
   const intentPath = text(process.env.INPUTS_INTENT);
-  const intent = record(parseAgentJson(readFileSync(intentPath, 'utf8')));
-  if (!intent) throw new Error('the PR intent must be a JSON object');
+  const intent = readIntent(intentPath);
   const base = repo(intent.repo, 'repo');
   const headRepo = intent.headRepo === undefined ? base : repo(intent.headRepo, 'headRepo');
   const head = required(intent.head, 'head');
@@ -91,15 +165,26 @@ function publish(): PrRecord {
     return existing.pr;
   }
   if (typeof intent.draft !== 'boolean') throw new Error("the PR intent's draft must be a boolean");
+  const baseBranch = required(intent.base, 'base');
+  const title = required(intent.title, 'title');
+  // pr.md fixes the body at $ARTIFACTS_DIR/pr-body.md, beside the intent.
+  const contractBody = join(dirname(intentPath), 'pr-body.md');
+  let bodyPath = contractPath(required(intent.bodyPath, 'bodyPath'), contractBody);
+  if (!existsSync(bodyPath)) {
+    // No body was written: describe the branch by its commits rather than fail.
+    const log = git('log', `origin/${baseBranch}..HEAD`, '--format=- %s') ?? `- ${title}`;
+    bodyPath = contractBody;
+    writeFileSync(bodyPath, `## Changes\n\n${log}\n`);
+    note('publish-pr: no PR body was written; described the branch by its commits.');
+  }
   const createIntent: CreatePrIntent = {
     repo: base,
     headRepo,
     head,
     headRevision: required(intent.headRevision, 'headRevision'),
-    base: required(intent.base, 'base'),
-    title: required(intent.title, 'title'),
-    // pr.md fixes the body at $ARTIFACTS_DIR/pr-body.md, beside the intent.
-    bodyPath: contractPath(required(intent.bodyPath, 'bodyPath'), join(dirname(intentPath), 'pr-body.md')),
+    base: baseBranch,
+    title,
+    bodyPath,
     draft: intent.draft,
   };
   readFileSync(createIntent.bodyPath, 'utf8').replace(/^\uFEFF/, '');
