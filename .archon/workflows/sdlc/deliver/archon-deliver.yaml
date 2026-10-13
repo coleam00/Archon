@@ -147,9 +147,11 @@ nodes:
               $INPUTS.work
 
         # CI is the project's full validation: implementers run only focused checks.
+        # Fresh: CI reads the PR, not simplify's or reshape's conversation.
         - id: ci
           command: ci
           model: medium
+          context: fresh
           mutates_checkout: false
           depends_on: [review, simplify, reshape]
           trigger_rule: none_failed_min_one_success
