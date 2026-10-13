@@ -416,11 +416,7 @@ async function prepareTriggerInputs(
   registerBuiltinProviders();
   setPlatformPolicies([]);
   const host = hostForTest();
-  await host.records.codebases.createCodebase({
-    name: 'portable',
-    kind: 'folder',
-    default_cwd: project,
-  });
+  await registerFolder(host.records.codebases, project, 'portable');
   const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
   if (!user) throw new Error('Expected test identity');
   const receipt = acceptance(
