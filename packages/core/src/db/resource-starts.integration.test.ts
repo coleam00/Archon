@@ -512,10 +512,9 @@ describe('durable resource starts', () => {
     });
     expect(stored?.event_input_names).toBe('["count"]');
     // This version reads the event inputs back apart from the literals.
-    expect((await getStartReceipt(receiptId))?.bindings[0]?.intent).toMatchObject({
-      launch: { inputs: { mode: 'nightly' } },
-      eventInputs: { count: 42 },
-    });
+    const restored = (await getStartReceipt(receiptId))?.bindings[0]?.intent;
+    expect(restored?.launch.inputs).toEqual({ mode: 'nightly' });
+    expect(restored?.eventInputs).toEqual({ count: 42 });
   });
 
   test('preparation completion and admission share one commit', async () => {
