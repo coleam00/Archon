@@ -26,10 +26,10 @@
     "hono": "^4.12.16",
     "pg": "^8.11.0",
     "yaml": "^2.8.2",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@archon/chat-contract": "workspace:*"
   },
   "devDependencies": {
-    "@archon/chat-contract": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0"
   },
@@ -146,6 +146,21 @@
     ],
     [
       "src/routes/workflow-yaml.test.ts"
+    ],
+    [
+      "src/chat-host/inbound.test.ts"
+    ],
+    [
+      "src/chat-host/supervisor.test.ts"
+    ],
+    [
+      "src/chat-host/run-events.test.ts"
+    ],
+    [
+      "src/chat-host/platform.test.ts"
+    ],
+    [
+      "src/chat-host/runtime.test.ts"
     ]
   ]
 }

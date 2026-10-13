@@ -530,6 +530,20 @@ CREATE TABLE IF NOT EXISTS remote_agent_schema_version (
   applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
+  project_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  value TEXT,
+  operation TEXT NOT NULL,
+  writer_kind TEXT NOT NULL CHECK (writer_kind IN ('run', 'operator')),
+  writer_run_id TEXT,
+  writer_node_path TEXT,
+  writer_identity TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_key, name, revision)
+);
+
 CREATE TABLE IF NOT EXISTS remote_agent_start_receipts (
   id UUID PRIMARY KEY,
   source_instance_id TEXT NOT NULL,
@@ -781,6 +795,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_adopted_from
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_last_activity
   ON remote_agent_workflow_runs(last_activity_at)
   WHERE status = 'running';
+
+CREATE INDEX IF NOT EXISTS idx_state_revisions_created_at ON remote_agent_state_revisions(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_resource_start_queue
   ON remote_agent_resource_start_requests(resource_key, status, queue_position);
