@@ -2,8 +2,9 @@ name: archon-prp
 description: |
   Experimental, beside the SDLC pack: take one issue or request to a ready PR in
   the agent-first shape. Triage labels the route: archon-ready delivers;
-  archon-plan plans, then delivers; archon-issue investigates, then delivers on a
-  proven cause; archon-need-design stops for human planning. Delivery runs capped
+  archon-plan plans, then delivers when every design call is settled, or stops
+  with the questions only a person can answer; archon-issue investigates, then
+  delivers on a proven cause. Delivery runs capped
   rounds of implement (which runs the project's validation once, at handoff),
   draft PR, and review; after the review passes, simplify runs once, then one CI
   agent marks the PR ready on green. Every other ending is not ready, with its
@@ -54,8 +55,6 @@ nodes:
         route:
           type: string
           enum: [investigate, plan, deliver, no_action]
-        design_first:
-          type: boolean
         complexity:
           type: string
           enum: [small, risky, large]
@@ -109,7 +108,6 @@ nodes:
       required:
         - contract
         - route
-        - design_first
         - complexity
         - item
         - area_labels
@@ -120,9 +118,8 @@ nodes:
         - report
 
   # The prompt judges; this boundary verifies what a schema cannot: the relations
-  # between fields. Only a READY contract carries an engineering route, design-first
-  # is a READY item routed to plan, only NEEDS_CONTRACT_WORK proposes edits, only
-  # BLOCKED names blockers, and the pack's labels are derived here rather than
+  # between fields. Only a READY contract carries an engineering route, only
+  # NEEDS_CONTRACT_WORK proposes edits, only BLOCKED names blockers, and the pack's labels are derived here rather than
   # chosen by the model: one state label, plus a size label while the item can
   # still be worked. Each field's own type and vocabulary were certified on the
   # node above. Labels are written only under publish, after the item's identity
@@ -134,7 +131,6 @@ nodes:
     with:
       contract: "$triage.output.contract"
       route: "$triage.output.route"
-      design_first: "$triage.output.design_first"
       complexity: "$triage.output.complexity"
       item: { from: "$triage.output.item" }
       area_labels: { from: "$triage.output.area_labels" }
@@ -154,8 +150,6 @@ nodes:
           type: string
           enum: [investigate, plan, deliver, no_action]
         ready:
-          type: boolean
-        design_first:
           type: boolean
         complexity:
           type: string
@@ -195,7 +189,6 @@ nodes:
         - contract
         - route
         - ready
-        - design_first
         - complexity
         - labels
         - published
@@ -215,16 +208,25 @@ nodes:
     depends_on: [verdict]
     when: "$verdict.output.route == 'investigate'"
 
-  # A design-first item (archon-need-design) stops here for human planning.
+  # Usage data for the planner, when the item could turn on it.
+  - id: intel
+    command: intel
+    depends_on: [verdict]
+    when: "$verdict.output.route == 'plan'"
+    mutates_checkout: false
+
+  # The planner makes the design calls. Open questions stop the run (needs_human).
   - id: planned
     include: archon-plan
     with:
       work: >-
         Plan the current work item from $ARTIFACTS_DIR/triage.md. Read that
         assessment first, preserve its verified outcome and constraints, and
-        decide the implementation questions it identified.
-    depends_on: [verdict]
-    when: "$verdict.output.route == 'plan' && $verdict.output.design_first == false"
+        decide the implementation questions it identified. Read
+        $ARTIFACTS_DIR/intel.md too: what usage data says about this work, or
+        why there is none.
+    depends_on: [verdict, intel]
+    when: "$verdict.output.route == 'plan'"
 
   # One round: implement → draft PR → review → (simplify → CI). A review that needs
   # fixes, or a red CI the PR caused, starts another round. Each round's implementer
@@ -236,7 +238,7 @@ nodes:
     # plan. `&&` short-circuits, so a skipped producer's output is never read.
     depends_on: [verdict, inv, planned]
     trigger_rule: none_failed_min_one_success
-    when: "$verdict.output.route == 'deliver' || $verdict.output.route == 'investigate' && $inv.output.rooted == true || $verdict.output.route == 'plan' && $verdict.output.design_first == false && $planned.output.ready == true"
+    when: "$verdict.output.route == 'deliver' || $verdict.output.route == 'investigate' && $inv.output.rooted == true || $verdict.output.route == 'plan' && $planned.output.ready == true"
     loop_group:
       until_bash: |
         done=$round.output.done
@@ -369,8 +371,8 @@ nodes:
     trigger_rule: none_failed_min_one_success
     with:
       route: "$verdict.output.route"
-      design_first: "$verdict.output.design_first"
       summary: "$verdict.output.summary"
+      open_questions: { from: "$planned.output.open_questions", if_skipped: null }
       rounds: { from: "$rounds.output", if_skipped: null }
     output_format:
       type: object
@@ -379,7 +381,7 @@ nodes:
         reason:
           type: string
           enum:
-            [delivered, implement_blocked, review_open, replan, ci_pr_caused, ci_other, round_cap, no_action, needs_design, plan_blocked, not_rooted]
+            [delivered, implement_blocked, replan, ci_other, round_cap, no_action, needs_human, not_rooted]
         pr_url: { type: string }
         summary: { type: string }
       required: [ready, reason, pr_url, summary]

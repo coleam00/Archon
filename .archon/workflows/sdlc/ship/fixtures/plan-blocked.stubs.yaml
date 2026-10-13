@@ -15,6 +15,7 @@ triage__triage:
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 planned__plan:
   ready: false
+  open_questions: ["stub: which product shape; no document rules on it"]
   summary: "stub: owner decision required before implementation"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 fixture:

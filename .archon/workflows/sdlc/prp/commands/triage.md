@@ -48,8 +48,6 @@ Declare exactly one contract verdict:
 
 Only a `READY` item carries an engineering route, and a `READY` item always carries one. For every other verdict, `route` is `no_action` and the verdict is the reason; the route you would have chosen belongs in the assessment for the human, not in the declared field.
 
-When the contract is sound but the engineering shape needs a person's design before any run should plan or implement it — the owning type or module, the supported and rejected cases, a compatibility boundary that is a product decision rather than an engineering one — declare `design_first: true` and route to `plan`. That is a `READY` item whose next step is human planning, not a contract defect: ship stops there and the item waits in the planning queue. Shape decisions a planning agent can settle from the code and the contract are a plain `plan` route, not design-first.
-
 ## Judge complexity
 
 Declare one `complexity` value on the item as written, so the delivery tail can compare its own read of the diff against yours:
@@ -61,7 +59,7 @@ Declare one `complexity` value on the item as written, so the delivery tail can 
 ## Choose one route
 
 - `investigate` — the work asserts broken or unexplained current behavior, but the causal chain or responsible fix boundary is not proven against current code.
-- `plan` — the desired outcome is known, but material implementation or product-shape decisions remain. Use this when a prescribed solution is stale, unsupported, or merely one option even if the issue calls itself a bug.
+- `plan` — the desired outcome is known, but material implementation or product-shape decisions remain. Use this when a prescribed solution is stale, unsupported, or merely one option even if the issue calls itself a bug. A design call that may need a person is still `plan`: the planner settles it from the project's own documents, code, and evidence, and stops with the exact question only when those cannot. An owner-level product decision the item cannot proceed without is `BLOCKED`, not `plan`.
 - `deliver` — the current evidence already forms an implementation-ready work order: the relevant behavior and boundary are verified, acceptance and scope are clear enough to start without asking a human, and delivery will not inherit an untested assumption.
 - `no_action` — the verdict is not `READY`. That verdict already names why nothing should be delivered now, so `no_action` never sits beside `READY`.
 
@@ -95,7 +93,6 @@ Do not investigate the full causal chain, choose the implementation design, impl
 
 - `contract` — exactly one of `READY`, `NEEDS_CONTRACT_WORK`, `BLOCKED`, or `NO_ACTION`, using the definitions above.
 - `route` — exactly one of `investigate`, `plan`, `deliver`, or `no_action`; `no_action` exactly when `contract` is not `READY`.
-- `design_first` — true only for a `READY` item routed to `plan` because its shape needs a person's design before any run plans or implements it.
 - `complexity` — exactly one of `small`, `risky`, or `large`.
 - `item` — `{ "repo": { "host": "tracker.example", "path": "owner/repo" }, "number": N }` when the target is a tracker issue, otherwise `{ "repo": { "host": "", "path": "" }, "number": 0 }`: the empty repository is how you say the target is not a tracker item, and the fields are always present.
 - `area_labels` — the repository's existing area labels this item touches, possibly empty.

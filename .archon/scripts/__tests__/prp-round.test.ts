@@ -88,14 +88,13 @@ describe('an archon-prp delivery round', () => {
   });
 });
 
-// Ship routes on the state label, so each READY route carries its own.
+// Each READY route carries its own state label.
 describe("archon-prp's triage labels", () => {
   it('labels a READY item with the route archon-prp takes on it', () => {
-    for (const [route, designFirst, label] of [
-      ['deliver', 'false', 'archon-ready'],
-      ['plan', 'false', 'archon-plan'],
-      ['plan', 'true', 'archon-need-design'],
-      ['investigate', 'false', 'archon-issue'],
+    for (const [route, label] of [
+      ['deliver', 'archon-ready'],
+      ['plan', 'archon-plan'],
+      ['investigate', 'archon-issue'],
     ]) {
       const run = runPackScript('prp/scripts/verdict', {
         inputs: {
@@ -104,7 +103,6 @@ describe("archon-prp's triage labels", () => {
           INPUTS_CONTRACT: 'READY',
           INPUTS_ROUTE: route,
           INPUTS_COMPLEXITY: 'small',
-          INPUTS_DESIGN_FIRST: designFirst,
           INPUTS_SUMMARY: 'Ready',
           INPUTS_BLOCKED_REASON: '',
           INPUTS_BLOCKED_BY: '[]',

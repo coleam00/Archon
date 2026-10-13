@@ -2,7 +2,8 @@
 # must COMPLETE (consumers gate on the field), never fail on honesty.
 plan:
   ready: false
-  summary: "stub: blocked on missing intent — the plan names the owner's open question"
+  open_questions: ["stub: which of two storage shapes; no document rules on it"]
+  summary: "stub: blocked on a call only the owner can make — the plan names the open question"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 fixture:
   expect: completed

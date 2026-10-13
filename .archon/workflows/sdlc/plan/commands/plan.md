@@ -24,22 +24,35 @@ Ground the plan in the code as it is, not as the request describes it. Read the 
 
 When a prior report is provided, treat its claims like any inherited analysis: verify the load-bearing ones against current code before building on them, and note where you confirm or refute. Implementers will follow your plan literally — a plan that repeats an inherited wrong claim ships that wrong claim.
 
+Design calls are judged against the project's own guidance, and nothing hands it to you. Read the repository's agent guidance (`AGENTS.md` or its equivalent) and every document it points to that bears on a call you are about to make: product direction, engineering values, design rules for a language, API, or configuration surface, reference documents. A call those documents already rule on is settled by them, not by your preference.
+
+When a call turns on a fact only trying can establish — whether an API behaves as documented, whether a shape fits the existing code — spike it: write throwaway code under `$ARTIFACTS_DIR/spike/`, run it, and keep the result as evidence. Need a checkout to spike against? Add a scratch worktree under `$ARTIFACTS_DIR/spike/` and remove it when you are done. Never spike in this checkout.
+
 ## Decide, don't defer
 
-Name the design decisions the work actually contains, choose, and record why — including the strongest alternative and the concrete reason it lost. A plan that defers its central decision is not a plan. Prefer the smallest coherent approach: no speculative abstraction, no capability without a current caller, deletion of superseded machinery over addition beside it, and a rewrite over a patch when it is clearly simpler and no riskier. If the path grows complicated while you plan it, step back and reconsider the approach rather than elaborating the first idea.
+Name the design decisions the work actually contains, choose, and record why — including the strongest alternative and the concrete reason it lost, and what settled the call: a project document and its section, spike evidence, usage data, or the code. A plan that defers its central decision is not a plan. Prefer the smallest coherent approach: no speculative abstraction, no capability without a current caller, deletion of superseded machinery over addition beside it, and a rewrite over a patch when it is clearly simpler and no riskier. If the path grows complicated while you plan it, step back and reconsider the approach rather than elaborating the first idea.
 
-The one thing you do not decide is missing intent. When the work genuinely cannot be planned without information only its owner has — a product choice, an unstated constraint — stop there: declare `ready: false` and name exactly what is missing. Never fill an intent gap with a guess.
+## Calls that belong to a person
+
+Settle every call you can. A call is a person's only when one of these holds, and you name which:
+
+- No project document covers it, and the code, a spike, and usage data do not settle it.
+- Two project documents disagree on it.
+- It changes a shipped contract — a persisted shape, a public API, a configuration or language surface users write — and no project document already rules on that change.
+
+Each such call is an open question. Write the plan up to it and stop there; never fill the gap with a guess. Do not edit the project's documents to settle it: the answer is the owner's.
 
 ## The plan
 
 Write `$ARTIFACTS_DIR/plan.md`:
 
 - **Problem** — what this work solves and why it matters, from the request.
-- **Approach** — the chosen design, and the alternatives rejected with reasons.
+- **Approach** — the chosen design, the alternatives rejected with reasons, and for each design call what settled it.
 - **Steps** — ordered, each independently verifiable, anchored to stable text anchors (a named function, a described test block) — never raw line numbers, which drift on every preceding edit.
 - **Validation** — which of the project's own gates prove the work, and the new tests to write: focused, behavior-proving, no padding.
 - **Risks and rollback** — blast radius, what could go wrong, and how the change reverts.
 - **Out of scope** — what this plan deliberately does not do, so the implementer does not helpfully do it.
+- **Open questions** — only when a call belongs to a person: each question, as declared below.
 
 Omit a section that does not apply; never write a placeholder to preserve one.
 
@@ -55,8 +68,9 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
 
 ## Declare the verdict
 
-- `ready` — true only when the plan is complete enough to execute without questions. False when missing intent blocked it — the plan is still written up to the block, with the gap named.
-- `summary` — a few sentences: the chosen approach (or the blocking gap), and that the full plan is at `$ARTIFACTS_DIR/plan.md`.
+- `ready` — true exactly when `open_questions` is empty: the plan is complete enough to execute without asking anyone.
+- `open_questions` — one entry per call that belongs to a person, empty when there is none. Each entry states the decision, the options and what each one costs, which of the three conditions above makes it a person's call, and one line the project's direction document could carry so that a later run settles the same call without asking.
+- `summary` — a few sentences: the chosen approach (or the open questions), and that the full plan is at `$ARTIFACTS_DIR/plan.md`.
 - `report` — a pointer to the report you just wrote, copied exactly:
 
   ```json
@@ -67,4 +81,4 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
   declare. `run_id` is the value above verbatim, and `path` is relative to
   `$ARTIFACTS_DIR`.
 
-Before declaring, re-read the plan: confirm every named anchor exists in the current code, every decision has its why, and `git status` matches what you started with.
+Before declaring, re-read the plan: confirm every named anchor exists in the current code, every decision has its why and its source, and `git status` matches what you started with.

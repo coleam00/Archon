@@ -3,13 +3,14 @@
  *
  * When the rounds ran, the last round's typed ending is the result. Otherwise the
  * advisory stop that kept delivery from starting is: triage found no work owed or a
- * non-ready contract, the item needs human design, planning left a decision open, or
- * the investigation did not prove a fix boundary. Discoveries are relayed in every
+ * non-ready contract, planning left questions only a person can answer, or the
+ * investigation did not prove a fix boundary. Discoveries are relayed in every
  * ending, including raw records written after the last review consolidated them (the
  * simplify pass runs after review), so the operator sees them.
  *
  * Bound inputs (canonical text; a skipped producer arrives as "null"):
- * - INPUTS_ROUTE / INPUTS_DESIGN_FIRST / INPUTS_SUMMARY: triage's verdict.
+ * - INPUTS_ROUTE / INPUTS_SUMMARY: triage's verdict.
+ * - INPUTS_OPEN_QUESTIONS: the planner's open questions, or "null" off the plan route.
  * - INPUTS_ROUNDS: the rounds loop's final `round` output, or "null" when delivery
  *   never started.
  */
@@ -20,7 +21,9 @@ import { artifactsDir, emit, text } from '../../.shared/io.ts';
 
 const artifacts = artifactsDir();
 const route = text(process.env.INPUTS_ROUTE);
-const designFirst = text(process.env.INPUTS_DESIGN_FIRST) === 'true';
+const openQuestions = JSON.parse(text(process.env.INPUTS_OPEN_QUESTIONS) || 'null') as
+  | string[]
+  | null;
 const summary = text(process.env.INPUTS_SUMMARY);
 const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS) || 'null') as {
   ready: boolean;
@@ -97,8 +100,6 @@ if (rounds !== null) {
   });
 } else if (route === 'no_action') {
   stopped('no_action', `No delivery: ${summary}`, 'triage.md');
-} else if (designFirst) {
-  stopped('needs_design', `Needs human planning before any run: ${summary}`, 'triage.md');
 } else if (route === 'investigate') {
   stopped(
     'not_rooted',
@@ -106,5 +107,12 @@ if (rounds !== null) {
     'investigation.md'
   );
 } else {
-  stopped('plan_blocked', 'No delivery started: planning left a material decision unresolved.', 'plan.md');
+  // Each question carries the direction line that would settle it next time; the
+  // operator decides whether to record it.
+  const questions = (openQuestions ?? []).map(question => `- ${question}`).join('\n');
+  stopped(
+    'needs_human',
+    `No delivery started: planning stopped on calls only a person can make.\n${questions || '- The planner named no question; read the plan.'}`,
+    'plan.md'
+  );
 }

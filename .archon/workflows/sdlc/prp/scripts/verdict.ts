@@ -5,10 +5,10 @@
  * and vocabulary — the contract, route, and complexity enums, the item and edit
  * shapes, the report pointer — were certified by the engine on the node that
  * produced them, so nothing here re-checks membership. What remains is the relations
- * between fields: only a READY contract carries an engineering route, design-first
- * is a READY item routed to plan, only NEEDS_CONTRACT_WORK proposes edits, only
- * BLOCKED names blockers, and blockers are qualified URLs. The pack's own labels
- * derive from the declared fields here rather than being chosen by the model, and
+ * between fields: only a READY contract carries an engineering route, only
+ * NEEDS_CONTRACT_WORK proposes edits, only BLOCKED names blockers, and blockers are
+ * qualified URLs. The pack's own labels derive from the declared fields here rather
+ * than being chosen by the model, and
  * only when the run was launched with publish=true and the target is a tracker
  * issue does this verify the item's identity on the tracker, apply the labels, and
  * read them back. Area labels are never created: the prompt may only pick labels
@@ -30,9 +30,9 @@ type Complexity = 'small' | 'risky' | 'large';
 
 type Route = 'investigate' | 'plan' | 'deliver';
 
-// Exactly one state label per item. A READY item's label names the route ship takes
-// on it: archon-ready delivers, archon-plan plans then delivers, archon-issue
-// investigates then delivers, and archon-need-design stops for human planning.
+// Exactly one state label per item. A READY item's label names the route this
+// workflow takes on it: archon-ready delivers, archon-plan plans then delivers, and
+// archon-issue investigates then delivers.
 const STATE_LABEL: Record<Exclude<Contract, 'READY'>, string> = {
   NEEDS_CONTRACT_WORK: 'archon-needs-contract',
   BLOCKED: 'archon-blocked',
@@ -43,7 +43,6 @@ const ROUTE_LABEL: Record<Route, string> = {
   plan: 'archon-plan',
   investigate: 'archon-issue',
 };
-const DESIGN_FIRST_LABEL = 'archon-need-design';
 const COMPLEXITY_LABEL: Record<Complexity, string> = {
   small: 'archon-small',
   risky: 'archon-risky',
@@ -67,10 +66,6 @@ const PACK_LABELS: Record<string, { color: string; description: string }> = {
   'archon-close': {
     color: '6A737D',
     description: 'Triage: already delivered, duplicate, obsolete, or out of direction',
-  },
-  'archon-need-design': {
-    color: '5319E7',
-    description: 'Triage: ready, but it needs human planning before any run',
   },
   'archon-small': { color: 'C2E0C6', description: 'Triage: bounded change' },
   'archon-risky': {
@@ -211,7 +206,6 @@ function main(): void {
   const contract = text(process.env.INPUTS_CONTRACT) as Contract;
   const route = text(process.env.INPUTS_ROUTE);
   const complexity = text(process.env.INPUTS_COMPLEXITY) as Complexity;
-  const designFirst = text(process.env.INPUTS_DESIGN_FIRST) === 'true';
   const publish = text(process.env.INPUTS_PUBLISH) === 'true';
   const summary = text(process.env.INPUTS_SUMMARY);
   const blockedReason = text(process.env.INPUTS_BLOCKED_REASON);
@@ -249,10 +243,6 @@ function main(): void {
     invalid(
       `only a READY contract carries an engineering route: got contract=${contract} route=${route}`
     );
-    return;
-  }
-  if (designFirst && route !== 'plan') {
-    invalid(`design_first requires route=plan, got route=${route}`);
     return;
   }
   const proposes = edits.title.trim() !== '' && edits.body.trim() !== '';
@@ -293,7 +283,6 @@ function main(): void {
 
   let state: string;
   if (contract !== 'READY') state = STATE_LABEL[contract];
-  else if (designFirst) state = DESIGN_FIRST_LABEL;
   else if (Object.hasOwn(ROUTE_LABEL, route)) state = ROUTE_LABEL[route as Route];
   else {
     invalid(`a READY contract routes to investigate, plan, or deliver, got route=${route}`);
@@ -315,7 +304,6 @@ function main(): void {
     contract,
     route,
     ready: contract === 'READY',
-    design_first: designFirst,
     complexity,
     labels,
     published,

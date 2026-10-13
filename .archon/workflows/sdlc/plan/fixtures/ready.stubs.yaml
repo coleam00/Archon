@@ -3,6 +3,7 @@
 # structuredOutput); plain-string stubs stay strings.
 plan:
   ready: true
+  open_questions: []
   summary: "stub: approach chosen — full plan at plan.md"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 fixture:

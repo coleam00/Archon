@@ -2,7 +2,6 @@
 triage:
   contract: NO_ACTION
   route: no_action
-  design_first: false
   complexity: small
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []

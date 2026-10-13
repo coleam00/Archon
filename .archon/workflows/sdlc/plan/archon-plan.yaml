@@ -31,9 +31,9 @@ outcome_field: ready
 
 nodes:
 
-  # Blocked is a valid outcome, not a failure: ready:false naming exactly what
-  # is missing beats a plan built on guesses. Consumers gate on
-  # $plan.output.ready before building.
+  # Blocked is a valid outcome, not a failure: ready:false with the open questions
+  # only a person can answer beats a plan built on guesses. Consumers gate on
+  # $plan.output.ready before building and relay $plan.output.open_questions.
   - id: plan
     command: plan
     # Advisory on both counts, and the engine holds both: it fails this node with
@@ -46,6 +46,10 @@ nodes:
       properties:
         ready:
           type: boolean
+        open_questions:
+          type: array
+          items:
+            type: string
         summary:
           type: string
         report:
@@ -59,4 +63,4 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [plan.md] }
           required: [type, run_id, path]
-      required: [ready, summary, report]
+      required: [ready, open_questions, summary, report]
