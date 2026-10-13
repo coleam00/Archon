@@ -11,6 +11,7 @@ export async function listWebPushSubscriptions(
   return [...result.rows];
 }
 
+/** Another user resubmitting a known endpoint leaves the row with its owner, who alone can delete it. */
 export async function addWebPushSubscription(
   userId: string,
   subscription: WebPushSubscription,
@@ -19,7 +20,8 @@ export async function addWebPushSubscription(
   await query(
     `INSERT INTO remote_agent_web_push_subscriptions (id, user_id, endpoint, p256dh, auth)
     VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+    ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth
+    WHERE remote_agent_web_push_subscriptions.user_id = excluded.user_id`,
     [
       getDialect().generateUuid(),
       userId,

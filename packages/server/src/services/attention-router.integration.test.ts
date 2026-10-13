@@ -343,6 +343,8 @@ test('subscription routes require identity, validate shared schemas and create/d
   expect(ownedSubscriptions.length).toBe(1);
   expect((await request('DELETE', 'another-push-operator')).status).toBe(200);
   expect(await listWebPushSubscriptions()).toEqual(ownedSubscriptions);
+  expect((await request('POST', 'another-push-operator')).status).toBe(200);
+  expect(await listWebPushSubscriptions()).toEqual(ownedSubscriptions);
   for (let i = 0; i < 2; i++) expect((await request('DELETE')).status).toBe(200);
   expect(await listWebPushSubscriptions()).toEqual([]);
   transport.stop();
