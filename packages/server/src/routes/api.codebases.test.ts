@@ -445,6 +445,15 @@ describe('PATCH /api/codebases/:id', () => {
     expect(mockRenameCodebase).not.toHaveBeenCalled();
   });
 
+  test('returns 400 when the request has no JSON body', async () => {
+    const response = await makeApp().request('/api/codebases/codebase-uuid-1', {
+      method: 'PATCH',
+    });
+
+    expect(response.status).toBe(400);
+    expect(mockRenameCodebase).not.toHaveBeenCalled();
+  });
+
   test('returns 404 when the codebase does not exist', async () => {
     mockRenameCodebase.mockImplementationOnce(async () => {
       throw new CodebaseNotFoundError('Codebase unknown-id not found');

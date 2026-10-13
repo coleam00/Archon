@@ -849,7 +849,10 @@ const renameCodebaseRoute = createRoute({
     'or when the new name would move the project storage (worktrees, state, logs, artifacts).',
   request: {
     params: codebaseIdParamsSchema,
-    body: { content: { 'application/json': { schema: renameCodebaseBodySchema } } },
+    body: {
+      content: { 'application/json': { schema: renameCodebaseBodySchema } },
+      required: true,
+    },
   },
   responses: {
     200: {
