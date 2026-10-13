@@ -364,7 +364,7 @@ export async function validateWorkflowResources(
     config?.workflowSource === 'bundled' ||
     config?.workflowSource === 'global' ||
     config?.workflowSource === 'installed';
-  const modelProfileProvider = config?.assistant ?? defaultProvider ?? 'claude';
+  const modelProfileProvider = config?.assistant ?? defaultProvider;
   let aiProfile: ResolvedAiProfile | undefined;
 
   try {

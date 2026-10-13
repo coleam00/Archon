@@ -181,7 +181,7 @@ export interface GlobalConfig {
     maxConversations?: number;
     /**
      * Opt-in install-wide cap on simultaneous provider attempts, keyed by provider
-     * registration ID (e.g. `claude: 4`). A provider without an entry is unlimited.
+     * registration ID (e.g. `claude: 4`). Pi also honors `assistants.pi.maxConcurrent`.
      * Read fresh and strictly at every attempt by `loadProviderConcurrencyCaps`.
      */
     providers?: Record<string, number>;
@@ -377,7 +377,7 @@ export interface RepoConfig {
  */
 export interface MergedConfig {
   botName: string;
-  assistant: string;
+  assistant: string | undefined;
   assistants: AssistantDefaults;
   /**
    * Merged aliases (repo > global). Used by buildAiProfile at execution time.
@@ -449,7 +449,7 @@ export interface MergedConfig {
  */
 export interface SafeConfig {
   botName: string;
-  assistant: string;
+  assistant: string | undefined;
   assistants: ProviderDefaultsMap;
   streaming: PlatformStreaming;
   concurrency: {

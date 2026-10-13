@@ -134,6 +134,20 @@ Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Ad
 
 Also runs automatically at the end of `archon setup` (optional).
 
+### `provider install`
+
+Install or replace maintained providers from the matching Archon release:
+
+```bash
+archon provider install claude codex pi
+```
+
+The command accepts only `claude`, `codex`, and `pi`, pins the first-party repository tag to the CLI version, and uses the plugin installer's checksum verification. Maintained ids cannot be installed from another repository. Remove a receipt with `archon plugin remove coleam00/Archon/plugins/provider-<id>`.
+
+Source checkouts and Docker run these providers from source over the process transport and refuse this install command. Release binaries retain their bundled providers until the separate provider release rollout is complete.
+
+The default provider comes from explicit configuration (`assistant` in project config or `defaultAssistant` in global config), then `DEFAULT_AI_ASSISTANT`, then the only registered provider. With multiple providers and no configured default, a run needing one fails before creating a worktree. A workflow can select its provider explicitly.
+
 ### `plugin`
 
 Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Forge plugins, provider plugins, chat plugins, and workflow packs install through this command.
@@ -1503,7 +1517,9 @@ tombstones, operation, writer and timestamp.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
-stdin to the latest value, initially `{}`, retrying up to five times on contention.
+stdin to the latest value, initially `{}`. Writes to one document are serialized, so a
+patch never loses a revision race; it applies to whatever an earlier write left, which
+can make it invalid (for example, removing a member another patch already removed).
 Operations are `set`, `remove`, and `append`, using RFC 6901 JSON Pointer paths. `set`
 replaces a value, `remove` deletes an existing member (or array element), and `append`
 adds one value to an array, creating it when missing. Missing intermediate objects are
