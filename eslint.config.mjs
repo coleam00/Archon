@@ -1,4 +1,6 @@
 import eslint from '@eslint/js';
+import workflowPersistence from './scripts/workflow-persistence-rule.mjs';
+import { workflowPersistenceConsumers } from './scripts/workflow-persistence-consumers.mjs';
 import tseslint from 'typescript-eslint';
 import prettierConfig from 'eslint-config-prettier';
 import { readFileSync } from 'node:fs';
@@ -157,6 +159,12 @@ export default tseslint.config(
         tsconfigRootDir: import.meta.dirname,
       },
     },
+  },
+
+  {
+    files: workflowPersistenceConsumers,
+    plugins: { archon: { rules: { 'no-workflow-persistence': workflowPersistence } } },
+    rules: { 'archon/no-workflow-persistence': 'error' },
   },
 
   // Provider attempts are admitted against the operator's concurrency caps. Callers

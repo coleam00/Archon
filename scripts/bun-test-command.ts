@@ -1,17 +1,7 @@
-import { WINDOWS_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
+import { DEFAULT_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
 
-/**
- * The one place a `bun test` invocation is assembled, so the per-test budget has one owner.
- * On Windows the default budget is `WINDOWS_TEST_TIMEOUT_MS` instead of Bun's 5 s; its
- * comment carries the attribution. A test with its own explicit budget keeps it, so explicit
- * budgets at or below the floor go through `testTimeout`.
- */
-export function bunTestCommand(
-  selectors: readonly string[],
-  platform: NodeJS.Platform = process.platform
-): string[] {
-  const budget = platform === 'win32' ? ['--timeout', String(WINDOWS_TEST_TIMEOUT_MS)] : [];
-  return ['bun', 'test', ...budget, ...selectors];
+export function bunTestCommand(selectors: readonly string[]): string[] {
+  return ['bun', 'test', '--timeout', String(DEFAULT_TEST_TIMEOUT_MS), ...selectors];
 }
 
 /**

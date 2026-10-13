@@ -1,11 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { findEdgeViolations, type PackageEdges, type PackageManifest } from './check-package-edges';
-
-const edges: Readonly<Record<string, PackageEdges>> = {
-  engine: { runtime: ['contract'], test: ['providers'] },
-  contract: { runtime: [] },
-  providers: { runtime: ['contract'] },
-};
+import { findEdgeViolations, type PackageManifest } from './check-package-edges';
 
 function manifests(): PackageManifest[] {
   return [
@@ -23,7 +17,7 @@ function manifests(): PackageManifest[] {
 }
 
 function check(content: string, path = 'packages/engine/src/execute.ts', packages = manifests()) {
-  return findEdgeViolations({ packages, files: [{ path, content }] }, edges);
+  return findEdgeViolations({ packages, files: [{ path, content }] });
 }
 
 describe('package source edges', () => {
@@ -49,7 +43,7 @@ describe('package source edges', () => {
             v.file === 'packages/engine/src/execute.ts' &&
             v.line === 2 &&
             v.message.includes('@archon/providers') &&
-            v.message.includes('forbidden')
+            v.message.includes('undeclared')
         )
       ).toBe(true);
     });
@@ -78,10 +72,10 @@ describe('package source edges', () => {
     });
   }
 
-  test('a test file is still limited to its runtime and test edges', () => {
+  test('a test file still requires declared dependencies', () => {
     expect(
-      check("import { run } from '@archon/providers';", 'packages/contract/src/a.test.ts').some(
-        v => v.message === 'contract → @archon/providers is forbidden; allowed: (none)'
+      check("import { run } from '@archon/providers';", 'packages/contract/src/a.test.ts').some(v =>
+        v.message.includes('undeclared')
       )
     ).toBe(true);
   });
@@ -138,51 +132,17 @@ describe('package source edges', () => {
   });
 });
 
-describe('package manifest edges and table conformance', () => {
-  test('accepts a clean workspace with test-only devDependencies', () => {
-    expect(findEdgeViolations({ packages: manifests(), files: [] }, edges)).toEqual([]);
-  });
-
-  for (const section of ['dependencies', 'peerDependencies'] as const) {
-    test(`rejects a test-only edge in ${section}`, () => {
-      const packages = manifests();
-      packages[0][section] = { '@archon/providers': 'workspace:*' };
-      const violations = findEdgeViolations({ packages, files: [] }, edges);
-      expect(violations).toHaveLength(1);
-      expect(violations[0].file).toBe('packages/engine/package.json');
-      expect(violations[0].message).toContain(`${section} is forbidden`);
-    });
-  }
-
-  test('rejects unknown manifest dependencies', () => {
-    const packages = manifests();
-    packages[0].devDependencies = { '@archon/missing': 'workspace:*' };
-    expect(findEdgeViolations({ packages, files: [] }, edges)[0].message).toContain(
-      '@archon/missing'
-    );
-  });
-
-  test('reports a workspace package missing from the table', () => {
-    const packages = [...manifests(), { path: 'packages/new/package.json' }];
-    expect(findEdgeViolations({ packages, files: [] }, edges)[0].message).toContain(
-      "'new' has no edge-table entry"
-    );
-  });
-
-  test('reports a table entry with no workspace package', () => {
-    expect(
-      findEdgeViolations({ packages: manifests().slice(0, 2), files: [] }, edges)[0].message
-    ).toContain("'providers' has no workspace package");
-  });
-
-  test('reports unknown table targets for runtime and test edges', () => {
-    const invalid = { ...edges, engine: { runtime: ['missing'], test: ['other'] } };
-    const violations = findEdgeViolations({ packages: manifests(), files: [] }, invalid);
-    expect(
-      violations.filter(v => v.message.includes('unknown edge-table target')).map(v => v.message)
-    ).toEqual([
-      'engine → missing: unknown edge-table target',
-      'engine → other: unknown edge-table target',
-    ]);
-  });
+test('checks a new workspace package against its own manifest', () => {
+  expect(
+    findEdgeViolations({
+      packages: [{ path: 'packages/new/package.json' }],
+      files: [{ path: 'packages/new/src/index.ts', content: "import '@archon/paths';" }],
+    })
+  ).toEqual([
+    {
+      file: 'packages/new/src/index.ts',
+      line: 1,
+      message: 'new → @archon/paths is undeclared in dependencies or peerDependencies',
+    },
+  ]);
 });

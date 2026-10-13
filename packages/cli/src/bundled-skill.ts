@@ -1,11 +1,6 @@
 /**
- * Bundled skill files for the `archon-cli` skill.
- *
- * Bun's `with { type: 'text' }` imports are hand-maintained (no glob imports at
- * compile time) — every file of the skill must be listed here and in the export
- * map below. `scripts/check-bundled-skill.ts` verifies the exported map keys
- * match the files on disk under .claude/skills/archon-cli/; run it after adding or removing
- * any skill file.
+ * Bun text imports embed the skill in compiled CLIs. `commands/skill.test.ts`
+ * verifies that the exported map covers every file in the shipped skill directory.
  */
 import router from '../../../.claude/skills/archon-cli/SKILL.md' with { type: 'text' };
 import runningWorkflows from '../../../.claude/skills/archon-cli/running-workflows/running-workflows.md' with { type: 'text' };
