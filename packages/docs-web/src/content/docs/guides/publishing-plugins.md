@@ -109,6 +109,35 @@ Remove provider plugins before downgrading to a release without provider-plugin 
 
 ## Chat plugins
 
+Slack is the maintained in-repository example in
+[`packages/chat-slack`](https://github.com/coleam00/Archon/tree/dev/packages/chat-slack).
+It uses `@archon/chat-contract` and Slack Bolt, without engine types or database access.
+Install it from an Archon release that publishes the Slack asset:
+
+```sh
+archon plugin install coleam00/Archon/plugins/chat-slack
+```
+
+Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in the server environment, then restart
+with `archon serve`. The plugin connects through Socket Mode; no webhook ingress is
+needed. Configure the Slack app with `/archon` and `/archon-workflow`, `app_mentions:read`,
+`chat:write`, `reactions:write`, `commands`, `im:history`, and `users:read`, plus the
+history scopes for the conversations you use. Subscribe to `app_mention` and `message.im`. The app token needs
+`connections:write`. Missing either token fails startup non-retryably.
+
+The host reads `SLACK_ALLOWED_USER_IDS` and `SLACK_STREAMING_MODE` from the descriptor.
+It authorizes inbound traffic and run actions, resolves Archon users, and pushes typed
+run events. The plugin renders progress, decisions, reactions and cost footers.
+`/archon connect github` points to the Web UI or `archon auth github`; it does not run a
+GitHub device flow. Installing the Slack receipt replaces the bundled Slack transport
+and bridge on restart. Removing it restores the bundled adapter for this transition.
+
+The package tests run `runChatConformance` against the source process with a stubbed
+Slack client. Linux CI also compiles that entry point with test-only Slack and driver
+module substitutions and runs the same suite against the binary. The unmodified release
+binary is separately smoke-tested for credential-free initialization, non-retryable
+missing-token failure and shutdown. Compile binaries in CI, not locally on macOS.
+
 A chat plugin declares an `archon-chat-*` executable:
 
 ```json
