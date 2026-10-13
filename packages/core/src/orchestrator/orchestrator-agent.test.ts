@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WORKFLOW_SOURCE_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
@@ -2605,6 +2606,53 @@ describe('workflow dispatch routing — interactive flag', () => {
     };
     expect(captureArg.sourceRoot).toBe('/adopted/snapshot');
     expect(mockResolveWorkflowSourceRoot).not.toHaveBeenCalledWith('/wt/from-branch');
+  });
+
+  // The run row exists before the worktree, so its recorded source must be rewritten
+  // with the created worktree as origin; the executor keeps a recorded source as-is.
+  test('adopt with checkout-branch records the created worktree as the run source origin', async () => {
+    const adapter = await import('../workflows/store-adapter');
+    const original = adapter.createWorkflowDeps();
+    const updates: Array<Record<string, unknown>> = [];
+    const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+      ...original,
+      store: {
+        ...original.store,
+        updateWorkflowRun: async (_id: string, data: { metadata?: Record<string, unknown> }) => {
+          if (data.metadata) updates.push(data.metadata);
+        },
+      },
+    }));
+    mockValidateAndResolveIsolation.mockImplementationOnce(() =>
+      Promise.resolve({ cwd: '/wt/from-branch', status: 'new', env: makeIsolationEnvironment() })
+    );
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+    );
+    mockResolveWorkflowAdoption.mockImplementationOnce(() =>
+      Promise.resolve({
+        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        lane: {
+          kind: 'checkout-branch',
+          taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') },
+        },
+      })
+    );
+    try {
+      await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+        workflowAdoptRunId: 'prior-run',
+      });
+      const recorded = updates
+        .map(metadata => metadata[WORKFLOW_SOURCE_METADATA_KEY] as { origin?: string } | undefined)
+        .filter(record => record !== undefined);
+      expect(recorded.at(-1)?.origin).toBe('/wt/from-branch');
+    } finally {
+      factory.mockRestore();
+      (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
   });
 
   // F1: the deferred capture swaps the executed graph for the branch's vintage, so the

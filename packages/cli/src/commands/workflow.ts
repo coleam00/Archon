@@ -6,6 +6,7 @@ import {
 import {
   configureWorktreeIsolation,
   createRunWorktreeSetupExecutor,
+  recordSetupRunSource,
   retainSetupRunSource,
 } from '@archon/core/workflows/worktree-setup';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
@@ -3253,6 +3254,7 @@ async function runWorkflowWithOwnedSource(
 
     if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined && preparedSource) {
       preparedSource = { ...preparedSource, origin: workingCwd };
+      if (setupPreparedRun) await recordSetupRunSource(host.deps, setupPreparedRun, preparedSource);
     }
 
     // Chat-origin runs keep their history; a fresh CLI invocation has no chat record.

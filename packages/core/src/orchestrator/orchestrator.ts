@@ -1,6 +1,7 @@
 import {
   configureWorktreeIsolation,
   createRunWorktreeSetupExecutor,
+  recordSetupRunSource,
   retainSetupRunSource,
 } from '../workflows/worktree-setup';
 import type { WorktreeSetupExecutor } from '@archon/isolation';
@@ -668,8 +669,10 @@ async function dispatchBackgroundWorkflowOwned(
       workerCwd = ctx.cwd;
     }
 
-    if (ctx.adoptionLane?.kind === 'checkout-branch')
+    if (ctx.adoptionLane?.kind === 'checkout-branch') {
       preparedSource = { ...preparedSource, origin: workerCwd };
+      await recordSetupRunSource(workflowDeps, preCreatedRun, preparedSource);
+    }
 
     // 4. Notify parent chat that workflow is dispatching
     await ctx.platform.sendMessage(

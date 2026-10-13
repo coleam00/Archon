@@ -225,15 +225,28 @@ export async function retainSetupRunSource(
   cwd: string,
   codebaseId?: string
 ): Promise<PreparedWorkflowSource> {
-  const { finalizeWorkflowSource, preparedWorkflowSourceRecord } =
-    await import('@archon/workflows/executor');
+  const { finalizeWorkflowSource } = await import('@archon/workflows/executor');
   const finalized = await finalizeWorkflowSource(deps, source, { cwd, codebaseId });
   owner.hold(finalized);
-  const record = preparedWorkflowSourceRecord(finalized);
+  await recordSetupRunSource(deps, run, finalized);
+  owner.adopt();
+  return finalized;
+}
+
+/**
+ * Write the source pointer onto a run created before its worktree. The executor keeps a
+ * recorded source as-is, so a caller that changes the source origin after isolation (a
+ * checkout-branch adoption) must record it again here.
+ */
+export async function recordSetupRunSource(
+  deps: WorkflowDeps,
+  run: WorkflowRun,
+  source: PreparedWorkflowSource
+): Promise<void> {
+  const { preparedWorkflowSourceRecord } = await import('@archon/workflows/executor');
+  const record = preparedWorkflowSourceRecord(source);
   await deps.store.updateWorkflowRun(run.id, {
     metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: record },
   });
   run.metadata = { ...run.metadata, [WORKFLOW_SOURCE_METADATA_KEY]: record };
-  owner.adopt();
-  return finalized;
 }

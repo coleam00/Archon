@@ -1,4 +1,8 @@
-import { createRunWorktreeSetupExecutor, retainSetupRunSource } from '../workflows/worktree-setup';
+import {
+  createRunWorktreeSetupExecutor,
+  recordSetupRunSource,
+  retainSetupRunSource,
+} from '../workflows/worktree-setup';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import {
@@ -1324,6 +1328,7 @@ async function dispatchOrchestratorWorkflowOwned(
         ...freshCaptured,
         preparedSource: { ...freshCaptured.preparedSource, origin: cwd },
       };
+      if (setupRun) await recordSetupRunSource(setupDeps, setupRun, freshCaptured.preparedSource);
     }
 
     // Dispatch workflow.

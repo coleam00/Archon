@@ -331,7 +331,7 @@ The run records the resolved AI configuration (assistant, provider defaults, tie
 
 Some repo settings are read at launch from fixed places rather than the launch checkout:
 
-- **`worktree.*`** (`baseBranch`, `remote`, `path`, `copyFiles`, `initSubmodules`) is read from the project's registered checkout when Archon creates the worktree.
+- **`worktree.*`** (`baseBranch`, `remote`, `path`, `copyFiles`, `initSubmodules`, `postCreate`, `postCreateTimeout`) is read from the project's registered checkout when Archon creates the worktree.
 - **Workflow-source settings** (`defaults.loadDefaultWorkflows`, `defaults.loadDefaultCommands`, `commands.folder`) are read from the source directory when the run captures its source (`--workflow-source` on the CLI), and are recorded with that capture.
 
 To change the configuration a run uses:
