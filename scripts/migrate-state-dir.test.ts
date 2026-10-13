@@ -2,11 +2,9 @@
  * Tests for `scripts/migrate-state-dir.ts` (#2200).
  *
  * Driven as a SUBPROCESS rather than by importing internals, because the
- * contract that matters here is the CLI one: exit codes, what ends up on disk,
- * and — above all — whether `.initialized` was written. That marker tells the
- * triage workflows' `state-preflight` gate "this state directory is complete";
- * writing it after a partial migration would wave through exactly the reset the
- * gate exists to prevent.
+ * contract that matters here is the CLI one: exit codes and what ends up on
+ * disk — above all, that a refusal moves nothing and a partial migration is never
+ * reported as success.
  *
  * `ARCHON_HOME` is redirected to a temp dir, so an unregistered repo resolves to
  * the `_cwd/<basename>` pseudo-project and the destination is predictable
@@ -71,7 +69,7 @@
  * `close()` (lsof shows every handle released before the child starts). If this
  * recurs, the failure now discriminates on its own: a HOOK timeout means creating
  * the database is itself the pathological operation, while a BODY timeout means a
- * body that does exactly what the other 17 do has stopped fitting, which is the
+ * body that does exactly what every other test does has stopped fitting, which is the
  * whole file's floor and not a C5 question. Still do not reach for the timeout.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
@@ -214,15 +212,6 @@ async function seedLegacy(ctx: Sandbox, files: Record<string, string>): Promise<
   }
 }
 
-async function isMarked(at: string): Promise<boolean> {
-  try {
-    await readFile(join(at, '.initialized'));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Distinguishes "directory absent" from "directory empty" — `listOrEmpty`
  * collapses both to `[]`, which makes `toEqual([])` unable to tell a refusal
@@ -251,7 +240,7 @@ async function databaseFiles(archonHome: string): Promise<string[]> {
 }
 
 describe('migrate-state-dir', () => {
-  test('--apply moves every file, marks the destination, and empties the source', async () =>
+  test('--apply moves every file and empties the source', async () =>
     withSandbox(async ctx => {
       await seedLegacy(ctx, { 'triage-state.json': '{"a":1}', 'pr-state.json': '{"b":2}' });
 
@@ -259,17 +248,13 @@ describe('migrate-state-dir', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Migrated 2 entries');
-      expect(await listOrEmpty(ctx.stateRoot)).toEqual([
-        '.initialized',
-        'pr-state.json',
-        'triage-state.json',
-      ]);
+      expect(await listOrEmpty(ctx.stateRoot)).toEqual(['pr-state.json', 'triage-state.json']);
       expect(await listOrEmpty(ctx.legacyDir)).toEqual([]);
       // Contents survive the copy — not just the filenames.
       expect(await readFile(join(ctx.stateRoot, 'triage-state.json'), 'utf-8')).toBe('{"a":1}');
     }));
 
-  test('dry run is the default and mutates nothing — no move, no marker', async () =>
+  test('dry run is the default and mutates nothing', async () =>
     withSandbox(async ctx => {
       await seedLegacy(ctx, { 'triage-state.json': '{"a":1}' });
 
@@ -279,12 +264,11 @@ describe('migrate-state-dir', () => {
       expect(result.stdout).toContain('would move');
       expect(result.stdout).toContain('Dry run — nothing was moved');
       expect(await listOrEmpty(ctx.legacyDir)).toEqual(['triage-state.json']);
-      expect(await isMarked(ctx.stateRoot)).toBe(false);
       // The destination is not even created by a dry run.
       expect(await listOrEmpty(ctx.stateRoot)).toEqual([]);
     }));
 
-  test('a destination collision exits 2, moves nothing, and does NOT mark', async () =>
+  test('a destination collision exits 2 and moves nothing', async () =>
     withSandbox(async ctx => {
       await seedLegacy(ctx, { 'triage-state.json': '{"new":true}' });
       await mkdir(ctx.stateRoot, { recursive: true });
@@ -295,20 +279,18 @@ describe('migrate-state-dir', () => {
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain('Refusing to migrate');
       expect(result.stderr).toContain('Already present in $STATE_DIR');
-      expect(result.stderr).toContain('NOT marked initialized');
       // Neither side was touched.
       expect(await readFile(join(ctx.stateRoot, 'triage-state.json'), 'utf-8')).toBe(
         '{"existing":true}'
       );
       expect(await listOrEmpty(ctx.legacyDir)).toEqual(['triage-state.json']);
-      expect(await isMarked(ctx.stateRoot)).toBe(false);
     }));
 
-  test('a nested directory is a hard failure — nothing moves and nothing is marked', async () =>
+  test('a nested directory is a hard failure and nothing moves', async () =>
     withSandbox(async ctx => {
-      // Regression guard: this used to `continue` past the directory, then write
-      // the marker anyway and report the PRE-SKIP count as migrated — a partial
-      // migration announced as complete.
+      // Regression guard: this used to `continue` past the directory and report
+      // the PRE-SKIP count as migrated — a partial migration announced as
+      // complete.
       await seedLegacy(ctx, { 'triage-state.json': '{"a":1}' });
       await mkdir(join(ctx.legacyDir, 'nested'), { recursive: true });
       await writeFile(join(ctx.legacyDir, 'nested', 'inner.json'), '{}');
@@ -317,26 +299,22 @@ describe('migrate-state-dir', () => {
 
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain('Nested directories');
-      expect(result.stderr).toContain('NOT marked initialized');
       expect(result.stdout).not.toContain('Migrated');
       // The sibling file must NOT have been moved — the pre-flight decides the
       // whole migration before touching anything.
       expect(await listOrEmpty(ctx.legacyDir)).toEqual(['nested', 'triage-state.json']);
-      expect(await isMarked(ctx.stateRoot)).toBe(false);
     }));
 
-  test('no legacy directory is a success that still marks the destination', async () =>
+  test('no legacy directory is a success that writes nothing', async () =>
     withSandbox(async ctx => {
       const result = await runMigration(ctx, '--apply');
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('no legacy .archon/state/ directory');
-      // Without this, an operator who correctly runs the migration on a project
-      // that has nothing to migrate would be left with an unmarked $STATE_DIR.
-      expect(await isMarked(ctx.stateRoot)).toBe(true);
+      expect(await dirExists(ctx.stateRoot)).toBe(false);
     }));
 
-  test('an empty legacy directory is a success that still marks the destination', async () =>
+  test('an empty legacy directory is a success', async () =>
     withSandbox(async ctx => {
       await mkdir(ctx.legacyDir, { recursive: true });
 
@@ -344,16 +322,6 @@ describe('migrate-state-dir', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('legacy .archon/state/ is empty');
-      expect(await isMarked(ctx.stateRoot)).toBe(true);
-    }));
-
-  test('a no-op dry run reports without marking', async () =>
-    withSandbox(async ctx => {
-      const result = await runMigration(ctx);
-
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('re-run with --apply');
-      expect(await isMarked(ctx.stateRoot)).toBe(false);
     }));
 
   // A read-only lookup that CREATES the thing it reads is not read-only. The
@@ -377,8 +345,7 @@ describe('migrate-state-dir', () => {
         // The skip is sound only for SQLite: a remote registry's contents cannot
         // be deduced from the absence of a local file. Without the dialect clause
         // the whole suite still passes while every DATABASE_URL install silently
-        // takes the _cwd fallback — a wrong destination in a script that writes
-        // `.initialized`.
+        // takes the _cwd fallback — a wrong destination for the moved files.
         //
         // The DSN points at a UNIX SOCKET path inside this test's own sandbox, so
         // the lookup fails with ENOENT at the filesystem layer — no TCP, no
@@ -397,12 +364,12 @@ describe('migrate-state-dir', () => {
 
         expect(result.exitCode).toBe(1);
         expect(result.stderr).toContain('Could not read the codebase registry');
-        // It refused rather than guessing: nothing moved, nothing marked.
+        // It refused rather than guessing: nothing moved.
         expect(await listOrEmpty(ctx.legacyDir)).toEqual(['triage-state.json']);
-        expect(await isMarked(ctx.stateRoot)).toBe(false);
+        expect(await dirExists(ctx.stateRoot)).toBe(false);
       }));
 
-    test('--apply creates no database either, and still migrates and marks', async () =>
+    test('--apply creates no database either, and still migrates', async () =>
       withSandbox(async ctx => {
         // Scoping the skip to dry runs would put the cold schema apply straight
         // back on the path every real migration takes.
@@ -412,7 +379,7 @@ describe('migrate-state-dir', () => {
 
         expect(result.exitCode).toBe(0);
         expect(await databaseFiles(ctx.archonHome)).toEqual([]);
-        expect(await listOrEmpty(ctx.stateRoot)).toEqual(['.initialized', 'triage-state.json']);
+        expect(await listOrEmpty(ctx.stateRoot)).toEqual(['triage-state.json']);
       }));
   });
 
@@ -420,7 +387,7 @@ describe('migrate-state-dir', () => {
     // A migration tool that silently operates on the wrong directory is the
     // failure family this script exists to prevent. `--cwd --apply` used to
     // swallow the flag as a path, resolve to <pwd>/--apply, find no legacy
-    // state, and exit 0 having written a junk `.initialized`.
+    // state, and exit 0.
     test('--cwd followed by a flag exits 1 and writes nothing', async () =>
       withSandbox(async ctx => {
         const result = await runRaw(ctx, '--cwd', '--apply');
@@ -463,7 +430,7 @@ describe('migrate-state-dir', () => {
     test('a nonexistent --cwd exits 1 instead of a confident no-op success', async () =>
       withSandbox(async ctx => {
         // Previously this resolved to the _cwd fallback, found no legacy state,
-        // and reported success while marking a directory nobody asked for.
+        // and reported success for a directory nobody asked for.
         const result = await runRaw(ctx, '--cwd', join(ctx.root, 'no-such-dir'), '--apply');
 
         expect(result.exitCode).toBe(1);
@@ -476,9 +443,8 @@ describe('migrate-state-dir', () => {
     // `findCodebaseByPathPrefix` matches any SUBDIRECTORY of a registered
     // project, so the destination climbed to the project root while the source
     // stayed at the literal cwd. The script then found no legacy state *under
-    // the subdirectory*, declared "nothing to migrate", and wrote `.initialized`
-    // into the REAL project's state root — disarming `state-preflight` for a
-    // project whose state had never been migrated.
+    // the subdirectory* and declared "nothing to migrate" for a project whose
+    // state had never been migrated.
     /** One registered project per case, so no two cases share a destination. */
     const CASE_NAMES = ['climbs', 'ambiguous'] as const;
     type CaseName = (typeof CASE_NAMES)[number];
@@ -536,7 +502,7 @@ describe('migrate-state-dir', () => {
      * subprocess is not the cost and never was. Building the registry per test was.
      *
      * So it is built once, in a hook, and the test bodies now do exactly what the
-     * other 17 do: seed files, spawn the script, assert. One creation for the group
+     * other tests do: seed files, spawn the script, assert. One creation for the group
      * instead of one per case is also the smallest possible amount of this work —
      * a per-case template copy still creates a database per case.
      *
@@ -595,16 +561,13 @@ describe('migrate-state-dir', () => {
       expect(result.stdout).toContain('resolved to the registered project root');
       // The state actually moved — the old behaviour left it behind.
       expect(await listOrEmpty(ctx.legacyDir)).toEqual([]);
-      expect(await listOrEmpty(ctx.projectStateRoot)).toEqual([
-        '.initialized',
-        'triage-state.json',
-      ]);
+      expect(await listOrEmpty(ctx.projectStateRoot)).toEqual(['triage-state.json']);
     });
 
     test('refuses when BOTH the subdirectory and the project root hold legacy state', async () => {
       const ctx = sandboxFor('ambiguous');
-      // Ambiguous: migrating only the project's while marking would leave the
-      // subdirectory's unmigrated behind a satisfied marker — C5 one level down.
+      // Ambiguous: migrating only the project's would report success while
+      // leaving the subdirectory's unmigrated — C5 one level down.
       await seedLegacy(ctx, { 'triage-state.json': '{"project":true}' });
       await mkdir(join(ctx.subdir, '.archon', 'state'), { recursive: true });
       await writeFile(join(ctx.subdir, '.archon', 'state', 'other.json'), '{"subdir":true}');
@@ -613,9 +576,9 @@ describe('migrate-state-dir', () => {
 
       expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain('two candidate sources');
-      // Nothing moved, and critically nothing marked.
+      // Nothing moved.
       expect(await listOrEmpty(ctx.legacyDir)).toEqual(['triage-state.json']);
-      expect(await isMarked(ctx.projectStateRoot)).toBe(false);
+      expect(await dirExists(ctx.projectStateRoot)).toBe(false);
     });
   });
 
@@ -645,6 +608,5 @@ describe('migrate-state-dir', () => {
       expect(second.exitCode).toBe(0);
       expect(second.stdout).toContain('legacy .archon/state/ is empty');
       expect(await readFile(join(ctx.stateRoot, 'triage-state.json'), 'utf-8')).toBe('{"a":1}');
-      expect(await isMarked(ctx.stateRoot)).toBe(true);
     }));
 });

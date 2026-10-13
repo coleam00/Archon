@@ -2493,8 +2493,8 @@ export async function executeWorkflow(
   // so:
   //   • a later resume re-derives once the registry is healthy and the
   //     `!workflowRun.output_root` guard above writes the now-correct root;
-  //   • the state-preflight gate (#2200), maintainer-triage, and anyone reading the
-  //     row can tell "unregistered" apart from "we could not tell";
+  //   • anyone reading the row can tell "unregistered" apart from "we could not
+  //     tell";
   //   • the write-once invariant is preserved everywhere else (a row with a
   //     resolved or unregistered identity is still protected across a #1192
   //     rename — only the empty faulted shape is scoped differently).
