@@ -59,7 +59,10 @@ is limited by the platform's `fsync` guarantees; macOS does not force drive cach
 The server refuses file storage because its routes read SQL. Trigger admission is also
 refused until file-backed admission is implemented. Provider concurrency caps
 (`concurrency.providers`) require `store: database` and fail at startup.
-Enabling per-user credential modes does not prevent selecting file storage. Stored per-user provider credentials are refused during run preflight,
+Per-user GitHub identity (`GITHUB_APP_ID` with `TOKEN_ENCRYPTION_KEY`) fails at startup under
+file storage, because files hold no user tokens and a run would otherwise use the shared
+token. A GitHub App without `TOKEN_ENCRYPTION_KEY` works. Per-user provider credential
+mode does not prevent selecting file storage. Stored per-user provider credentials are refused during run preflight,
 before creating a worktree. Environment credentials and the provider's own login work
 normally. State documents (`archon state`) are not stored in files; the command requires
 database storage, and `workflow cleanup` has no state revisions to prune. Other SQL-only

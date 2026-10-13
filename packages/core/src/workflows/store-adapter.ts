@@ -6,7 +6,7 @@ import { createSqlStateDocumentStore } from '../db/state-documents';
 import { getDatabase } from '../db/connection';
 import { providerRegistry } from '@archon/providers';
 import type { CredentialStatus } from '@archon/provider-contract';
-import type { IWorkflowStore } from '@archon/workflows/store';
+import type { IWorkflowStore, WorkflowStoreKind } from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
@@ -207,7 +207,7 @@ export function initializeWorkflowGitHubAppAuth(
  */
 export function createWorkflowDeps(
   store: IWorkflowStore = createWorkflowStore(),
-  credentialStore: 'database' | 'files' = 'database'
+  credentialStore: WorkflowStoreKind = 'database'
 ): Omit<WorkflowDeps, 'loadConfig'> & {
   loadConfig: typeof loadMergedConfig;
 } {

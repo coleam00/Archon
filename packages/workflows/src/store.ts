@@ -126,6 +126,10 @@ export const NODE_STATE_EVENT_TYPES = [
 
 export type NodeStateEventType = (typeof NODE_STATE_EVENT_TYPES)[number];
 
+/** Where an install persists workflow state; selected by `store:` in the global config. */
+export const WORKFLOW_STORE_KINDS = ['database', 'files'] as const;
+export type WorkflowStoreKind = (typeof WORKFLOW_STORE_KINDS)[number];
+
 export function foldActiveNodeIds(
   active: Set<string>,
   stepName: string | null,

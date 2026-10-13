@@ -1,3 +1,4 @@
+import type { WorkflowStoreKind } from '@archon/workflows/store';
 import type { ResolvedWorkflowPolicy } from '@archon/workflows/schemas/run-config';
 /**
  * Configuration types for Archon YAML config files
@@ -117,7 +118,7 @@ export interface ContainerConfig {
 }
 
 export interface GlobalConfig {
-  store?: 'database' | 'files';
+  store?: WorkflowStoreKind;
   /**
    * Bot display name (shown in messages)
    * @default 'Archon'

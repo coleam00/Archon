@@ -106,6 +106,14 @@ test('pause, approve in another process, and resume without any SQL connection',
     publicKeyEncoding: { type: 'spki', format: 'pem' },
     privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
   }).privateKey;
+  // Per-user GitHub needs stored user tokens, so files refuse it rather than run unscrubbed.
+  const perUser = await cli(f, ['workflow', 'run', 'portable', '--folder', '--no-worktree']);
+  expect(perUser.code).toBe(1);
+  expect(perUser.output + perUser.error).toContain('per-user GitHub');
+  expect(perUser.output + perUser.error).toContain('store: database');
+  expect(existsSync(join(f.project, 'before-count'))).toBe(false);
+  // The GitHub App alone still initializes for file-backed runs.
+  f.env.TOKEN_ENCRYPTION_KEY = '';
   const started = await cli(f, [
     'workflow',
     'run',
