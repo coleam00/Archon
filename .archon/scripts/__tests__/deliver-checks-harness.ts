@@ -21,8 +21,6 @@ export const CLI_ENTRY = resolve(import.meta.dir, '../../../packages/cli/src/cli
 export const PR = { repo: { host: 'ghe.example.com', path: 'example/repo' }, number: 42 };
 export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 
-const trackTempRoot = trackTempRoots();
-
 /**
  * One row of `gh pr checks --json name,state,bucket`, as gh 2.92 prints it.
  * `state` is a check run's conclusion once it completes, its status before
@@ -261,9 +259,35 @@ export interface ScriptOptions {
   readonly cwd?: string;
 }
 
-/** Run one pack script the way the engine does: `<pack>/<relative>.ts`. */
-export function runPackScript(relative: string, options: ScriptOptions = {}): ScriptRun {
-  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-script-')));
+export interface PackScriptRunner {
+  /** Run one pack script the way the engine does: `<pack>/<relative>.ts`. */
+  readonly runPackScript: (relative: string, options?: ScriptOptions) => ScriptRun;
+  readonly runDeliverScript: (
+    script: 'check-ci' | 'ci-note' | 'flip-ready',
+    options?: ScriptOptions
+  ) => ScriptRun;
+}
+
+/**
+ * The script runners for one test file. Call it once at the file's module scope.
+ *
+ * The scratch roots are tracked here rather than at this module's top level because a
+ * hook registered while a shared module is first imported belongs to that one test
+ * file. Every later file in the same `bun test` process would leak all of its roots.
+ */
+export function packScriptRunner(): PackScriptRunner {
+  const trackTempRoot = trackTempRoots();
+  const runPackScript = (relative: string, options: ScriptOptions = {}): ScriptRun => {
+    const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-script-')));
+    return runPackScriptIn(root, relative, options);
+  };
+  return {
+    runPackScript,
+    runDeliverScript: (script, options) => runPackScript(`deliver/scripts/${script}`, options),
+  };
+}
+
+function runPackScriptIn(root: string, relative: string, options: ScriptOptions): ScriptRun {
   const ghLog = join(root, 'gh.log');
   const forgeLog = join(root, 'forge.log');
   const requestLog = join(root, 'forge-requests');
@@ -353,13 +377,6 @@ else {
     forgeRequests: lines(requestLog),
     artifacts,
   };
-}
-
-export function runDeliverScript(
-  script: 'check-ci' | 'ci-note' | 'flip-ready',
-  options: ScriptOptions = {}
-): ScriptRun {
-  return runPackScript(`deliver/scripts/${script}`, options);
 }
 
 type ForgeState = 'none' | 'pending' | 'green' | 'red' | 'gated' | 'unknown';

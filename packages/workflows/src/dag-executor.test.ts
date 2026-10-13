@@ -32383,6 +32383,8 @@ describe('retained exec output', () => {
 describe('executeDagWorkflow -- container write-back gate', () => {
   const CONTAINER_EXEC = { kind: 'container' as const, containerId: 'cid-1' };
   const wbTestDir = join(tmpdir(), `dag-wb-test-${Date.now()}`);
+  // The executor creates `logs/` under the run's cwd, so this path becomes a real tree.
+  afterEach(() => removeTempTree(wbTestDir));
 
   function makeWritebackBackend(over?: Partial<Record<string, unknown>>) {
     return {
