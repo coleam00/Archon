@@ -31,7 +31,7 @@ Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
 `generated-files`, `type-check`, `lint`, `installer` (POSIX only), and `tests`.
 The generated group checks bundled defaults, the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
-platform. Lint runs Biome (`biome.json`) after two TypeScript-API checks Biome cannot
+platform. Lint runs Biome (`biome.jsonc`) after two TypeScript-API checks Biome cannot
 express: test-cleanup drift and the workflow persistence boundary. Install the Biome
 extension for in-editor diagnostics; ESLint extensions no longer find a config.
 

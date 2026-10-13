@@ -3,5 +3,5 @@
     "biome lint --write --no-errors-on-unmatched --files-ignore-unknown=true",
     "prettier --write"
   ],
-  "*.{json,md,yaml,yml}": ["prettier --write"]
+  "*.{json,jsonc,md,yaml,yml}": ["prettier --write"]
 }

@@ -307,6 +307,7 @@ describe('inert paths', () => {
     ['Dockerfile', 'the docker-build job'],
     ['.dockerignore', 'the docker-build job'],
     ['.prettierrc', 'format:check'],
+    ['biome.jsonc', 'lint'],
     ['homebrew/archon.rb', 'build:checksums'],
     ['scripts/install.ps1', 'test:install'],
     ['.github/workflows/test.yml', 'the gate itself'],

@@ -3,9 +3,10 @@
   "vcs": {
     "enabled": true,
     "clientKind": "git",
-    "useIgnoreFile": true
+    "useIgnoreFile": true,
   },
   "files": {
+    // dag-executor.test.ts is over Biome's 1 MiB default and would be skipped silently.
     "maxSize": 2097152,
     "includes": [
       "**",
@@ -23,14 +24,14 @@
       "!.claude",
       "!.github",
       "!docs",
-      "!workspace"
-    ]
+      "!workspace",
+    ],
   },
   "formatter": {
-    "enabled": false
+    "enabled": false,
   },
   "assist": {
-    "enabled": false
+    "enabled": false,
   },
   "linter": {
     "enabled": true,
@@ -49,7 +50,7 @@
         "noDebugger": "error",
         "noMisleadingCharacterClass": "error",
         "noIrregularWhitespace": "error",
-        "noGlobalAssign": "error"
+        "noGlobalAssign": "error",
       },
       "correctness": {
         "noUnsafeFinally": "error",
@@ -59,27 +60,30 @@
         "noEmptyPattern": "error",
         "noPrecisionLoss": "error",
         "noSelfAssign": "error",
-        "noSwitchDeclarations": "error"
+        "noSwitchDeclarations": "error",
       },
       "style": {
-        "useThrowOnlyError": "error"
+        "useThrowOnlyError": "error",
       },
       "nursery": {
-        "usePromiseRejectErrors": "error"
+        "usePromiseRejectErrors": "error",
       },
       "complexity": {
-        "noBannedTypes": "error"
-      }
+        "noBannedTypes": "error",
+      },
     },
     "includes": [
       "packages/*/src/**/*.ts",
       "packages/*/src/**/*.tsx",
       "scripts/**/*.ts",
       ".archon/scripts/**/*.ts",
-      ".archon/workflows/**/*.ts"
-    ]
+      ".archon/workflows/**/*.ts",
+    ],
   },
+  // Biome takes a rule's options from the last override that matches a file; options for
+  // the same rule do not merge. Keep the restricted-import overrides from overlapping.
   "overrides": [
+    // Source only: tests use `!` and empty blocks freely, and neither hides a failure there.
     {
       "includes": [
         "packages/*/src/**",
@@ -90,25 +94,29 @@
         "!**/*.spec.ts",
         "!**/*.spec.tsx",
         "!**/src/test/**",
-        "!**/__tests__/**"
+        "!**/__tests__/**",
       ],
       "linter": {
         "rules": {
           "style": {
-            "noNonNullAssertion": "error"
+            "noNonNullAssertion": "error",
           },
           "suspicious": {
-            "noEmptyBlockStatements": "error"
-          }
-        }
-      }
+            "noEmptyBlockStatements": "error",
+          },
+        },
+      },
     },
+    // Provider attempts are admitted against the operator's concurrency caps, so callers get
+    // providers from core's admission seam. The web bundle is excluded: it has no
+    // @archon/providers dependency (check:package-edges rejects the import), and including
+    // it would let the console override below replace these paths there.
     {
       "includes": [
         "packages/*/src/**",
         "!packages/providers/src/**",
         "!packages/core/src/services/provider-admission.ts",
-        "!packages/web/**"
+        "!packages/web/**",
       ],
       "linter": {
         "rules": {
@@ -119,19 +127,20 @@
                 "paths": {
                   "@archon/providers": {
                     "importNames": ["getAgentProvider"],
-                    "message": "Use getAgentProvider from '@archon/core/services/provider-admission' so provider concurrency caps apply."
+                    "message": "Use getAgentProvider from '@archon/core/services/provider-admission' so provider concurrency caps apply.",
                   },
                   "@archon/providers/registry": {
                     "importNames": ["getAgentProvider"],
-                    "message": "Use getAgentProvider from '@archon/core/services/provider-admission' so provider concurrency caps apply."
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+                    "message": "Use getAgentProvider from '@archon/core/services/provider-admission' so provider concurrency caps apply.",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     },
+    // The console owns its API and reactive state instead of a second data layer.
     {
       "includes": ["packages/web/src/experiments/console/**"],
       "linter": {
@@ -141,13 +150,13 @@
               "level": "error",
               "options": {
                 "paths": {
-                  "@tanstack/react-query": "The console uses its own reactive store (store/cache.ts)."
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  ]
+                  "@tanstack/react-query": "The console uses its own reactive store (store/cache.ts).",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  ],
 }
