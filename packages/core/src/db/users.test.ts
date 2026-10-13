@@ -1,6 +1,11 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { createMockLogger } from '../test/mocks/logger';
+import * as paths from '@archon/paths';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+
+const logger = createMockLogger();
+mock.module('@archon/paths', () => ({ ...paths, createLogger: () => logger }));
 
 const mockQuery = createMockQuery();
 
@@ -51,6 +56,10 @@ const identityRow = (overrides: Partial<UserIdentity> = {}): UserIdentity => ({
 
 describe('users', () => {
   beforeEach(() => {
+    logger.debug.mockClear();
+    logger.info.mockClear();
+    logger.warn.mockClear();
+    logger.error.mockClear();
     mockQuery.mockClear();
     mockWithTransaction.mockClear();
   });
@@ -183,6 +192,11 @@ describe('users', () => {
 
       const result = await findOrCreateUserByPlatformIdentity('telegram', '7654321', 'Bob');
 
+      expect(logger.info).toHaveBeenCalledWith(
+        { userId: 'user-new', platform: 'telegram' },
+        'user.create_completed'
+      );
+      expect(logger.debug).toHaveBeenCalledWith({ platform: 'telegram' }, 'user.create_started');
       expect(result).toEqual(newUser);
       expect(mockWithTransaction).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenNthCalledWith(
@@ -232,6 +246,10 @@ describe('users', () => {
 
       const result = await findOrCreateUserByPlatformIdentity('github', 'alice');
 
+      expect(logger.info).toHaveBeenCalledWith(
+        { platform: 'github', userId: 'user-winner' },
+        'user.create_race_recovered'
+      );
       expect(result).toEqual(winner);
     });
 
@@ -257,12 +275,21 @@ describe('users', () => {
     test('rethrows non-UNIQUE errors WITHOUT attempting race recovery', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
-      mockQuery.mockRejectedValueOnce(new Error('serialization failure'));
+      const failure = Object.assign(
+        new Error('could not serialize access due to concurrent update'),
+        { code: '40001' }
+      );
+      mockQuery.mockRejectedValueOnce(failure);
       // No re-SELECT should happen — if the narrowed catch is widened by a
       // future refactor, this assertion catches it.
 
       await expect(findOrCreateUserByPlatformIdentity('slack', 'U999')).rejects.toThrow(
-        'serialization failure'
+        'could not serialize access'
+      );
+      // The database error itself is logged, so its message survives for diagnosis.
+      expect(logger.error).toHaveBeenCalledWith(
+        { err: failure, platform: 'slack' },
+        'user.create_failed'
       );
       // Exactly 3 queries: initial identity SELECT + INSERT user + INSERT identity (failed).
       // No recovery SELECT means the narrowed catch path held.
@@ -291,6 +318,14 @@ describe('users', () => {
 
       const result = await findOrCreateUserByPlatformIdentity('slack', 'U123', 'Carol');
 
+      expect(logger.warn).toHaveBeenCalledWith(
+        { identityId: 'identity-1', platform: 'slack' },
+        'user.identity_orphan_repair_started'
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        { userId: 'user-repaired', identityId: 'identity-1', platform: 'slack' },
+        'user.identity_orphan_repair_completed'
+      );
       expect(result).toEqual(repaired);
       expect(mockWithTransaction).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenNthCalledWith(
@@ -320,9 +355,14 @@ describe('users', () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([githubIdentity({ user_id: 'user-other' })])
       );
-      await expect(linkGithubIdentity('user-1', 'alice')).rejects.toBeInstanceOf(
-        GithubIdentityConflictError
+      const conflict: unknown = await linkGithubIdentity('user-1', 'alice').catch(
+        (err: unknown) => err
       );
+      expect(conflict).toBeInstanceOf(GithubIdentityConflictError);
+      // Callers show and log this error, so it must not carry the login.
+      expect(
+        JSON.stringify({ ...(conflict as object), message: (conflict as Error).message })
+      ).not.toContain('alice');
       // Only the SELECT ran — a conflict must not touch the identity row.
       expect(mockQuery).toHaveBeenCalledTimes(1);
     });
@@ -331,6 +371,10 @@ describe('users', () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([githubIdentity({ user_id: 'user-1' })]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       await expect(linkGithubIdentity('user-1', 'alice')).resolves.toBeUndefined();
+      expect(logger.info).toHaveBeenCalledWith(
+        { userId: 'user-1', platform: 'github' },
+        'user.github_identity_relinked'
+      );
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         'UPDATE remote_agent_user_identities SET platform_display_name = $1 WHERE id = $2',
@@ -342,6 +386,10 @@ describe('users', () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       await linkGithubIdentity('user-1', 'alice');
+      expect(logger.info).toHaveBeenCalledWith(
+        { userId: 'user-1', platform: 'github' },
+        'user.github_identity_linked'
+      );
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         expect.stringContaining('INSERT INTO remote_agent_user_identities'),
@@ -359,6 +407,10 @@ describe('users', () => {
       // Re-SELECT after the UNIQUE violation: the winner is us → no conflict.
       mockQuery.mockResolvedValueOnce(createQueryResult([githubIdentity({ user_id: 'user-1' })]));
       await expect(linkGithubIdentity('user-1', 'alice')).resolves.toBeUndefined();
+      expect(logger.info).toHaveBeenCalledWith(
+        { userId: 'user-1', platform: 'github' },
+        'user.github_identity_link_race_recovered'
+      );
       expect(mockQuery).toHaveBeenCalledTimes(3);
     });
 
