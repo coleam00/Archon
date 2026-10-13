@@ -437,6 +437,24 @@ export function describeWorkflowStoreConformance(
       expect(await types(store, signaled.id)).toEqual(['wait_started', 'wait_signaled']);
       expect(await due(new Date())).toContain(signaled.id);
     });
+    test('due continuations come earliest first, so a limit keeps the most overdue', async () => {
+      const later = await running(store);
+      await store.pauseWorkflowRunForWait(
+        later.id,
+        { ...wait, resumeAt: new Date(Date.parse(wait.resumeAt) + 60_000).toISOString() },
+        { kind: 'started', stepName: 'wait' }
+      );
+      const earlier = await running(store);
+      await store.pauseWorkflowRunForWait(earlier.id, wait, { kind: 'started', stepName: 'wait' });
+      const now = new Date(Date.parse(wait.resumeAt) + 120_000);
+      expect((await store.listDueWorkflowContinuations(now, 1)).map(run => run.id)).toEqual([
+        earlier.id,
+      ]);
+      expect((await store.listDueWorkflowContinuations(now, 10)).map(run => run.id)).toEqual([
+        earlier.id,
+        later.id,
+      ]);
+    });
     test('attention failure matches its exact owner and reports only the winner', async () => {
       const run = await running(store);
       const attention = {

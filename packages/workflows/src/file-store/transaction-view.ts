@@ -41,6 +41,13 @@ export type TransactionView = Omit<
   | 'deleteWorkflowNodeSessions'
 >;
 
+/** Events that end a run; a commit that adds one reports the run's terminal telemetry. */
+export const TERMINAL_RUN_EVENT_TYPES = [
+  'workflow_completed',
+  'workflow_failed',
+  'workflow_cancelled',
+] as const;
+
 export function createTransactionView(
   runs: Map<string, WorkflowRun>,
   events: WorkflowEventRow[],

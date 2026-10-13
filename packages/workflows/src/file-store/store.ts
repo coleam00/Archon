@@ -17,7 +17,11 @@ import { workflowRunNodeSessionSchema } from '../schemas/workflow-run-node-sessi
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { reportRunTerminalTelemetry } from '../run-terminal-telemetry';
 import { getWorkflowEventEmitter } from '../event-emitter';
-import { createTransactionView, type TransactionView } from './transaction-view';
+import {
+  createTransactionView,
+  TERMINAL_RUN_EVENT_TYPES,
+  type TransactionView,
+} from './transaction-view';
 import {
   commit,
   openFileStore,
@@ -104,13 +108,7 @@ export async function createFileWorkflowStore(
           .map(event => event.id);
         if (!isDeepStrictEqual(before.get(id), run) || added.length || retract.length)
           changes.push({ run, events: added, retract });
-        if (
-          added.some(event =>
-            ['workflow_completed', 'workflow_failed', 'workflow_cancelled'].includes(
-              event.event_type
-            )
-          )
-        )
+        if (added.some(event => TERMINAL_RUN_EVENT_TYPES.some(type => type === event.event_type)))
           reports.push({
             run: structuredClone(run),
             events: structuredClone(runEvents),
