@@ -70,6 +70,25 @@ export function validateStartReceiptLimit(limit = 50): number {
   return limit;
 }
 
+// The receipt schema accepts UTC datetimes with optional seconds and arbitrary
+// fractional precision; Date.parse would discard precision below milliseconds.
+function receiptTimeKey(receivedAt: string): string {
+  const dot = receivedAt.indexOf('.');
+  const seconds = receivedAt.slice(0, dot === -1 ? -1 : dot).padEnd(19, ':00');
+  const fraction = dot === -1 ? '' : receivedAt.slice(dot + 1, -1).replace(/0+$/, '');
+  return `${seconds}.${fraction}`;
+}
+
+export function compareStartReceipts(
+  a: Pick<SourceReceiptInput, 'id' | 'receivedAt'>,
+  b: Pick<SourceReceiptInput, 'id' | 'receivedAt'>
+): number {
+  return (
+    receiptTimeKey(b.receivedAt).localeCompare(receiptTimeKey(a.receivedAt)) ||
+    b.id.localeCompare(a.id)
+  );
+}
+
 export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {

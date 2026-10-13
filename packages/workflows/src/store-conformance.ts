@@ -260,24 +260,55 @@ export function describeWorkflowStoreConformance(
         expect(await store.listWorkflowEvents(id)).toEqual(events);
       });
     }
-    test('receipt listing orders by newest timestamp then ID before limiting', async () => {
-      const receipts = [
-        { id: '00000000-0000-4000-8000-000000000002', receivedAt: '2026-01-02T00:00:00.000Z' },
-        { id: '00000000-0000-4000-8000-000000000003', receivedAt: '2026-01-01T00:00:00.000Z' },
-        { id: '00000000-0000-4000-8000-000000000001', receivedAt: '2026-01-02T00:00:00.000Z' },
-      ];
-      for (const receipt of receipts) {
-        const input = acceptance();
-        await store.acceptStartReceipt({
-          ...input,
-          receipt: { ...input.receipt, ...receipt, deliveryId: receipt.id },
-        });
-      }
-      expect((await store.listStartReceipts(2)).map(row => row.id)).toEqual([
-        receipts[0].id,
-        receipts[2].id,
-      ]);
-    });
+    for (const { name, timestamps } of [
+      {
+        name: 'mixed fractional precision',
+        timestamps: ['2026-01-02T00:00:00.500Z', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00.5Z'],
+      },
+      {
+        name: 'submillisecond precision',
+        timestamps: [
+          '2026-01-02T00:00:00.0002Z',
+          '2026-01-02T00:00:00.0001Z',
+          '2026-01-02T00:00:00.000200Z',
+        ],
+      },
+      {
+        name: 'optional seconds',
+        timestamps: [
+          '2026-01-02T00:00:00.001Z',
+          '2026-01-02T00:00Z',
+          '2026-01-02T00:00:00.001000Z',
+        ],
+      },
+      {
+        name: 'equal zero fractions',
+        timestamps: ['2026-01-02T00:00Z', '2026-01-01T23:59:59.9999Z', '2026-01-02T00:00:00.0000Z'],
+      },
+    ]) {
+      test(`receipt listing orders ${name} by newest instant then ID before limiting`, async () => {
+        const receipts = timestamps.map((receivedAt, index) => ({
+          id: `00000000-0000-4000-8000-00000000000${String([2, 3, 1][index])}`,
+          receivedAt,
+        }));
+        for (const receipt of receipts) {
+          const input = acceptance();
+          await store.acceptStartReceipt({
+            ...input,
+            receipt: { ...input.receipt, ...receipt, deliveryId: receipt.id },
+          });
+        }
+        expect((await store.listStartReceipts()).map(row => row.id)).toEqual([
+          receipts[0].id,
+          receipts[2].id,
+          receipts[1].id,
+        ]);
+        expect((await store.listStartReceipts(2)).map(row => row.id)).toEqual([
+          receipts[0].id,
+          receipts[2].id,
+        ]);
+      });
+    }
     test('capacity admits multiple holders and drain fills every released slot in FIFO order', async () => {
       const intents = Array.from({ length: 5 }, () => start('queue', 'host', 2));
       const decisions = [];

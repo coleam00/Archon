@@ -22,6 +22,7 @@ import {
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
   validateStartReceiptLimit,
+  compareStartReceipts,
   type IResourceStartStore,
   type StartBindingInspection,
   type ResourceStartRequestInspection,
@@ -415,7 +416,7 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
     listStartReceipts: limit =>
       query(async () =>
         (await list('receipts', receiptSchema))
-          .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt) || b.id.localeCompare(a.id))
+          .sort(compareStartReceipts)
           .slice(0, validateStartReceiptLimit(limit))
           .map(({ id, sourceInstanceId, deliveryId, outcome, reason, receivedAt }) => ({
             id,

@@ -1,5 +1,6 @@
 import {
   validateStartReceiptLimit,
+  compareStartReceipts,
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
   type IResourceStartStore,
@@ -179,7 +180,7 @@ export function createInMemoryResourceStartStore(
     ): ReturnType<IResourceStartStore['listStartReceipts']> =>
       structuredClone(
         [...receipts.values()]
-          .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt) || b.id.localeCompare(a.id))
+          .sort(compareStartReceipts)
           .slice(0, validateStartReceiptLimit(limit))
           .map(({ id, sourceInstanceId, deliveryId, outcome, reason, receivedAt }) => ({
             id,

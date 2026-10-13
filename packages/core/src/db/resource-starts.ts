@@ -334,6 +334,14 @@ export async function listStartReceipts(
   >[]
 > {
   const receiptLimit = validateStartReceiptLimit(limit);
+  // SQLite's date functions round fractions to milliseconds. Keep the schema's UTC precision.
+  const receivedAtOrder =
+    getDatabase().dialect === 'sqlite'
+      ? `CASE WHEN length(received_at) = 17 THEN substr(received_at, 1, 16) || ':00'
+              ELSE substr(received_at, 1, 19) END || '.' ||
+         CASE WHEN instr(received_at, '.') = 0 THEN ''
+              ELSE rtrim(substr(received_at, 21, length(received_at) - 21), '0') END`
+      : 'received_at';
   const result = await getDatabase().query<{
     id: string;
     source_instance_id: string;
@@ -342,7 +350,7 @@ export async function listStartReceipts(
     reason: string | null;
     received_at: string | Date;
   }>(
-    'SELECT id, source_instance_id, delivery_id, outcome, reason, received_at FROM remote_agent_start_receipts ORDER BY received_at DESC, id DESC LIMIT $1',
+    `SELECT id, source_instance_id, delivery_id, outcome, reason, received_at FROM remote_agent_start_receipts ORDER BY ${receivedAtOrder} DESC, id DESC LIMIT $1`,
     [receiptLimit]
   );
   return result.rows.map(row => ({
