@@ -461,7 +461,7 @@ test('stop drains a timer-triggered Slack edit before stopping the client', asyn
   expect(slack.stopped).toBe(true);
 });
 
-test('failed approval delivery shows recovery instructions on the existing status', async () => {
+test('approval delivery recovery survives paused edits and clears after resume', async () => {
   await started();
   slack.failPost = new Error('private SDK details');
   await approval();
@@ -475,4 +475,43 @@ test('failed approval delivery shows recovery instructions on the existing statu
   expect(text).toContain('Web UI');
   expect(JSON.stringify(update)).toContain('Approval card could not be delivered');
   expect(JSON.stringify(update)).not.toContain('private SDK details');
+
+  async function nodeUpdate(state: 'completed' | 'running'): Promise<void> {
+    const original = slack.client.chat.update;
+    const updated = new Promise<void>(resolve => {
+      spyOn(slack.client.chat, 'update').mockImplementationOnce(async args => {
+        const result = await original(args);
+        resolve();
+        return result;
+      });
+    });
+    await plugin.onRunEvent({
+      type: 'node_state',
+      runId: 'run',
+      nodeId: 'work',
+      nodeName: 'Work',
+      state,
+    });
+    await updated;
+  }
+
+  await nodeUpdate('completed');
+  expect(slack.updates).toHaveLength(3);
+  expect(slack.updates.at(-1)?.ts).toBe('msg-1');
+  const paused = JSON.stringify(slack.updates.at(-1));
+  expect(paused).toContain('Workflow paused');
+  expect(paused).toContain('Approval card could not be delivered');
+  expect(paused).toContain('/archon-workflow status run');
+
+  await nodeUpdate('running');
+  expect(slack.updates).toHaveLength(4);
+  const resumed = JSON.stringify(slack.updates.at(-1));
+  expect(resumed).toContain('Workflow running');
+  expect(resumed).not.toContain('Approval card could not be delivered');
+
+  await approval();
+  expect(slack.posts).toHaveLength(2);
+  const nextApproval = JSON.stringify(slack.updates.at(-1));
+  expect(nextApproval).toContain('Workflow paused');
+  expect(nextApproval).not.toContain('Approval card could not be delivered');
 });
