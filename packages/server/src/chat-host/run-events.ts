@@ -1,3 +1,4 @@
+import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import type { ChatRunEvent } from '@archon/chat-contract';
 import {
   getWorkflowEventEmitter,
@@ -20,12 +21,21 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
     case 'workflow_started':
       return { type: 'workflow_started', runId, workflowName: event.workflowName };
     case 'node_started':
+    case 'node_suspended':
       return {
         type: 'node_state',
         runId,
         nodeId: event.nodeId,
         nodeName: event.nodeName,
         state: 'running',
+      };
+    case 'node_skipped_prior_success':
+      return {
+        type: 'node_state',
+        runId,
+        nodeId: event.nodeId,
+        nodeName: event.nodeName,
+        state: 'completed',
       };
     case 'node_completed':
       return {
@@ -59,7 +69,7 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
         runId,
         nodeId: event.nodeId,
         message: event.message,
-        decisions: event.decisions,
+        decisions: getApprovalDecisions(event),
         pauseId: event.pauseId,
       };
     case 'workflow_completed':
@@ -71,8 +81,6 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
     case 'loop_iteration_started':
     case 'loop_iteration_completed':
     case 'loop_iteration_failed':
-    case 'node_suspended':
-    case 'node_skipped_prior_success':
     case 'workflow_artifact':
     case 'provider_event':
     case 'container_lifecycle':
@@ -115,8 +123,9 @@ export function subscribeChatRunEvents(plugins: ReadonlyMap<string, ChatSupervis
           projected.type === 'workflow_started'
             ? { ...projected, conversationId: conversation.platform_conversation_id }
             : projected;
-        if (routed.type === 'terminal') {
+        if (routed.type === 'approval_pending' || routed.type === 'terminal')
           routed.authoredOutcome = run.outcome ?? undefined;
+        if (routed.type === 'terminal') {
           const cost = run.metadata.total_cost_usd;
           if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0)
             routed.totalCostUsd = cost;

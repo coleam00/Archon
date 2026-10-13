@@ -1616,7 +1616,10 @@ test('Codex diagnostics carry binary resolution and legacy setup posture without
   const previous = process.env.CODEX_ID_TOKEN;
   process.env.CODEX_ID_TOKEN = 'p4-legacy-token-secret';
   try {
-    const request = { assistantConfig: { codexBinaryPath: process.execPath } };
+    const request = {
+      signal: new AbortController().signal,
+      assistantConfig: { codexBinaryPath: process.execPath },
+    };
     const direct = await createProvider().diagnose(request);
     expect(await overStreams(createProvider, descriptor).diagnose!(request)).toEqual(direct);
     expect(direct.checks.map(check => check.status)).toEqual(['ok', 'warn']);

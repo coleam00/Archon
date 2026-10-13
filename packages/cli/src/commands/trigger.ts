@@ -28,7 +28,7 @@ export const timerTriggerConfigSchema = z
   .object({
     version: z.literal(1),
     sourceInstanceId: z.string().min(1),
-    binding: resourceStartBindingIntentSchema,
+    binding: resourceStartBindingIntentSchema.omit({ eventInputs: true }),
     schedule: z
       .object({ intervalSeconds: z.number().int().positive(), runAtLoad: z.boolean() })
       .strict(),

@@ -131,7 +131,9 @@ export async function serveProvider(
     const provider = options.create(log);
     if (!provider.diagnose)
       throw new PluginRemoteError(-32601, 'Provider does not support diagnose');
-    return providerDiagnosticsSchema.parse(await provider.diagnose(request));
+    return providerDiagnosticsSchema.parse(
+      await provider.diagnose({ ...request, signal: connectionAbort.signal })
+    );
   });
   rpc.handle('_archon/list_models', async raw => {
     requireInitialized();

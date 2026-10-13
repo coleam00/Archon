@@ -90,6 +90,7 @@ import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
 import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
+import { hasStartReceiptForDelivery } from '@archon/core/db/resource-starts';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import {
@@ -675,6 +676,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         acceptReceipt: input => resourceStartWorkflowHost.deps.store.acceptStartReceipt(input),
         isKnownUser: async id =>
           (await resourceStartWorkflowHost.records.users.getUserById(id)) !== null,
+        hasDeliveryReceipt: hasStartReceiptForDelivery,
       })
     : undefined;
   // Explicit only: bindings choose their execution host, so the server never guesses one.

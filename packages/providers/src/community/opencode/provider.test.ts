@@ -201,6 +201,19 @@ async function createTempProjectDir(): Promise<string> {
 }
 
 describe('OpencodeProvider', () => {
+  test('diagnostic cancellation after probe entry rejects with the abort reason', async () => {
+    const controller = new AbortController();
+    const probe = mock((signal: AbortSignal) => {
+      expect(signal).toBe(controller.signal);
+      return new Promise<'ready'>(() => {});
+    });
+    const pending = new OpencodeProvider(probe).diagnose({ signal: controller.signal });
+    expect(probe).toHaveBeenCalledTimes(1);
+    const reason = new Error('diagnostic deadline reached');
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+  });
+
   beforeEach(() => {
     scriptedEvents = [];
     runtimeQueue.length = 0;

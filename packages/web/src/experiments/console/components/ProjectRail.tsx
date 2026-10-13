@@ -29,6 +29,20 @@ export async function removeProjectFromRail(
   if (selectedProjectId === projectId) actions.navigateToOverview();
 }
 
+interface ProjectRenameActions {
+  rename: (projectId: string, name: string) => Promise<unknown>;
+  invalidateProject: (projectId: string) => void;
+}
+
+export async function renameProjectInRail(
+  projectId: string,
+  name: string,
+  actions: ProjectRenameActions
+): Promise<void> {
+  await actions.rename(projectId, name);
+  actions.invalidateProject(projectId);
+}
+
 /** Extract the project id from /console/p/:id (and /console/p/:id/r/:runId). */
 function extractProjectId(pathname: string): string | null {
   const m = /^\/console\/p\/([^/]+)/.exec(pathname);
@@ -132,6 +146,16 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
     },
     [location.pathname, navigate]
   );
+
+  const renameProject = useCallback(async (projectId: string, name: string): Promise<void> => {
+    await renameProjectInRail(projectId, name, {
+      rename: skill.renameProject,
+      invalidateProject: id => {
+        invalidate(K.projects);
+        invalidate(K.project(id));
+      },
+    });
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -297,6 +321,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
                   navigate(`/console/p/${p.id}`);
                 }}
                 onRemove={() => removeProject(p.id)}
+                onRename={name => renameProject(p.id, name)}
                 onEditEnv={() => {
                   setEnvProject(p);
                 }}

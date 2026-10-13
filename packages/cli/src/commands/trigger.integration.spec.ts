@@ -319,10 +319,12 @@ describe('trigger CLI durable execution', () => {
       import { registerWebhookSourceRoutes } from ${JSON.stringify(join(packagesRoot, 'server/src/routes/webhooks.ts'))};
       import { closeDatabase } from ${JSON.stringify(join(packagesRoot, 'core/src/db/connection.ts'))};
       import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
+      import { hasStartReceiptForDelivery } from ${JSON.stringify(join(packagesRoot, 'core/src/db/resource-starts.ts'))};
       const workflowHost = createSqlWorkflowHost();
       const host = await loadWebhookSourcePlugins(${JSON.stringify(forgeConfigPath)}, {
         acceptReceipt: workflowHost.deps.store.acceptStartReceipt,
         isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
+        hasDeliveryReceipt: hasStartReceiptForDelivery,
       });
       const app = new OpenAPIHono();
       registerWebhookSourceRoutes(app, host);
@@ -335,6 +337,14 @@ describe('trigger CLI durable execution', () => {
         },
       });
       if(response.status !== 200) throw Error('Not accepted: '+response.status);
+      const changed = payload + ' ';
+      const conflict = await app.request('/webhooks/sources/integration-github', {
+        method: 'POST', body: changed, headers: {
+          'x-hub-signature-256': 'sha256='+createHmac('sha256','test-secret').update(changed).digest('hex'),
+          'x-github-delivery': 'delivery-one', 'x-github-event': 'pull_request',
+        },
+      });
+      if(conflict.status !== 409) throw Error('Not a conflict: '+conflict.status);
       await closeDatabase();
     `
     );
@@ -394,6 +404,206 @@ describe('trigger CLI durable execution', () => {
       ).trim()
     ).toBe('EDITED-9-edited-config');
   }, 45_000);
+
+  test('a bundled Standard Webhooks source authenticates, deduplicates and starts a governed run', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-standard-webhooks-integration-')));
+    tempRoots.push(root);
+    const archonHome = join(root, 'home');
+    const projectRoot = join(root, 'project');
+    const workflowsDir = join(projectRoot, '.archon', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(
+      join(workflowsDir, 'order.yaml'),
+      `name: order
+description: Standard Webhooks integration proof.
+mutates_checkout: false
+inputs:
+  count:
+    required: true
+nodes:
+  - id: record
+    bash: echo "$INPUTS_COUNT" > "$ARTIFACTS_DIR/result.txt"
+`
+    );
+    // No `inputs:` declaration: a source must not pass event values to it.
+    writeFileSync(
+      join(workflowsDir, 'plain.yaml'),
+      `name: plain
+description: Declares no inputs.
+mutates_checkout: false
+nodes:
+  - id: record
+    bash: echo plain
+`
+    );
+    const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
+    const identity = await runCli(cliPath, projectRoot, archonHome, ['trigger', 'whoami']);
+    const { runAsUserId } = JSON.parse(identity.stdout) as { runAsUserId: string };
+    const databasePath = join(archonHome, 'archon.db');
+    const packagesRoot = resolve(import.meta.dir, '../../..');
+    const bindingWithoutRevision = {
+      bindingId: 'order',
+      hostId: 'integration-host',
+      runAsUserId,
+      resource: 'integration:orders',
+      overlap: 'queue',
+      launch: {
+        cwd: projectRoot,
+        workflowName: 'order',
+        inputs: { count: 0 },
+        isolation: { kind: 'in-place' },
+      },
+    };
+    const standardInstall = join(root, 'installed-standard-webhooks-plugin');
+    const standardBuild = await Bun.build({
+      entrypoints: [join(packagesRoot, 'adapters/src/sources/standard-webhooks/source-plugin.ts')],
+      outdir: standardInstall,
+      target: 'bun',
+      naming: 'source-plugin.mjs',
+    });
+    if (!standardBuild.success) throw new Error(standardBuild.logs.map(String).join('\n'));
+    const standardConfigPath = join(root, 'standard-webhooks.json');
+    writeFileSync(
+      standardConfigPath,
+      JSON.stringify({
+        version: 1,
+        sources: [
+          {
+            sourceInstanceId: 'integration-orders',
+            module: join(standardInstall, 'source-plugin.mjs'),
+            config: {
+              version: 1,
+              signingSecretEnv: 'ARCHON_STANDARD_WEBHOOKS_TEST_SECRET',
+              bindings: [
+                {
+                  ...bindingWithoutRevision,
+                  bindingId: 'order',
+                  inputMapping: { count: '/order/count' },
+                },
+                {
+                  ...bindingWithoutRevision,
+                  bindingId: 'undeclared',
+                  inputMapping: { undeclared: '/order/count' },
+                },
+                {
+                  ...bindingWithoutRevision,
+                  bindingId: 'undeclared-workflow',
+                  resource: 'integration:plain',
+                  launch: { ...bindingWithoutRevision.launch, workflowName: 'plain', inputs: {} },
+                  inputMapping: { count: '/order/count' },
+                },
+              ],
+            },
+          },
+        ],
+      })
+    );
+    const standardScript = join(root, 'receive-standard.ts');
+    writeFileSync(
+      standardScript,
+      `
+      import { createHmac } from 'node:crypto';
+      import { OpenAPIHono } from ${JSON.stringify(import.meta.resolve('@hono/zod-openapi'))};
+      import { loadWebhookSourcePlugins } from ${JSON.stringify(join(packagesRoot, 'server/src/services/webhook-source-plugins.ts'))};
+      import { registerWebhookSourceRoutes } from ${JSON.stringify(join(packagesRoot, 'server/src/routes/webhooks.ts'))};
+      import { closeDatabase } from ${JSON.stringify(join(packagesRoot, 'core/src/db/connection.ts'))};
+      import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
+      import { hasStartReceiptForDelivery } from ${JSON.stringify(join(packagesRoot, 'core/src/db/resource-starts.ts'))};
+      const workflowHost = createSqlWorkflowHost();
+      process.env.ARCHON_STANDARD_WEBHOOKS_TEST_SECRET = 'whsec_' + Buffer.from('test-secret').toString('base64');
+      let runAsUserRemoved = false;
+      const host = await loadWebhookSourcePlugins(${JSON.stringify(standardConfigPath)}, {
+        acceptReceipt: workflowHost.deps.store.acceptStartReceipt,
+        isKnownUser: async id => !runAsUserRemoved && (await workflowHost.records.users.getUserById(id)) !== null,
+        hasDeliveryReceipt: hasStartReceiptForDelivery,
+      });
+      const app = new OpenAPIHono();
+      registerWebhookSourceRoutes(app, host);
+      const payload = JSON.stringify({order:{count:12},workflowName:'evil',cwd:'/evil',runAsUserId:'evil',hostId:'evil',resource:'evil',isolation:{kind:'worktree'}});
+      const id = 'order-one';
+      const timestamp = String(Math.floor(Date.now()/1000));
+      const headers = (body, ts = timestamp, deliveryId = id) => ({
+        'webhook-id': deliveryId, 'webhook-timestamp': ts,
+        'webhook-signature': 'v1,'+createHmac('sha256','test-secret').update(deliveryId+'.'+ts+'.'+body).digest('base64'),
+      });
+      const post = async (body, hdrs, expected) => {
+        // Bytes, as on the wire: Bun keeps a string body's BOM in text() where HTTP bytes lose it.
+        const response = await app.request('/webhooks/sources/integration-orders', {method:'POST',body:new TextEncoder().encode(body),headers:hdrs});
+        if(response.status !== expected) throw Error('Expected '+expected+', got '+response.status+' for '+hdrs['webhook-id']+' '+JSON.stringify(body.slice(0,12)));
+      };
+      await post(payload, {}, 401);
+      await post(payload+' ', headers(payload), 401);
+      await post(payload, headers(payload, String(Number(timestamp)-301)), 401);
+      // A UTF-8 BOM is part of the received bytes: prefixing one changes the signed content.
+      await post('\\uFEFF'+payload, headers(payload), 401);
+      if ((await workflowHost.deps.store.listStartReceipts()).some(r => r.sourceInstanceId === 'integration-orders')) throw Error('Unauthenticated receipt persisted');
+      await post(payload, headers(payload), 200);
+      // A replay keeps its first acceptance even when today's run-as check would fail.
+      runAsUserRemoved = true;
+      await post(payload, headers(payload), 200);
+      runAsUserRemoved = false;
+      // Signed with its BOM, the delivery authenticates; JSON forbids a BOM, so it is malformed.
+      const bomBody = '\\uFEFF'+JSON.stringify({order:{count:1}});
+      await post(bomBody, headers(bomBody, timestamp, 'bom-one'), 400);
+      const changed = JSON.stringify({order:{count:13}});
+      await post(changed, headers(changed), 409);
+      await closeDatabase();
+    `
+    );
+    await runCli(standardScript, projectRoot, archonHome, []);
+    expect(
+      readRows<{ delivery_id: string; outcome: string }>(
+        databasePath,
+        "SELECT delivery_id, outcome FROM remote_agent_start_receipts WHERE source_instance_id='integration-orders' ORDER BY delivery_id"
+      )
+    ).toEqual([
+      { delivery_id: 'bom-one', outcome: 'malformed' },
+      { delivery_id: 'order-one', outcome: 'matched' },
+    ]);
+    const drained = await runCli(
+      cliPath,
+      projectRoot,
+      archonHome,
+      ['trigger', 'drain', '--host', 'integration-host'],
+      false
+    );
+    expect(drained.exitCode).toBe(1);
+    expect(
+      readRows(
+        databasePath,
+        'SELECT binding_id,preparation_status FROM remote_agent_start_receipt_bindings ORDER BY binding_id'
+      )
+    ).toEqual([
+      { binding_id: 'order', preparation_status: 'complete' },
+      { binding_id: 'undeclared', preparation_status: 'rejected' },
+      { binding_id: 'undeclared-workflow', preparation_status: 'rejected' },
+    ]);
+
+    const standardRun = await waitFor(() => {
+      const rows = readRows<RunRow>(
+        databasePath,
+        'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs ORDER BY started_at'
+      );
+      if (rows[0] && !['completed', 'failed'].includes(rows[0].status)) activeRuns.add(rows[0].id);
+      return rows[0]?.status === 'completed' ? rows[0] : undefined;
+    }, 'signed Standard Webhooks delivery to execute after host drain');
+    activeRuns.delete(standardRun.id);
+    expect(JSON.parse(standardRun.metadata)).toMatchObject({ inputs_values: { count: 12 } });
+    if (!standardRun.output_root) throw new Error('Standard Webhooks run has no output root');
+    expect(
+      readFileSync(
+        join(getRunArtifactsDirForRoot(standardRun.output_root, standardRun.id), 'result.txt'),
+        'utf8'
+      ).trim()
+    ).toBe('12');
+    expect(
+      readRows<RequestRow>(
+        databasePath,
+        'SELECT id,status,launch FROM remote_agent_resource_start_requests'
+      )
+    ).toHaveLength(1);
+  }, 30_000);
 
   // Windows has no POSIX signal delivery, and Git Bash's $PPID is an MSYS PID, not a Windows one.
   test.skipIf(process.platform === 'win32')(

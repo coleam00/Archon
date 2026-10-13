@@ -7595,6 +7595,53 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     );
   });
 
+  it('validates and persists checkout-sharing events before reporting success', async () => {
+    const data = {
+      parent_run_id: 'parent',
+      parent_node_id: 'work',
+      working_path: '/repo',
+      sibling_run_id: 'peer',
+    };
+    await workflowEventEmitCommand(
+      createTestWorkflowHost(),
+      FULL_ID,
+      'workflow.checkout_shared',
+      data
+    );
+    expect(mockPersistWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: FULL_ID,
+      event_type: 'workflow.checkout_shared',
+      data,
+    });
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      `Event persisted: workflow.checkout_shared for run ${FULL_ID}`
+    );
+  });
+
+  it('rejects incomplete checkout-sharing data before any write', async () => {
+    await expect(
+      workflowEventEmitCommand(createTestWorkflowHost(), FULL_ID, 'workflow.checkout_shared', {})
+    ).rejects.toThrow();
+    expect(mockPersistWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
+  it('propagates checkout-sharing persistence failure without reporting success', async () => {
+    mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('sharing INSERT rejected'));
+    await expect(
+      workflowEventEmitCommand(createTestWorkflowHost(), FULL_ID, 'workflow.checkout_shared', {
+        parent_run_id: 'parent',
+        parent_node_id: 'work',
+        working_path: '/repo',
+        sibling_run_id: 'peer',
+      })
+    ).rejects.toThrow('sharing INSERT rejected');
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
   it.each(['node_completed', 'node_deferred_usage'] as const)(
     'persists %s before reporting success',
     async eventType => {
