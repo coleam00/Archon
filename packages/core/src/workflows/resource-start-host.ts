@@ -141,20 +141,22 @@ async function prepareBinding(
         githubConnected: Boolean(await host.deps.getUserGithubToken?.(intent.runAsUserId)),
       });
     }
-    const inputs = { ...intent.launch.inputs };
     // `resolveDeclaredInputs` passes inputs through to a workflow without `inputs:`, which
-    // direct runs and sub-runs rely on. A trigger's inputs can carry source event values,
-    // so a trigger start passes inputs only to a workflow that declares them.
-    if (workflow.inputs === undefined && Object.keys(inputs).length > 0) {
+    // operator-written literals rely on. Event inputs carry untrusted source content, so
+    // they reach only a workflow that declares them.
+    const eventInputNames = Object.keys(intent.eventInputs ?? {});
+    if (workflow.inputs === undefined && eventInputNames.length > 0) {
       throw new Error(
-        `Workflow '${workflow.name}' declares no inputs; a trigger cannot pass ` +
-          Object.keys(inputs)
+        `Workflow '${workflow.name}' declares no inputs; a trigger cannot pass event-mapped ` +
+          `input${eventInputNames.length === 1 ? '' : 's'} ` +
+          eventInputNames
             .sort()
             .map(name => `'${name}'`)
             .join(', ') +
           ". Declare them under 'inputs:' in the workflow."
       );
     }
+    const inputs = { ...intent.launch.inputs, ...intent.eventInputs };
     try {
       resolveDeclaredInputs(
         inputs,

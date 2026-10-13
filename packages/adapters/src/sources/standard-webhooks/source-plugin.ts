@@ -65,7 +65,7 @@ function verifySignature(request: WebhookSourceRequest, secret: Buffer): boolean
 }
 
 const bindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true })
+  .omit({ bindingRevision: true, eventInputs: true })
   .extend({
     inputMapping: z.record(
       z.string().min(1),
@@ -161,10 +161,7 @@ const createStandardWebhooksSource: WebhookSourcePluginFactory = ({
           resourceStartBindingIntentSchema.parse({
             ...binding,
             bindingRevision,
-            launch: {
-              ...binding.launch,
-              inputs: { ...binding.launch.inputs, ...Object.fromEntries(mapped) },
-            },
+            eventInputs: Object.fromEntries(mapped),
           })
         );
       }

@@ -72,7 +72,8 @@ test('maps only configured inputs over literals and retains operator authority',
     acceptance: {
       outcome: 'matched',
       receipt: { deliveryId: 'order-123', sourceActor: null },
-      bindings: [{ ...intent, launch: { ...binding.launch, inputs: { count: 42 } } }],
+      // The literal stays with the operator's launch; the event value is kept apart.
+      bindings: [{ ...intent, launch: binding.launch, eventInputs: { count: 42 } }],
     },
   });
   if (result.status !== 'received') throw Error('Expected receipt');
@@ -105,7 +106,9 @@ test('missing targets reject only their binding and whole-document pointers pres
           reason: "Input 'count': pointer /absent did not resolve",
         },
       ],
-      bindings: [{ launch: { inputs: { count: 0, payload: { order: { count: 42 } } } } }],
+      bindings: [
+        { launch: { inputs: { count: 0 } }, eventInputs: { payload: { order: { count: 42 } } } },
+      ],
     },
   });
 });
@@ -241,7 +244,7 @@ test.each([
       status: 'received',
       acceptance: {
         outcome: 'matched',
-        bindings: [{ launch: { inputs: { count: 0, payload: expected } } }],
+        bindings: [{ eventInputs: { payload: expected } }],
       },
     });
   }

@@ -69,6 +69,16 @@ Create `/Users/alice/.archon/triggers/repository-refresh.json`:
 }
 ```
 
+The workflow declares the input the binding passes, so a typo in the binding fails preparation instead of reaching the run:
+
+```yaml
+name: refresh-repository-state
+inputs:
+  repository: { required: true }
+nodes:
+  # ...
+```
+
 `intervalSeconds` is required and has no default. `runAtLoad` is also required. Set it to `true` to request one start when launchd loads the job, or `false` to wait for the first interval.
 
 Test the binding once before installing it:
@@ -271,7 +281,7 @@ Set `ORDER_SIGNING_SECRET` in the server environment to your sender's signing se
 }
 ```
 
-The workflow must declare `order_id` in `inputs:`. `inputMapping` maps input names to [RFC 6901 JSON Pointers](https://www.rfc-editor.org/rfc/rfc6901): `/order/id` selects a nested field, `/items/0` selects the first array item, `~1` escapes `/`, and `~0` escapes `~`. The empty pointer `""` selects the whole JSON document. Mapped values retain their JSON types and override literals in `launch.inputs`. A missing target rejects that binding with a recorded reason; other bindings still run. Preparation rejects undeclared inputs and missing required inputs. A workflow without an `inputs:` declaration accepts no trigger inputs at all, so its binding is rejected at preparation.
+The workflow must declare `order_id` in `inputs:`. `inputMapping` maps input names to [RFC 6901 JSON Pointers](https://www.rfc-editor.org/rfc/rfc6901): `/order/id` selects a nested field, `/items/0` selects the first array item, `~1` escapes `/`, and `~0` escapes `~`. The empty pointer `""` selects the whole JSON document. Mapped values retain their JSON types and override literals in `launch.inputs`. A missing target rejects that binding with a recorded reason; other bindings still run. Preparation rejects undeclared inputs and missing required inputs. Mapped inputs come from the event, so preparation also rejects the binding when the workflow has no `inputs:` declaration.
 
 ### Sign a delivery from a shell
 
@@ -315,7 +325,7 @@ Operator configuration owns the workflow, cwd, isolation, execution host, resour
 
 The receipt freezes the evaluated bindings and resolved inputs. The execution host later captures the workflow source and reads any `configSource` run configuration. Queue admission freezes that prepared source and configuration; editing live files afterward does not change queued work.
 
-A trigger passes inputs only to a workflow that declares them under `inputs:`. Preparation rejects a binding that supplies inputs, literal or mapped, to a workflow without that declaration.
+An input mapped from the event, by a Standard Webhooks JSON Pointer or a GitHub `field` mapping, reaches only a workflow that declares it under `inputs:`. Preparation rejects a binding that maps event values into a workflow without that declaration. Literal inputs you write into `launch.inputs` or a GitHub `literal` mapping pass through to a workflow without `inputs:`, as they do for a direct run. A workflow that declares `inputs:` rejects any undeclared name, literal or mapped.
 
 A process that stops during preparation leaves its recorded preparation owner visible. After verifying that exact process has stopped, use `archon trigger recover-preparation <receipt-id> <binding-id> --owner <recorded-owner-id> --yes`, then drain the configured host. A failed validation is recorded as rejected and requires a corrected new request.
 

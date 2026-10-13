@@ -62,6 +62,7 @@ function binding(overrides: Record<string, unknown> = {}) {
       repository: { source: 'field', field: 'repository.path' },
       revision: { source: 'field', field: 'check.revision' },
       checkName: { source: 'field', field: 'check.unit.name' },
+      lane: { source: 'literal', value: 'ci' },
     },
     ...overrides,
   };
@@ -137,12 +138,13 @@ describe('GitHub source plugin', () => {
           launch: {
             cwd: '/srv/owner/repo',
             workflowName: 'react-to-check',
-            inputs: {
-              configured: true,
-              repository: 'owner/repo',
-              revision: 'opaque-revision-id',
-              checkName: 'build',
-            },
+            inputs: { configured: true, lane: 'ci' },
+          },
+          // Field mappings carry event content, kept apart from the operator's literals.
+          eventInputs: {
+            repository: 'owner/repo',
+            revision: 'opaque-revision-id',
+            checkName: 'build',
           },
         },
       ],
@@ -158,7 +160,7 @@ describe('GitHub source plugin', () => {
 
     await github.receiveWebhook(payload, sign(payload), 'delivery-zero-pr', 'check_run');
 
-    expect(recorded.calls[0]?.bindings[0]?.launch.inputs).toMatchObject({
+    expect(recorded.calls[0]?.bindings[0]?.eventInputs).toMatchObject({
       repository: 'owner/repo',
       revision: 'opaque-revision-id',
     });
