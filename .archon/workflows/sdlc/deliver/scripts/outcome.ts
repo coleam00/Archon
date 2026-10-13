@@ -3,8 +3,8 @@
  *
  * The last round's typed ending is the result: ready when its review converged and
  * the CI agent saw green and marked the pull request ready, otherwise the reason the
- * rounds stopped, in the deciding node's words. Either way it appends whatever the
- * run recorded for the operator (red the implementer passed on, discoveries).
+ * rounds stopped, in the deciding node's words. Either way it appends the
+ * discoveries the run recorded for the operator.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_ROUNDS: the rounds loop's final `round` output.

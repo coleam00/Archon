@@ -4,7 +4,6 @@
 mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
 route: { seams: true, code: true, tests: false, errors: false, docs: true, reason: "stub: a typed contract and its docs changed" }
 scope:
-  pr_behind: false
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
 seams: "0 findings"

@@ -4,7 +4,6 @@
 mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
 route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: lifecycle ownership changed" }
 scope:
-  pr_behind: false
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
 seams: "0 findings"

@@ -21,7 +21,6 @@
  *   pull-request record here, and that record is then the only write target.
  * - INPUTS_PR: the qualified pull request the scope agent declared it reviewed,
  *   or `null` for a working diff. It names the target of a standalone review.
- * - INPUTS_PR_BEHIND: the scope agent saw the pull request's head behind HEAD.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
@@ -97,11 +96,6 @@ try {
         `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: the commits under review were not pushed`
       );
     }
-  }
-  if (text(process.env.INPUTS_PR_BEHIND) === 'true') {
-    throw new Error(
-      `the review scope saw ${label(pr)} behind ${head}, the commit under review: its commits were not pushed`
-    );
   }
   if (
     recorded &&

@@ -422,6 +422,31 @@ describe('bundled-defaults', () => {
       expect(parsed.workflow.outcome_field).toBe('ready');
     });
 
+    // A delivery ending travels from round to deliver's outcome to ship's outcome; the
+    // three schemas must name the same endings or a valid one fails certification.
+    it("deliver's endings are the same set at every node that carries them", () => {
+      const parse = (name: string) => {
+        const parsed = parseWorkflow(BUNDLED_WORKFLOWS[name], `${name}.yaml`, providerRegistry);
+        if (parsed.workflow === null) throw new Error(parsed.error.error);
+        return parsed.workflow;
+      };
+      const reasons = (node: { output_format?: Record<string, unknown> } | undefined) =>
+        (
+          (node?.output_format?.properties as Record<string, { enum?: string[] }> | undefined)
+            ?.reason?.enum ?? []
+        ).slice();
+      const deliver = parse('archon-deliver');
+      const rounds = deliver.nodes.find(node => node.id === 'rounds');
+      if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
+      const round = reasons(rounds.loop_group.nodes.find(node => node.id === 'round'));
+      expect(round.length).toBeGreaterThan(0);
+      expect(reasons(deliver.nodes.find(node => node.id === 'outcome')).sort()).toEqual(
+        [...round].sort()
+      );
+      const ship = reasons(parse('archon-ship').nodes.find(node => node.id === 'outcome'));
+      expect(ship).toEqual(expect.arrayContaining(round));
+    });
+
     // Reviewers create scratch trees under the run, where the workflow removes them;
     // a tree outside it would outlive a lens that died.
     it('every SDLC scratch worktree lives under the run and is removed by the workflow', () => {
@@ -466,7 +491,6 @@ describe('bundled-defaults', () => {
       expect(scopeSchema).toEqual({
         type: 'object',
         properties: {
-          pr_behind: { type: 'boolean' },
           pr: {
             type: ['object', 'null'],
             properties: {
@@ -483,15 +507,12 @@ describe('bundled-defaults', () => {
             required: ['repo', 'number'],
           },
         },
-        required: ['pr_behind', 'pr'],
+        required: ['pr'],
       });
-      expect(validateStructuredOutput({ pr_behind: false, pr: null }, scopeSchema).valid).toBe(
-        true
-      );
+      expect(validateStructuredOutput({ pr: null }, scopeSchema).valid).toBe(true);
       expect(
         validateStructuredOutput(
           {
-            pr_behind: false,
             pr: {
               repo: { host: 'github.com', path: 'coleam00/Archon' },
               number: 3557,
@@ -500,7 +521,7 @@ describe('bundled-defaults', () => {
           scopeSchema
         ).valid
       ).toBe(true);
-      expect(validateStructuredOutput({ pr_behind: false, pr: {} }, scopeSchema).valid).toBe(false);
+      expect(validateStructuredOutput({ pr: {} }, scopeSchema).valid).toBe(false);
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
       expect(parsed.workflow.inputs?.tier).toBeUndefined();
