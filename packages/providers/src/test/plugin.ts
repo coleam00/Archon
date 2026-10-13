@@ -33,7 +33,8 @@ export function overStreams(
     checkCredential: request =>
       withStreamProvider(create, descriptor, client => client.checkCredential(request)),
     diagnose: request => withStreamProvider(create, descriptor, client => client.diagnose(request)),
-    listModels: () => withStreamProvider(create, descriptor, client => client.listModels()),
+    listModels: request =>
+      withStreamProvider(create, descriptor, client => client.listModels(request)),
     async *sendQuery(...args) {
       const pair = streamPair();
       const serving = serveProvider({ descriptor, create }, pair.provider);

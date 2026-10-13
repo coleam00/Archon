@@ -4,7 +4,7 @@ import { rawAliasesConfigSchema, rawTiersConfigSchema } from './schemas/model-bi
 import type { ValidationConfig } from './validator';
 
 export const validationSourceConfigSchema = z.object({
-  assistant: z.string().default('claude'),
+  assistant: z.string().optional(),
   aliases: rawAliasesConfigSchema.optional(),
   tiers: rawTiersConfigSchema.optional(),
   assistants: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),

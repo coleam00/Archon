@@ -618,7 +618,7 @@ describe('per-run model bindings', () => {
           },
         },
       })
-    ).toThrow(/unknown provider 'removed-provider'/);
+    ).toThrow(/Unknown provider: 'removed-provider'/);
     expect(
       readRunModelBindingsMetadata(providerRegistry, {
         model_bindings: {
@@ -965,4 +965,16 @@ describe('isEffortValidForProvider', () => {
   test('accepts anything for a provider with no vocabulary to validate against', () => {
     expect(isEffortValidForProvider(providerRegistry, 'opencode', 'ultra')).toBe(true);
   });
+});
+
+test('a missing maintained prefix cannot fall through to Pi vendor model ownership', () => {
+  const available = providerRegistry.list().filter(provider => provider.id !== 'claude');
+  const providers: ProviderRegistry = {
+    get: id => available.find(provider => provider.id === id),
+    list: () => available,
+  };
+  const profile = buildAiProfile('codex');
+  expect(() =>
+    resolveRunModelOverrides(providers, profile, { tiers: { large: 'claude/sonnet' } })
+  ).toThrow('archon provider install claude');
 });

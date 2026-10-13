@@ -1,3 +1,4 @@
+import { missingProviderMessage } from '@archon/provider-contract';
 /**
  * Workflow loader - discovers and parses workflow YAML files
  */
@@ -1724,10 +1725,7 @@ export function parseWorkflow(
         workflow: null,
         error: {
           filename,
-          error: `Unknown provider '${provider}'. Registered: ${providers
-            .list()
-            .map(p => p.id)
-            .join(', ')}`,
+          error: missingProviderMessage(providers, provider),
           errorType: 'validation_error',
         },
       };
@@ -1739,10 +1737,7 @@ export function parseWorkflow(
           workflow: null,
           error: {
             filename,
-            error: `Node '${node.id}': unknown provider '${node.provider}'. Registered: ${providers
-              .list()
-              .map(p => p.id)
-              .join(', ')}`,
+            error: `Node '${node.id}': ${missingProviderMessage(providers, node.provider)}`,
             errorType: 'validation_error',
           },
         };

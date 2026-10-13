@@ -134,6 +134,20 @@ Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Ad
 
 Also runs automatically at the end of `archon setup` (optional).
 
+### `provider install`
+
+Install or replace maintained providers from the matching Archon release:
+
+```bash
+archon provider install claude codex pi
+```
+
+The command accepts only `claude`, `codex`, and `pi`, pins the first-party repository tag to the CLI version, and uses the plugin installer's checksum verification. Maintained ids cannot be installed from another repository. Remove a receipt with `archon plugin remove coleam00/Archon/plugins/provider-<id>`.
+
+Source checkouts and Docker run these providers from source over the process transport and refuse this install command. Release binaries retain their bundled providers until the separate provider release rollout is complete.
+
+The default provider comes from explicit configuration (`assistant` in project config or `defaultAssistant` in global config), then `DEFAULT_AI_ASSISTANT`, then the only registered provider. With multiple providers and no configured default, a run needing one fails before creating a worktree. A workflow can select its provider explicitly.
+
 ### `plugin`
 
 Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Forge plugins, provider plugins, chat plugins, and workflow packs install through this command.
