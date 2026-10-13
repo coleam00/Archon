@@ -80,7 +80,10 @@ export async function resolveCodebaseForPath(
 ): Promise<{ codebase: Codebase | null; repoRoot: string | null }> {
   cwd = await canonicalizeProjectPath(cwd);
   const exact = await deps.findCodebaseByDefaultCwd(cwd);
-  if (exact) return { codebase: exact, repoRoot: exact.kind === 'repo' ? cwd : null };
+  if (exact?.kind === 'folder') return { codebase: exact, repoRoot: null };
+  // Repository roots always come from Git: runs record this string as their working
+  // path, and on Windows it differs from the canonical `default_cwd` (separators,
+  // 8.3 short names), so returning `cwd` would hide runs from `--resume`.
   const repoRoot = await findRepoRoot(cwd);
   const parent = await deps.findCodebaseByPathPrefix(cwd);
   if (parent?.kind === 'folder') {
