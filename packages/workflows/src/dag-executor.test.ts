@@ -19,6 +19,7 @@ import {
   type Mock,
 } from 'bun:test';
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
+import { makeTestResolvedWorkflow } from './test-utils';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
 import { isAbsolute, join } from 'path';
@@ -917,6 +918,7 @@ describe('planGraph', () => {
     expect(workflow.plan.sinks).toEqual(['left', 'right']);
     expect(workflow.nodes).toBe(workflow.plan.nodes);
 
+    // biome-ignore lint/correctness/noConstantCondition: compile-time assertions that never run
     if (false) {
       // @ts-expect-error Resolved workflow nodes are immutable after planning.
       workflow.nodes.push(node('late'));
@@ -16153,7 +16155,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       string,
       unknown
     >;
-    expect(nodeFailedData.error).toContain("unknown provider 'claud'");
+    expect(nodeFailedData.error).toContain("Unknown provider: 'claud'");
   });
 
   it('failure message names the failing node instead of generic summary', async () => {
@@ -31104,6 +31106,31 @@ describe('collectContainerIncompatibleProviders', () => {
     expect([...bad]).toEqual(['codex']);
   });
 
+  it('coordination wrappers do not require a parent default provider', () => {
+    const workflow = makeTestResolvedWorkflow({
+      name: 'coordination',
+      nodes: [
+        { id: 'child', workflow: 'deterministic-child' },
+        { id: 'fan', include: 'explicit-child', fan_out: { items: '[1, 2]', as: 'item' } },
+      ],
+    });
+    const visited: string[] = [];
+    visitProviderInvokingNodes(workflow.nodes, undefined, undefined, (_node, provider) =>
+      visited.push(provider)
+    );
+    expect(visited).toEqual([]);
+    expect([
+      ...collectContainerIncompatibleProviders(providerRegistry, workflow.nodes, undefined),
+    ]).toEqual([]);
+    visitProviderInvokingNodes(
+      [promptNode('explicit', 'codex')],
+      undefined,
+      undefined,
+      (_node, provider) => visited.push(provider)
+    );
+    expect(visited).toEqual(['codex']);
+  });
+
   it('ignores bash/script nodes (deterministic, no provider)', () => {
     const nodes = [bashNode('a'), bashNode('b')];
     const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'codex');
@@ -32357,6 +32384,8 @@ describe('retained exec output', () => {
 describe('executeDagWorkflow -- container write-back gate', () => {
   const CONTAINER_EXEC = { kind: 'container' as const, containerId: 'cid-1' };
   const wbTestDir = join(tmpdir(), `dag-wb-test-${Date.now()}`);
+  // The executor creates `logs/` under the run's cwd, so this path becomes a real tree.
+  afterEach(() => removeTempTree(wbTestDir));
 
   function makeWritebackBackend(over?: Partial<Record<string, unknown>>) {
     return {
@@ -33572,7 +33601,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
     };
   }
 
-  const collapseConfig: WorkflowConfig = {
+  const collapseConfig: WorkflowConfig & { assistant: string } = {
     assistant: 'claude',
     assistants: { claude: { model: 'claude-default' }, codex: { model: 'codex-default' } },
     commands: {},
@@ -40615,10 +40644,10 @@ describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
       },
     };
 
-    const runChildWorkflow = mock(async (args: any) => ({
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async args => ({
       status: 'completed' as const,
       output: 'child-output',
-      childRunId: `subrun-${args.nodeId ?? 'child'}`,
+      childRunId: `subrun-${args.nodeId}`,
     }));
 
     await executeDagWorkflow(

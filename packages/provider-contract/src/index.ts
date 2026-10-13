@@ -91,6 +91,13 @@ export {
   type PiExtensionPosture,
 } from './agent-provider';
 export {
+  MAINTAINED_PROVIDER_IDS,
+  isMaintainedProvider,
+  missingProviderMessage,
+  noDefaultProviderMessage,
+  NO_DEFAULT_PROVIDER_MESSAGE,
+  NoDefaultProviderError,
+  providerVersionMismatchMessage,
   CREDENTIAL_KINDS,
   credentialSpecSchema,
   UnknownProviderError,

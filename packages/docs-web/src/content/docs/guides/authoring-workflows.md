@@ -1460,7 +1460,8 @@ JSON is capped at 64 KiB. Values are fetched explicitly; the engine adds no stat
 
 `put --if-revision 0` creates a document; subsequent whole-document changes must name the
 revision read. Concurrent replacements have one winner; losers exit `3`. `patch` applies
-JSON Pointer `set`, `remove`, or `append` operations to the latest revision, retrying races.
+JSON Pointer `set`, `remove`, or `append` operations to the latest revision; concurrent
+patches serialize instead of racing, though an earlier write can make a later patch invalid.
 An absent document starts as `{}`; appending to `/seen` creates the array. Invalid patches
 or oversized values exit `4` and write nothing. Exit `1` means usage or storage failure.
 The [CLI reference](/reference/cli/#state) describes pointer and tombstone semantics.

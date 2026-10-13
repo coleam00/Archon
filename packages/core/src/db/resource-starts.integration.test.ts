@@ -5,9 +5,11 @@ import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { z } from 'zod';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
 import { createWorkflowStore } from '../workflows/store-adapter';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+import { hasStartReceiptForDelivery } from './resource-starts';
 const {
   listStartReceipts,
   acceptStartReceipt,
@@ -430,6 +432,89 @@ describe('durable resource starts', () => {
       })
     ).rejects.toBeInstanceOf(SourceReceiptDigestConflictError);
     expect((await getStartReceipt(receipt.id))?.deliveryId).toBe('delivery-1');
+    expect(await hasStartReceiptForDelivery(receipt.sourceInstanceId, 'delivery-1')).toBe(true);
+    expect(await hasStartReceiptForDelivery(receipt.sourceInstanceId, 'delivery-2')).toBe(false);
+    expect(await hasStartReceiptForDelivery('github:installation:2', 'delivery-1')).toBe(false);
+  });
+
+  test('a binding with event inputs stays readable by the v0.11.1 intent schema', async () => {
+    // The keys and strictness of v0.11.1's resourceStartBindingIntentSchema, which parses
+    // the `intent` column. A shipped reader, so it is frozen here, not derived from today's.
+    const shippedIntentSchema = z
+      .object({
+        bindingId: z.string().min(1),
+        bindingRevision: z.string().min(1).nullable(),
+        hostId: z.string().min(1),
+        runAsUserId: z.string().min(1),
+        resource: z.string().min(1),
+        capacity: z.number().int().min(1),
+        overlap: z.enum(['skip', 'queue']),
+        launch: z
+          .object({
+            cwd: z.string().min(1),
+            workflowName: z.string().min(1),
+            inputs: z.record(z.string(), z.unknown()),
+            discoveryCwd: z.string().min(1).optional(),
+            configSource: z.string().min(1).optional(),
+            isolation: z.object({ kind: z.string() }).passthrough(),
+          })
+          .strict(),
+      })
+      .strict();
+    const receiptId = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+    await acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: 'orders',
+        deliveryId: 'order-1',
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'binding',
+          bindingRevision: '1',
+          hostId: 'host',
+          runAsUserId: '22222222-2222-4222-8222-222222222222',
+          resource: 'repo:orders',
+          capacity: 1,
+          overlap: 'queue',
+          launch: {
+            cwd: '/tmp/test',
+            workflowName: 'test',
+            inputs: { mode: 'nightly', count: 0 },
+            isolation: { kind: 'in-place' },
+          },
+          eventInputs: { count: 42 },
+        },
+      ],
+    });
+
+    const raw = new Database(join(root, 'archon.db'), { readonly: true });
+    let stored: { intent: string; event_input_names: string | null } | null;
+    try {
+      stored = raw
+        .query<
+          { intent: string; event_input_names: string | null },
+          SQLQueryBindings[]
+        >('SELECT intent, event_input_names FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?')
+        .get(receiptId);
+    } finally {
+      raw.close();
+    }
+    // An older binary sees the merged inputs it always passed through.
+    expect(shippedIntentSchema.parse(JSON.parse(stored?.intent ?? 'null')).launch.inputs).toEqual({
+      mode: 'nightly',
+      count: 42,
+    });
+    expect(stored?.event_input_names).toBe('["count"]');
+    // This version reads the event inputs back apart from the literals.
+    const restored = (await getStartReceipt(receiptId))?.bindings[0]?.intent;
+    expect(restored?.launch.inputs).toEqual({ mode: 'nightly' });
+    expect(restored?.eventInputs).toEqual({ count: 42 });
   });
 
   test('preparation completion and admission share one commit', async () => {

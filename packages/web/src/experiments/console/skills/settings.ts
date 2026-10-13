@@ -73,7 +73,8 @@ export function buildAssistantUpdate(form: AssistantConfigForm): UpdateAssistant
     if (Object.keys(entry).length > 0) assistants[providerId] = entry;
   }
 
-  const body: UpdateAssistantConfigBody = { assistant: form.assistant };
+  const body: UpdateAssistantConfigBody =
+    form.assistant === '' ? {} : { assistant: form.assistant };
   if (Object.keys(assistants).length > 0) body.assistants = assistants;
   return body;
 }

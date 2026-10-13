@@ -10,7 +10,7 @@ import pino from 'pino';
 import { rootLogger } from './logger';
 
 /**
- * The per-test budget floor on Windows: `bun test` runs there with `--timeout` set to this
+ * The default per-test budget on every platform: `bun test` runs there with `--timeout` set to this
  * instead of Bun's 5 s default (see `scripts/bun-test-command.ts`).
  *
  * This is an attributed runner-floor residual, not headroom for slow tests: on the 4-vCPU
@@ -20,18 +20,17 @@ import { rootLogger } from './logger';
  * instrumented runs found no per-test, per-package, disk-layout or service-level change that
  * removes the class; the attribution is on coleam00/Archon#3294.
  */
-export const WINDOWS_TEST_TIMEOUT_MS = 20_000;
+export const DEFAULT_TEST_TIMEOUT_MS = 20_000;
 
 /**
- * An explicit per-test budget that never undercuts the Windows floor.
+ * An explicit per-test budget that never undercuts the runner default.
  *
  * `--timeout` only sets the default, so a raw `it(name, fn, 10_000)` replaces the 20 s
- * Windows floor with 10 s and reopens exactly the stall the floor absorbs. Pass a budget at
+ * default with 10 s and reopens the stalls the floor absorbs. Pass a budget at
  * or below the floor through here; a budget above it is safe as a plain number.
- * `scripts/test-budget-floor.test.ts` enforces that split.
  */
-export function testTimeout(ms: number, platform: NodeJS.Platform = process.platform): number {
-  return platform === 'win32' ? Math.max(ms, WINDOWS_TEST_TIMEOUT_MS) : ms;
+export function testTimeout(ms: number): number {
+  return Math.max(ms, DEFAULT_TEST_TIMEOUT_MS);
 }
 
 /** Attempts before a stuck tree is reported as a leak rather than retried again. */

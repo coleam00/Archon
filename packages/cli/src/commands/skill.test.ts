@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { copyArchonSkill, skillInstallCommand } from './skill';
@@ -18,6 +18,19 @@ describe('copyArchonSkill', () => {
 
   afterEach(async () => {
     await removeTempTree(tempDir);
+  });
+
+  it('bundles every file under the shipped skill root', () => {
+    const files = [
+      ...new Bun.Glob('**/*').scanSync({
+        cwd: resolve(import.meta.dir, '../../../../.claude/skills/archon-cli'),
+        onlyFiles: true,
+        dot: true,
+      }),
+    ]
+      .map(file => file.replaceAll('\\', '/'))
+      .sort();
+    expect(Object.keys(BUNDLED_SKILL_FILES).sort()).toEqual(files);
   });
 
   it('creates missing parents and writes exact bundled content in both destinations', async () => {

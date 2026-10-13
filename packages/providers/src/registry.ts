@@ -19,6 +19,7 @@ import {
   type ProviderRegistry,
   parseProviderRunModel as parseRegisteredRunModel,
   UnknownProviderError,
+  missingProviderMessage,
 } from '@archon/provider-contract';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -31,7 +32,14 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Backing store for registered providers. */
 const registry = new Map<string, ProviderRegistration>();
 
+const unavailableProviders = new Map<string, string>();
+
+export function markProviderUnavailable(id: string, reason: string): void {
+  unavailableProviders.set(id, reason);
+}
+
 export const providerRegistry: ProviderRegistry = {
+  unavailable: id => unavailableProviders.get(id),
   get: id => registry.get(id),
   list: () => [...registry.values()],
 };
@@ -66,6 +74,7 @@ export function assertProviderRegistrationAllowed(
 export function registerProvider(entry: ProviderRegistration): void {
   assertProviderRegistrationAllowed(entry, registry.values());
   registry.set(entry.id, entry);
+  unavailableProviders.delete(entry.id);
   getLog().debug({ provider: entry.id, builtIn: entry.builtIn }, 'provider.registered');
 }
 
@@ -76,7 +85,11 @@ export function registerProvider(entry: ProviderRegistration): void {
 export function getAgentProvider(id: string): IAgentProvider {
   const entry = registry.get(id);
   if (!entry) {
-    throw new UnknownProviderError(id, [...registry.keys()]);
+    throw new UnknownProviderError(
+      id,
+      [...registry.keys()],
+      missingProviderMessage(providerRegistry, id)
+    );
   }
   getLog().debug({ provider: id }, 'provider_selected');
   // Every node and turn resolves its provider here, so the notice is gated per process.
@@ -94,7 +107,11 @@ export function getAgentProvider(id: string): IAgentProvider {
 export function getRegistration(id: string): ProviderRegistration {
   const entry = registry.get(id);
   if (!entry) {
-    throw new UnknownProviderError(id, [...registry.keys()]);
+    throw new UnknownProviderError(
+      id,
+      [...registry.keys()],
+      missingProviderMessage(providerRegistry, id)
+    );
   }
   return entry;
 }
@@ -142,5 +159,6 @@ export function isRegisteredProvider(id: string): boolean {
 /** @internal Test-only — clears the registry. Not for production use. */
 export function clearRegistry(): void {
   registry.clear();
+  unavailableProviders.clear();
   deprecationNoticed.clear();
 }

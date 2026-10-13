@@ -66,7 +66,7 @@ For each changed or new file, analyze for:
 - Structured Pino logging with `{domain}.{action}_{state}` event naming
 - `bun run test` not `bun test` from repo root
 - `mock.module()` isolation (separate test batches for conflicting mocks)
-- ESLint zero-warnings policy
+- Lint passes with zero warnings (`bun run lint`)
 
 **Package Boundary Compliance**
 - No circular dependencies between packages

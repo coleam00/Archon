@@ -4,7 +4,9 @@
  * observations: the fix's start, bound as `since`, and its own start.
  */
 import { describe, expect, it } from 'bun:test';
-import { runPackScript, type ScriptRun } from './deliver-checks-harness';
+import { packScriptRunner, type ScriptRun } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
 
 const EARLIER = 'a'.repeat(40);
 const LATER = 'b'.repeat(40);

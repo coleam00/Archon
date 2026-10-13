@@ -1,3 +1,5 @@
+export const FIRST_PARTY_PLUGIN_REPO = 'coleam00/Archon';
+
 /**
  * The shared distribution contract for Archon plugins: the author-owned
  * `archon-plugin.json` manifest and the local install receipt.
@@ -10,9 +12,21 @@
  * needs the schemas does not load filesystem code.
  */
 import { z } from 'zod';
+import { type MAINTAINED_PROVIDER_IDS } from '@archon/provider-contract';
 import { chatPluginDescriptorSchema } from '@archon/chat-contract/descriptor';
 import { releaseAsset } from '@archon/paths/release-asset';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
+
+export function maintainedProviderPluginId(id: (typeof MAINTAINED_PROVIDER_IDS)[number]): string {
+  return `${FIRST_PARTY_PLUGIN_REPO}/plugins/provider-${id}`;
+}
+
+export function isMaintainedProviderPlugin(
+  pluginId: string,
+  id: (typeof MAINTAINED_PROVIDER_IDS)[number]
+): boolean {
+  return pluginId.toLowerCase() === maintainedProviderPluginId(id).toLowerCase();
+}
 
 export const PLUGIN_MANIFEST_FILE = 'archon-plugin.json';
 

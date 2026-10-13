@@ -15,12 +15,14 @@ import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   forgePrRecord,
+  packScriptRunner,
   PR,
-  runPackScript,
   type ScriptOptions,
   type ScriptRun,
 } from './deliver-checks-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
+
+const { runPackScript } = packScriptRunner();
 
 const trackTempRoot = trackTempRoots();
 const REPO_ROOT = resolve(import.meta.dir, '../../..');

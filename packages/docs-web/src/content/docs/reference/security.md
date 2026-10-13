@@ -23,6 +23,7 @@ Use the database configured for the install you want to manage (`DATABASE_URL` f
 
 ```bash
 docker compose exec -u appuser app bun run cli user list
+docker compose exec -u appuser app bun run cli user link <id> slack:U123
 docker compose exec -u appuser app bun run cli user role <id> admin
 ```
 

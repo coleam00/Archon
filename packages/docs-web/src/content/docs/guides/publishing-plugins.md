@@ -203,7 +203,8 @@ A platform id cannot belong to two chat installs. `web`, `cli`, `api`, `github`,
 `gitea`, and `gitlab` are reserved for host surfaces and bundled forge adapters.
 Collisions name both owners. A rejected initialization or collision leaves existing
 files unchanged; handled publication failures restore the previous install when the
-filesystem permits rollback. A rollback failure reports local recovery and backup paths.
+filesystem permits rollback. A rollback failure reports local recovery and backup paths,
+and a backup that stays locked past the retry window is named for you to remove.
 Installation does not promise crash atomicity across receipt and binary files.
 
 Chat plugins run as your operating-system user and inherit the ambient environment.

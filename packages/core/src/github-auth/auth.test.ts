@@ -426,8 +426,7 @@ describe('cache TTL boundaries', () => {
     const baseTime = 1_700_000_000_000;
     let mockedNow = baseTime;
     // spyOn restores cleanly in afterEach via mockRestore; avoids direct
-    // mutation of the Date.now reference (and the eslint-disable that came
-    // with it).
+    // mutation of the Date.now reference.
     const nowSpy = spyOn(Date, 'now').mockImplementation(() => mockedNow);
 
     try {

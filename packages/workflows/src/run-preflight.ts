@@ -1,4 +1,10 @@
-import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
+import { FileStoreUnsupportedError } from './file-store/errors';
+import { gateReworkNode } from './gate-rework';
+import {
+  type ProviderRegistry,
+  requireProvider,
+  NoDefaultProviderError,
+} from '@archon/provider-contract';
 import {
   createRunAiConfigurationSnapshot,
   readRunAiConfigurationSnapshot,
@@ -8,11 +14,12 @@ import type { RunAiConfigurationSnapshot } from './schemas/run-ai-configuration'
 import type { CredentialStatus } from '@archon/provider-contract';
 import type { WorkflowConfig, WorkflowDeps } from './deps';
 import type { ResolvedWorkflow, WorkflowRun, DagNode } from './schemas';
-import { isAgentNode, isLoopNode, isLoopGroupNode } from './schemas';
+import { isAgentNode, isLoopNode, isLoopGroupNode, isGateNode } from './schemas';
 import { resolvedBodyNodes } from './graph-plan';
 import {
   assistantModelDefaults,
   resolveNodeModel,
+  resolveNodeModelScope,
   resolveWorkflowModelScope,
   type WorkflowModelScope,
 } from './node-model-resolution';
@@ -48,7 +55,21 @@ export interface RunAiConfigurationOptions {
     | { kind: 'resolved'; overrides: ResolvedRunModelOverrides };
 }
 
+// The resolvers that throw NoDefaultProviderError are pure and shared with the executor
+// and validator, which hold no registry. Preflight does, so it adds the install hint here.
 export async function prepareRunAiConfiguration(
+  ...args: Parameters<typeof prepareAiConfiguration>
+): Promise<PreparedRunAiConfiguration> {
+  try {
+    return await prepareAiConfiguration(...args);
+  } catch (error) {
+    if (error instanceof NoDefaultProviderError)
+      throw new NoDefaultProviderError(args[0].providers);
+    throw error;
+  }
+}
+
+async function prepareAiConfiguration(
   deps: Pick<
     WorkflowDeps,
     | 'providers'
@@ -177,13 +198,7 @@ export async function prepareRunAiConfiguration(
     assistantModelDefaults(config),
     aiProfile
   );
-  if (!deps.providers.get(scope.provider))
-    throw new Error(
-      `Workflow '${workflow.name}': unknown provider '${scope.provider}'. Registered: ${deps.providers
-        .list()
-        .map(p => p.id)
-        .join(', ')}`
-    );
+  if (scope.provider !== undefined) requireProvider(deps.providers, scope.provider);
   const unresolved = collectRunCredentialRequirements(deps.providers, workflow, {
     config,
     aiProfile,
@@ -265,9 +280,14 @@ export function collectRunCredentialRequirements(
   const models = assistantModelDefaults(prepared.config);
   const visit = (nodes: readonly DagNode[], scope: WorkflowModelScope): void => {
     for (const node of nodes) {
+      if (isGateNode(node)) {
+        const rework = node.decisions.find(decision => decision.rework !== undefined)?.rework;
+        if (rework) visit([gateReworkNode(node, rework.prompt)], scope);
+        continue;
+      }
       if (!isAgentNode(node) && !isLoopNode(node) && !isLoopGroupNode(node)) continue;
-      const resolved = resolveNodeModel(node, scope, models, prepared.aiProfile);
       if (isLoopGroupNode(node)) {
+        const resolved = resolveNodeModelScope(node, scope, models, prepared.aiProfile);
         visit(resolvedBodyNodes(node.loop_group), {
           ...scope,
           provider: resolved.provider,
@@ -277,6 +297,7 @@ export function collectRunCredentialRequirements(
           providerOrigin: resolved.providerOrigin,
         });
       } else {
+        const resolved = resolveNodeModel(node, scope, models, prepared.aiProfile);
         const { provider, model } = resolved;
         requirements.set(JSON.stringify([provider, model]), {
           provider,
@@ -333,7 +354,10 @@ export function assertCredentialStatus(
 export async function assertRunCredentials(
   deps: Pick<
     WorkflowDeps,
-    'getAgentProvider' | 'isPerUserProviderKeysEnabled' | 'getUserProviderCredentialStatus'
+    | 'getAgentProvider'
+    | 'isPerUserProviderKeysEnabled'
+    | 'getUserProviderCredentialStatus'
+    | 'credentialStore'
   >,
   prepared: PreparedRunAiConfiguration
 ): Promise<void> {
@@ -341,6 +365,8 @@ export async function assertRunCredentials(
   for (const requirement of prepared.requirements) {
     const { provider, model, vendor } = requirement;
     if (prepared.executionUserId && deps.isPerUserProviderKeysEnabled?.() && vendor) {
+      if (deps.credentialStore === 'files')
+        throw new FileStoreUnsupportedError('stored per-user provider credentials');
       if (!deps.getUserProviderCredentialStatus)
         throw new WorkflowCredentialPreflightError(
           requirement,

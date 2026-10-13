@@ -113,8 +113,8 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'user',
-    spec: 'user <list|role>',
-    description: 'List users and manage roles as the operator',
+    spec: 'user <list|role|link>',
+    description: 'List users, link identities and manage roles as the operator',
   },
   {
     command: 'trigger',
@@ -295,6 +295,12 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'install',
     spec: 'skill install [path]',
     description: 'Install archon-cli into .claude/skills and .agents/skills',
+  },
+  {
+    command: 'provider',
+    subcommand: 'install',
+    spec: 'provider install <id...>',
+    description: 'Install maintained providers matching this Archon release',
   },
   {
     command: 'plugin',
@@ -512,6 +518,12 @@ const scopedOnlyHelp: HelpEntry[] = [
     subcommand: 'list',
     spec: 'user list',
     description: 'List user ids, roles, display names and identities',
+  },
+  {
+    command: 'user',
+    subcommand: 'link',
+    spec: 'user link <user-id> <platform>:<platform-user-id> [--move]',
+    description: 'Link an identity to an existing user; --move reassigns a conflicting identity',
   },
   {
     command: 'user',

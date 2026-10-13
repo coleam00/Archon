@@ -94,8 +94,8 @@ import { publishArchonCliCommand } from '@archon/paths/cli-command';
 publishArchonCliCommand();
 
 let providersRegistered = false;
-let providerProcessErrorHandlersInstalled = false;
 let databaseRouteLoaded = false;
+let providerProcessErrorHandlersInstalled = false;
 
 function installProviderProcessErrorHandlers(
   claimPiExtensionProcessError: (reason: unknown) => boolean
@@ -130,19 +130,19 @@ function installProviderProcessErrorHandlers(
 
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
-  const {
-    claimPiExtensionProcessError,
-    registerBuiltinProviders,
-    registerCommunityProviders,
-    registerProvider,
-  } = await import('@archon/providers/in-process');
-  installProviderProcessErrorHandlers(claimPiExtensionProcessError);
-  registerBuiltinProviders();
-  registerCommunityProviders();
-  const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
-  for (const registration of await loadProviderPlugins(getPluginsPath()))
-    registerProvider(registration);
+  const { registerHostProviders } = await import('@archon/core/providers/register-host-providers');
+  if (BUNDLED_IS_BINARY) {
+    const { claimPiExtensionProcessError } =
+      await import('@archon/providers/pi/extension-error-broker');
+    installProviderProcessErrorHandlers(claimPiExtensionProcessError);
+  }
+  await registerHostProviders();
   providersRegistered = true;
+}
+
+async function usesDatabaseStore(): Promise<boolean> {
+  const { loadStoreSelection } = await import('@archon/core/config/store-selection');
+  return (await loadStoreSelection()) === 'database';
 }
 
 async function loadRoute<T>(
@@ -157,9 +157,16 @@ async function loadRoute<T>(
     ]);
   setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   if (options.providers !== false) await registerProviders();
-  const route = await loader();
-  if (options.database) databaseRouteLoaded = true;
-  return route;
+  if (options.database) {
+    const { loadStoreSelection } = await import('@archon/core/config/store-selection');
+    if ((await loadStoreSelection()) === 'files') {
+      const { FileStoreUnsupportedError: fileStoreUnsupportedError } =
+        await import('@archon/workflows/file-store');
+      throw new fileStoreUnsupportedError('this SQL-only CLI command');
+    }
+    databaseRouteLoaded = true;
+  }
+  return loader();
 }
 
 /** True when `path` exists and is a directory (used to validate `--workflow-source`). */
@@ -396,6 +403,19 @@ async function main(): Promise<number> {
   if (showUpdateNotice) void checkForUpdate(BUNDLED_VERSION);
 
   try {
+    // `workflow wake schedule` installs an OS timer and never opens the store or a provider.
+    const wakeSchedule =
+      command === 'workflow' && subcommand === 'wake' && positionals[2] === 'schedule';
+    if (
+      (command === 'workflow' || command === 'trigger') &&
+      !wakeSchedule &&
+      !(await usesDatabaseStore())
+    ) {
+      // Provider concurrency caps are validated against registered providers.
+      await registerProviders();
+      const { assertFileStoreConfiguration } = await import('@archon/core/config/store-selection');
+      await assertFileStoreConfiguration();
+    }
     const detachedRunConfigPayload = values['internal-detached-run-config'];
     if (
       command === 'workflow' &&
@@ -423,16 +443,14 @@ async function main(): Promise<number> {
     }
 
     if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
-      const schedule = subcommand === 'wake' && positionals[2] === 'schedule';
       const { workflowContinuationCommand, workflowWakeScheduleCommand } = await loadRoute(
         () => import('./commands/workflow-continuations'),
-        schedule ? { providers: false } : { database: true }
+        wakeSchedule ? { providers: false } : { database: await usesDatabaseStore() }
       );
-      if (schedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
-      const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
-      const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+      if (wakeSchedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
+      const { createCliWorkflowHost } = await import('./utils/workflow-host');
       return await workflowContinuationCommand(
-        createSqlWorkflowHost(createCliWorkflowDeps()),
+        await createCliWorkflowHost(true),
         subcommand,
         positionals.slice(2),
         values
@@ -453,6 +471,16 @@ async function main(): Promise<number> {
           'Use: archon workflow run <name> --adopt <run-id> <input>\n' +
           'Find a prior run id with: archon workflow runs --open (or workflow get <run-id>)'
       );
+    }
+    if (command === 'provider') {
+      const { providerCommand } = await loadRoute(() => import('./commands/provider'), {
+        providers: false,
+      });
+      return await providerCommand(subcommand, positionals.slice(2), {
+        pluginsDir: getPluginsPath(),
+        archonVersion: BUNDLED_VERSION,
+        projectDir: cwd,
+      });
     }
     if (command === 'plugin') {
       const { pluginCommand } = await loadRoute(() => import('./commands/plugin'), {
@@ -508,8 +536,7 @@ async function main(): Promise<number> {
         // not need project registration, a database lookup, or a git worktree.
         effectiveCwd = cwd;
       } else {
-        // Not a git repo. It may still be a registered FOLDER project (a
-        // multi-repo root or plain ops folder). Consult the DB before rejecting.
+        // A non-git directory may be a registered folder project.
         // Canonicalize through the one shared `default_cwd` canonicalizer, so
         // this lookup asks for exactly the string registration stored. Using a
         // different realpath variant here is what hid every CLI-registered
@@ -521,18 +548,21 @@ async function main(): Promise<number> {
         // (workflow/isolation commands still need to surface a clear error rather
         // than a stack trace) — capture it and, if connection-shaped, report
         // "database unavailable" instead of the misleading "not a git repository".
+        const databaseLookup = await usesDatabaseStore();
         let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
         let gateLookupError: Error | null = null;
-        let codebaseDb: typeof import('@archon/core/db/codebases') | undefined;
         try {
-          codebaseDb = await loadRoute(() => import('@archon/core/db/codebases'), {
-            database: true,
-          });
+          if (databaseLookup) databaseRouteLoaded = true;
+          const { createCliWorkflowHost } = await import('./utils/workflow-host');
+          const host = await createCliWorkflowHost();
           folderCodebase =
-            (await codebaseDb.findCodebaseByDefaultCwd(realCwd)) ??
-            (await codebaseDb.findCodebaseByPathPrefix(realCwd));
+            (await host.records.codebases.findCodebaseByDefaultCwd(realCwd)) ??
+            (await host.records.codebases.findCodebaseByPathPrefix(realCwd));
         } catch (dbError) {
-          if (codebaseDb && dbError instanceof codebaseDb.InvalidCodebaseDefaultCwdError) {
+          if (!databaseLookup) throw dbError;
+          const { InvalidCodebaseDefaultCwdError: invalidCodebaseDefaultCwdError } =
+            await import('@archon/core/db/codebase-path');
+          if (dbError instanceof invalidCodebaseDefaultCwdError) {
             return await fail(jsonFlag, dbError.message);
           }
           gateLookupError = dbError as Error;
@@ -604,12 +634,11 @@ async function main(): Promise<number> {
         const { triggerCommand, spawnAdmitted } = await loadRoute(
           () => import('./commands/trigger'),
           {
-            database: true,
+            database: await usesDatabaseStore(),
           }
         );
-        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
-        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
-        const host = createSqlWorkflowHost(createCliWorkflowDeps());
+        const { createCliWorkflowHost } = await import('./utils/workflow-host');
+        const host = await createCliWorkflowHost(true);
         await triggerCommand(
           host,
           subcommand,
@@ -716,20 +745,16 @@ async function main(): Promise<number> {
           workflowEventEmitCommand,
           isValidEventType,
         } = await loadRoute(() => import('./commands/workflow'), {
-          database: true,
+          database: await usesDatabaseStore(),
         });
-        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        const { createCliWorkflowHost } = await import('./utils/workflow-host');
         // The host's deps capture GitHub App auth when built, so commands that can
         // execute a workflow initialize it first. A misconfigured App fails here,
         // before any run row exists; query commands stay usable without it.
         const executesWorkflow = ['run', 'resume', 'approve', 'reject', 'respond'].includes(
           subcommand ?? ''
         );
-        const workflowHost = createSqlWorkflowHost(
-          executesWorkflow
-            ? (await import('./utils/workflow-deps')).createCliWorkflowDeps()
-            : undefined
-        );
+        const workflowHost = await createCliWorkflowHost(executesWorkflow);
         switch (subcommand) {
           case 'list': {
             const workflowName = positionals[2];
@@ -1212,7 +1237,7 @@ async function main(): Promise<number> {
       }
 
       case 'user': {
-        const { userListCommand, userRoleCommand } = await loadRoute(
+        const { userListCommand, userRoleCommand, userLinkCommand } = await loadRoute(
           () => import('./commands/user'),
           { database: true }
         );
@@ -1231,8 +1256,17 @@ async function main(): Promise<number> {
             }
             await userRoleCommand(positionals[2] ?? '', positionals[3] ?? '');
             break;
+          case 'link':
+            if (positionals.length !== 4) {
+              return await fail(
+                jsonFlag,
+                'Usage: archon user link <user-id> <platform>:<platform-user-id> [--move]'
+              );
+            }
+            await userLinkCommand(positionals[2] ?? '', positionals[3] ?? '', Boolean(values.move));
+            break;
           default:
-            return await fail(jsonFlag, 'Usage: archon user <list|role>');
+            return await fail(jsonFlag, 'Usage: archon user <list|role|link>');
         }
         break;
       }

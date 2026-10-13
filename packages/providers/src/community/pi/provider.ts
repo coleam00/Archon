@@ -572,8 +572,22 @@ async function createPiModelRuntime(
  * (no reuse) so concurrent calls don't collide.
  */
 export class PiProvider implements IAgentProvider {
-  async listModels(): Promise<ProviderModelList> {
-    return { models: (await listPiModels()).map(model => ({ id: model.ref, label: model.name })) };
+  async listModels(
+    request: Parameters<NonNullable<IAgentProvider['listModels']>>[0]
+  ): Promise<ProviderModelList> {
+    return {
+      models: (await listPiModels(request.signal)).map(model => ({
+        id: model.ref,
+        label: model.name,
+        details: {
+          provider: model.provider,
+          modelId: model.id,
+          reasoning: model.reasoning,
+          cost: model.cost,
+          contextWindow: model.contextWindow,
+        },
+      })),
+    };
   }
 
   async diagnose(
@@ -746,8 +760,7 @@ export class PiProvider implements IAgentProvider {
     // reads a package.json that doesn't exist next to the executable).
     //
     // Class constructors (AuthStorage, ModelRegistry, SettingsManager) are
-    // accessed via `piCodingAgent.X` rather than destructured, because
-    // destructured PascalCase bindings trip eslint's naming-convention rule.
+    // accessed via `piCodingAgent.X` rather than destructured.
     const [
       piCodingAgent,
       { bridgeSession },
