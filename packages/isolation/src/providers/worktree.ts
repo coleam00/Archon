@@ -1,3 +1,5 @@
+import { validateWorktreePostCreate } from '../post-create-config';
+import type { WorktreeSetupExecutor } from '../types';
 /**
  * Worktree Provider - Git worktree-based isolation
  *
@@ -205,18 +207,20 @@ function resolveRepoLocalOverride(
 export class WorktreeProvider implements IIsolationProvider {
   readonly providerType = 'worktree';
 
-  constructor(private loadConfig: RepoConfigLoader = () => Promise.resolve(null)) {}
+  constructor(
+    private loadConfig: RepoConfigLoader = () => Promise.resolve(null),
+    private setupExecutor?: WorktreeSetupExecutor
+  ) {}
 
   /**
    * Create an isolated environment using git worktrees.
    *
-   * Config is loaded exactly once here and threaded through the rest of the
-   * `create()` call. A malformed `.archon/config.yaml` fails loudly at this
-   * boundary rather than being swallowed — see CLAUDE.md "Fail Fast + Explicit
-   * Errors". Downstream helpers assume they receive either a valid config
-   * object or `null`, never a second chance to reload.
+   * Config is loaded once; parsed provisioning settings are validated before mutation.
    */
-  async create(request: IsolationRequest): Promise<WorktreeCreationEnvironment> {
+  async create(
+    request: IsolationRequest,
+    setupExecutor = this.setupExecutor
+  ): Promise<WorktreeCreationEnvironment> {
     if (!(await this.projectDirectoryExists(request.canonicalRepoPath))) {
       throw new MissingProjectDirectoryError(
         request.canonicalRepoPath,
@@ -233,6 +237,10 @@ export class WorktreeProvider implements IIsolationProvider {
       throw new Error(`Failed to load config: ${err.message}`);
     }
 
+    validateWorktreePostCreate(repoConfig);
+    if (repoConfig?.postCreate?.length && !setupExecutor) {
+      throw new Error('worktree.postCreate requires a worktree setup executor');
+    }
     const branchName = toBranchName(this.generateBranchName(request));
     const worktreePath = this.getWorktreePath(request, branchName, repoConfig);
     // envId is, by contract, the worktree filesystem path (see `destroy()` docstring).
@@ -248,7 +256,13 @@ export class WorktreeProvider implements IIsolationProvider {
     }
 
     // Create new worktree (re-uses the already-loaded repoConfig — no double load).
-    const creation = await this.createWorktree(request, worktreePath, branchName, repoConfig);
+    const creation = await this.createWorktree(
+      request,
+      worktreePath,
+      branchName,
+      repoConfig,
+      setupExecutor
+    );
     if (creation.kind === 'adopted') {
       return creation.environment;
     }
@@ -940,7 +954,8 @@ export class WorktreeProvider implements IIsolationProvider {
     request: IsolationRequest,
     worktreePath: string,
     branchName: string,
-    worktreeConfig: WorktreeCreateConfig | null
+    worktreeConfig: WorktreeCreateConfig | null,
+    setupExecutor?: WorktreeSetupExecutor
   ): Promise<WorktreeCreationResult> {
     const repoPath = request.canonicalRepoPath;
     if (await this.directoryExists(worktreePath)) {
@@ -1020,7 +1035,13 @@ export class WorktreeProvider implements IIsolationProvider {
       worktreePath,
       setupLockReason,
       async () => {
-        const warnings = await this.finishWorktreeSetup(repoPath, worktreePath, worktreeConfig);
+        const warnings = await this.finishWorktreeSetup(
+          request,
+          repoPath,
+          worktreePath,
+          worktreeConfig,
+          setupExecutor
+        );
         if (existingBranch) return { kind: 'adopted' as const, warnings };
         const identity = await getGitCheckoutIdentity(worktreePath);
         await writeFile(join(identity.gitDir, CREATION_MARKER), creationId, { flag: 'wx' });
@@ -1059,9 +1080,11 @@ export class WorktreeProvider implements IIsolationProvider {
    * Returns the warnings a caller should surface on an otherwise usable worktree.
    */
   private async finishWorktreeSetup(
+    request: IsolationRequest,
     repoPath: RepoPath,
     worktreePath: string,
-    worktreeConfig: WorktreeCreateConfig | null
+    worktreeConfig: WorktreeCreateConfig | null,
+    setupExecutor?: WorktreeSetupExecutor
   ): Promise<string[]> {
     // Initialize submodules unless explicitly opted out. The check is free
     // when `.gitmodules` is absent (access-based short-circuit), so repos
@@ -1077,6 +1100,16 @@ export class WorktreeProvider implements IIsolationProvider {
       worktreePath,
       worktreeConfig
     );
+
+    if (worktreeConfig?.postCreate?.length && setupExecutor) {
+      await setupExecutor({
+        workingPath: worktreePath,
+        canonicalRepoPath: repoPath,
+        codebaseId: request.codebaseId,
+        commands: worktreeConfig.postCreate,
+        timeout: worktreeConfig.postCreateTimeout ?? 300_000,
+      });
+    }
 
     // Last, so the refresh sees the tree the rest of setup leaves, and while the
     // setup lock is still held: no adopter can start git work in the checkout

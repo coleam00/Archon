@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { testTimeout, DEFAULT_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
-import { bunTestCommand, bunTestEnv } from './bun-test-command';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+import { removeTempTree, testTimeout, DEFAULT_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
+import { TEST_TRANSPILER_CACHE, bunTestCommand, bunTestEnv } from './bun-test-command';
 
 describe('bunTestCommand', () => {
   it('sets the default per-test budget to 20 seconds', () => {
@@ -37,6 +40,34 @@ describe('bunTestEnv', () => {
     expect(bunTestEnv({}).ARCHON_TELEMETRY_DISABLED).toBe('1');
     expect(bunTestEnv({ ARCHON_TELEMETRY_DISABLED: '' }).ARCHON_TELEMETRY_DISABLED).toBe('');
     expect(bunTestEnv({ PATH: '/bin' }).PATH).toBe('/bin');
+  });
+
+  it('pins the transpiler cache so a child given its own home starts warm', async () => {
+    expect(bunTestEnv({}).BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe(TEST_TRANSPILER_CACHE);
+    expect(
+      bunTestEnv({ BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0' }).BUN_RUNTIME_TRANSPILER_CACHE_PATH
+    ).toBe('0');
+
+    // Without the pin Bun derives the cache from the home, so a child with a scratch
+    // home would write `.bun/install/cache` (Windows) or `.cache`/`Library` into it.
+    const home = await mkdtemp(join(tmpdir(), 'archon-transpiler-home-'));
+    try {
+      // Bun caches only outputs above a size floor, so transpile a large module.
+      const big = join(home, '..', `${basename(home)}-big.ts`);
+      await writeFile(big, `export const x: number[] = [${'1,'.repeat(40_000)}];\n`);
+      try {
+        const { BUN_RUNTIME_TRANSPILER_CACHE_PATH: _, ...inherited } = process.env;
+        const child = Bun.spawnSync([process.execPath, big], {
+          env: { ...bunTestEnv(inherited), HOME: home, USERPROFILE: home },
+        });
+        expect(child.exitCode).toBe(0);
+        expect(await readdir(home)).toEqual([]);
+      } finally {
+        await rm(big, { force: true });
+      }
+    } finally {
+      await removeTempTree(home);
+    }
   });
 });
 

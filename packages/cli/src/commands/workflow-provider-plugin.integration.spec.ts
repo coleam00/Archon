@@ -1,3 +1,8 @@
+import {
+  createReleaseRepo,
+  serveFixtureGit,
+  fixtureGit as git,
+} from '../test-support/plugin-fixture';
 import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
@@ -32,20 +37,6 @@ let server: ReturnType<typeof Bun.serve>;
 let binary: Uint8Array<ArrayBuffer>;
 let beforeAssetDownload: (() => Promise<void>) | undefined;
 
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const child = Bun.spawn(
-    ['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args],
-    { cwd, stdout: 'pipe', stderr: 'pipe' }
-  );
-  const [out, err, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  if (code !== 0) throw new Error(err);
-  return out.trim();
-}
-
 async function runnable(source: string, name: string): Promise<Uint8Array<ArrayBuffer>> {
   const script = join(root, `${name}.js`);
   await writeFile(script, source);
@@ -74,12 +65,11 @@ beforeAll(async () => {
   if (!build.success) throw new Error('test provider bundle failed');
   binary = await runnable(await build.outputs[0].text(), 'provider');
   const repo = join(root, 'repo');
-  await mkdir(repo);
-  await git(repo, 'init', '-q');
-  for (const tag of ['v1', 'v2', 'invalid']) {
-    await git(repo, 'commit', '--allow-empty', '-qm', tag);
-    await git(repo, 'tag', tag);
-    const commit = await git(repo, 'rev-parse', 'HEAD');
+  const fixtureCommits = await createReleaseRepo(
+    repo,
+    ['v1', 'v2', 'invalid'].map(tag => ({ tag }))
+  );
+  for (const [tag, commit] of fixtureCommits) {
     commits.set(tag, commit);
     manifests.set(commit, {
       schemaVersion: 1,
@@ -90,7 +80,6 @@ beforeAll(async () => {
     });
     assets.set(tag, binary);
   }
-  await git(repo, 'update-server-info');
   server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -101,11 +90,8 @@ beforeAll(async () => {
           status: 302,
           headers: { location: '/owner/repo/releases/tag/v1' },
         });
-      const gitPath = /^\/(?:owner\/repo|coleam00\/Archon)\.git\/(.+)$/.exec(path);
-      if (gitPath) {
-        const file = Bun.file(join(repo, '.git', gitPath[1]));
-        return (await file.exists()) ? new Response(file) : new Response(null, { status: 404 });
-      }
+      const gitResponse = await serveFixtureGit(repo, path, ['owner/repo', 'coleam00/Archon']);
+      if (gitResponse) return gitResponse;
       const raw =
         /^\/raw\/(?:owner\/repo|coleam00\/Archon)\/([a-f0-9]{40})(?:\/alternate|\/plugins\/provider-codex)?\/archon-plugin.json$/.exec(
           path

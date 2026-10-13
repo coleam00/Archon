@@ -26,6 +26,18 @@ The console's **Needs your input** banner lists every run waiting for a human, i
 
 Keep the console open to receive live updates from runs started by another process. **Dismiss** hides an occurrence for this browser session; reloading or a new pause brings it back. Resuming still requires the server to have access to the run's working path.
 
+## Get notified with the console closed
+
+In **Settings → Alerts**, enable **Also notify this browser when the console is closed** and allow notifications. Subscription requires a signed-in web user or an identity supplied by your trusted authentication proxy. Push works over HTTPS or localhost in a browser supporting Web Push. On iOS, first install Archon as a home-screen web app.
+
+Every opted-in browser on this install receives notices for approval gates and `wait: attention` pauses, including runs started by the CLI or triggers. Runs already rendered inline by a chat plugin are excluded. A notified run also gets a completion notice. Notifications name the workflow and the kind of attention; messages, outputs and identities stay in Archon. Click the notification to open the run page and act there.
+
+The first browser subscription quietly records existing pauses as a baseline. New pause occurrences are delivered once across scans and server restarts. Archon sends before recording delivery, so a crash can cause a duplicate. If only some browsers receive a push, the next scan retries every browser. These duplicates replace the same browser notification because its tag is the run ID. There is no per-browser delivery ledger.
+
+Disable the toggle to unsubscribe this browser. Expired subscriptions are removed when the push service returns 404 or 410. With no subscriptions, no pushes or delivery rows are written. In-tab alerts remain an independent setting.
+
+Archon generates VAPID keys once in `ARCHON_HOME/web-push-vapid.json`, with owner-only file permissions. Preserve that file with the install's state: replacing it invalidates existing browser subscriptions. Browser vendors carry the encrypted minimal push payload; Archon needs outbound HTTPS access to their push services.
+
 ## Find your run-as user ID
 
 Every binding names the Archon user whose provider configuration and credentials the run uses, as `runAsUserId`. To use your own CLI identity, run:
@@ -115,7 +127,7 @@ The installed LaunchAgent runs in the current user's GUI login domain. The user 
 
 `StartInterval` behavior during sleep or while the prior command is still running is native launchd behavior and differs across macOS releases. Archon does not promise replay of missed intervals. `runAtLoad` requests one invocation when the job loads; it is not a missed-run queue.
 
-Use the trigger workflow to read the current source state when it runs. Do not depend on one invocation for every wall-clock interval.
+For plain schedules, use the trigger workflow to read the current source state when it runs. To report identified items from an external system, use the [polling recipe](#poll-a-system-that-cannot-send-webhooks). Do not depend on one invocation for every wall-clock interval.
 
 ## Drive the same commands from Linux or Windows
 
@@ -321,11 +333,111 @@ A valid signature proves possession of the sender's key and integrity of the del
 
 Operator configuration owns the workflow, cwd, isolation, execution host, resource, and run-as user. The body can only supply configured input values, which preparation checks against the workflow's declarations; a workflow that declares no inputs receives none. It cannot choose any launch authority. The plugin reads secrets from the environment and never logs secrets, bodies, or signature headers. The signature covers the exact received bytes, including a leading byte-order mark. Authentication completes before receipt persistence.
 
+## Poll a system that cannot send webhooks
+
+The host scheduler (cron, a systemd timer, launchd, or Task Scheduler) runs an operator-owned poll script. The script lists recent items and reports each with a stable delivery key made from its ID and version, encoded as a base64 JSON pair `[id, version]` in these recipes. Archon deduplicates within the configured source instance and admits the work. It keeps no poll cursor, runs no resident poller, and promises no catch-up. Choose the API's lookback window to cover scheduler downtime; items outside that window are the script's responsibility.
+
+These POSIX shell recipes require `curl` and `jq`. The example API at `$ORDERS_URL` returns a JSON array of objects with string `id` and `version` fields. Each version must identify immutable content. Report a new version when an item changes, and keep the same key and input content across retries.
+
+Save this workflow as `/srv/archon/orders/.archon/workflows/process-order.yaml` and validate it with `archon validate workflows process-order --cwd /srv/archon/orders`:
+
+```yaml
+name: process-order
+description: Record an order reported by a poll script.
+mutates_checkout: false
+inputs:
+  order_id: { type: string, required: true }
+nodes:
+  - id: record
+    bash: printf '%s\n' "$INPUTS_ORDER_ID" > "$ARTIFACTS_DIR/order.txt"
+```
+
+Replace the recording node with your order handling. Event values remain untrusted and are persisted with the receipt; pass only the fields the workflow needs.
+
+### CLI-only host
+
+Save `/srv/archon/polled-orders.json` using your own `runAsUserId` from `archon trigger whoami`:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "polled-orders",
+  "binding": {
+    "bindingId": "process-order",
+    "bindingRevision": null,
+    "hostId": "orders-host",
+    "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a",
+    "resource": "orders:processing",
+    "overlap": "queue",
+    "launch": {
+      "cwd": "/srv/archon/orders",
+      "workflowName": "process-order",
+      "inputs": {},
+      "isolation": { "kind": "in-place" }
+    }
+  },
+  "schedule": { "intervalSeconds": 60, "runAtLoad": false }
+}
+```
+
+The configuration still requires `schedule`, but `fire` does not install or run that schedule. Schedule the poll script itself, rather than `trigger schedule install`, which fires without event values. Set `ARCHON_HOME` and `ORDERS_URL` for the scheduled user, and use absolute executable paths:
+
+```bash
+#!/bin/sh
+set -eu
+poll_dir=$(mktemp -d)
+trap 'rm -rf "$poll_dir"' EXIT HUP INT TERM
+curl --fail --silent --show-error "$ORDERS_URL" > "$poll_dir/response.json"
+jq -c '.[]' "$poll_dir/response.json" > "$poll_dir/items.jsonl"
+while IFS= read -r item; do
+  delivery_id=$(printf '%s' "$item" | jq -er '[.id, .version] | @base64')
+  printf '%s' "$item" | jq -cS '{order_id: .id}' > "$poll_dir/inputs.json"
+  /opt/archon/bin/archon trigger fire --config /srv/archon/polled-orders.json \
+    --delivery-id "$delivery_id" --inputs "$poll_dir/inputs.json"
+done < "$poll_dir/items.jsonl"
+/opt/archon/bin/archon trigger drain --host orders-host
+```
+
+The final drain also advances queued work on ticks with no items. On CLI-only hosts, continue scheduling drains until queued work has started.
+
+`--inputs` reads a JSON object, including from `/dev/stdin` on Unix, and treats its values as event inputs. Each name must be declared by the workflow. Event inputs override `launch.inputs` literals; literals still pass through to workflows without `inputs:`. The local operator's access to the Archon installation is the trust boundary, so `fire` needs no signature.
+
+An identical key and inputs reuse the original receipt and still drain the retained receipt's host. Editing the binding does not start that delivery again. The digest covers `JSON.stringify` of the parsed event inputs, or `{}` when omitted, excluding binding literals. Whitespace differences in the JSON file do not matter; object key order does, so produce stable JSON (the recipe uses `jq -S`). Reusing a key with different inputs exits non-zero with a delivery conflict. Without `--delivery-id`, every fire records a new receipt, including when `--inputs` is supplied.
+
+### Server host
+
+Configure the [Standard Webhooks source](#start-workflows-from-any-signed-webhook) above with its `order_id: /order/id` mapping, `ARCHON_TRIGGER_HOST=orders-host`, and the same `process-order` workflow. The poll script can run on a different trusted sender host. Set `ORDERS_URL`, `ORDER_SIGNING_SECRET`, and `ARCHON_WEBHOOK_URL` (for example `https://your-archon-host/webhooks/sources/orders-production`) in that script's environment. It also needs OpenSSL:
+
+```bash
+#!/bin/sh
+set -eu
+poll_dir=$(mktemp -d)
+trap 'rm -rf "$poll_dir"' EXIT HUP INT TERM
+curl --fail --silent --show-error "$ORDERS_URL" > "$poll_dir/response.json"
+jq -c '.[]' "$poll_dir/response.json" > "$poll_dir/items.jsonl"
+while IFS= read -r item; do
+  delivery_id=$(printf '%s' "$item" | jq -er '[.id, .version] | @base64')
+  body=$(printf '%s' "$item" | jq -cS '{order: {id: .id}}')
+  timestamp=$(date +%s)
+  key_hex=$(printf '%s' "${ORDER_SIGNING_SECRET#whsec_}" | openssl base64 -d -A | od -An -v -tx1 | tr -d ' \n')
+  signature=$(printf '%s' "$delivery_id.$timestamp.$body" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$key_hex" -binary | openssl base64 -A)
+  unset key_hex
+  curl --fail-with-body --silent --show-error "$ARCHON_WEBHOOK_URL" \
+    -H 'Content-Type: application/json' \
+    -H "webhook-id: $delivery_id" \
+    -H "webhook-timestamp: $timestamp" \
+    -H "webhook-signature: v1,$signature" \
+    --data-binary "$body"
+done < "$poll_dir/items.jsonl"
+```
+
+The server drains accepted and queued work. Re-polling sends a fresh timestamp but identical body bytes and delivery ID, so the server returns 200 without another run. A changed body under the same key returns 409. Apply the [signing recipe's security boundary](#sign-a-delivery-from-a-shell), including running OpenSSL on a trusted host with shell tracing disabled.
+
 ## Preparation and retained records
 
 The receipt freezes the evaluated bindings and resolved inputs. The execution host later captures the workflow source and reads any `configSource` run configuration. Queue admission freezes that prepared source and configuration; editing live files afterward does not change queued work.
 
-An input mapped from the event, by a Standard Webhooks JSON Pointer or a GitHub `field` mapping, reaches only a workflow that declares it under `inputs:`. Preparation rejects a binding that maps event values into a workflow without that declaration. Literal inputs you write into `launch.inputs` or a GitHub `literal` mapping pass through to a workflow without `inputs:`, as they do for a direct run. A workflow that declares `inputs:` rejects any undeclared name, literal or mapped.
+An input mapped from the event, by CLI `--inputs`, a Standard Webhooks JSON Pointer, or a GitHub `field` mapping, reaches only a workflow that declares it under `inputs:`. Preparation rejects a binding that maps event values into a workflow without that declaration. Literal inputs you write into `launch.inputs` or a GitHub `literal` mapping pass through to a workflow without `inputs:`, as they do for a direct run. A workflow that declares `inputs:` rejects any undeclared name, literal or mapped.
 
 A process that stops during preparation leaves its recorded preparation owner visible. After verifying that exact process has stopped, use `archon trigger recover-preparation <receipt-id> <binding-id> --owner <recorded-owner-id> --yes`, then drain the configured host. A failed validation is recorded as rejected and requires a corrected new request.
 

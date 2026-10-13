@@ -1,3 +1,14 @@
+import {
+  createRunWorktreeSetupExecutor,
+  recordSetupRunSource,
+  retainSetupRunSource,
+} from '../workflows/worktree-setup';
+import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
+import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
+import {
+  SUBRUN_METADATA_KEYS,
+  CONTINUATION_METADATA_KEY,
+} from '@archon/workflows/schemas/workflow-run';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import * as sqlWorkflow from '@archon/core/db/workflows';
 import { providerRegistry } from '@archon/providers';
@@ -62,7 +73,10 @@ import {
 } from '@archon/workflows/executor';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type { WorkflowResumeAdmission } from '@archon/workflows/engine-port';
-import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
+import {
+  TerminalStatusWriteError,
+  requireTerminalStatusWrite,
+} from '@archon/workflows/terminal-status-write';
 import { liveSourceRoots } from '@archon/workflows/workflow-discovery';
 import {
   assertWorkflowRequirementsMet,
@@ -827,7 +841,8 @@ async function dispatchOrchestratorWorkflowOwned(
       baseBranch: codebaseBaseBranch,
       createdByPlatform: platform.getPlatformType(),
       createdByUserId: userId,
-    }
+    },
+    createWorkflowDeps()
   );
 
   // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
@@ -1082,6 +1097,21 @@ async function dispatchOrchestratorWorkflowOwned(
     }
   }
 
+  if (resumableRun?.working_path && resumableRun.status !== 'paused' && !explicitResumeRequested) {
+    getLog().info(
+      {
+        workflowName: workflow.name,
+        resumableRunId: resumableRun.id,
+        platformType: platform.getPlatformType(),
+      },
+      'orchestrator.failed_resume_user_prompted'
+    );
+    await platform.sendMessage(
+      conversationId,
+      buildFailedRunResumePrompt(platform, workflow.name, resumableRun, userMessage)
+    );
+    return;
+  }
   // A fresh run reads repo config from the project's registered checkout, never from a
   // worktree an earlier run left on this conversation, so uncommitted and gitignored
   // config apply. An adopted worktree stays the estate. The run records the result, and
@@ -1108,322 +1138,8 @@ async function dispatchOrchestratorWorkflowOwned(
     codebase_id: codebase.id,
   });
 
-  // Validate and resolve isolation.
-  // A workflow with `worktree.enabled: false` short-circuits the resolver entirely
-  // and runs in the live checkout — no worktree creation, no env row. This is the
-  // declarative equivalent of CLI `--no-worktree` for workflows that should always
-  // run live (e.g. read-only triage, docs generation on the main checkout).
-  let cwd: string;
-  let cutFromCommit: string | undefined;
-  let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
-  if (adoptionLane?.kind === 'reuse-worktree') {
-    // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
-    // instead of cutting a fresh one (same shape as the background dispatch in
-    // orchestrator.ts). Linking the env keeps isolation hygiene pointed at this
-    // checkout.
-    cwd = adoptionLane.workingPath;
-    await db
-      .updateConversation(conversation.id, {
-        cwd,
-        ...(adoptionLane.envId ? { isolation_env_id: adoptionLane.envId } : {}),
-      })
-      .catch((e: unknown) => {
-        getLog().warn(
-          { err: toError(e), conversationId },
-          'orchestrator.worker_cwd_persist_failed'
-        );
-      });
-  } else if (workflow.worktree?.enabled === false) {
-    getLog().info(
-      { workflowName: workflow.name, conversationId, codebaseId: codebase.id },
-      'workflow.worktree_disabled_by_policy'
-    );
-    cwd = codebase.default_cwd;
-  } else {
-    try {
-      const result = await validateAndResolveIsolation(
-        // A checkout-branch adoption must not adopt the conversation's existing env:
-        // the resolver short-circuits on `existingEnvId` before hints are read (R7), so a
-        // stale worktree from an earlier run in this conversation would win over the
-        // adopted branch. Null it out — same shape the `stale_cleaned` retry sees.
-        {
-          ...conversation,
-          codebase_id: codebase.id,
-          ...(adoptionLane?.kind === 'checkout-branch' ? { isolation_env_id: null } : {}),
-        },
-        codebase,
-        platform,
-        conversationId,
-        adoptionLane?.kind === 'checkout-branch'
-          ? {
-              ...isolationHints,
-              // Unique per dispatch: a shared id would key the reuse lookup to an
-              // earlier adoption's worktree and drop the exact branch on later ones.
-              workflowId: randomUUID(),
-              workflowType: 'task',
-              taskBranch: adoptionLane.taskBranch,
-            }
-          : isolationHints,
-        false,
-        userId
-      );
-      cwd = result.cwd;
-      if (result.status === 'new') {
-        cutFromCommit = result.cutFromCommit;
-        ownedWorktree = result.ownedWorktree;
-      }
-    } catch (error) {
-      if (error instanceof IsolationBlockedError) {
-        getLog().warn(
-          {
-            reason: error.reason,
-            conversationId,
-            codebaseId: codebase.id,
-            workflowName: workflow.name,
-          },
-          'isolation_blocked'
-        );
-        return;
-      }
-      throw error;
-    }
-  }
-
-  if (adoptionLane?.kind === 'checkout-branch' && freshCaptured) {
-    freshCaptured = {
-      ...freshCaptured,
-      preparedSource: { ...freshCaptured.preparedSource, origin: cwd },
-    };
-  }
-
-  // Dispatch workflow.
-  // `resumableRun` was resolved above the signature gate (see the comment there):
-  // resume detection runs for ALL platforms, so a prior run for this workflow in a
-  // resumable state (paused — including approved-awaiting-resume, but excluding an
-  // action-required wait unless explicitly resumed — or failed) in this conversation+
-  // codebase is continued rather than dispatched fresh. This ensures chat platforms
-  // (slack, telegram, discord, github) resume after approval gates just like web does.
-  if (resumableRun?.working_path) {
-    const resumableWorkingPath = resumableRun.working_path;
-    if (resumableRun.status !== 'paused' && !explicitResumeRequested) {
-      getLog().info(
-        {
-          workflowName: workflow.name,
-          resumableRunId: resumableRun.id,
-          platformType: platform.getPlatformType(),
-        },
-        'orchestrator.failed_resume_user_prompted'
-      );
-      await platform.sendMessage(
-        conversationId,
-        buildFailedRunResumePrompt(platform, workflow.name, resumableRun, userMessage)
-      );
-      return;
-    }
-
-    getLog().info(
-      {
-        workflowName: workflow.name,
-        resumableRunId: resumableRun.id,
-        workingPath: resumableRun.working_path,
-        platformType: platform.getPlatformType(),
-      },
-      'orchestrator.foreground_resume_detected'
-    );
-    // An empty resume is the explicit restart path below; a lost claim never
-    // falls through to a fresh run on another owner's worktree.
-    const deps = createWorkflowDeps();
-    const engine = new InProcessWorkflowEngine(deps);
-    const resumeOwner = await startRunLiveOwner(resumableRun.id);
-    let resumeOwnerClosed = false;
-    try {
-      let admission: WorkflowResumeAdmission;
-      try {
-        const needsResumeNotice =
-          options?.runConfig !== undefined ||
-          Object.keys(options?.inputs ?? {}).length > 0 ||
-          Object.keys(options?.modelOverrides?.tiers ?? {}).length > 0 ||
-          Object.keys(options?.modelOverrides?.aliases ?? {}).length > 0;
-        const nothingToResume =
-          needsResumeNotice && (await inspectResumableRun(deps, resumableRun)) === null;
-        if (nothingToResume) {
-          admission = { accepted: false, reason: 'nothing-to-resume' };
-        } else {
-          if (options?.runConfig) {
-            await platform.sendMessage(
-              conversationId,
-              'This command would resume an existing run, so a new run config cannot be applied. ' +
-                'Resume without config, or force a fresh run.'
-            );
-            return;
-          }
-          const resumeStateLabel = formatResumableRunState(resumableRun.status);
-          const suppliedModelBindingNames = [
-            ...Object.keys(options?.modelOverrides?.tiers ?? {}),
-            ...Object.keys(options?.modelOverrides?.aliases ?? {}),
-          ].sort();
-          // A resume replays the inputs stamped on its own row; values supplied on THIS
-          // call cannot reach it (the row already exists, so the executor's stamp never
-          // fires). Say so rather than accepting them and quietly running something else.
-          if (options?.inputs && Object.keys(options.inputs).length > 0) {
-            const ignored = Object.keys(options.inputs).sort().join(', ');
-            getLog().info(
-              {
-                workflowName: workflow.name,
-                resumableRunId: resumableRun.id,
-                ignoredKeys: ignored,
-              },
-              'orchestrator.resume_ignored_supplied_inputs'
-            );
-            await platform.sendMessage(
-              conversationId,
-              `▶️ Resuming the ${resumeStateLabel} run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
-                `keeps the inputs it started with — the values you supplied now (${ignored}) were ` +
-                'not applied. To run fresh with them instead, abandon that run first ' +
-                `(\`${spellWorkflowCommand(platform, `abandon ${resumableRun.id}`)}\`) and re-invoke.`
-            );
-          }
-          if (suppliedModelBindingNames.length > 0) {
-            getLog().info(
-              {
-                workflowName: workflow.name,
-                resumableRunId: resumableRun.id,
-                ignoredBindings: suppliedModelBindingNames,
-              },
-              'orchestrator.resume_ignored_model_bindings'
-            );
-            await platform.sendMessage(
-              conversationId,
-              `▶️ Resuming the ${resumeStateLabel} run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
-                'keeps the model bindings it started with — the bindings you supplied now ' +
-                `(${suppliedModelBindingNames.join(', ')}) were not applied. To run fresh with them ` +
-                `instead, abandon that run first (\`${spellWorkflowCommand(platform, `abandon ${resumableRun.id}`)}\`) and re-invoke.`
-            );
-          }
-          admission = await engine.resume({
-            platform,
-            conversationId,
-            cwd: resumableWorkingPath,
-            legacyWorkflow: workflow,
-            userMessage,
-            origin: {
-              conversationId: conversation.id,
-              userId,
-              parentConversationId: conversation.id,
-            },
-            run: resumableRun,
-            options: {
-              codebaseId: codebase.id,
-              source,
-              parseWarnings,
-              baseBranch: codebaseBaseBranch,
-              resolveChildIsolation,
-            },
-          });
-        }
-      } catch (err) {
-        // resumeWorkflowRun is a compare-and-swap: if another surface (web Resume,
-        // a concurrent re-dispatch, the CLI) already claimed this run, it throws
-        // WorkflowNotResumableError. Surface a friendly note instead of leaking the
-        // raw internal string to the generic failure catch, and do NOT fall through
-        // to a fresh run — the other resumer owns the worktree (#1830 I2).
-        if (err instanceof workflowDb.WorkflowNotResumableError) {
-          getLog().info(
-            { workflowName: workflow.name, runId: resumableRun.id, status: err.currentStatus },
-            'orchestrator.resume_lost_race'
-          );
-          await platform.sendMessage(
-            conversationId,
-            `⚠️ **${workflow.name}** is already being resumed (status: ${err.currentStatus}). ` +
-              'No action taken — follow the existing run for progress.' +
-              // The gate deferred a contract violation because this looked like a
-              // continuation; losing the race means it never got surfaced anywhere else.
-              // Say it here rather than let an already-computed, actionable error die.
-              (deferredInputError && options?.inputs && Object.keys(options.inputs).length > 0
-                ? `\n\nAlso note: ${deferredInputError.message}`
-                : '')
-          );
-          return;
-        }
-        throw err;
-      }
-      if (admission.accepted) {
-        await admission.settled;
-      } else {
-        await resumeOwner.close();
-        resumeOwnerClosed = true;
-        // Hydration found nothing worth resuming, so this is the ONE continuation path
-        // that creates a fresh run row — which means a contract violation deferred at the
-        // gate is live again and must be surfaced before any AI cost.
-        if (deferredInputError) {
-          await platform.sendMessage(conversationId, deferredInputError.message);
-          return;
-        }
-        // This branch IS a fresh run, even though the outer block entered via the resume
-        // menu (#2686). Capture the source here so the run freezes the bytes it actually
-        // executes against; without this it would inherit the prior run's frozen graph
-        // and let the executor fall back to live command/script lookup, which is exactly
-        // the mixed-vintage shape #2660 exists to remove.
-        const captured = await captureFreshSource(
-          owner,
-          runCwd,
-          workflow,
-          conversationId,
-          platform
-        );
-        if (!captured) return; // capture failed, message already sent
-        workflow = captured.workflow;
-        const freshAiConfiguration = await prepareLaunchAiConfiguration();
-        await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration);
-        await platform.sendMessage(
-          conversationId,
-          `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
-        );
-        // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
-        // executor adopts for us there (see #2690). `captured.preparedSource` proves
-        // the helper has already run `owner.hold`, which is the only thing the wrap
-        // needs to know to reclaim if the rename fails.
-        await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
-          await engine.submit({
-            platform,
-            conversationId,
-            cwd: resumableWorkingPath,
-            workflow,
-            userMessage,
-            origin: {
-              conversationId: conversation.id,
-              userId,
-              parentConversationId: conversation.id,
-            },
-            options: {
-              codebaseId: codebase.id,
-              source,
-              preparedSource: captured.preparedSource,
-              preparedAiConfiguration: freshAiConfiguration,
-              parseWarnings,
-              baseBranch: codebaseBaseBranch,
-              resolveChildIsolation,
-              capturedSourceOwner: owner,
-              // This branch creates a FRESH run row (the prior run had nothing to resume),
-              // so the supplied inputs still need stamping.
-              inputs: resolvedInputs,
-              ...(options?.modelOverrides
-                ? {
-                    modelOverrideLayer: {
-                      kind: 'raw' as const,
-                      overrides: options.modelOverrides,
-                    },
-                  }
-                : {}),
-              ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
-            },
-          });
-        });
-      }
-    } finally {
-      if (!resumeOwnerClosed) await resumeOwner.close();
-    }
-  } else if (
+  if (
+    !willContinueExistingRun &&
     platform.capabilities.defaultWorkflowDispatch === 'background' &&
     !workflow.interactive
   ) {
@@ -1438,7 +1154,7 @@ async function dispatchOrchestratorWorkflowOwned(
         {
           platform,
           conversationId,
-          cwd,
+          cwd: launchConfigCwd,
           originalMessage: userMessage,
           conversationDbId: conversation.id,
           codebaseId: codebase.id,
@@ -1467,68 +1183,441 @@ async function dispatchOrchestratorWorkflowOwned(
       }
       throw err;
     }
-  } else {
-    // Fresh foreground execution for interactive workflows and foreground-default adapters.
-    // Reaching this branch means `resumableRun?.working_path` is falsy, which implies
-    // `willContinueExistingRun` was false and step 2 above ran. `freshCaptured` is
-    // invariantly defined here — the capture-flow helper ran before this branch.
-    if (!freshCaptured) {
-      // Should never trigger; the reasoning above is the invariant. If it does, the
-      // dispatch returned a `preparedSource: undefined` to the executor and we are
-      // about to fall into the executor's `source_unprepared_live` branch — the
-      // mixed-vintage shape #2660 exists to remove — so refuse loudly rather than
-      // ship that regression silently.
-      throw new Error(
-        'orchestrator invariant violated: fresh-foreground dispatch reached without a captured source'
-      );
-    }
-    const freshDeps = createWorkflowDeps();
-    const freshEngine = new InProcessWorkflowEngine(freshDeps);
-    // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
-    // executor adopts for us there (see #2690). `freshCaptured` proves the prior
-    // `captureFreshSource` call already ran `owner.hold`.
-    const captured = freshCaptured;
-    await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
-      await freshEngine.submit({
-        platform,
-        conversationId,
-        cwd,
-        workflow,
-        userMessage,
-        origin: {
-          conversationId: conversation.id,
-          parentConversationId: conversation.id,
-          userId,
+    return;
+  }
+
+  const setupDeps = createWorkflowDeps();
+  let setupRun: WorkflowRun | undefined;
+  let setupOwner: Awaited<ReturnType<typeof startRunLiveOwner>> | undefined;
+  let foregroundSubmitted = false;
+  try {
+    if (
+      !willContinueExistingRun &&
+      workflow.worktree?.enabled !== false &&
+      freshCaptured &&
+      preparedAiConfiguration
+    ) {
+      setupOwner = await startRunLiveOwner(freshCaptured.preparedSource.runId);
+      setupRun = await setupDeps.store.createWorkflowRun({
+        id: freshCaptured.preparedSource.runId,
+        workflow_name: workflow.name,
+        origin: { conversationId: conversation.id, parentConversationId: conversation.id, userId },
+        codebase_id: codebase.id,
+        user_message: userMessage,
+        metadata: {
+          [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAiConfiguration.aiConfigurationSnapshot,
+          ...(preparedAiConfiguration.runConfigMetadata
+            ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAiConfiguration.runConfigMetadata }
+            : {}),
+          ...(resolvedInputs ? { [SUBRUN_METADATA_KEYS.inputs]: resolvedInputs } : {}),
+          ...(options?.adoptRunId || options?.supersedesRunId
+            ? { [CONTINUATION_METADATA_KEY]: { mode: options.adoptRunId ? 'adopt' : 'supersede' } }
+            : {}),
         },
-        options: {
-          codebaseId: codebase.id,
-          source,
-          preparedSource: captured.preparedSource,
-          preparedAiConfiguration,
-          parseWarnings,
-          baseBranch: codebaseBaseBranch,
-          resolveChildIsolation,
-          capturedSourceOwner: owner,
-          inputs: resolvedInputs,
-          ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
-          ownedWorktree,
-          ...(options?.adoptRunId
-            ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
-            : options?.supersedesRunId
+        ...(options?.adoptRunId || options?.supersedesRunId
+          ? { adopted_from_run_id: options.adoptRunId ?? options.supersedesRunId }
+          : {}),
+      });
+      freshCaptured = {
+        ...freshCaptured,
+        preparedSource: await retainSetupRunSource(
+          setupDeps,
+          setupRun,
+          freshCaptured.preparedSource,
+          owner,
+          codebase.default_cwd,
+          codebase.id
+        ),
+      };
+    }
+    // Validate and resolve isolation.
+    // A workflow with `worktree.enabled: false` short-circuits the resolver entirely
+    // and runs in the live checkout — no worktree creation, no env row. This is the
+    // declarative equivalent of CLI `--no-worktree` for workflows that should always
+    // run live (e.g. read-only triage, docs generation on the main checkout).
+    let cwd: string;
+    let cutFromCommit: string | undefined;
+    let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
+    if (willContinueExistingRun && resumableRun?.working_path) {
+      cwd = resumableRun.working_path;
+    } else if (adoptionLane?.kind === 'reuse-worktree') {
+      // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
+      // instead of cutting a fresh one (same shape as the background dispatch in
+      // orchestrator.ts). Linking the env keeps isolation hygiene pointed at this
+      // checkout.
+      cwd = adoptionLane.workingPath;
+      await db
+        .updateConversation(conversation.id, {
+          cwd,
+          ...(adoptionLane.envId ? { isolation_env_id: adoptionLane.envId } : {}),
+        })
+        .catch((e: unknown) => {
+          getLog().warn(
+            { err: toError(e), conversationId },
+            'orchestrator.worker_cwd_persist_failed'
+          );
+        });
+    } else if (workflow.worktree?.enabled === false) {
+      getLog().info(
+        { workflowName: workflow.name, conversationId, codebaseId: codebase.id },
+        'workflow.worktree_disabled_by_policy'
+      );
+      cwd = codebase.default_cwd;
+    } else {
+      try {
+        const result = await validateAndResolveIsolation(
+          // A checkout-branch adoption must not adopt the conversation's existing env:
+          // the resolver short-circuits on `existingEnvId` before hints are read (R7), so a
+          // stale worktree from an earlier run in this conversation would win over the
+          // adopted branch. Null it out — same shape the `stale_cleaned` retry sees.
+          {
+            ...conversation,
+            codebase_id: codebase.id,
+            ...(adoptionLane?.kind === 'checkout-branch' ? { isolation_env_id: null } : {}),
+          },
+          codebase,
+          platform,
+          conversationId,
+          adoptionLane?.kind === 'checkout-branch'
+            ? {
+                ...isolationHints,
+                // Unique per dispatch: a shared id would key the reuse lookup to an
+                // earlier adoption's worktree and drop the exact branch on later ones.
+                workflowId: randomUUID(),
+                workflowType: 'task',
+                taskBranch: adoptionLane.taskBranch,
+              }
+            : isolationHints,
+          false,
+          userId,
+          setupRun && preparedAiConfiguration
+            ? createRunWorktreeSetupExecutor(setupDeps, setupRun, preparedAiConfiguration.config)
+            : undefined
+        );
+        cwd = result.cwd;
+        if (result.status === 'new') {
+          cutFromCommit = result.cutFromCommit;
+          ownedWorktree = result.ownedWorktree;
+        }
+      } catch (error) {
+        if (error instanceof IsolationBlockedError) {
+          if (setupRun)
+            await requireTerminalStatusWrite(
+              setupDeps.store.failWorkflowRun(setupRun.id, error.message, {
+                exitReason: 'launch_failed',
+              }),
+              { workflowRunId: setupRun.id, site: 'foreground.worktree_setup_failed' }
+            );
+          getLog().warn(
+            {
+              reason: error.reason,
+              conversationId,
+              codebaseId: codebase.id,
+              workflowName: workflow.name,
+            },
+            'isolation_blocked'
+          );
+          return;
+        }
+        throw error;
+      }
+    }
+
+    if (adoptionLane?.kind === 'checkout-branch' && freshCaptured) {
+      freshCaptured = {
+        ...freshCaptured,
+        preparedSource: { ...freshCaptured.preparedSource, origin: cwd },
+      };
+      if (setupRun) await recordSetupRunSource(setupDeps, setupRun, freshCaptured.preparedSource);
+    }
+
+    // Dispatch workflow.
+    // `resumableRun` was resolved above the signature gate (see the comment there):
+    // resume detection runs for ALL platforms, so a prior run for this workflow in a
+    // resumable state (paused — including approved-awaiting-resume, but excluding an
+    // action-required wait unless explicitly resumed — or failed) in this conversation+
+    // codebase is continued rather than dispatched fresh. This ensures chat platforms
+    // (slack, telegram, discord, github) resume after approval gates just like web does.
+    if (resumableRun?.working_path) {
+      const resumableWorkingPath = resumableRun.working_path;
+
+      getLog().info(
+        {
+          workflowName: workflow.name,
+          resumableRunId: resumableRun.id,
+          workingPath: resumableRun.working_path,
+          platformType: platform.getPlatformType(),
+        },
+        'orchestrator.foreground_resume_detected'
+      );
+      // An empty resume is the explicit restart path below; a lost claim never
+      // falls through to a fresh run on another owner's worktree.
+      const deps = createWorkflowDeps();
+      const engine = new InProcessWorkflowEngine(deps);
+      const resumeOwner = await startRunLiveOwner(resumableRun.id);
+      let resumeOwnerClosed = false;
+      try {
+        let admission: WorkflowResumeAdmission;
+        try {
+          const needsResumeNotice =
+            options?.runConfig !== undefined ||
+            Object.keys(options?.inputs ?? {}).length > 0 ||
+            Object.keys(options?.modelOverrides?.tiers ?? {}).length > 0 ||
+            Object.keys(options?.modelOverrides?.aliases ?? {}).length > 0;
+          const nothingToResume =
+            needsResumeNotice && (await inspectResumableRun(deps, resumableRun)) === null;
+          if (nothingToResume) {
+            admission = { accepted: false, reason: 'nothing-to-resume' };
+          } else {
+            if (options?.runConfig) {
+              await platform.sendMessage(
+                conversationId,
+                'This command would resume an existing run, so a new run config cannot be applied. ' +
+                  'Resume without config, or force a fresh run.'
+              );
+              return;
+            }
+            const resumeStateLabel = formatResumableRunState(resumableRun.status);
+            const suppliedModelBindingNames = [
+              ...Object.keys(options?.modelOverrides?.tiers ?? {}),
+              ...Object.keys(options?.modelOverrides?.aliases ?? {}),
+            ].sort();
+            // A resume replays the inputs stamped on its own row; values supplied on THIS
+            // call cannot reach it (the row already exists, so the executor's stamp never
+            // fires). Say so rather than accepting them and quietly running something else.
+            if (options?.inputs && Object.keys(options.inputs).length > 0) {
+              const ignored = Object.keys(options.inputs).sort().join(', ');
+              getLog().info(
+                {
+                  workflowName: workflow.name,
+                  resumableRunId: resumableRun.id,
+                  ignoredKeys: ignored,
+                },
+                'orchestrator.resume_ignored_supplied_inputs'
+              );
+              await platform.sendMessage(
+                conversationId,
+                `▶️ Resuming the ${resumeStateLabel} run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
+                  `keeps the inputs it started with — the values you supplied now (${ignored}) were ` +
+                  'not applied. To run fresh with them instead, abandon that run first ' +
+                  `(\`${spellWorkflowCommand(platform, `abandon ${resumableRun.id}`)}\`) and re-invoke.`
+              );
+            }
+            if (suppliedModelBindingNames.length > 0) {
+              getLog().info(
+                {
+                  workflowName: workflow.name,
+                  resumableRunId: resumableRun.id,
+                  ignoredBindings: suppliedModelBindingNames,
+                },
+                'orchestrator.resume_ignored_model_bindings'
+              );
+              await platform.sendMessage(
+                conversationId,
+                `▶️ Resuming the ${resumeStateLabel} run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
+                  'keeps the model bindings it started with — the bindings you supplied now ' +
+                  `(${suppliedModelBindingNames.join(', ')}) were not applied. To run fresh with them ` +
+                  `instead, abandon that run first (\`${spellWorkflowCommand(platform, `abandon ${resumableRun.id}`)}\`) and re-invoke.`
+              );
+            }
+            admission = await engine.resume({
+              platform,
+              conversationId,
+              cwd: resumableWorkingPath,
+              legacyWorkflow: workflow,
+              userMessage,
+              origin: {
+                conversationId: conversation.id,
+                userId,
+                parentConversationId: conversation.id,
+              },
+              run: resumableRun,
+              options: {
+                codebaseId: codebase.id,
+                source,
+                parseWarnings,
+                baseBranch: codebaseBaseBranch,
+                resolveChildIsolation,
+              },
+            });
+          }
+        } catch (err) {
+          // resumeWorkflowRun is a compare-and-swap: if another surface (web Resume,
+          // a concurrent re-dispatch, the CLI) already claimed this run, it throws
+          // WorkflowNotResumableError. Surface a friendly note instead of leaking the
+          // raw internal string to the generic failure catch, and do NOT fall through
+          // to a fresh run — the other resumer owns the worktree (#1830 I2).
+          if (err instanceof workflowDb.WorkflowNotResumableError) {
+            getLog().info(
+              { workflowName: workflow.name, runId: resumableRun.id, status: err.currentStatus },
+              'orchestrator.resume_lost_race'
+            );
+            await platform.sendMessage(
+              conversationId,
+              `⚠️ **${workflow.name}** is already being resumed (status: ${err.currentStatus}). ` +
+                'No action taken — follow the existing run for progress.' +
+                // The gate deferred a contract violation because this looked like a
+                // continuation; losing the race means it never got surfaced anywhere else.
+                // Say it here rather than let an already-computed, actionable error die.
+                (deferredInputError && options?.inputs && Object.keys(options.inputs).length > 0
+                  ? `\n\nAlso note: ${deferredInputError.message}`
+                  : '')
+            );
+            return;
+          }
+          throw err;
+        }
+        if (admission.accepted) {
+          await admission.settled;
+        } else {
+          await resumeOwner.close();
+          resumeOwnerClosed = true;
+          // Hydration found nothing worth resuming, so this is the ONE continuation path
+          // that creates a fresh run row — which means a contract violation deferred at the
+          // gate is live again and must be surfaced before any AI cost.
+          if (deferredInputError) {
+            await platform.sendMessage(conversationId, deferredInputError.message);
+            return;
+          }
+          // This branch IS a fresh run, even though the outer block entered via the resume
+          // menu (#2686). Capture the source here so the run freezes the bytes it actually
+          // executes against; without this it would inherit the prior run's frozen graph
+          // and let the executor fall back to live command/script lookup, which is exactly
+          // the mixed-vintage shape #2660 exists to remove.
+          const captured = await captureFreshSource(
+            owner,
+            runCwd,
+            workflow,
+            conversationId,
+            platform
+          );
+          if (!captured) return; // capture failed, message already sent
+          workflow = captured.workflow;
+          const freshAiConfiguration = await prepareLaunchAiConfiguration();
+          await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration);
+          await platform.sendMessage(
+            conversationId,
+            `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
+          );
+          // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
+          // executor adopts for us there (see #2690). `captured.preparedSource` proves
+          // the helper has already run `owner.hold`, which is the only thing the wrap
+          // needs to know to reclaim if the rename fails.
+          await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
+            await engine.submit({
+              platform,
+              conversationId,
+              cwd: resumableWorkingPath,
+              workflow,
+              userMessage,
+              origin: {
+                conversationId: conversation.id,
+                userId,
+                parentConversationId: conversation.id,
+              },
+              options: {
+                codebaseId: codebase.id,
+                source,
+                preparedSource: captured.preparedSource,
+                preparedAiConfiguration: freshAiConfiguration,
+                parseWarnings,
+                baseBranch: codebaseBaseBranch,
+                resolveChildIsolation,
+                capturedSourceOwner: owner,
+                // This branch creates a FRESH run row (the prior run had nothing to resume),
+                // so the supplied inputs still need stamping.
+                inputs: resolvedInputs,
+                ...(options?.modelOverrides
+                  ? {
+                      modelOverrideLayer: {
+                        kind: 'raw' as const,
+                        overrides: options.modelOverrides,
+                      },
+                    }
+                  : {}),
+                ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
+              },
+            });
+          });
+        }
+      } finally {
+        if (!resumeOwnerClosed) await resumeOwner.close();
+      }
+    } else {
+      // Fresh foreground execution for interactive workflows and foreground-default adapters.
+      // Reaching this branch means `resumableRun?.working_path` is falsy, which implies
+      // `willContinueExistingRun` was false and step 2 above ran. `freshCaptured` is
+      // invariantly defined here — the capture-flow helper ran before this branch.
+      if (!freshCaptured) {
+        // Should never trigger; the reasoning above is the invariant. If it does, the
+        // dispatch returned a `preparedSource: undefined` to the executor and we are
+        // about to fall into the executor's `source_unprepared_live` branch — the
+        // mixed-vintage shape #2660 exists to remove — so refuse loudly rather than
+        // ship that regression silently.
+        throw new Error(
+          'orchestrator invariant violated: fresh-foreground dispatch reached without a captured source'
+        );
+      }
+      const freshDeps = createWorkflowDeps();
+      const freshEngine = new InProcessWorkflowEngine(freshDeps);
+      const captured = freshCaptured;
+      const submitFresh = async (): Promise<void> => {
+        foregroundSubmitted = true;
+        await freshEngine.submit({
+          platform,
+          conversationId,
+          cwd,
+          workflow,
+          userMessage,
+          origin: {
+            conversationId: conversation.id,
+            parentConversationId: conversation.id,
+            userId,
+          },
+          options: {
+            codebaseId: codebase.id,
+            source,
+            preparedSource: captured.preparedSource,
+            preparedAiConfiguration,
+            preCreatedRun: setupRun,
+            parseWarnings,
+            baseBranch: codebaseBaseBranch,
+            resolveChildIsolation,
+            capturedSourceOwner: owner,
+            inputs: resolvedInputs,
+            ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+            ownedWorktree,
+            ...(options?.adoptRunId
+              ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
+              : options?.supersedesRunId
+                ? {
+                    adoptedFromRunId: options.supersedesRunId,
+                    continuationMode: 'supersede' as const,
+                  }
+                : {}),
+            ...(options?.modelOverrides
               ? {
-                  adoptedFromRunId: options.supersedesRunId,
-                  continuationMode: 'supersede' as const,
+                  modelOverrideLayer: { kind: 'raw' as const, overrides: options.modelOverrides },
                 }
               : {}),
-          ...(options?.modelOverrides
-            ? {
-                modelOverrideLayer: { kind: 'raw' as const, overrides: options.modelOverrides },
-              }
-            : {}),
-          ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
-        },
-      });
-    });
+            ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
+          },
+        });
+      };
+      if (setupOwner) await submitFresh();
+      else await withRunLiveOwner(captured.preparedSource.runId, {}, submitFresh);
+    }
+  } catch (error) {
+    if (setupRun && !foregroundSubmitted && !(error instanceof TerminalStatusWriteError))
+      await requireTerminalStatusWrite(
+        setupDeps.store.failWorkflowRun(setupRun.id, toError(error).message, {
+          exitReason: 'launch_failed',
+        }),
+        { workflowRunId: setupRun.id, site: 'foreground.preparation_failed' }
+      );
+    throw error;
+  } finally {
+    await setupOwner?.close();
   }
 }
 

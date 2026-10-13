@@ -44,6 +44,16 @@ export function serveWebUi<E extends Env, S extends Schema, B extends string>(
       },
     })
   );
+  app.use(
+    '/attention-sw.js',
+    serveStatic({
+      root: webDistPath,
+      path: 'attention-sw.js',
+      onFound: (_path, c) => {
+        c.header('Cache-Control', HTML_CACHE_CONTROL);
+      },
+    })
+  );
   app.use('/favicon.png', serveStatic({ root: webDistPath, path: 'favicon.png' }));
   app.get(
     '*',

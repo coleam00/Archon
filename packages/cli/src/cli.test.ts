@@ -16,7 +16,14 @@ import * as git from '@archon/git';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -155,16 +162,19 @@ if (process.argv[3] === 'metadata') {
       `forge:\n  plugins:\n    - plugin: marker\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}, ${JSON.stringify(marker)}]\n  hosts:\n    forge.example: marker\n`
     );
     try {
-      const db = new SqliteAdapter(join(home, 'archon.db'));
+      // The beforeAll seed process has closed this registry. Copy its schema so
+      // fresh-database DDL does not consume the process-boundary test's budget.
+      copyFileSync(join(jsonEnvelopeHome, 'archon.db'), join(home, 'archon.db'));
+      const db = new Database(join(home, 'archon.db'));
       try {
-        await db.query(
+        db.run(
           "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('conversation', 'cli', 'credential-test')"
         );
-        await db.query(
+        db.run(
           "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ('credential-run', 'conversation', 'credential-test', '')"
         );
       } finally {
-        await db.close();
+        db.close();
       }
       const ref = { repo: { host: 'forge.example', path: 'owner/repo' }, number: 7 };
       const result = spawnSync(

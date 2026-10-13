@@ -1,3 +1,4 @@
+import { WORKTREE_SETUP_EVENT_TYPES } from './schemas/worktree-setup';
 import type { IStateDocumentStore } from './state-document-store';
 import type { IResourceStartStore } from './resource-start-store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -142,6 +143,7 @@ export function foldActiveNodeIds(
 
 export const DURABLE_WORKFLOW_EVENT_TYPES = [
   ...NODE_STATE_EVENT_TYPES,
+  ...WORKTREE_SETUP_EVENT_TYPES,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
 ] as const;
 export type DurableWorkflowEventType = (typeof DURABLE_WORKFLOW_EVENT_TYPES)[number];
@@ -149,6 +151,7 @@ export type DurableNodeEventInput = NodeStateEventInput | SerializedDeferredNode
 
 export const WORKFLOW_EVENT_TYPES = [
   'run_attention_changed',
+  'attention_notice_sent',
   'workflow_started',
   'workflow_completed',
   'workflow_failed',
@@ -349,8 +352,40 @@ export class WorkflowRunPauseConflictError extends Error {
   }
 }
 
+declare const workflowEventCursorBrand: unique symbol;
+/** A durable commit position. Only the issuing store interprets its contents. */
+export type WorkflowEventCursor = string & { readonly [workflowEventCursorBrand]: true };
+
+export class WorkflowEventCursorError extends Error {
+  constructor() {
+    super('Invalid or foreign workflow event cursor');
+    this.name = 'WorkflowEventCursorError';
+  }
+}
+
+export interface WorkflowEventPage {
+  events: readonly { cursor: WorkflowEventCursor; event: WorkflowEventRow }[];
+  /** Advances past scanned rows, including rows excluded by eventTypes. */
+  next: WorkflowEventCursor;
+}
+
+/** Live log across all runs. Retractions do not undo deliveries; run reads own current state. */
+export interface IWorkflowEventFeed {
+  getWorkflowEventHead(): Promise<WorkflowEventCursor>;
+  /** Every committed event after this cursor appears in this page or a later one. */
+  readWorkflowEventsAfter(
+    after: WorkflowEventCursor,
+    options: { limit: number; eventTypes?: readonly WorkflowEventType[] }
+  ): Promise<WorkflowEventPage>;
+}
+
 export interface IWorkflowStore
-  extends IRunTreeStore, IWorkflowRunNodeSessionStore, IResourceStartStore, IStateDocumentStore {
+  extends
+    IRunTreeStore,
+    IWorkflowRunNodeSessionStore,
+    IResourceStartStore,
+    IStateDocumentStore,
+    IWorkflowEventFeed {
   setToolCallAttention(
     runId: string,
     streamId: string,

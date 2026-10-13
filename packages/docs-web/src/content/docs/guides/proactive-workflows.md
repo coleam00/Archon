@@ -39,7 +39,7 @@ Every agent node returns a small typed object. Nodes never parse another node's 
 
 ## Start it when an issue opens
 
-Bind the workflow to GitHub issue openings in your [webhook source configuration](/guides/workflow-triggers/#configure-github-event-starts). GitHub is the maintained event source today; starting runs from signed webhooks and polled events from other systems is tracked in [issue 3975](https://github.com/coleam00/Archon/issues/3975).
+Bind the workflow to GitHub issue openings in your [webhook source configuration](/guides/workflow-triggers/#configure-github-event-starts). The [workflow triggers guide](/guides/workflow-triggers/) also covers signed Standard Webhooks and CLI-driven polling for systems that cannot send webhooks.
 
 This binding maps the issue number from the event and the repository from a literal:
 

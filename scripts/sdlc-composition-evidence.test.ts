@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, beforeAll, afterAll } from 'bun:test';
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -9,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import {
   compareComposition,
   comparisonVerdict,
@@ -33,9 +34,12 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.toString().trim();
 }
 
-function fixture(): { cwd: string; artifacts: string; request: CompositionRequest } {
-  const root = track(mkdtempSync(join(tmpdir(), 'composition-proof-')));
-  const cwd = join(root, 'repo');
+let templateRoot: string;
+let template: { cwd: string; original: string; head: string; base: string };
+
+beforeAll(() => {
+  templateRoot = mkdtempSync(join(tmpdir(), 'composition-template-'));
+  const cwd = join(templateRoot, 'repo');
   mkdirSync(cwd);
   git(cwd, 'init', '-b', 'main');
   git(cwd, 'config', 'user.name', 'Test');
@@ -54,6 +58,18 @@ function fixture(): { cwd: string; artifacts: string; request: CompositionReques
   git(cwd, 'add', '.');
   git(cwd, 'commit', '-qm', 'move value');
   const base = git(cwd, 'rev-parse', 'HEAD');
+  template = { cwd, original, head, base };
+});
+
+afterAll(async () => {
+  if (templateRoot) await removeTempTree(templateRoot);
+});
+
+function fixture(): { cwd: string; artifacts: string; request: CompositionRequest } {
+  const root = track(mkdtempSync(join(tmpdir(), 'composition-proof-')));
+  const cwd = join(root, 'repo');
+  cpSync(template.cwd, cwd, { recursive: true });
+  const { original, head, base } = template;
   const check = join(root, 'gate.js');
   writeFileSync(
     check,

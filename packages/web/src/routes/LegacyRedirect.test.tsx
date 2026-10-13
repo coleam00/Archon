@@ -19,3 +19,7 @@ describe('Old entry URLs', () => {
     ).toBe('/console/builder/my%20workflow?project=p-123');
   });
 });
+
+test('push entry links reach the matching run detail page', () => {
+  expect(legacyDestination('/runs/run-123', '')).toBe('/console/r/run-123');
+});

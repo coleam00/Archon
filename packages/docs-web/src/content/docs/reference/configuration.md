@@ -236,6 +236,10 @@ worktree:
     - plans/                # Local plans not committed to the team repo
   initSubmodules: true  # Optional: default true — auto-detects .gitmodules and runs
                         # `git submodule update --init --recursive`. Set false to opt out.
+  postCreate:          # Optional: sequential setup commands for newly created checkouts
+    - bun install --frozen-lockfile
+    - ./scripts/seed-fixtures.sh
+  postCreateTimeout: 300000  # Optional: timeout in ms for EACH command
   path: .worktrees      # Optional: co-locate worktrees with the repo at
                         # <repoRoot>/.worktrees/<branch> instead of under
                         # ~/.archon/workspaces/<owner>/<repo>/worktrees/.
@@ -258,8 +262,8 @@ defaults:
 #   - archon-review
 #   - archon-plan
 
-# Per-project environment variables for workflow execution (Claude SDK only)
-# Injected into the Claude subprocess env. For secrets, open Environment variables
+# Per-project environment variables for workflow execution.
+# Injected into workflow subprocess environments. For secrets, open Environment variables
 # from the project row in the console project rail.
 # env:
 #   MY_API_KEY: value
@@ -327,7 +331,7 @@ The run records the resolved AI configuration (assistant, provider defaults, tie
 
 Some repo settings are read at launch from fixed places rather than the launch checkout:
 
-- **`worktree.*`** (`baseBranch`, `remote`, `path`, `copyFiles`, `initSubmodules`) is read from the project's registered checkout when Archon creates the worktree.
+- **`worktree.*`** (`baseBranch`, `remote`, `path`, `copyFiles`, `initSubmodules`, `postCreate`, `postCreateTimeout`) is read from the project's registered checkout when Archon creates the worktree.
 - **Workflow-source settings** (`defaults.loadDefaultWorkflows`, `defaults.loadDefaultCommands`, `commands.folder`) are read from the source directory when the run captures its source (`--workflow-source` on the CLI), and are recorded with that capture.
 
 To change the configuration a run uses:
@@ -335,6 +339,20 @@ To change the configuration a run uses:
 - **Edit `.archon/config.yaml` before launching.** Committing is not needed; the launch reads your working tree.
 - **A running run keeps its launch config.** To use new config, start a new run, or use `archon workflow run --supersedes <run-id>` to replace a finished one with fresh config.
 - **Use `--config <file>`** for a one-off layer on a fresh run. It covers the settings listed in [Run-scoped configuration](#run-scoped-configuration).
+
+### Worktree provisioning
+
+`worktree.postCreate` runs sequentially through `bash -c` in the new worktree root, after submodule initialization and `copyFiles`, before the checkout becomes available. It also runs when Archon creates a checkout of an existing branch. Reusing or adopting a checkout already on disk skips provisioning. Commands use ordinary shell expansion; workflow variables and node outputs are unavailable. Put setup logic in a script.
+
+Each command has a timeout of `worktree.postCreateTimeout` milliseconds (default `300000`) and receives empty stdin. POSIX setup has no controlling terminal, so commands cannot prompt through `/dev/tty`. On macOS and Linux each command owns a process group. Archon ends the whole group at the timeout, when the command exits (success included), or when its owning Archon process ends, including Ctrl-C, detached-owner cancel/abandon, server exit, and SIGKILL. Background jobs in that group are ended too. Archon confirms the group is gone before completing setup or reporting failure for rollback. A process that starts its own session or group (`setsid`, a daemon), or a service started outside the group (`docker compose up -d`), escapes this cleanup. Use setup to provision a checkout, not to leave a server running.
+
+On Windows the timeout uses `taskkill /T /F` to end the tree still attached to the command at that moment. Descendants whose parent already exited can be missed, and command exit does not end background jobs. Redirect their output so they do not hold setup's output pipes open. Windows owner-stop paths retain their existing tree/console behavior; there is no POSIX stdin lifeline.
+
+The first nonzero exit, timeout, spawn error, unconfirmed group termination, or audit-write failure aborts creation. The error includes the command and captured output with known credentials redacted. Cleanup removes only a clean checkout owned by this attempt; installer output or other changes may leave it locked. Inspect the reported path before unlocking or removing it. A worktree does not sandbox commands or undo external side effects. Cooperative cancel while a foreground or server owner remains alive does not interrupt setup; cancelling a pending run remains unsupported.
+
+Setup uses the same host subprocess environment as `bash:` nodes: the cleaned host environment plus effective run configuration and managed project variables. Project variables override file-config values; run credential restrictions remain in force. Archon does not automatically load the target repository's `.env`, including one copied by `copyFiles`. A setup script can explicitly source it.
+
+Started, completed, and failed commands appear in the run audit trail and `workflow logs`. Child setup is recorded on the parent run with the spawning node and child index. Manual worktree creation has no workflow run and writes structured application logs instead.
 
 ### Worktree file copying (`worktree.copyFiles`)
 

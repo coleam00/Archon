@@ -224,6 +224,12 @@ const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 // ---------------------------------------------------------------------------
 
 class InMemoryStore implements IWorkflowStore {
+  getWorkflowEventHead: IWorkflowStore['getWorkflowEventHead'] = async () => {
+    throw new Error('Unexpected event feed read');
+  };
+  readWorkflowEventsAfter: IWorkflowStore['readWorkflowEventsAfter'] = async () => {
+    throw new Error('Unexpected event feed read');
+  };
   getStateDocument: IWorkflowStore['getStateDocument'] = async () => {
     throw new Error('Unexpected getStateDocument');
   };
@@ -2469,6 +2475,11 @@ nodes:
 
     const store = new InMemoryStore();
     const deps = makeDeps(store);
+    const loadConfig = deps.loadConfig;
+    deps.loadConfig = async path => ({
+      ...(await loadConfig(path)),
+      envVars: { SETUP_VALUE: 'managed-child-value' },
+    });
     const parent = await discover('parent-iso');
     const childCwd = join(cwd, 'child-worktree-0');
     const { resolver, calls } = makeFakeResolver(childCwd);
@@ -2489,6 +2500,7 @@ nodes:
     expect(calls).toHaveLength(1);
     if (!calls[0]) throw new Error('Expected resolver call');
     expect(calls[0].nodeId).toBe('sub');
+    expect(calls[0].setupEnvironment.envVars).toMatchObject({ SETUP_VALUE: 'managed-child-value' });
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-iso');
     if (!parentRun) throw new Error('Expected parent run');
     expect(calls[0].parentRun.id).toBe(parentRun.id);

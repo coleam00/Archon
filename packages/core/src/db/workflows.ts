@@ -2383,8 +2383,10 @@ export async function listDashboardRuns(
   }
 }
 
-export async function listRunsNeedingAttention(): Promise<DashboardWorkflowRun[]> {
-  const result = await pool.query<JoinedWorkflowRunRow>(
+export async function listRunsNeedingAttention(
+  query: IDatabase['query'] = pool.query
+): Promise<DashboardWorkflowRun[]> {
+  const result = await query<JoinedWorkflowRunRow>(
     `SELECT r.*, CAST(r.origin AS TEXT) AS origin,
             c.platform_type,
             c.platform_conversation_id AS worker_platform_id,
@@ -2646,4 +2648,29 @@ export async function listConversationDetachBlockers(
     [conversationId]
   );
   return result.rows;
+}
+
+export async function listNotifiedTerminalRuns(): Promise<WorkflowRun[]> {
+  const field = (alias: string, key: string): string =>
+    getDatabaseType() === 'postgresql'
+      ? `${alias}.data->>'${key}'`
+      : `json_extract(${alias}.data, '$.${key}')`;
+  const nonBaseline =
+    getDatabaseType() === 'postgresql'
+      ? "COALESCE(e.data->>'baseline', 'false') <> 'true'"
+      : "COALESCE(json_extract(e.data, '$.baseline'), 0) = 0";
+  const result = await pool.query<WorkflowRunRow>(
+    `
+    SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
+    WHERE r.status IN (${TERMINAL_WORKFLOW_STATUSES.map((_, i) => `$${String(i + 1)}`).join(', ')})
+      AND EXISTS (SELECT 1 FROM remote_agent_workflow_events e
+        WHERE e.workflow_run_id = r.id AND e.event_type = 'attention_notice_sent'
+          AND ${nonBaseline} AND ${field('e', 'key')} <> 'terminal'
+          AND NOT EXISTS (SELECT 1 FROM remote_agent_workflow_events t
+            WHERE t.workflow_run_id = r.id AND t.event_type = 'attention_notice_sent'
+              AND ${field('t', 'key')} = 'terminal'
+              AND ${field('t', 'destination')} = ${field('e', 'destination')}))`,
+    [...TERMINAL_WORKFLOW_STATUSES]
+  );
+  return result.rows.map(normalizeWorkflowRun);
 }
