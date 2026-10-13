@@ -91,10 +91,7 @@ export class GitLabAdapter implements IPlatformAdapter {
       getLog().info('gitlab.whitelist_disabled');
     }
 
-    getLog().info(
-      { botMention: this.botMention, gitlabUrl: this.gitlabUrl },
-      'gitlab.adapter_initialized'
-    );
+    getLog().info({ gitlabUrl: this.gitlabUrl }, 'gitlab.adapter_initialized');
   }
 
   // ---------------------------------------------------------------------------
@@ -613,10 +610,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
   async handleWebhook(payload: string, token: string): Promise<void> {
     // 1. Verify token
     if (!verifyWebhookToken(token, this.webhookSecret)) {
-      getLog().error(
-        { tokenPrefix: token?.substring(0, 8) + '...', payloadSize: payload.length },
-        'gitlab.invalid_webhook_token'
-      );
+      getLog().error({ payloadSize: payload.length }, 'gitlab.invalid_webhook_token');
       return;
     }
 
@@ -632,8 +626,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     // 3. Authorization check
     const senderUsername = event.user?.username;
     if (!isGitLabUserAuthorized(senderUsername, this.allowedUsers)) {
-      const maskedUser = senderUsername ? `${senderUsername.slice(0, 3)}***` : 'unknown';
-      getLog().info({ maskedUser }, 'gitlab.unauthorized_webhook');
+      getLog().info({ platform: gitlabPolicy.id }, 'gitlab.unauthorized_webhook');
       return;
     }
 
@@ -662,11 +655,11 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
     // 5. Self-trigger prevention
     if (comment.includes(BOT_RESPONSE_MARKER)) {
-      getLog().debug({ commentAuthor: event.user?.username }, 'gitlab.ignoring_marked_comment');
+      getLog().debug('gitlab.ignoring_marked_comment');
       return;
     }
     if (event.user?.username?.toLowerCase() === this.botMention.toLowerCase()) {
-      getLog().debug({ commentAuthor: event.user.username }, 'gitlab.ignoring_own_comment');
+      getLog().debug('gitlab.ignoring_own_comment');
       return;
     }
 
@@ -688,7 +681,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         archonUserId = user.id;
       } catch (err) {
         getLog().warn(
-          { err: toError(err), gitlabUsername: senderUsername },
+          { err: toError(err), platform: gitlabPolicy.id },
           'gitlab.user_resolve_failed'
         );
       }
@@ -770,7 +763,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
 
       if (isSlashCommand) {
         finalMessage = strippedComment.split('\n')[0].trim();
-        getLog().debug({ command: finalMessage }, 'gitlab.slash_command_processing');
+        getLog().debug('gitlab.slash_command_processing');
 
         if (isMR && mergeRequest) {
           contextToAppend = `GitLab Merge Request !${String(mergeRequest.iid)}: "${mergeRequest.title}"\nUse 'glab mr view ${String(mergeRequest.iid)}' for full details if needed.`;

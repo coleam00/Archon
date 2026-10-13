@@ -43,9 +43,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   WHEN_ATOM_PATTERN,
-  parseWhenAtom,
-  splitOutsideQuotes,
-  whenAtoms,
+  parseWhenExpression,
   type WhenAtom,
 } from '../packages/workflows/src/when-atom';
 import { parseWorkflow } from '../packages/workflows/src/loader';
@@ -205,11 +203,9 @@ nodes:
  * identical, so no `.toString()` trick applies — is pinned only for the strings
  * enumerated below, plus their grouping.
  *
- * The ordering itself — `||` outer, `&&` inner — is written here rather than read
- * from the engine, so this pins the BUILDER against that contract, not the engine
- * against it. An engine-side precedence change is caught instead by
- * `condition-evaluator.test.ts` ("&& has higher precedence than ||"), behaviourally,
- * on a truth table.
+ * The engine side is `parseWhenExpression`, the entry point the loader and the
+ * evaluator both use, so the comparison covers every rule they apply, including the
+ * ones that run after the regex matches (the numeric-RHS rule is one).
  */
 describe('when-atom parity: the builder parses what the engine parses', () => {
   test("the builder's atom pattern is byte-identical to the engine's", () => {
@@ -303,6 +299,21 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     '$a.output ==',
     '$1bad.output == 1',
     "$a.output == 'X' &&",
+    // Grouping parentheses, which neither side supports.
+    "($a.output == 'X')",
+    "$a.output == 'X' && ($b.output == 'Y' || $c.output == 'Z')",
+    "$a.output == '(X)'",
+    // A numeric operator needs a numeric RHS; both sides use the `parseFloat` rule, so
+    // a quoted number and a numeric prefix both pass, while text, '' and booleans fail.
+    '$n.output > 80',
+    "$n.output >= '-0.5'",
+    "$n.output < '80abc'",
+    "$n.output > 'high'",
+    "$n.output > ''",
+    '$n.output <= true',
+    "$INPUTS.limit >= 'many'",
+    "$a.output == 'X' || $n.output < 'low'",
+    "$n.output == 'high'",
   ];
 
   /**
@@ -318,15 +329,16 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
       : `$${atom.ref.nodeId}.output.${atom.ref.field}`;
   }
 
-  /** `null` means "rejected"; an array means "accepted, and here is what it means". */
+  /**
+   * `null` means "rejected"; an array means "accepted, and here is what it means".
+   * Uses `parseWhenExpression`, the same entry point the loader and the evaluator use.
+   */
   function engineParse(expr: string): string[] | null {
-    const atoms = whenAtoms(expr).map(parseWhenAtom);
-    if (atoms.some(atom => atom === null)) return null;
-    return atoms.map(atom => {
-      // Narrowed by the `some` guard above; `flatMap` would lose that.
-      if (atom === null) throw new Error('unreachable');
-      return `${engineRef(atom)} ${atom.operator} ${JSON.stringify(atom.expected)}`;
-    });
+    return (
+      parseWhenExpression(expr)
+        ?.flat()
+        .map(atom => `${engineRef(atom)} ${atom.operator} ${JSON.stringify(atom.expected)}`) ?? null
+    );
   }
 
   function webParse(expr: string): string[] | null {
@@ -348,19 +360,14 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
   /**
    * The AND/OR shape as a list of group sizes — `[2, 1]` for `a && b || c`.
    *
-   * The engine has no grouped parse to compare against (`whenAtoms` flattens on
-   * purpose, because its callers want every atom, not the boolean structure), so
-   * the expected shape is derived from the engine's OWN exported splitter. That
-   * keeps this a cross-package comparison rather than the web checking itself.
+   * Both shapes come from each side's grouped parse, so a one-sided precedence swap
+   * shows up here even though the flattened atom lists agree.
    *
    * `null` for a rejected expression, so the two sides stay comparable on the
    * malformed entries as well.
    */
   function engineGroupShape(expr: string): number[] | null {
-    if (engineParse(expr) === null) return null;
-    return splitOutsideQuotes(expr.trim(), '||').map(
-      clause => splitOutsideQuotes(clause, '&&').length
-    );
+    return parseWhenExpression(expr)?.map(group => group.length) ?? null;
   }
 
   function webGroupShape(expr: string): number[] | null {

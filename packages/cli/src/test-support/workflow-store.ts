@@ -1,3 +1,4 @@
+import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { randomUUID } from 'node:crypto';
 import {
@@ -267,6 +268,7 @@ export function createInMemoryWorkflowStore(
     structuredClone(runs.get(id) ?? null)
   );
   const store: InMemoryWorkflowStore = {
+    ...createInMemoryStateDocumentStore(),
     admitResourceStart: serialize(admission.admitResourceStart.bind(admission)),
     drainResourceStarts: serialize(admission.drainResourceStarts.bind(admission)),
     acceptStartReceipt: serialize(admission.acceptStartReceipt.bind(admission)),

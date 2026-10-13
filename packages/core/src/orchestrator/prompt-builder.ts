@@ -28,7 +28,7 @@ type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description'> & {
  */
 export function formatProjectSection(
   codebase: Codebase,
-  assistant: string | null = codebase.ai_assistant_type
+  assistant: string | null | undefined = codebase.ai_assistant_type
 ): string {
   let section = `### ${codebase.name}\n`;
   if (codebase.repository_url) {

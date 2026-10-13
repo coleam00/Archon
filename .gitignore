@@ -50,7 +50,7 @@ e2e-screenshots/
 .archon/logs/
 .archon/artifacts/
 
-# Cross-run workflow state (e.g. issue-triage memory)
+# Legacy repo-local workflow state, replaced by $STATE_DIR
 .archon/state/
 
 # Personal per-run steering configs (#2482 sparse run config).

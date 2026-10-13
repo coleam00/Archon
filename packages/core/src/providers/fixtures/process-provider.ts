@@ -9,11 +9,16 @@ import type {
   ProviderDiagnostics,
   ProviderModelList,
 } from '@archon/provider-contract';
-import { descriptor, chunks } from './process-provider-data';
+import { descriptor as fixtureDescriptor, chunks } from './process-provider-data';
 
 const mode = process.argv[2];
+const descriptor =
+  mode === 'pi-gated'
+    ? (await import('@archon/providers/pi/descriptor')).descriptor
+    : fixtureDescriptor;
 if (mode === 'mismatch') descriptor.version = '2';
-if (mode === 'record-pid') writeFileSync(process.argv[3], String(process.pid));
+if (mode === 'record-pid' || mode === 'hung-models')
+  writeFileSync(process.argv[3], String(process.pid));
 async function closeOutput(): Promise<never> {
   writeFileSync(process.argv[3], String(process.pid));
   // On Windows closeSync(1) leaves the standard output handle open, so the host would
@@ -55,6 +60,10 @@ await serveProvider(
         };
       },
       async listModels(): Promise<ProviderModelList> {
+        if (mode === 'hung-models') {
+          setInterval(() => undefined, 1000);
+          return await new Promise<never>(() => undefined);
+        }
         if (mode === 'live-eof') return await closeOutput();
         return {
           models: [{ id: 'fixture/model', label: 'Fixture model' }, { id: 'fixture/other' }],
@@ -85,6 +94,17 @@ await serveProvider(
         return request.model ?? 'openai/native-model';
       },
       async *sendQuery(prompt, _cwd, resume, options): AsyncGenerator<ProviderChunk> {
+        if (mode === 'pi-gated') {
+          writeFileSync(`${process.argv[3]}.${prompt}.pid`, String(process.pid));
+          yield { type: 'agent_message_chunk', text: 'started' };
+          while (!existsSync(`${process.argv[3]}.${prompt}.release`)) {
+            options?.abortSignal?.throwIfAborted();
+            await Bun.sleep(5);
+          }
+          yield { type: 'result' };
+          yield { type: 'settled' };
+          return;
+        }
         if (mode === 'live-eof') return await closeOutput();
         if (mode === 'resume') {
           yield { type: 'result', sessionId: resume };

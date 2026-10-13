@@ -54,6 +54,7 @@ for (const [mode, connection] of [
           ARCHON_HOME: join(root, 'home'),
           DATABASE_URL: '',
           ARCHON_USER_ID: 'author-operator',
+          DEFAULT_AI_ASSISTANT: 'claude',
           ARCHON_TELEMETRY_DISABLED: '1',
           GITHUB_APP_ID: connection === 'disabled' ? '' : '123',
           GITHUB_APP_PRIVATE_KEY: connection === 'disabled' ? '' : privateKey,

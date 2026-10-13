@@ -173,6 +173,9 @@ describe('GiteaAdapter', () => {
   let originalFetch: typeof fetch;
 
   beforeEach(() => {
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.warn.mockClear();
     mockGetOrCreateConversation.mockClear();
     mockCloneRepository.mockClear();
     mockSyncRepository.mockClear();
@@ -192,6 +195,13 @@ describe('GiteaAdapter', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+  });
+
+  test('initialization logs only operational configuration', () => {
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { baseUrl: 'https://gitea.example.com' },
+      'adapter_initialized'
+    );
   });
 
   describe('streaming mode', () => {
@@ -406,6 +416,7 @@ describe('GiteaAdapter', () => {
 
       await adapter.handleWebhook(payload, 'mock-signature');
 
+      expect(mockLogger.debug).toHaveBeenCalledWith('ignoring_own_comment');
       // Bot's own comments should be silently dropped - no lock acquired, no processing
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });
@@ -444,6 +455,7 @@ describe('GiteaAdapter', () => {
 
       await adapter.handleWebhook(payload, 'mock-signature');
 
+      expect(mockLogger.debug).toHaveBeenCalledWith('ignoring_marked_comment');
       // Marked comments should be silently dropped
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });
@@ -1139,67 +1151,73 @@ describe('GiteaAdapter', () => {
       }
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ giteaLogin: 'commenter' }),
+        { err: expect.objectContaining({ message: 'DB connection failed' }), platform: 'gitea' },
         'gitea.user_resolve_failed'
       );
     });
 
-    test('passes resolved archonUserId to handleMessage', async () => {
-      // Seed DB mocks so handleWebhook reaches handleMessage
-      mockGetOrCreateConversation.mockImplementation(async () => ({
-        id: 'conv-test-uuid',
-        codebase_id: 'codebase-test-uuid',
-        cwd: '/tmp/project',
-        platform_type: 'gitea',
-        platform_conversation_id: 'testuser/testrepo#42',
-      }));
-      mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
-        id: 'codebase-test-uuid',
-        repository_url: 'https://gitea.example.com/testuser/testrepo',
-        default_cwd: '/tmp/test-workspaces/testuser/testrepo/source',
-        name: 'testrepo',
-      }));
-
-      const adapter = createWebhookAdapter();
-
-      const payload = JSON.stringify({
-        action: 'created',
-        issue: {
-          number: 42,
-          title: 'Test Issue',
-          body: 'Description',
-          user: { login: 'user123' },
-          labels: [],
-          state: 'open',
-        },
-        comment: {
-          body: '@archon fix this',
-          user: { login: 'commenter' },
-        },
-        repository: {
-          owner: { login: 'testuser' },
+    test.each(['fix this', '/workflow run @alice'])(
+      'dispatches %s with internal identity and private logs',
+      async message => {
+        // Seed DB mocks so handleWebhook reaches handleMessage
+        mockGetOrCreateConversation.mockImplementation(async () => ({
+          id: 'conv-test-uuid',
+          codebase_id: 'codebase-test-uuid',
+          cwd: '/tmp/project',
+          platform_type: 'gitea',
+          platform_conversation_id: 'testuser/testrepo#42',
+        }));
+        mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
+          id: 'codebase-test-uuid',
+          repository_url: 'https://gitea.example.com/testuser/testrepo',
+          default_cwd: '/tmp/test-workspaces/testuser/testrepo/source',
           name: 'testrepo',
-          full_name: 'testuser/testrepo',
-          html_url: 'https://gitea.example.com/testuser/testrepo',
-          default_branch: 'main',
-        },
-        sender: { login: 'senderuser' },
-      });
+        }));
 
-      await adapter.handleWebhook(payload, 'mock-signature');
+        const adapter = createWebhookAdapter();
 
-      expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
-        'gitea',
-        expect.any(String),
-        'codebase-test-uuid'
-      );
-      expect(mockHandleMessage).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.objectContaining({ actor: { kind: 'user', userId: 'user-test-uuid' } })
-      );
-    });
+        const payload = JSON.stringify({
+          action: 'created',
+          issue: {
+            number: 42,
+            title: 'Test Issue',
+            body: 'Description',
+            user: { login: 'user123' },
+            labels: [],
+            state: 'open',
+          },
+          comment: {
+            body: `@archon ${message}`,
+            user: { login: 'commenter' },
+          },
+          repository: {
+            owner: { login: 'testuser' },
+            name: 'testrepo',
+            full_name: 'testuser/testrepo',
+            html_url: 'https://gitea.example.com/testuser/testrepo',
+            default_branch: 'main',
+          },
+          sender: { login: 'senderuser' },
+        });
+
+        await adapter.handleWebhook(payload, 'mock-signature');
+
+        if (message.startsWith('/'))
+          expect(mockLogger.debug).toHaveBeenCalledWith('slash_command_processing');
+
+        expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
+          'gitea',
+          expect.any(String),
+          'codebase-test-uuid'
+        );
+        expect(mockHandleMessage).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ actor: { kind: 'user', userId: 'user-test-uuid' } })
+        );
+      }
+    );
 
     test('skips user resolution when both commentAuthor and sender are missing', async () => {
       // Seed DB mocks so handleWebhook reaches handleMessage

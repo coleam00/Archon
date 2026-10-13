@@ -48,6 +48,7 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
     conversationId: null as string | null,
     conversationPlatformId: null as string | null,
     workerPlatformId: null as string | null,
+    attention: null,
     outcome: null,
     terminalRecord: null,
     workingPath: null,
@@ -79,6 +80,13 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
     {
       ...base,
       id: 'demo-paused-1',
+      attention: {
+        kind: 'awaiting_response',
+        runId: 'demo-paused-1',
+        respondTo: { runId: 'demo-paused-1', nodeId: 'foundation-gate' },
+        message: 'Demo gate',
+        occurrence: 'demo',
+      },
       workflow: 'prd-intake',
       origin: 'web',
       status: 'paused',
@@ -96,6 +104,13 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
     {
       ...base,
       id: 'demo-paused-2',
+      attention: {
+        kind: 'awaiting_response',
+        runId: 'demo-paused-2',
+        respondTo: { runId: 'demo-paused-2', nodeId: 'review/approve' },
+        message: 'Demo gate',
+        occurrence: 'demo',
+      },
       workflow: 'review',
       origin: 'slack',
       status: 'paused',
@@ -198,7 +213,7 @@ interface RunsFeedProps {
   showProject: boolean;
   draftProject: { id: string; path: string } | null;
   selectedRunId: string | null;
-  /** Run ids whose approval is currently shown in the pending-input banner. */
+  /** Run ids whose actions are currently shown in the pending-input banner. */
   promotedRunIds: ReadonlySet<string>;
 }
 
@@ -267,6 +282,11 @@ function RunsFeed({
   );
 }
 
+function attentionKey(run: Run): string {
+  const attention = run.attention;
+  return `${run.id}:${attention?.kind === 'awaiting_response' || attention?.kind === 'action_required' ? attention.occurrence : ''}`;
+}
+
 export function RunsPage(): ReactElement {
   const { projectId } = useParams<{ projectId?: string }>();
   const navigate = useNavigate();
@@ -311,13 +331,20 @@ export function RunsPage(): ReactElement {
   const counts = demoMode ? mergeCounts(realCounts, demoCounts) : realCounts;
   const runs = useMemo(() => filterRuns(allRuns, filter, query), [allRuns, filter, query]);
 
-  // Runs paused on a human gate (approval node / agent question). Derived from
-  // the unfiltered set on purpose: a run that needs you should surface even
-  // while the feed is filtered to `completed` or a search is active.
+  const { data: attentionRuns, error: attentionError } = useEntity<Run[]>(
+    K.runsAttention,
+    skill.listRunsNeedingAttention
+  );
   const pendingRuns = useMemo(
     () =>
-      allRuns.filter(r => r.status === 'paused' && r.approval !== null && r.approval !== undefined),
-    [allRuns]
+      [
+        ...demoRuns.filter(
+          run =>
+            run.attention?.kind === 'awaiting_response' || run.attention?.kind === 'action_required'
+        ),
+        ...(attentionRuns ?? []),
+      ].filter(run => scope === 'all' || run.projectId === scope),
+    [demoRuns, attentionRuns, scope]
   );
 
   // Drop dismissed ids that are no longer pending so a run that pauses again
@@ -326,7 +353,7 @@ export function RunsPage(): ReactElement {
   useEffect(() => {
     setDismissed(prev => {
       if (prev.size === 0) return prev;
-      const pendingIds = new Set(pendingRuns.map(r => r.id));
+      const pendingIds = new Set(pendingRuns.map(r => attentionKey(r)));
       let changed = false;
       const next = new Set<string>();
       for (const id of prev) {
@@ -338,7 +365,7 @@ export function RunsPage(): ReactElement {
   }, [pendingRuns]);
 
   const visiblePending = useMemo(
-    () => pendingRuns.filter(r => !dismissed.has(r.id)),
+    () => pendingRuns.filter(r => !dismissed.has(attentionKey(r))),
     [pendingRuns, dismissed]
   );
   const promotedRunIds = useMemo(() => new Set(visiblePending.map(r => r.id)), [visiblePending]);
@@ -531,13 +558,19 @@ export function RunsPage(): ReactElement {
         <FilterChips value={filter} onChange={setFilter} counts={counts} />
       </div>
 
+      {attentionError !== undefined ? (
+        <p role="alert" className="px-6 py-3 text-error">
+          Could not load runs needing your input: {attentionError.message}
+        </p>
+      ) : null}
       <PendingInputBanner
         runs={visiblePending}
         showProject={scope === 'all'}
         onDismiss={runId => {
           setDismissed(prev => {
             const next = new Set(prev);
-            next.add(runId);
+            const run = pendingRuns.find(run => run.id === runId);
+            if (run !== undefined) next.add(attentionKey(run));
             return next;
           });
         }}

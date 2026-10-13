@@ -46,7 +46,7 @@ export const updateTiersBodySchema = z
 export const safeConfigSchema = z
   .object({
     botName: z.string(),
-    assistant: z.string().min(1),
+    assistant: z.string().min(1).optional(),
     assistants: z.record(z.string(), providerDefaultsSchema),
     streaming: platformStreamingSchema,
     concurrency: z.object({ maxConversations: z.number() }),

@@ -19,10 +19,12 @@ export function createRunAiConfigurationSnapshot(
   baseAiProfile: ResolvedAiProfile,
   modelOverrides: ResolvedRunModelOverrides
 ): RunAiConfigurationSnapshot {
+  // The snapshot is persisted as JSON run metadata, so an unset default
+  // assistant is omitted rather than recorded as `undefined`.
   return structuredClone(
     runAiConfigurationSnapshotSchema.parse({
       version: 1,
-      assistant: config.assistant,
+      ...(config.assistant !== undefined ? { assistant: config.assistant } : {}),
       assistants: Object.fromEntries(
         providers
           .list()

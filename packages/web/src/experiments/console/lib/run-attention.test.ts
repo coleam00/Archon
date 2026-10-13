@@ -14,6 +14,7 @@ function run(id: string, over: Partial<Run> = {}): Run {
     workflow: 'implement',
     origin: 'cli',
     status: 'running',
+    attention: null,
     outcome: null,
     terminalRecord: null,
     startedAt: '2026-10-01T10:00:00.000Z',
@@ -23,6 +24,27 @@ function run(id: string, over: Partial<Run> = {}): Run {
     activeNodes: [],
     ...over,
   };
+}
+
+function gateAttention(
+  runId: string,
+  occurrence = 'pause-one',
+  nodeId = 'review'
+): Run['attention'] {
+  return {
+    kind: 'awaiting_response',
+    runId,
+    respondTo: { runId, nodeId },
+    message: 'Approve?',
+    occurrence,
+  };
+}
+
+function terminalRun(
+  id: string,
+  status: Extract<NonNullable<Run['attention']>, { kind: 'terminal' }>['status']
+): Run {
+  return run(id, { status, attention: { kind: 'terminal', runId: id, status, at: null } });
 }
 
 const gate: Run['approval'] = {
@@ -105,8 +127,12 @@ function harness(
 describe('watchRunAttention', () => {
   test('runs already waiting or finished at load never alert, even when their events replay', async () => {
     const h = harness([
-      run('paused', { status: 'paused', approval: gate }),
-      run('done', { status: 'completed' }),
+      run('paused', {
+        status: 'paused',
+        approval: gate,
+        attention: gateAttention('paused'),
+      }),
+      terminalRun('done', 'completed'),
     ]);
     h.watcher.runChanged('paused');
     h.watcher.runChanged('done');
@@ -125,11 +151,18 @@ describe('watchRunAttention', () => {
     expect(h.alerted).toEqual([]);
 
     // The seed is read after the pause, so the pause is already part of the load state.
-    h.current.set('r1', run('r1', { status: 'paused', approval: gate }));
+    h.current.set(
+      'r1',
+      run('r1', {
+        status: 'paused',
+        approval: gate,
+        attention: gateAttention('r1'),
+      })
+    );
     await h.seed();
     expect(h.alerted).toEqual([]);
 
-    await h.change(run('r1', { status: 'completed' }));
+    await h.change(terminalRun('r1', 'completed'));
     expect(h.alerted).toEqual(['r1:completed']);
   });
 
@@ -137,7 +170,13 @@ describe('watchRunAttention', () => {
     const h = harness([run('r1')]);
     await h.seed();
 
-    await h.change(run('r1', { status: 'paused', approval: gate }));
+    await h.change(
+      run('r1', {
+        status: 'paused',
+        approval: gate,
+        attention: gateAttention('r1'),
+      })
+    );
     h.watcher.runChanged('r1');
     h.watcher.runChanged('r1');
     await flush();
@@ -149,10 +188,22 @@ describe('watchRunAttention', () => {
     const h = harness([run('r1')]);
     await h.seed();
 
-    await h.change(run('r1', { status: 'paused', approval: gate }));
+    await h.change(
+      run('r1', {
+        status: 'paused',
+        approval: gate,
+        attention: gateAttention('r1'),
+      })
+    );
     await h.change(run('r1', { status: 'paused', approval: null, gateResolved: 'approved' }));
     await h.change(run('r1'));
-    await h.change(run('r1', { status: 'paused', approval: { ...gate, nodeId: 'ship' } }));
+    await h.change(
+      run('r1', {
+        status: 'paused',
+        approval: { ...gate, nodeId: 'ship' },
+        attention: gateAttention('r1', 'pause-two', 'ship'),
+      })
+    );
 
     expect(h.alerted).toEqual(['r1:paused', 'r1:paused']);
   });
@@ -161,20 +212,20 @@ describe('watchRunAttention', () => {
     const h = harness([run('r1'), run('r2')]);
     await h.seed();
 
-    await h.change(run('r1', { status: 'failed' }));
-    await h.change(run('r1', { status: 'failed' }));
-    await h.change(run('r2', { status: 'cancelled' }));
-    await h.change(run('new', { status: 'completed' }));
+    await h.change(terminalRun('r1', 'failed'));
+    await h.change(terminalRun('r1', 'failed'));
+    await h.change(terminalRun('r2', 'cancelled'));
+    await h.change(terminalRun('new', 'completed'));
 
     expect(h.alerted).toEqual(['r1:failed', 'r2:cancelled', 'new:completed']);
   });
 
   test('a run resumed after failing alerts again when it finishes', async () => {
-    const h = harness([run('r1', { status: 'failed' })]);
+    const h = harness([terminalRun('r1', 'failed')]);
     await h.seed();
 
     await h.change(run('r1'));
-    await h.change(run('r1', { status: 'completed' }));
+    await h.change(terminalRun('r1', 'completed'));
 
     expect(h.alerted).toEqual(['r1:completed']);
   });
@@ -209,6 +260,13 @@ describe('watchRunAttention', () => {
     await h.change(
       run('action', {
         status: 'paused',
+        attention: {
+          kind: 'action_required',
+          runId: 'action',
+          nodeId: 'w',
+          message: 'Rotate key',
+          occurrence: 'wait:2026-10-01T10:00:00.000Z',
+        },
         wait: {
           kind: 'attention',
           nodeId: 'w',
@@ -226,27 +284,24 @@ describe('watchRunAttention', () => {
     await h.seed();
 
     h.watcher.runChanged('missing');
-    await h.change(run('r1', { status: 'completed' }));
+    await h.change(terminalRun('r1', 'completed'));
 
     expect(h.errors).toEqual(['run missing not found']);
     expect(h.alerted).toEqual(['r1:completed']);
   });
 
   test('seeds every run at load, across as many pages as the server returns', async () => {
-    const h = harness(
-      [run('c'), run('a', { status: 'completed' }), run('b', { status: 'failed' })],
-      2
-    );
+    const h = harness([run('c'), terminalRun('a', 'completed'), terminalRun('b', 'failed')], 2);
     await h.seed();
 
     h.watcher.runChanged('b');
-    await h.change(run('c', { status: 'completed' }));
+    await h.change(terminalRun('c', 'completed'));
 
     expect(h.alerted).toEqual(['c:completed']);
   });
 
   test('a failed seed is retried on the next change, and load-time runs still stay silent', async () => {
-    const h = harness([run('done', { status: 'completed' }), run('r1')]);
+    const h = harness([terminalRun('done', 'completed'), run('r1')]);
     h.failing.on = true;
     await h.seed();
     expect(h.errors).toEqual(['listing failed']);
@@ -254,7 +309,13 @@ describe('watchRunAttention', () => {
     h.failing.on = false;
     h.watcher.runChanged('done');
     await flush();
-    await h.change(run('r1', { status: 'paused', approval: gate }));
+    await h.change(
+      run('r1', {
+        status: 'paused',
+        approval: gate,
+        attention: gateAttention('r1'),
+      })
+    );
 
     expect(h.alerted).toEqual(['r1:paused']);
     expect(h.recovered).toBe(1);
@@ -265,7 +326,7 @@ describe('watchRunAttention', () => {
     await h.seed();
 
     h.failing.on = true;
-    await h.change(run('r1', { status: 'completed' }));
+    await h.change(terminalRun('r1', 'completed'));
     expect(h.errors).toEqual(['reading r1 failed']);
     expect(h.alerted).toEqual([]);
 
@@ -281,7 +342,7 @@ describe('watchRunAttention', () => {
     await h.seed();
     h.watcher.stop();
 
-    await h.change(run('r1', { status: 'completed' }));
+    await h.change(terminalRun('r1', 'completed'));
 
     expect(h.alerted).toEqual([]);
   });
@@ -300,19 +361,92 @@ test('running tool advisories alert only on new occurrence identities', async ()
     raisedAt: '2026-10-01T00:30:00Z',
     thresholdMs: 1800000,
   };
-  const h = harness([run('live', { toolCallAttention: [call] })]);
+  const h = harness([
+    run('live', {
+      attention: {
+        kind: 'stalled_tool_calls',
+        runId: 'live',
+        status: 'running',
+        calls: [{ ...call, elapsedMs: 1, stalledForMs: 1 }],
+      },
+    }),
+  ]);
   await h.seed();
-  await h.change(run('live', { toolCallAttention: [call] }));
+  await h.change(
+    run('live', {
+      attention: {
+        kind: 'stalled_tool_calls',
+        runId: 'live',
+        status: 'running',
+        calls: [{ ...call, elapsedMs: 1, stalledForMs: 1 }],
+      },
+    })
+  );
   expect(h.alerted).toEqual([]);
   const second = { ...call, toolCallId: 'second' };
-  await h.change(run('live', { toolCallAttention: [call, second] }));
+  await h.change(
+    run('live', {
+      attention: {
+        kind: 'stalled_tool_calls',
+        runId: 'live',
+        status: 'running',
+        calls: [call, second].map(call => ({ ...call, elapsedMs: 1, stalledForMs: 1 })),
+      },
+    })
+  );
   expect(h.alerted).toEqual(['live:running']);
-  await h.change(run('live', { toolCallAttention: [second] }));
-  await h.change(run('live', { toolCallAttention: [] }));
+  await h.change(
+    run('live', {
+      attention: {
+        kind: 'stalled_tool_calls',
+        runId: 'live',
+        status: 'running',
+        calls: [{ ...second, elapsedMs: 1, stalledForMs: 1 }],
+      },
+    })
+  );
+  await h.change(run('live', { attention: null }));
   expect(h.alerted).toHaveLength(1);
   await h.change(
-    run('live', { toolCallAttention: [{ ...call, raisedAt: '2026-10-01T01:00:00Z' }] })
+    run('live', {
+      attention: {
+        kind: 'stalled_tool_calls',
+        runId: 'live',
+        status: 'running',
+        calls: [{ ...call, raisedAt: '2026-10-01T01:00:00Z', elapsedMs: 1, stalledForMs: 1 }],
+      },
+    })
   );
   expect(h.alerted).toHaveLength(2);
+  h.watcher.stop();
+});
+
+test('a new occurrence at the same gate alerts without an intermediate running cue', async () => {
+  const attention = {
+    kind: 'awaiting_response' as const,
+    runId: 'r1',
+    respondTo: { runId: 'r1', nodeId: 'review' },
+    message: 'Approve?',
+    occurrence: 'first',
+  };
+  const h = harness([run('r1', { status: 'paused', attention })]);
+  await h.seed();
+  await h.change(run('r1', { status: 'paused', attention }));
+  expect(h.alerted).toEqual([]);
+  await h.change(
+    run('r1', { status: 'paused', attention: { ...attention, occurrence: 'second' } })
+  );
+  await h.change(
+    run('r1', { status: 'paused', attention: { ...attention, occurrence: 'second' } })
+  );
+  expect(h.alerted).toEqual(['r1:paused']);
+  h.watcher.stop();
+});
+
+test('metadata cannot manufacture attention when the server says none is owed', async () => {
+  const h = harness([run('r1')]);
+  await h.seed();
+  await h.change(run('r1', { status: 'paused', approval: gate, attention: null }));
+  expect(h.alerted).toEqual([]);
   h.watcher.stop();
 });

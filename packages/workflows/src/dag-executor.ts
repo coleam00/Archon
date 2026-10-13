@@ -1,3 +1,4 @@
+import { gateReworkNode } from './gate-rework';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
 import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
@@ -116,6 +117,12 @@ import type {
   ScheduledWorkflowResume,
 } from './schemas';
 import {
+  bodySessionCursorsSchema,
+  bodySessionCursorAncestrySchema,
+  type BodySessionCursorAncestry,
+  type SessionCursor,
+} from './schemas';
+import {
   isExecNode,
   isAgentNode,
   isLoopGroupNode,
@@ -192,7 +199,11 @@ import {
   type LoopWithCompiledCommand,
   type IncludeCommandContent,
 } from './compiled-command';
-import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
+import {
+  assistantModelDefaults,
+  resolveNodeModel,
+  resolveNodeModelScope,
+} from './node-model-resolution';
 import {
   logNodeComplete,
   logExecOutput,
@@ -835,17 +846,8 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
   };
 }
 
-/**
- * Sequential-session threading cursor. Tagged with the resolved provider that produced
- * the session so a downstream sequential node on a DIFFERENT provider starts fresh
- * instead of attempting an impossible cross-provider resume (#1992) — a foreign session
- * id hard-fails Claude ("No conversation found with session ID") and cold-falls-back
- * on Codex.
- */
-interface SequentialSessionCursor {
-  sessionId: string;
-  provider: string;
-}
+type SequentialSessionCursor = SessionCursor;
+type SessionResumeIntent = 'ordinary' | 'source-fork' | 'owner-continuation';
 
 /** Makes a provider session durable before its node becomes authoritatively complete. */
 type SessionCheckpoint = (sessionId: string) => Promise<void>;
@@ -1626,7 +1628,7 @@ export function substituteLoopPrevRefs(
 async function resolveNodeProviderAndModel(
   providers: ProviderRegistry,
   node: DagNode,
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   workflowModel: string | undefined,
   config: WorkflowConfig,
   platform: IWorkflowPlatform,
@@ -1705,16 +1707,7 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  const descriptor = providers.get(provider);
-  if (!descriptor) {
-    throw new Error(
-      `Node '${node.id}': unknown provider '${provider}'. ` +
-        `Registered: ${providers
-          .list()
-          .map(p => p.id)
-          .join(', ')}`
-    );
-  }
+  const descriptor = requireProvider(providers, provider);
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = descriptor.capabilities;
@@ -2119,7 +2112,8 @@ async function executeNodeInternal(
   stepNamePrefix = '',
   iteration?: number,
   checkpointSession?: SessionCheckpoint,
-  typedArtifactsFile?: string
+  typedArtifactsFile?: string,
+  resumeIntent: SessionResumeIntent = 'ordinary'
 ): Promise<NodeExecutionResult> {
   const {
     deps,
@@ -2172,7 +2166,7 @@ async function executeNodeInternal(
       ...(namedResumeSourceNodeId !== undefined
         ? {
             sessionSourceNodeId: namedResumeSourceNodeId,
-            sessionForkRequested: true,
+            sessionForkRequested: resumeIntent !== 'owner-continuation',
           }
         : {}),
     },
@@ -2318,13 +2312,15 @@ async function executeNodeInternal(
 
   // Create per-node abort controller for idle timeout cleanup
   const nodeAbortController = new AbortController();
-  // Request a fork when resuming. Exact-fork callers gate on sessionFork first;
-  // legacy resume-only providers may continue the source session in place.
-  const shouldForkSession = resumeSessionId !== undefined;
+  const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
     abortSignal: nodeAbortController.signal,
-    ...(shouldForkSession ? { forkSession: true } : {}),
+    ...(resumeIntent === 'owner-continuation'
+      ? { forkSession: false }
+      : shouldForkSession
+        ? { forkSession: true }
+        : {}),
   };
   let nodeIdleTimedOut = false;
   let lastWatchdogReset: WatchdogReset | undefined;
@@ -2630,7 +2626,7 @@ async function executeNodeInternal(
       try {
         await runStreamPass(
           reaskPrompt,
-          structuredOutputPass(reaskAttempt, resumeSessionId, namedResumeSourceNodeId !== undefined)
+          structuredOutputPass(reaskAttempt, resumeSessionId, resumeIntent === 'source-fork')
         );
       } finally {
         await watchdogResets.flush();
@@ -2801,10 +2797,15 @@ async function executeNodeInternal(
       }
       if (newSessionId === undefined || newSessionId.trim() === '') {
         throw new Error(
-          `Node '${node.id}' forked the session from '${namedResumeSourceNodeId}' but the provider returned no branch session ID.`
+          `Node '${node.id}' resumed '${namedResumeSourceNodeId}' but the provider returned no branch session ID.`
         );
       }
-      if (newSessionId === resumeSessionId) {
+      if (resumeIntent === 'owner-continuation' && newSessionId !== resumeSessionId) {
+        throw new Error(
+          `Node '${node.id}' did not continue its private owner session: the provider replaced the session ID.`
+        );
+      }
+      if (resumeIntent !== 'owner-continuation' && newSessionId === resumeSessionId) {
         throw new Error(
           `Node '${node.id}' did not create an immutable fork of '${namedResumeSourceNodeId}': the provider reused the source session ID.`
         );
@@ -2893,7 +2894,9 @@ async function executeNodeInternal(
         diagnostics: {
           ...execution.diagnostics,
           ...(node.output_type !== undefined ? { outputType: node.output_type } : {}),
-          ...(namedResumeSourceNodeId !== undefined ? { sessionForked: true } : {}),
+          ...(namedResumeSourceNodeId !== undefined
+            ? { sessionForked: resumeIntent !== 'owner-continuation' }
+            : {}),
           ...(backgroundTasksIncomplete.length > 0 ? { backgroundTasksIncomplete } : {}),
         },
       }
@@ -4224,7 +4227,7 @@ function findLoopGroupTerminalSuspendNode(
 async function executeLoopGroupNode(
   ctx: RunLayersContext,
   node: LoopGroupNode,
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
   workflowPreset: ModelAliasPreset | undefined,
@@ -4293,7 +4296,7 @@ async function executeLoopGroupBody(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   execution: NodeExecutionRecord,
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
   workflowPreset: ModelAliasPreset | undefined,
@@ -4351,17 +4354,79 @@ async function executeLoopGroupBody(
   const rawWait = workflowRun.metadata?.wait;
   const loopWaitMeta = isWorkflowWaitContext(rawWait) ? rawWait : undefined;
   const loopOwnedWaitMeta = loopWaitMeta?.owner === 'loop_group' ? loopWaitMeta : undefined;
+  const ownerInvocationKey = nodeInvocationKey(stepName, ctx.loopGroupPath);
+  const rawAncestry =
+    loopGateMeta?.bodySessionCursorAncestry ?? loopOwnedWaitMeta?.bodySessionCursorAncestry;
+  const restoredAncestry =
+    rawAncestry === undefined ? undefined : bodySessionCursorAncestrySchema.parse(rawAncestry);
+  const matchesOwnerInvocation =
+    restoredAncestry === undefined || Object.hasOwn(restoredAncestry, ownerInvocationKey);
   const isLegacyInteractiveLoopResume =
-    loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
+    matchesOwnerInvocation &&
+    loopGateMeta?.type === 'interactive_loop' &&
+    loopGateMeta.nodeId === node.id;
   const isEscalatedGateResume =
+    matchesOwnerInvocation &&
     loopGateMeta?.type === 'approval' &&
     loopGateMeta.nodeId === node.id &&
     loopGateMeta.bodyGateId !== undefined;
-  const isEscalatedWaitResume = loopOwnedWaitMeta?.nodeId === node.id;
+  const isEscalatedWaitResume = matchesOwnerInvocation && loopOwnedWaitMeta?.nodeId === node.id;
   const isLoopResume =
     isLegacyInteractiveLoopResume || isEscalatedGateResume || isEscalatedWaitResume;
+  const ownerIds = new Set(bodyNodes.filter(n => isNodeContextResume(n.context)).map(n => n.id));
+  const bodySessionCursors = ownerIds.size === 0 ? undefined : new Map<string, SessionCursor>();
+  const rawLoopWait =
+    typeof rawWait === 'object' &&
+    rawWait !== null &&
+    'nodeId' in rawWait &&
+    rawWait.nodeId === node.id;
+  if (bodySessionCursors !== undefined && rawLoopWait && !isEscalatedWaitResume) {
+    throw new Error(
+      `Loop group '${node.id}' cannot restore named owner sessions: invalid loop wait state.`
+    );
+  }
+  const pauseLoopPath = loopGateMeta?.execution?.invocation.loopPath;
+  const pauseFrame = pauseLoopPath?.[ctx.loopGroupPath.length];
+  const enclosingPauseFrame =
+    pauseFrame?.groupId === node.id &&
+    nodeInvocationKey(stepName, pauseLoopPath?.slice(0, ctx.loopGroupPath.length) ?? []) ===
+      ownerInvocationKey
+      ? pauseFrame
+      : undefined;
+  const restoredOwnerCursors = restoredAncestry?.[ownerInvocationKey];
+  if (
+    bodySessionCursors !== undefined &&
+    (isLoopResume || restoredOwnerCursors !== undefined || enclosingPauseFrame !== undefined)
+  ) {
+    const rawCursors =
+      restoredOwnerCursors ??
+      (isLoopResume && restoredAncestry === undefined
+        ? isEscalatedWaitResume
+          ? loopOwnedWaitMeta?.bodySessionCursors
+          : loopGateMeta?.bodySessionCursors
+        : undefined);
+    const parsed = bodySessionCursorsSchema.safeParse(rawCursors);
+    if (!parsed.success) {
+      throw new Error(
+        `Loop group '${node.id}' cannot restore named owner sessions: missing or invalid bodySessionCursors.`
+      );
+    }
+    for (const [id, cursor] of Object.entries(parsed.data)) {
+      if (!ownerIds.has(id))
+        throw new Error(`Loop group '${node.id}' has an unknown restored session owner '${id}'.`);
+      bodySessionCursors.set(id, cursor);
+    }
+  }
+  const bodySessionCursorAncestry = new Map(ctx.bodySessionCursorAncestry);
+  if (bodySessionCursors !== undefined || bodySessionCursorAncestry.size > 0) {
+    bodySessionCursorAncestry.set(ownerInvocationKey, bodySessionCursors ?? new Map());
+  }
   const resumeIteration = loopGateMeta?.iteration ?? loopOwnedWaitMeta?.iteration ?? 0;
-  const startIteration = isLoopResume ? resumeIteration + 1 : 1;
+  const startIteration = isLoopResume
+    ? resumeIteration + 1
+    : restoredAncestry !== undefined
+      ? (enclosingPauseFrame?.iteration ?? 1)
+      : 1;
   // max_iterations bounds autonomous work. An attention wait contributes no work while
   // paused, so each explicit resume authorizes one fresh iteration even after that bound.
   // This keeps manual recovery resumable without turning a concluded-red wait into polling.
@@ -4416,6 +4481,10 @@ async function executeLoopGroupBody(
         iteration: resumeIteration,
         sessionId: loopOwnedWaitMeta?.sessionId ?? null,
         sessionProvider: loopOwnedWaitMeta?.sessionProvider ?? null,
+        ...(bodySessionCursors !== undefined
+          ? { bodySessionCursors: Object.fromEntries(bodySessionCursors) }
+          : {}),
+        ...snapshotBodySessionCursorAncestry(bodySessionCursorAncestry),
       }
     );
     const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
@@ -4775,6 +4844,10 @@ async function executeLoopGroupBody(
       // session forward so a body AI node resumes the prior iteration's conversation.
       // Gate on the literal i === 1 (not startIteration): on interactive resume the
       // first processed iteration must continue the restored pre-pause session.
+      nodeSessionHandles: new Map(ctx.nodeSessionHandles),
+      namedResumeSourceIds: ctx.namedResumeSourceIds,
+      bodySessionCursors,
+      bodySessionCursorAncestry,
       lastSequentialSession: group.fresh_context || i === 1 ? undefined : loopLastSequentialSession,
       warnedProviderConflicts: ctx.warnedProviderConflicts,
       totalCostUsd: undefined,
@@ -4896,6 +4969,22 @@ async function executeLoopGroupBody(
           ...(suspensionPoint !== undefined ? { suspensionPoint } : {}),
         };
       }
+    }
+
+    if (
+      postBodyStatus === 'paused' &&
+      bodySessionCursorAncestry.size > 0 &&
+      iterBodyNodes.some(
+        n => n.kind === 'loop_group' && scopedNodeOutputs.get(n.id)?.state === 'running'
+      )
+    ) {
+      return {
+        state: 'running',
+        output: lastIterationOutput,
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
     }
 
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
@@ -5137,6 +5226,10 @@ async function executeLoopGroupBody(
         // a different provider (#1992). null = this pause has no cursor to restore.
         sessionId: loopLastSequentialSession?.sessionId ?? null,
         sessionProvider: loopLastSequentialSession?.provider ?? null,
+        ...(bodySessionCursors !== undefined
+          ? { bodySessionCursors: Object.fromEntries(bodySessionCursors) }
+          : {}),
+        ...snapshotBodySessionCursorAncestry(bodySessionCursorAncestry),
         // Signal state for finalize-on-bare-approve (#2074). The structured payload
         // rides along (#2637) so the finalize attaches it like a natural completion.
         completionSignaled: completionDetected,
@@ -6891,14 +6984,28 @@ async function pauseGateRespectingExternalTransition(
   return approvalContext;
 }
 
-/** Execute a durable wait without holding a subprocess or provider slot. */
+function snapshotBodySessionCursorAncestry(
+  ancestry: RunLayersContext['bodySessionCursorAncestry']
+): { bodySessionCursorAncestry?: BodySessionCursorAncestry } {
+  return ancestry === undefined || ancestry.size === 0
+    ? {}
+    : {
+        bodySessionCursorAncestry: Object.fromEntries(
+          [...ancestry].map(([key, cursors]) => [key, Object.fromEntries(cursors)])
+        ),
+      };
+}
+
 interface WaitLoopOwner {
   groupId: string;
   iteration: number;
   sessionId: string | null;
   sessionProvider: string | null;
+  bodySessionCursors?: Record<string, SessionCursor>;
+  bodySessionCursorAncestry?: BodySessionCursorAncestry;
 }
 
+/** Execute a durable wait without holding a subprocess or provider slot. */
 async function executeWaitNode(
   ctx: RunLayersContext,
   node: WaitNode,
@@ -6936,6 +7043,12 @@ async function executeWaitNode(
           iteration: loopOwner.iteration,
           sessionId: loopOwner.sessionId,
           sessionProvider: loopOwner.sessionProvider,
+          ...(loopOwner.bodySessionCursors !== undefined
+            ? { bodySessionCursors: loopOwner.bodySessionCursors }
+            : {}),
+          ...(loopOwner.bodySessionCursorAncestry !== undefined
+            ? { bodySessionCursorAncestry: loopOwner.bodySessionCursorAncestry }
+            : {}),
         } as const);
   const condition = waitCondition(node.wait);
   let context: WorkflowWaitContext;
@@ -7110,16 +7223,6 @@ async function executeWaitNode(
     output,
     structuredOutput: result,
     declaredOutputPaths: declaredOutputPathsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
-  };
-}
-
-function gateReworkNode(node: GateNode, prompt: string): AgentNode {
-  return {
-    id: `${node.id}:on_reject`,
-    kind: 'agent',
-    source: { kind: 'inline', prompt },
-    ...(node.depends_on ? { depends_on: node.depends_on } : {}),
-    ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
   };
 }
 
@@ -7324,6 +7427,10 @@ async function executeApprovalNode(
           iteration: bodyGateOwner.iteration,
           sessionId: ctx.lastSequentialSession?.sessionId ?? null,
           sessionProvider: ctx.lastSequentialSession?.provider ?? null,
+          ...(ctx.bodySessionCursors !== undefined
+            ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
+            : {}),
+          ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
         }
       : {}),
     type: 'approval',
@@ -9261,7 +9368,7 @@ interface RunInputs {
   runChildWorkflow?: RunChildWorkflowFn;
   workflowRun: WorkflowRun;
   config: WorkflowConfig;
-  workflowProvider: string;
+  workflowProvider: string | undefined;
   workflowModel: string | undefined;
   aiProfile?: ResolvedAiProfile;
   workflowPreset?: ModelAliasPreset;
@@ -9369,14 +9476,10 @@ interface RunLayersContext extends RunInputs, RunDerived {
   claimedWorkPausePolicy?: ClaimedWorkPausePolicy;
   /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
-  /**
-   * Private provider session handles produced by completed top-level nodes. Undefined
-   * inside loop_group bodies because repeated local IDs have no addressable lineage
-   * contract yet.
-   */
   nodeSessionHandles?: Map<string, SequentialSessionCursor>;
-  /** Top-level node IDs whose sessions are named by at least one downstream consumer. */
   namedResumeSourceIds?: ReadonlySet<string>;
+  bodySessionCursors?: Map<string, SessionCursor>;
+  bodySessionCursorAncestry?: Map<string, Map<string, SessionCursor>>;
   /** Sequential-session threading cursor (mutated by runLayers). Provider-tagged so the
    *  session is only threaded into nodes that resolve to the SAME provider (#1992). */
   lastSequentialSession: SequentialSessionCursor | undefined;
@@ -9621,7 +9724,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               return async (sessionId: string): Promise<void> => {
                 await ctx.deps.store.upsertWorkflowRunNodeSession({
                   workflow_run_id: ctx.workflowRun.id,
-                  node_id: node.id,
+                  node_id: ctx.stepNamePrefix + node.id,
                   provider,
                   provider_session_id: sessionId,
                 });
@@ -10075,28 +10178,43 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 // Resolve provider and model for the group: both are forwarded to body
                 // AI nodes as their defaults. The group itself never calls sendQuery, so
                 // the resolved SendQueryOptions are not needed here.
+                const groupScope = resolveNodeModelScope(
+                  node,
+                  {
+                    provider: ctx.workflowProvider,
+                    model: ctx.workflowModel,
+                    preset: ctx.workflowPreset,
+                    tier: ctx.workflowLevelOptions.workflowTier,
+                    effort: ctx.workflowLevelOptions.effort,
+                    providerOrigin: 'workflow',
+                  },
+                  assistantModelDefaults(ctx.config),
+                  ctx.aiProfile
+                );
                 const {
                   provider: loopGroupProvider,
                   model: loopGroupModel,
                   tier: loopGroupTier,
                   preset: loopGroupPreset,
-                } = await resolveNodeProviderAndModel(
-                  providers,
-                  node,
-                  ctx.workflowProvider,
-                  ctx.workflowModel,
-                  ctx.config,
-                  ctx.platform,
-                  ctx.conversationId,
-                  ctx.workflowRun.id,
-                  ctx.cwd,
-                  ctx.workflowLevelOptions,
-                  ctx.aiProfile,
-                  ctx.workflowPreset,
-                  resolveAiConfigText,
-                  ctx.warnedProviderConflicts,
-                  ctx.execContext
-                );
+                } = groupScope.provider === undefined
+                  ? groupScope
+                  : await resolveNodeProviderAndModel(
+                      providers,
+                      node,
+                      ctx.workflowProvider,
+                      ctx.workflowModel,
+                      ctx.config,
+                      ctx.platform,
+                      ctx.conversationId,
+                      ctx.workflowRun.id,
+                      ctx.cwd,
+                      ctx.workflowLevelOptions,
+                      ctx.aiProfile,
+                      ctx.workflowPreset,
+                      resolveAiConfigText,
+                      ctx.warnedProviderConflicts,
+                      ctx.execContext
+                    );
 
                 const output = await executeLoopGroupNode(
                   ctx,
@@ -10128,6 +10246,10 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                         iteration: loopFrame.iteration,
                         sessionId: ctx.lastSequentialSession?.sessionId ?? null,
                         sessionProvider: ctx.lastSequentialSession?.provider ?? null,
+                        ...(ctx.bodySessionCursors !== undefined
+                          ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
+                          : {}),
+                        ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
                       }
                 );
                 return { nodeId: node.id, output };
@@ -10229,9 +10351,14 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               : undefined;
             const hasNamedSessionResume = namedResumeSourceNodeId !== undefined;
             let resumeSessionId: string | undefined;
+            let resumeIntent: SessionResumeIntent = hasNamedSessionResume
+              ? 'source-fork'
+              : 'ordinary';
             if (hasNamedSessionResume) {
               const sourceNodeId = namedResumeSourceNodeId;
-              const sourceHandle = ctx.nodeSessionHandles?.get(sourceNodeId);
+              const ownerCursor = ctx.bodySessionCursors?.get(node.id);
+              if (ownerCursor !== undefined) resumeIntent = 'owner-continuation';
+              const sourceHandle = ownerCursor ?? ctx.nodeSessionHandles?.get(sourceNodeId);
               if (sourceHandle === undefined) {
                 throw new Error(
                   `Node '${node.id}' cannot resume '${sourceNodeId}': the completed source has no available provider session.`
@@ -10248,7 +10375,10 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 );
               }
               const caps = ctx.deps.getAgentProvider(provider).getCapabilities();
-              if (!caps.sessionResume || caps.sessionFork !== true) {
+              if (
+                !caps.sessionResume ||
+                (resumeIntent === 'source-fork' && caps.sessionFork !== true)
+              ) {
                 throw new Error(
                   `Node '${node.id}' cannot resume '${sourceNodeId}': resolved provider '${provider}' does not support immutable session forks.`
                 );
@@ -10407,9 +10537,6 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   node,
                   provider,
                   nodeOptions,
-                  // Always pass the prior session ID. executeNodeInternal requests a fork,
-                  // but legacy resume-only providers may continue in place; named resume
-                  // separately capability-gates and verifies an exact fork.
                   resumeSessionId,
                   resolvedNodeModel,
                   resolvedTier,
@@ -10417,7 +10544,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.stepNamePrefix,
                   iteration,
                   checkpointSessionForProvider(provider),
-                  attemptTypedArtifactsFile
+                  attemptTypedArtifactsFile,
+                  resumeIntent
                 );
               },
               { state: 'failed', output: '', error: 'Node did not execute' },
@@ -10613,6 +10741,19 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             provider: sessionProvider,
           });
         }
+        const ownerNode = nodeById.get(nodeId);
+        if (
+          ownerNode &&
+          isNodeContextResume(ownerNode.context) &&
+          output.state === 'completed' &&
+          output.sessionId !== undefined &&
+          sessionProvider !== undefined
+        ) {
+          ctx.bodySessionCursors?.set(nodeId, {
+            sessionId: output.sessionId,
+            provider: sessionProvider,
+          });
+        }
         // Typed artifact: when a node declares `output_type`, persist its output
         // as a typed sidecar so other nodes and later runs can locate it by type.
         // The writer keeps top-level node paths stable and qualifies loop body
@@ -10726,14 +10867,14 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
 
 /**
  * Walk every node (including loop_group bodies) that can invoke a provider.
- * bash/script/cancel nodes are skipped (deterministic, no provider). An approval
+ * Execution and coordination nodes are skipped (no direct provider call). An approval
  * node counts only when it has an `on_reject` reprompt (the one AI turn it can
  * spawn). For each visited node the resolved provider is passed to `visit`.
  * Unknown providers are passed through — the caller decides how to handle them.
  */
 export function visitProviderInvokingNodes(
   nodes: readonly (DagNode | IncludeDirective)[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile: ResolvedAiProfile | undefined,
   visit: (node: DagNode, provider: string) => void
 ): void {
@@ -10752,11 +10893,30 @@ export function visitProviderInvokingNodes(
       aiProfile
     ).provider;
   for (const node of nodes) {
-    if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node) || isWaitNode(node))
+    if (
+      isIncludeDirective(node) ||
+      isExecNode(node) ||
+      isHaltNode(node) ||
+      isWaitNode(node) ||
+      node.kind === 'workflow' ||
+      node.kind === 'compose_fan_out'
+    )
       continue;
     if (isLoopGroupNode(node)) {
-      const groupProvider = resolve(node);
-      visit(node, groupProvider);
+      const groupProvider = resolveNodeModelScope(
+        node,
+        {
+          provider: workflowProvider,
+          providerOrigin: 'workflow',
+          model: undefined,
+          preset: undefined,
+          tier: undefined,
+          effort: undefined,
+        },
+        {},
+        aiProfile
+      ).provider;
+      if (groupProvider !== undefined) visit(node, groupProvider);
       visitProviderInvokingNodes(node.loop_group.nodes, groupProvider, aiProfile, visit);
       continue;
     }
@@ -10783,7 +10943,7 @@ export function visitProviderInvokingNodes(
 export function collectContainerIncompatibleProviders(
   providers: ProviderRegistry,
   nodes: readonly DagNode[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile?: ResolvedAiProfile
 ): Set<string> {
   const incompatible = new Set<string>();
@@ -10837,7 +10997,7 @@ export interface ScopedCapabilityMismatch {
 export function collectScopedCapabilityMismatches(
   providers: ProviderRegistry,
   nodes: readonly DagNode[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile?: ResolvedAiProfile
 ): ScopedCapabilityMismatch[] {
   const mismatches: ScopedCapabilityMismatch[] = [];
@@ -10885,7 +11045,7 @@ export type StrictSchemaViolation = StrictSchemaIssue & {
 export function collectStrictSchemaViolations(
   providers: ProviderRegistry,
   nodes: readonly (DagNode | IncludeDirective)[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile?: ResolvedAiProfile
 ): StrictSchemaViolation[] {
   const violations: StrictSchemaViolation[] = [];
@@ -11555,9 +11715,13 @@ export async function executeDagWorkflow(
     persistScope = { key: runPersistScopeKey, sessionsAtStart };
   }
   const namedResumeSourceIds = new Set<string>();
-  for (const node of workflow.nodes) {
-    if (isNodeContextResume(node.context)) namedResumeSourceIds.add(node.context.resume);
-  }
+  const collectNamedSources = (nodes: readonly DagNode[]): void => {
+    for (const node of nodes) {
+      if (isNodeContextResume(node.context)) namedResumeSourceIds.add(node.context.resume);
+      if (isLoopGroupNode(node)) collectNamedSources(resolvedBodyNodes(node.loop_group));
+    }
+  };
+  collectNamedSources(workflow.nodes);
   const nodeSessionHandles = new Map<string, SequentialSessionCursor>();
   for (const row of priorNodeSessions ?? []) {
     // The completed-output snapshot is the authority for which nodes actually

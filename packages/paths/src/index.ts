@@ -62,6 +62,7 @@ export {
   getWebDistDir,
   getSourceWebDistDir,
   getSourceServerEntry,
+  getSourceProviderEntry,
   getServerDistDir,
 } from './archon-paths';
 export type { ProjectStorageKey, ProjectStoragePaths } from './archon-paths';

@@ -8,23 +8,15 @@
  * are regenerated. The generator writes the whole protocol; only the import closure of the
  * roots below is kept, because that is all the provider reads.
  *
- * Usage:
- *   bun run scripts/generate-codex-protocol.ts          # write
- *   bun run scripts/generate-codex-protocol.ts --check  # verify (exit 2 if stale)
- *
- * Exit codes:
- *   0  generated (and unchanged, if --check)
- *   1  unexpected error (binary missing, generator failure)
- *   2  --check was passed and the directory would change
+ * Regenerate with `bun run generate:codex-protocol` after an SDK upgrade.
  */
-import { mkdtemp, readFile, readdir, rm, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, readFile, rm, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join, posix, resolve } from 'path';
 import { resolveBundledCodexBinary } from '../packages/providers/src/codex/binary-resolver';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const OUTPUT_DIR = join(REPO_ROOT, 'packages/providers/src/codex/protocol');
-const CHECK_ONLY = process.argv.includes('--check');
 
 /** The generated types the provider imports; everything they import comes along. */
 const ROOTS = [
@@ -83,7 +75,7 @@ async function generate(): Promise<Map<string, string>> {
         '',
         `AUTO-GENERATED from \`@openai/codex\` ${version.version} by \`scripts/generate-codex-protocol.ts\`. Do not edit.`,
         '',
-        'Regenerate with `bun run generate:codex-protocol`; verify with `bun run check:codex-protocol`.',
+        'Regenerate with `bun run generate:codex-protocol`; the version stamp is checked by `scripts/codex-protocol-version.test.ts`.',
         '',
       ].join('\n')
     );
@@ -93,44 +85,11 @@ async function generate(): Promise<Map<string, string>> {
   }
 }
 
-async function readExisting(dir: string, prefix = ''): Promise<Map<string, string>> {
-  const files = new Map<string, string>();
-  let entries;
-  try {
-    entries = await readdir(join(dir, prefix), { withFileTypes: true });
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return files;
-    throw e;
-  }
-  for (const entry of entries) {
-    const rel = prefix ? posix.join(prefix, entry.name) : entry.name;
-    if (entry.isDirectory()) {
-      for (const [k, v] of await readExisting(dir, rel)) files.set(k, v);
-    } else {
-      files.set(rel, (await readFile(join(dir, rel), 'utf-8')).replace(/\r\n/g, '\n'));
-    }
-  }
-  return files;
-}
-
 async function main(): Promise<void> {
-  const generated = await generate();
-  const existing = await readExisting(OUTPUT_DIR);
-
-  if (CHECK_ONLY) {
-    const stale = [...new Set([...generated.keys(), ...existing.keys()])].filter(
-      file => generated.get(file) !== existing.get(file)
-    );
-    if (stale.length > 0) {
-      console.error(
-        `packages/providers/src/codex/protocol/ is stale vs the pinned @openai/codex (${stale.length} files differ, e.g. ${stale.slice(0, 3).join(', ')}).\nRun: bun run generate:codex-protocol`
-      );
-      process.exit(2);
-    }
-    console.log('check:codex-protocol OK');
-    return;
+  if (Bun.argv.slice(2).length > 0) {
+    throw new Error('Usage: bun run generate:codex-protocol');
   }
-
+  const generated = await generate();
   await rm(OUTPUT_DIR, { recursive: true, force: true });
   for (const [file, contents] of generated) {
     const target = join(OUTPUT_DIR, file);

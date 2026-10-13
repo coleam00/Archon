@@ -94,8 +94,8 @@ import { publishArchonCliCommand } from '@archon/paths/cli-command';
 publishArchonCliCommand();
 
 let providersRegistered = false;
-let providerProcessErrorHandlersInstalled = false;
 let databaseRouteLoaded = false;
+let providerProcessErrorHandlersInstalled = false;
 
 function installProviderProcessErrorHandlers(
   claimPiExtensionProcessError: (reason: unknown) => boolean
@@ -130,18 +130,13 @@ function installProviderProcessErrorHandlers(
 
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
-  const {
-    claimPiExtensionProcessError,
-    registerBuiltinProviders,
-    registerCommunityProviders,
-    registerProvider,
-  } = await import('@archon/providers/in-process');
-  installProviderProcessErrorHandlers(claimPiExtensionProcessError);
-  registerBuiltinProviders();
-  registerCommunityProviders();
-  const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
-  for (const registration of await loadProviderPlugins(getPluginsPath()))
-    registerProvider(registration);
+  const { registerHostProviders } = await import('@archon/core/providers/register-host-providers');
+  if (BUNDLED_IS_BINARY) {
+    const { claimPiExtensionProcessError } =
+      await import('@archon/providers/pi/extension-error-broker');
+    installProviderProcessErrorHandlers(claimPiExtensionProcessError);
+  }
+  await registerHostProviders();
   providersRegistered = true;
 }
 
@@ -369,6 +364,7 @@ async function main(): Promise<number> {
 
   // Commands that don't require git repo validation
   const noGitCommands = [
+    'state',
     'trigger',
     'version',
     'help',
@@ -452,6 +448,16 @@ async function main(): Promise<number> {
           'Use: archon workflow run <name> --adopt <run-id> <input>\n' +
           'Find a prior run id with: archon workflow runs --open (or workflow get <run-id>)'
       );
+    }
+    if (command === 'provider') {
+      const { providerCommand } = await loadRoute(() => import('./commands/provider'), {
+        providers: false,
+      });
+      return await providerCommand(subcommand, positionals.slice(2), {
+        pluginsDir: getPluginsPath(),
+        archonVersion: BUNDLED_VERSION,
+        projectDir: cwd,
+      });
     }
     if (command === 'plugin') {
       const { pluginCommand } = await loadRoute(() => import('./commands/plugin'), {
@@ -578,6 +584,27 @@ async function main(): Promise<number> {
     }
 
     switch (command) {
+      case 'state': {
+        const { stateCommand } = await loadRoute(() => import('./commands/state'), {
+          database: true,
+        });
+        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+        const { getDatabaseType } = await import('@archon/core/db/connection');
+        return await stateCommand(
+          createSqlWorkflowHost(createCliWorkflowDeps()),
+          subcommand,
+          positionals.slice(2),
+          {
+            cwd,
+            ...(typeof values['if-revision'] === 'string'
+              ? { ifRevision: values['if-revision'] }
+              : {}),
+            ...(typeof values.limit === 'string' ? { limit: values.limit } : {}),
+          },
+          { storeKind: getDatabaseType() }
+        );
+      }
       case 'trigger': {
         const { triggerCommand, spawnAdmitted } = await loadRoute(
           () => import('./commands/trigger'),
@@ -1190,7 +1217,7 @@ async function main(): Promise<number> {
       }
 
       case 'user': {
-        const { userListCommand, userRoleCommand } = await loadRoute(
+        const { userListCommand, userRoleCommand, userLinkCommand } = await loadRoute(
           () => import('./commands/user'),
           { database: true }
         );
@@ -1209,8 +1236,17 @@ async function main(): Promise<number> {
             }
             await userRoleCommand(positionals[2] ?? '', positionals[3] ?? '');
             break;
+          case 'link':
+            if (positionals.length !== 4) {
+              return await fail(
+                jsonFlag,
+                'Usage: archon user link <user-id> <platform>:<platform-user-id> [--move]'
+              );
+            }
+            await userLinkCommand(positionals[2] ?? '', positionals[3] ?? '', Boolean(values.move));
+            break;
           default:
-            return await fail(jsonFlag, 'Usage: archon user <list|role>');
+            return await fail(jsonFlag, 'Usage: archon user <list|role|link>');
         }
         break;
       }

@@ -75,7 +75,7 @@ warning with the exact `mv` command and moves nothing.
 
 **Concurrency.** The engine does no locking on `$STATE_DIR`. See
 [Authoring Workflows](/guides/authoring-workflows/#cross-run-state-with-state_dir) for
-the read-modify-write hazard and how to avoid it.
+the read-modify-write hazard. Use [durable state documents](/guides/authoring-workflows/#durable-state-documents) for concurrent, audited JSON updates.
 
 **Name collisions.** The project segment is derived from the project's identity, and distinct
 projects can derive the same one — two no-remote local repos both called `api`, or two folder
