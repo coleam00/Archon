@@ -42,7 +42,7 @@ test.skipIf(process.platform === 'win32')(
       join(project, '.archon', 'workflows', 'hosted.yaml'),
       'name: hosted\ndescription: Shutdown test.\nnodes:\n  - id: one\n    bash: echo one\n'
     );
-    const descendant = `echo $$ > '${root}/descendant.pid'; touch '${root}/ready'; while [ ! -f '${root}/go' ]; do sleep 0.01; done; touch '${root}/leaked'`;
+    const descendant = `echo \\$\\$ > '${root}/descendant.pid'; touch '${root}/ready'; while [ ! -f '${root}/go' ]; do sleep 0.01; done; touch '${root}/leaked'`;
     await writeFile(
       join(project, '.archon', 'config.yaml'),
       `worktree:\n  postCreateTimeout: 120000\n  postCreate:\n    - ${JSON.stringify(`bash -c "${descendant}" & wait`)}\n`
