@@ -5,6 +5,7 @@ import {
   type ProviderRegistry,
 } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
+import { PluginRemoteError } from '@archon/provider-contract/plugin';
 import { getAgentProvider } from '@archon/core/services/provider-admission';
 import { isProviderReceipt } from '@archon/plugin-manifest';
 import { readReceipts } from '@archon/plugin-manifest/store';
@@ -159,6 +160,8 @@ export async function checkProviderDiagnostics(
       message: `${check.message}${check.remedy ? ` Remedy: ${check.remedy}` : ''}`,
     }));
   } catch (error) {
+    if (error instanceof PluginRemoteError && error.code === -32601)
+      return [{ label, status: 'skip', message: 'no diagnostics hook' }];
     return [
       { label, status: 'fail', message: error instanceof Error ? error.message : String(error) },
     ];

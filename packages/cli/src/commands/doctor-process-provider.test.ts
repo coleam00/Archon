@@ -53,6 +53,31 @@ test('doctor renders diagnostics returned by a registered process provider', asy
   }
 });
 
+test.each([
+  { mode: 'no-diagnose', status: 'skip', message: 'no diagnostics hook' },
+  { mode: 'information-crash', status: 'fail', message: 'request failed (RPC -32603)' },
+] as const)(
+  'doctor reports $mode from a process provider as $status',
+  async ({ mode, status, message }) => {
+    const registration = processProviderRegistration(descriptor, [
+      process.execPath,
+      '--no-env-file',
+      resolve(import.meta.dir, '../../../core/src/providers/fixtures/process-provider.ts'),
+      mode,
+    ]);
+    const [check] = await checkProviderDiagnostics(
+      registration.id,
+      registration.factory(),
+      async () => ({
+        assistants: { claude: {}, codex: {} },
+      })
+    );
+    expect(check.status).toBe(status);
+    expect(check.message).toContain(message);
+    expect(check.message).not.toContain('private message and token');
+  }
+);
+
 test('doctor reports a stale receipt with its versions and reinstall command', async () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-doctor-stale-'));
   const savedHome = process.env.ARCHON_HOME;

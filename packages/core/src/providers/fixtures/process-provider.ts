@@ -1,7 +1,7 @@
 import { closeSync, writeSync, existsSync, writeFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { spawn } from 'node:child_process';
-import { serveProvider } from '@archon/provider-contract/plugin';
+import { PluginRemoteError, serveProvider } from '@archon/provider-contract/plugin';
 import type {
   ProviderChunk,
   CredentialStatus,
@@ -41,28 +41,33 @@ await serveProvider(
     create: (log): IAgentProvider => ({
       getType: (): string => descriptor.id,
       getCapabilities: (): typeof descriptor.capabilities => descriptor.capabilities,
-      async diagnose({ assistantConfig }): Promise<ProviderDiagnostics> {
-        if (mode === 'hung-diagnose') {
-          setInterval(() => undefined, 1000);
-          return await new Promise<never>(() => undefined);
-        }
-        if (mode === 'live-eof') return await closeOutput();
-        if (mode === 'information-crash') {
-          process.stderr.write('private message and token');
-          throw new Error('private message and token');
-        }
-        return {
-          checks: [
-            {
-              id: 'config',
-              label: 'Configuration',
-              status: assistantConfig?.model ? 'ok' : 'skip',
-              message: 'Configuration inspected',
-              remedy: 'Select a model',
+      diagnose:
+        mode === 'no-diagnose'
+          ? undefined
+          : async ({ assistantConfig }): Promise<ProviderDiagnostics> => {
+              if (mode === 'hung-diagnose') {
+                setInterval(() => undefined, 1000);
+                return await new Promise<never>(() => undefined);
+              }
+              if (mode === 'live-eof') return await closeOutput();
+              if (mode === 'information-crash') {
+                process.stderr.write('private message and token');
+                throw new PluginRemoteError(-32603, 'private message and token', {
+                  detail: 'private message and token',
+                });
+              }
+              return {
+                checks: [
+                  {
+                    id: 'config',
+                    label: 'Configuration',
+                    status: assistantConfig?.model ? 'ok' : 'skip',
+                    message: 'Configuration inspected',
+                    remedy: 'Select a model',
+                  },
+                ],
+              };
             },
-          ],
-        };
-      },
       async listModels(): Promise<ProviderModelList> {
         if (mode === 'hung-models') {
           setInterval(() => undefined, 1000);

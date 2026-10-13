@@ -6,6 +6,7 @@ import * as paths from '@archon/paths';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { buildProviderSubprocessEnv, type ProviderChunk } from '@archon/provider-contract';
 import { runProviderConformance } from '@archon/provider-contract/conformance';
+import { PluginRemoteError } from '@archon/provider-contract/plugin';
 import { ProviderPluginExitedError } from './process-provider';
 import { processProviderRegistration } from './process-registration';
 import { descriptor, chunks } from './fixtures/process-provider-data';
@@ -416,9 +417,15 @@ test('information hooks round-trip through fresh processes and close them', asyn
 test('diagnostic hook errors withhold plugin prose and stderr', async () => {
   const debug = spyOn(processLog, 'debug').mockImplementation(() => {});
   try {
-    await expect(
-      provider('information-crash').diagnose?.({ signal: new AbortController().signal })
-    ).rejects.toThrow('request failed (RPC -32603)');
+    const error: unknown = await provider('information-crash')
+      .diagnose?.({ signal: new AbortController().signal })
+      .catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(PluginRemoteError);
+    if (!(error instanceof PluginRemoteError)) throw error;
+    expect(error.code).toBe(-32603);
+    expect(error.message).toContain('request failed (RPC -32603)');
+    expect(error.message).not.toContain('private message and token');
+    expect(error.data).toBeUndefined();
     expect(JSON.stringify(debug.mock.calls)).not.toContain('private message and token');
   } finally {
     debug.mockRestore();

@@ -200,7 +200,8 @@ function startProcess(
           evidence()
         );
       if (error instanceof PluginRemoteError)
-        return new Error(
+        return new PluginRemoteError(
+          error.code,
           `Provider plugin ${descriptor.id} request failed (RPC ${String(error.code)})`
         );
       if (error instanceof PluginProtocolError)

@@ -334,7 +334,7 @@ assistants:
     claudeBinaryPath: /absolute/path/to/claude
 ```
 
-`archon setup` auto-detects and writes `CLAUDE_BIN_PATH` for you. After setup, run `archon doctor` to confirm the binary actually spawns. Docker users do not need to do anything — the image pre-sets the variable.
+When Claude is selected, setup auto-detects and writes `CLAUDE_BIN_PATH` for you. Run `archon setup --providers claude` to select Claude and configure its path. After setup, run `archon doctor` to confirm the binary actually spawns. Docker users do not need to do anything — the image pre-sets the variable.
 
 See the [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) guide for the full install matrix.
 
