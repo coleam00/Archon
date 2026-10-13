@@ -38,7 +38,7 @@ $ARGUMENTS
 
 ## Resolve the accepted contract
 
-The review judges the change against what the contract says completion looks like, so resolve the contract in full, in every mode, including light mode.
+The review judges the change against what the contract says completion looks like, so resolve the contract in full, in every mode, including delta mode.
 
 - When `work_order` is non-empty, read it in full, then follow it to the **originating contract**: the issue, request, or document the work order, or a document it points to, names as its source. Read that source yourself. Triage summaries, plans, and a previous review report are derived from it: a summary is where an acceptance line gets lost, a plan's own design decisions are not steering, and a contract a previous round recorded is not a source. The originating contract, as settled by the work order, is the accepted contract implementation received. Preserve its required outcome, explicit non-goals, and boundaries as prose; do not parse it with scripts, regexes, or keyword extraction.
 - When `work_order` is empty and the target is a PR, use the PR body's problem/outcome and explicit scope or non-goals as the standalone review contract, following it to any source it names in the same way. Do not infer a broader promise from the changed files.
@@ -48,9 +48,13 @@ From the originating contract, list every **acceptance** item (how completed beh
 
 An explicit narrowing in the operator's trigger, or a plan the trigger explicitly names as this delivery, is an accepted boundary. Preserve all originating items and their sources; mark items explicitly assigned to future parts deferred with their authorization and owning part. Do not infer an assignment from a plan merely used to explain a broad request. Unassigned or unexplained omissions remain current requirements. A derived document without that authorization cannot drop originating acceptance: record its narrowing as a conflict. Correctness, truth, documentation and proof inside the delivered slice remain required.
 
-## Light mode (a prior report exists)
+## Delta mode (a prior report exists)
 
-When a prior-report path is supplied, read it in full. The cursor is the previous round's reviewed commit given above, not a SHA you read from the report. For a PR target, this round's diff is **only the delta**: `git diff <cursor>..<commit under review>`. For a working-diff target, include that delta plus any uncommitted changes. The prior report remains the sole owner of earlier findings and review coverage; do not copy or rebuild them in scope.md. The accepted contract is not among them: resolve it from its source as above, never by copying the prior report's contract section.
+When a prior-report path is supplied, this round reruns the lenses the previous round ran, on the changes since the commit it reviewed: seams $mode.output.seams, code $mode.output.code, tests $mode.output.tests, errors $mode.output.errors, docs $mode.output.docs. When this round is light (the input below is `true`), it follows a correction for CI rather than for review, and the code lens alone reviews the delta.
+
+Light round: $INPUTS.light
+
+Read the prior report in full. The cursor is the previous round's reviewed commit given above, not a SHA you read from the report. For a PR target, this round's diff is **only the delta**: `git diff <cursor>..<commit under review>`. For a working-diff target, include that delta plus any uncommitted changes. The prior report remains the sole owner of earlier findings and review coverage; do not copy or rebuild them in scope.md. The accepted contract is not among them: resolve it from its source as above, never by copying the prior report's contract section.
 
 ## Write the scope file
 
@@ -58,7 +62,7 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 
 1. **Accepted contract** — the source you read it from (the originating contract, and the work order, PR body, or requested scope/repository contracts that led there); the required outcome; then three subsections, **Acceptance**, **Invariants**, and **Steering**, each holding its numbered quoted items or the sentence that the contract states none of that kind or that its items could not be read; then explicit non-goals or boundaries, each naming its source — the operator's originating contract, or the derived document that inferred it — and any recorded narrowing, the authorized delivery slice, deferred items and their explicit authorization and later owner.
 2. **Target** — PR reference or "working diff", base branch, and the **head SHA under review**: the commit under review, in full.
-3. **Mode** — full review, or light (delta since `<cursor>`).
+3. **Mode** — full review, delta (since `<cursor>`, with the lenses rerunning), or light delta (since `<cursor>`, code lens only).
 4. **Changed files** — path list with a one-line shape of the change per file (added/modified/deleted, rough size).
 5. **The diff to review** — inline when small; for a large diff, the exact commands a reviewer runs to see it (`git diff <range>`).
 6. **Prior report** — continuation mode only: its path and reviewed-head cursor. Do not duplicate its findings or coverage.

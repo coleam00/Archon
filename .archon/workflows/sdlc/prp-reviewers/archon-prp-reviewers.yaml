@@ -2,9 +2,12 @@ name: archon-prp-reviewers
 description: |
   Building block for archon-prp, not a standalone run. A copy of archon-review in
   which a quick route node (small model, reads only the diff summary and the plan)
-  picks the lenses, seams on by default, and no node runs the project's gate:
-  reviewers read the checks the implementer ran on what it changed. Each lens is a
-  fresh reviewer; synthesis aggregates and publishes one canonical PR comment.
+  picks the lenses for the first round, seams on by default, and no node runs the
+  project's gate: reviewers read the checks the implementer ran on what it changed.
+  A later round reruns the same lenses on the changes since the last reviewed
+  commit, with the previous findings in hand; a light round, after a correction
+  for CI, runs the general code lens alone on those changes. Each lens is a fresh
+  reviewer; synthesis aggregates and publishes one canonical PR comment.
 
   NOT for: reviewing a PR on its own (use archon-review).
 
@@ -19,9 +22,15 @@ inputs:
   prior_report:
     default: ""
     description: >-
-      Path to the previous review round's report. When set, this round verifies
-      prior findings first and reviews only the delta since the commit that round
-      reviewed, which its publish recorded beside the report.
+      Path to the previous review round's report. When set, this round reruns the
+      lenses that round ran, which verify its findings first and review only the
+      delta since the commit it reviewed; its publish recorded both beside the
+      report.
+  light:
+    default: "false"
+    description: >-
+      "true" when this continuation follows a correction for CI rather than for
+      review: the general code lens alone reviews the delta.
   work_order:
     default: ""
     description: >-
@@ -53,6 +62,7 @@ nodes:
     runtime: bun
     with:
       prior_report: "$INPUTS.prior_report"
+      light: "$INPUTS.light"
     output_format:
       type: object
       properties:
@@ -62,7 +72,13 @@ nodes:
         cursor: { type: string }
         risks: { type: string, minLength: 1 }
         execution: { type: object }
-      required: [continuation, head, cursor, risks, execution]
+        # A continuation's lenses; all false on a first round, where route decides.
+        seams: { type: boolean }
+        code: { type: boolean }
+        tests: { type: boolean }
+        errors: { type: boolean }
+        docs: { type: boolean }
+      required: [continuation, head, cursor, risks, execution, seams, code, tests, errors, docs]
 
   - id: scope
     command: review-scope
@@ -91,13 +107,15 @@ nodes:
       required: [pr]
 
   # The lens decision is quick and separate from scope: a small model reads the diff
-  # summary and the plan and answers, with seams on by default.
+  # summary and the plan and answers, with seams on by default. Only a first round
+  # decides; a continuation reruns what mode read back.
   - id: route
     command: route
     model: small
     context: fresh
     mutates_checkout: false
     depends_on: [mode]
+    when: "$mode.output.continuation == false"
     output_format:
       type: object
       properties:
@@ -112,15 +130,18 @@ nodes:
   # ── Lenses ────────────────────────────────────────────────────────
   # Every reviewer is read-only by the engine's check, not only by its prompt:
   # lenses run in parallel in one checkout, so a reviewer that edits it can
-  # mislead the others. The route node picks the lenses; a continuation round
-  # runs none of them (synthesize verifies the delta itself).
+  # mislead the others. The route node picks a first round's lenses; a
+  # continuation runs the set mode read back, on the delta only. The trigger rule
+  # lets a lens run past the route a continuation skips; `&&` binds tighter than
+  # `||` and short-circuits, so a continuation never reads that route's output.
   - id: seams
     output_type: review-lens
     command: review-seams
     context: fresh
     mutates_checkout: false
     depends_on: [scope, route]
-    when: "$mode.output.continuation == false && $route.output.seams == true"
+    trigger_rule: none_failed_min_one_success
+    when: "$mode.output.continuation == false && $route.output.seams == true || $mode.output.seams == true"
 
   - id: code
     output_type: review-lens
@@ -129,7 +150,8 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [scope, route]
-    when: "$mode.output.continuation == false && $route.output.code == true"
+    trigger_rule: none_failed_min_one_success
+    when: "$mode.output.continuation == false && $route.output.code == true || $mode.output.code == true"
 
   - id: tests
     output_type: review-lens
@@ -137,7 +159,8 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [scope, route]
-    when: "$mode.output.continuation == false && $route.output.tests == true"
+    trigger_rule: none_failed_min_one_success
+    when: "$mode.output.continuation == false && $route.output.tests == true || $mode.output.tests == true"
 
   - id: errors
     output_type: review-lens
@@ -145,7 +168,8 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [scope, route]
-    when: "$mode.output.continuation == false && $route.output.errors == true"
+    trigger_rule: none_failed_min_one_success
+    when: "$mode.output.continuation == false && $route.output.errors == true || $mode.output.errors == true"
 
   - id: docs
     output_type: review-lens
@@ -153,10 +177,11 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [scope, route]
-    when: "$mode.output.continuation == false && $route.output.docs == true"
+    trigger_rule: none_failed_min_one_success
+    when: "$mode.output.continuation == false && $route.output.docs == true || $mode.output.docs == true"
 
-  # all_done lets this barrier settle after input-disabled lenses, every skipped
-  # continuation lens, or a lens whose retries were exhausted. The deciding
+  # all_done lets this barrier settle after input-disabled lenses, a skipped
+  # route, or a lens whose retries were exhausted. The deciding
   # agent can then tolerate specialist failures without also tolerating a failed
   # mode/scope preflight: synthesize separately requires scope to have succeeded.
   - id: review-complete
@@ -169,16 +194,14 @@ nodes:
   # report for an ENABLED lens and forces ready:false naming the gap, so
   # degradation is disclosed, never silent, and the correction loop's recheck is
   # the retry. `ready` is a real boolean — the load-bearing field a composing
-  # loop terminates on. Full reviews receive complete lens files; continuation
-  # reviews receive the complete prior report and correction delta.
+  # loop terminates on. Full reviews receive complete lens files; continuations
+  # receive this round's delta lens files and the complete prior report, which
+  # carries every earlier finding forward.
   #
-  # The deciding agent starts fresh and re-reads the diff. On a continuation it
-  # performs the review itself from the previous report and correction delta;
-  # that keeps the accumulated review state without paying for a cold fan-out.
-  # Returning into the scope
-  # node's session is not portable across the bundle's supported providers:
-  # Claude Code, Codex, and Pi. Bundled defaults stay on that shared capability
-  # floor even where the configured provider can resume a named upstream session.
+  # Every reviewer starts fresh. A lens cannot continue its first-round session:
+  # a loop body may resume only a session that finished before the loop started,
+  # and the first round's lenses run inside it. The prior report and the delta
+  # carry that context instead.
   #
   # Adversarial per-finding verification happens inside this node's prompt. A
   # separate verify stage between the lenses and this node is now expressible and
@@ -228,6 +251,8 @@ nodes:
       pr: "$scope.output.pr"
       report: "$ARTIFACTS_DIR/review/report.md"
       head: "$mode.output.head"
+      route: { from: "$route.output", if_skipped: null }
+      mode: { from: "$mode.output" }
       ready: "$synthesize.output.ready"
       action: "$synthesize.output.action"
       summary: "$synthesize.output.findings_summary"

@@ -19,7 +19,7 @@ implement__implement:
 implement__assert-changed: "3 files changed"
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false}'
 review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
 review__route: { seams: true, code: true, tests: false, errors: false, docs: false, risk: "stub: changes a typed contract" }

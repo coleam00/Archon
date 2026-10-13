@@ -11,7 +11,8 @@
  * (review-round): the checkout must still be at it, the pull request's remote
  * head must be it, and the report must name it. Any mismatch refuses, so a
  * verdict about one commit can never stand as the verdict on another. Once
- * published, the commit is recorded beside the report as the next round's cursor.
+ * published, the commit is recorded beside the report as the next round's cursor,
+ * and the lenses this round ran as the next round's lens set.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_SCOPE: the review's requested scope. Delivery passes its verified
@@ -20,6 +21,9 @@
  *   or `null` for a working diff. It names the target of a standalone review.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
+ * - INPUTS_ROUTE / INPUTS_MODE: the route agent's lens decision ("null" when a
+ *   continuation skipped it) and review-round's output, whose lens fields hold a
+ *   continuation's set.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER: the
  *   certified verdict fields this node forwards.
  */
@@ -37,6 +41,7 @@ import {
   type QualifiedPr,
 } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
+import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 
 const MARKER = '<!-- archon-review-report -->';
 
@@ -60,6 +65,15 @@ function declaredPr(value: string): QualifiedPr | undefined {
     return undefined;
   }
   return parseQualifiedPr(target);
+}
+
+/** The lenses this round ran: the route agent's call on a first round, review-round's otherwise. */
+function lenses(): Record<string, boolean> {
+  const decision = record(JSON.parse(text(process.env.INPUTS_ROUTE) || 'null'));
+  const source = decision ?? record(JSON.parse(text(process.env.INPUTS_MODE)));
+  return Object.fromEntries(
+    REVIEW_LENSES.map(lens => [lens, source?.[lens] === true])
+  );
 }
 
 function label(pr: QualifiedPr | undefined): string {
@@ -86,6 +100,7 @@ try {
   }
   const pr = recorded ?? declared;
   const head = text(process.env.INPUTS_HEAD).trim();
+  const ran = lenses();
   const reportPath = text(process.env.INPUTS_REPORT);
   const report = readFileSync(reportPath, 'utf8');
   if (report.trim() === '') throw new Error('the review report is empty');
@@ -115,8 +130,9 @@ try {
       rmSync(directory, { recursive: true, force: true });
     }
   }
-  // review-round reads this as the next round's cursor.
+  // review-round reads these as the next round's cursor and lens set.
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
+  writeFileSync(join(dirname(reportPath), 'reviewed-lenses.json'), JSON.stringify(ran));
   emit(verdict);
 } catch (error) {
   refuse(`publish-review: ${error instanceof Error ? error.message : String(error)}`);

@@ -1,7 +1,7 @@
 # Outcome: ready. The route node's risk call picks seams and code for a contract
 # change and leaves tests, errors and docs out; those carry no stub, so the fixture
 # fails if any of them runs.
-mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false}'
 scope:
   # A standalone review of the working diff: no pull request to publish to.
   pr: null

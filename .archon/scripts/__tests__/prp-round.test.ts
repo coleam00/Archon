@@ -29,11 +29,19 @@ describe('an archon-prp delivery round', () => {
   it('repeats while the review or a PR-caused CI red needs another round', () => {
     expect(
       round({ ...reviewed, INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct' })
-    ).toMatchObject({ round: 1, done: false, ready: false, reason: 'review_open' });
+    ).toMatchObject({
+      round: 1,
+      done: false,
+      ready: false,
+      reason: 'review_open',
+      light_review: false,
+    });
+    // A correction for CI gets the light review: the code lens alone, on the delta.
     expect(round({ ...reviewed, INPUTS_PREVIOUS: '1', INPUTS_CI: 'pr_caused' })).toMatchObject({
       round: 2,
       done: false,
       reason: 'ci_pr_caused',
+      light_review: true,
     });
   });
 

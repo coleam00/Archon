@@ -1,5 +1,5 @@
 # Outcome: needs fixes. A lens finds a blocking defect and the verdict is not ready.
-mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false}'
 scope:
   pr: null
 route: { seams: true, code: true, tests: true, errors: false, docs: false, risk: "stub: changes persisted state" }

@@ -73,5 +73,7 @@ emit({
   pr_url: prUrl === 'null' ? previousPrUrl : prUrl,
   // The next round's review continues from the last published report, if any.
   prior_report: reviewReady === 'null' ? priorReport : `${artifactsDir()}/review/report.md`,
+  // A correction for CI gets a light review: the code lens alone, on the delta.
+  light_review: reason === 'ci_pr_caused',
   summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(process.env[`INPUTS_${SUMMARY_OF[reason]}`])}`,
 });

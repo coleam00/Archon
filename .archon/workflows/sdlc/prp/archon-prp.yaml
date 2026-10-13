@@ -5,9 +5,11 @@ description: |
   archon-plan plans, then delivers when every design call is settled, or stops
   with the questions only a person can answer; archon-issue investigates, then
   delivers on a proven cause. Delivery runs capped rounds of implement (which
-  checks only what it changed; CI is the validation), draft PR, and review; after
-  the review passes, simplify runs once, then one CI agent marks the PR ready on
-  green. A conflict with the base sends the work back to implement, which merges
+  checks only what it changed; CI is the validation), draft PR, and review. The
+  first review is routed; a fix round's review reruns the same lenses on the
+  changes since the last reviewed commit, and a CI fix round's review is the code
+  lens alone on them. After the review passes, simplify runs once, then one CI
+  agent marks the PR ready on green. A conflict with the base sends the work back to implement, which merges
   the base into the branch. Every other ending is not ready, with its reason.
   Never merges the PR.
 
@@ -230,10 +232,11 @@ nodes:
     when: "$verdict.output.route == 'plan'"
 
   # One round: implement → draft PR → review → (simplify → CI). A review that needs
-  # fixes, or a red CI the PR caused, starts another round. Each round's implementer
-  # is a fresh agent that reads the previous round's review report and ci.md; once a
-  # loop body can continue a named session, `implement` resumes the previous round's
-  # session instead.
+  # fixes, or a red CI the PR caused, starts another round. The first review is the
+  # full routed one; a later round's review reruns the same lenses on the changes
+  # since the last reviewed commit, and after a correction for CI the code lens
+  # alone reviews them. Each round's implementer is a fresh agent that reads the
+  # previous round's review report and ci.md.
   - id: rounds
     # One join into delivery: the direct route, a rooted investigation, or a ready
     # plan. `&&` short-circuits, so a skipped producer's output is never read.
@@ -282,6 +285,7 @@ nodes:
           with:
             scope: "$pr.output"
             prior_report: "$LOOP_PREV.round.output.prior_report"
+            light: "$LOOP_PREV.round.output.light_review"
             work_order: >-
               $ARTIFACTS_DIR/triage.md, with plan.md or investigation.md beside it
               when present.
@@ -359,8 +363,9 @@ nodes:
                 enum: [delivered, implement_blocked, review_open, replan, ci_pr_caused, ci_other, round_cap]
               pr_url: { type: string }
               prior_report: { type: string }
+              light_review: { type: boolean }
               summary: { type: string }
-            required: [round, done, ready, reason, pr_url, prior_report, summary]
+            required: [round, done, ready, reason, pr_url, prior_report, light_review, summary]
 
   # One return for every ending: the rounds' typed ending, or the advisory stop that
   # kept delivery from starting. A failed node cascades an `upstream_failed` skip that

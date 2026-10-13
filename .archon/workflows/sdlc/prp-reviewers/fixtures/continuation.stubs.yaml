@@ -1,10 +1,11 @@
-# Outcome: a continuation round. One reviewer verifies the prior report and the
-# correction delta; no lens runs (none carries a stub), whatever the route node
-# would select.
-mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
+# Outcome: a continuation round. The lenses the previous round ran (seams and code,
+# read back by mode) rerun on the delta; route is skipped and carries no stub, nor do
+# the lenses left out, so the fixture fails if any of them runs.
+mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":true,"code":true,"tests":false,"errors":false,"docs":false}'
 scope:
   pr: null
-route: { seams: true, code: true, tests: false, errors: false, docs: true, risk: "stub: the delta adds a documented option" }
+seams: "0 findings; prior finding S1 fixed at fixturehead"
+code: "0 findings"
 review-complete: "settled"
 synthesize:
   ready: true
@@ -19,4 +20,4 @@ publish:
 fixture:
   inputs: { prior_report: "/fixture/report.md" }
   expect: completed
-  reached: [synthesize, publish]
+  reached: [seams, code, synthesize, publish]
