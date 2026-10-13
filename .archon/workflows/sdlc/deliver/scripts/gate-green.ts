@@ -52,9 +52,19 @@ if (cause === 'incomplete') {
 } else if (green === 'true') {
   emit({ gate: 'green', red_cause: '', stage, summary: '' });
 } else if (cause === '') {
+  // Not green with no cause is usually not a failing check at all but unfinished
+  // work: an acceptance criterion the agent could not meet (seen live: a rubric no
+  // change could satisfy). Still no pull request, but the refusal carries the
+  // agent's own account and the next step, so whoever reads it next (a person, or
+  // the loop deciding where this item goes) does not have to dig for it.
   refuse(
-    `${stage} is red and declared no red_cause. Red that nobody explained is red this ` +
-      'gate refuses — its summary says what happened.'
+    `${stage} is not green and declared no red_cause, so this is treated as ` +
+      `unfinished work, not a passable red. What it reported: ${summary || '(no summary)'} ` +
+      'Next step: if a check the change touches fails, fix it and record red_cause ' +
+      'introduced; if it was red before this change or failed on the environment, ' +
+      'record inherited or environment with the failing check named; if an acceptance ' +
+      'criterion cannot be met as written, say so on the work item so its owner can ' +
+      'decide, instead of retrying.'
   );
 } else if (!passesRed(cause)) {
   refuse(
