@@ -1,8 +1,8 @@
 name: archon-prp-build
 description: |
   Building block for archon-prp, not a standalone run. A copy of archon-implement
-  whose implementer checks only its own changes while it works and runs the
-  project's validation scripts once, at handoff. Commits as it goes; opens no PR.
+  whose implementer checks only what it changed and never runs the project's full
+  validation: CI is that validation. Commits as it goes; opens no PR.
 
   NOT for: implementing on its own (use archon-implement).
 

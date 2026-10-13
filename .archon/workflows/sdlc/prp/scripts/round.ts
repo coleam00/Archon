@@ -8,7 +8,7 @@
  * Bound inputs (canonical text; a skipped producer arrives as "null"):
  * - INPUTS_PREVIOUS / INPUTS_PRIOR_REPORT: the previous round's `round` and
  *   `prior_report`, and INPUTS_PREVIOUS_PR_URL its `pr_url` ('' on the first round).
- * - INPUTS_GREEN / INPUTS_RED_CAUSE: the implementer's verdict on its handoff validation.
+ * - INPUTS_GREEN / INPUTS_RED_CAUSE: the implementer's verdict on the checks it ran.
  * - INPUTS_REVIEW_READY / INPUTS_REVIEW_ACTION:
  *   the review verdict. INPUTS_CI: the CI agent's state. INPUTS_PR_URL: the PR.
  * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.

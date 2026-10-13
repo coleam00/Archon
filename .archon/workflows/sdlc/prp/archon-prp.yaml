@@ -4,10 +4,10 @@ description: |
   the agent-first shape. Triage labels the route: archon-ready delivers;
   archon-plan plans, then delivers when every design call is settled, or stops
   with the questions only a person can answer; archon-issue investigates, then
-  delivers on a proven cause. Delivery runs capped
-  rounds of implement (which runs the project's validation once, at handoff),
-  draft PR, and review; after the review passes, simplify runs once, then one CI
-  agent marks the PR ready on green. Every other ending is not ready, with its
+  delivers on a proven cause. Delivery runs capped rounds of implement (which
+  checks only what it changed; CI is the validation), draft PR, and review; after
+  the review passes, simplify runs once, then one CI agent marks the PR ready on
+  green. Every other ending is not ready, with its
   reason. Never merges and never syncs the base.
 
   Use when: comparing this shape with archon-ship on real work — "deliver this

@@ -3,7 +3,7 @@ description: |
   Building block for archon-prp, not a standalone run. A copy of archon-review in
   which a quick route node (small model, reads only the diff summary and the plan)
   picks the lenses, seams on by default, and no node runs the project's gate:
-  reviewers read the implementer's handoff validation instead. Each lens is a
+  reviewers read the checks the implementer ran on what it changed. Each lens is a
   fresh reviewer; synthesis aggregates and publishes one canonical PR comment.
 
   NOT for: reviewing a PR on its own (use archon-review).
