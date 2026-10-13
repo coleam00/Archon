@@ -1,10 +1,10 @@
 import { expect, test, spyOn } from 'bun:test';
-import { execFileSync } from 'node:child_process';
+import * as childProcess from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import * as os from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { getSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { buildDockerExecTranscriptReadArgs } from './container-spawn';
@@ -171,30 +171,83 @@ test('native default config root uses the home directory', async () => {
   }
 });
 
-test.skipIf(process.platform === 'win32')(
-  'container shell reads a unique native transcript and rejects missing/duplicate files',
-  () => {
-    const { root } = tree();
-    const args = buildDockerExecTranscriptReadArgs(
-      { kind: 'container', containerId: 'container' },
-      '/work',
-      {},
-      sessionId
-    );
-    const shellArgs = args.slice(args.indexOf('sh') + 1);
-    const run = (configRoot: string) =>
-      execFileSync('sh', shellArgs, {
-        env: { ...process.env, CLAUDE_CONFIG_DIR: configRoot },
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    expect(parseSessionSpend(run(root), sessionId)).toEqual(known);
-    expect(() => run(join(root, 'missing'))).toThrow();
-    mkdirSync(join(root, 'projects', 'duplicate'));
-    writeFileSync(join(root, 'projects', 'duplicate', sessionId + '.jsonl'), fixture);
-    expect(() => run(root)).toThrow();
+// Host and container locators cannot share filesystem code; this matrix binds their
+// native-path and ambiguity rules while executing the production container branch.
+test.skipIf(process.platform === 'win32').each([
+  { name: 'default', config: undefined, known: true },
+  { name: 'empty', config: '', known: true },
+  { name: 'relative', config: 'relative', known: true },
+  { name: 'absolute', config: 'absolute', known: true },
+  { name: 'NFC', config: 'cafe\u0301', known: true },
+  { name: 'missing', config: 'missing', known: false },
+  { name: 'duplicate', config: 'duplicate', known: false },
+])('host/container native locator conformance: $name', async scenario => {
+  const cwd = track(mkdtempSync(join(tmpdir(), 'claude-locator-')));
+  const home = join(cwd, 'home');
+  const config = scenario.config === 'absolute' ? join(cwd, 'absolute') : scenario.config;
+  const root = config === undefined ? join(home, '.claude') : resolve(cwd, config.normalize('NFC'));
+  const project = join(root, 'projects', 'arbitrary-slug');
+  mkdirSync(project, { recursive: true });
+  if (scenario.name !== 'missing') writeFileSync(join(project, sessionId + '.jsonl'), fixture);
+  if (scenario.name === 'duplicate') {
+    const duplicate = join(root, 'projects', 'second-slug');
+    mkdirSync(duplicate);
+    writeFileSync(join(duplicate, sessionId + '.jsonl'), fixture);
   }
-);
+  const env = { HOME: home, CLAUDE_CONFIG_DIR: config };
+  const expected = scenario.known ? known : { kind: 'unknown' as const };
+  expect(await readSessionSpendBaseline(sessionId, { cwd, env })).toEqual(expected);
+
+  const runner: {
+    execFile: (
+      command: string,
+      args: string[],
+      options: childProcess.ExecFileOptionsWithStringEncoding,
+      callback: (
+        error: childProcess.ExecFileException | null,
+        stdout: string,
+        stderr: string
+      ) => void
+    ) => childProcess.ChildProcess;
+  } = childProcess;
+  const execFile = runner.execFile;
+  const docker = spyOn(runner, 'execFile').mockImplementation(
+    (command, args, options, callback) => {
+      expect(command).toBe('docker');
+      expect(args.slice(0, 6)).toEqual(['exec', '-i', '-u', 'operator', '-w', cwd]);
+      const shell = args.indexOf('sh');
+      expect(args[shell - 1]).toBe('cost-container');
+      expect(args.at(-1)).toBe(sessionId);
+      expect(args).not.toContain('HOME=' + home);
+      const containerEnv: NodeJS.ProcessEnv = { HOME: home };
+      for (let index = 0; index < shell; index++) {
+        if (args[index] !== '-e') continue;
+        const assignment = args[index + 1];
+        if (assignment === undefined) throw new Error('missing docker environment value');
+        const equals = assignment.indexOf('=');
+        containerEnv[assignment.slice(0, equals)] = assignment.slice(equals + 1);
+      }
+      return execFile(
+        'sh',
+        args.slice(shell + 1),
+        { ...options, cwd, env: containerEnv },
+        callback
+      );
+    }
+  );
+  try {
+    expect(
+      await readSessionSpendBaseline(sessionId, {
+        cwd,
+        env,
+        execContext: { kind: 'container', containerId: 'cost-container', execUser: 'operator' },
+      })
+    ).toEqual(expected);
+    expect(docker).toHaveBeenCalledTimes(1);
+  } finally {
+    docker.mockRestore();
+  }
+});
 
 test('a relative request config directory is resolved where the SDK process runs', async () => {
   const { root } = tree();

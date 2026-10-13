@@ -471,6 +471,36 @@ describe('ClaudeProvider', () => {
         }
       });
 
+      test.each([false, true])(
+        'request home supplies the in-process baseline (fork=%s)',
+        async forkSession => {
+          const home = configRoot;
+          configRoot = join(home, '.claude');
+          mkdirSync(join(configRoot, 'projects', 'arbitrary-slug'), { recursive: true });
+          const sessionId = '10000000-0000-4000-8000-000000000098';
+          persist({ session_id: sessionId, total_cost_usd: 0.1, modelUsage: haiku(0.1, 10) });
+          resultFor(sessionId, 0.3, 30);
+          const previous = process.env.CLAUDE_CONFIG_DIR;
+          delete process.env.CLAUDE_CONFIG_DIR;
+          try {
+            const results: Extract<MessageChunk, { type: 'result' }>[] = [];
+            for await (const chunk of client.sendQuery('test', '/workspace', sessionId, {
+              forkSession,
+              env: { [process.platform === 'win32' ? 'USERPROFILE' : 'HOME']: home },
+            })) {
+              if (chunk.type === 'result') results.push(chunk);
+            }
+            expect(results[0]?.cost).toBeCloseTo(0.2, 10);
+            expect(results[0]?.resolvedModel?.id).toBe('claude-haiku-4-5-20251001');
+            expect(mockQuery.mock.calls[0]?.[0].options?.env).toMatchObject({
+              [process.platform === 'win32' ? 'USERPROFILE' : 'HOME']: home,
+            });
+          } finally {
+            if (previous !== undefined) process.env.CLAUDE_CONFIG_DIR = previous;
+          }
+        }
+      );
+
       test('a resumed turn reports what it spent, not the session total', async () => {
         resultFor('10000000-0000-4000-8000-000000000001', 0.030896, 55);
         expect(await costOf()).toBe(0.030896);

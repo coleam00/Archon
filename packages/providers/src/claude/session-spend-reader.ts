@@ -75,9 +75,11 @@ export async function readSessionSpendBaseline(
       });
     } else {
       // Mirrors SDK getSessionInfo's no-dir lookup, including custom/long project slugs.
+      const home =
+        (process.platform === 'win32' ? input.env.USERPROFILE : input.env.HOME) || homedir();
       const root = resolve(
         input.cwd,
-        (input.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')).normalize('NFC')
+        (input.env.CLAUDE_CONFIG_DIR ?? join(home, '.claude')).normalize('NFC')
       );
       const projects = join(root, 'projects');
       const matches: string[] = [];
