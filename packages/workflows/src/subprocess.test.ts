@@ -18,3 +18,23 @@ test('owned process groups are rejected before container execution', async () =>
     })
   ).rejects.toThrow('Owned subprocess groups require host execution');
 });
+
+test.skipIf(process.platform === 'win32')(
+  'the setup lifeline works when project PATH contains no external utilities',
+  async () => {
+    const result = await runSubprocess(
+      { kind: 'host' },
+      '/bin/bash',
+      ['-c', '/bin/sleep 0.05; printf completed'],
+      {
+        cwd: import.meta.dir,
+        timeout: 2000,
+        env: { PATH: '/nonexistent' },
+        ownProcessGroup: true,
+        retention: { standalone: true },
+      }
+    );
+    expect(result.stdout).toBe('completed');
+    expect(result.stderr).toBe('');
+  }
+);

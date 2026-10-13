@@ -239,7 +239,8 @@ export async function runSubprocess(
 
 // Explicit <&0 keeps bash from replacing the background watcher's stdin with /dev/null.
 // Only the owner holds the write end; EOF covers even SIGKILL, without signal handlers.
-const SETUP_LIFELINE = '{ cat >/dev/null; kill -KILL 0; } <&0 >/dev/null 2>&1 &\n"$@" </dev/null';
+const SETUP_LIFELINE =
+  '{ while IFS= read -r; do :; done; kill -KILL 0; } <&0 >/dev/null 2>&1 &\n"$@" </dev/null';
 const TERMINATION_CONFIRM_MS = 1000;
 
 async function confirmGroupGone(pid: number): Promise<void> {
