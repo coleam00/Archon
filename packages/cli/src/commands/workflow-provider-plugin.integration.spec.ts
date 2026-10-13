@@ -157,6 +157,11 @@ async function cli(
   const child = Bun.spawn([process.execPath, entry, ...args], {
     env: {
       ...process.env,
+      HOME: dirname(env.pluginsDir),
+      USERPROFILE: dirname(env.pluginsDir),
+      CODEX_HOME: join(dirname(env.pluginsDir), '.codex'),
+      CLAUDE_CONFIG_DIR: join(dirname(env.pluginsDir), '.claude'),
+      PI_CODING_AGENT_DIR: join(dirname(env.pluginsDir), '.pi', 'agent'),
       ARCHON_HOME: dirname(env.pluginsDir),
       ARCHON_TELEMETRY_DISABLED: '1',
       DATABASE_URL: '',
@@ -559,7 +564,11 @@ test('a process holding the install lock excludes competing install, update and 
   expect((await loadProviderPlugins(env.pluginsDir)).map(provider => provider.id)).toEqual([
     'test-provider',
   ]);
-  expect((await cli(env, ['doctor', '--json'])).code).toBe(0);
+  const doctor = await cli(env, ['doctor', '--json']);
+  expect(doctor.output).toContain('✓ Installed providers:');
+  expect(doctor.output).toContain('test-provider: Configuration: Configuration inspected');
+  expect(doctor.output).toContain('opencode: OpenCode runtime:');
+  expect(doctor.output).not.toContain('Plugin mutation locked');
   expect((await spawnMutation('update', `${ID}@v2`))[0]).toBe(0);
   expect((await spawnMutation('remove', ID))[0]).toBe(0);
   expect(await readReceipts(env.pluginsDir)).toEqual([]);

@@ -335,9 +335,8 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'doctor',
-    spec: 'doctor [--full]',
-    description:
-      'Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)',
+    spec: 'doctor',
+    description: 'Verify installed provider diagnostics, gh auth, DB, and adapters',
   },
   {
     command: 'auth',
@@ -772,6 +771,12 @@ const orderedFlags: FlagHelp[] = [
     spec: '--pause-at-gates',
     description: 'Stop a dry-run at approval gates instead of auto-approving',
     owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
+    spec: '--providers <ids>',
+    description:
+      'Install comma-separated maintained providers, skipping the setup provider question',
+    owners: [{ command: 'setup' }],
   },
   {
     spec: '--spawn',

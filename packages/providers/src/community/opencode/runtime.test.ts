@@ -29,20 +29,20 @@ describe('probeOpencodeRuntime', () => {
   });
 
   it('reports the missing executable even when the SDK is present', async () => {
-    expect(await probeOpencodeRuntime()).toBe('executable-missing');
+    expect(await probeOpencodeRuntime(new AbortController().signal)).toBe('executable-missing');
   });
 
   it('finds an executable on PATH without running it', async () => {
     writeFileSync(join(root, process.platform === 'win32' ? 'opencode.exe' : 'opencode'), '', {
       mode: 0o755,
     });
-    expect(await probeOpencodeRuntime()).toBe('ready');
+    expect(await probeOpencodeRuntime(new AbortController().signal)).toBe('ready');
   });
 
   it.skipIf(process.platform === 'win32')('rejects a non-executable file on PATH', async () => {
     const binary = join(root, 'opencode');
     writeFileSync(binary, '');
     chmodSync(binary, 0o644);
-    expect(await probeOpencodeRuntime()).toBe('executable-missing');
+    expect(await probeOpencodeRuntime(new AbortController().signal)).toBe('executable-missing');
   });
 });

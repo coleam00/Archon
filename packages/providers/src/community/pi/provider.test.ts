@@ -3767,7 +3767,10 @@ describe('PiProvider', () => {
 
   test('Pi information hooks preserve backend status and model lists over streams', async () => {
     process.env.GEMINI_API_KEY = 'p4-backend-secret';
-    const request = { assistantConfig: { model: 'google/gemini-2.5-pro' } };
+    const request = {
+      signal: new AbortController().signal,
+      assistantConfig: { model: 'google/gemini-2.5-pro' },
+    };
     const direct = createProvider();
     const remote = overStreams(createProvider, descriptor);
     const diagnostics = await direct.diagnose(request);
