@@ -151,6 +151,7 @@ export type DurableNodeEventInput = NodeStateEventInput | SerializedDeferredNode
 
 export const WORKFLOW_EVENT_TYPES = [
   'run_attention_changed',
+  'attention_notice_sent',
   'workflow_started',
   'workflow_completed',
   'workflow_failed',
