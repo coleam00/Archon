@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
   SourceReceiptDigestConflictError,
   validateStartReceiptLimit,
@@ -15,6 +16,7 @@ export type {
 } from '@archon/workflows/resource-start-store';
 import type {
   PreparedWorkflowLaunch,
+  ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
   SourceReceiptAcceptance,
@@ -225,14 +227,14 @@ export async function acceptStartReceipt(
     for (const binding of input.bindings) {
       await query(
         `INSERT INTO remote_agent_start_receipt_bindings
-         (receipt_id,binding_id,binding_revision,host_id,intent,preparation_status)
-         VALUES ($1,$2,$3,$4,$5,'pending')`,
+         (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,preparation_status)
+         VALUES ($1,$2,$3,$4,$5,$6,'pending')`,
         [
           input.receipt.id,
           binding.bindingId,
           binding.bindingRevision,
           binding.hostId,
-          JSON.stringify(binding),
+          ...storableIntent(binding),
         ]
       );
     }
@@ -256,6 +258,41 @@ export async function acceptStartReceipt(
 
 function parseStoredJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
+}
+
+/**
+ * Older binaries parse the `intent` column strictly, so it keeps their shape: event
+ * inputs are merged into `launch.inputs` (an older binary passes them through, as it
+ * always did) and their names go to `event_input_names`. `readStoredIntent` reverses it.
+ */
+function storableIntent(binding: ResourceStartBindingIntent): [string, string | null] {
+  const { eventInputs, ...intent } = binding;
+  if (!eventInputs || Object.keys(eventInputs).length === 0) return [JSON.stringify(intent), null];
+  return [
+    JSON.stringify({
+      ...intent,
+      launch: { ...intent.launch, inputs: { ...intent.launch.inputs, ...eventInputs } },
+    }),
+    JSON.stringify(Object.keys(eventInputs)),
+  ];
+}
+
+function readStoredIntent(intent: unknown, eventInputNames: unknown): ResourceStartBindingIntent {
+  const stored = resourceStartBindingIntentSchema.parse(parseStoredJson(intent));
+  if (eventInputNames == null) return stored;
+  const names = new Set(z.array(z.string()).parse(parseStoredJson(eventInputNames)));
+  for (const name of names)
+    if (!Object.hasOwn(stored.launch.inputs, name))
+      throw new Error(`Stored binding intent lacks its event input '${name}'`);
+  const entries = Object.entries(stored.launch.inputs);
+  return {
+    ...stored,
+    launch: {
+      ...stored.launch,
+      inputs: Object.fromEntries(entries.filter(([name]) => !names.has(name))),
+    },
+    eventInputs: Object.fromEntries(entries.filter(([name]) => names.has(name))),
+  };
 }
 
 function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
@@ -293,10 +330,7 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
     status: row.preparation_status as StartBindingInspection['status'],
     ownerId: typeof row.preparation_owner === 'string' ? row.preparation_owner : null,
     error: typeof row.preparation_error === 'string' ? row.preparation_error : null,
-    intent:
-      row.intent == null
-        ? null
-        : resourceStartBindingIntentSchema.parse(parseStoredJson(row.intent)),
+    intent: row.intent == null ? null : readStoredIntent(row.intent, row.event_input_names),
     requestStatus,
     disposition: requestDisposition,
   };

@@ -198,7 +198,9 @@ export const resourceStartBindingIntentSchema = z
      * Inputs a source copied from its event, kept apart from the operator's literal
      * `launch.inputs` and overriding them on a name clash. Preparation hands these only to
      * a workflow that declares them, so untrusted event content never fills the
-     * passthrough of a workflow without `inputs:`. Operator configs omit this field.
+     * passthrough of a workflow without `inputs:`. Operator configs omit this field. The
+     * SQL store never writes it into the `intent` column, which older binaries parse
+     * strictly; see `storableIntent` in core's resource-starts.
      */
     eventInputs: z.record(z.string(), jsonValueSchema).optional(),
   })
