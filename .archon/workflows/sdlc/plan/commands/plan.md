@@ -38,9 +38,9 @@ Settle every call you can. A call is a person's only when one of these holds, an
 
 - No project document covers it, and the code, a spike, and usage data do not settle it.
 - Two project documents disagree on it.
-- It changes a shipped contract — a persisted shape, a public API, a configuration or language surface users write — and no project document already rules on that change.
+- It changes a shipped contract — a persisted shape, a public API, a configuration or language surface users write, a shipped lifecycle — and no project document already rules on that change.
 
-Each such call is an open question. Then judge whether it blocks the plan. A question blocks when no responsible choice exists without the owner's answer: write the plan up to it and stop there, and never fill the gap with a guess. A question does not block when the plan can proceed on a choice that is cheap to reverse and does not commit a shipped contract: make that choice, say in the plan that it is provisional, and still declare the question so the owner sees it. Do not edit the project's documents to settle either kind: the answer is the owner's.
+Each such call is an open question, and it always blocks the plan: write the plan up to it and stop there, and never fill the gap with a guess or a provisional choice. Meeting one of the conditions above is what makes it blocking; you may not judge it non-blocking, however cheap or reversible a choice looks. A question that meets none of the conditions is yours to settle. When the owner should still see it, proceed on a choice that is cheap to reverse, say in the plan that it is provisional, and declare the question as non-blocking. Do not edit the project's documents to settle any question.
 
 ## The plan
 
@@ -68,8 +68,8 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
 
 ## Declare the verdict
 
-- `ready` — your judgment: true when the plan can be executed as written, with every open question either absent or non-blocking; false when a question blocks it. When false, `open_questions` names at least the blocking question.
-- `open_questions` — one entry per call that belongs to a person, blocking or not, empty when there is none. Say in each entry whether it blocks. Each entry states the decision, the options and what each one costs, which of the three conditions above makes it a person's call, and one line the project's direction document could carry so that a later run settles the same call without asking.
+- `ready` — your judgment that the plan can be executed as written without asking anyone. A blocking question means `ready` is false, and `open_questions` names it. `ready` may be true while questions remain only when every one of them is non-blocking.
+- `open_questions` — one entry per open question, blocking or not, empty when there is none. Say in each entry whether it blocks: an entry that meets one of the three conditions above blocks, and only an entry that meets none may say it does not. Each entry states the decision, the options and what each one costs, which of the three conditions makes it a person's call or that none does, and one line the project's direction document could carry so that a later run settles the same call without asking.
 - `summary` — a few sentences: the chosen approach (or the open questions), and that the full plan is at `$ARTIFACTS_DIR/plan.md`.
 - `report` — a pointer to the report you just wrote, copied exactly:
 
