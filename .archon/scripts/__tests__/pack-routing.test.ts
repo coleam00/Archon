@@ -139,7 +139,7 @@ describe("deliver's terminal outcome", () => {
 });
 
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; next_review: string }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -203,9 +203,9 @@ describe("deliver's round", () => {
   });
 
   it('reviews the next round light only after a CI fix', () => {
-    expect(round({ INPUTS_CI: 'pr_caused' }).next_review).toBe('light');
-    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI: 'null' }).next_review).toBe(
-      'delta'
+    expect(round({ INPUTS_CI: 'pr_caused' }).light_review).toBe(true);
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI: 'null' }).light_review).toBe(
+      false
     );
   });
 
@@ -240,7 +240,7 @@ describe('review lens gating', () => {
     expect(mode).toEqual(expect.arrayContaining(ids));
     for (const lens of lenses) {
       expect(lens.when).toBe(
-        `$mode.output.route == true && $route.output.${lens.id} == true || $mode.output.${lens.id} == true`
+        `$mode.output.continuation == false && $route.output.${lens.id} == true || $mode.output.${lens.id} == true`
       );
     }
   });

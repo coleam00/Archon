@@ -307,7 +307,7 @@ describe('bundled-defaults', () => {
         errors: '$INPUTS.errors',
         // Later rounds review the delta since the last reviewed commit.
         prior_report: '$LOOP_PREV.round.output.prior_report',
-        depth: '$LOOP_PREV.round.output.next_review',
+        light: '$LOOP_PREV.round.output.light_review',
       });
       // One typed value carries the target — not the same number bound twice
       // beside a head branch nothing downstream reads (#2968).

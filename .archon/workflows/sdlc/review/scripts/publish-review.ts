@@ -25,8 +25,10 @@
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
  *   INPUTS_DISCOVERIES: the certified verdict fields this node forwards.
- * - INPUTS_LENSES: the route agent's selection, or `null` when it did not run this
- *   round. Recorded beside the report so a later round reruns the same lenses.
+ * - INPUTS_ROUTE / INPUTS_MODE: the route agent's lens decision ("null" when a
+ *   continuation skipped it) and review-round's output, whose lens fields hold a
+ *   continuation's set. The lenses this round ran are recorded beside the report
+ *   as the next round's lens set.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -42,6 +44,7 @@ import {
   type QualifiedPr,
 } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
+import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 
 const MARKER = '<!-- archon-review-report -->';
 
@@ -65,6 +68,13 @@ function declaredPr(value: string): QualifiedPr | undefined {
     return undefined;
   }
   return parseQualifiedPr(target);
+}
+
+/** The lenses this round ran: the route agent's call on a first round, review-round's otherwise. */
+function lenses(): Record<string, boolean> {
+  const decision = record(JSON.parse(text(process.env.INPUTS_ROUTE) || 'null'));
+  const source = decision ?? record(JSON.parse(text(process.env.INPUTS_MODE)));
+  return Object.fromEntries(REVIEW_LENSES.map(lens => [lens, source?.[lens] === true]));
 }
 
 function label(pr: QualifiedPr | undefined): string {
@@ -120,12 +130,9 @@ try {
       rmSync(directory, { recursive: true, force: true });
     }
   }
-  // review-round reads these as the next round's cursor and lens selection.
+  // review-round reads these as the next round's cursor and lens set.
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
-  const lenses = text(process.env.INPUTS_LENSES);
-  if (lenses !== '' && lenses !== 'null') {
-    writeFileSync(join(dirname(reportPath), 'lenses.json'), `${lenses}\n`);
-  }
+  writeFileSync(join(dirname(reportPath), 'reviewed-lenses.json'), JSON.stringify(lenses()));
   emit(verdict);
 } catch (error) {
   refuse(`publish-review: ${error instanceof Error ? error.message : String(error)}`);

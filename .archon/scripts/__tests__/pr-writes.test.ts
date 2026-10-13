@@ -297,6 +297,8 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
         path: 'review/report.md',
       }),
       INPUTS_DISCOVERIES: '[]',
+      INPUTS_ROUTE: 'null',
+      INPUTS_MODE: JSON.stringify({ seams: false, code: true, tests: false, errors: false, docs: false }),
       ...options.inputs,
     },
     artifacts: { 'review-report.md': REPORT, ...options.artifacts },
@@ -498,14 +500,16 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
 
   // An unpushed correction once reached publication with a scope that declared no
   // pull request; the error named the declaration instead of the unpushed head.
-  it('records the route selection beside the report for the next round to rerun', () => {
-    const lenses = { seams: true, code: true, tests: false, errors: false, docs: false, reason: 'r' };
-    const first = publishReview({ inputs: { ...report, INPUTS_LENSES: JSON.stringify(lenses) } });
+  it('records the lenses this round ran beside the report for the next round to rerun', () => {
+    const recorded = (run: ScriptRun): unknown =>
+      JSON.parse(readFileSync(join(run.artifacts, 'reviewed-lenses.json'), 'utf8'));
+    const route = { seams: true, code: true, tests: false, errors: false, docs: true, reason: 'r' };
+    const first = publishReview({ inputs: { ...report, INPUTS_ROUTE: JSON.stringify(route) } });
     expect(first.code).toBe(0);
-    const recorded = join(first.artifacts, 'lenses.json');
-    expect(JSON.parse(readFileSync(recorded, 'utf8'))).toEqual(lenses);
-    const later = publishReview({ inputs: { ...report, INPUTS_LENSES: 'null' } });
-    expect(existsSync(join(later.artifacts, 'lenses.json'))).toBe(false);
+    expect(recorded(first)).toEqual({ seams: true, code: true, tests: false, errors: false, docs: true });
+    // A continuation skipped route: its own (here, light) set is what ran.
+    const light = publishReview({ inputs: report });
+    expect(recorded(light)).toEqual({ seams: false, code: true, tests: false, errors: false, docs: false });
   });
 
   it('names an unpushed head before any scope disagreement', () => {

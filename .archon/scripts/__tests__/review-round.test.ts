@@ -61,13 +61,13 @@ function round(
   cwd: string,
   head: string,
   cursor?: string,
-  extra: { depth?: string; lenses?: object } = {}
+  extra: { light?: boolean; lenses?: object } = {}
 ): ScriptRun {
   return runPackScript('review/scripts/review-round', {
     cwd,
     inputs: {
       INPUTS_PRIOR_REPORT: cursor === undefined ? '' : '{ARTIFACTS}/review/report.md',
-      INPUTS_DEPTH: extra.depth ?? '',
+      INPUTS_LIGHT: extra.light ? 'true' : 'false',
       ARCHON_NODE_EXECUTION: JSON.stringify(execution(head)),
     },
     artifacts:
@@ -76,7 +76,7 @@ function round(
         : {
             'review/report.md': 'Round 1',
             'review/reviewed-head': `${cursor}\n`,
-            ...(extra.lenses ? { 'review/lenses.json': JSON.stringify(extra.lenses) } : {}),
+            ...(extra.lenses ? { 'review/reviewed-lenses.json': JSON.stringify(extra.lenses) } : {}),
           },
   });
 }
@@ -92,13 +92,14 @@ describe('review-round', () => {
       cursor: '',
       risks: FULL_REVIEW_RISKS,
       execution: execution(newer),
-      route: true, seams: false, code: false, tests: false, errors: false, docs: false,
+      seams: false, code: false, tests: false, errors: false, docs: false,
     });
   });
 
-  it("continues from the previous round's reviewed commit to a head that descends from it", () => {
+  it("continues from the previous round's reviewed commit with the lenses it ran", () => {
     const { cwd, older, newer } = history();
-    const run = round(cwd, newer, older);
+    const recorded = { seams: true, code: true, tests: false, errors: true, docs: false };
+    const run = round(cwd, newer, older, { lenses: recorded });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       continuation: true,
@@ -106,27 +107,27 @@ describe('review-round', () => {
       cursor: older,
       risks: FULL_REVIEW_RISKS,
       execution: execution(newer),
-      route: true, seams: false, code: false, tests: false, errors: false, docs: false,
+      ...recorded,
     });
   });
 
-  it('reruns the recorded lenses on a later round, and the code reviewer alone after a CI fix', () => {
+  it('runs the code lens alone on a light continuation', () => {
     const { cwd, older, newer } = history();
-    const recorded = { seams: true, code: true, tests: false, errors: true, docs: false, reason: 'r' };
-    expect(JSON.parse(round(cwd, newer, older, { lenses: recorded }).stdout)).toMatchObject({
-      route: false,
-      seams: true,
-      code: true,
-      tests: false,
-      errors: true,
-      docs: false,
-    });
-    expect(JSON.parse(round(cwd, newer, older, { lenses: recorded, depth: 'light' }).stdout)).toMatchObject({
-      route: false,
+    const recorded = { seams: true, code: false, tests: true, errors: true, docs: true };
+    expect(JSON.parse(round(cwd, newer, older, { lenses: recorded, light: true }).stdout)).toMatchObject({
       seams: false,
       code: true,
+      tests: false,
       errors: false,
+      docs: false,
     });
+  });
+
+  it('refuses a continuation whose report recorded no lenses', () => {
+    const { cwd, older, newer } = history();
+    const run = round(cwd, newer, older);
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('records no lenses');
   });
 
   it('refuses a head that is an ancestor of the commit the previous round reviewed', () => {

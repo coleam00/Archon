@@ -10,7 +10,7 @@ description: |
   Advisory and read-only: it judges, it never edits. Given the previous round's
   report, the same lenses review only the correction delta since the reviewed
   commit, judging whether each prior finding was resolved or validly declined
-  (`depth: light` runs the general code reviewer alone, for a CI fix), and one
+  (`light` runs the general code reviewer alone, for a CI fix), and one
   continuation reviewer carries the prior findings forward.
 
   When reviewing a PR, the final synthesized report is posted to it as one
@@ -41,13 +41,11 @@ inputs:
       The accepted outcome and scope boundaries for this change. Delivery passes
       the same work order implementation received. Standalone review may leave
       this empty and use the PR's problem, outcome, and explicit scope instead.
-  # `light` reruns only the general code reviewer on the delta: a round whose
-  # correction was a CI fix. Anything else reruns the recorded lens selection.
-  depth:
-    default: ""
+  light:
+    default: "false"
     description: >-
-      On a continuation round, `light` runs the general code reviewer alone on the
-      correction delta; empty reruns the lenses the first round selected.
+      "true" when this continuation follows a correction for CI rather than for
+      review: the general code lens alone reviews the delta.
   # Error review can be forced on or off; `auto` leaves it to the route agent.
   errors:
     default: "auto"
@@ -71,7 +69,7 @@ nodes:
     runtime: bun
     with:
       prior_report: "$INPUTS.prior_report"
-      depth: "$INPUTS.depth"
+      light: "$INPUTS.light"
     output_format:
       type: object
       properties:
@@ -82,14 +80,13 @@ nodes:
         risks: { type: string, minLength: 1 }
         # This node's engine identity, so synthesis counts only this round's lenses.
         execution: { type: object }
-        # Ask the route agent (a first round), or run the recorded lenses below.
-        route: { type: boolean }
+        # A continuation's lenses; all false on a first round, where route decides.
         seams: { type: boolean }
         code: { type: boolean }
         tests: { type: boolean }
         errors: { type: boolean }
         docs: { type: boolean }
-      required: [continuation, head, cursor, risks, execution, route, seams, code, tests, errors, docs]
+      required: [continuation, head, cursor, risks, execution, seams, code, tests, errors, docs]
 
   - id: scope
     command: review-scope
@@ -118,15 +115,15 @@ nodes:
       required: [pr]
 
   # The lens decision is quick and separate from scope: a small model reads the diff
-  # summary and the work order and answers, with seams on by default. A later round
-  # reruns the recorded selection on the delta instead (see review-round).
+  # summary and the work order and answers, with seams on by default. Only a first
+  # round decides; a continuation reruns what mode read back.
   - id: route
     command: route-review
     model: small
     context: fresh
     mutates_checkout: false
     depends_on: [mode]
-    when: "$mode.output.route == true"
+    when: "$mode.output.continuation == false"
     output_format:
       type: object
       properties:
@@ -151,7 +148,7 @@ nodes:
     depends_on: [scope, route]
     # A later round skips route; scope alone must have succeeded.
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.route == true && $route.output.seams == true || $mode.output.seams == true"
+    when: "$mode.output.continuation == false && $route.output.seams == true || $mode.output.seams == true"
 
   - id: code
     output_type: review-lens
@@ -161,7 +158,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.route == true && $route.output.code == true || $mode.output.code == true"
+    when: "$mode.output.continuation == false && $route.output.code == true || $mode.output.code == true"
 
   - id: tests
     output_type: review-lens
@@ -170,7 +167,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.route == true && $route.output.tests == true || $mode.output.tests == true"
+    when: "$mode.output.continuation == false && $route.output.tests == true || $mode.output.tests == true"
 
   - id: errors
     output_type: review-lens
@@ -179,7 +176,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.route == true && $route.output.errors == true || $mode.output.errors == true"
+    when: "$mode.output.continuation == false && $route.output.errors == true || $mode.output.errors == true"
 
   - id: docs
     output_type: review-lens
@@ -188,7 +185,7 @@ nodes:
     mutates_checkout: false
     depends_on: [scope, route]
     trigger_rule: none_failed_min_one_success
-    when: "$mode.output.route == true && $route.output.docs == true || $mode.output.docs == true"
+    when: "$mode.output.continuation == false && $route.output.docs == true || $mode.output.docs == true"
 
   # all_done lets this barrier settle after unselected lenses, or a lens whose
   # retries were exhausted. The deciding
@@ -277,7 +274,8 @@ nodes:
       summary: "$synthesize.output.findings_summary"
       report_pointer: "$synthesize.output.report"
       discoveries: { from: "$synthesize.output.discoveries" }
-      lenses: { from: "$route.output", if_skipped: null }
+      route: { from: "$route.output", if_skipped: null }
+      mode: { from: "$mode.output" }
     output_type: review-report
     output_format: *review_verdict
 
