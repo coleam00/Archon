@@ -55,7 +55,7 @@ nodes:
         done=$round.output.done
         test "$done" = "true"
       # round caps itself one below this, so the cap ends typed instead of failing.
-      max_iterations: 4
+      max_iterations: 5
       fresh_context: true
       nodes:
         - id: implement

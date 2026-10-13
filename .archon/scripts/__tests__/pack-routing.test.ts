@@ -214,8 +214,9 @@ describe("deliver's round", () => {
   });
 
   it('ends typed at the round cap instead of exhausting the loop', () => {
-    expect(round({ INPUTS_PREVIOUS: '2', INPUTS_CI: 'pr_caused' })).toMatchObject({
-      round: 3,
+    expect(round({ INPUTS_PREVIOUS: '2', INPUTS_CI: 'pr_caused' })).toMatchObject({ round: 3, done: false });
+    expect(round({ INPUTS_PREVIOUS: '3', INPUTS_CI: 'pr_caused' })).toMatchObject({
+      round: 4,
       done: true,
       ready: false,
       reason: 'round_cap',

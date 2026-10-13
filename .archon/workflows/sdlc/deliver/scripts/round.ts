@@ -19,7 +19,7 @@
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';
 
-const ROUND_CAP = 3;
+const ROUND_CAP = 4;
 
 /** Why a round ended; `round_cap` is added only when the cap stops a round that would repeat. */
 type Ended =
