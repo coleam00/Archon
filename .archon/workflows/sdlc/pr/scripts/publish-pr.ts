@@ -12,9 +12,6 @@
  * request's head by merge only — the push never forces, so a head that is not an
  * ancestor of this commit refuses.
  *
- * Red a gate let through is disclosed at the top of the published body from the
- * gates' own typed records (./.shared/report.ts), not transcribed by the agent.
- *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_REPO / INPUTS_HEAD_REPO: `{host, path}` of the base and head repositories.
  * - INPUTS_HEAD / INPUTS_BASE: the head and base branch names.
@@ -25,7 +22,7 @@
  * - INPUTS_DRAFT: `true` opens a draft.
  */
 
-import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createPr, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
@@ -37,7 +34,6 @@ import {
 } from '../../.shared/forge.ts';
 import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { pushHead } from '../../.shared/push.ts';
-import { writePublishedBody } from '../../.shared/report.ts';
 
 type Repo = QualifiedPr['repo'];
 
@@ -79,11 +75,7 @@ function publish(): PrRecord {
     return open.pr;
   }
 
-  const bodyPath = writePublishedBody(
-    artifacts,
-    process.env.TYPED_ARTIFACTS_FILE,
-    readFileSync(text(process.env.INPUTS_BODY), 'utf8')
-  );
+  const bodyPath = text(process.env.INPUTS_BODY);
 
   // Killing the script cannot cancel a submitted forge write. Keep this claim even
   // after success: a retry may only reconcile it.

@@ -130,12 +130,28 @@ nodes:
       open_questions: { from: "$planned.output.open_questions", if_skipped: null }
       delivered: { from: "$deliver.output.ready", if_skipped: null }
       delivery: { from: "$deliver.output.summary", if_skipped: null }
+      delivery_reason: { from: "$deliver.output.reason", if_skipped: null }
     output_format:
       type: object
       properties:
         delivered: { type: boolean }
         reason:
           type: string
-          enum: [delivered, not_ready, no_action, blocked, needs_contract, refuted, not_rooted, needs_human]
+          enum:
+            # deliver's own endings
+            - delivered
+            - implement_blocked
+            - review_open
+            - replan
+            - ci_pr_caused
+            - ci_other
+            - round_cap
+            # the stops before delivery
+            - no_action
+            - blocked
+            - needs_contract
+            - refuted
+            - not_rooted
+            - needs_human
         summary: { type: string }
       required: [delivered, reason, summary]

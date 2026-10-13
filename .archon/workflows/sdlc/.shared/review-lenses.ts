@@ -1,14 +1,14 @@
 /**
  * Which review lenses a round enables: the one place the rule is written.
  *
- * The coverage node emits the flags the code, tests, simplify, errors and docs lenses
+ * The coverage node emits the flags the code, tests, errors and docs lenses
  * gate on, and the lens-status node computes which enabled lenses did not complete,
  * both from this function. Seams and focused gate before coverage exists, so their
  * `when:` expressions in archon-review.yaml restate their lines below; a conformance
  * test holds the two in step.
  */
 
-export const LENSES = ['seams', 'focused', 'code', 'tests', 'simplify', 'errors', 'docs'] as const;
+export const LENSES = ['seams', 'focused', 'code', 'tests', 'errors', 'docs'] as const;
 export type Lens = (typeof LENSES)[number];
 
 export interface LensInputs {
@@ -34,7 +34,7 @@ export function enabledLenses(input: LensInputs): Lens[] {
   const full = !focused || input.focusedFull === true;
   const lenses: Lens[] = input.seams === 'false' ? [] : ['seams'];
   if (focused) lenses.push('focused');
-  if (full) lenses.push('code', 'tests', 'simplify');
+  if (full) lenses.push('code', 'tests');
   if (input.errors === 'true') lenses.push('errors');
   if (input.docs === 'true' || (input.docs === 'auto' && input.scopeDocs)) lenses.push('docs');
   return lenses;

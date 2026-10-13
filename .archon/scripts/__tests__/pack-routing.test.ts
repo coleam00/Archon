@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
 import { LENSES } from '../../workflows/sdlc/.shared/review-lenses';
-import { PR_URL, forgePrRecord, runPackScript } from './deliver-checks-harness';
+import { PR_URL, runPackScript } from './deliver-checks-harness';
 
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 
@@ -42,6 +42,7 @@ describe("ship's terminal outcome", () => {
         INPUTS_OPEN_QUESTIONS: 'null',
         INPUTS_DELIVERED: 'null',
         INPUTS_DELIVERY: 'null',
+        INPUTS_DELIVERY_REASON: 'null',
         TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
         ...inputs,
       },
@@ -96,105 +97,118 @@ describe("ship's terminal outcome", () => {
 
   it("reports deliver's own outcome, ready or not", () => {
     const deliver = { INPUTS_ROUTE: 'deliver', INPUTS_CONTRACT: 'READY' };
-    expect(outcome({ ...deliver, INPUTS_DELIVERED: 'true', INPUTS_DELIVERY: 'https://x/pull/1' })).toEqual({
+    expect(
+      outcome({ ...deliver, INPUTS_DELIVERED: 'true', INPUTS_DELIVERY: 'https://x/pull/1', INPUTS_DELIVERY_REASON: 'delivered' })
+    ).toEqual({
       delivered: true,
       reason: 'delivered',
       summary: 'https://x/pull/1',
     });
-    expect(outcome({ ...deliver, INPUTS_DELIVERED: 'false', INPUTS_DELIVERY: 'Not ready, red: lint' })).toEqual({
+    expect(
+      outcome({ ...deliver, INPUTS_DELIVERED: 'false', INPUTS_DELIVERY: 'Not ready, red: lint', INPUTS_DELIVERY_REASON: 'ci_other' })
+    ).toEqual({
       delivered: false,
-      reason: 'not_ready',
+      reason: 'ci_other',
       summary: 'Not ready, red: lint',
     });
   });
 });
 
 describe("deliver's terminal outcome", () => {
-  const outcome = (inputs: Record<string, string>): { ready: boolean; pr_url: string; summary: string } => {
+  const outcome = (rounds: object): { ready: boolean; reason: string; pr_url: string; summary: string } => {
     const run = runPackScript('deliver/scripts/outcome', {
-      inputs: {
-        INPUTS_PR: JSON.stringify(forgePrRecord()),
-        INPUTS_REVIEW_ACTION: 'none',
-        INPUTS_FIRST_STATE: 'null',
-        INPUTS_FIRST_SUMMARY: 'null',
-        INPUTS_ACTION: 'null',
-        INPUTS_STATE: 'null',
-        INPUTS_CI_SUMMARY: 'null',
-        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
-        ...inputs,
-      },
+      inputs: { INPUTS_ROUNDS: JSON.stringify(rounds), TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
       artifacts: { 'listing.json': EMPTY_LISTING },
     });
     expect(run.code).toBe(0);
-    return JSON.parse(run.stdout) as { ready: boolean; pr_url: string; summary: string };
+    return JSON.parse(run.stdout) as { ready: boolean; reason: string; pr_url: string; summary: string };
   };
 
-  it('reports the pull request as ready when CI is green after the initial review', () => {
-    expect(outcome({ INPUTS_FIRST_STATE: 'green', INPUTS_FIRST_SUMMARY: 'all passed' })).toEqual({
+  it("reports the last round's ending with its pull request", () => {
+    expect(
+      outcome({ ready: true, reason: 'delivered', pr_url: PR_URL, summary: 'Round 1: delivered. all passed' })
+    ).toEqual({
       ready: true,
+      reason: 'delivered',
       pr_url: PR_URL,
-      summary: PR_URL,
+      summary: `Ready: Round 1: delivered. all passed\n${PR_URL}`,
     });
-  });
-
-  it('reads the last correction round over the initial CI check', () => {
-    const result = outcome({
-      INPUTS_FIRST_STATE: 'red',
-      INPUTS_FIRST_SUMMARY: 'the change broke a test',
-      INPUTS_ACTION: 'none',
-      INPUTS_STATE: 'green',
-      INPUTS_CI_SUMMARY: 'all passed',
-    });
-    expect(result.ready).toBe(true);
-  });
-
-  it('reports red the change did not cause as not ready, with the root cause', () => {
-    const result = outcome({ INPUTS_FIRST_STATE: 'red', INPUTS_FIRST_SUMMARY: 'the base fails the same way' });
-    expect(result.ready).toBe(false);
-    expect(result.pr_url).toBe(PR_URL);
-    expect(result.summary).toStartWith('Not ready, red: the base fails the same way');
-  });
-
-  it('reports a review that ended asking for a replan as not ready, without CI', () => {
-    const result = outcome({ INPUTS_REVIEW_ACTION: 'correct', INPUTS_ACTION: 'replan', INPUTS_STATE: '' });
-    expect(result.ready).toBe(false);
-    expect(result.summary).toStartWith('Not ready, the review asks for a replan');
-  });
-
-  it('reports a blocked pull request as not ready, never as red', () => {
-    const result = outcome({ INPUTS_FIRST_STATE: 'blocked', INPUTS_FIRST_SUMMARY: 'awaits approval' });
-    expect(result.ready).toBe(false);
-    expect(result.summary).toStartWith('Not ready, blocked: awaits approval');
+    const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', summary: 'Round 1: implement_blocked. x' });
+    expect(blocked).toMatchObject({ ready: false, reason: 'implement_blocked', pr_url: '' });
+    expect(blocked.summary).toBe('Not ready: Round 1: implement_blocked. x');
   });
 });
 
-describe("deliver's correction round", () => {
-  const round = (inputs: Record<string, string>): { again: boolean; action: string; state: string } =>
+describe("deliver's round", () => {
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string }
+  const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
         inputs: {
-          INPUTS_ACTION: 'none',
-          INPUTS_DISCOVERIES: '[]',
-          INPUTS_STATE: 'null',
-          INPUTS_CAUSED_BY_CHANGE: 'null',
-          INPUTS_CI_SUMMARY: 'null',
+          INPUTS_PREVIOUS: '',
+          INPUTS_PRIOR_REPORT: '',
+          INPUTS_PREVIOUS_PR_URL: '',
+          INPUTS_GREEN: 'true',
+          INPUTS_RED_CAUSE: '',
+          INPUTS_IMPLEMENT_SUMMARY: 'built',
+          INPUTS_PR_URL: PR_URL,
+          INPUTS_REVIEW_READY: 'true',
+          INPUTS_REVIEW_ACTION: 'none',
+          INPUTS_REVIEW_SUMMARY: 'clean',
+          INPUTS_CI: 'green',
+          INPUTS_CAUSED_BY_CHANGE: 'false',
+          INPUTS_CI_SUMMARY: 'all passed',
           ...inputs,
         },
       }).stdout
-    ) as { again: boolean; action: string; state: string };
+    ) as Round;
 
-  it('asks for another round when the review wants corrections, before CI runs', () => {
-    expect(round({ INPUTS_ACTION: 'correct' })).toMatchObject({ again: true, state: '' });
+  it('delivers on a passing review and green CI', () => {
+    expect(round({})).toMatchObject({ round: 1, done: true, ready: true, reason: 'delivered', pr_url: PR_URL });
   });
 
-  it('asks for another round only for a red the change caused', () => {
-    expect(round({ INPUTS_STATE: 'red', INPUTS_CAUSED_BY_CHANGE: 'true' }).again).toBe(true);
-    expect(round({ INPUTS_STATE: 'red', INPUTS_CAUSED_BY_CHANGE: 'false' }).again).toBe(false);
-    expect(round({ INPUTS_STATE: 'green', INPUTS_CAUSED_BY_CHANGE: 'false' }).again).toBe(false);
+  it('stops on red the change introduced, before any pull request', () => {
+    const ended = round({ INPUTS_GREEN: 'false', INPUTS_RED_CAUSE: 'introduced', INPUTS_PR_URL: 'null' });
+    expect(ended).toMatchObject({ done: true, ready: false, reason: 'implement_blocked', pr_url: '' });
   });
 
-  it('ends the rounds on a replan without CI', () => {
-    expect(round({ INPUTS_ACTION: 'replan' })).toMatchObject({ again: false, action: 'replan' });
+  it('keeps an earlier round’s pull request when this round opened none', () => {
+    const ended = round({
+      INPUTS_PREVIOUS: '1',
+      INPUTS_PREVIOUS_PR_URL: PR_URL,
+      INPUTS_GREEN: 'false',
+      INPUTS_PR_URL: 'null',
+    });
+    expect(ended).toMatchObject({ round: 2, reason: 'implement_blocked', pr_url: PR_URL });
+  });
+
+  it('goes again for open findings and a red the change caused, and stops on any other red', () => {
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI: 'null' })).toMatchObject({
+      done: false,
+      reason: 'review_open',
+    });
+    expect(round({ INPUTS_CI: 'red', INPUTS_CAUSED_BY_CHANGE: 'true' })).toMatchObject({ done: false, reason: 'ci_pr_caused' });
+    expect(round({ INPUTS_CI: 'red' })).toMatchObject({ done: true, ready: false, reason: 'ci_other' });
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'replan', INPUTS_CI: 'null' })).toMatchObject({
+      done: true,
+      reason: 'replan',
+    });
+  });
+
+  it('ends typed at the round cap instead of exhausting the loop', () => {
+    expect(round({ INPUTS_PREVIOUS: '2', INPUTS_CI: 'red', INPUTS_CAUSED_BY_CHANGE: 'true' })).toMatchObject({
+      round: 3,
+      done: true,
+      ready: false,
+      reason: 'round_cap',
+    });
+  });
+
+  it('points the next round at the published review report', () => {
+    expect(round({}).prior_report).toEndWith('/review/report.md');
+    expect(round({ INPUTS_GREEN: 'false', INPUTS_PRIOR_REPORT: '/earlier/report.md', INPUTS_REVIEW_READY: 'null' }).prior_report).toBe(
+      '/earlier/report.md'
+    );
   });
 });
 
@@ -237,9 +251,8 @@ describe('lens-status', () => {
     const status = lensStatus([
       lens('review__seams'),
       lens('review__tests'),
-      lens('review__simplify__simplify', { structure: true }),
     ]);
-    expect(status.required).toEqual(['seams', 'code', 'tests', 'simplify', 'errors']);
+    expect(status.required).toEqual(['seams', 'code', 'tests', 'errors']);
     expect(status.missing).toEqual(['code', 'errors']);
   });
 
@@ -248,7 +261,6 @@ describe('lens-status', () => {
       lens('review__seams'),
       lens('recheck__code'),
       lens('review__tests', { loopGroupPath: [{ groupId: 'corrections', iteration: 1 }] }),
-      lens('review__simplify__simplify', { structure: true }),
       lens('review__errors'),
     ]);
     expect(status.missing).toEqual(['code', 'tests']);

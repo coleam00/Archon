@@ -1,7 +1,7 @@
 /**
  * Decide this round's lens coverage once the focused reviewer, if any, has reported.
  *
- * A first round on the full tier enables code, tests and simplify; on the focused
+ * A first round on the full tier enables code and tests; on the focused
  * tier they run only when the focused reviewer escalated to full review. Errors and
  * docs follow their inputs. The rule lives in ../../.shared/review-lenses.ts, which
  * the lens-status node reads too.

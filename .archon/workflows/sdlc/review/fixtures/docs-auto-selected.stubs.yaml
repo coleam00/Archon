@@ -2,14 +2,13 @@
 # at its `auto` default, so the docs lens is gated on the scope node's own selection —
 # the branch archon-deliver never reaches, because it always binds a resolved boolean.
 mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
-coverage: { full: true, errors: false, docs: true, lenses: [seams, code, tests, simplify, docs] }
+coverage: { full: true, errors: false, docs: true, lenses: [seams, code, tests, docs] }
 scope:
   docs: true
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
 code: "0 findings"
 seams: "0 findings"
-simplify__simplify: { findings: false }
 tests: "0 findings"
 docs: "0 findings"
 review-complete: "settled"
@@ -25,8 +24,8 @@ publish:
   findings_summary: "stub: clean, docs lens included"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
-lens-status: { required: [seams, code, tests, simplify, docs], completed: [seams, code, tests, simplify, docs], missing: [] }
+lens-status: { required: [seams, code, tests, docs], completed: [seams, code, tests, docs], missing: [] }
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed
-  reached: [code, seams, simplify__simplify, tests, docs]
+  reached: [code, seams, tests, docs]

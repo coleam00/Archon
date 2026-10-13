@@ -6,7 +6,6 @@ scope:
   pr: null
 code: "0 findings"
 seams: "0 findings"
-simplify__simplify: { findings: false }
 tests: "0 findings"
 review-complete: "settled"
 synthesize:
@@ -21,12 +20,12 @@ publish:
   findings_summary: "stub: clean, docs lens skipped"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
-lens-status: { required: [seams, focused, code, tests, simplify], completed: [seams, focused, code, tests, simplify], missing: [] }
+lens-status: { required: [seams, focused, code, tests], completed: [seams, focused, code, tests], missing: [] }
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   inputs: { tier: focused }
   expect: completed
-  reached: [focused, code, seams, simplify__simplify, tests, synthesize]
+  reached: [focused, code, seams, tests, synthesize]
   resolved-text-contains:
     synthesize: 'the enabled lenses that did not complete are'
 exec-code: true

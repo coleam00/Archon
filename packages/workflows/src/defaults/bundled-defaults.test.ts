@@ -217,8 +217,10 @@ describe('bundled-defaults', () => {
         // anything that touches the change is a finding, only unrelated work is a
         // discovery. Every reviewer states it in the same words.
         expect(content).toContain('is a finding, even when the contract never named it');
-        expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
+        // The structure pass runs after the review, outside it, so it reads the
+        // diff and work order itself rather than a review round's scope.
         if (!key.includes(':simplify::')) {
+          expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
           expect(content).toContain('$mode.output.risks');
         }
       }
@@ -296,7 +298,9 @@ describe('bundled-defaults', () => {
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
-      const review = parsed.workflow.nodes.find(node => node.id === 'review');
+      const rounds = parsed.workflow.nodes.find(node => node.id === 'rounds');
+      if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
+      const review = rounds.loop_group.nodes.find(node => node.id === 'review');
       expect(review?.kind).toBe('include');
       if (review?.kind !== 'include') throw new Error('review is not an include');
       expect(review.with).toMatchObject({
@@ -345,6 +349,9 @@ describe('bundled-defaults', () => {
           });
         for (const node of nodes) {
           if (node.kind === 'loop_group') checkScope(node.loop_group.nodes);
+          // The one exception: the structure pass's reshape runs after the round's
+          // review has passed and goes straight to CI, by the delivery design.
+          if (node.id === 'reshape') continue;
           if (isInclude(node.id, 'archon-implement') && !reviewedAfter(node.id)) {
             unreviewed.push(node.id);
           }
@@ -382,11 +389,11 @@ describe('bundled-defaults', () => {
       expect(offenders).toEqual([]);
     });
 
-    // CI is the project's full validation, judged by one agent prompt that runs after
-    // the initial review converges (ci-first) and at the end of each correction round
-    // (ci). A red the change caused drives another round, whose fix is reviewed before
-    // CI runs again. The graph has no engine wait and no separate ready-mark node.
-    it('archon-deliver judges CI in the correction rounds, with one shared prompt', () => {
+    // One round loop owns delivery: implement, pr, review, then simplify and one CI
+    // agent once the review passes. The pr step runs every round and owns the push;
+    // a red the change caused drives another round, whose fix is reviewed before CI
+    // runs again. The graph has no engine wait and no separate ready-mark node.
+    it('archon-deliver runs one round loop that ends in a single CI agent', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],
         'archon-deliver.yaml',
@@ -394,7 +401,6 @@ describe('bundled-defaults', () => {
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       const nodes = parsed.workflow.nodes;
-      const node = (id: string) => nodes.find(candidate => candidate.id === id);
       const waits = nodes.flatMap(candidate =>
         candidate.kind === 'loop_group'
           ? candidate.loop_group.nodes.filter(body => body.kind === 'wait')
@@ -403,21 +409,20 @@ describe('bundled-defaults', () => {
             : []
       );
       expect(waits).toEqual([]);
-      const rounds = node('rounds');
+      expect(nodes.map(candidate => candidate.id)).toEqual(['rounds', 'update-pr-body', 'outcome']);
+      const rounds = nodes[0];
       if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
       expect(rounds.loop_group.nodes.map(body => body.id)).toEqual([
-        'fix',
-        'gate-fix',
-        'recheck',
+        'implement',
+        'pr',
+        'route',
+        'review',
+        'simplify',
+        'reshape',
         'ci',
         'round',
       ]);
-      const ci = rounds.loop_group.nodes.find(body => body.id === 'ci');
-      const first = node('ci-first');
-      if (ci?.kind !== 'agent' || first?.kind !== 'agent')
-        throw new Error('ci nodes are not agents');
-      expect(ci.source).toEqual(first.source);
-      expect(node('flip-ready')).toBeUndefined();
+      expect(rounds.loop_group.nodes.find(body => body.id === 'ci')?.kind).toBe('agent');
       expect(parsed.workflow.returns).toBe('outcome');
       expect(parsed.workflow.outcome_field).toBe('ready');
     });
@@ -503,7 +508,7 @@ describe('bundled-defaults', () => {
       const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
       expect(docs?.when).toBe('$coverage.output.docs == true');
 
-      const specialists = ['seams', 'code', 'tests', 'focused', 'simplify', 'errors', 'docs'];
+      const specialists = ['seams', 'code', 'tests', 'focused', 'errors', 'docs'];
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
       expect(reviewComplete?.kind).toBe('exec');
       expect(reviewComplete?.depends_on).toEqual(['coverage', ...specialists]);
@@ -512,9 +517,8 @@ describe('bundled-defaults', () => {
       expect(lensWhen('code')).toContain('$coverage.output.full == true');
       expect(lensWhen('tests')).toContain('$coverage.output.full == true');
       expect(lensWhen('focused')).toContain("$INPUTS.tier == 'focused'");
-      // Structure is a full-tier lens again: delivery's pre-PR pass is the first look,
-      // not a replacement for this one.
-      expect(lensWhen('simplify')).toContain('$coverage.output.full == true');
+      // Structure is judged once, by delivery after a review passes, not as a lens.
+      expect(parsed.workflow.nodes.find(node => node.id === 'simplify')).toBeUndefined();
       // Reviewers are read-only by the engine's check, not only by their prompts.
       for (const id of [
         'scope',
@@ -826,7 +830,10 @@ describe('bundled-defaults', () => {
       expect(updateNode?.kind).toBe('agent');
       if (updateNode?.kind !== 'agent') throw new Error('update-pr-body is not an agent node');
       // A command node carries its bindings on `source`, not the node root.
-      expect(updateNode.source).toMatchObject({ kind: 'command', with: { pr: '$pr.output' } });
+      expect(updateNode.source).toMatchObject({
+        kind: 'command',
+        with: { pr: '$rounds.output.pr_url' },
+      });
       // Composition once dropped that binding while materializing the command body
       // and then reported both names as missing caller inputs, so archon-deliver
       // declared them with empty defaults purely to load inside ship/upkeep

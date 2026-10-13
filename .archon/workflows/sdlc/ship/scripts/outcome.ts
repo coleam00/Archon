@@ -16,8 +16,8 @@
  *   summary, or "null" when it did not run.
  * - INPUTS_PLAN_SUMMARY / INPUTS_OPEN_QUESTIONS: the planner's summary and the calls it
  *   left to a person, or "null" when it did not run.
- * - INPUTS_DELIVERED / INPUTS_DELIVERY: deliver's `ready` and `summary`, or "null"
- *   when the deliver branch was skipped.
+ * - INPUTS_DELIVERED / INPUTS_DELIVERY / INPUTS_DELIVERY_REASON: deliver's `ready`,
+ *   `summary` and `reason`, or "null" when the deliver branch was skipped.
  *
  * A failed delivery cannot reach this node: the failure cascades an
  * `upstream_failed` skip that blocks this join, and the run's terminal record names
@@ -98,5 +98,9 @@ if (delivered === 'null') {
   });
 } else {
   // Deliver ran, so its outcome is the report; its summary already carries the caveats.
-  emit({ delivered: delivered === 'true', reason: delivered === 'true' ? 'delivered' : 'not_ready', summary: delivery });
+  emit({
+    delivered: delivered === 'true',
+    reason: text(process.env.INPUTS_DELIVERY_REASON),
+    summary: delivery,
+  });
 }

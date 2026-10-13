@@ -1,6 +1,6 @@
-# Dry-run fixture: delivery dies at the green gate. Failure-cascade skips block
-# ship's outcome join even though triage succeeded. Terminal reporting after
-# delivery failure belongs to #3043; this fixture checks the original gate failure.
+# Dry-run fixture: delivery dies when the implementer declares a blocker and changed
+# nothing. The real assert-changed guard refuses, the loop group fails, and the
+# failure cascade blocks ship's outcome join even though triage succeeded.
 triage__triage:
   decision: { contract: READY, route: deliver }
   complexity: small
@@ -8,14 +8,13 @@ triage__triage:
   area_labels: []
   summary: "stub: current code confirms a complete work order"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
-deliver__impl__implement:
+implement__implement:
   done: true
   green: false
   red_cause: ""
-  summary: "stub: full validate red on one spec this change does not touch"
-deliver__impl__assert-changed: "2 files changed"
-# deliver__gate-green is deliberately unstubbed: the real gate must refuse.
+  summary: "stub: blocked: the work order names a module that does not exist"
+# implement__assert-changed is deliberately unstubbed: the real guard must refuse.
 fixture:
   expect: failed
-  fail-node: deliver__gate-green
+  fail-node: [implement__assert-changed, deliver__rounds]
 exec-code: true

@@ -28,7 +28,7 @@ describe('effective review coverage', () => {
       full: true,
       errors: false,
       docs: false,
-      lenses: ['seams', 'code', 'tests', 'simplify'],
+      lenses: ['seams', 'code', 'tests'],
     });
   });
 
@@ -38,7 +38,7 @@ describe('effective review coverage', () => {
       expect(run.code).toBe(0);
       expect(JSON.parse(run.stdout)).toMatchObject({ full: fullReview });
       expect(JSON.parse(run.stdout).lenses).toEqual(
-        fullReview ? ['seams', 'focused', 'code', 'tests', 'simplify'] : ['seams', 'focused']
+        fullReview ? ['seams', 'focused', 'code', 'tests'] : ['seams', 'focused']
       );
     });
   }

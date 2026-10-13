@@ -296,31 +296,6 @@ function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
   return left.number === right.number && sameRepo(left.repo, right.repo);
 }
 
-/**
- * The URL of the issue a `workitem.create` filed or recovered. A recovered issue
- * (`changed: false`, found by its marker) counts only while it is open: a closed one
- * was settled by a maintainer, and reporting it as filed would leave this record
- * unpublished.
- */
-export function parseCreatedWorkItem(value: unknown, repo: QualifiedPr['repo']): string {
-  const result = record(value);
-  const item = record(result?.workitem);
-  const ref = parseQualifiedPr(JSON.stringify(item?.ref));
-  if (
-    result?.outcome !== 'applied' ||
-    typeof result.changed !== 'boolean' ||
-    item?.kind !== 'issue' ||
-    !sameRepo(ref.repo, repo) ||
-    typeof item.url !== 'string' ||
-    !URL.canParse(item.url) ||
-    (item.state !== 'open' && item.state !== 'closed')
-  )
-    throw new Error('forge returned an invalid created work item');
-  if (item.state !== 'open') {
-    throw new Error(`forge recovered ${item.url}, which is closed, instead of filing an open issue`);
-  }
-  return item.url;
-}
 export function readWorkItemLabels(ref: QualifiedPr): string[] {
   const value = invokeForge('workitem.view', { ref });
   const observed = parseQualifiedPr(JSON.stringify(value?.ref));

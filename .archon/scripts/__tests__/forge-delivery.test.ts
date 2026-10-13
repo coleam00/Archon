@@ -15,7 +15,6 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
-  forgePrRecord,
   PR,
   gitCheckout,
   runPackScript,
@@ -208,7 +207,7 @@ describe('the forge opt-in delivers through plugin operations', () => {
 // Real CLI and plugin processes, like the delivery test above: several seconds on a
 // loaded machine, past the default five.
 for (const other of [false, true]) {
-  it(`preserves inherited-property labels and publishes marker-idempotent discoveries through ${other ? 'a non-GitHub tracker' : 'GitHub'}`, () => {
+  it(`preserves inherited-property labels through ${other ? 'a non-GitHub tracker' : 'GitHub'}`, () => {
     const host = forgeHost(other);
     const operatorLabels = Object.getOwnPropertyNames(Object.prototype);
     const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
@@ -236,43 +235,12 @@ for (const other of [false, true]) {
       published: true,
       labels: ['archon-ready', 'archon-small', 'area', 'constructor'],
     });
-    const record = {
-      title: 'Proved discovery',
-      claim: 'Concrete claim',
-      evidence: ['file:12'],
-      relation: 'unrelated',
-      source_nodes: ['review'],
-    };
-    const discovery = (runId: string): ScriptRun =>
-      runPackScript('deliver/scripts/file-discoveries', {
-        ...options,
-        inputs: {
-          INPUTS_PR: JSON.stringify(forgePrRecord({ repo })),
-          INPUTS_INITIAL: JSON.stringify([record]),
-          INPUTS_FINAL: 'null',
-          INPUTS_MATCHES: '[]',
-          WORKFLOW_ID: runId,
-        },
-      });
-    // Two runs, two empty ledgers: the second create is recovered by its body marker.
-    const first = discovery('first');
-    const second = discovery('second');
-    for (const result of [first, second]) {
-      expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
-      expect(result.gh).toEqual([]);
-      const saved = JSON.parse(
-        readFileSync(join(result.artifacts, 'discoveries-filed.json'), 'utf8')
-      ) as Record<string, string>;
-      expect(Object.values(saved)).toEqual([JSON.parse(result.stdout).records[0].issue]);
-    }
-    expect(JSON.parse(first.stdout)).toEqual(JSON.parse(second.stdout));
     const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
       issues: { number: number; labels: (string | { name: string })[] }[];
       labels: { name: string }[];
       writes?: string[];
       calls?: string[];
     };
-    expect(state.issues).toHaveLength(2);
     const labels = state.issues[0].labels.map(label =>
       typeof label === 'string' ? label : label.name
     );
@@ -280,9 +248,5 @@ for (const other of [false, true]) {
       ['archon-ready', 'archon-small', 'area', 'operator', ...operatorLabels].sort()
     );
     expect(state.labels.some(label => label.name === 'nonexistent')).toBe(false);
-    const writes = other
-      ? state.writes?.filter(op => op === 'workitem.create')
-      : state.calls?.filter(call => call.startsWith('POST ') && call.includes('/issues'));
-    expect(writes).toHaveLength(1);
   }, 120_000);
 }

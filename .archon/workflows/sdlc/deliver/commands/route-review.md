@@ -12,7 +12,7 @@ $INPUTS.work
 
 ## Decide
 
-- `tier`: `full` runs the code, tests and simplify lenses; `focused` runs one
+- `tier`: `full` runs the code and tests lenses; `focused` runs one
   general reviewer instead, who escalates to full review when it finds a risk the
   full lenses exist for. Choose `focused` only for a change that is clearly low
   risk: documentation, tests alone, a small local fix. Choose `full` when the

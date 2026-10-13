@@ -11,7 +11,6 @@ import { validateStructuredOutput } from '../../../packages/workflows/src/struct
 import { parseWorkflow } from '../../../packages/workflows/src/loader';
 import {
   parseQualifiedPr,
-  parseCreatedWorkItem,
   type PrRecord,
   type QualifiedPr,
   type MergeRequest,
@@ -23,7 +22,6 @@ import type { PrRef } from '../../../packages/forge/src/identity';
 import {
   forgePrRecordSchema,
   type ForgePrRecord,
-  type ForgeWorkItemRecord,
 } from '../../../packages/forge/src/lifecycle';
 
 // The pack is standalone and cannot import runtime packages. These assignments
@@ -98,34 +96,6 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
   expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
   // Guard against a vacuous match: the parser must accept the qualified PR.
   expect(verdicts[0].parserAccepts).toBe(true);
-});
-
-test('standalone work-item projection accepts the owning identity and rejects a foreign repository', () => {
-  const repo = { host: 'tracker.example', path: 'group/team/repo' };
-  const workitem: ForgeWorkItemRecord = {
-    ref: { repo, number: 1 },
-    kind: 'issue',
-    url: 'https://tracker.example/group/team/repo/items/1',
-    state: 'open',
-  };
-  const value = { outcome: 'applied', changed: false, workitem };
-  expect(parseCreatedWorkItem(value, repo)).toBe(workitem.url);
-  expect(() => parseCreatedWorkItem(value, { ...repo, path: 'other' })).toThrow();
-});
-
-// A marker can recover an issue a maintainer has since closed; reporting it as filed
-// would leave the discovery unpublished.
-test('a recovered work item that is closed is never reported as filed', () => {
-  const repo = { host: 'tracker.example', path: 'group/team/repo' };
-  const workitem: ForgeWorkItemRecord = {
-    ref: { repo, number: 1 },
-    kind: 'issue',
-    url: 'https://tracker.example/group/team/repo/items/1',
-    state: 'closed',
-  };
-  expect(() => parseCreatedWorkItem({ outcome: 'applied', changed: false, workitem }, repo)).toThrow(
-    'which is closed'
-  );
 });
 
 test('triage producer declares qualified identities and its non-tracker sentinel', () => {

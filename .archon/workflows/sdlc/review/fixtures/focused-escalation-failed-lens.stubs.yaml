@@ -6,8 +6,6 @@ scope:
   pr: null
 code: "0 findings"
 seams: "0 findings"
-simplify__simplify: { findings: "invalid boolean" }
-tests: "0 findings"
 review-complete: "settled"
 synthesize:
   ready: false
@@ -21,13 +19,13 @@ publish:
   findings_summary: "stub: enabled specialist failed"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
-lens-status: { required: [seams, focused, code, tests, simplify], completed: [seams, focused, code, tests], missing: [simplify] }
+lens-status: { required: [seams, focused, code, tests], completed: [seams, focused, code], missing: [tests] }
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   inputs: { tier: focused }
   expect: failed
-  fail-node: simplify__simplify
-  reached: [focused, code, seams, tests, synthesize, publish]
+  fail-node: tests
+  reached: [focused, code, seams, synthesize, publish]
   resolved-text-contains:
     synthesize: 'the enabled lenses that did not complete are'
 exec-code: true

@@ -67,7 +67,7 @@ Omit a section that does not apply; never write a placeholder to preserve one.
 
 ## Preserve proved unrelated defects
 
-A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/investigate.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`investigate`). Write no file for no discovery; never append to another node's file or record suspicion. When delivery follows in the same run, its review validates each record and delivery files it as an issue.
+A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/investigate.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`investigate`). Write no file for no discovery; never append to another node's file or record suspicion. When delivery follows in the same run, its review validates each record; the run's outcome relays them to the operator.
 
 ## Not your job
 

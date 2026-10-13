@@ -1,0 +1,55 @@
+# Dry-run fixture: the plan route settles every design call. Intel finds nothing
+# relevant, the planner names no open question, the real verdict derives ready, and
+# delivery runs one clean round to a ready pull request.
+triage__triage:
+  decision: { contract: READY, route: plan }
+  complexity: large
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  summary: "stub: the outcome is clear; the owning module is undecided"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+intel: "stub: no design call here turns on usage data"
+planned__plan:
+  open_questions: []
+  summary: "stub: every call settled by the project's documents — full plan at plan.md"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
+implement__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented; focused checks pass"
+implement__assert-changed: "3 files changed"
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
+pr__synced: "verify-sync: upstream/dev is merged and the tree is clean"
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+route: { tier: full, seams: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
+review__scope:
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+review__coverage: { full: true, errors: false, docs: false, lenses: [seams, code, tests] }
+review__seams: "0 findings"
+review__code: "0 findings"
+review__tests: "0 findings"
+review__lens-status: { required: [seams, code, tests], completed: [seams, code, tests], missing: [] }
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: none"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: none"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+simplify__simplify: { findings: false }
+simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+ci: { state: green, caused_by_change: false, summary: "stub: ci green", evidence: "stub: gh pr checks on the head commit" }
+deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
+fixture:
+  expect: completed
+  reached: [intel, planned__verdict, ci, round, deliver__outcome, outcome]
+exec-code: true

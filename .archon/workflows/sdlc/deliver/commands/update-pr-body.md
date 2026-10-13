@@ -5,11 +5,10 @@ written when the draft opened; the base merge and correction rounds since then
 may have falsified claims in it, and a validation may have passed red it has to
 disclose. Your product is an accurate description, nothing else.
 
-The pull request:
+The pull request: $INPUTS.pr. Its URL names the repository (`<owner>/<repo>`) and
+the number every command below uses.
 
-$INPUTS.pr
-
-1. Read the live description (`gh pr view <number> --repo <owner>/<repo> --json body`):
+1. Read the live description (`gh pr view <number> --repo <owner>/<repo> --json body,baseRefName`):
    a person may have edited it since, and their edits stay. Then read the full
    final diff: fetch the base from the remote whose URL is the pull request's
    repository (`git remote -v`; it need not be named `origin`) and diff

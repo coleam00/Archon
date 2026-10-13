@@ -1,0 +1,13 @@
+# Dry-run fixture: the item is not a contract yet. Triage proposes one, every
+# delivery node stays skipped, and the real outcome reports needs_contract.
+triage__triage:
+  decision: { contract: NEEDS_CONTRACT_WORK, proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" } }
+  complexity: risky
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  summary: "stub: no acceptance stated; proposed contract in triage.md"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+fixture:
+  expect: completed
+  reached: [triage__verdict, outcome]
+exec-code: true

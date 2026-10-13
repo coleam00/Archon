@@ -1,32 +1,79 @@
 /**
- * Join one correction round's verdicts into the value the loop decides on.
+ * One delivery round's typed result, and whether the round loop is done.
  *
- * CI runs in a round only once its review converged, and neither `until_bash` nor
- * the loop's output can read a skipped node. This reads CI with if_skipped bindings
- * and says whether another round is owed: the review asks for corrections, or CI is
- * red because of the change. Its output is the loop's output.
+ * A loop_group that exhausts max_iterations fails the run instead of ending it with
+ * a reason, so this node counts rounds itself and declares the run done at ROUND_CAP.
+ * Everything else is read from the round's own typed outputs; nothing here judges.
  *
- * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_ACTION / INPUTS_DISCOVERIES: this round's review verdict.
- * - INPUTS_STATE / INPUTS_CAUSED_BY_CHANGE / INPUTS_CI_SUMMARY: this round's CI
- *   verdict, or "null" when CI did not run.
+ * Bound inputs (canonical text; a skipped producer arrives as "null"):
+ * - INPUTS_PREVIOUS / INPUTS_PRIOR_REPORT / INPUTS_PREVIOUS_PR_URL: the previous round's
+ *   `round`, `prior_report` and `pr_url` ('' on the first round).
+ * - INPUTS_GREEN / INPUTS_RED_CAUSE: the implementer's verdict on the checks it ran.
+ * - INPUTS_PR_URL: this round's pull request.
+ * - INPUTS_REVIEW_READY / INPUTS_REVIEW_ACTION: the review verdict.
+ * - INPUTS_CI / INPUTS_CAUSED_BY_CHANGE: the CI agent's verdict.
+ * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.
  */
 
-import { emit, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, text } from '../../.shared/io.ts';
 
-const optional = (value: string | undefined): string | null => {
-  const bound = text(value);
-  return bound === 'null' ? null : bound;
+const ROUND_CAP = 3;
+
+/** Why a round ended; `round_cap` is added only when the cap stops a round that would repeat. */
+type Ended =
+  | 'delivered'
+  | 'implement_blocked'
+  | 'review_open'
+  | 'replan'
+  | 'ci_pr_caused'
+  | 'ci_other';
+
+const previous = Number.parseInt(text(process.env.INPUTS_PREVIOUS), 10);
+const round = (Number.isNaN(previous) ? 0 : previous) + 1;
+const green = text(process.env.INPUTS_GREEN);
+const redCause = text(process.env.INPUTS_RED_CAUSE);
+const reviewReady = text(process.env.INPUTS_REVIEW_READY);
+const reviewAction = text(process.env.INPUTS_REVIEW_ACTION);
+const ci = text(process.env.INPUTS_CI);
+const causedByChange = text(process.env.INPUTS_CAUSED_BY_CHANGE) === 'true';
+const prUrl = text(process.env.INPUTS_PR_URL);
+
+/** The reason this round ended, and whether another round can change it. */
+function decide(): { reason: Ended; again: boolean } {
+  // A validation red the change did not cause still goes to review; CI judges it again.
+  const handedOff = green === 'true' || redCause === 'inherited' || redCause === 'environment';
+  if (!handedOff) return { reason: 'implement_blocked', again: false };
+  if (reviewReady !== 'true') {
+    return reviewAction === 'replan'
+      ? { reason: 'replan', again: false }
+      : { reason: 'review_open', again: true };
+  }
+  if (ci === 'green') return { reason: 'delivered', again: false };
+  if (ci === 'red' && causedByChange) return { reason: 'ci_pr_caused', again: true };
+  return { reason: 'ci_other', again: false };
+}
+
+const SUMMARY_OF: Record<Ended, string> = {
+  delivered: 'CI_SUMMARY',
+  implement_blocked: 'IMPLEMENT_SUMMARY',
+  review_open: 'REVIEW_SUMMARY',
+  replan: 'REVIEW_SUMMARY',
+  ci_pr_caused: 'CI_SUMMARY',
+  ci_other: 'CI_SUMMARY',
 };
 
-const action = text(process.env.INPUTS_ACTION);
-const state = optional(process.env.INPUTS_STATE) ?? '';
-const causedByChange = optional(process.env.INPUTS_CAUSED_BY_CHANGE) === 'true';
+const { reason, again } = decide();
+const capped = again && round >= ROUND_CAP;
 
 emit({
-  again: action === 'correct' || (state === 'red' && causedByChange),
-  action,
-  discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
-  state,
-  ci_summary: optional(process.env.INPUTS_CI_SUMMARY) ?? '',
+  round,
+  done: !again || capped,
+  ready: reason === 'delivered',
+  reason: capped ? 'round_cap' : reason,
+  // A round whose implementer stopped opens no pull request; an earlier round's stands.
+  pr_url: prUrl === 'null' ? text(process.env.INPUTS_PREVIOUS_PR_URL) : prUrl,
+  // The next round's review continues from the last published report, if any.
+  prior_report:
+    reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
+  summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(process.env[`INPUTS_${SUMMARY_OF[reason]}`])}`,
 });
