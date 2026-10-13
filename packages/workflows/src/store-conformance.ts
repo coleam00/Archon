@@ -1,3 +1,13 @@
+import {
+  ResourceSlotCapacityConflictError,
+  SourceReceiptDigestConflictError,
+} from './resource-start-store';
+import type {
+  PreparedWorkflowLaunch,
+  ResourceStartBindingIntent,
+  ResourceStartIntent,
+  SourceReceiptAcceptance,
+} from './schemas/resource-start';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   WorkflowNotResumableError,
@@ -153,6 +163,217 @@ export function describeWorkflowStoreConformance(
     });
     afterEach(async () => {
       await harness?.close();
+    });
+
+    const launch = (id = crypto.randomUUID()): PreparedWorkflowLaunch => ({
+      version: 2,
+      run: {
+        id,
+        workflow_name: 'conformance',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+        user_message: '',
+        metadata: {},
+      },
+      execution: {
+        cwd: '/conformance',
+        conversationId: CONFORMANCE_CONVERSATION_ID,
+        isolation: { kind: 'in-place' },
+      },
+    });
+    const start = (
+      overlap: 'queue' | 'skip' = 'queue',
+      hostId = 'host',
+      capacity = 1
+    ): ResourceStartIntent => ({
+      resource: 'resource',
+      capacity,
+      hostId,
+      overlap,
+      launch: launch(),
+    });
+    const binding: ResourceStartBindingIntent = {
+      bindingId: 'binding',
+      bindingRevision: 'v1',
+      hostId: 'host',
+      runAsUserId: 'operator',
+      resource: 'resource',
+      capacity: 1,
+      overlap: 'queue',
+      launch: {
+        cwd: '/conformance',
+        workflowName: 'conformance',
+        inputs: {},
+        isolation: { kind: 'in-place' },
+      },
+    };
+    const acceptance = (): SourceReceiptAcceptance => ({
+      receipt: {
+        id: crypto.randomUUID(),
+        sourceInstanceId: 'source',
+        deliveryId: 'delivery',
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched' as const,
+      bindings: [binding] as [ResourceStartBindingIntent],
+    });
+    test('admission races keep capacity and persist only admitted runs', async () => {
+      const intents = Array.from({ length: 8 }, () => start());
+      const decisions = await Promise.all(
+        intents.map(intent => harness.store.admitResourceStart(intent))
+      );
+      expect(decisions.filter(row => row.status === 'admitted')).toHaveLength(1);
+      expect(decisions.filter(row => row.status === 'queued')).toHaveLength(7);
+      for (const [index, intent] of intents.entries()) {
+        expect((await harness.store.getWorkflowRun(intent.launch.run.id))?.status ?? null).toBe(
+          decisions[index]?.status === 'admitted' ? 'pending' : null
+        );
+        expect(await harness.store.admitResourceStart(intent)).toEqual(decisions[index]);
+      }
+      expect(
+        await rejection(harness.store.admitResourceStart(start('queue', 'host', 2)))
+      ).toBeInstanceOf(ResourceSlotCapacityConflictError);
+    });
+    test('capacity admits multiple holders and drain fills every released slot in FIFO order', async () => {
+      const intents = Array.from({ length: 5 }, () => start('queue', 'host', 2));
+      const decisions = [];
+      for (const intent of intents) decisions.push(await store.admitResourceStart(intent));
+      expect(decisions.map(row => row.status)).toEqual([
+        'admitted',
+        'admitted',
+        'queued',
+        'queued',
+        'queued',
+      ]);
+      for (const input of intents.slice(0, 2)) await store.cancelWorkflowRun(input.launch.run.id);
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual(
+        intents.slice(2, 4).map(input => ({
+          status: 'admitted',
+          requestId: input.launch.run.id,
+          runId: input.launch.run.id,
+        }))
+      );
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
+      expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+        { id: intents[4].launch.run.id },
+      ]);
+    });
+    test('admission keeps FIFO across hosts, skips overlap and withdraws queued work', async () => {
+      const store = harness.store;
+      const owner = start(),
+        queued = start('queue', 'other'),
+        later = start(),
+        skipped = start('skip');
+      await store.admitResourceStart(owner);
+      expect(await store.admitResourceStart(queued)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: owner.launch.run.id },
+      });
+      expect(await store.admitResourceStart(later)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'request', id: queued.launch.run.id },
+      });
+      expect(await store.admitResourceStart(skipped)).toMatchObject({
+        status: 'skipped',
+        blocker: { kind: 'request', id: queued.launch.run.id },
+      });
+      expect(await store.getWorkflowRun(skipped.launch.run.id)).toBeNull();
+      await store.claimPendingWorkflowRun(owner.launch.run.id);
+      await store.completeWorkflowRun(owner.launch.run.id, { duration_ms: 1 });
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toEqual(queued.launch);
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toBeNull();
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([
+        { status: 'admitted', requestId: later.launch.run.id, runId: later.launch.run.id },
+      ]);
+      expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+    });
+    test('receipt deduplication compares verified content and preparation has one owner', async () => {
+      const store = harness.store,
+        input = acceptance();
+      expect(await store.acceptStartReceipt(input)).toEqual({
+        receiptId: input.receipt.id,
+        replay: false,
+      });
+      expect(
+        await store.acceptStartReceipt({
+          ...input,
+          receipt: { ...input.receipt, id: crypto.randomUUID() },
+        })
+      ).toEqual({ receiptId: input.receipt.id, replay: true });
+      expect(
+        await rejection(
+          store.acceptStartReceipt({
+            ...input,
+            receipt: { ...input.receipt, id: crypto.randomUUID(), contentDigest: 'different' },
+          })
+        )
+      ).toBeInstanceOf(SourceReceiptDigestConflictError);
+      const owners = await eight(index =>
+        store.claimStartBindingPreparation({
+          receiptId: input.receipt.id,
+          bindingId: binding.bindingId,
+          ownerId: String(index),
+        })
+      );
+      expect(owners.filter(Boolean)).toHaveLength(1);
+      const ownerId = String(owners.indexOf(true));
+      const identity = { receiptId: input.receipt.id, bindingId: binding.bindingId, ownerId };
+      const prepared = launch();
+      expect(
+        await store.completeStartBindingPreparation({
+          ...identity,
+          ownerId: 'stale',
+          launch: prepared,
+        })
+      ).toBeNull();
+      const result = await store.completeStartBindingPreparation({ ...identity, launch: prepared });
+      expect(result).toEqual({
+        status: 'admitted',
+        requestId: prepared.run.id,
+        runId: prepared.run.id,
+      });
+      expect(
+        await store.completeStartBindingPreparation({ ...identity, launch: launch() })
+      ).toBeNull();
+      expect(await store.getStartReceipt(input.receipt.id)).toMatchObject({
+        bindings: [{ status: 'complete', requestStatus: 'admitted', disposition: result }],
+      });
+      expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
+    });
+    test('preparation failure and reset require the exact current owner', async () => {
+      const store = harness.store,
+        input = acceptance();
+      await store.acceptStartReceipt(input);
+      const identity = {
+        receiptId: input.receipt.id,
+        bindingId: binding.bindingId,
+        ownerId: 'owner',
+      };
+      expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+      expect(await store.resetStartBindingPreparation({ ...identity, ownerId: 'stale' })).toBe(
+        false
+      );
+      expect(
+        await store.failStartBindingPreparation({ ...identity, retryable: true, error: 'retry' })
+      ).toBe(true);
+      expect(await store.listPendingStartBindings({ hostId: 'host' })).toMatchObject([
+        { status: 'failed', error: 'retry' },
+      ]);
+      expect(await store.claimStartBindingPreparation({ ...identity, ownerId: 'next' })).toBe(true);
+      expect(await store.resetStartBindingPreparation(identity)).toBe(false);
+      expect(await store.resetStartBindingPreparation({ ...identity, ownerId: 'next' })).toBe(true);
+      expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+      expect(
+        await store.failStartBindingPreparation({
+          ...identity,
+          retryable: false,
+          error: 'rejected',
+        })
+      ).toBe(true);
+      expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
     });
 
     test('preserves private loop owner cursors through durable pause storage', async () => {

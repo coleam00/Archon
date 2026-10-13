@@ -34,7 +34,15 @@ test('file host records persist across hosts and released worktrees fence pendin
     name: 'project',
     default_cwd: home,
   });
-  expect(await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator')).toBeNull();
+  const user = await host.records.users.findOrCreateUserByPlatformIdentity(
+    'cli',
+    'operator',
+    'Operator'
+  );
+  expect(user).toMatchObject({ display_name: 'Operator' });
+  expect(await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator')).toEqual(
+    user
+  );
   await expect(
     host.records.conversations.getConversationById('conversation')
   ).rejects.toBeInstanceOf(FileStoreUnsupportedError);
@@ -72,6 +80,7 @@ test('file host records persist across hosts and released worktrees fence pendin
   expect(upsert.id).toBe(env.id);
   expect(upsert.created_by_user_id).toBe('first');
   const reopened = await createFileWorkflowHost(root);
+  expect(await reopened.records.users.getUserById(user!.id)).toEqual(user);
   expect(await reopened.deps.store.getCodebaseEnvVars(codebase.id)).toEqual({
     FILE_SETTING: 'value',
   });

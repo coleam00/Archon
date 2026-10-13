@@ -1,3 +1,4 @@
+import { createFileAdmissionStore, createAdmissionTransaction } from './admission';
 import { NODE_LIFECYCLE_EVENT_TYPES, foldActiveNodeIds } from '../store';
 import { FileStoreUnsupportedError } from './errors';
 import { createHash } from 'node:crypto';
@@ -34,9 +35,6 @@ import {
 } from './commit';
 
 const log = createLogger('file-store');
-const unsupportedTriggerAdmission = async (): Promise<never> => {
-  throw new FileStoreUnsupportedError('trigger admission');
-};
 const unsupportedStateDocuments = async (): Promise<never> => {
   throw new FileStoreUnsupportedError('state documents');
 };
@@ -87,7 +85,10 @@ export async function createFileWorkflowStore(
    */
   async function write<T>(
     ids: readonly string[] | 'all',
-    call: (view: TransactionView) => Promise<T>,
+    call: (
+      view: TransactionView,
+      admission: ReturnType<typeof createAdmissionTransaction>
+    ) => Promise<T>,
     { events: loadEvents = true }: { events?: boolean } = {}
   ): Promise<T> {
     const reports: { run: WorkflowRun; events: WorkflowEventRow[] }[] = [];
@@ -96,7 +97,8 @@ export async function createFileWorkflowStore(
       const events = loadEvents ? await eventsFor([...runs.keys()]) : [];
       const prior = byRun(events);
       const priorIds = new Set(events.map(event => event.id));
-      const result = await call(createTransactionView(runs, events, getCodebase));
+      const admission = createAdmissionTransaction(root);
+      const result = await call(createTransactionView(runs, events, getCodebase), admission);
       const next = byRun(events);
       const nextIds = new Set(events.map(event => event.id));
       const changes = [];
@@ -120,7 +122,10 @@ export async function createFileWorkflowStore(
         changes: {
           runs: changes,
           deleteRuns: deleted,
-          documents: await clearDeletedSessionReferences(deleted),
+          documents: {
+            ...(await clearDeletedSessionReferences(deleted)),
+            ...(await admission.changedDocuments()),
+          },
         },
       };
     });
@@ -174,16 +179,27 @@ export async function createFileWorkflowStore(
     getWorkflowRun: id => readRun(root, id),
     getWorkflowRunStatus: async id => (await readRun(root, id))?.status ?? null,
     claimPendingWorkflowRun: (id, path) =>
-      write([id], async view => {
+      write([id], async (view, admission) => {
         const run = await view.getWorkflowRun(id);
-        if (!run || (await options.isCheckoutReleased?.(run, path))) return null;
+        if (
+          !run ||
+          !(await admission.canClaim(id)) ||
+          (await options.isCheckoutReleased?.(run, path))
+        )
+          return null;
         return view.claimPendingWorkflowRun(id, path);
       }),
     updateWorkflowRun: (id, updates) => write([id], view => view.updateWorkflowRun(id, updates)),
     updateWorkflowActivity: id => write([id], view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write([id], view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
-    resumeWorkflowRun: (id, cursor) => write([id], view => view.resumeWorkflowRun(id, cursor)),
+    resumeWorkflowRun: (id, cursor) =>
+      write([id], async (view, admission) => {
+        const prior = await view.getWorkflowRun(id);
+        const resumed = await view.resumeWorkflowRun(id, cursor);
+        if (prior) await admission.resume(prior);
+        return resumed;
+      }),
     recoverCancelledFanOutRun: id => write([id], view => view.recoverCancelledFanOutRun(id)),
     pauseWorkflowRun: (id, approval, extra, suspension) =>
       write([id], view => view.pauseWorkflowRun(id, approval, extra, suspension)),
@@ -393,19 +409,7 @@ export async function createFileWorkflowStore(
           changes: { documents: { [path]: [...rows.filter(row => row !== prior), next] } },
         };
       }),
-    admitResourceStart: unsupportedTriggerAdmission,
-    drainResourceStarts: unsupportedTriggerAdmission,
-    acceptStartReceipt: unsupportedTriggerAdmission,
-    getStartReceipt: unsupportedTriggerAdmission,
-    listStartReceipts: unsupportedTriggerAdmission,
-    listPendingStartBindings: unsupportedTriggerAdmission,
-    getResourceStartRequest: unsupportedTriggerAdmission,
-    listQueuedResourceStartsForHost: unsupportedTriggerAdmission,
-    withdrawQueuedResourceStart: unsupportedTriggerAdmission,
-    claimStartBindingPreparation: unsupportedTriggerAdmission,
-    completeStartBindingPreparation: unsupportedTriggerAdmission,
-    failStartBindingPreparation: unsupportedTriggerAdmission,
-    resetStartBindingPreparation: unsupportedTriggerAdmission,
+    ...createFileAdmissionStore(root),
     getStateDocument: unsupportedStateDocuments,
     putStateDocument: unsupportedStateDocuments,
     patchStateDocument: unsupportedStateDocuments,

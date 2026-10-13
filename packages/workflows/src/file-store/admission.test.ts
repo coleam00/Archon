@@ -1,0 +1,214 @@
+import { expect, spyOn, test } from 'bun:test';
+import { mkdtemp, readdir, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { currentProcessOwner } from '@archon/paths/process-owner';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { WorkflowResourceBusyError, WorkflowNotResumableError } from '../store';
+import type { ResourceStartIntent } from '../schemas/resource-start';
+import { createFileWorkflowStore } from './store';
+import * as commitModule from './commit';
+const roots = trackTempRoots();
+const intent = (): ResourceStartIntent => ({
+  resource: 'resource',
+  capacity: 1,
+  hostId: 'host',
+  overlap: 'queue',
+  launch: {
+    version: 2,
+    run: {
+      id: crypto.randomUUID(),
+      workflow_name: 'test',
+      user_message: '',
+      codebase_id: 'codebase',
+      metadata: {},
+    },
+    execution: { cwd: '/test', conversationId: 'correlation', isolation: { kind: 'in-place' } },
+  },
+});
+async function fixture() {
+  const root = roots(await mkdtemp(join(tmpdir(), 'file-admission-')));
+  return { root, store: await createFileWorkflowStore({ root }) };
+}
+test('failed resume cannot bypass queued promises or a new holder; paused continuation keeps its slot', async () => {
+  const { root, store } = await fixture();
+  const first = intent(),
+    next = intent();
+  await store.admitResourceStart(first);
+  await store.claimPendingWorkflowRun(first.launch.run.id);
+  await store.pauseWorkflowRunForWait(
+    first.launch.run.id,
+    {
+      owner: 'node',
+      nodeId: 'wait',
+      kind: 'time',
+      waitingSince: '2026-01-01T00:00:00.000Z',
+      resumeAt: '2026-01-02T00:00:00.000Z',
+    },
+    { kind: 'started', stepName: 'wait' }
+  );
+  await store.admitResourceStart(next);
+  await store.resumeWorkflowRun(first.launch.run.id);
+  await store.failWorkflowRun(first.launch.run.id, 'failed');
+  const head = await readFile(join(root, 'head.json'), 'utf8');
+  await expect(store.resumeWorkflowRun(first.launch.run.id)).rejects.toBeInstanceOf(
+    WorkflowResourceBusyError
+  );
+  expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+  await expect(
+    store.resumeWorkflowRun(first.launch.run.id, {
+      kind: 'wait',
+      nodeId: 'stale',
+      resumeAt: 'stale',
+    })
+  ).rejects.toBeInstanceOf(WorkflowNotResumableError);
+  expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+  await store.drainResourceStarts({ resource: 'resource', hostId: 'host' });
+  await expect(store.resumeWorkflowRun(first.launch.run.id)).rejects.toMatchObject({
+    blocker: { kind: 'run', id: next.launch.run.id },
+  });
+  // A delayed starter cannot reclaim a run after admission has pruned its holder.
+  await store.updateWorkflowRun(first.launch.run.id, { status: 'pending' });
+  expect(await store.claimPendingWorkflowRun(first.launch.run.id)).toBeNull();
+  await store.cancelWorkflowRun(next.launch.run.id);
+  await commitModule.commit(root, [first.launch.run.id], async runs => {
+    const run = runs.get(first.launch.run.id)!;
+    run.status = 'failed';
+    return { result: undefined, changes: { runs: [{ run }] } };
+  });
+  expect(await store.resumeWorkflowRun(first.launch.run.id)).toMatchObject({ status: 'running' });
+});
+
+test('holder checks use snapshots even when a snapshot is missing, and prune missing runs', async () => {
+  const { root, store } = await fixture();
+  const first = intent(),
+    next = intent();
+  await store.admitResourceStart(first);
+  await unlink(join(root, 'runs', first.launch.run.id, 'run.json'));
+  const reads = spyOn(commitModule, 'readRunState');
+  try {
+    expect(await store.admitResourceStart(next)).toMatchObject({ status: 'queued' });
+    expect(reads).not.toHaveBeenCalled();
+    // A missing run releases the holder, as a terminal run does.
+    const { rm } = await import('node:fs/promises');
+    await rm(join(root, 'runs', first.launch.run.id), { recursive: true });
+    expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toHaveLength(
+      1
+    );
+    expect(reads).not.toHaveBeenCalled();
+  } finally {
+    reads.mockRestore();
+  }
+});
+
+test.each(['intent', 'run', 'request'] as const)(
+  'admission redo at %s restores run, request and holder as one commit',
+  async step => {
+    const source = await fixture();
+    const start = intent();
+    await source.store.admitResourceStart(start);
+    const line = JSON.parse(
+      (await readFile(join(source.root, 'runs', start.launch.run.id, 'log.jsonl'), 'utf8')).trim()
+    );
+    const documents: Record<string, unknown> = {};
+    for (const kind of ['requests', 'slots']) {
+      for (const name of await readdir(join(source.root, 'resource', kind))) {
+        const path = `resource/${kind}/${name}`;
+        documents[path] = JSON.parse(await readFile(join(source.root, path), 'utf8'));
+      }
+    }
+    const target = await fixture();
+    await writeFile(
+      join(target.root, 'intent.json'),
+      JSON.stringify({ seq: line.seq, lines: [line], documents, deleteRuns: [] })
+    );
+    if (step !== 'intent') {
+      const dir = join(target.root, 'runs', start.launch.run.id);
+      await mkdir(dir);
+      await writeFile(join(dir, 'log.jsonl'), `${JSON.stringify(line)}\n`);
+    }
+    if (step === 'request') {
+      const path = Object.keys(documents).find(path => path.startsWith('resource/requests/'))!;
+      await mkdir(join(target.root, 'resource/requests'), { recursive: true });
+      await writeFile(join(target.root, path), JSON.stringify(documents[path]));
+    }
+    const recovered = await createFileWorkflowStore({ root: target.root });
+    expect(await recovered.getResourceStartRequest(start.launch.run.id)).toMatchObject({
+      status: 'admitted',
+      runStatus: 'pending',
+    });
+    expect(
+      (await readFile(join(target.root, 'runs', start.launch.run.id, 'log.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+    ).toHaveLength(1);
+    expect(await recovered.admitResourceStart(intent())).toMatchObject({ status: 'queued' });
+    expect(await recovered.claimPendingWorkflowRun(start.launch.run.id)).toMatchObject({
+      status: 'running',
+    });
+  }
+);
+
+test('attempt holders are retained until their exact owner is provably gone', async () => {
+  const { root, store } = await fixture();
+  const first = intent();
+  await store.admitResourceStart(first);
+  await store.cancelWorkflowRun(first.launch.run.id);
+  const path = join(root, 'resource/slots', (await readdir(join(root, 'resource/slots')))[0]!);
+  const slot = JSON.parse(await readFile(path, 'utf8'));
+  slot.holders = [{ kind: 'attempt', id: crypto.randomUUID(), owner: { ...currentProcessOwner } }];
+  await writeFile(path, JSON.stringify(slot));
+  const next = intent();
+  expect(await store.admitResourceStart(next)).toMatchObject({ status: 'queued' });
+  slot.queue = [next.launch.run.id];
+  slot.holders[0].owner.pid = 2147483647;
+  await writeFile(path, JSON.stringify(slot));
+  expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toHaveLength(1);
+});
+
+test('receipt-linked requests validate their binding and inspection follows every linked request', async () => {
+  const { root, store } = await fixture();
+  const first = intent();
+  first.capacity = 2;
+  const receiptId = crypto.randomUUID();
+  first.receipt = { receiptId, bindingId: 'binding' };
+  const before = await readFile(join(root, 'head.json'), 'utf8');
+  await expect(store.admitResourceStart(first)).rejects.toThrow('receipt binding missing');
+  expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(before);
+  expect(await store.getWorkflowRun(first.launch.run.id)).toBeNull();
+  await store.acceptStartReceipt({
+    receipt: {
+      id: receiptId,
+      sourceInstanceId: 'source',
+      deliveryId: null,
+      contentDigest: 'digest',
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: null,
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'binding',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: 'resource',
+        capacity: 2,
+        overlap: 'queue',
+        launch: { cwd: '/test', workflowName: 'test', inputs: {}, isolation: { kind: 'in-place' } },
+      },
+    ],
+  });
+  await store.admitResourceStart(first);
+  const second = { ...intent(), capacity: 2, receipt: first.receipt };
+  await store.admitResourceStart(second);
+  const receipt = await store.getStartReceipt(receiptId);
+  expect(receipt?.bindings.map(item => item.disposition?.requestId)).toEqual([
+    first.launch.run.id,
+    second.launch.run.id,
+  ]);
+  expect(receipt).not.toHaveProperty('createdAt');
+  expect(receipt?.bindings[0]).not.toHaveProperty('requestIds');
+  expect(await store.getResourceStartRequest(first.launch.run.id)).not.toHaveProperty('position');
+});
