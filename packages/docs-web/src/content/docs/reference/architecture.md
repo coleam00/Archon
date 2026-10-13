@@ -1096,7 +1096,7 @@ remote_agent_codebases
 ├── default_cwd (VARCHAR)
 ├── default_branch (VARCHAR, nullable) -- optional explicit base branch; NULL resolves the remote default at use
 ├── ai_assistant_type (VARCHAR, nullable) -- optional explicit provider choice; NULL follows project configuration for new conversations
-├── kind (VARCHAR, default 'repo') -- 'repo' | 'folder' (folder projects are non-git, run in place)
+├── kind (VARCHAR, default 'repo') -- 'repo' | 'folder' (folders run in place, no Archon-managed git; directory may have git)
 └── commands (JSONB) -- {command_name: {path, description}}
 
 remote_agent_conversations

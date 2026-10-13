@@ -28,7 +28,7 @@ Archon provides a unified directory and configuration system with:
 ├── workspaces/                     # Per-project storage (project-centric layout)
 │   ├── <owner>/<repo>/             #   a registered repo with a remote
 │   ├── _local/<basename>/          #   a no-remote local git repo
-│   ├── _folder/<slug>/             #   a folder project (non-git; runs in place)
+│   ├── _folder/<slug>/             #   a folder project (runs in place; git is user/agent-owned)
 │   └── _cwd/<basename>/            #   an unregistered working directory
 │       ├── source/                 # Clone or symlink -> local path (repo kinds only)
 │       ├── worktrees/              # Git worktrees for this project (repo kinds only)

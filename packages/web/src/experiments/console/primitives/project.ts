@@ -7,7 +7,7 @@ export interface Project {
   defaultBranch: string | null;
   repositoryUrl: string | null;
   lastSyncedAt: string | null;
-  /** 'folder' = non-git workspace running in place; 'repo' = git repository. */
+  /** 'folder' = runs in place without Archon-managed git (directory may have git); 'repo' = git repository. */
   kind: 'repo' | 'folder';
 }
 

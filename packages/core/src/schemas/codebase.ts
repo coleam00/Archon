@@ -16,8 +16,9 @@ export const codebaseRowSchema = z.object({
   ai_assistant_type: z.string().nullable(),
   /**
    * Project kind discriminator. `'repo'` = a git repository (worktree isolation,
-   * branch/PR flows). `'folder'` = a non-git workspace (multi-repo root or plain
-   * ops folder) that runs in place with `_folder/<slug>/` named storage.
+   * branch/PR flows). `'folder'` = Archon applies no git machinery; runs in place
+   * by default; the directory may or may not be a git repository.
+   * Folder artifact/log storage lives under `_folder/<slug>/`.
    * Backfilled to `'repo'` by DB DEFAULT for pre-existing rows.
    */
   kind: z.enum(['repo', 'folder']),

@@ -107,14 +107,14 @@ When you're done with a worktree's branch, clean up everything (worktree + local
 archon complete <branch-name>
 ```
 
-## Folder Projects (non-git workspaces)
+## Folder projects
 
-A **project** doesn't have to be a git repository. A **folder project** is any directory — a **multi-repo root** holding many service repos, or a plain **business-ops folder** with no git at all — registered as a first-class Archon project. It gets identity, per-project env vars, run history, and named artifact/log storage, just like a repo project.
+A **folder project** is a directory for which Archon applies no git machinery: no managed worktree, branch or PR. It runs in place by default. The directory may or may not be a git repository, at the user's choice. Git operations belong to the user and agent. Folder projects include multi-repo roots, individual git roots and business-ops folders. They get identity, per-project env vars, run history and named artifact/log storage, just like repo projects.
 
 Register and run one with `--folder`:
 
 ```bash
-# From a multi-repo root (not itself a git repo)
+# From a multi-repo root, with or without its own git repository
 cd ~/platform          # contains auth-service/, billing-service/, ...
 archon workflow run investigate --folder "How do these services call each other?"
 ```
@@ -124,9 +124,9 @@ Folder projects differ from repo projects in a few honest ways:
 - **They run in place by default — no worktree isolation.** The agent's working directory is the folder root, so it sees *every* child folder and repo. Per-service git (branch, commit, PR) is the agent's job via `bash`/`gh`, not Archon's. Pass `--container` (or set `container.enabled` in config) to instead run inside an overlay-isolated Docker container so writes don't touch the live root mid-run — see [configuration](/reference/configuration/#container-isolation-folder-projects).
 - `--branch` / `--from` are rejected (there's no worktree to create), and `/worktree` reports "not applicable".
 - Artifacts and logs live under `~/.archon/workspaces/_folder/<slug>/` instead of `<owner>/<repo>/`.
-- Registration is explicit — via `--folder` on the CLI, the `path` field when adding a project in the web console, or `/register-project` in chat (a non-git path is auto-detected as a folder).
+- Choose folder registration explicitly with `--folder` on the CLI, **Register as a folder project** under **Local path** in the web console, or `/register-project --folder <name> <path>` in chat. Web and chat auto-detect non-git paths as folders; CLI first use needs `--folder`. Existing repo registrations cannot be converted by this choice.
 
-Once registered, you can run workflows and chat against the folder from anywhere under its root — no `--folder` flag needed after the first time.
+Once registered, you can run workflows and chat against the folder from its root or ordinary subdirectories (nested git repositories resolve as their own repo projects) — no `--folder` flag needed after the first time.
 
 ---
 

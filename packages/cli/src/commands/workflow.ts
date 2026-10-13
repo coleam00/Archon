@@ -1,3 +1,4 @@
+import { canonicalizeProjectPath } from '@archon/paths';
 import { isWorktreeSetupEventType } from '@archon/workflows/schemas/worktree-setup';
 import {
   requireTerminalStatusWrite,
@@ -321,9 +322,8 @@ export interface WorkflowRunOptions {
   registrationBaseBranch?: string;
   noWorktree?: boolean;
   /**
-   * Register the current non-git cwd as a folder project on first use and run
-   * in place (no worktree isolation). No-op when the cwd is already a registered
-   * project or a git repository.
+   * Register the supplied directory as a folder project and run in place,
+   * even with git. Reuses existing folder registrations; refuses existing repos.
    */
   folder?: boolean;
   /**
@@ -803,7 +803,7 @@ function warnBaseOverrideOnReuse(workingPath: string, flagBase: string): void {
 function folderWorktreePolicyError(workflowName: string): Error {
   return new Error(
     `Workflow '${workflowName}' requires a worktree (worktree.enabled: true), ` +
-      'which is not available for folder projects (no git repo to isolate).\n' +
+      'which is not available for folder projects (no Archon-managed worktree).\n' +
       '  Run this workflow against a git-repo project, or change its worktree policy.'
   );
 }
@@ -1556,12 +1556,10 @@ export async function workflowListCommand(
  * refuse an adoption (#2872), and the run path itself. Registration is idempotent,
  * so the detached child's own call finds what the parent registered.
  *
- * Returns the failures rather than throwing: the caller decides which of them is
- * fatal, and those decisions differ (a `--folder` registration failure is always
- * fatal; a lookup failure is only fatal for `--resume` and adoption). It reports
- * a first-time folder registration the same way — as a fact, not a `console.log` —
- * because one caller emits a machine-readable document on stdout and cannot have a
- * sentence written into the middle of it.
+ * Explicit folder selection fails on unknown or conflicting registration.
+ * Other lookup and registration failures are returned for the caller's isolation,
+ * resume and adoption policy. First-time folder registration is returned too,
+ * because detached JSON output cannot include a prose notice.
  */
 async function resolveRunCodebase(
   host: WorkflowHost,
@@ -1578,12 +1576,16 @@ async function resolveRunCodebase(
   let lookupError: Error | null = null;
   let registrationError: Error | null = null;
   let registeredFolder: { name: string; defaultCwd: string } | undefined;
-  const repoRoot = await git.findRepoRoot(cwd);
+  cwd = await canonicalizeProjectPath(cwd);
+  let repoRoot: string | null = null;
   try {
-    codebase = repoRoot
+    codebase = await host.records.codebases.findCodebaseByDefaultCwd(cwd);
+    if (!options.folder && !codebase) repoRoot = await git.findRepoRoot(cwd);
+    codebase ??= repoRoot
       ? await findCodebaseForCheckoutPath(repoRoot, host.records.codebases)
-      : ((await host.records.codebases.findCodebaseByDefaultCwd(cwd)) ??
-        (await host.records.codebases.findCodebaseByPathPrefix(cwd)));
+      : options.folder
+        ? null
+        : await host.records.codebases.findCodebaseByPathPrefix(cwd);
   } catch (error) {
     if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
     const err = error as Error;
@@ -1619,7 +1621,7 @@ async function resolveRunCodebase(
 
   if (options.registrationBaseBranch !== undefined) {
     if (lookupError) throw lookupError;
-    if (!repoRoot || codebase?.kind === 'folder')
+    if (options.folder || (!repoRoot && !codebase) || codebase?.kind === 'folder')
       throw new Error('Folder projects have no base branch; remove --base-branch.');
     if (codebase)
       throw new Error(
@@ -1627,47 +1629,33 @@ async function resolveRunCodebase(
       );
   }
 
-  // Auto-register unregistered repos (creates project structure for artifacts/logs)
-  if (!codebase && !lookupError) {
-    if (repoRoot) {
-      try {
-        const result = await registerRepository(host.records.codebases, repoRoot, {
-          baseBranch: options.registrationBaseBranch,
-        });
-        codebase = await host.records.codebases.getCodebase(result.codebaseId);
-        if (!result.alreadyExisted) {
-          getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
-        }
-      } catch (error) {
-        if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
-        const err = error as Error;
-        if (options.registrationBaseBranch !== undefined) throw err;
-        registrationError = err;
-        getLog().warn(
-          { err, errorType: err.constructor.name, repoRoot },
-          'cli.codebase_auto_registration_failed'
-        );
+  if (options.folder) {
+    if (lookupError) throw buildFolderRegistrationFailureError(lookupError);
+    if (codebase && codebase.kind !== 'folder') {
+      throw new Error(
+        `Project "${codebase.name}" is already registered as a repo; cannot register it as a folder project.`
+      );
+    }
+  }
+
+  if (!codebase && !lookupError && (options.folder || repoRoot)) {
+    try {
+      const result = options.folder
+        ? await registerFolder(host.records.codebases, cwd)
+        : await registerRepository(host.records.codebases, repoRoot ?? cwd, {
+            baseBranch: options.registrationBaseBranch,
+          });
+      codebase = await host.records.codebases.getCodebase(result.codebaseId);
+      if (!result.alreadyExisted) {
+        if (options.folder) registeredFolder = { name: result.name, defaultCwd: result.defaultCwd };
+        getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
       }
-    } else if (options.folder) {
-      // Non-git cwd + explicit --folder: register a folder project (runs in
-      // place). Without --folder the cli.ts gate already errored for
-      // unregistered non-git cwds, so this branch is only reached via the flag.
-      try {
-        const result = await registerFolder(host.records.codebases, cwd);
-        codebase = await host.records.codebases.getCodebase(result.codebaseId);
-        if (!result.alreadyExisted) {
-          registeredFolder = { name: result.name, defaultCwd: result.defaultCwd };
-          getLog().info({ name: result.name }, 'cli.folder_project_auto_registered');
-        }
-      } catch (error) {
-        if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
-        const err = error as Error;
-        registrationError = err;
-        getLog().warn(
-          { err, errorType: err.constructor.name, cwd },
-          'cli.folder_project_auto_registration_failed'
-        );
-      }
+    } catch (error) {
+      if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
+      const err = error as Error;
+      if (options.registrationBaseBranch !== undefined) throw err;
+      registrationError = err;
+      getLog().warn({ err, cwd }, 'cli.codebase_auto_registration_failed');
     }
   }
 

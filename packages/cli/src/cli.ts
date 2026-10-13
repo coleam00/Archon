@@ -525,84 +525,42 @@ async function main(): Promise<number> {
         return await fail(jsonFlag, `Error: Directory does not exist: ${cwd}`);
       }
 
-      // Validate git repository and resolve to root
-      const git = await import('@archon/git');
-      const repoRoot = await git.findRepoRoot(cwd);
-      if (repoRoot) {
-        // Use repo root as working directory (handles subdirectory case)
-        effectiveCwd = repoRoot;
+      const realCwd = await canonicalizeProjectPath(cwd);
+      if (folderFlag && command === 'workflow' && subcommand === 'run') {
+        effectiveCwd = realCwd;
       } else if (dryRunFlag && command === 'workflow' && subcommand === 'run') {
-        // Dry-run only discovers workflow files and simulates in memory. It does
-        // not need project registration, a database lookup, or a git worktree.
-        effectiveCwd = cwd;
+        const { findRepoRoot } = await import('@archon/git');
+        effectiveCwd = (await findRepoRoot(realCwd)) ?? realCwd;
       } else {
-        // A non-git directory may be a registered folder project.
-        // Canonicalize through the one shared `default_cwd` canonicalizer, so
-        // this lookup asks for exactly the string registration stored. Using a
-        // different realpath variant here is what hid every CLI-registered
-        // folder project on Windows behind a false "Not in a git repository"
-        // (#2927). It also covers an explicit `--cwd`, which — unlike
-        // `process.cwd()` — arrives with its symlinks unresolved.
-        const realCwd = await canonicalizeProjectPath(cwd);
-        // The DB may be unreachable. A lookup failure must NOT crash pre-dispatch
-        // (workflow/isolation commands still need to surface a clear error rather
-        // than a stack trace) — capture it and, if connection-shaped, report
-        // "database unavailable" instead of the misleading "not a git repository".
         const databaseLookup = await usesDatabaseStore();
-        let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
-        let gateLookupError: Error | null = null;
         try {
           if (databaseLookup) databaseRouteLoaded = true;
           const { createCliWorkflowHost } = await import('./utils/workflow-host');
           const host = await createCliWorkflowHost();
-          folderCodebase =
-            (await host.records.codebases.findCodebaseByDefaultCwd(realCwd)) ??
-            (await host.records.codebases.findCodebaseByPathPrefix(realCwd));
-        } catch (dbError) {
-          if (!databaseLookup) throw dbError;
-          const { InvalidCodebaseDefaultCwdError: invalidCodebaseDefaultCwdError } =
-            await import('@archon/core/db/codebase-path');
-          if (dbError instanceof invalidCodebaseDefaultCwdError) {
-            return await fail(jsonFlag, dbError.message);
+          const exact = await host.records.codebases.findCodebaseByDefaultCwd(realCwd);
+          if (exact?.kind === 'folder') {
+            effectiveCwd = exact.default_cwd;
+          } else {
+            const { findRepoRoot } = await import('@archon/git');
+            const repoRoot = await findRepoRoot(realCwd);
+            if (repoRoot) {
+              effectiveCwd = repoRoot;
+            } else {
+              const parent = await host.records.codebases.findCodebaseByPathPrefix(realCwd);
+              if (parent?.kind !== 'folder') {
+                return await fail(
+                  jsonFlag,
+                  'Error: Not in a git repository.\n' +
+                    'Register this folder as a project: run with --folder, or use /register-project in chat.'
+                );
+              }
+              effectiveCwd = parent.default_cwd;
+            }
           }
-          gateLookupError = dbError as Error;
-          getLog().warn(
-            { err: gateLookupError, cwd: realCwd },
-            'cli.folder_project_gate_lookup_failed'
-          );
-        }
-
-        const looksLikeConnectionError = (e: Error): boolean => {
-          const m = e.message.toLowerCase();
-          return m.includes('econnrefused') || m.includes('etimedout') || m.includes('connect');
-        };
-
-        if (folderCodebase?.kind === 'folder') {
-          // Registered folder project — run in place at its root.
-          effectiveCwd = folderCodebase.default_cwd;
-        } else if (folderFlag && command === 'workflow' && subcommand === 'run') {
-          // First-use `workflow run --folder` from an unregistered non-git dir:
-          // let it through so the run command registers the folder project.
-          effectiveCwd = realCwd;
-        } else if (gateLookupError && looksLikeConnectionError(gateLookupError)) {
-          // A DB outage would otherwise be mis-reported as "not a git repository".
+        } catch (error) {
           return await fail(
             jsonFlag,
-            [
-              'Error: Could not verify project registration — the database is unavailable.',
-              `  ${gateLookupError.message}`,
-              '  Check that your database is running (or DATABASE_URL is set), then retry.',
-            ].join('\n')
-          );
-        } else {
-          return await fail(
-            jsonFlag,
-            [
-              'Error: Not in a git repository.',
-              'The Archon CLI must be run from within a git repository.',
-              'Either navigate to a git repo or use --cwd to specify one.',
-              'Or register this folder as a project: run with --folder, or use /register-project in chat.',
-            ].join('\n')
+            `Error: Could not verify project registration: ${(error as Error).message}`
           );
         }
       }

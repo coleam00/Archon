@@ -1,3 +1,4 @@
+import { registerFolder } from '../handlers/sql-registration';
 import {
   createRunWorktreeSetupExecutor,
   recordSetupRunSource,
@@ -46,7 +47,7 @@ import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError, formatProviderFailure } from '../utils/error-formatter';
 import { toError } from '../utils/error';
-import { quoteCommandArg } from '../utils/command-args';
+import { quoteCommandArg, parseSlashCommand } from '../utils/command-args';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { getProviderCapabilities } from '@archon/providers';
 import { getAgentProvider } from '../services/provider-admission';
@@ -332,6 +333,7 @@ export interface WorkflowInvocation {
 export interface ProjectRegistration {
   projectName: string;
   projectPath: string;
+  folder?: boolean;
 }
 
 export interface OrchestratorCommands {
@@ -340,6 +342,18 @@ export interface OrchestratorCommands {
 }
 
 // ─── Command Parsing ────────────────────────────────────────────────────────
+
+function parseProjectRegistration(message: string): ProjectRegistration | null {
+  const { args } = parseSlashCommand(message);
+  const folder = args[0] === '--folder';
+  const [projectName, ...pathParts] = folder ? args.slice(1) : args;
+  if (!projectName || pathParts.length === 0) return null;
+  return {
+    projectName,
+    projectPath: pathParts.join(' '),
+    ...(folder ? { folder: true } : {}),
+  };
+}
 
 // Prefix patterns: fire as soon as the command keyword is seen.
 const INVOKE_WORKFLOW_PREFIX_RE = /^\/invoke-workflow\s/m;
@@ -389,7 +403,6 @@ const INVOKE_WORKFLOW_FULL_RE = {
 //     by a non-whitespace char) so a space-containing path like "/home/user/my project"
 //     is not declared complete after "my" arrives.
 //   - Quoted paths: require the closing quote so we don't stop mid-path.
-// This mirrors parseOrchestratorCommands' /^..\s+(.+)$/m pattern for the path capture.
 const REGISTER_PROJECT_FULL_RE = {
   test(text: string): boolean {
     // Match the register-project line up to and including its terminator (\n) or end of string.
@@ -400,8 +413,9 @@ const REGISTER_PROJECT_FULL_RE = {
     // line that was cut mid-word.
     const isEos = !lineMatch[0].endsWith('\n');
     const line = lineMatch[0].replace(/(\r?\n)?$/, '');
-    const rest = line.replace(/^\/register-project\s+/, '');
-    if (rest === line) return false; // no whitespace after command keyword
+    const commandArgs = line.replace(/^\/register-project\s+/, '');
+    const rest = commandArgs.replace(/^--folder\s+/, '');
+    if (commandArgs === line) return false; // no whitespace after command keyword
     const nameEnd = rest.search(/\s/);
     if (nameEnd === -1) return false; // no path token yet
     const projectPath = rest.slice(nameEnd).trimStart();
@@ -611,15 +625,8 @@ export function parseOrchestratorCommands(
     }
   }
 
-  // Parse /register-project {name} {path}
-  const registerPattern = /^\/register-project\s+(\S+)\s+(.+)$/m;
-  const registerMatch = registerPattern.exec(normalizedResponse);
-  if (registerMatch) {
-    result.projectRegistration = {
-      projectName: registerMatch[1].trim(),
-      projectPath: registerMatch[2].trim(),
-    };
-  }
+  const registerMatch = /^\/register-project[^\r\n]+/m.exec(normalizedResponse);
+  if (registerMatch) result.projectRegistration = parseProjectRegistration(registerMatch[0]);
 
   return result;
 }
@@ -1939,7 +1946,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
         // Sync canonical source with remote before the AI reads codebase state.
         // This path must remain non-destructive: users and agents can write to source/.
         // Non-fatal: if fetch fails (network, no remote), proceed with local state.
-        // Folder projects have no git repo to sync — skip entirely.
+        // Folder projects leave git synchronization to the user and agent.
         if (codebase.kind === 'folder') {
           getLog().debug(
             { codebaseId: codebase.id, path: codebase.default_cwd },
@@ -2134,7 +2141,7 @@ export async function handleMessage(
       if (deterministicCommands.includes(command)) {
         if (command === 'register-project') {
           getLog().debug({ command, conversationId }, 'deterministic_command');
-          const result = await handleRegisterProject(message, platform, conversationId);
+          const result = await handleRegisterProject(message);
           await platform.sendMessage(conversationId, result);
           return;
         }
@@ -3478,8 +3485,6 @@ async function handleProjectRegistrationResult(
   fullResponse: string,
   registration: ProjectRegistration
 ): Promise<void> {
-  const { projectName, projectPath } = registration;
-
   // Normalize before extraction so that Mode A's bold markers ('**') are
   // stripped from the command line; otherwise textBeforeReg would include a
   // trailing '**' when the model wrapped the command in markdown bold.
@@ -3500,33 +3505,23 @@ async function handleProjectRegistrationResult(
   }
 
   // Register the project
-  const regResult = await handleRegisterProject(
-    `/register-project ${projectName} ${projectPath}`,
-    platform,
-    conversationId
-  );
+  const regResult = await registerProject(registration);
   await platform.sendMessage(conversationId, regResult);
 }
 
 // ─── Internal Helpers ───────────────────────────────────────────────────────
 
-/**
- * Handle /register-project command.
- * Creates a codebase DB entry for a cloned project.
- */
-async function handleRegisterProject(
-  message: string,
-  _platform: IPlatformAdapter,
-  _conversationId: string
-): Promise<string> {
-  const { args } = commandHandler.parseCommand(message);
-  if (args.length < 2) {
-    return 'Usage: /register-project <name> <path>';
-  }
+async function handleRegisterProject(message: string): Promise<string> {
+  const registration = parseProjectRegistration(message);
+  if (!registration) return 'Usage: /register-project [--folder] <name> <path>';
+  return registerProject(registration);
+}
 
-  const [projectName, ...pathParts] = args;
-  const projectPath = pathParts.join(' ');
-
+async function registerProject({
+  projectName,
+  projectPath,
+  folder,
+}: ProjectRegistration): Promise<string> {
   // Canonicalize through the one shared `default_cwd` canonicalizer, the same
   // one `registerFolder`, the CLI gate and `archon doctor` use. Calling a
   // different realpath variant here is what made a chat-registered project and a
@@ -3544,6 +3539,10 @@ async function handleRegisterProject(
   const existing = await codebaseDb.listCodebaseRegistrations();
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
+  if (folder && alreadyExists?.kind === 'repo') {
+    return `Project "${projectName}" is already registered as a repo; cannot register it as a folder project.`;
+  }
+
   if (alreadyExists && !isAbsolute(alreadyExists.stored_default_cwd)) {
     await codebaseDb.updateCodebase(alreadyExists, { default_cwd: canonicalPath });
     return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
@@ -3553,13 +3552,19 @@ async function handleRegisterProject(
     return `Project "${projectName}" is already registered (path: ${alreadyExists.stored_default_cwd}).`;
   }
 
-  // Detect whether the path is a git repository. Non-git paths (multi-repo roots
-  // or plain ops folders) register as folder projects — run-in-place, no branch.
-  // findRepoRoot returns null ONLY for a definitive "not a git repository"; it
-  // throws for genuine failures (git missing, timeout, permission). Since `kind`
-  // is persisted and mis-setting it to 'folder' permanently strips a real repo's
-  // worktree/branch capability, we do NOT silently treat a throw as folder: log
-  // loudly and tell the user so they can re-register after resolving the error.
+  if (folder) {
+    try {
+      const result = await registerFolder(canonicalPath, projectName);
+      return `Project "${result.name}" ${result.alreadyExisted ? 'is already registered' : 'registered successfully!'}
+Path: ${result.defaultCwd}
+ID: ${result.codebaseId}
+Kind: folder project (runs in place)`;
+    } catch (error) {
+      return `Could not register folder project: ${(error as Error).message}`;
+    }
+  }
+
+  // Automatic detection retains the existing fallback on a git error, reported below.
   let repoRoot: string | null = null;
   let repoDetectFailed = false;
   try {
@@ -3583,7 +3588,7 @@ async function handleRegisterProject(
     { name: projectName, path: canonicalPath, id: codebase.id, kind },
     'project.register_completed'
   );
-  let kindNote = kind === 'folder' ? '\nKind: folder project (no git — runs in place)' : '';
+  let kindNote = kind === 'folder' ? '\nKind: folder project (runs in place)' : '';
   if (repoDetectFailed) {
     kindNote +=
       '\n⚠️ Could not determine git status (git error) — registered as a folder project. ' +

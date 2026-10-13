@@ -37,7 +37,10 @@ export async function findCodebaseForCheckoutPath(
     if (canonicalCwd === cwd) return null;
     // The primary path comes from `git worktree list` (forward slashes on
     // Windows); `default_cwd` is stored in canonical form.
-    return await deps.findCodebaseByDefaultCwd(await canonicalizeProjectPath(canonicalCwd));
+    const primary = await deps.findCodebaseByDefaultCwd(
+      await canonicalizeProjectPath(canonicalCwd)
+    );
+    return primary?.kind === 'repo' ? primary : null;
   } catch (error) {
     if (!(error instanceof CanonicalRepoPathUnavailableError)) throw error;
   }

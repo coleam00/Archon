@@ -3463,6 +3463,9 @@ describe('workflowRunCommand', () => {
     });
     const executeSpy = executeWorkflow as ReturnType<typeof mock>;
     const registerSpy = core.registerFolder as ReturnType<typeof mock>;
+    const isolation = await import('@archon/isolation');
+    const isolationSpy = isolation.getIsolationProvider as ReturnType<typeof mock>;
+    const isolationBefore = isolationSpy.mock.calls.length;
     const execBefore = executeSpy.mock.calls.length;
     const registerBefore = registerSpy.mock.calls.length;
     executeSpy.mockResolvedValueOnce({ success: true, workflowRunId: 'run-folder' });
@@ -3478,10 +3481,12 @@ describe('workflowRunCommand', () => {
       consoleSpy.mockRestore();
     }
 
-    // registerFolder was invoked for the non-git cwd
+    // Explicit folder registration also applies to git roots.
     expect(registerSpy.mock.calls.length).toBe(registerBefore + 1);
     // The run executed in place
     expect(executeSpy.mock.calls.length).toBe(execBefore + 1);
+    expect(executeSpy.mock.calls.at(-1)?.[3]).toBe('/test/path');
+    expect(isolationSpy.mock.calls.length).toBe(isolationBefore);
     // The in-place notice was printed
     expect(printed).toContain('running in place');
   });
@@ -5066,6 +5071,7 @@ describe('workflowStatusCommand', () => {
         id: 'cb-project-a',
         name: 'owner/project-a',
         default_cwd: '/workspace/project-a',
+        kind: 'repo',
       });
     mockListDashboardRuns.mockResolvedValueOnce(statusRuns([]));
 
@@ -7282,7 +7288,7 @@ describe('workflowLogsCommand', () => {
 
 describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
   const FULL_ID = '0b1ee8da-1111-2222-3333-444455556666';
-  const CODEBASE = { id: 'cb-1', name: 'proj', default_cwd: '/repo' };
+  const CODEBASE = { id: 'cb-1', name: 'proj', default_cwd: '/repo', kind: 'repo' };
   let consoleSpy: ReturnType<typeof spyOn>;
   let stdoutSpy: ReturnType<typeof spyOn>;
 
@@ -7850,6 +7856,7 @@ describe('workflowRunsCommand', () => {
         id: 'cb-primary',
         name: 'owner/repo',
         default_cwd: '/registered/primary',
+        kind: 'repo',
       });
     const listSpy = workflowDb.listDashboardRuns as ReturnType<typeof mock>;
     listSpy.mockClear();
@@ -8559,6 +8566,7 @@ describe('workflowRunCommand — detach', () => {
   it('resolves an adopted run prefix before passing it to the detached child', async () => {
     const adoptedRunId = '0b1ee8da-1111-2222-3333-444455556666';
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce(null);
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDb = await import('@archon/core/db/workflows');
     const { resolveWorkflowAdoption } = await import('@archon/core/operations/workflow-adoption');
@@ -14007,6 +14015,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
 
   it('adopts a normal run from a unique short run id prefix', async () => {
     const adoptedRunId = '0b1ee8da-1111-2222-3333-444455556666';
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce(null);
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDb = await import('@archon/core/db/workflows');
     const adoption = await import('@archon/core/operations/workflow-adoption');
@@ -15223,6 +15232,26 @@ describe('run codebase resolution', () => {
       mockCanonicalizeProjectPath.mockReset().mockImplementation(async (path: string) => path);
     }
   });
+
+  for (const options of [
+    { folder: true, noWorktree: true },
+    { folder: true, detach: true },
+  ]) {
+    it(`explicit folder lookup failure stops execution before registration (${JSON.stringify(options)})`, async () => {
+      const registerFolder = core.registerFolder as ReturnType<typeof mock>;
+      registerFolder.mockClear();
+      (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockRejectedValueOnce(
+        new Error('registration lookup unavailable')
+      );
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', options)
+      ).rejects.toThrow('registration lookup unavailable');
+      expect(registerFolder).not.toHaveBeenCalled();
+      expect(core.registerRepository).not.toHaveBeenCalled();
+      expect(executor.executeWorkflow).not.toHaveBeenCalled();
+      expect(git.findRepoRoot).not.toHaveBeenCalled();
+    });
+  }
 
   it('retains prefix resolution for a non-Git folder subdirectory', async () => {
     (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValue(null);

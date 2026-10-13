@@ -775,8 +775,6 @@ async function copyPlugin(ref: PluginRef, env: PluginEnvironment): Promise<void>
   if (receipt.manifest.kind !== 'workflow-pack') {
     throw new Error(`${ref.id} is a ${receipt.manifest.kind} plugin; only workflow packs copy`);
   }
-  // Where discovery reads project workflows: the repository root, not the subdirectory
-  // the command ran in. A folder project has no repository; its directory is the project.
   const project = (await findRepoRoot(env.projectDir)) ?? env.projectDir;
   const target = join(project, '.archon', 'workflows', receipt.manifest.name);
   if (await pathExists(target)) {
