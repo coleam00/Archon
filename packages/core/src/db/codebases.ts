@@ -258,11 +258,11 @@ function nameDerivedLocations(codebase: Codebase): string[] {
 }
 
 /**
- * Transaction-scoped advisory lock that serializes codebase renames on
- * PostgreSQL. Distinct from the schema-init keys (1796, 1797) in the Postgres
- * adapter.
+ * Names the transaction-scoped advisory lock that serializes codebase renames
+ * on PostgreSQL. Hashed like the state-document locks, so no numeric key has to
+ * be kept apart from the others by hand.
  */
-const CODEBASE_RENAME_LOCK_KEY = 1798;
+const CODEBASE_RENAME_LOCK = JSON.stringify(['codebase-rename']);
 
 /**
  * Change a codebase's display name.
@@ -300,7 +300,7 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
 
   const result = await getDatabase().withTransaction(async query => {
     if (getDatabaseType() === 'postgresql') {
-      await query('SELECT pg_advisory_xact_lock($1)', [CODEBASE_RENAME_LOCK_KEY]);
+      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [CODEBASE_RENAME_LOCK]);
     }
     return query(
       `UPDATE remote_agent_codebases SET name = $1, updated_at = ${getDialect().now()} WHERE id = $2 ` +

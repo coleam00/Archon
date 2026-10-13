@@ -621,7 +621,9 @@ describe('codebases', () => {
 
       expect(renamed.name).toBe('qes');
       // The PostgreSQL rename lock is taken before the conditional UPDATE.
-      expect(mockQuery.mock.calls[1]?.[0]).toBe('SELECT pg_advisory_xact_lock($1)');
+      expect(mockQuery.mock.calls[1]?.[0]).toBe(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))'
+      );
       expect(mockQuery).toHaveBeenCalledWith(
         'UPDATE remote_agent_codebases SET name = $1, updated_at = NOW() WHERE id = $2 ' +
           'AND NOT EXISTS (SELECT 1 FROM remote_agent_codebases WHERE name = $1 AND id <> $2)',
