@@ -42,8 +42,8 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
   },
   {
     id: 'lint',
-    label: 'ESLint, warnings included',
-    commands: [['bun', 'run', 'lint', '--max-warnings', '0']],
+    label: 'Biome lint and repository checks',
+    commands: [['bun', 'run', 'lint']],
   },
   {
     id: 'format',

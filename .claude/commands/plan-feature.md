@@ -92,10 +92,9 @@ Before writing tasks, reason through:
 - If adding tests to packages with split test batches (core, workflows, adapters, isolation),
   determine which batch the new test belongs to.
 
-**ESLint compliance:**
-- All new functions need explicit return types.
+**Lint compliance:**
 - No `any` without justification.
-- Zero-warning policy enforced in CI.
+- Biome warnings fail CI.
 
 **Rollback plan:**
 - What is the blast radius if this goes wrong?

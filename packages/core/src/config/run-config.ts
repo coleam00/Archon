@@ -27,6 +27,7 @@ type ConfigKey = keyof GlobalConfig | keyof RepoConfig;
 type KeyClassification = { kind: 'runtime' } | { kind: 'unavailable'; reason: string };
 
 const keyClassifications = {
+  store: { kind: 'unavailable', reason: 'persistence is selected at install startup' },
   assistant: { kind: 'runtime' },
   defaultAssistant: { kind: 'runtime' },
   assistants: { kind: 'runtime' },

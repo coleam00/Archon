@@ -760,8 +760,7 @@ export class PiProvider implements IAgentProvider {
     // reads a package.json that doesn't exist next to the executable).
     //
     // Class constructors (AuthStorage, ModelRegistry, SettingsManager) are
-    // accessed via `piCodingAgent.X` rather than destructured, because
-    // destructured PascalCase bindings trip eslint's naming-convention rule.
+    // accessed via `piCodingAgent.X` rather than destructured.
     const [
       piCodingAgent,
       { bridgeSession },

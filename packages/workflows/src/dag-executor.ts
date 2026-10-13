@@ -2940,7 +2940,7 @@ function utf8SequenceLength(leadByte: number): number {
  * A spill write failure never fails the node — it degrades to preview-only persistence,
  * matching `shellQuoteOrFile`'s existing fallback behavior for the same class of error.
  *
- * Because the spill filename is reused, `getDagResumeSnapshot` (packages/core)
+ * Because the spill filename is reused, `foldDagResumeSnapshot` (dag-resume-snapshot.ts)
  * checks its byte length against the row's `originalBytes`. A later execution can
  * overwrite the file before its event commits; a length mismatch exposes that stale
  * pairing. The check cannot distinguish different contents of the same length.
@@ -10957,7 +10957,7 @@ async function suspendContainerForPause(
  * its content. Truncated to keep one entry from dominating the message.
  */
 function sanitizeGateText(value: string): string {
-  // eslint-disable-next-line no-control-regex -- deliberately matching control chars to neutralize them
+  // Matches control characters on purpose, to neutralize them.
   const noControl = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
   const capped = noControl.length > 300 ? `${noControl.slice(0, 300)}…` : noControl;
   return `\`${capped.replace(/`/g, "'")}\``;

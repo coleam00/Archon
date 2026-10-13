@@ -49,7 +49,7 @@ bun run type-check
 ```bash
 bun run lint
 ```
-**Expected:** Zero ESLint errors (warnings acceptable)
+**Expected:** Zero lint diagnostics (warnings fail too)
 
 ### 1.3 Code Formatting
 ```bash
