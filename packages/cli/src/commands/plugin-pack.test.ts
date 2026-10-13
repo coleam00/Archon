@@ -400,13 +400,17 @@ describe('archon plugin: workflow packs', () => {
     if (initGit) expect(Bun.spawnSync(['git', 'init', '-q', env.projectDir]).exitCode).toBe(0);
     const home = join(env.projectDir, '..', 'unreadable-home');
     await mkdir(join(home, 'archon.db'), { recursive: true });
+    // Inside Git, copy from a child directory: the destination must fall back to the Git root.
+    const cwd = initGit ? join(env.projectDir, 'deep') : env.projectDir;
+    await mkdir(cwd, { recursive: true });
     const copied = await captureCommand({ ARCHON_HOME: home }, async () => {
-      expect(await pluginCommand('copy', [ID], env)).toBe(0);
+      expect(await pluginCommand('copy', [ID], { ...env, projectDir: cwd })).toBe(0);
     });
     expect(copied.status, copied.output).toBe(0);
     expect(
       Object.keys(await snapshot(join(env.projectDir, '.archon', 'workflows', 'review-kit')))
     ).toEqual(TREE_FILES);
+    if (initGit) expect(await snapshot(cwd)).toEqual({});
   });
 
   // Workflow discovery reads the same receipts on every call, so "nothing installed"

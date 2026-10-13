@@ -2221,6 +2221,9 @@ it.each([true, false])(
     mkdirSync(join(repo, '.archon', 'commands'), { recursive: true });
     mkdirSync(join(home, 'archon.db'), { recursive: true });
     if (initGit) expect(spawnSync('git', ['init', '-q', repo]).status).toBe(0);
+    // Inside Git, invoke from a child directory: discovery must fall back to the Git root.
+    const cwd = initGit ? join(repo, 'deep') : repo;
+    mkdirSync(cwd, { recursive: true });
     mkdirSync(join(repo, '.archon', 'workflows', 'fixtures'), { recursive: true });
     writeFileSync(
       join(repo, '.archon', 'workflows', 'fixtures', 'probe.stubs.yaml'),
@@ -2248,7 +2251,7 @@ it.each([true, false])(
         ['workflow', 'test', 'probe'],
       ]) {
         const result = spawnSync(process.execPath, [CLI_ENTRY, ...args], {
-          cwd: repo,
+          cwd,
           encoding: 'utf8',
           timeout: 30_000,
           env: {
@@ -2262,7 +2265,7 @@ it.each([true, false])(
         expect(result.stdout).toContain('probe');
       }
       const execution = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'run', 'probe'], {
-        cwd: repo,
+        cwd,
         encoding: 'utf8',
         timeout: 30_000,
         env: {
