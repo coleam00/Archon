@@ -21,7 +21,7 @@ import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/conne
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { registerFolder, registerRepository } from '@archon/core';
 import { updateCodebase, findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
-import { getStartReceipt } from '@archon/core/db/resource-starts';
+import { getStartReceipt, hasStartReceiptForDelivery } from '@archon/core/db/resource-starts';
 import { claimPendingWorkflowRun } from '@archon/core/db/workflows';
 import {
   drainResourceStartHost,
@@ -200,6 +200,7 @@ async function fixture(
     await loadWebhookSourcePlugins(configPath, {
       acceptReceipt: input => workflowHost.deps.store.acceptStartReceipt(input),
       isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
+      hasDeliveryReceipt: hasStartReceiptForDelivery,
     }),
     autoDrain ? (): void => void host.requestDrain() : undefined
   );
@@ -236,6 +237,9 @@ async function bindingOf(delivery: string): Promise<{
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'archon-server-resource-host-')));
   process.env.ARCHON_HOME = join(root, 'home');
+  // Conversations need a configured default provider.
+  await mkdir(process.env.ARCHON_HOME);
+  await writeFile(join(process.env.ARCHON_HOME, 'config.yaml'), 'defaultAssistant: claude\n');
   delete process.env.DATABASE_URL;
   setPlatformPolicies([]);
   resetDatabase();

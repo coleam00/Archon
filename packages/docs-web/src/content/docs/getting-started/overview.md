@@ -22,10 +22,10 @@ Before you start, make sure you have:
 | -------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | **Git**                          | `git --version`    | [git-scm.com](https://git-scm.com/)                                                                                 |
 | **Bun** (replaces Node.js + npm) | `bun --version`    | Linux/macOS: `curl -fsSL https://bun.sh/install \| bash` — Windows: `powershell -c "irm bun.sh/install.ps1 \| iex"` |
-| **Claude Code CLI**              | `claude --version` | [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation) — in compiled Archon binaries, also set `CLAUDE_BIN_PATH` ([details](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)) |
+| **AI provider** | Depends on your selection | Choose Claude, Codex, or Pi and follow the [AI Assistants setup guide](/getting-started/ai-assistants/). Claude Code is required only when selecting Claude. |
 | **GitHub account**               | —                  | [github.com](https://github.com/)                                                                                   |
 
-> **Do not run as root.** Archon (and the Claude Code CLI it depends on) does not work when run as the `root` user. If you're on a VPS or server that only has root, create a regular user first:
+> **Do not run as root.** Run Archon as a regular user; Claude Code also requires this when Claude is selected. If you're on a VPS or server that only has root, create a regular user first:
 >
 > ```bash
 > adduser archon          # create user (Debian/Ubuntu)
@@ -84,7 +84,7 @@ This installs all dependencies across the monorepo. Takes about 30 seconds.
 
 ## Step 2: Set Up Authentication
 
-You need two things: a GitHub token (for cloning repos) and Claude authentication (for the AI assistant).
+You need a GitHub token for cloning repos and authentication for your selected AI provider. Follow the [AI Assistants guide](/getting-started/ai-assistants/) for Claude, Codex, or Pi.
 
 ### GitHub Token
 
@@ -95,7 +95,9 @@ You need two things: a GitHub token (for cloning repos) and Claude authenticatio
 
 > **Why classic and not fine-grained?** GitHub exposes no Checks permission to fine-grained tokens, so they cannot read GitHub Actions check runs — which `gh pr checks` queries through GraphQL `statusCheckRollup` — and a workflow that waits on CI fails at that gate. The `repo` scope is broad in exchange; [GitHub App mode](/adapters/github-app-setup/) grants access per repository instead, if you would rather not hand over a repo-wide token.
 
-### Claude Authentication
+### Claude Authentication (when selected)
+
+Skip this section if you selected Codex or Pi; use their instructions in the [AI Assistants guide](/getting-started/ai-assistants/).
 
 If you already use Claude Code, you're probably already authenticated. Check with:
 
@@ -115,28 +117,31 @@ Follow the browser flow to log in. This stores credentials globally — no API k
 
 ## Step 3: Create Your .env File
 
-> **Required for Web UI / server mode. Optional for CLI-only usage** — the CLI uses your existing Claude authentication by default.
+> **Required for Web UI / server mode. Optional for CLI-only usage** — when Claude is selected, the CLI uses your existing Claude authentication.
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` in your editor and set these two values:
+Open `.env` in your editor and set your GitHub token and selected provider:
 
 ```ini
 # Paste your GitHub token in both (they serve different parts of the system)
 GH_TOKEN=ghp_your_token_here
 GITHUB_TOKEN=ghp_your_token_here
 
-# Use your existing Claude Code login
-CLAUDE_USE_GLOBAL_AUTH=true
+# Choose your provider: claude, codex, or pi
+DEFAULT_AI_ASSISTANT=codex
+
+# Only when selecting Claude: use your existing Claude Code login
+# CLAUDE_USE_GLOBAL_AUTH=true
 ```
 
 That's it. Everything else has sensible defaults:
 
 - **Database:** SQLite at `~/.archon/archon.db` (auto-created, zero setup)
 - **Port:** 3090 for the API server, 5173 for the Web UI dev server
-- **AI assistant:** Claude (default)
+- **AI assistant:** Set `DEFAULT_AI_ASSISTANT` to your selected provider. The copied `.env.example` uses `claude`; change it for Codex or Pi. The CLI does not read this repository `.env`; it reads Archon-owned files such as `~/.archon/.env` and `~/.archon/config.yaml`. Without a configured default, Archon selects only a sole registered provider; with multiple providers, run `archon setup` or configure the default explicitly.
 
 > **Why two GitHub token variables?** `GH_TOKEN` is used by the GitHub CLI (`gh`), and `GITHUB_TOKEN` is used by Archon's GitHub adapter. Set them to the same value.
 
@@ -314,7 +319,7 @@ archon workflow run <name> --cwd /path/to/repo "<message>"
 |---------|-------------|
 | `archon chat <message>` | Send a message to the orchestrator |
 | `archon setup` | Interactive setup wizard for credentials and config |
-| `archon doctor` | Verify your setup (Claude/Codex binaries, gh auth, DB, adapters; `--full` also probes the OpenCode runtime) |
+| `archon doctor` | Verify registered provider diagnostics, gh auth, DB, and adapters |
 | `archon workflow list` | List available workflows |
 | `archon workflow run <name> [msg]` | Run a workflow (`--detach` to background it) |
 | `archon workflow status` | Show active runs (running + paused) |
@@ -567,12 +572,14 @@ bun install
 | Start frontend only | `bun run dev:web`                   |
 | Run tests           | `bun run test`                      |
 | Type check          | `bun run type-check`                |
-| Full validation     | `bun run validate`                  |
+| Local validation    | `bun run validate`                  |
 | Web UI              | http://localhost:5173               |
 | API server          | http://localhost:3090               |
 | Health check        | `curl http://localhost:3090/health` |
 
 ---
+
+CI is the full validation gate. Format and workflow fixtures are explicit local checks: `bun run validate --only format,workflow-fixtures`.
 
 ## What's Next?
 

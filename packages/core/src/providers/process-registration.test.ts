@@ -1,4 +1,6 @@
-import { expect, test } from 'bun:test';
+import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
+import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
+import { expect, mock, test } from 'bun:test';
 import { z } from 'zod';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
 import { InvalidProviderRunConfigError } from '@archon/provider-contract';
@@ -304,3 +306,54 @@ for (const { descriptor: maintained, raw, canonical, snapshot, discardedInvalid,
     }
   });
 }
+
+test('process Pi credential selection normalizes every declared vendor model', () => {
+  const registration = processProviderRegistration(piDescriptor, argv);
+  for (const spec of piDescriptor.credentials.specs) {
+    expect(registration.credentials.vendorFor(`  ${spec.vendor} / model/name  `)).toBe(spec.vendor);
+  }
+  expect(registration.credentials.vendorFor(' malformed ')).toBeUndefined();
+});
+
+test('whitespace Pi models preflight the stored vendor credential instead of native auth', async () => {
+  const registration = processProviderRegistration(piDescriptor, argv);
+  const native = registration.factory();
+  const checkCredential = mock(native.checkCredential.bind(native));
+  native.checkCredential = checkCredential;
+  const getUserProviderCredentialStatus = mock(async (_user: string, _vendor: string) => ({
+    state: 'usable' as const,
+    source: 'archon' as const,
+  }));
+  const providers = {
+    get: (id: string) => (id === 'pi' ? registration : undefined),
+    list: () => [registration],
+  };
+  const deps = {
+    providers,
+    loadConfig: async () => ({
+      assistant: 'pi',
+      assistants: { claude: {}, codex: {}, pi: { model: '  google / gemini-2.5-pro  ' } },
+      commands: {},
+    }),
+    store: { getCodebaseEnvVars: async () => ({}) },
+    getAgentProvider: () => native,
+    isPerUserProviderKeysEnabled: () => true,
+    getUserProviderCredentialStatus,
+  };
+  const prepared = await prepareRunAiConfiguration(
+    deps,
+    makeTestResolvedWorkflow({ name: 'pi-credentials' }),
+    '/project',
+    { userId: 'user' }
+  );
+  expect(prepared.requirements).toEqual([
+    { provider: 'pi', model: 'google/gemini-2.5-pro', vendor: 'google' },
+  ]);
+  const model = '  google / gemini-2.5-pro  ';
+  await assertRunCredentials(deps, {
+    ...prepared,
+    requirements: [{ provider: 'pi', model, vendor: registration.credentials.vendorFor(model) }],
+  });
+  expect(getUserProviderCredentialStatus).toHaveBeenCalledWith('user', 'google');
+  expect(checkCredential).not.toHaveBeenCalled();
+});

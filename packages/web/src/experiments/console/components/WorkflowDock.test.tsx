@@ -17,6 +17,7 @@ const parallelRun: Run = {
   workflow: 'implement',
   origin: 'cli',
   status: 'running',
+  attention: null,
   outcome: null,
   terminalRecord: null,
   startedAt: '2026-09-01T10:00:00.000Z',

@@ -1,3 +1,5 @@
+import { noDefaultProviderMessage } from '@archon/provider-contract';
+import { providerRegistry } from '@archon/providers';
 import type { UpdateConversationInput } from '../schemas/conversation';
 /**
  * Database operations for conversations
@@ -126,6 +128,8 @@ export async function getOrCreateConversation(
   if (assistantType === undefined) {
     assistantType = (await loadConfig()).assistant;
   }
+
+  if (assistantType === undefined) throw new Error(noDefaultProviderMessage(providerRegistry));
 
   const created = await pool.query<Conversation>(
     'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',

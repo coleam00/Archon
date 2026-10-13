@@ -282,7 +282,7 @@ nodes:
     depends_on: [lens-a, lens-b]
 ```
 
-`synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Addressable resume is not supported inside `loop_group` bodies.
+`synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Inside a `loop_group` body, the source must complete before entry into the group: name an enclosing command, prompt, or plain `loop:` ancestor, never a same-body node. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Interactive gates, terminal body approvals, and durable waits restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume still restarts the group at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
 
 Scalar `context: shared` is only for ambient session threading through a sequential layer. It is rejected on a node in a structurally parallel layer because there is no single unambiguous ambient lineage there. Use named resume as above, or add dependencies to serialize the nodes. This remains a structural rule when sibling `when:` conditions appear mutually exclusive: Archon constructs the parallel layer before evaluating those conditions.
 
@@ -491,7 +491,7 @@ when: "$nodeId.output != 'VALUE'"
 when: "$nodeId.output.field == 'VALUE'"    # JSON dot notation for output_format nodes
 ```
 
-**Numeric operators** (both sides must parse as numbers; fail-closed if not):
+**Numeric operators** (the right-hand side must be a number; a non-numeric output at run time skips the node):
 ```yaml
 when: "$nodeId.output > '80'"
 when: "$nodeId.output >= '0.9'"
@@ -507,6 +507,11 @@ when: "$a.output == 'X' || $b.output == 'Y'"
 when: "$score.output > '80' && $flag.output == 'true'"
 # Precedence: (A && B) || C
 when: "$a.output == 'X' && $b.output == 'Y' || $c.output == 'Z'"
+```
+
+To express `A && (B || C)`, expand it to `A && B || A && C`:
+```yaml
+when: "$a.output == 'x' && $b.output == 'y' || $a.output == 'x' && $c.output == 'z'"
 ```
 
 **Declared inputs** (see [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)):
@@ -533,9 +538,9 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
   run's `--input`). A name this run does not carry **fails the node** — it never quietly
   becomes an empty string. `INPUTS` is a reserved scope: a node cannot be given that id
   (the loader rejects it), so `$INPUTS.x` always means an input.
-- Invalid or unparseable expressions default to `false` (fail-closed — node is skipped with a warning)
-- Numeric operators fail-closed if either side is not a finite number
-- Parentheses are not supported — use standard AND/OR precedence to structure conditions
+- Invalid or unsupported expression syntax is rejected when workflows load and by `archon validate workflows`.
+- A numeric operator (`<`, `>`, `<=`, `>=`) needs a number on the right-hand side, quoted or bare; any other literal is rejected at load. If the left-hand value is not a number at run time, the node is skipped (fail-closed).
+- Grouping parentheses are not supported. Use AND/OR precedence or compute a decision in a `script:` node and gate on its scalar output.
 - Skipped nodes propagate their skipped state to dependants
 - A **failed** producer's output is never evaluated, fielded or whole-text — a `when:`
   joined past a failure via `trigger_rule: all_done` must branch on a different node's
@@ -1423,7 +1428,8 @@ lost updates — the read happened before either write.
 
 This is an **authoring** concern, not an engine one. Options, in order of preference:
 
-- **Append-only ledger.** Concurrent small `O_APPEND` writes are atomic on POSIX, so each
+- **Durable state documents.** Use `archon state` for concurrent JSON updates with audit history, including multiple hosts sharing PostgreSQL. See below.
+- **Append-only file ledger.** Concurrent small `O_APPEND` writes are atomic on POSIX, so each
   run appends its own lines and readers fold the file. This is the fix if lost updates
   matter.
 - **Accept last-writer-wins.** Fine when the state is a cache or a cursor that self-corrects.
@@ -1435,6 +1441,77 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
 
 Put the state write in a `script:` node, not in an AI node's Write tool. A `script:` node is
 a guarantee; a prompt instructing an AI node to append is a convention it may not follow.
+
+## Durable state documents
+
+Use `archon state` for a standing agent's small JSON ledger, cursor or index when updates
+can overlap, need audit history, or run on several hosts. `$STATE_DIR` remains the free-form
+file area for caches and non-JSON data, with its existing concurrency limitations.
+State documents currently require the SQL store (SQLite or PostgreSQL); file-store support
+is separate follow-up work. AI nodes do not yet receive `WORKFLOW_ID`, so a write an agent
+makes by calling `archon state` from its shell is recorded as the operator (`ARCHON_USER_ID`
+or `USER`), not as its run and node. Commit through a bash or script node when the run must
+be recorded. Container runs are not supported because the CLI and store are not delivered there.
+
+A document belongs to a project, shared by all its workflows. Choose names such as
+`review/acme/123` with slash-separated lowercase letters, digits, `.`, `_`, or `-`
+(1–200 characters total). Use artifact pointers for large content: a document's serialized
+JSON is capped at 64 KiB. Values are fetched explicitly; the engine adds no state to prompts.
+
+`put --if-revision 0` creates a document; subsequent whole-document changes must name the
+revision read. Concurrent replacements have one winner; losers exit `3`. `patch` applies
+JSON Pointer `set`, `remove`, or `append` operations to the latest revision; concurrent
+patches serialize instead of racing, though an earlier write can make a later patch invalid.
+An absent document starts as `{}`; appending to `/seen` creates the array. Invalid patches
+or oversized values exit `4` and write nothing. Exit `1` means usage or storage failure.
+The [CLI reference](/reference/cli/#state) describes pointer and tombstone semantics.
+
+Let the agent judge what to remember, then commit its structured output in a script node
+when the write must happen. For example, a review agent returns a completed PR identifier;
+its dependent host-side node appends that identifier to a ledger:
+
+```yaml
+nodes:
+  - id: review
+    prompt: Review the supplied PR and return its identifier after completing the review.
+    output_format:
+      type: object
+      properties:
+        completed_pr: { type: string }
+      required: [completed_pr]
+  - id: commit-state
+    depends_on: [review]
+    runtime: bun
+    with:
+      completed_pr: $review.output.completed_pr
+    script: |
+      const command: string[] = JSON.parse(process.env.ARCHON_CLI_COMMAND!);
+      const child = Bun.spawn([...command, 'state', 'patch', 'review/ledger'], {
+        stdin: 'pipe', stdout: 'inherit', stderr: 'inherit',
+      });
+      child.stdin.write(JSON.stringify({ops: [
+        {op: 'append', path: '/seen', value: process.env.INPUTS_COMPLETED_PR},
+      ]}));
+      child.stdin.end();
+      if (await child.exited !== 0) throw new Error('State commit failed');
+```
+
+This recipe runs on the host. Container-isolated nodes cannot use `archon state` in
+this release: they do not receive the host's `ARCHON_CLI_COMMAND` or access to its store.
+Commit state in a host-side step. `$STATE_DIR` remains available for free-form files on
+the host, but it also is not mounted into container runs.
+
+Bash/script nodes already receive `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION`; writes
+record their run ID and node path. Invoke the JSON argv in `ARCHON_CLI_COMMAND` instead
+of assuming `archon` is on PATH. If the nested CLI opens a store that does not know the
+run, it refuses the write instead of writing to another project. Operators can inspect
+`archon state log review/ledger` and correct a value using `put --if-revision`.
+
+The ledger prevents lost state updates; it does not make an external review/comment and
+the state commit one transaction. Use resource admission to serialize work that must not
+repeat an external action. Retention is operator-run: `archon workflow cleanup <days>`
+removes old history but retains each latest revision, including tombstones. Keeping the
+tombstone prevents a recreated document from reusing an old revision and accepting a stale write.
 
 ### When you *want* output in the repository
 
@@ -1497,7 +1574,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `inputs`, `returns` | **Consumed** by composition — `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
 | `interactive`, `worktree`, `container`, `evidence_policy` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
-| `mutates_checkout` | **Run-owned for ordinary `include:` composition.** It is dropped with the same warning. The one exception is `include:` + `fan_out:`, where the engine consumes the target block's `mutates_checkout: false` declaration to allow concurrent instances in the shared checkout. |
+| `mutates_checkout` | **Run-owned.** It is dropped with the same warning, including under `include:` + `fan_out:`, whose instances run inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow — where it then applies to every node in the run. |
 
 Two consequences worth knowing:
@@ -2143,8 +2220,9 @@ directories, separate branches.
 Children **sharing the parent's checkout** meet the engine's path-exclusive lock. Every run
 takes a lock on its working path at start, and a run that finds the path already held by
 another active run **cancels itself**. The lock excludes a run's own ancestors and
-descendants — a child never blocks against its own parent — but **siblings are not
-excluded**. Two sub-run children in one layer over one checkout are therefore a collision:
+descendants — a child never blocks against its own parent. Children of the **same
+`fan_out` node** are also excluded and may share the checkout. Children of different
+`workflow:` nodes are not excluded. Two such children in one layer over one checkout collide:
 the older run keeps the path, the younger one cancels itself, and the parent run fails.
 
 > **Resume does not recover from this.** A parent's resume re-drives a *failed* child, but a
@@ -2167,12 +2245,12 @@ nodes:
 `mutates_checkout: false` is a **workflow-level** field asserting that the run does not write
 to its checkout, so the engine skips the path lock for it. It defaults to `true` (take the
 lock, serialize runs on the same path). It is author-declared on purpose — the author of a
-review or research workflow is the one who knows it only reads. Every child sharing the
-checkout has to declare it: a sibling that doesn't still runs the lock query, finds the
-others on the path, and cancels itself.
+review or research workflow is the one who knows it only reads. Children launched by
+separate `workflow:` nodes still compete for the path lock unless they declare it.
+Children of the same `fan_out:` node and their nested sub-runs may share the checkout
+without that declaration; see [fanning out over a list](#fanning-out-over-a-list-with-fan_out).
 
-So there are three ways to make concurrent sub-runs work, and picking between them is a
-statement about the children:
+For concurrent 1:1 children launched by different nodes, choose according to the children:
 
 | The children… | Do this |
 |---------------|---------|
@@ -2363,40 +2441,25 @@ Bound the list in the producer node if that matters, and treat the abandon-casca
 above as a real limit rather than a footnote — this is what makes
 [#1961](https://github.com/coleam00/Archon/issues/1961)'s budget ceiling load-bearing.
 
-#### Isolation: the same explicit rule, and one sharp edge
+#### Sharing a checkout or choosing isolation
 
 Fan-out changes nothing about [`isolation:`](#choosing-the-childs-checkout-with-isolation).
-The engine does not infer a worktree from `fan_out:` — how many children a node spawns says
-nothing about whether they write. N review or research children over the parent's checkout
-is the ordinary case and needs no isolation at all.
+Without `isolation: worktree`, children share the parent's checkout and run up to
+`max_parallel`, including children that write to it. The engine excludes children of the
+same `fan_out` node and their nested sub-runs from one another's path lock.
+Agents own coordination of their edits; the engine adds no coordination mechanism between them.
 
-But N children sharing one checkout **are siblings of each other**, so they meet the path
-lock described in [Running sub-runs side by side](#running-sub-runs-side-by-side): all but
-one would cancel themselves, and a lock-cancelled child is not recoverable by resume. So
-Archon refuses that expansion **before creating a single child**:
+Each child's `workflow.checkout_shared` events name its siblings on that checkout through
+`sibling_run_id`, with `parent_run_id`, `parent_node_id`, and `working_path`. This records
+checkout sharing, including children that use it at different times, rather than claiming
+their execution overlapped. Unrelated runs and children of different nodes still compete
+for the path lock.
 
-```text
-fan_out node 'review-each': up to 3 children of 'review-one-file' would run at once in the
-parent checkout, and that workflow does not declare `mutates_checkout: false`. Concurrent
-runs on one checkout take a path-exclusive lock, so all but the first would cancel
-themselves — and a lock-cancelled child is not recoverable by resume (#2180). Choose one:
-add `mutates_checkout: false` to 'review-one-file' if it only reads the repo; set
-`isolation: worktree` on 'review-each' if the children write to it; or set
-`fan_out.max_parallel: 1` to run them one at a time.
-```
-
-Three ways out, and which one is right is a statement about the children:
-
-| The children… | Do this |
-|---------------|---------|
-| only read the repo (review, research, summarize) | `mutates_checkout: false` on the **child workflow** |
-| write to the repo | `isolation: worktree` on the **fan-out node** — every child gets its own worktree and branch, at the [cost described above](#what-isolation-worktree-gives-you-and-what-it-costs), multiplied by N |
-| write, but can be serialized | `fan_out.max_parallel: 1` — one child at a time in the parent checkout, so no two ever contend |
-
-The check runs at **spawn** time, not load time: the child target resolves when the node
-executes (that is deliberate — it's what lets a workflow generate another workflow and then
-run it), so `archon validate workflows` cannot see the child's `mutates_checkout`. What it
-can guarantee is that you find out before any child exists and before any money is spent.
+Use `isolation: worktree` explicitly when every child should have its own checkout and
+branch, or `max_parallel: 1` when children should run serially. Workflow-level
+`mutates_checkout: false` still skips the path lock; node-level `mutates_checkout: false`
+still enforces the checkout guard. Neither declaration is required to share a checkout
+within one fan-out.
 
 #### Gates: around a fan-out, never inside one
 
@@ -2421,10 +2484,8 @@ A paused child is the single case where a fan-out cancels a run it did not have 
 is not a terminal state and the parent cannot hand its one approval slot to N children, so
 the child would wait for something it can never be given — cancelling it (tagged
 `fan_out_gate`, so removing the gate and resuming re-drives it) is what makes it terminal.
-It happens as soon as the pause is seen rather than at the end, because a non-terminal run
-still holds its working path: left paused, it would take the path lock out from under the
-next sibling on a shared checkout. Its siblings are unaffected either way — they run to
-their own terminal states, and the node fails afterwards.
+The child is cancelled as soon as the pause is seen. Its siblings still run to their own
+terminal states, and the node fails afterwards.
 
 #### Resume, and what `child_index` keys
 
@@ -2528,9 +2589,9 @@ Two hard limits, both enforced at load time before any upstream node can spend:
   interactive fan-out instances are a possible future extension tracked in
   [#2810](https://github.com/coleam00/Archon/issues/2810), not a promise of the current shape.
 - **No `isolation:`** — a composed block runs inside this run and has no checkout of its own
-  to isolate. Instances share the parent's checkout, so as with a `workflow:` fan-out,
-  concurrent instances over a mutating body fail closed unless the block declares
-  `mutates_checkout: false`; `fan_out.max_parallel: 1` remains the serial escape.
+  to isolate. Instances share the parent's checkout and run concurrently up to
+  `max_parallel`, as `workflow:` fan-out children do; instances that write must coordinate
+  their edits. `fan_out.max_parallel: 1` runs them one at a time.
 
 Cancellation stops the pool from claiming new items. An in-flight item may still reach its
 own terminal event; under `all_done`, a cancelled slot is represented by the same reserved

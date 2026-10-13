@@ -187,9 +187,10 @@ Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
+  state <get|put|patch|log|delete> Read and audit durable project JSON documents
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
-  user <list|role>           List users and manage roles as the operator
+  user <list|role|link>      List users, link identities and manage roles as the operator
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator
@@ -224,13 +225,14 @@ Commands:
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (binary installs download server and UI on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
+  provider install <id...>   Install maintained providers matching this Archon release
   plugin install <owner/repo[/path][@tag]>
                              Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
   plugin update <id>[@tag]   Reinstall an installed plugin at a tag, or its latest release or default branch
   plugin remove <id>         Delete the files an installed plugin wrote
   plugin copy <id>           Copy an installed workflow pack into this project's .archon/workflows/
   plugin list                Show installed plugins with tag and commit
-  doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
+  doctor                     Verify installed provider diagnostics, gh auth, DB, and adapters
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
   ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription
@@ -274,6 +276,7 @@ Options:
   --default-stubs            Fill missing reached nodes with validated placeholders during --dry-run
   --exec-code                Execute trusted bash/script nodes during --dry-run (default: require stubs)
   --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
+  --providers <ids>          Install comma-separated maintained providers, skipping the setup provider question
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)

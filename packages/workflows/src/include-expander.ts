@@ -70,7 +70,7 @@ import {
 } from './loader';
 import { resolveDeclaredInputs } from './workflow-inputs';
 import { resolveWorkflowName } from './router';
-import { parseWhenAtom, whenAtoms } from './when-atom';
+import { parseWhenExpression } from './when-atom';
 import { mapNodeTemplateSlots, mapNodeTemplateValueSlots } from './template-walker';
 import { resolveWorkflow, resolvedBodyNodes } from './graph-plan';
 import {
@@ -441,7 +441,6 @@ function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
   // (The drop-warning is indifferent: it already filters `!== undefined`.) The key set is
   // this module's own const tuple list, never caller input.
   for (const [wfKey] of NODE_AFFECTING_WORKFLOW_FIELDS) {
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
     delete scope[wfKey];
   }
   return collapsed;
@@ -489,9 +488,6 @@ function rewriteNodeOutputRefs(
   const whenExpr = (text: string): string => applyWhenRefRename(text, renameOutputRef);
 
   if (node.when !== undefined) node.when = whenExpr(node.when);
-  if (isNodeContextResume(node.context)) {
-    node.context.resume = renameOutputRef(node.context.resume);
-  }
 
   // A loop_group body node carries the enclosing include's boundary too (markComposedNode
   // stamps it on every body node), and that boundary names outer-graph ids. When the
@@ -500,7 +496,10 @@ function rewriteNodeOutputRefs(
   // no longer exists in the flat graph and is skipped as "upstream failed" on the first
   // iteration, which is how a two-level composition (lifecycle → ship → deliver's
   // corrections loop) failed at runtime while each level worked on its own.
-  const rewriteBoundaries = (target: DagNode): void => {
+  const rewriteStructuralRefs = (target: DagNode): void => {
+    if (isNodeContextResume(target.context)) {
+      target.context.resume = renameOutputRef(target.context.resume);
+    }
     for (const boundary of readComposedMeta(target)?.boundaries ?? []) {
       boundary.dependsOn = boundary.dependsOn.flatMap(expandDependency);
       if (boundary.when !== undefined) boundary.when = whenExpr(boundary.when);
@@ -510,11 +509,11 @@ function rewriteNodeOutputRefs(
       // no composed metadata of their own, so only real nodes are rewritten (the same
       // guard markComposedNode applies when it stamps the boundary in the first place).
       for (const body of target.loop_group.nodes) {
-        if (!isIncludeDirective(body)) rewriteBoundaries(body);
+        if (!isIncludeDirective(body)) rewriteStructuralRefs(body);
       }
     }
   };
-  rewriteBoundaries(node);
+  rewriteStructuralRefs(node);
 
   const rewritten = mapNodeTemplateSlots(node, slot =>
     slot.surface === 'binding_default'
@@ -601,8 +600,8 @@ function applyInputsMacro(
 
   const substituteWhen = (when: string): string => {
     const expanded = substitute(when);
-    const wasParseable = whenAtoms(when).every(atom => parseWhenAtom(atom) !== null);
-    const isParseable = whenAtoms(expanded).every(atom => parseWhenAtom(atom) !== null);
+    const wasParseable = parseWhenExpression(when) !== null;
+    const isParseable = parseWhenExpression(expanded) !== null;
     if (expanded !== when && wasParseable && !isParseable) {
       throw new IncludeExpansionError(
         `Node '${includeNode.id}': input substitution made included node '${node.id}' field 'when' unparseable: "${when}" became "${expanded}". Put '$INPUTS.<name>' on the right-hand side of a comparison whose left-hand side is a node-output reference.`
@@ -905,7 +904,6 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
 const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
-const COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
 
 /**
  * What remains of the included file's workflow-level configuration after the collapse is
@@ -931,16 +929,10 @@ const COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mu
  */
 function warnDroppedWorkflowLevelFields(
   includeNode: IncludeDirective,
-  child: ResolvedWorkflow,
-  consumedFields?: ReadonlySet<string>
+  child: ResolvedWorkflow
 ): void {
   const droppedFields = Object.entries(child)
-    .filter(
-      ([key, value]) =>
-        !NON_DROPPED_WORKFLOW_KEYS.has(key) &&
-        consumedFields?.has(key) !== true &&
-        value !== undefined
-    )
+    .filter(([key, value]) => !NON_DROPPED_WORKFLOW_KEYS.has(key) && value !== undefined)
     .map(([key]) => key)
     .sort();
   if (droppedFields.length === 0) return;
@@ -1157,8 +1149,7 @@ export function expandWorkflowIncludes(
         }
         warnDroppedWorkflowLevelFields(
           { id: node.id, kind: 'include', include: node.include },
-          child,
-          COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS
+          child
         );
         // Exercise the exact ordinary-include instantiation once at load time. Width is
         // still deferred, but the block's input contract and packaged command resources

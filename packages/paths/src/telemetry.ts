@@ -172,9 +172,8 @@ function collectMachineProperties(): Record<string, string | boolean> {
     is_ci: process.env.CI?.toLowerCase() === 'true',
     // `process.stderr.isTTY` is `undefined` at runtime when stderr is not a TTY
     // (servers, pipes, CI), so without coercion the field is silently omitted on
-    // the primary server path. bun-types incorrectly narrows it to `boolean`,
-    // which makes the lint rule think the coercion is redundant — it is not.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- bun-types mis-types process.stderr.isTTY as always-boolean; runtime value is boolean|undefined and the coercion guarantees a present `false`.
+    // the primary server path. bun-types incorrectly narrows it to `boolean`, so
+    // the coercion looks redundant — it is not.
     is_tty: Boolean(process.stderr.isTTY),
   };
 }

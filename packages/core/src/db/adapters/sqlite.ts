@@ -746,6 +746,22 @@ export class SqliteAdapter implements IDatabase {
       allApplied = false;
     }
 
+    // Names of event-derived inputs live beside the binding intent, not in it: older
+    // binaries parse `intent` strictly and would refuse an extra key.
+    try {
+      const cols = this.prepareAll<{ name: string }>(
+        "PRAGMA table_info('remote_agent_start_receipt_bindings')"
+      );
+      if (!new Set(cols.map(c => c.name)).has('event_input_names')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN event_input_names TEXT'
+        );
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_receipt_bindings_columns_failed');
+      allApplied = false;
+    }
+
     return allApplied;
   }
 
@@ -952,6 +968,20 @@ export class SqliteAdapter implements IDatabase {
         checkout_baseline TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
+        project_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        value TEXT,
+        operation TEXT NOT NULL,
+        writer_kind TEXT NOT NULL CHECK (writer_kind IN ('run', 'operator')),
+        writer_run_id TEXT,
+        writer_node_path TEXT,
+        writer_identity TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (project_key, name, revision)
+      );
+
       CREATE TABLE IF NOT EXISTS remote_agent_start_receipts (
         id TEXT PRIMARY KEY,
         source_instance_id TEXT NOT NULL,
@@ -972,6 +1002,7 @@ export class SqliteAdapter implements IDatabase {
         binding_revision TEXT,
         host_id TEXT,
         intent TEXT,
+        event_input_names TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
         preparation_error TEXT,
@@ -1004,6 +1035,8 @@ export class SqliteAdapter implements IDatabase {
         admitted_at TEXT,
         FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
       );
+
+      CREATE INDEX IF NOT EXISTS idx_state_revisions_created_at ON remote_agent_state_revisions(created_at);
 
       CREATE INDEX IF NOT EXISTS idx_resource_start_queue
         ON remote_agent_resource_start_requests(resource_key, status, queue_position);

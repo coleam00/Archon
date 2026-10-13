@@ -1,6 +1,6 @@
 ---
-title: Start workflows from schedules and GitHub events
-description: Configure governed workflow starts from native schedules and verified GitHub webhooks.
+title: Start workflows from schedules and signed webhooks
+description: Configure governed workflow starts from native schedules, GitHub events, and Standard Webhooks.
 category: guides
 area: workflows
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 10
 ---
 
-Triggers start ordinary governed workflow runs. A trigger binding selects the workflow, execution user, inputs, execution host, shared resource, and overlap policy. The schedule or webhook decides when to request a start; it does not bypass workflow validation, provider configuration, isolation, or resource admission.
+Native schedules, GitHub events, and Standard Webhooks deliveries start ordinary governed workflow runs through triggers. A trigger binding selects the workflow, execution user, inputs, execution host, shared resource, and overlap policy. The schedule or webhook decides when to request a start; it does not bypass workflow validation, provider configuration, isolation, or resource admission.
 
 Schedules and event bindings are deployment configuration. They do not belong in workflow YAML.
 
@@ -19,6 +19,12 @@ Every binding names a `hostId`. A host prepares accepted work for its own ID, ad
 - The CLI, through `archon trigger fire` and `archon trigger drain --host <hostId>`. Each admitted run executes in its own detached process.
 
 Both hosts use the same admission records, so a server and a scheduled CLI command can serve the same host ID without starting a run twice.
+
+## Find runs needing your input
+
+The console's **Needs your input** banner lists every run waiting for a human, including triggered runs and runs older than the first page of the feed. Approval gates keep their decision and response controls. A `wait: attention` run shows its message with **Resume** and **Abandon** actions.
+
+Keep the console open to receive live updates from runs started by another process. **Dismiss** hides an occurrence for this browser session; reloading or a new pause brings it back. Resuming still requires the server to have access to the run's working path.
 
 ## Find your run-as user ID
 
@@ -61,6 +67,16 @@ Create `/Users/alice/.archon/triggers/repository-refresh.json`:
     "runAtLoad": true
   }
 }
+```
+
+The workflow declares the input the binding passes, so a typo in the binding fails preparation instead of reaching the run:
+
+```yaml
+name: refresh-repository-state
+inputs:
+  repository: { required: true }
+nodes:
+  # ...
 ```
 
 `intervalSeconds` is required and has no default. `runAtLoad` is also required. Set it to `true` to request one start when launchd loads the job, or `false` to wait for the first interval.
@@ -214,15 +230,102 @@ The following configuration starts `review-pull-request` when a pull request is 
 
 The maintained GitHub source plugin supports issue and pull-request lifecycle events, issue or pull-request label changes, check-run changes, and commit-status changes. Selectors match an exact event kind and one of the configured actions. They can also restrict the repository, issue or pull-request number, and the predicates supported for that event kind. Input mappings copy a supported event field or supply a typed JSON literal. A required field that is unavailable rejects that binding instead of inventing a value.
 
-The plugin authenticates the raw payload using the configured shared secret. The server validates its resolved receipt, verifies that the configured run-as users exist, and commits the receipt before returning success. Preparing and starting the run happen after the response, so a slow workflow never delays GitHub's delivery. An invalid signature creates no trusted receipt. A signed source event does not select the Archon user who runs the workflow. Every binding must name an authorized `runAsUserId`. The optional GitHub event actor remains provenance and never becomes an Archon credential selector.
+The plugin authenticates the raw payload using the configured shared secret. The server validates its resolved receipt, verifies for a new delivery that the configured run-as users exist, and commits the receipt before returning success. Preparing and starting the run happen after the response, so a slow workflow never delays GitHub's delivery. An invalid signature creates no trusted receipt. A signed source event does not select the Archon user who runs the workflow. Every binding must name an authorized `runAsUserId`. The optional GitHub event actor remains provenance and never becomes an Archon credential selector.
 
-On the first verified delivery, Archon records the source instance, delivery ID, verified-content digest, selected binding ID and revision, resolved inputs, and launch intent. Replaying the same `(sourceInstanceId, deliveryId)` reuses the original receipt and does not evaluate changed or newly added bindings. Editing a binding does not turn an old delivery into a new start. Reusing a delivery ID with different verified content is rejected. When GitHub supplies no delivery ID, Archon cannot provide source-level replay deduplication.
+On the first verified delivery, Archon records the source instance, delivery ID, verified-content digest, selected binding ID and revision, resolved inputs, and launch intent. Replaying the same `(sourceInstanceId, deliveryId)` reuses the original receipt and binding snapshot; changed or newly added bindings do not create starts for that delivery. Editing a binding does not turn an old delivery into a new start. Reusing a delivery ID with different verified content returns HTTP 409. When GitHub supplies no delivery ID, Archon cannot provide source-level replay deduplication.
 
 GitHub does not automatically redeliver every failed webhook. Check delivery status in GitHub and use GitHub's explicit redelivery or your reconciliation process after a transport or processing failure. Archon retains safe receipt and disposition data for inspection; it does not retain the raw webhook body as a trigger archive.
+
+## Start workflows from any signed webhook
+
+The Standard Webhooks source plugin accepts the published [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md) `v1` HMAC-SHA256 scheme. It requires `webhook-id`, `webhook-timestamp`, and `webhook-signature`; vendor-specific signatures, `svix-*` aliases, and asymmetric signatures are unsupported. Every authenticated delivery with valid JSON evaluates every configured binding. Configure the sender to send only the events you need.
+
+From a source checkout, bundle the plugin into a standalone module in an operator-owned plugin directory. The module loads outside the Archon source tree:
+
+```bash
+bun build packages/adapters/src/sources/standard-webhooks/source-plugin.ts --target=bun \
+  --outfile=/opt/archon/plugins/standard-webhooks/source-plugin.mjs
+```
+
+Set `ORDER_SIGNING_SECRET` in the server environment to your sender's signing secret (`whsec_` followed by base64-encoded key bytes). Missing or invalid secrets fail at server startup. The configuration contains only the environment variable name. Set `ARCHON_WEBHOOK_SOURCES` to this configuration's absolute path and `ARCHON_TRIGGER_HOST=orders-host` to execute its bindings. Use `https://your-archon-host/webhooks/sources/orders-production` as the sender's URL.
+
+```json
+{
+  "version": 1,
+  "sources": [
+    {
+      "sourceInstanceId": "orders-production",
+      "module": "/opt/archon/plugins/standard-webhooks/source-plugin.mjs",
+      "config": {
+        "version": 1,
+        "signingSecretEnv": "ORDER_SIGNING_SECRET",
+        "bindings": [
+          {
+            "bindingId": "process-order",
+            "hostId": "orders-host",
+            "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a",
+            "resource": "orders:processing",
+            "overlap": "queue",
+            "launch": {
+              "cwd": "/srv/archon/orders",
+              "workflowName": "process-order",
+              "inputs": {},
+              "isolation": { "kind": "in-place" }
+            },
+            "inputMapping": { "order_id": "/order/id" }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+The workflow must declare `order_id` in `inputs:`. `inputMapping` maps input names to [RFC 6901 JSON Pointers](https://www.rfc-editor.org/rfc/rfc6901): `/order/id` selects a nested field, `/items/0` selects the first array item, `~1` escapes `/`, and `~0` escapes `~`. The empty pointer `""` selects the whole JSON document. Mapped values retain their JSON types and override literals in `launch.inputs`. A missing target rejects that binding with a recorded reason; other bindings still run. Preparation rejects undeclared inputs and missing required inputs. Mapped inputs come from the event, so preparation also rejects the binding when the workflow has no `inputs:` declaration.
+
+### Sign a delivery from a shell
+
+This POSIX shell recipe uses OpenSSL and preserves the exact body bytes. Set `ORDER_SIGNING_SECRET` in the sender environment to the same secret as the server, and disable shell tracing when handling secrets. Do not put the secret value in command history.
+
+```bash
+body='{"order":{"id":"order-123"}}'
+delivery_id='order-123@1'
+timestamp=$(date +%s)
+key_hex=$(printf '%s' "${ORDER_SIGNING_SECRET#whsec_}" | openssl base64 -d -A | od -An -v -tx1 | tr -d ' \n')
+signature=$(printf '%s' "$delivery_id.$timestamp.$body" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$key_hex" -binary | openssl base64 -A)
+unset key_hex
+curl --fail-with-body 'https://your-archon-host/webhooks/sources/orders-production' \
+  -H 'Content-Type: application/json' \
+  -H "webhook-id: $delivery_id" \
+  -H "webhook-timestamp: $timestamp" \
+  -H "webhook-signature: v1,$signature" \
+  --data-binary "$body"
+```
+
+`-macopt hexkey:` supplies the decoded key bytes; `-hmac` cannot represent arbitrary binary keys. OpenSSL receives the key in its process arguments, so run this recipe on a trusted sender host. Send fresh timestamps when retrying, but retain the delivery ID and exact body. Timestamps must be within 300 seconds of receipt, in either direction. During key rotation the signature header can contain space-separated `v1,<base64>` entries; any matching entry authenticates the delivery.
+
+`webhook-id` is the durable dedup key within this source instance. A retry of a valid JSON delivery with the same ID and exact body returns 200 and creates no new receipt or start, even if a binding's run-as user has since been removed. Reusing the ID with different body bytes returns 409, even if the JSON values are equivalent. Binding edits do not change an already accepted delivery.
+
+| Status | Meaning |
+| --- | --- |
+| 200 | Receipt committed, including unmatched deliveries and replays; execution happens afterward |
+| 400 | Authenticated body is malformed JSON, and its malformed receipt is retained; or the body is not UTF-8, and nothing is persisted |
+| 401 | Missing headers, invalid signature or invalid/stale timestamp; nothing persisted |
+| 404 | Unknown source instance |
+| 409 | Delivery ID reused with different content; no new receipt or start |
+| 500 | Processing or persistence failed; investigate and retry |
+
+### Security boundary
+
+A valid signature proves possession of the sender's key and integrity of the delivery. It does not make customer text or other event content trustworthy. Mapped inputs reach workflow prompts and scripts as untrusted data; author workflows accordingly. Map only the fields the workflow needs. Resolved inputs are persisted with the receipt's binding, including the whole body if you use `""`, and there is no automatic retention policy. Never map credentials into inputs.
+
+Operator configuration owns the workflow, cwd, isolation, execution host, resource, and run-as user. The body can only supply configured input values, which preparation checks against the workflow's declarations; a workflow that declares no inputs receives none. It cannot choose any launch authority. The plugin reads secrets from the environment and never logs secrets, bodies, or signature headers. The signature covers the exact received bytes, including a leading byte-order mark. Authentication completes before receipt persistence.
 
 ## Preparation and retained records
 
 The receipt freezes the evaluated bindings and resolved inputs. The execution host later captures the workflow source and reads any `configSource` run configuration. Queue admission freezes that prepared source and configuration; editing live files afterward does not change queued work.
+
+An input mapped from the event, by a Standard Webhooks JSON Pointer or a GitHub `field` mapping, reaches only a workflow that declares it under `inputs:`. Preparation rejects a binding that maps event values into a workflow without that declaration. Literal inputs you write into `launch.inputs` or a GitHub `literal` mapping pass through to a workflow without `inputs:`, as they do for a direct run. A workflow that declares `inputs:` rejects any undeclared name, literal or mapped.
 
 A process that stops during preparation leaves its recorded preparation owner visible. After verifying that exact process has stopped, use `archon trigger recover-preparation <receipt-id> <binding-id> --owner <recorded-owner-id> --yes`, then drain the configured host. A failed validation is recorded as rejected and requires a corrected new request.
 

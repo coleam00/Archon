@@ -305,10 +305,12 @@ export async function disposeInstanceForDirectory(
 }
 
 /** Check SDK and executable availability without starting a server or binding a port. */
-export async function probeOpencodeRuntime(): Promise<
-  'ready' | 'sdk-entrypoint-missing' | 'executable-missing'
-> {
+export async function probeOpencodeRuntime(
+  signal: AbortSignal
+): Promise<'ready' | 'sdk-entrypoint-missing' | 'executable-missing'> {
+  signal.throwIfAborted();
   const mod = await import('@opencode-ai/sdk');
+  signal.throwIfAborted();
   if (typeof mod.createOpencode !== 'function') return 'sdk-entrypoint-missing';
 
   // Bun searches PATH (on Windows for .exe/.cmd/.bat/.com, not PATHEXT or cwd),

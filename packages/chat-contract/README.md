@@ -41,8 +41,8 @@ only `user` and `unidentified`; it is a host type, never a plugin-supplied actor
 Plugin message persistence is always owned by core.
 
 `ChatRunEvent` is a presentation projection: workflow start, node state, approval
-pending (including authored decisions and pause identity), and terminal status
-with authored outcome and cost. Engine events and database rows stay on the host.
+pending (including authored decisions, pause identity and the persisted authored
+outcome), and terminal status with authored outcome and cost. Engine events and database rows stay on the host.
 The host routes events only to the plugin owning the run's conversation.
 
 Run actions are approve, reject, respond and cancel. An optional response carries
@@ -67,6 +67,8 @@ malformed inbound driver that bypasses local validation, a next-render failure
 driver, and a promise that resolves once the plugin stops. Drivers must exercise
 the real transport and platform implementation; they must not fabricate results.
 The runner installs fixture host handlers for sender ids `allowed` and `denied`.
+`PluginRemoteError` is exported from the conformance subpath for process-fixture
+drivers that carry a remote error through a separate control channel.
 It checks start success or typed failure, long sends, both sender outcomes,
 invalid-params without delivery, render-error containment, optional footer and
 stdin closure. Each check has a bounded grace period (5 seconds by default).

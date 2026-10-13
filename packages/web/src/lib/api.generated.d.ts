@@ -1306,7 +1306,72 @@ export interface paths {
     };
     options?: never;
     head?: never;
-    patch?: never;
+    /**
+     * Rename a codebase
+     * @description Changes the display name. Refused with 409 when another codebase already uses the name, or when the new name would move the project storage (worktrees, state, logs, artifacts).
+     */
+    patch: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['RenameCodebaseBody'];
+        };
+      };
+      responses: {
+        /** @description Renamed codebase */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Codebase'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Name already used, or the rename would move project storage */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
     trace?: never;
   };
   '/api/codebases/base-branch': {
@@ -1606,6 +1671,51 @@ export interface paths {
         };
       };
     };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/runs/attention': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List every run needing a human response or action */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['RunsNeedingAttentionResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -3811,6 +3921,80 @@ export interface components {
           kind: 'upstream_skipped';
           origin: string;
         };
+    RunAttention:
+      | {
+          /** @enum {string} */
+          kind: 'stalled_tool_calls';
+          runId: string;
+          /** @enum {string} */
+          status: 'running';
+          calls: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
+        }
+      | {
+          /** @enum {string} */
+          kind: 'awaiting_response';
+          runId: string;
+          respondTo: {
+            runId: string;
+            nodeId: string;
+          };
+          message: string;
+          occurrence: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'action_required';
+          runId: string;
+          nodeId: string;
+          message: string;
+          occurrence: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'blocked_on_child';
+          runId: string;
+          childRunId: string;
+          nodeId: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'unreadable';
+          runId: string;
+          /** @enum {string} */
+          reason:
+            | 'malformed_tool_call_attention'
+            | 'malformed_gate'
+            | 'unrecognized_gate_type'
+            | 'child_pointer_missing'
+            | 'child_run_missing'
+            | 'child_chain_too_deep';
+          detail: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'terminal';
+          runId: string;
+          /** @enum {string} */
+          status: 'completed' | 'failed' | 'cancelled';
+          /** Format: date-time */
+          at: string | null;
+        };
     AuthStatusResponse: {
       enabled: boolean;
       /** @enum {string} */
@@ -4046,6 +4230,9 @@ export interface components {
           path: string;
           base_branch?: string | null;
         };
+    RenameCodebaseBody: {
+      name: string;
+    };
     DeleteCodebaseResponse: {
       success: boolean;
     };
@@ -4476,18 +4663,8 @@ export interface components {
       /** @enum {string} */
       errorType: 'read_error' | 'parse_error' | 'validation_error';
     };
-    DashboardRunsResponse: {
+    RunsNeedingAttentionResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
-      total: number;
-      counts: {
-        all: number;
-        running: number;
-        completed: number;
-        failed: number;
-        cancelled: number;
-        pending: number;
-        paused: number;
-      };
     };
     DashboardWorkflowRun: {
       origin: {
@@ -4575,6 +4752,7 @@ export interface components {
       agents_completed: number | null;
       agents_failed: number | null;
       agents_total: number | null;
+      attention: components['schemas']['RunAttention'] | (never | null);
     };
     WorkflowRunMetadata: {
       tool_call_attention?: {
@@ -4603,6 +4781,20 @@ export interface components {
         iteration?: number;
         sessionId?: string | null;
         sessionProvider?: string | null;
+        bodySessionCursors?: {
+          [key: string]: {
+            sessionId: string;
+            provider: string;
+          };
+        };
+        bodySessionCursorAncestry?: {
+          [key: string]: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+        };
         captureResponse?: boolean;
         onRejectPrompt?: string;
         onRejectMaxAttempts?: number;
@@ -5050,6 +5242,20 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
+            };
+          };
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -5065,6 +5271,20 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
+            };
+          };
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */
@@ -5084,6 +5304,20 @@ export interface components {
           iteration: number;
           sessionId: string | null;
           sessionProvider: string | null;
+          bodySessionCursors?: {
+            [key: string]: {
+              sessionId: string;
+              provider: string;
+            };
+          };
+          bodySessionCursorAncestry?: {
+            [key: string]: {
+              [key: string]: {
+                sessionId: string;
+                provider: string;
+              };
+            };
+          };
           /** @enum {string} */
           kind: 'attention';
           /** Format: date-time */
@@ -5104,6 +5338,19 @@ export interface components {
         | 'run_not_created';
       /** @enum {string} */
       signal?: 'SIGINT' | 'SIGTERM';
+    };
+    DashboardRunsResponse: {
+      runs: components['schemas']['DashboardWorkflowRun'][];
+      total: number;
+      counts: {
+        all: number;
+        running: number;
+        completed: number;
+        failed: number;
+        cancelled: number;
+        pending: number;
+        paused: number;
+      };
     };
     CancelWorkflowRunResponse: {
       success: boolean;
@@ -5210,6 +5457,7 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
+      attention: components['schemas']['RunAttention'] | (never | null);
     };
     /** @enum {string|null} */
     WorkflowRunOutcome: 'succeeded' | 'failed' | null;
@@ -5537,7 +5785,7 @@ export interface components {
     };
     SafeConfig: {
       botName: string;
-      assistant: string;
+      assistant?: string;
       assistants: {
         [key: string]: components['schemas']['ProviderDefaults'];
       };

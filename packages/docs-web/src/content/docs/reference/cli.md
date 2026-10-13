@@ -40,13 +40,17 @@ Use `archon forge resolve --data <json>` for an explicit remote, `archon forge c
 
 ## Users and roles
 
-`archon user` manages persisted roles as the local operator. It requires no git repository and uses the install's configured database (`DATABASE_URL` for PostgreSQL, otherwise `ARCHON_HOME/archon.db`).
+`archon user` manages identities and persisted roles as the local operator. It requires no git repository and uses the install's configured database (`DATABASE_URL` for PostgreSQL, otherwise `ARCHON_HOME/archon.db`).
 
 ```bash
 archon user list                    # Full ids, roles, display names and platform identities
 archon user role <id> admin         # Designate an admin using a full Archon user id
 archon user role <id> member        # Demote a user
+archon user link <id> slack:U123    # Link a platform identity to an existing user
+archon user link <id> slack:U123 --move # Reassign an identity from another user
 ```
+
+Linking requires an existing full user id and a valid platform id. The first colon separates the platform from its opaque user id. A conflicting link fails and names both Archon users unless `--move` is supplied. Moving changes only the identity mapping; both users, their roles and their other data remain unchanged. Linking to the run starter lets chat actions use that user’s existing permissions and record that user as the actor.
 
 Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non-zero exit code. New users are members, while upgrades preserve existing roles. There is no last-admin restriction because the CLI is the operator. Only a run's starter or an admin can act on it; the local operator can always act through the CLI. See [Who can act on a run](/reference/security/#who-can-act-on-a-run) for the action policy and [Users and roles](/reference/security/#users-and-roles) for the upgrade policy and Docker commands.
 
@@ -101,6 +105,7 @@ Interactive setup wizard for credentials and configuration.
 
 ```bash
 archon setup                      # writes ~/.archon/.env (home scope, default)
+archon setup --providers codex    # skip the provider selection question
 archon setup --scope project      # writes <cwd>/.archon/.env instead
 archon setup --force              # overwrite instead of merging (backup still written)
 archon setup --spawn              # open in a new terminal window
@@ -113,7 +118,10 @@ archon setup --spawn              # open in a new terminal window
 | `--scope home` | Write to `~/.archon/.env` (default). Applies to every project. |
 | `--scope project` | Write to `<cwd>/.archon/.env`. Overrides user scope for this repo only. |
 | `--force` | Overwrite the target file wholesale instead of merging. A timestamped backup is still written. |
+| `--providers <ids>` | Install comma-separated maintained providers (claude, codex, pi), skipping the provider selection question. Auth and configuration prompts still run. |
 | `--spawn` | Open setup wizard in a new terminal window. |
+
+`--providers` takes precedence over `ARCHON_PROVIDERS`; both accept comma-separated IDs and skip the provider selection question. An explicit empty value selects none. Without either, setup asks which maintained providers to install, installs that selection in release binaries, and renders their diagnostics before collecting native authentication and configuration. Source checkouts run maintained providers from source. Selecting none installs nothing and prints `archon provider install <claude|codex|pi>`; setup never silently selects a provider. With multiple selected providers, it asks which should be the default and saves that choice.
 
 **Write safety**: `archon setup` never writes to `<cwd>/.env` — that file belongs to you. The wizard always targets one archon-owned file chosen by `--scope`, merges into existing content (so user-added keys survive), and writes a timestamped backup before every rewrite (e.g. `~/.archon/.env.archon-backup-2026-04-20T09-28-11-000Z`).
 
@@ -121,18 +129,31 @@ archon setup --spawn              # open in a new terminal window
 
 ### `doctor`
 
-Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, Codex binary resolution (env → config → vendor → autodetect, reporting which source resolved), gh CLI auth, the configured assistant's native login, OpenCode runtime SDK and executable presence, database reachability, workspace writability, bundled defaults, folder-project detection (contained repos, when run from one), telemetry state, AI credentials connected in Archon, and adapter token pings (Slack/Telegram, best-effort).
+Verify your Archon setup. Runs a checklist of common failure points: installed provider versions and unavailable-plugin reasons, each registered provider's own diagnostics, gh CLI auth, the configured assistant's native login, OpenCode runtime SDK and executable presence, database reachability, workspace writability, bundled defaults, folder-project detection (contained repos, when run from one), telemetry state, AI credentials connected in Archon, and adapter token pings (Slack/Telegram, best-effort).
 
 ```bash
 archon doctor
-archon doctor --full   # also probe the OpenCode runtime dependencies even when it isn't the configured assistant
 ```
 
-The Codex check skips (never fails) when Codex isn't the configured assistant anywhere and no OpenAI credential is connected, so Claude-only users aren't nagged about a binary they'll never use. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon. When Archon config names no model (Pi then uses its own default), doctor cannot tell which vendor the run uses, so a missing native login is a warning, not a failure, if you have connected a credential the assistant can use. Pi resolves its configured key during the check, so a key command runs during `archon doctor`; a command that prompts can prompt again at run start. The check builds the runtime a run builds, which runs every provider's `!command` key stored in Pi's `auth.json`, not only the configured provider's. For a model in Pi's catalog, a run resolves a `models.json` key command once when a node starts and uses that key for the whole node, so a short-lived token can expire before a long node ends; a model from an extension provider runs its key command on each request. Pi OAuth checks may refresh through Pi's runtime. Codex reads its native account through app-server and asks it to refresh the sign-in, so a revoked login fails the check (a run does not make this call); an API key is usable once resolved. When Codex is configured for a model provider that needs no OpenAI login, the check is skipped. Claude, Copilot, and OpenCode cannot check their native login without starting a model session, so the check is skipped and reports "not checked". The OpenCode check probes that the embedded runtime SDK module resolves and the `opencode` executable is available on the inherited `PATH` — it never boots the runtime (which spawns a child process and binds a port) — and skips unless OpenCode is the configured assistant or `--full` is passed. The provider support check warns when the default assistant is a [deprecated provider](/getting-started/ai-assistants/#deprecated-providers).
+With no registered providers, doctor fails and prints `archon provider install <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon. When Archon config names no model (Pi then uses its own default), doctor cannot tell which vendor the run uses, so a missing native login is a warning, not a failure, if you have connected a credential the assistant can use. Pi resolves its configured key during the check, so a key command runs during `archon doctor`; a command that prompts can prompt again at run start. The check builds the runtime a run builds, which runs every provider's `!command` key stored in Pi's `auth.json`, not only the configured provider's. For a model in Pi's catalog, a run resolves a `models.json` key command once when a node starts and uses that key for the whole node, so a short-lived token can expire before a long node ends; a model from an extension provider runs its key command on each request. Pi OAuth checks may refresh through Pi's runtime. Codex reads its native account through app-server and asks it to refresh the sign-in, so a revoked login fails the check (a run does not make this call); an API key is usable once resolved. When Codex is configured for a model provider that needs no OpenAI login, the check is skipped. Claude, Copilot, and OpenCode cannot check their native login without starting a model session, so the check is skipped and reports "not checked". The OpenCode check probes that the embedded runtime SDK module resolves and the `opencode` executable is available on the inherited `PATH` — it never boots the runtime (which spawns a child process and binds a port) — for every registered OpenCode provider. The provider support check warns when the default assistant is a [deprecated provider](/getting-started/ai-assistants/#deprecated-providers).
 
 Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
 
 Also runs automatically at the end of `archon setup` (optional).
+
+### `provider install`
+
+Install or replace maintained providers from the matching Archon release:
+
+```bash
+archon provider install claude codex pi
+```
+
+The command accepts only `claude`, `codex`, and `pi`, pins the first-party repository tag to the CLI version, and uses the plugin installer's checksum verification. Maintained ids cannot be installed from another repository. Remove a receipt with `archon plugin remove coleam00/Archon/plugins/provider-<id>`.
+
+Source checkouts and Docker run these providers from source over the process transport and refuse this install command. Release binaries retain their bundled providers until the separate provider release rollout is complete.
+
+The default provider comes from explicit configuration (`assistant` in project config or `defaultAssistant` in global config), then `DEFAULT_AI_ASSISTANT`, then the only registered provider. With multiple providers and no configured default, a run needing one fails before creating a worktree. A workflow can select its provider explicitly.
 
 ### `plugin`
 
@@ -153,7 +174,7 @@ archon plugin list
 
 A provider plugin records its descriptor in the receipt and registers on the next CLI invocation or server restart. A workflow names its descriptor id in `provider:`. See [Provider plugins](/guides/publishing-plugins/#provider-plugins) for executable naming, capabilities, credentials, and the process environment.
 
-A chat plugin records its validated descriptor after an initialization-only handshake. Hosts do not yet load installed chat plugins. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
+A chat plugin records its validated descriptor after an initialization-only handshake. On server restart, each installed chat receipt starts one supervised plugin process. Install, update, and removal take effect at the next restart. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
 
 A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. Nothing updates in the background. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
 
@@ -1106,7 +1127,10 @@ archon workflow reject <run-id> --json
 
 ### `workflow cleanup`
 
-Delete old terminal workflow run records from the database.
+Delete old terminal workflow run records and prune state-document revisions from the
+database. Every latest revision survives, including tombstones: removing a tombstone
+would allow revision numbers to repeat and a stale replacement to overwrite recreated state.
+The command reports both counts.
 
 ```bash
 archon workflow cleanup        # Default: 7 days
@@ -1158,12 +1182,15 @@ its worktrees; use the full ID elsewhere.
 | `--type` | Yes | Event type (e.g., `ralph_story_started`, `node_completed`) |
 | `--data` | No | JSON string attached to the event. Invalid JSON prints a warning and is ignored. |
 
-Node-state events, including completion, failure, skip, and resume-cache changes, print
-`Event persisted` only after the database write succeeds. Storage failures exit with code 1.
+Node-state events, including completion, failure, skip, and resume-cache changes, and
+`workflow.checkout_shared` events print `Event persisted` only after the database write
+succeeds. Storage failures exit with code 1. Checkout-sharing data must contain
+`parent_run_id`, `parent_node_id`, `working_path`, and `sibling_run_id` as nonempty strings.
 Other events print `Event submitted (best-effort)`; check server logs if they appear missing.
 
 Exit code: 0 after persistence or best-effort submission, 1 when a required argument is
-missing, the event type is invalid, run-ID prefix resolution fails, or a node-state write fails.
+missing, the event type is invalid, run-ID prefix resolution fails, required event data is
+invalid, or a required event write fails.
 
 ### `isolation list`
 
@@ -1477,3 +1504,51 @@ archon isolation list
 # Clean up old worktrees
 archon isolation cleanup
 ```
+
+### state
+
+Durable, audited JSON documents scoped to the current project. SQL storage supports
+SQLite and PostgreSQL. Values are read on demand; the engine never injects them into prompts.
+
+```bash
+archon state get review/123
+printf '{"seen":[]}' | archon state put review/123 --if-revision 0
+printf '{"ops":[{"op":"append","path":"/seen","value":123}]}' | archon state patch review/123
+archon state log review/123 --limit 100
+archon state delete review/123 --if-revision 2
+```
+
+Every command writes JSON. `get` returns `{name, revision, value}`; an absent document
+returns revision `0` and value `null`. A deleted document returns value `null`,
+`deleted: true` and its tombstone revision, which is the revision a recreating `put` must
+name. `put`, `patch`, and `delete` return the new full revision. `log` returns all
+revisions newest first (use a positive `--limit` to bound the result), including
+tombstones, operation, writer and timestamp.
+
+`put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
+that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
+stdin to the latest value, initially `{}`. Writes to one document are serialized, so a
+patch never loses a revision race; it applies to whatever an earlier write left, which
+can make it invalid (for example, removing a member another patch already removed).
+Operations are `set`, `remove`, and `append`, using RFC 6901 JSON Pointer paths. `set`
+replaces a value, `remove` deletes an existing member (or array element), and `append`
+adds one value to an array, creating it when missing. Missing intermediate objects are
+created for `set` and `append`. Array indices must be canonical, in-range integers;
+`-` is unsupported. The empty pointer addresses the entire document. Root `null` is
+reserved for deletion; nested nulls are ordinary JSON values.
+
+Names contain 1–200 lowercase letters, digits, `.`, `_`, `-`, and slash-separated segments.
+Values are limited to 64 KiB of serialized UTF-8 JSON. Exit codes: `0` success, `1` usage
+or storage failure, `3` revision conflict, `4` oversized value or invalid patch. Failures
+return `{ok:false, error, code}` and rejected writes append no revision.
+
+Inside a bash/script node, `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` resolve the run's
+project and writer. Missing runs fail loudly with the opened store kind; a missing project
+or node identity also fails. There is no project override. Outside a run, the current
+checkout (auto-registered when needed) or registered folder resolves the project and `ARCHON_USER_ID`, `USER`, or
+`USERNAME` identifies the operator. Projects with colliding storage names share state,
+just as with `$STATE_DIR`; register them with distinct names.
+
+`archon workflow cleanup <days>` also prunes old state revisions, keeps each live document's latest
+revision, retains the latest tombstone of deleted documents, and reports both counts.
+See [Durable state documents](/guides/authoring-workflows/#durable-state-documents).

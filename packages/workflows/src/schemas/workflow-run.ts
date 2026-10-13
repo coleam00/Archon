@@ -75,6 +75,19 @@ const workflowWaitNodeOwnerFields = {
   owner: z.literal('node'),
   nodeId: z.string().min(1),
 } as const;
+export const sessionCursorSchema = z.object({
+  sessionId: z.string().min(1),
+  provider: z.string().min(1),
+});
+export type SessionCursor = z.infer<typeof sessionCursorSchema>;
+export const bodySessionCursorsSchema = z.record(z.string().min(1), sessionCursorSchema);
+
+export const bodySessionCursorAncestrySchema = z.record(
+  z.string().min(1),
+  bodySessionCursorsSchema
+);
+export type BodySessionCursorAncestry = z.infer<typeof bodySessionCursorAncestrySchema>;
+
 const workflowWaitLoopOwnerFields = {
   owner: z.literal('loop_group'),
   nodeId: z.string().min(1),
@@ -82,6 +95,8 @@ const workflowWaitLoopOwnerFields = {
   iteration: z.number().int().positive(),
   sessionId: z.string().nullable(),
   sessionProvider: z.string().nullable(),
+  bodySessionCursors: bodySessionCursorsSchema.optional(),
+  bodySessionCursorAncestry: bodySessionCursorAncestrySchema.optional(),
 } as const;
 
 /**
@@ -750,6 +765,8 @@ export const approvalContextSchema = z.object({
    * node, so the provider is the same by construction.
    */
   sessionProvider: z.string().nullable().optional(),
+  bodySessionCursors: bodySessionCursorsSchema.optional(),
+  bodySessionCursorAncestry: bodySessionCursorAncestrySchema.optional(),
   /** When true, the user's approval comment is stored as `$nodeId.output`. Legacy-mode gates only (see `onRejectPrompt`). */
   captureResponse: z.boolean().optional(),
   /** The on_reject prompt template (stored at pause time so reject handlers don't need the workflow def). */
@@ -913,12 +930,8 @@ export const toolCallAttentionArraySchema = z.array(toolCallAttentionSchema);
 export type ToolCallAttention = z.infer<typeof toolCallAttentionSchema>;
 
 /** Where a gate's response must be recorded — this run, or the child blocking it. */
-export interface GateAddress {
-  /** The run the response is recorded against. NOT always the run that was asked about. */
-  runId: string;
-  /** The gate node inside that run. */
-  nodeId: string;
-}
+export const gateAddressSchema = z.object({ runId: z.string(), nodeId: z.string() });
+export type GateAddress = z.infer<typeof gateAddressSchema>;
 
 /**
  * Why a run cannot be described. An enum rather than prose alone because the
@@ -932,14 +945,75 @@ export interface GateAddress {
  * produced by a reader that follows a `blocked_on_child` pointer into the database
  * (`waitForRunAttention`, @archon/core); the projection is pure and never does.
  */
-export type RunAttentionUnreadableReason =
-  | 'malformed_tool_call_attention'
-  | 'malformed_gate'
-  | 'unrecognized_gate_type'
-  | 'child_pointer_missing'
-  | 'child_run_missing'
-  | 'child_chain_too_deep';
+export const runAttentionUnreadableReasonSchema = z.enum([
+  'malformed_tool_call_attention',
+  'malformed_gate',
+  'unrecognized_gate_type',
+  'child_pointer_missing',
+  'child_run_missing',
+  'child_chain_too_deep',
+]);
+export type RunAttentionUnreadableReason = z.infer<typeof runAttentionUnreadableReasonSchema>;
 
+const terminalAttentionShape = {
+  kind: z.literal('terminal'),
+  runId: z.string(),
+  status: terminalWorkflowRunStatusSchema,
+};
+
+const nonTerminalRunAttentionSchemas = [
+  z.object({
+    kind: z.literal('stalled_tool_calls'),
+    runId: z.string(),
+    status: z.literal('running'),
+    calls: z.array(
+      toolCallAttentionSchema.extend({ elapsedMs: z.number(), stalledForMs: z.number() })
+    ),
+  }),
+  z.object({
+    kind: z.literal('awaiting_response'),
+    runId: z.string(),
+    respondTo: gateAddressSchema,
+    message: z.string(),
+    occurrence: z.string(),
+  }),
+  z.object({
+    kind: z.literal('action_required'),
+    runId: z.string(),
+    nodeId: z.string(),
+    message: z.string(),
+    occurrence: z.string(),
+  }),
+  z.object({
+    kind: z.literal('blocked_on_child'),
+    runId: z.string(),
+    childRunId: z.string(),
+    nodeId: z.string(),
+  }),
+  z.object({
+    kind: z.literal('unreadable'),
+    runId: z.string(),
+    reason: runAttentionUnreadableReasonSchema,
+    detail: z.string(),
+  }),
+] as const;
+
+export function createRunAttentionSchema<T extends z.ZodDate | z.ZodString>(
+  timestamp: T
+): z.ZodDiscriminatedUnion<
+  [
+    ...typeof nonTerminalRunAttentionSchemas,
+    z.ZodObject<typeof terminalAttentionShape & { at: z.ZodNullable<T> }>,
+  ],
+  'kind'
+> {
+  return z.discriminatedUnion('kind', [
+    ...nonTerminalRunAttentionSchemas,
+    z.object({ ...terminalAttentionShape, at: z.nullable(timestamp) }),
+  ]);
+}
+
+export const runAttentionSchema = createRunAttentionSchema(z.date());
 /**
  * Terminal and gate attention, or advisory attention for overdue live tools.
  *
@@ -955,23 +1029,7 @@ export type RunAttentionUnreadableReason =
  * really is on a gate. So the projection reports what it knows — this run is blocked
  * on that child — and a reader with database access resolves the chain.
  */
-export type RunAttention =
-  | {
-      kind: 'stalled_tool_calls';
-      runId: string;
-      status: 'running';
-      calls: (ToolCallAttention & { elapsedMs: number; stalledForMs: number })[];
-    }
-  | { kind: 'terminal'; runId: string; status: RunTerminalStatus; at: Date | null }
-  | { kind: 'awaiting_response'; runId: string; respondTo: GateAddress; message: string }
-  | {
-      kind: 'action_required';
-      runId: string;
-      nodeId: string;
-      message: string;
-    }
-  | { kind: 'blocked_on_child'; runId: string; childRunId: string; nodeId: string }
-  | { kind: 'unreadable'; runId: string; reason: RunAttentionUnreadableReason; detail: string };
+export type RunAttention = z.infer<typeof runAttentionSchema>;
 
 /** The run shape `runAttention` reads. Structural so a caller can pass a partial row. */
 export interface RunAttentionInput {
@@ -1040,6 +1098,7 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
       runId: run.id,
       nodeId: workflowWaitStepName(wait),
       message: wait.message,
+      occurrence: `wait:${wait.waitingSince}`,
     };
   }
 
@@ -1103,6 +1162,7 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
     runId: run.id,
     respondTo: { runId: run.id, nodeId: raw.nodeId },
     message: raw.message,
+    occurrence: raw.pauseId ?? `legacy:${raw.nodeId}`,
   };
 }
 

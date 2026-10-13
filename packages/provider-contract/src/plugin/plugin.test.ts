@@ -681,9 +681,12 @@ test('information hooks return all diagnostic states and optional model labels',
     }),
     async client => {
       expect(
-        await client.diagnose({ assistantConfig: { nested: { enabled: true, unset: undefined } } })
+        await client.diagnose({
+          signal: new AbortController().signal,
+          assistantConfig: { nested: { enabled: true, unset: undefined } },
+        })
       ).toEqual({ checks });
-      expect(await client.listModels()).toEqual({
+      expect(await client.listModels({ signal: new AbortController().signal })).toEqual({
         models: [{ id: 'one', label: 'One' }, { id: 'two' }],
       });
     }
@@ -692,7 +695,10 @@ test('information hooks return all diagnostic states and optional model labels',
 
 test('absent information hooks report unsupported rather than successful empty results', async () => {
   await withProvider(fixtureProvider(), async client => {
-    for (const call of [() => client.diagnose({}), () => client.listModels()]) {
+    for (const call of [
+      () => client.diagnose({ signal: new AbortController().signal }),
+      () => client.listModels({ signal: new AbortController().signal }),
+    ]) {
       try {
         await call();
         throw new Error('accepted absent hook');
@@ -720,8 +726,8 @@ test('client rejects malformed successful information responses from an independ
   const client = await connectProvider(pair.host);
   try {
     for (const [call, field] of [
-      [() => client.diagnose({}), 'label'],
-      [() => client.listModels(), 'id'],
+      [() => client.diagnose({ signal: new AbortController().signal }), 'label'],
+      [() => client.listModels({ signal: new AbortController().signal }), 'id'],
     ] as const) {
       try {
         await call();
@@ -739,4 +745,79 @@ test('client rejects malformed successful information responses from an independ
     await client.close();
     await peer.close();
   }
+});
+
+test('an in-flight model list abort leaves the shared connection usable after a late reply', async () => {
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const replied = Promise.withResolvers<void>();
+  let requestId: string | number | undefined;
+  await withProvider(
+    fixtureProvider({
+      async listModels() {
+        started.resolve();
+        await release.promise;
+        return { models: [{ id: 'late-model' }] };
+      },
+    }),
+    async client => {
+      const abort = new AbortController();
+      const pending = client.listModels({ signal: abort.signal });
+      await started.promise;
+      abort.abort(new Error('catalog cancelled'));
+      try {
+        const outcome = await Promise.race([
+          pending.then(
+            () => 'models returned',
+            (error: unknown) => error
+          ),
+          client.resolveCredentialModel({ cwd: '/' }).then(() => 'next RPC finished'),
+        ]);
+        expect(outcome).toEqual(new Error('catalog cancelled'));
+      } finally {
+        release.resolve();
+      }
+      await replied.promise;
+      expect(await client.resolveCredentialModel({ cwd: '/' })).toBe('credential-model');
+      expect(await collect(client.sendQuery('turn', '/'))).toEqual(chunks);
+    },
+    (side, bytes) => {
+      const message = rpcMessageSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
+      if (
+        side === 'host' &&
+        'method' in message &&
+        'id' in message &&
+        message.method === '_archon/list_models'
+      )
+        requestId = message.id;
+      if (side === 'provider' && 'result' in message && message.id === requestId) replied.resolve();
+    }
+  );
+});
+
+test('a diagnostic caller can cancel while the shared connection remains usable', async () => {
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  await withProvider(
+    fixtureProvider({
+      async diagnose(request) {
+        expect(request.signal).toBeInstanceOf(AbortSignal);
+        started.resolve();
+        await release.promise;
+        return { checks: [] };
+      },
+    }),
+    async client => {
+      const abort = new AbortController();
+      const pending = client.diagnose({ signal: abort.signal });
+      await started.promise;
+      abort.abort(new Error('diagnostic deadline'));
+      try {
+        await expect(pending).rejects.toThrow('diagnostic deadline');
+        expect(await client.resolveCredentialModel({ cwd: '/' })).toBe('credential-model');
+      } finally {
+        release.resolve();
+      }
+    }
+  );
 });

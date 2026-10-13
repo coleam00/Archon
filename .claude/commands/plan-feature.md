@@ -92,10 +92,9 @@ Before writing tasks, reason through:
 - If adding tests to packages with split test batches (core, workflows, adapters, isolation),
   determine which batch the new test belongs to.
 
-**ESLint compliance:**
-- All new functions need explicit return types.
+**Lint compliance:**
 - No `any` without justification.
-- Zero-warning policy enforced in CI.
+- Biome warnings fail CI.
 
 **Rollback plan:**
 - What is the blast radius if this goes wrong?
@@ -116,7 +115,7 @@ Generate the implementation plan at `.claude/archon/plans/{kebab-case-feature-na
 ## Success Criteria
 - [ ] {Verifiable criterion 1}
 - [ ] {Verifiable criterion 2}
-- [ ] Passes `bun run validate` (type-check + lint + format + tests)
+- [ ] Tests covering the change pass, and the touched packages lint and type-check (CI is the full validation)
 
 ## Affected Packages
 - `@archon/{package}` — {what changes}

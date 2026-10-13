@@ -55,6 +55,7 @@ import type {
   ScheduledWorkflowResume,
 } from '@archon/workflows/schemas/workflow-run';
 import {
+  runAttention,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   scheduledWorkflowResumeSchema,
@@ -1219,6 +1220,9 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
       : "json_remove(metadata, '$.cancelled_reason')";
   const eventReason =
     getDatabaseType() === 'postgresql' ? "data->>'reason'" : "json_extract(data, '$.reason')";
+  // Placeholders follow the reason list, so a new fan-out cancel reason needs no SQL edit.
+  const reasonPlaceholders = (first: number): string =>
+    FAN_OUT_CANCEL_REASONS.map((_, i) => `$${String(first + i)}`).join(', ');
 
   try {
     return await getDatabase().withTransaction(async query => {
@@ -1228,14 +1232,14 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
              completed_at = NULL,
              started_at = ${dialect.now()},
              last_activity_at = ${dialect.now()},
-             metadata = ${dialect.jsonMerge(metadataWithoutCancelledReason, 5)}
+             metadata = ${dialect.jsonMerge(metadataWithoutCancelledReason, 2)}
          WHERE id = $1
            AND status = 'cancelled'
-           AND ${cancelledReason} IN ($2, $3, $4)`,
+           AND ${cancelledReason} IN (${reasonPlaceholders(3)})`,
         [
           id,
-          ...FAN_OUT_CANCEL_REASONS,
           JSON.stringify({ [TOOL_CALL_ATTENTION_METADATA_KEY]: null }),
+          ...FAN_OUT_CANCEL_REASONS,
         ]
       );
       if ((result.rowCount ?? 0) === 0) {
@@ -1245,7 +1249,7 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
         `DELETE FROM remote_agent_workflow_events
          WHERE workflow_run_id = $1
            AND event_type = 'workflow_cancelled'
-           AND ${eventReason} IN ($2, $3, $4)`,
+           AND ${eventReason} IN (${reasonPlaceholders(2)})`,
         [id, ...FAN_OUT_CANCEL_REASONS]
       );
       const recovered = await query<WorkflowRunRow>(
@@ -2241,17 +2245,18 @@ function buildDashboardWhereClauses(
   return whereClauses;
 }
 
-/** The dashboard list query's row: a raw run row plus its joined and counted columns. */
-type DashboardRunRow = WorkflowRunRow &
+type JoinedWorkflowRunRow = WorkflowRunRow &
   Pick<
     DashboardWorkflowRun,
     'codebase_name' | 'platform_type' | 'worker_platform_id' | 'parent_platform_id'
-  > & {
-    // COUNT is BIGINT on PostgreSQL, which node-postgres returns as text.
-    agents_completed: number | string | null;
-    agents_failed: number | string | null;
-    agents_total: number | string | null;
-  };
+  >;
+
+type DashboardRunRow = JoinedWorkflowRunRow & {
+  // COUNT is BIGINT on PostgreSQL, which node-postgres returns as text.
+  agents_completed: number | string | null;
+  agents_failed: number | string | null;
+  agents_total: number | string | null;
+};
 
 function toCount(value: number | string | null): number | null {
   return value === null ? null : Number(value);
@@ -2376,6 +2381,51 @@ export async function listDashboardRuns(
     getLog().error({ err }, 'list_dashboard_runs_failed');
     throw new Error(`Failed to list dashboard runs: ${err.message}`);
   }
+}
+
+export async function listRunsNeedingAttention(): Promise<DashboardWorkflowRun[]> {
+  const result = await pool.query<JoinedWorkflowRunRow>(
+    `SELECT r.*, CAST(r.origin AS TEXT) AS origin,
+            c.platform_type,
+            c.platform_conversation_id AS worker_platform_id,
+            pc.platform_conversation_id AS parent_platform_id,
+            cb.name AS codebase_name
+     FROM remote_agent_workflow_runs r
+     LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND ${notOriginAnchor('c.id')}
+     LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id
+     LEFT JOIN remote_agent_codebases cb ON r.codebase_id = cb.id
+     WHERE r.status = 'paused'
+     ORDER BY r.started_at DESC`
+  );
+  const runs: DashboardWorkflowRun[] = [];
+  for (const row of result.rows) {
+    let run: DashboardWorkflowRun;
+    try {
+      run = normalizeWorkflowRun({
+        ...row,
+        agents_completed: null,
+        agents_failed: null,
+        agents_total: null,
+        active_nodes: [],
+        current_step_name: null,
+        current_step_status: null,
+        total_steps: null,
+      });
+    } catch {
+      // Parser errors can quote stored data, including message text.
+      getLog().error({ workflowRunId: row.id }, 'attention_run_normalization_failed');
+      continue;
+    }
+    const attention = runAttention(run);
+    if (
+      attention?.kind === 'awaiting_response' ||
+      attention?.kind === 'action_required' ||
+      attention?.kind === 'unreadable'
+    ) {
+      runs.push(run);
+    }
+  }
+  return runs;
 }
 
 /**

@@ -25,7 +25,8 @@ Archon supports a layered configuration system with sensible defaults, optional 
 ├── workflows/              # Home-scoped workflows (source: 'global')
 ├── commands/               # Home-scoped commands (source: 'global')
 ├── scripts/                # Home-scoped scripts (runtime: bun | uv)
-├── archon.db               # SQLite database (when DATABASE_URL not set)
+├── store/                  # File workflow data (store: files)
+├── archon.db               # SQLite (store: database, no DATABASE_URL)
 └── config.yaml             # Global configuration (optional)
 ```
 
@@ -62,6 +63,15 @@ Credentials are checked and delivered freshly. The AI record excludes credential
 The last three layers exist only where their setting has a run-time consumer. Archon-managed GitHub and provider credentials remain protected and are injected after user-authored run environment values.
 
 ## Global Configuration
+
+### Workflow store
+
+Set `store: database` (the default) or `store: files` in `~/.archon/config.yaml`.
+With database storage, omitting `DATABASE_URL` selects SQLite at `~/.archon/archon.db`.
+File storage is CLI-only and creates no database file or SQL connection. The server
+refuses it, and setting `DATABASE_URL` together with `store: files` fails at startup.
+Store selection has no environment override and is not a repository setting.
+See [Database and file storage](/reference/database/) for file layout, recovery and limits.
 
 Create `~/.archon/config.yaml` for user-wide preferences:
 
@@ -109,7 +119,7 @@ paths:
 concurrency:
   maxConversations: 10
   # Optional install-wide cap on simultaneous provider attempts, by provider ID.
-  # Unlisted providers are unlimited. See "Provider concurrency caps" below.
+  # Pi also honors assistants.pi.maxConcurrent. See "Provider concurrency caps" below.
   # providers:
   #   pi: 1
 
@@ -151,7 +161,7 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
 
 ## Provider concurrency caps
 
-`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap, so many runs across Claude, Codex, and Pi can start in parallel. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
+`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap unless Pi has `assistants.pi.maxConcurrent` configured. For Pi, the stricter of these two caps applies across plugin processes. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
 
 - **Attempts, not runs.** One attempt holds one slot from the moment the provider starts until its stream has closed. Retry backoff between attempts holds no slot. A rate limit is retried with backoff as before; it never lowers the cap.
 - **Waiting.** An attempt that finds the cap full waits and checks again about once a second. Cancelling the run stops the wait without starting the attempt. Until queue visibility lands, a waiting node looks idle, and a wait longer than the node's `idle_timeout` ends the node like any other idle node.
@@ -187,7 +197,7 @@ Run config accepts settings whose consumers still execute after the run is dispa
 - `worktree` and `container` already affected isolation.
 - `botName`, `streaming`, `paths`, and `concurrency` are process-scoped or have no per-run consumer.
 - `recommendedWorkflows` is listing-only.
-- `assistants.pi.env` and `assistants.pi.maxConcurrent` mutate process-lifetime Pi state rather than one request.
+- `assistants.pi.env` and `assistants.pi.maxConcurrent` are install settings rather than per-run settings. Pi concurrency is enforced at host admission for process providers; bundled Pi also retains its in-process semaphore.
 
 Unknown keys, unregistered providers, invalid effort values, and alias names without `@` also fail instead of being ignored. CLI accepts a local path; the HTTP run API accepts inline validated content and never a caller-selected server path.
 
@@ -485,7 +495,7 @@ Environment variables override all other configuration. They are organized by ca
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
-| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `pi`, or `copilot`. | `claude` |
+| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id. | Only registered provider, otherwise unset |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
@@ -603,7 +613,7 @@ Signup uses email + password (no email verification by default). **Signup postur
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string (omit to use SQLite) | SQLite at `~/.archon/archon.db` |
+| `DATABASE_URL` | PostgreSQL connection string for `store: database` (omit to use SQLite; incompatible with `store: files`) | SQLite at `~/.archon/archon.db` under `store: database` |
 
 ### Web UI
 
@@ -729,11 +739,13 @@ commands:
 
 ### Minimal Setup (Using Defaults)
 
-No configuration needed. Archon works out of the box with:
+Archon uses these defaults without configuration:
 
 - `~/.archon/` for all managed files
-- Claude as default AI assistant
+- The only registered provider as default AI assistant, otherwise no default
 - Platform-appropriate streaming modes
+
+With multiple providers, select a default with `archon setup`, `defaultAssistant` in global config, `assistant` in project config, or `DEFAULT_AI_ASSISTANT`. A run that needs an unset default fails before creating a worktree; workflows can select providers explicitly.
 
 ### Custom AI Preference
 

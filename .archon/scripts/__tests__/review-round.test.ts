@@ -12,7 +12,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { runPackScript, type ScriptRun } from './deliver-checks-harness';
+import { packScriptRunner, type ScriptRun } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
 
 const trackTempRoot = trackTempRoots();
 

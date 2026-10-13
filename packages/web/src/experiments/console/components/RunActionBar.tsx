@@ -15,7 +15,7 @@ interface RunActionBarProps {
  *   running   → Cancel; Abandon too once cancel was refused (409: no live owner
  *               answered, or it could not be stopped). Abandon is then how the
  *               operator releases a run whose process is gone.
- *   paused    → (nothing — the in-stream ApprovalPanel is the action surface)
+ *   paused    → Resume · Abandon for action-required waits; gates use ApprovalPanel
  *   failed    → Resume · Abandon
  *   completed → Re-run when the run has a project
  *   cancelled → Re-run
@@ -69,7 +69,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
     }
   };
 
-  if (run.status === 'paused') return null;
+  if (run.status === 'paused' && run.attention?.kind !== 'action_required') return null;
 
   return (
     <div className="sticky bottom-0 border-t border-border bg-surface px-[30px] py-3.5">
@@ -97,7 +97,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
           </button>
         ) : null}
 
-        {run.status === 'failed' ? (
+        {run.status === 'failed' || run.attention?.kind === 'action_required' ? (
           <>
             <button
               type="button"

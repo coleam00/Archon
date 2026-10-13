@@ -1,3 +1,4 @@
+import { FileStoreUnsupportedError } from './file-store/errors';
 import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
@@ -472,4 +473,106 @@ test('AI-only inheritance uses the new actor and refuses conflicting adoption in
       modelOverrideLayer: { kind: 'raw', overrides: {} },
     })
   ).rejects.toThrow('Cannot override AI configuration');
+});
+
+test('files reject stored per-user credential reads, while native credentials and script-only runs work', async () => {
+  const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+  const files = { ...deps, credentialStore: 'files' as const };
+  const ai = makeTestResolvedWorkflow({ name: 'ai' });
+  const prepared = await prepareRunAiConfiguration(files, ai, '/p', { userId: 'origin' });
+  const refused = assertRunCredentials(files, prepared);
+  await expect(refused).rejects.toBeInstanceOf(FileStoreUnsupportedError);
+  await expect(refused).rejects.toThrow('store: database');
+  expect(deps.getUserProviderCredentialStatus).not.toHaveBeenCalled();
+  expect(checkCredential).not.toHaveBeenCalled();
+  await assertRunCredentials(files, await prepareRunAiConfiguration(files, ai, '/p'));
+  expect(checkCredential).toHaveBeenCalledTimes(1);
+  const shell = makeTestResolvedWorkflow({ name: 'shell', nodes: [{ id: 'shell', bash: 'true' }] });
+  await assertRunCredentials(
+    files,
+    await prepareRunAiConfiguration(files, shell, '/p', { userId: 'origin' })
+  );
+  expect(deps.getUserProviderCredentialStatus).not.toHaveBeenCalled();
+});
+
+test('a run needing an unset default fails in preflight before provider execution', async () => {
+  const { deps } = fixture();
+  deps.loadConfig.mockResolvedValue({ ...config, assistant: undefined });
+  const workflow = makeTestResolvedWorkflow({
+    name: 'default-needed',
+    nodes: [{ id: 'ai', prompt: 'never spend' }],
+  });
+  await expect(prepareRunAiConfiguration(deps, workflow, '/project')).rejects.toThrow(
+    "No default provider: set 'defaultAssistant' in ~/.archon/config.yaml or run archon setup"
+  );
+  expect(deps.getAgentProvider).not.toHaveBeenCalled();
+  await expect(
+    prepareRunAiConfiguration(
+      { ...deps, providers: { get: () => undefined, list: () => [] } },
+      workflow,
+      '/project'
+    )
+  ).rejects.toThrow('No providers installed. Run: archon provider install <claude|codex|pi>');
+});
+
+test('an unset default permits deterministic nodes and explicitly selected AI nodes', async () => {
+  const { deps } = fixture();
+  deps.loadConfig.mockResolvedValue({ ...config, assistant: undefined });
+  const workflow = makeTestResolvedWorkflow({
+    name: 'explicit-only',
+    nodes: [
+      {
+        id: 'group',
+        loop_group: {
+          max_iterations: 1,
+          until: 'done',
+          nodes: [
+            { id: 'shell', bash: 'true' },
+            { id: 'ai', provider: 'codex', prompt: 'explicit' },
+          ],
+        },
+      },
+    ],
+  });
+  const prepared = await prepareRunAiConfiguration(deps, workflow, '/project');
+  expect(prepared.requirements.map(requirement => requirement.provider)).toEqual(['codex']);
+  expect(prepared.config.assistant).toBeUndefined();
+  expect(prepared.aiConfigurationSnapshot.assistant).toBeUndefined();
+});
+
+test('gate rework also requires its provider during preflight', async () => {
+  const { deps } = fixture();
+  deps.loadConfig.mockResolvedValue({ ...config, assistant: undefined });
+  const workflow = makeTestResolvedWorkflow({
+    name: 'gate-rework',
+    nodes: [
+      {
+        id: 'gate',
+        approval: { message: 'Review', on_reject: { prompt: 'revise', max_attempts: 1 } },
+      },
+    ],
+  });
+  await expect(prepareRunAiConfiguration(deps, workflow, '/project')).rejects.toThrow(
+    'No default provider'
+  );
+  expect(deps.getAgentProvider).not.toHaveBeenCalled();
+});
+
+test('an implicit built-in tier cannot choose a provider when the default is unset', async () => {
+  const { deps } = fixture();
+  deps.loadConfig.mockResolvedValue({ ...config, assistant: undefined });
+  const workflow = makeTestResolvedWorkflow({
+    name: 'tier-default',
+    nodes: [{ id: 'ai', prompt: 'never spend', model: 'large' }],
+  });
+  await expect(prepareRunAiConfiguration(deps, workflow, '/project')).rejects.toThrow(
+    'No default provider'
+  );
+  await expect(
+    prepareRunAiConfiguration(
+      { ...deps, providers: { get: () => undefined, list: () => [] } },
+      workflow,
+      '/project'
+    )
+  ).rejects.toThrow('No providers installed');
 });

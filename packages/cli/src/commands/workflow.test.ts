@@ -867,6 +867,7 @@ const coreCapabilities = await import('@archon/core');
 const { createSqlWorkflowOperations } = await import('@archon/core/workflows/sql-host');
 function createTestWorkflowHost(): import('@archon/core/workflows/host-store').WorkflowHost {
   const host = createSqlWorkflowHost();
+  host.deps.store.pruneStateRevisions = mock(async () => ({ count: 0 }));
   host.deps.store.createWorkflowEvent = mockCreateWorkflowEvent;
   host.deps.store.persistWorkflowEvent = mockPersistWorkflowEvent;
   host.deps.loadConfig = coreCapabilities.loadConfig;
@@ -6248,9 +6249,17 @@ describe('workflowGetCommand', () => {
 
       // Human output draws from the same filtered list and says what it omitted.
       await workflowGetCommand(createTestWorkflowHost(), runId);
-      const printed = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
-      for (const report of reports) expect(printed).toContain(`- ${report}`);
-      expect(printed).not.toContain(RUN_ARTIFACTS_ENGINE_SUBDIR);
+      const printed: string = consoleSpy.mock.calls
+        .map((call: unknown[]) => String(call[0]))
+        .join('\n');
+      // Only the listed entries: the transcript path is absolute and may itself
+      // sit under a `.archon` directory.
+      const listed = printed
+        .split('\n')
+        .filter(line => line.startsWith('      - '))
+        .map(line => line.slice('      - '.length));
+      for (const report of reports) expect(listed).toContain(report);
+      expect(listed.filter(file => file.startsWith(`${RUN_ARTIFACTS_ENGINE_SUBDIR}/`))).toEqual([]);
       expect(printed).toContain(`Engine-internal artifact files (not listed): ${internalFiles}`);
     } finally {
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
@@ -7471,6 +7480,53 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     );
   });
 
+  it('validates and persists checkout-sharing events before reporting success', async () => {
+    const data = {
+      parent_run_id: 'parent',
+      parent_node_id: 'work',
+      working_path: '/repo',
+      sibling_run_id: 'peer',
+    };
+    await workflowEventEmitCommand(
+      createTestWorkflowHost(),
+      FULL_ID,
+      'workflow.checkout_shared',
+      data
+    );
+    expect(mockPersistWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: FULL_ID,
+      event_type: 'workflow.checkout_shared',
+      data,
+    });
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      `Event persisted: workflow.checkout_shared for run ${FULL_ID}`
+    );
+  });
+
+  it('rejects incomplete checkout-sharing data before any write', async () => {
+    await expect(
+      workflowEventEmitCommand(createTestWorkflowHost(), FULL_ID, 'workflow.checkout_shared', {})
+    ).rejects.toThrow();
+    expect(mockPersistWorkflowEvent).not.toHaveBeenCalled();
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
+  it('propagates checkout-sharing persistence failure without reporting success', async () => {
+    mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('sharing INSERT rejected'));
+    await expect(
+      workflowEventEmitCommand(createTestWorkflowHost(), FULL_ID, 'workflow.checkout_shared', {
+        parent_run_id: 'parent',
+        parent_node_id: 'work',
+        working_path: '/repo',
+        sibling_run_id: 'peer',
+      })
+    ).rejects.toThrow('sharing INSERT rejected');
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
   it.each(['node_completed', 'node_deferred_usage'] as const)(
     'persists %s before reporting success',
     async eventType => {
@@ -7994,12 +8050,14 @@ describe('workflowRunsCommand', () => {
         kind: 'awaiting_response',
         runId: 'run-gate',
         respondTo: { runId: 'run-gate', nodeId: 'approve' },
+        occurrence: 'legacy:approve',
         message: 'Ship it?',
       });
       expect(parsed.runs[1]?.attention).toEqual({
         kind: 'action_required',
         runId: 'run-wait',
         nodeId: 'plan',
+        occurrence: 'wait:2026-09-27T09:00:01.000Z',
         message: 'Check the plan',
       });
     });
@@ -11393,7 +11451,12 @@ describe('workflowCleanupCommand', () => {
       count: 5,
     });
 
-    await workflowCleanupCommand(createTestWorkflowHost(), 30);
+    const host = createTestWorkflowHost();
+    const prune = mock(async () => ({ count: 7 }));
+    host.deps.store.pruneStateRevisions = prune;
+    await workflowCleanupCommand(host, 30);
+    expect(prune).toHaveBeenCalledWith(30);
+    expect(consoleSpy).toHaveBeenCalledWith('Pruned 7 state revision(s) older than 30 days.');
 
     expect(consoleSpy).toHaveBeenCalledWith('Deleted 5 workflow run(s) older than 30 days.');
   });
@@ -11409,6 +11472,20 @@ describe('workflowCleanupCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('No workflow runs older than 7 days to clean up.');
   });
 
+  it('reports committed run deletion when state pruning fails', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      count: 5,
+    });
+    const host = createTestWorkflowHost();
+    host.deps.store.pruneStateRevisions = mock(async () => {
+      throw new Error('state unavailable');
+    });
+    await expect(workflowCleanupCommand(host, 7)).rejects.toThrow(
+      'Deleted 5 workflow run(s) older than 7 days, but failed to prune state revisions: state unavailable'
+    );
+  });
+
   it('should throw when deleteOldWorkflowRuns fails', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockRejectedValueOnce(
@@ -11416,7 +11493,7 @@ describe('workflowCleanupCommand', () => {
     );
 
     await expect(workflowCleanupCommand(createTestWorkflowHost(), 7)).rejects.toThrow(
-      'Failed to clean up workflow runs: disk full'
+      'Failed to clean up workflow history: disk full'
     );
   });
 });
@@ -14495,6 +14572,7 @@ describe('workflowWaitCommand', () => {
         kind: 'awaiting_response',
         runId: 'child-9',
         respondTo: { runId: 'child-9', nodeId: 'review' },
+        occurrence: 'legacy:review',
         message: 'Approve?',
       },
     });
@@ -14514,6 +14592,7 @@ describe('workflowWaitCommand', () => {
         kind: 'action_required',
         runId: FULL_ID,
         nodeId: 'rerun-ci',
+        occurrence: 'wait:2026-08-28T10:00:00.000Z',
         message: 'Re-run CI, then resume.',
       },
     });
@@ -14685,6 +14764,7 @@ describe('workflowWaitCommand', () => {
         kind: 'awaiting_response',
         runId: FULL_ID,
         respondTo: { runId: FULL_ID, nodeId: 'review' },
+        occurrence: 'legacy:review',
         message: 'Approve?',
       },
     });
@@ -14701,6 +14781,7 @@ describe('workflowWaitCommand', () => {
         kind: 'awaiting_response',
         runId: FULL_ID,
         respondTo: { runId: FULL_ID, nodeId: 'review' },
+        occurrence: 'legacy:review',
         message: 'Approve?',
       },
     });

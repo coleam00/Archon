@@ -6,6 +6,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./providers/register-host-providers": "./src/providers/register-host-providers.ts",
     "./providers/load-provider-plugins": "./src/providers/load-provider-plugins.ts",
     "./providers/inspect-provider-plugin": "./src/providers/inspect-provider-plugin.ts",
     "./providers/process-registration": "./src/providers/process-registration.ts",
@@ -31,7 +32,8 @@
     "./platforms/registry": "./src/platforms/registry.ts",
     "./platforms/types": "./src/platforms/types.ts",
     "./handlers/clone": "./src/handlers/clone.ts",
-    "./config/config-loader": "./src/config/config-loader.ts"
+    "./config/config-loader": "./src/config/config-loader.ts",
+    "./config/store-selection": "./src/config/store-selection.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",

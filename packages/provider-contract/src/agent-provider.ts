@@ -287,9 +287,10 @@ export interface SendQueryOptions extends AgentRequestOptions {
  */
 export interface IAgentProvider {
   diagnose?(request: {
+    signal: AbortSignal;
     assistantConfig?: SendQueryOptions['assistantConfig'];
   }): Promise<ProviderDiagnostics>;
-  listModels?(): Promise<ProviderModelList>;
+  listModels?(request: { signal: AbortSignal }): Promise<ProviderModelList>;
 
   resolveCredentialModel?(request: {
     model?: string;

@@ -1,3 +1,4 @@
+import { checkoutSharedEventDataSchema } from '@archon/workflows/schemas/workflow-event';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import type { Conversation } from '@archon/core/schemas/conversation';
 import { providerRegistry } from '@archon/providers';
@@ -891,7 +892,7 @@ async function resolveCliUserRecordId(host: WorkflowHost): Promise<string | unde
       cliId,
       cliId
     );
-    return cliUser.id;
+    return cliUser?.id;
   } catch (error) {
     getLog().warn({ err: error as Error, cliId }, 'cli.user_identity_resolve_failed');
     return undefined;
@@ -964,7 +965,8 @@ async function assertCliWorkflowRequirementsMet(
         cliId,
         cliId
       );
-      githubConnected = Boolean(await host.deps.getUserGithubToken?.(cliUser.id));
+      githubConnected =
+        cliUser !== null && Boolean(await host.deps.getUserGithubToken?.(cliUser.id));
     } catch (error) {
       getLog().warn({ err: error as Error, cliId }, 'cli.requirement_gate_user_resolve_failed');
     }
@@ -984,7 +986,7 @@ async function resolveCliDryRunAiPrefs(
       cliId,
       cliId
     );
-    return (await host.deps.getUserAiPrefs?.(cliUser.id)) ?? {};
+    return cliUser ? ((await host.deps.getUserAiPrefs?.(cliUser.id)) ?? {}) : {};
   } catch (error) {
     getLog().warn({ err: error as Error, cliId }, 'cli.dry_run_user_ai_prefs_resolve_failed');
     return {};
@@ -6404,8 +6406,12 @@ export async function workflowResetSessionsCommand(
  * Delete terminal workflow runs older than the given number of days.
  */
 export async function workflowCleanupCommand(host: WorkflowHost, days: number): Promise<void> {
+  let deleted: number | undefined;
   try {
     const { count } = await host.deps.store.deleteOldWorkflowRuns(days);
+    deleted = count;
+    const { count: revisions } = await host.deps.store.pruneStateRevisions(days);
+    console.log(`Pruned ${revisions} state revision(s) older than ${days} days.`);
     if (count === 0) {
       console.log(`No workflow runs older than ${days} days to clean up.`);
     } else {
@@ -6413,19 +6419,24 @@ export async function workflowCleanupCommand(host: WorkflowHost, days: number): 
     }
   } catch (error) {
     const err = error as Error;
-    getLog().error({ err, days }, 'cli.workflow_cleanup_failed');
-    throw new Error(`Failed to clean up workflow runs: ${err.message}`);
+    getLog().error({ err, days, deleted }, 'cli.workflow_cleanup_failed');
+    if (deleted !== undefined)
+      throw new Error(
+        `Deleted ${deleted} workflow run(s) older than ${days} days, but failed to prune state revisions: ${err.message}`,
+        { cause: error }
+      );
+    throw new Error(`Failed to clean up workflow history: ${err.message}`, { cause: error });
   }
 }
 
-/**
- * Emit a workflow event directly to the database.
- * Node-state writes propagate storage failures; observability remains best-effort.
- */
 export function isValidEventType(value: string): value is WorkflowEventType {
   return (WORKFLOW_EVENT_TYPES as readonly string[]).includes(value);
 }
 
+/**
+ * Emit a workflow event directly to the database.
+ * Required event writes propagate storage failures; ordinary observability remains best-effort.
+ */
 export async function workflowEventEmitCommand(
   host: WorkflowHost,
   runId: string,
@@ -6435,6 +6446,15 @@ export async function workflowEventEmitCommand(
 ): Promise<void> {
   const resolvedId = await resolveRunIdArg(host, runId, cwd, true);
   const store = host.deps.store;
+  if (eventType === 'workflow.checkout_shared') {
+    await store.persistWorkflowEvent({
+      workflow_run_id: resolvedId,
+      event_type: eventType,
+      data: checkoutSharedEventDataSchema.parse(data),
+    });
+    console.log(`Event persisted: ${eventType} for run ${resolvedId}`);
+    return;
+  }
   if (isDurableWorkflowEventType(eventType)) {
     await store.persistWorkflowEvent({
       workflow_run_id: resolvedId,

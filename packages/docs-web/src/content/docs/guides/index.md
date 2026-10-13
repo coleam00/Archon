@@ -22,6 +22,11 @@ How-to guides for building and running AI coding workflows with Archon.
 - [Approval Nodes](/guides/approval-nodes/) — Human review gates with optional AI rework on rejection
 - [Script Nodes](/guides/script-nodes/) — TypeScript/JavaScript (bun) or Python (uv) as a deterministic DAG node, without AI
 
+## Automation
+
+- [Workflow Triggers](/guides/workflow-triggers/) — Start workflows from schedules and verified GitHub events
+- [Proactive Workflows](/guides/proactive-workflows/) — Let a cheap agent decide whether an event matters, then keep a person on the loop before the run acts
+
 ## Node Features (Claude only)
 
 - [Per-Node Hooks](/guides/hooks/) — Attach Claude SDK hooks for tool control, context injection, and input modification

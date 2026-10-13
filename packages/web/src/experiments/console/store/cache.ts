@@ -28,6 +28,7 @@ const listeners = new Map<string, Set<Listener>>();
 const errors = new Map<string, Error>();
 const inflight = new Map<string, Promise<unknown>>();
 const loaders = new Map<string, () => Promise<unknown>>();
+const pendingRevalidation = new Set<string>();
 // Per-key change counter. `useEntity` snapshots THIS (not the cached value), so a
 // subscriber re-renders on every mutation — including the error transition, where
 // the value stays `undefined` and a value-identity snapshot would bail out and
@@ -81,7 +82,10 @@ function runLoad(key: string, loader: () => Promise<unknown>): void {
     .finally(() => {
       // Only clear the entry if it's still THIS load's promise — a newer load
       // for the key may already own `inflight[key]`.
-      if (inflight.get(key) === p) inflight.delete(key);
+      if (inflight.get(key) === p) {
+        inflight.delete(key);
+        if (pendingRevalidation.delete(key)) revalidate(key);
+      }
     });
   inflight.set(key, p);
 }
@@ -128,7 +132,10 @@ function revalidate(key: string): void {
     loadSeq.delete(key); // release the sequence alongside cache/errors (they move together)
     return;
   }
-  if (inflight.has(key)) return; // a revalidation is already in flight
+  if (inflight.has(key)) {
+    pendingRevalidation.add(key);
+    return;
+  }
   runLoad(key, loader);
 }
 
@@ -137,15 +144,15 @@ export function invalidate(keyPrefix: string): void {
   // concrete key (`run:abc`) or a prefix that fans out (`runs`).
   const matches = (key: string): boolean => key === keyPrefix || key.startsWith(`${keyPrefix}:`);
 
-  // Walk both the data cache AND the errors map. An errored key lives only in
-  // `errors`, so iterating `cache.keys()` alone would leave it permanently
-  // stuck — the loader would never refetch and the UI would require a full
-  // page reload to recover.
+  // Subscribed keys may still be loading their first value, or hold only an error.
   const toRefresh = new Set<string>();
   for (const key of [...cache.keys()]) {
     if (matches(key)) toRefresh.add(key);
   }
   for (const key of [...errors.keys()]) {
+    if (matches(key)) toRefresh.add(key);
+  }
+  for (const key of loaders.keys()) {
     if (matches(key)) toRefresh.add(key);
   }
   for (const key of toRefresh) {
@@ -207,6 +214,7 @@ export function subscribeKey(
       // arriving before it settles runs its OWN loader via `ensureLoad` instead
       // of inheriting this abandoned request's eventual result (#2101).
       inflight.delete(key);
+      pendingRevalidation.delete(key);
     }
   };
 }

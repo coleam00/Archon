@@ -6,6 +6,7 @@ import * as paths from '@archon/paths';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { buildProviderSubprocessEnv, type ProviderChunk } from '@archon/provider-contract';
 import { runProviderConformance } from '@archon/provider-contract/conformance';
+import { PluginRemoteError } from '@archon/provider-contract/plugin';
 import { ProviderPluginExitedError } from './process-provider';
 import { processProviderRegistration } from './process-registration';
 import { descriptor, chunks } from './fixtures/process-provider-data';
@@ -281,8 +282,8 @@ test.each(['turn', 'credential', 'model', 'diagnose', 'models'] as const)(
             : operation === 'model'
               ? runtime.resolveCredentialModel?.({ cwd: tmpdir() })
               : operation === 'diagnose'
-                ? runtime.diagnose?.({})
-                : runtime.listModels?.();
+                ? runtime.diagnose?.({ signal: new AbortController().signal })
+                : runtime.listModels?.({ signal: new AbortController().signal });
       await expect(request).rejects.toBeInstanceOf(ProviderPluginExitedError);
       expect(watchdogFired).toBe(false);
       expect(alive(Number(readFileSync(file, 'utf8')))).toBe(false);
@@ -385,7 +386,10 @@ test('information hooks round-trip through fresh processes and close them', asyn
     const file = join(directory, 'pid');
     const runtime = provider('record-pid', file);
     expect(
-      await runtime.diagnose?.({ assistantConfig: { model: 'fixture/model', omitted: undefined } })
+      await runtime.diagnose?.({
+        signal: new AbortController().signal,
+        assistantConfig: { model: 'fixture/model', omitted: undefined },
+      })
     ).toEqual({
       checks: [
         {
@@ -399,7 +403,7 @@ test('information hooks round-trip through fresh processes and close them', asyn
     });
     const firstPid = Number(readFileSync(file, 'utf8'));
     expect(alive(firstPid)).toBe(false);
-    expect(await runtime.listModels?.()).toEqual({
+    expect(await runtime.listModels?.({ signal: new AbortController().signal })).toEqual({
       models: [{ id: 'fixture/model', label: 'Fixture model' }, { id: 'fixture/other' }],
     });
     const secondPid = Number(readFileSync(file, 'utf8'));
@@ -413,11 +417,42 @@ test('information hooks round-trip through fresh processes and close them', asyn
 test('diagnostic hook errors withhold plugin prose and stderr', async () => {
   const debug = spyOn(processLog, 'debug').mockImplementation(() => {});
   try {
-    await expect(provider('information-crash').diagnose?.({})).rejects.toThrow(
-      'request failed (RPC -32603)'
-    );
+    const error: unknown = await provider('information-crash')
+      .diagnose?.({ signal: new AbortController().signal })
+      .catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(PluginRemoteError);
+    if (!(error instanceof PluginRemoteError)) throw error;
+    expect(error.code).toBe(-32603);
+    expect(error.message).toContain('request failed (RPC -32603)');
+    expect(error.message).not.toContain('private message and token');
+    expect(error.data).toBeUndefined();
     expect(JSON.stringify(debug.mock.calls)).not.toContain('private message and token');
   } finally {
     debug.mockRestore();
   }
 });
+
+test.each(['models', 'diagnose'] as const)(
+  'a caller cancellation stops a stalled %s process by its recorded PID',
+  async operation => {
+    const directory = mkdtempSync(join(tmpdir(), 'archon-models-cancel-'));
+    const file = join(directory, 'pid');
+    const abort = new AbortController();
+    const runtime = provider(operation === 'models' ? 'hung-models' : 'hung-diagnose', file);
+    try {
+      const pending =
+        operation === 'models'
+          ? runtime.listModels?.({ signal: abort.signal })
+          : runtime.diagnose?.({ signal: abort.signal });
+      for (let attempt = 0; attempt < 200 && !existsSync(file); attempt++) await Bun.sleep(10);
+      expect(existsSync(file)).toBe(true);
+      abort.abort(new Error('model list cancelled'));
+      await expect(pending).rejects.toThrow();
+      expect(alive(Number(readFileSync(file, 'utf8')))).toBe(false);
+    } finally {
+      abort.abort();
+      await removeTempTree(directory);
+    }
+  },
+  testTimeout(18_000)
+);
