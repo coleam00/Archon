@@ -67,11 +67,10 @@ nodes:
   # paid or public below, and an expected negative is a completed run with the
   # assessment as its result.
   #
-  # The order authorizes exactly the lockfile change implement's default forbids:
-  # implement.md's "never update a lockfile" exists to stop incidental churn, and
-  # the target dependency IS the work here — so the order re-scopes that rule
-  # explicitly (non-goals are transferable by the work item) while keeping it in
-  # force for every other dependency.
+  # implement.md's lockfile rule already allows the change a dependency update
+  # needs: it forbids incidental churn, and lets a work order that changes a
+  # dependency update the lockfile for that dependency. The order names the
+  # target so that exception covers it and nothing else.
   - id: deliver
     include: archon-deliver
     with:
@@ -83,9 +82,9 @@ nodes:
         beyond it and the repository itself. Follow its update order: use the
         project's own package manager, change the manifest only as the
         assessment directs, and update the lockfile for the TARGET dependency
-        only — this work item explicitly authorizes that lockfile change; the
-        no-lockfile-updates default still applies to every other dependency, so
-        keep churn minimal and never downgrade anything unrelated. Fix what the
+        only, committed with the manifest change; every other dependency stays
+        as locked, so keep churn minimal and never downgrade anything
+        unrelated. Fix what the
         bump breaks, validate with the project's own checks, and if reality
         contradicts the assessment (version unavailable, an unlisted peer
         conflict), stop honestly with green false and the contradiction in your
