@@ -111,6 +111,9 @@ test('rollback failure reports recovery paths and preserves the usable backup', 
   );
   expect(String(error)).toContain('rollback failed; recovery required');
   expect(String(error)).toContain(data.receiptFile);
+  // The publication failure that triggered the rollback is the reason to act on.
+  expect(String(error)).toContain('injected rename failure');
+  expect((error as Error).cause).toBeInstanceOf(Error);
   const backup = (await real.readdir(data.root)).find(name => name.startsWith('receipt.json.'));
   expect(backup).toBeDefined();
   expect(await Bun.file(join(data.root, backup ?? '')).text()).toBe('old receipt');

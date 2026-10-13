@@ -72,12 +72,17 @@ export async function publishPlugin(publication: Publication): Promise<void> {
         recovery.push(`${path} (backup: ${backup})`);
       }
     }
+    const reason = (error as Error).message;
     if (recovery.length) {
-      throw new Error(`Plugin rollback failed; recovery required: ${recovery.join(', ')}`);
+      throw new Error(
+        `Plugin publication failed and rollback failed; recovery required: ${recovery.join(', ')}. ${reason}`,
+        { cause: error }
+      );
     }
     await discardBackups();
     throw new Error(
-      `Plugin publication failed; previous install restored: ${receiptFile}. ${(error as Error).message}`
+      `Plugin publication failed; previous install restored: ${receiptFile}. ${reason}`,
+      { cause: error }
     );
   }
   // Publication has committed; leftover backups must not turn success into refusal.
