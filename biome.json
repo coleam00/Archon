@@ -107,7 +107,8 @@
       "includes": [
         "packages/*/src/**",
         "!packages/providers/src/**",
-        "!packages/core/src/services/provider-admission.ts"
+        "!packages/core/src/services/provider-admission.ts",
+        "!packages/web/**"
       ],
       "linter": {
         "rules": {
