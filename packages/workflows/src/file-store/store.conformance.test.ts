@@ -7,6 +7,7 @@ import { describeWorkflowStoreConformance } from '../store-conformance';
 import * as telemetry from '../run-terminal-telemetry';
 import { createFileWorkflowStore } from './store';
 import { commit } from './commit';
+import { FileStoreUnsupportedError } from './errors';
 const roots = trackTempRoots();
 let restore: (() => void) | undefined;
 afterEach(() => {
@@ -73,4 +74,24 @@ test('undelivered approval compares the exact persisted context and reports one 
   } finally {
     report.mockRestore();
   }
+});
+
+test('state documents refuse with a typed error until the file store backs them', async () => {
+  const store = await createFileWorkflowStore({
+    root: roots(await mkdtemp(join(tmpdir(), 'workflow-files-state-'))),
+  });
+  const writer = { kind: 'operator', identity: 'cli' } as const;
+  const scope = { project: 'p', name: 'notes', writer };
+  for (const operation of [
+    store.getStateDocument('p', 'notes'),
+    store.listStateRevisions('p', 'notes'),
+    store.putStateDocument({ ...scope, value: { a: 1 }, ifRevision: 0 }),
+    store.patchStateDocument({ ...scope, ops: [{ op: 'set', path: '/a', value: 1 }] }),
+    store.deleteStateDocument(scope),
+  ]) {
+    await expect(operation).rejects.toBeInstanceOf(FileStoreUnsupportedError);
+    await expect(operation).rejects.toThrow('state documents requires store: database');
+  }
+  // `workflow cleanup` prunes through the same port; a store that holds no revisions has none.
+  expect(await store.pruneStateRevisions(7)).toEqual({ count: 0 });
 });
