@@ -55,8 +55,7 @@ nodes:
               properties:
                 contract: { type: string, enum: [READY] }
                 route: { type: string, enum: [investigate, plan, deliver] }
-                design_first: { type: boolean }
-              required: [contract, route, design_first]
+              required: [contract, route]
             - type: object
               additionalProperties: false
               properties:
@@ -142,8 +141,8 @@ nodes:
       required: [decision, complexity, item, area_labels, summary, report]
 
   # The prompt judges; this boundary flattens the decision into the fields every
-  # caller reads, checks the relations a schema cannot (design-first is a READY
-  # item routed to plan; blockers are qualified URLs) and backstops the rest, and
+  # caller reads, checks what a schema cannot (blockers are qualified URLs) and
+  # backstops the rest, and
   # derives the pack's labels here rather than
   # chosen by the model: one state label, plus a size label while the item can
   # still be worked. Each field's own type and vocabulary were certified on the
@@ -174,8 +173,6 @@ nodes:
         # every other route.
         pull_request: { type: [integer, 'null'] }
         ready:
-          type: boolean
-        design_first:
           type: boolean
         complexity:
           type: string
@@ -216,7 +213,6 @@ nodes:
         - route
         - pull_request
         - ready
-        - design_first
         - complexity
         - labels
         - published

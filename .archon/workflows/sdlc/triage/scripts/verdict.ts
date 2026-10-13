@@ -5,7 +5,7 @@
  * branch per contract verdict, each carrying only its own fields), so an illegal
  * combination is re-asked at that node rather than refused here. This flattens the
  * decision into the fields every caller reads and checks what a schema cannot:
- * design-first is a READY item routed to plan, and blockers are qualified URLs. The pack's own labels
+ * blockers are qualified URLs. The pack's own labels
  * derive from the declared fields here rather than being chosen by the model, and
  * only when the run was launched with publish=true and the target is a tracker
  * issue does this verify the item's identity on the tracker, apply the labels, and
@@ -26,15 +26,13 @@ import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
 type Complexity = 'small' | 'risky' | 'large';
 
-// Exactly one state label per item. Design-first is READY whose next step is
-// design, so it replaces the ready label rather than sitting beside it.
+// Exactly one state label per item.
 const STATE_LABEL: Record<Contract, string> = {
   READY: 'archon-ready',
   NEEDS_CONTRACT_WORK: 'archon-needs-contract',
   BLOCKED: 'archon-blocked',
   NO_ACTION: 'archon-close',
 };
-const DESIGN_FIRST_LABEL = 'archon-design-first';
 const COMPLEXITY_LABEL: Record<Complexity, string> = {
   small: 'archon-small',
   risky: 'archon-risky',
@@ -53,10 +51,6 @@ const PACK_LABELS: Record<string, { color: string; description: string }> = {
   'archon-close': {
     color: '6A737D',
     description: 'Triage: already delivered, duplicate, obsolete, or out of direction',
-  },
-  'archon-design-first': {
-    color: '5319E7',
-    description: 'Triage: ready, but settle the engineering shape before implementing',
   },
   'archon-small': { color: 'C2E0C6', description: 'Triage: bounded change' },
   'archon-risky': {
@@ -195,7 +189,7 @@ function apply(item: Item, wanted: string[], area: string[]): string[] {
 
 /** One branch of the triage decision, as the node's schema admits it. */
 type Decision =
-  | { contract: 'READY'; route: 'investigate' | 'plan' | 'deliver'; design_first: boolean }
+  | { contract: 'READY'; route: 'investigate' | 'plan' | 'deliver' }
   | { contract: 'READY'; route: 'continue'; pull_request: number }
   | { contract: 'NEEDS_CONTRACT_WORK'; proposed_edits: Edits }
   | { contract: 'BLOCKED'; blocked_reason: string; blocked_by: string[] }
@@ -205,7 +199,6 @@ function main(): void {
   const decision = bound(process.env.INPUTS_DECISION) as Decision;
   const contract: Contract = decision.contract;
   const route = 'route' in decision ? decision.route : 'no_action';
-  const designFirst = 'design_first' in decision && decision.design_first;
   const edits: Edits = 'proposed_edits' in decision ? decision.proposed_edits : { title: '', body: '' };
   const blockedReason = 'blocked_reason' in decision ? decision.blocked_reason : '';
   const blockedBy = 'blocked_by' in decision ? decision.blocked_by : [];
@@ -241,10 +234,6 @@ function main(): void {
     refuse(`invalid triage verdict: ${message}`);
   };
 
-  if (designFirst && route !== 'plan') {
-    invalid(`design_first requires route=plan, got route=${route}`);
-    return;
-  }
   if (!blockedBy.every(isQualifiedUrl)) {
     invalid('blocked_by must be a list of fully qualified http(s) URLs');
     return;
@@ -264,7 +253,7 @@ function main(): void {
     return;
   }
 
-  let labels = [designFirst ? DESIGN_FIRST_LABEL : STATE_LABEL[contract]];
+  let labels = [STATE_LABEL[contract]];
   // Size only matters on an item that can still be worked; a close verdict carries none.
   if (contract !== 'NO_ACTION') labels.push(COMPLEXITY_LABEL[complexity]);
 
@@ -281,7 +270,6 @@ function main(): void {
     route,
     pull_request: pullRequest,
     ready: contract === 'READY',
-    design_first: designFirst,
     complexity,
     labels,
     published,

@@ -48,8 +48,6 @@ Declare exactly one contract verdict:
 
 Only a `READY` item carries an engineering route, and a `READY` item always carries one. Every other verdict carries no route: the verdict is the reason, and the route you would have chosen belongs in the assessment for the human, not in the declared fields.
 
-When the contract is sound but the engineering shape must be settled before any run should implement — the owning type or module, the supported and rejected cases, a compatibility boundary — declare `design_first: true` and route to `plan`. That is a `READY` item whose next step is design, not a contract defect.
-
 ## Judge complexity
 
 Declare one `complexity` value on the item as written, so the delivery tail can compare its own read of the diff against yours:
@@ -61,7 +59,7 @@ Declare one `complexity` value on the item as written, so the delivery tail can 
 ## Choose one route
 
 - `investigate` — the work asserts broken or unexplained current behavior, but the causal chain or responsible fix boundary is not proven against current code.
-- `plan` — the desired outcome is known, but material implementation or product-shape decisions remain. Use this when a prescribed solution is stale, unsupported, or merely one option even if the issue calls itself a bug.
+- `plan` — the desired outcome is known, but material implementation or product-shape decisions remain. Use this when a prescribed solution is stale, unsupported, or merely one option even if the issue calls itself a bug. A design call that may need a person is still `plan`: the planner settles it from the project's own documents, code, and evidence, and stops with the exact question only when those cannot. An owner-level product decision the item cannot proceed without is `BLOCKED`, not `plan`.
 - `deliver` — the current evidence already forms an implementation-ready work order: the relevant behavior and boundary are verified, acceptance and scope are clear enough to start without asking a human, and delivery will not inherit an untested assumption.
 - `continue` — an open pull request already carries this outcome, because the operator names one to continue or you find one: the run finishes that pull request instead of opening another. Name it in `pull_request`. A pull request from a fork whose author did not allow maintainer edits cannot be continued by this run: that item is `BLOCKED` on it.
 
@@ -94,7 +92,7 @@ Do not investigate the full causal chain, choose the implementation design, impl
 ## Declare the disposition
 
 - `decision` — the contract verdict and only what it carries, using the definitions above:
-  - `READY` with `route` `investigate`, `plan`, or `deliver`, and `design_first` — true only for an item routed to `plan` because its engineering shape must be settled before implementation;
+  - `READY` with `route` `investigate`, `plan`, or `deliver`;
   - `READY` with `route` `continue` and `pull_request` — the number of the open pull request to finish, in the item's repository;
   - `NEEDS_CONTRACT_WORK` with `proposed_edits` — `{ "title", "body" }`, both non-empty;
   - `BLOCKED` with `blocked_reason` — what it waits on — and `blocked_by` — fully qualified URLs of the items it waits on, possibly empty;

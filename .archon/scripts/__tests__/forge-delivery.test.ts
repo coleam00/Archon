@@ -222,7 +222,7 @@ for (const other of [false, true]) {
     const inputs = {
       INPUTS_ITEM: JSON.stringify({ repo, number: 7 }),
       INPUTS_PUBLISH: 'true',
-      INPUTS_DECISION: JSON.stringify({ contract: 'READY', route: 'deliver', design_first: false }),
+      INPUTS_DECISION: JSON.stringify({ contract: 'READY', route: 'deliver' }),
       INPUTS_COMPLEXITY: 'small',
       INPUTS_SUMMARY: 'Ready',
       INPUTS_AREA_LABELS: JSON.stringify(['area', 'nonexistent', 'constructor']),
