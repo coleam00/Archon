@@ -41,7 +41,7 @@ hooks:
             2. **Evaluate prioritization**: Were the right items addressed first?
             3. **Check quality**: Were fixes correct and non-breaking?
             4. **Check PR format**: Did it follow the project's PR template?
-            5. **Assess validation**: Did `bun run validate` pass?
+            5. **Assess validation**: Did the agent test, lint and type-check what it changed, and do those checks pass?
 
             ## Write Feedback
 
@@ -157,15 +157,9 @@ Do NOT mix unrelated violation types.
 pushing, PR creation, and memory updates. A completed PR is better than an
 incomplete one that tried to fix too much.
 
-## Step 6: Validate
+## Step 6: Check your changes
 
-After ALL fixes are done, run the full validation suite:
-
-```bash
-bun run validate
-```
-
-If validation fails, fix the issues and run again. Iterate until it passes.
+After ALL fixes are done, run the tests that cover the files you changed, and lint and type-check the packages you touched. Fix any failure your change caused. CI is the full validation; don't run `bun run validate`.
 
 ## Step 7: Commit and Create PR
 
@@ -197,7 +191,7 @@ Write to your `MEMORY.md`:
 - **Never force push** — the safety hook blocks it, but don't even try
 - **Never modify main/master** — work in the worktree branch only
 - **Fix, don't refactor** — address violations, don't redesign code
-- **Validate after changes only** — `bun run validate` after edits, not before
+- **Check after changes only** — test, lint and type-check what you changed, after edits, not before
 - **Preserve functionality** — only change how code is written, not what it does
 
 ## Completion Checklist
@@ -209,7 +203,7 @@ Before you stop, verify ALL of these are done:
 - [ ] Broad-scanned the codebase for violations
 - [ ] Picked one concern and deep-scanned for all instances
 - [ ] Fixed all instances of that concern
-- [ ] Ran `bun run validate` and it passed
+- [ ] Tested, linted and type-checked what I changed, and those checks passed
 - [ ] Committed, pushed, and created PR with `gh pr create`
 - [ ] Updated memory with findings and backlog
 

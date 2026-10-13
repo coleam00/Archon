@@ -15,6 +15,7 @@ const parallelRun: Run = {
   workflow: 'implement',
   origin: 'cli',
   status: 'running',
+  attention: null,
   outcome: null,
   terminalRecord: null,
   startedAt: '2026-09-01T10:00:00.000Z',
@@ -66,4 +67,38 @@ test('a running card displays overdue tools without offering resume', () => {
   expect(html).toContain('bun test [REDACTED]');
   expect(html).toContain('no progress');
   expect(html).not.toContain('Resume');
+});
+
+test('promoting an attention wait replaces its inline actions with the banner pointer', () => {
+  const run: Run = {
+    ...parallelRun,
+    status: 'paused',
+    attention: {
+      kind: 'action_required',
+      runId: parallelRun.id,
+      nodeId: 'hold',
+      message: 'Rotate the key',
+      occurrence: 'wait:2026-10-12T00:00:00.000Z',
+    },
+    wait: {
+      kind: 'attention',
+      nodeId: 'hold',
+      message: 'Rotate the key',
+      waitingSince: '2026-10-12T00:00:00.000Z',
+    },
+  };
+  const promoted = renderToStaticMarkup(
+    <MemoryRouter>
+      <ActiveRunCard run={run} inputPromoted />
+    </MemoryRouter>
+  );
+  expect(promoted).toContain('see the banner at the top');
+  expect(promoted).not.toContain('Resume');
+  const inline = renderToStaticMarkup(
+    <MemoryRouter>
+      <ActiveRunCard run={run} />
+    </MemoryRouter>
+  );
+  expect(inline).toContain('Rotate the key');
+  expect(inline).toContain('Resume');
 });

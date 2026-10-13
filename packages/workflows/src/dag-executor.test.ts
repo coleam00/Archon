@@ -30430,10 +30430,12 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     async mode => {
       const deliver = {
         ...buildWf('deliver-block', [
+          { id: 'gate-input', bash: 'printf ready' },
           {
             id: 'gate-validated',
             bash: 'exit 1',
-            ...(mode === 'condition' ? { when: 'false' } : {}),
+            depends_on: ['gate-input'],
+            ...(mode === 'condition' ? { when: "$gate-input.output == 'never'" } : {}),
           },
           { id: 'checks', bash: 'echo checks', depends_on: ['gate-validated'] },
           { id: 'result', bash: 'echo delivered', depends_on: ['checks'] },
@@ -30493,6 +30495,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
         cwd: testDir,
         stubs: {
           pr: 'ready',
+          'deliver__gate-input': 'ready',
           'flip-ready': 'fallback',
           report: 'fallback',
           action__entry: 'entry',

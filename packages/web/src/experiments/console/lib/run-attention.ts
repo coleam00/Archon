@@ -13,22 +13,22 @@ import type { Run } from '../primitives/run';
 
 type AttentionState = readonly string[];
 
-type RunState = Pick<Run, 'status' | 'approval' | 'wait' | 'toolCallAttention'>;
+type RunState = Pick<Run, 'attention'>;
 
-/**
- * A paused run needs a human only on an approval gate or an attention wait; a run
- * paused on an event or a scheduled time resumes on its own.
- */
 function attentionState(run: RunState): AttentionState {
-  switch (run.status) {
-    case 'running':
-      return (run.toolCallAttention ?? []).map(call =>
+  const attention = run.attention;
+  switch (attention?.kind) {
+    case 'stalled_tool_calls':
+      return attention.calls.map(call =>
         JSON.stringify([call.streamId, call.toolCallId, call.raisedAt])
       );
-    case 'paused':
-      return run.approval != null || run.wait?.kind === 'attention' ? ['waiting'] : [];
+    case 'awaiting_response':
+    case 'action_required':
+      return [JSON.stringify([attention.kind, attention.occurrence])];
+    case 'terminal':
+      return [attention.status];
     default:
-      return [run.status];
+      return [];
   }
 }
 
