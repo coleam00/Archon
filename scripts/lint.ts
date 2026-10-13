@@ -28,8 +28,30 @@ async function findTargets(): Promise<string[][]> {
   ];
 }
 
+export async function runLintTargets(
+  targets: readonly (readonly string[])[],
+  runTarget: (patterns: readonly string[]) => Promise<number>
+): Promise<number> {
+  const exitCodes: number[] = [];
+  let nextTarget = 0;
+  async function worker(): Promise<void> {
+    while (nextTarget < targets.length) {
+      const index = nextTarget++;
+      const patterns = targets[index];
+      try {
+        exitCodes[index] = await runTarget(patterns);
+      } catch (error) {
+        console.error(error);
+        exitCodes[index] = 1;
+      }
+    }
+  }
+  await Promise.all([worker(), worker()]);
+  return exitCodes.find(code => code !== 0) ?? 0;
+}
+
 async function main(): Promise<number> {
-  for (const patterns of await findTargets()) {
+  return runLintTargets(await findTargets(), async patterns => {
     console.log(`Linting ${patterns.join(', ')}`);
     const child = Bun.spawn(
       [
@@ -50,10 +72,8 @@ async function main(): Promise<number> {
       }
     );
     const exitCode = await child.exited;
-    if (exitCode !== 0) return exitCode;
-  }
-
-  return 0;
+    return exitCode;
+  });
 }
 
-process.exit(await main());
+if (import.meta.main) process.exit(await main());
