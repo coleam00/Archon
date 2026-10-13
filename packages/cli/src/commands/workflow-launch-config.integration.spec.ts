@@ -4,6 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { workflowRunCommand } from './workflow';
+import { captureWorkflowCommand } from '../test-support/command';
 import { removeTempTree } from '@archon/paths/test-utils';
 
 const CLI_ENTRY = join(import.meta.dir, '..', 'cli.ts');
@@ -44,6 +46,13 @@ function runCli(args: string[], cwd: string, archonHome: string): string {
     },
   });
   return `${result.stdout ?? ''}${result.stderr ?? ''}`;
+}
+
+async function runForeground(cwd: string, archonHome: string, branch?: string): Promise<string> {
+  const result = await captureWorkflowCommand(archonHome, async host => {
+    await workflowRunCommand(host, cwd, 'launch-config', 'go', { branchName: branch });
+  });
+  return result.output;
 }
 
 /** Providers the executor resolved, in log order, from the CLI's JSON log lines. */
@@ -137,7 +146,7 @@ describe('workflow run launch config', () => {
       const config = join(repo, '.archon', 'config.yaml');
       writeFileSync(config, 'assistant: codex\nworktree:\n  baseBranch: main\n');
 
-      const first = runCli(['workflow', 'run', 'launch-config', 'go'], repo, archonHome);
+      const first = await runForeground(repo, archonHome);
       expect(first).toContain("Bash node 'gate' failed");
       expect(resolvedProviders(first)).toEqual(['codex']);
 
@@ -169,18 +178,14 @@ describe('workflow run launch config', () => {
     const repo = createRepo(root, true);
     const config = join(repo, '.archon', 'config.yaml');
 
-    runCli(['workflow', 'run', 'launch-config', '--branch', 'reuse-me', 'go'], repo, archonHome);
+    await runForeground(repo, archonHome, 'reuse-me');
     const firstRun = latestRun(archonHome);
     expect(firstRun.assistant).toBe('claude');
 
     // The reused worktree keeps its committed claude config; the operator's checkout
     // now says codex, and the new run must follow the checkout.
     writeFileSync(config, 'assistant: codex\nworktree:\n  baseBranch: main\n');
-    const second = runCli(
-      ['workflow', 'run', 'launch-config', '--branch', 'reuse-me', 'go'],
-      repo,
-      archonHome
-    );
+    const second = await runForeground(repo, archonHome, 'reuse-me');
     const secondRun = latestRun(archonHome);
     expect(secondRun.id).not.toBe(firstRun.id);
     expect(secondRun.working_path).toBe(firstRun.working_path);

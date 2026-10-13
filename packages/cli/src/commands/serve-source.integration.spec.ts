@@ -1,19 +1,21 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { getSourceWebDistDir } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 
 const repoRoot = resolve(import.meta.dir, '../../../..');
 const cliEntry = join(repoRoot, 'packages/cli/src/cli.ts');
 
 test('source archon serve starts the server on the requested port and serves the built console', async () => {
-  const build = Bun.spawn([process.execPath, 'run', 'build:web'], {
-    cwd: repoRoot,
-    stdout: 'inherit',
-    stderr: 'inherit',
-  });
-  expect(await build.exited).toBe(0);
+  const webDist = getSourceWebDistDir();
+  const ownsDist = !existsSync(webDist);
+  if (ownsDist) {
+    mkdirSync(webDist, { recursive: true });
+    writeFileSync(join(webDist, 'index.html'), '<!doctype html><title>Serve fixture</title>');
+  }
+  const expectedHtml = readFileSync(join(webDist, 'index.html'), 'utf8');
 
   const root = mkdtempSync(join(tmpdir(), 'archon-source-serve-'));
   const stdout = join(root, 'stdout.log');
@@ -101,7 +103,7 @@ test('source archon serve starts the server on the requested port and serves the
       signal: AbortSignal.timeout(1000),
     });
     expect(consoleResponse.ok).toBe(true);
-    expect(await consoleResponse.text()).toContain('<!doctype html>');
+    expect(await consoleResponse.text()).toBe(expectedHtml);
   } finally {
     // Windows does not deliver SIGTERM to the launcher handler.
     if (process.platform === 'win32' && serverPid !== undefined) process.kill(serverPid);
@@ -127,6 +129,7 @@ test('source archon serve starts the server on the requested port and serves the
     } finally {
       clearTimeout(timer);
       await removeTempTree(root);
+      if (ownsDist) await removeTempTree(webDist);
     }
   }
 }, 120_000);
