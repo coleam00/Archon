@@ -335,11 +335,18 @@ describe('toRunEvent — error & workflow lifecycle', () => {
 });
 
 describe('toRunEvent — fallback', () => {
-  test('unknown event types fall through to a text event with a payload summary', () => {
-    const e = toRunEvent(raw({ event_type: 'mystery_event', data: { foo: 'bar' } }));
-    expect(e.kind).toBe('text');
-    if (e.kind !== 'text') throw new Error('unreachable');
-    expect(e.content).toContain('mystery_event');
+  test.each(['mystery_event', 'node_suspended'])(
+    'structured %s records are system events rather than agent questions',
+    event_type => {
+      const e = toRunEvent(raw({ event_type, data: { foo: 'bar' } }));
+      expect(e).toMatchObject({ kind: 'system', label: event_type, detail: '{"foo":"bar"}' });
+    }
+  );
+  test.each(['text', 'message'])('a prose-bearing event keeps its %s content', field => {
+    const e = toRunEvent(
+      raw({ event_type: 'agent_text', data: { [field]: 'Which target should I use?' } })
+    );
+    expect(e).toMatchObject({ kind: 'text', content: 'Which target should I use?' });
   });
 });
 

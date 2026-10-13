@@ -392,14 +392,13 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
-  // Fallback: render anything else as a text event with the payload summary.
+  const content = readString(data, 'text') || readString(data, 'message');
+  if (content) return { ...base, kind: 'text', content };
   return {
     ...base,
-    kind: 'text',
-    content:
-      readString(data, 'text') ||
-      readString(data, 'message') ||
-      `${et} — ${JSON.stringify(data).slice(0, 200)}`,
+    kind: 'system',
+    label: et,
+    detail: JSON.stringify(data).slice(0, 200),
   };
 }
 
