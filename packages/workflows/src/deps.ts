@@ -210,8 +210,9 @@ export interface WorkflowDeps {
    * false/absent, no per-user provider env is injected and chats/runs keep
    * the shared process-global keys.
    */
-  credentialStore?: 'database' | 'files';
   isPerUserProviderKeysEnabled?: () => boolean;
+  /** Where stored per-user credentials live; `files` has none, so preflight refuses them. */
+  credentialStore?: 'database' | 'files';
   /**
    * Optional: resolve the required connected provider credentials into a
    * delivery bag (env vars + files to write under `artifactsDir`) plus the

@@ -210,16 +210,39 @@ export async function recoverBeforeRead(root: string): Promise<void> {
   if ((await readJson(join(root, 'intent.json'))) !== undefined)
     await withFileStoreLock(root, () => redo(root));
 }
+/** The snapshot's run when it matches the last log line; undefined when missing or stale. */
+async function freshSnapshot(root: string, id: string): Promise<WorkflowRun | undefined> {
+  const snapshot = await readJson(join(runPath(root, id), 'run.json'));
+  if (snapshot === undefined) return undefined;
+  const parsed = z.object({ seq: z.number(), run: persistedRunSchema }).parse(snapshot);
+  const last = await lastLogLine(root, id);
+  if (last?.seq === parsed.seq) return parsed.run;
+  if (last && last.seq < parsed.seq)
+    throw new Error('File store snapshot is ahead of the committed log');
+  return undefined;
+}
+async function listWith(
+  root: string,
+  read: (id: string) => Promise<WorkflowRun | null>
+): Promise<WorkflowRun[]> {
+  const dirs = await readdir(join(root, 'runs'), { withFileTypes: true });
+  const result: WorkflowRun[] = [];
+  // Bound open handles for large installations, including Windows.
+  for (let i = 0; i < dirs.length; i += 64) {
+    const rows = await Promise.all(
+      dirs
+        .slice(i, i + 64)
+        .filter(dir => dir.isDirectory())
+        .map(dir => read(dir.name))
+    );
+    for (const row of rows) if (row) result.push(row);
+  }
+  return result;
+}
 export async function readRun(root: string, id: string): Promise<WorkflowRun | null> {
   await recoverBeforeRead(root);
-  const snapshot = await readJson(join(runPath(root, id), 'run.json'));
-  if (snapshot !== undefined) {
-    const parsed = z.object({ seq: z.number(), run: persistedRunSchema }).parse(snapshot);
-    const last = await lastLogLine(root, id);
-    if (last?.seq === parsed.seq) return parsed.run;
-    if (last && last.seq < parsed.seq)
-      throw new Error('File store snapshot is ahead of the committed log');
-  }
+  const fresh = await freshSnapshot(root, id);
+  if (fresh) return fresh;
   return withFileStoreLock(root, async () => {
     await redo(root);
     const state = await readRunState(root, id);
@@ -231,19 +254,7 @@ export async function readRun(root: string, id: string): Promise<WorkflowRun | n
 }
 export async function listRuns(root: string): Promise<WorkflowRun[]> {
   await recoverBeforeRead(root);
-  const dirs = await readdir(join(root, 'runs'), { withFileTypes: true });
-  const result: WorkflowRun[] = [];
-  // Bound open handles for large installations, including Windows.
-  for (let i = 0; i < dirs.length; i += 64) {
-    const rows = await Promise.all(
-      dirs
-        .slice(i, i + 64)
-        .filter(dir => dir.isDirectory())
-        .map(dir => readRun(root, dir.name))
-    );
-    for (const row of rows) if (row) result.push(row);
-  }
-  return result;
+  return listWith(root, id => readRun(root, id));
 }
 export async function commit<T>(
   root: string,
@@ -254,7 +265,7 @@ export async function commit<T>(
     await redo(root);
     const rows =
       runIds === 'all'
-        ? await listSnapshots(root)
+        ? await listWith(root, id => readSnapshot(root, id))
         : await Promise.all(runIds.map(id => readSnapshot(root, id)));
     const runs = new Map(rows.flatMap(run => (run ? [[run.id, run] as const] : [])));
     const { result, changes } = await decide(runs);
@@ -287,28 +298,7 @@ export async function commit<T>(
   });
 }
 
+// Commit-time read: the caller holds the lock, so a stale snapshot is rebuilt from the log.
 async function readSnapshot(root: string, id: string): Promise<WorkflowRun | null> {
-  const snapshot = await readJson(join(runPath(root, id), 'run.json'));
-  if (snapshot !== undefined) {
-    const parsed = z.object({ seq: z.number(), run: persistedRunSchema }).parse(snapshot);
-    const last = await lastLogLine(root, id);
-    if (last?.seq === parsed.seq) return parsed.run;
-    if (last && last.seq < parsed.seq)
-      throw new Error('File store snapshot is ahead of the committed log');
-  }
-  return (await readRunState(root, id))?.run ?? null;
-}
-async function listSnapshots(root: string): Promise<WorkflowRun[]> {
-  const dirs = await readdir(join(root, 'runs'), { withFileTypes: true });
-  const result: WorkflowRun[] = [];
-  for (let i = 0; i < dirs.length; i += 64) {
-    const rows = await Promise.all(
-      dirs
-        .slice(i, i + 64)
-        .filter(dir => dir.isDirectory())
-        .map(dir => readSnapshot(root, dir.name))
-    );
-    for (const row of rows) if (row) result.push(row);
-  }
-  return result;
+  return (await freshSnapshot(root, id)) ?? (await readRunState(root, id))?.run ?? null;
 }

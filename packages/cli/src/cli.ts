@@ -408,13 +408,11 @@ async function main(): Promise<number> {
   if (showUpdateNotice) void checkForUpdate(BUNDLED_VERSION);
 
   try {
-    if (command === 'workflow' || command === 'trigger') {
+    if ((command === 'workflow' || command === 'trigger') && !(await usesDatabaseStore())) {
+      // Provider concurrency caps are validated against registered providers.
       await registerProviders();
-      if (!(await usesDatabaseStore())) {
-        const { assertFileStoreConfiguration } =
-          await import('@archon/core/config/store-selection');
-        await assertFileStoreConfiguration();
-      }
+      const { assertFileStoreConfiguration } = await import('@archon/core/config/store-selection');
+      await assertFileStoreConfiguration();
     }
     const detachedRunConfigPayload = values['internal-detached-run-config'];
     if (

@@ -325,6 +325,7 @@ export function createWorkflowDeps(
             }
           },
         }
-      : { isPerUserProviderKeysEnabled: () => true }),
+      : // Files hold no stored credentials; preflight refuses a run that would need them.
+        { isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled() }),
   };
 }

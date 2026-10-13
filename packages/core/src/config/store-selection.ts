@@ -5,6 +5,12 @@ import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { loadProviderConcurrencyCaps } from './provider-concurrency';
 
 const selectionSchema = z.looseObject({ store: z.enum(['database', 'files']).optional() });
+function refuseDatabaseUrl(): void {
+  if (process.env.DATABASE_URL)
+    throw new FileStoreUnsupportedError(
+      'DATABASE_URL with store: files (ambiguous storage selection)'
+    );
+}
 export async function loadStoreSelection(): Promise<'database' | 'files'> {
   let content: string;
   try {
@@ -14,17 +20,11 @@ export async function loadStoreSelection(): Promise<'database' | 'files'> {
     throw error;
   }
   const selected = selectionSchema.parse(Bun.YAML.parse(content) ?? {}).store ?? 'database';
-  if (selected === 'files' && process.env.DATABASE_URL)
-    throw new FileStoreUnsupportedError(
-      'DATABASE_URL with store: files (ambiguous storage selection)'
-    );
+  if (selected === 'files') refuseDatabaseUrl();
   return selected;
 }
 export async function assertFileStoreConfiguration(): Promise<void> {
-  if (process.env.DATABASE_URL)
-    throw new FileStoreUnsupportedError(
-      'DATABASE_URL with store: files (ambiguous storage selection)'
-    );
+  refuseDatabaseUrl();
   if ((await loadProviderConcurrencyCaps()).size)
     throw new FileStoreUnsupportedError('concurrency.providers (provider attempt slots)');
 }

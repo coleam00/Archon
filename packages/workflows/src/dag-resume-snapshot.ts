@@ -1,4 +1,3 @@
-import { foldActiveNodeIds } from './store';
 import { readFile } from 'node:fs/promises';
 import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
@@ -13,6 +12,7 @@ import type { NodeExecutionMetadata } from './schemas/node-execution';
 import {
   DURABLE_WORKFLOW_EVENT_TYPES,
   NODE_STATE_EVENT_TYPES,
+  foldActiveNodeIds,
   type DagResumeSnapshot,
   type PersistedNodeOutput,
 } from './store';
