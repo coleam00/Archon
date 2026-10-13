@@ -108,6 +108,7 @@ ship__deliver__shape__simplify:
   findings: false
 ship__deliver__review__tests: 0 findings
 ship__deliver__review__review-complete: settled
+ci-probe: '{"state":"concluded","detail":"all checks green"}'
 check-app: 'APP CHECK https://github.com/example/app/pull/11 at fixturehead
 
   C1 PASS  tag a note  tagged
