@@ -32,6 +32,7 @@ and isolation records without creating `archon.db`. It stores records under
 ```text
 head.json                format version and commit sequence
 intent.json              pending commit, present during writes or crash recovery
+feed-index.json          derived latest event commit per run, rebuilt from logs when missing
 runs/<id>/log.jsonl       append-only run records, events and event retractions
 runs/<id>/run.json        derived snapshot, rebuilt when missing or behind the log
 runs/<id>/node-sessions.json
@@ -44,7 +45,10 @@ Every write uses one store-wide lock and a recoverable intent. The next writer o
 reader that sees an intent redoes the committed operation exactly once. A torn final
 log line is ignored by readers and truncated only under the lock by the next writer.
 Committed lines are never rewritten; cancellation recovery appends event retractions.
-Run cleanup can delete a terminal run's entire directory.
+Run cleanup can delete a terminal run's entire directory. The event feed reads its
+derived index to find changed runs, then reads their logs. Writers update the index
+under the same lock before publishing the head; a missing or stale index is rebuilt
+from the logs.
 
 Use a local filesystem that supports hard links. Network filesystems are unsupported.
 The lock records its host, PID and process instance. Archon breaks it only when its owner

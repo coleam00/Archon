@@ -40,6 +40,53 @@ const intentSchema = z.object({
   deleteRuns: z.array(z.string()),
 });
 type Intent = z.infer<typeof intentSchema>;
+const feedIndexSchema = headSchema.extend({
+  runs: z.record(z.string(), z.number().int().positive()),
+});
+type FeedIndex = z.infer<typeof feedIndexSchema>;
+
+// Disposable acceleration only: event payloads and positions remain owned by run logs.
+async function rebuildFeedIndex(root: string, seq: number): Promise<FeedIndex> {
+  const runs: FeedIndex['runs'] = {};
+  const dirs = await readdir(join(root, 'runs'), { withFileTypes: true });
+  for (let start = 0; start < dirs.length; start += 64) {
+    await Promise.all(
+      dirs
+        .slice(start, start + 64)
+        .filter(dir => dir.isDirectory())
+        .map(async dir => {
+          const last = (await readLog(root, dir.name)).lines
+            .reverse()
+            .find(line => line.events.length > 0);
+          if (last) runs[dir.name] = last.seq;
+        })
+    );
+  }
+  const index = { format: 1 as const, seq, runs };
+  await replaceJson(join(root, 'feed-index.json'), index);
+  return index;
+}
+async function readFeedIndex(root: string, seq: number): Promise<FeedIndex> {
+  const value = await readJson(join(root, 'feed-index.json'));
+  const index = value === undefined ? undefined : feedIndexSchema.parse(value);
+  return index?.seq === seq ? index : rebuildFeedIndex(root, seq);
+}
+async function updateFeedIndex(root: string, intent: Intent): Promise<void> {
+  const value = await readJson(join(root, 'feed-index.json'));
+  const index = value === undefined ? undefined : feedIndexSchema.parse(value);
+  if (index?.seq === intent.seq) return;
+  if (index?.seq !== (await readHead(root))) {
+    await rebuildFeedIndex(root, intent.seq);
+    return;
+  }
+  for (const line of intent.lines) if (line.events.length) index.runs[line.run.id] = line.seq;
+  if (intent.deleteRuns.length) {
+    const deleted = new Set(intent.deleteRuns);
+    index.runs = Object.fromEntries(Object.entries(index.runs).filter(([id]) => !deleted.has(id)));
+  }
+  index.seq = intent.seq;
+  await replaceJson(join(root, 'feed-index.json'), index);
+}
 export interface CommitChanges {
   runs?: { run: WorkflowRun; events?: WorkflowEventRow[]; retract?: string[] }[];
   documents?: Record<string, unknown>;
@@ -187,6 +234,7 @@ async function apply(root: string, intent: Intent): Promise<void> {
       rm(runPath(root, id), { recursive: true, force: true })
     );
   if (intent.deleteRuns.length) await syncDirectory(join(root, 'runs'));
+  await updateFeedIndex(root, intent);
   await replaceJson(join(root, 'head.json'), { format: 1, seq: intent.seq });
   await retryFileStoreHandles('unlink', join(root, 'intent.json'), () =>
     unlink(join(root, 'intent.json'))
@@ -209,6 +257,7 @@ export async function openFileStore(root: string): Promise<void> {
     if (head === undefined && (await readJson(join(root, 'head.json'))) === undefined)
       await replaceJson(join(root, 'head.json'), { format: 1, seq: 0 });
     await mkdir(join(root, 'runs'), { recursive: true });
+    await readFeedIndex(root, await readHead(root));
     await syncDirectory(root);
   });
 }
@@ -346,34 +395,26 @@ export function createFileEventFeed(root: string): IWorkflowEventFeed {
         await redo(root);
         const head = await readHead(root);
         const deliveries: { seq: number; index: number; event: WorkflowEventRow }[] = [];
-        const dirs = await readdir(join(root, 'runs'), { withFileTypes: true });
-        for (let start = 0; start < dirs.length; start += 64) {
+        const feedIndex = await readFeedIndex(root, head);
+        const ids = Object.entries(feedIndex.runs)
+          .filter(
+            ([, seq]) =>
+              seq > position.seq || (seq === position.seq && position.index !== endOfCommit)
+          )
+          .map(([id]) => id);
+        for (let start = 0; start < ids.length; start += 64) {
           await Promise.all(
-            dirs
-              .slice(start, start + 64)
-              .filter(dir => dir.isDirectory())
-              .map(async dir => {
-                const snapshot = await readJson(join(runPath(root, dir.name), 'run.json'));
-                const seq =
-                  snapshot === undefined
-                    ? (await lastLogLine(root, dir.name))?.seq
-                    : z.object({ seq: z.number() }).parse(snapshot).seq;
-                if (
-                  seq === undefined ||
-                  seq < position.seq ||
-                  (seq === position.seq && position.index === endOfCommit)
-                )
-                  return;
-                for (const line of (await readLog(root, dir.name)).lines) {
-                  if (line.seq < position.seq || line.seq > head) continue;
-                  for (const event of line.events) {
-                    const index = event.event_order;
-                    if (index == null) throw new Error('File event has no commit position');
-                    if (line.seq > position.seq || index > position.index)
-                      deliveries.push({ seq: line.seq, index, event });
-                  }
+            ids.slice(start, start + 64).map(async id => {
+              for (const line of (await readLog(root, id)).lines) {
+                if (line.seq < position.seq || line.seq > head) continue;
+                for (const event of line.events) {
+                  const index = event.event_order;
+                  if (index == null) throw new Error('File event has no commit position');
+                  if (line.seq > position.seq || index > position.index)
+                    deliveries.push({ seq: line.seq, index, event });
                 }
-              })
+              }
+            })
           );
         }
         deliveries.sort((a, b) => a.seq - b.seq || a.index - b.index);

@@ -14,67 +14,69 @@ async function fixture() {
   const dir = join(root, 'runs', run.id);
   return { root, store, run, dir };
 }
-test.each(['intent', 'log', 'snapshot', 'document', 'head'] as const)(
-  'redo after crash at %s applies exactly once',
-  async step => {
-    const { root, store, run, dir } = await fixture();
-    const head = await store.getWorkflowEventHead();
-    const old = await readFile(join(dir, 'log.jsonl'), 'utf8');
-    const event = {
-      id: crypto.randomUUID(),
-      workflow_run_id: run.id,
-      event_type: 'workflow_started',
-      event_order: 1,
-      step_name: null,
-      step_index: null,
-      data: {},
-      created_at: new Date().toISOString(),
-    };
-    const line = {
+const crashSteps = ['intent', 'log', 'snapshot', 'document', 'index', 'head'] as const;
+test.each(crashSteps)('redo after crash at %s applies exactly once', async step => {
+  const { root, store, run, dir } = await fixture();
+  const head = await store.getWorkflowEventHead();
+  const old = await readFile(join(dir, 'log.jsonl'), 'utf8');
+  const event = {
+    id: crypto.randomUUID(),
+    workflow_run_id: run.id,
+    event_type: 'workflow_started',
+    event_order: 1,
+    step_name: null,
+    step_index: null,
+    data: {},
+    created_at: new Date().toISOString(),
+  };
+  const line = {
+    seq: 2,
+    at: new Date().toISOString(),
+    run: { ...run, status: 'running' },
+    events: [event],
+    retract: [],
+  };
+  await writeFile(
+    join(root, 'intent.json'),
+    JSON.stringify({
       seq: 2,
-      at: new Date().toISOString(),
-      run: { ...run, status: 'running' },
-      events: [event],
-      retract: [],
-    };
-    await writeFile(
-      join(root, 'intent.json'),
-      JSON.stringify({
-        seq: 2,
-        lines: [line],
-        documents: { 'host/fixture.json': { value: 42 } },
-        deleteRuns: [],
-      })
-    );
-    const steps = ['intent', 'log', 'snapshot', 'document', 'head'];
-    if (steps.indexOf(step) >= 1)
-      await appendFile(join(dir, 'log.jsonl'), `${JSON.stringify(line)}\n`);
-    if (steps.indexOf(step) >= 2)
-      await writeFile(join(dir, 'run.json'), JSON.stringify({ seq: 2, run: line.run }));
-    if (steps.indexOf(step) >= 3) {
-      const { mkdir } = await import('node:fs/promises');
-      await mkdir(join(root, 'host'));
-      await writeFile(join(root, 'host/fixture.json'), JSON.stringify({ value: 42 }));
-    }
-    if (steps.indexOf(step) >= 4)
-      await writeFile(join(root, 'head.json'), JSON.stringify({ format: 1, seq: 2 }));
-    expect(
-      (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(({ event }) => event)
-    ).toEqual([event]);
-    expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
-    expect(await store.listWorkflowEvents(run.id)).toEqual([event]);
-    const contents = await readFile(join(dir, 'log.jsonl'), 'utf8');
-    expect(contents.startsWith(old)).toBe(true);
-    expect(contents.trim().split('\n')).toHaveLength(2);
-    expect(JSON.parse(contents.trim().split('\n')[1]!)).toEqual(JSON.parse(JSON.stringify(line)));
-    if (step !== 'intent') expect(contents).toBe(old + JSON.stringify(line) + '\n');
-    await createFileWorkflowStore({ root });
-    expect(await readFile(join(dir, 'log.jsonl'), 'utf8')).toBe(contents);
-    expect(JSON.parse(await readFile(join(root, 'host/fixture.json'), 'utf8'))).toEqual({
-      value: 42,
-    });
+      lines: [line],
+      documents: { 'host/fixture.json': { value: 42 } },
+      deleteRuns: [],
+    })
+  );
+  if (crashSteps.indexOf(step) >= 1)
+    await appendFile(join(dir, 'log.jsonl'), `${JSON.stringify(line)}\n`);
+  if (crashSteps.indexOf(step) >= 2)
+    await writeFile(join(dir, 'run.json'), JSON.stringify({ seq: 2, run: line.run }));
+  if (crashSteps.indexOf(step) >= 3) {
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(root, 'host'));
+    await writeFile(join(root, 'host/fixture.json'), JSON.stringify({ value: 42 }));
   }
-);
+  if (crashSteps.indexOf(step) >= 4)
+    await writeFile(
+      join(root, 'feed-index.json'),
+      JSON.stringify({ format: 1, seq: 2, runs: { [run.id]: 2 } })
+    );
+  if (crashSteps.indexOf(step) >= 5)
+    await writeFile(join(root, 'head.json'), JSON.stringify({ format: 1, seq: 2 }));
+  expect(
+    (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(({ event }) => event)
+  ).toEqual([event]);
+  expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
+  expect(await store.listWorkflowEvents(run.id)).toEqual([event]);
+  const contents = await readFile(join(dir, 'log.jsonl'), 'utf8');
+  expect(contents.startsWith(old)).toBe(true);
+  expect(contents.trim().split('\n')).toHaveLength(2);
+  expect(JSON.parse(contents.trim().split('\n')[1]!)).toEqual(JSON.parse(JSON.stringify(line)));
+  if (step !== 'intent') expect(contents).toBe(old + JSON.stringify(line) + '\n');
+  await createFileWorkflowStore({ root });
+  expect(await readFile(join(dir, 'log.jsonl'), 'utf8')).toBe(contents);
+  expect(JSON.parse(await readFile(join(root, 'host/fixture.json'), 'utf8'))).toEqual({
+    value: 42,
+  });
+});
 test('a torn UTF-8 tail is ignored, repaired by a writer, and deleting the snapshot loses nothing', async () => {
   const { root, store, run, dir } = await fixture();
   const before = await readFile(join(dir, 'log.jsonl'));
@@ -149,4 +151,68 @@ test('feed reads committed events when a disposable snapshot is missing', async 
       ({ event }) => event.event_type
     )
   ).toEqual(['workflow_started']);
+});
+
+test('active feed reads skip unrelated runs and rebuild a missing index from logs', async () => {
+  const { root, store, run, dir } = await fixture();
+  const other = await store.createWorkflowRun({ workflow_name: 'other', user_message: '' });
+  await store.persistWorkflowEvent({ workflow_run_id: other.id, event_type: 'workflow_started' });
+  const head = await store.getWorkflowEventHead();
+  await store.persistWorkflowEvent({
+    workflow_run_id: run.id,
+    event_type: 'workflow_started',
+  });
+  const expected = (await store.listWorkflowEvents(run.id))[0]!;
+  const otherLogPath = join(root, 'runs', other.id, 'log.jsonl');
+  const otherSnapshotPath = join(root, 'runs', other.id, 'run.json');
+  const otherSnapshot = await readFile(otherSnapshotPath);
+  const otherLog = await readFile(otherLogPath);
+  await writeFile(otherSnapshotPath, 'invalid snapshot');
+  await writeFile(otherLogPath, 'invalid log\n');
+  expect(
+    (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event.id)
+  ).toEqual([expected.id]);
+  await writeFile(otherLogPath, otherLog);
+  await writeFile(otherSnapshotPath, otherSnapshot);
+  await unlink(join(root, 'feed-index.json'));
+  expect(
+    (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event.id)
+  ).toEqual([expected.id]);
+  await unlink(join(root, 'feed-index.json'));
+  await unlink(join(dir, 'run.json'));
+  const reopened = await createFileWorkflowStore({ root });
+  expect(
+    (await reopened.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event.id)
+  ).toEqual([expected.id]);
+  expect(
+    JSON.parse(await readFile(join(root, 'feed-index.json'), 'utf8')).runs[run.id]
+  ).toBeDefined();
+});
+
+test('missing and stale indexes are rebuilt before commits without losing earlier events', async () => {
+  const { root, store, run } = await fixture();
+  const head = await store.getWorkflowEventHead();
+  const stale = await readFile(join(root, 'feed-index.json'));
+  const other = await store.createWorkflowRun({ workflow_name: 'other', user_message: '' });
+  await store.persistWorkflowEvent({
+    workflow_run_id: run.id,
+    event_type: 'workflow_started',
+  });
+  await writeFile(join(root, 'feed-index.json'), stale);
+  await store.persistWorkflowEvent({
+    workflow_run_id: other.id,
+    event_type: 'workflow_completed',
+  });
+  await unlink(join(root, 'feed-index.json'));
+  await store.persistWorkflowEvent({
+    workflow_run_id: run.id,
+    event_type: 'workflow_started',
+  });
+  expect(
+    (await store.readWorkflowEventsAfter(head, { limit: 10 })).events.map(row => row.event.id)
+  ).toEqual([
+    (await store.listWorkflowEvents(run.id))[0]!.id,
+    (await store.listWorkflowEvents(other.id))[0]!.id,
+    (await store.listWorkflowEvents(run.id))[1]!.id,
+  ]);
 });
