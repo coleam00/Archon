@@ -85,6 +85,7 @@ export async function resolveCodebaseForPath(
   // path, and on Windows it differs from the canonical `default_cwd` (separators,
   // 8.3 short names), so returning `cwd` would hide runs from `--resume`.
   const repoRoot = await findRepoRoot(cwd);
+  if (exact) return { codebase: exact, repoRoot };
   const parent = await deps.findCodebaseByPathPrefix(cwd);
   if (parent?.kind === 'folder') {
     const insideFolder = repoRoot ? relative(parent.default_cwd, repoRoot) : null;
