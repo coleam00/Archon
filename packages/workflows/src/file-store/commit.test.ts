@@ -18,11 +18,13 @@ test.each(['intent', 'log', 'snapshot', 'document', 'head'] as const)(
   'redo after crash at %s applies exactly once',
   async step => {
     const { root, store, run, dir } = await fixture();
+    const head = await store.getWorkflowEventHead();
     const old = await readFile(join(dir, 'log.jsonl'), 'utf8');
     const event = {
       id: crypto.randomUUID(),
       workflow_run_id: run.id,
       event_type: 'workflow_started',
+      event_order: 1,
       step_name: null,
       step_index: null,
       data: {},
@@ -56,6 +58,9 @@ test.each(['intent', 'log', 'snapshot', 'document', 'head'] as const)(
     }
     if (steps.indexOf(step) >= 4)
       await writeFile(join(root, 'head.json'), JSON.stringify({ format: 1, seq: 2 }));
+    expect(
+      (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(({ event }) => event)
+    ).toEqual([event]);
     expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
     expect(await store.listWorkflowEvents(run.id)).toEqual([event]);
     const contents = await readFile(join(dir, 'log.jsonl'), 'utf8');
@@ -132,4 +137,16 @@ test('cleanup deletes old runs without reading any run event log under the lock'
   } finally {
     reads.mockRestore();
   }
+});
+
+test('feed reads committed events when a disposable snapshot is missing', async () => {
+  const { store, run, dir } = await fixture();
+  const head = await store.getWorkflowEventHead();
+  await store.persistWorkflowEvent({ workflow_run_id: run.id, event_type: 'workflow_started' });
+  await unlink(join(dir, 'run.json'));
+  expect(
+    (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(
+      ({ event }) => event.event_type
+    )
+  ).toEqual(['workflow_started']);
 });

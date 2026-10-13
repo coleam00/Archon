@@ -1,6 +1,7 @@
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { randomUUID } from 'node:crypto';
+import { WorkflowEventCursorError, type WorkflowEventCursor } from '@archon/workflows/store';
 import type {
   IWorkflowStore,
   WorkflowNodeSession,
@@ -128,6 +129,9 @@ export function createInMemoryWorkflowStore(
 ): InMemoryWorkflowStore {
   let runs = new Map<string, WorkflowRun>();
   let events: WorkflowEventRow[] = [];
+  let eventOrder = 0;
+  const feed: { cursor: WorkflowEventCursor; event: WorkflowEventRow }[] = [];
+  const cursor = (order: number): WorkflowEventCursor => `memory:${order}` as WorkflowEventCursor;
   const sessions = new Map<string, WorkflowNodeSession>();
   const runSessions = new Map<string, WorkflowRunNodeSession>();
   const getCodebase: IWorkflowStore['getCodebase'] = id => records.codebases.getCodebase(id);
@@ -143,6 +147,10 @@ export function createInMemoryWorkflowStore(
         if (session.workflow_run_id === id) runSessions.delete(key);
       for (const session of sessions.values())
         if (session.last_run_id === id) session.last_run_id = null;
+    }
+    for (const event of nextEvents) {
+      if (!priorIds.has(event.id))
+        feed.push({ cursor: cursor(++eventOrder), event: structuredClone(event) });
     }
     runs = nextRuns;
     events = nextEvents;
@@ -244,6 +252,26 @@ export function createInMemoryWorkflowStore(
     persistWorkflowEvent: input => write(view => view.persistWorkflowEvent(input)),
     persistWorkflowEventIfRunning: (input, options) =>
       write(view => view.persistWorkflowEventIfRunning(input, options)),
+    getWorkflowEventHead: () => serialize(async () => cursor(eventOrder)),
+    readWorkflowEventsAfter: (after, { limit, eventTypes }) =>
+      serialize(async () => {
+        if (!/^memory:(0|[1-9][0-9]*)$/.test(after)) throw new WorkflowEventCursorError();
+        const order = Number(after.slice(7));
+        if (!Number.isSafeInteger(order) || order > eventOrder)
+          throw new WorkflowEventCursorError();
+        if (!Number.isSafeInteger(limit) || limit <= 0)
+          throw new RangeError('limit must be a positive integer');
+        const scanned = feed.slice(order, order + limit);
+        return {
+          events: structuredClone(
+            scanned.filter(
+              ({ event }) =>
+                eventTypes === undefined || eventTypes.some(type => type === event.event_type)
+            )
+          ),
+          next: scanned.at(-1)?.cursor ?? after,
+        };
+      }),
     listWorkflowEvents: (id, options) => write(view => view.listWorkflowEvents(id, options)),
     listEventsForRuns: (ids, types) => write(view => view.listEventsForRuns(ids, types)),
     getDagResumeSnapshot: id => write(view => view.getDagResumeSnapshot(id)),

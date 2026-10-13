@@ -24,6 +24,7 @@ import {
 } from './transaction-view';
 import {
   commit,
+  createFileEventFeed,
   openFileStore,
   readJson,
   readRun,
@@ -165,6 +166,7 @@ export async function createFileWorkflowStore(
     return documents;
   }
   const store: IWorkflowStore & { deleteWorkflowRun(id: string): Promise<void> } = {
+    ...createFileEventFeed(root),
     getCodebase,
     getCodebaseEnvVars,
     createWorkflowRun: data => {

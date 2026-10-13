@@ -6,9 +6,16 @@ import { createSqlStateDocumentStore } from '../db/state-documents';
 import { getDatabase } from '../db/connection';
 import { providerRegistry } from '@archon/providers';
 import type { CredentialStatus } from '@archon/provider-contract';
-import type { IWorkflowStore, WorkflowStoreKind } from '@archon/workflows/store';
+import {
+  WorkflowEventCursorError,
+  type WorkflowEventCursor,
+  type WorkflowEventPage,
+  type IWorkflowStore,
+  type WorkflowStoreKind,
+} from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
@@ -43,6 +50,20 @@ import {
 } from '../db/user-provider-key-store';
 import { normalizeCredentialVendor } from '@archon/providers';
 import { StoredCredentialDeliveryError } from '@archon/workflows/run-preflight';
+
+function hydrateWorkflowEventRow(row: WorkflowEventRow): WorkflowEventRow {
+  return { ...row, created_at: toHydratedTimestamp(row.created_at).toISOString() };
+}
+
+function sqlCursor(order: string | number): WorkflowEventCursor {
+  return `sql:${String(order)}` as WorkflowEventCursor;
+}
+function sqlCursorOrder(cursor: WorkflowEventCursor): string {
+  if (!/^sql:(0|[1-9][0-9]*)$/.test(cursor)) throw new WorkflowEventCursorError();
+  const order = cursor.slice(4);
+  if (BigInt(order) > 9223372036854775807n) throw new WorkflowEventCursorError();
+  return order;
+}
 
 async function requiredCredentialRows(
   userId: string,
@@ -110,19 +131,31 @@ export function createWorkflowStore(): IWorkflowStore {
     findOpenWorkRuns: workflowDb.findOpenWorkRuns,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
+    getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),
+    readWorkflowEventsAfter: async (after, { limit, eventTypes }): Promise<WorkflowEventPage> => {
+      const order = sqlCursorOrder(after);
+      if (!Number.isSafeInteger(limit) || limit <= 0)
+        throw new RangeError('limit must be a positive integer');
+      const rows = await workflowEventDb.readWorkflowEventsAfter(order, limit);
+      const deliveries = rows.map(event => {
+        if (event.event_order == null) throw new Error('Feed row has no event order');
+        return { cursor: sqlCursor(event.event_order), event: hydrateWorkflowEventRow(event) };
+      });
+      return {
+        events: deliveries.filter(
+          ({ event }) =>
+            eventTypes === undefined || eventTypes.some(type => type === event.event_type)
+        ),
+        next: deliveries.at(-1)?.cursor ?? after,
+      };
+    },
     listWorkflowEvents: async (...args) =>
-      (await workflowEventDb.listWorkflowEvents(...args)).map(row => ({
-        ...row,
-        created_at: toHydratedTimestamp(row.created_at).toISOString(),
-      })),
+      (await workflowEventDb.listWorkflowEvents(...args)).map(hydrateWorkflowEventRow),
     listEventsForRuns: async (...args) =>
       new Map(
         [...(await workflowEventDb.listEventsForRuns(...args))].map(([id, rows]) => [
           id,
-          rows.map(row => ({
-            ...row,
-            created_at: toHydratedTimestamp(row.created_at).toISOString(),
-          })),
+          rows.map(hydrateWorkflowEventRow),
         ])
       ),
     findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,

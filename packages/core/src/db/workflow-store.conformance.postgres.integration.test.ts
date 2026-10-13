@@ -41,6 +41,28 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test("the head includes events ordered by the previous binary's trigger", async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      await db.query(`CREATE OR REPLACE FUNCTION archon_assign_workflow_event_order() RETURNS trigger AS $$
+        BEGIN
+          PERFORM pg_advisory_xact_lock(3334);
+          UPDATE remote_agent_workflow_events
+            SET event_order = nextval('remote_agent_workflow_events_event_order_seq') WHERE id = NEW.id;
+          RETURN NULL;
+        END;
+        $$ LANGUAGE plpgsql`);
+      const run = await store.createWorkflowRun({ workflow_name: 'old-writer', user_message: '' });
+      await store.persistWorkflowEvent({ workflow_run_id: run.id, event_type: 'workflow_started' });
+      const head = await store.getWorkflowEventHead();
+      expect((await store.readWorkflowEventsAfter(head, { limit: 1 })).events).toEqual([]);
+      await store.persistWorkflowEvent({ workflow_run_id: run.id, event_type: 'workflow_started' });
+      expect((await store.readWorkflowEventsAfter(head, { limit: 1 })).events).toHaveLength(1);
+    } finally {
+      await harness.close();
+    }
+  });
   test('trigger admission preserves atomic run/request/holder writes and origin-free claims', async () => {
     const harness = await makeHarness();
     const { store, db } = harness;

@@ -1,4 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import {
+  WorkflowEventCursorError,
+  type WorkflowEventCursor,
+  type WorkflowEventPage,
+  type IWorkflowEventFeed,
+} from '../store';
 import { mkdir, open, readFile, readdir, rm, truncate, unlink } from 'node:fs/promises';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
@@ -301,4 +307,93 @@ export async function commit<T>(
 // Commit-time read: the caller holds the lock, so a stale snapshot is rebuilt from the log.
 async function readSnapshot(root: string, id: string): Promise<WorkflowRun | null> {
   return (await freshSnapshot(root, id)) ?? (await readRunState(root, id))?.run ?? null;
+}
+
+const endOfCommit = Number.MAX_SAFE_INTEGER;
+function fileCursor(seq: number, index: number): WorkflowEventCursor {
+  return `file:${seq}.${index}` as WorkflowEventCursor;
+}
+function filePosition(cursor: WorkflowEventCursor): { seq: number; index: number } {
+  const match = /^file:(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.exec(cursor);
+  if (!match) throw new WorkflowEventCursorError();
+  const seq = Number(match[1]),
+    index = Number(match[2]);
+  if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(index))
+    throw new WorkflowEventCursorError();
+  return { seq, index };
+}
+async function readHead(root: string): Promise<number> {
+  return headSchema.parse(await readJson(join(root, 'head.json'))).seq;
+}
+export function createFileEventFeed(root: string): IWorkflowEventFeed {
+  return {
+    getWorkflowEventHead: async (): Promise<WorkflowEventCursor> => {
+      await recoverBeforeRead(root);
+      return fileCursor(await readHead(root), endOfCommit);
+    },
+    readWorkflowEventsAfter: async (after, { limit, eventTypes }): Promise<WorkflowEventPage> => {
+      const position = filePosition(after);
+      if (!Number.isSafeInteger(limit) || limit <= 0)
+        throw new RangeError('limit must be a positive integer');
+      await recoverBeforeRead(root);
+      const head = await readHead(root);
+      if (position.seq > head) throw new WorkflowEventCursorError();
+      if (position.seq === head && position.index === endOfCommit)
+        return { events: [], next: after };
+      // A committed head must never outrun the log scan: writes/deletes and recovery
+      // share this lock. Otherwise a paged scan could advance past an unseen commit.
+      return withFileStoreLock(root, async () => {
+        await redo(root);
+        const head = await readHead(root);
+        const deliveries: { seq: number; index: number; event: WorkflowEventRow }[] = [];
+        const dirs = await readdir(join(root, 'runs'), { withFileTypes: true });
+        for (let start = 0; start < dirs.length; start += 64) {
+          await Promise.all(
+            dirs
+              .slice(start, start + 64)
+              .filter(dir => dir.isDirectory())
+              .map(async dir => {
+                const snapshot = await readJson(join(runPath(root, dir.name), 'run.json'));
+                const seq =
+                  snapshot === undefined
+                    ? (await lastLogLine(root, dir.name))?.seq
+                    : z.object({ seq: z.number() }).parse(snapshot).seq;
+                if (
+                  seq === undefined ||
+                  seq < position.seq ||
+                  (seq === position.seq && position.index === endOfCommit)
+                )
+                  return;
+                for (const line of (await readLog(root, dir.name)).lines) {
+                  if (line.seq < position.seq || line.seq > head) continue;
+                  for (const event of line.events) {
+                    const index = event.event_order;
+                    if (index == null) throw new Error('File event has no commit position');
+                    if (line.seq > position.seq || index > position.index)
+                      deliveries.push({ seq: line.seq, index, event });
+                  }
+                }
+              })
+          );
+        }
+        deliveries.sort((a, b) => a.seq - b.seq || a.index - b.index);
+        const scanned = deliveries.slice(0, limit);
+        const last = scanned.at(-1);
+        return {
+          events: scanned
+            .filter(
+              ({ event }) =>
+                eventTypes === undefined || eventTypes.some(type => type === event.event_type)
+            )
+            .map(({ seq, index, event }) => ({ cursor: fileCursor(seq, index), event })),
+          next:
+            deliveries.length <= limit
+              ? fileCursor(head, endOfCommit)
+              : last
+                ? fileCursor(last.seq, last.index)
+                : after,
+        };
+      });
+    },
+  };
 }

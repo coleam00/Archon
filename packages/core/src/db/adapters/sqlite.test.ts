@@ -59,6 +59,8 @@ async function makeDbWithoutEventOrder(): Promise<string> {
   try {
     raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
     raw.run('DROP INDEX IF EXISTS idx_workflow_events_run_order');
+    raw.run('DROP INDEX IF EXISTS idx_workflow_events_order');
+    raw.run('DROP TABLE IF EXISTS remote_agent_workflow_event_sequence');
     raw.run('ALTER TABLE remote_agent_workflow_events DROP COLUMN event_order');
   } finally {
     raw.close();
@@ -165,6 +167,61 @@ describe('SqliteAdapter failure logging', () => {
 });
 
 describe('SqliteAdapter upgrade path', () => {
+  test('upgrades the shipped MAX allocator and keeps its head after deletes and reopen', async () => {
+    const path = await upgradeFixturePath();
+    await new SqliteAdapter(path).close();
+    const raw = new Database(path);
+    try {
+      raw.run('DROP TRIGGER remote_agent_workflow_events_assign_order');
+      raw.run('DROP TABLE remote_agent_workflow_event_sequence');
+      raw.run(`CREATE TRIGGER remote_agent_workflow_events_assign_order AFTER INSERT ON remote_agent_workflow_events
+        WHEN NEW.event_order IS NULL BEGIN
+        UPDATE remote_agent_workflow_events SET event_order = (SELECT COALESCE(MAX(event_order), 0) + 1 FROM remote_agent_workflow_events) WHERE rowid = NEW.rowid; END`);
+      raw.run(
+        "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('feed-conversation', 'test', 'feed')"
+      );
+      raw.run(
+        "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ('feed-run', 'feed-conversation', 'feed', '')"
+      );
+      for (const id of ['first', 'second'])
+        raw.run(
+          "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES (?, 'feed-run', 'workflow_started')",
+          [id]
+        );
+    } finally {
+      raw.close();
+    }
+    let db = new SqliteAdapter(path);
+    try {
+      await db.query("DELETE FROM remote_agent_workflow_events WHERE id = 'second'");
+      await db.query(
+        "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES ('third', 'feed-run', 'workflow_started')"
+      );
+      expect(
+        (
+          await db.query<{ event_order: number }>(
+            "SELECT event_order FROM remote_agent_workflow_events WHERE id = 'third'"
+          )
+        ).rows
+      ).toEqual([{ event_order: 3 }]);
+      await db.query('DELETE FROM remote_agent_workflow_events');
+      await db.close();
+      db = new SqliteAdapter(path);
+      await db.query(
+        "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES ('fourth', 'feed-run', 'workflow_started')"
+      );
+      expect(
+        (
+          await db.query<{ event_order: number }>(
+            "SELECT event_order FROM remote_agent_workflow_events WHERE id = 'fourth'"
+          )
+        ).rows
+      ).toEqual([{ event_order: 4 }]);
+    } finally {
+      await db.close();
+    }
+  });
+
   // Regression: the event_order index and trigger were briefly created inside
   // createSchema(). Both reference a column absent from any database predating
   // it, and CREATE INDEX on a missing column aborts the entire createSchema()

@@ -512,27 +512,32 @@ CREATE SEQUENCE IF NOT EXISTS remote_agent_workflow_events_event_order_seq
 ALTER TABLE remote_agent_workflow_events
   ALTER COLUMN event_order SET DEFAULT nextval('remote_agent_workflow_events_event_order_seq');
 
--- event_order follows commit order (#3334). The column default draws nextval()
--- at insert time, so a transaction that inserts first and commits last would
--- land below an order a reader has already passed. This deferred trigger
--- replaces that value at commit instead: it takes a transaction-scoped advisory
--- lock, which is held until the commit completes, and then draws a new value.
--- Committing event writers therefore draw in commit order. A transaction draws
--- once per event, in insert order, so its own events keep their order.
---
--- Deferred on purpose. The lock is global, so a transaction holding it must
--- never wait on another lock. At commit it has finished all of its work and
--- only updates its own new rows, so it cannot join a deadlock. Taking the lock
--- at insert time could, through any row lock taken later in the transaction.
---
--- The trigger also orders inserts from older binaries, which never name
--- event_order. The values are unique, but the sequence leaves gaps.
+-- Both dialects retain the committed head after event deletion. PostgreSQL
+-- draws final positions from its sequence, beyond values reserved by defaults;
+-- SQLite allocates from this row under its single writer.
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_sequence (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  value BIGINT NOT NULL DEFAULT 0
+);
+INSERT INTO remote_agent_workflow_event_sequence (id, value)
+  SELECT 1, COALESCE(MAX(event_order), 0) FROM remote_agent_workflow_events
+  ON CONFLICT (id) DO UPDATE
+    SET value = GREATEST(remote_agent_workflow_event_sequence.value, EXCLUDED.value);
+
+-- Deferred on purpose: the global ordering lock is taken only after the writer
+-- has acquired its other locks, avoiding deadlocks with other event writers.
+-- Allocation and the high-water update commit atomically with the event rows.
 CREATE OR REPLACE FUNCTION archon_assign_workflow_event_order() RETURNS trigger AS $$
+DECLARE
+  assigned_order BIGINT;
 BEGIN
   -- 3334 is arbitrary; it only has to differ from the schema lock (1796).
   PERFORM pg_advisory_xact_lock(3334);
+  UPDATE remote_agent_workflow_event_sequence
+    SET value = nextval('remote_agent_workflow_events_event_order_seq')
+    WHERE id = 1 RETURNING value INTO assigned_order;
   UPDATE remote_agent_workflow_events
-     SET event_order = nextval('remote_agent_workflow_events_event_order_seq')
+     SET event_order = assigned_order
    WHERE id = NEW.id;
   RETURN NULL;
 END;
@@ -860,3 +865,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow
 -- Messages
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
   ON remote_agent_messages(conversation_id, created_at ASC);
+
+-- The global feed pages by commit order independently of run membership.
+CREATE INDEX IF NOT EXISTS idx_workflow_events_order
+  ON remote_agent_workflow_events(event_order);

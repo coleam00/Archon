@@ -216,6 +216,12 @@ const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 // ---------------------------------------------------------------------------
 
 class InMemoryStore implements IWorkflowStore {
+  getWorkflowEventHead: IWorkflowStore['getWorkflowEventHead'] = async () => {
+    throw new Error('Unexpected event feed read');
+  };
+  readWorkflowEventsAfter: IWorkflowStore['readWorkflowEventsAfter'] = async () => {
+    throw new Error('Unexpected event feed read');
+  };
   getStateDocument: IWorkflowStore['getStateDocument'] = async () => {
     throw new Error('Unexpected getStateDocument');
   };
