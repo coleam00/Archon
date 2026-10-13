@@ -4125,13 +4125,8 @@ async function executeLoopGroupBody(
   // prefix composes across nested loop_groups: `<enclosing>.<groupId>.<bodyNodeId>`.
   const bodyStepNamePrefix = `${stepName}.`;
 
-  // Static (iteration-invariant) id sets for `$LOOP_PREV.<id>.output[.field]` resolution
-  // (#2142). `knownBodyIds` is TRANSITIVE (this group's body + every nested descendant) —
-  // an id absent from it is a typo (`.field` ref → loud failure). `directBodyIds` is only
-  // THIS group's immediate ids — an id in knownBodyIds but not directBodyIds belongs to a
-  // nested group and its token is preserved for that inner group's own pass. Computed once
-  // (body shape is static) and threaded into every applyLoopPrevToBodyNode call.
-  const knownBodyIds = collectLoopBodyNodeIds(bodyNodes);
+  // THIS group's immediate body ids: the resume snapshot is keyed by them, and until_bash
+  // resolves `$LOOP_PREV` against them (#2142).
   const directBodyIds = new Set(bodyNodes.map(n => n.id));
 
   // Detect loop resume (mirrors executeLoopNode). Two shapes recognized:
@@ -4554,15 +4549,11 @@ async function executeLoopGroupBody(
     // iteration of an interactive loop.
     const prevSnapshot = loopPrevOutputs;
     const userInputForIter = isLoopResume && i === startIteration ? loopUserInput : '';
-    const iterBodyNodes = bodyNodes.map(n =>
-      applyLoopPrevToBodyNode(
-        n,
-        prevSnapshot,
-        userInputForIter,
-        artifactsDir,
-        knownBodyIds,
-        directBodyIds
-      )
+    const iterBodyNodes = applyLoopPrevToBody(
+      bodyNodes,
+      prevSnapshot,
+      userInputForIter,
+      artifactsDir
     );
     // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
     // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
@@ -5193,6 +5184,36 @@ export function applyLoopPrevToBodyNode(
     substitutedNode.source.name = sub(substitutedNode.source.name);
   }
   return substitutedNode;
+}
+
+/**
+ * Apply {@link applyLoopPrevToBodyNode} to every node of one loop_group iteration's body.
+ * The single per-iteration resolution path shared by {@link executeLoopGroupNode} and the
+ * dry-run simulator, so a dry run binds `$LOOP_PREV.*` exactly as a real run does.
+ *
+ * `knownBodyIds` is TRANSITIVE (this group's body + every nested descendant) — an id absent
+ * from it is a typo (`.field` ref → loud failure). `directBodyIds` is only THIS group's
+ * immediate ids — an id in knownBodyIds but not directBodyIds belongs to a nested group and
+ * its token is preserved for that inner group's own pass (#2142).
+ */
+export function applyLoopPrevToBody(
+  bodyNodes: readonly DagNode[],
+  loopPrevOutputs: Map<string, NodeOutput> | undefined,
+  loopUserInput: string,
+  outputFileDir: string
+): DagNode[] {
+  const knownBodyIds = collectLoopBodyNodeIds(bodyNodes);
+  const directBodyIds = new Set(bodyNodes.map(n => n.id));
+  return bodyNodes.map(n =>
+    applyLoopPrevToBodyNode(
+      n,
+      loopPrevOutputs,
+      loopUserInput,
+      outputFileDir,
+      knownBodyIds,
+      directBodyIds
+    )
+  );
 }
 
 /**
