@@ -312,10 +312,10 @@ describe('bundled-defaults', () => {
       expect(review.with).not.toHaveProperty('pr_head');
     });
 
-    // Every commit that ships is read by a review round that judges structure as well
-    // as correctness. A pass that writes code with no review after it ships that code
-    // unread, and any structure finding it declines goes unjudged.
-    it('archon-deliver follows every implementation pass with a review', () => {
+    // Every implementation pass is reviewed before CI, with one named exception: the
+    // post-review reshape, which adopts or declines the structure pass's findings and
+    // goes straight to CI. Its edits reaching CI unreviewed is the delivery design.
+    it('archon-deliver reviews every implementation pass except the post-review reshape', () => {
       const parsed = parseWorkflow(
         BUNDLED_WORKFLOWS['archon-deliver'],
         'archon-deliver.yaml',
@@ -345,9 +345,7 @@ describe('bundled-defaults', () => {
           });
         for (const node of nodes) {
           if (node.kind === 'loop_group') checkScope(node.loop_group.nodes);
-          // The one exception: the structure pass's reshape runs after the round's
-          // review has passed and goes straight to CI, by the delivery design.
-          if (node.id === 'reshape') continue;
+          if (node.id === 'reshape') continue; // the named exception above
           if (isInclude(node.id, 'archon-implement') && !reviewedAfter(node.id)) {
             unreviewed.push(node.id);
           }

@@ -48,8 +48,9 @@ could ever run. All three copies are gone.
 
 CI is the project's full validation; implementers run only focused checks. Whether
 CI is green is judgment, so one agent prompt owns it (`deliver/commands/ci.md`), run
-once a round's review passes. It refuses to mark ready a head that is not this
-checkout's `HEAD` or that conflicts with its base, marks the pull request ready (a
+once a round's review passes. It never judges a stale head (it pushes the
+checkout's `HEAD` when the pull request is behind it), refuses a head that
+conflicts with its base, marks the pull request ready (a
 project whose CI skips drafts starts it then), waits however long CI takes, and
 answers green, pr_caused, or other. On anything but green it puts the pull request
 back to draft before it answers, so a red PR never stays ready. A red the change
@@ -97,8 +98,8 @@ before it declared in its typed output, which the engine certified, writes throu
 the selected source, and fails unless the result reads back — so "the write
 failed" and "the write may have landed" stay different outcomes, in the pack as in
 the forge contract. Three agents write directly with `gh`: the structure pass's
-implementer pushes its own commit to the pull request's branch, and CI refuses to
-judge a head that is not the checkout's;
+implementer pushes its own commit to the pull request's branch, and CI pushes a
+head that was left behind before it judges anything, ending `other` if it cannot;
 `update-pr-body` edits the description, because judging which claims are stale and
 rewriting them is the whole job; and `ci` marks the pull request ready and back to
 draft around its CI wait. No script reads an
