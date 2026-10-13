@@ -528,8 +528,6 @@ INSERT INTO remote_agent_workflow_event_sequence (id, value)
 -- Derive the row shape from its owner; no foreign key may cascade into the feed.
 CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_archive AS
   SELECT * FROM remote_agent_workflow_events WHERE false;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_event_archive_order
-  ON remote_agent_workflow_event_archive(event_order);
 CREATE OR REPLACE FUNCTION archon_archive_workflow_event() RETURNS trigger AS $$
 BEGIN
   INSERT INTO remote_agent_workflow_event_archive SELECT (OLD).*;
@@ -891,3 +889,5 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
 -- The global feed pages by commit order independently of run membership.
 CREATE INDEX IF NOT EXISTS idx_workflow_events_order
   ON remote_agent_workflow_events(event_order);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_event_archive_order
+  ON remote_agent_workflow_event_archive(event_order);
