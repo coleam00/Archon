@@ -1,6 +1,7 @@
-# Outcome: not ready, round_cap. Every round's CI is red because of the change (the
-# stubs repeat each round), so the real round script sends the work back to
-# implement until its cap ends the rounds typed instead of failing the loop.
+# Outcome: not ready, round_cap. Every round the head conflicts with its base (the
+# stubs repeat each round), so the CI agent declares pr_caused with the conflicting
+# paths in ci.md, the next round's implementer is told to merge the base, never
+# rebase, and the real round script ends the rounds typed at its cap.
 implement__implement:
   done: true
   green: true
@@ -31,9 +32,11 @@ review__publish:
   discoveries: []
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
-ci: { state: pr_caused, summary: "stub: a test this change edited fails" }
+ci: { state: pr_caused, summary: "stub: conflicts with dev in src/a.ts; marked draft" }
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   expect: completed
   reached: [ci, round, outcome]
+  resolved-text-contains:
+    implement__implement: "merge the base branch into this branch with a normal merge commit, never a rebase"
 exec-code: true
