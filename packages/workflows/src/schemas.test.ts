@@ -1,5 +1,10 @@
 import { describe, test, expect } from 'bun:test';
 import {
+  approvalContextSchema,
+  bodySessionCursorsSchema,
+  bodySessionCursorAncestrySchema,
+} from './schemas/workflow-run';
+import {
   isExecNode,
   isGateNode,
   isWaitNode,
@@ -90,6 +95,53 @@ describe('persisted workflow continuation schemas', () => {
     waitingSince: '2026-08-24T10:00:00.000Z',
     resumeAt: '2026-08-25T10:00:00.000Z',
   };
+
+  test('round trips named owner cursors in approvals and every loop wait kind', () => {
+    const bodySessionCursors = { owner: { sessionId: 'O', provider: 'pi' } };
+    for (const cursors of [undefined, {}, bodySessionCursors]) {
+      const approval = {
+        nodeId: 'group',
+        message: 'Review',
+        ...(cursors
+          ? { bodySessionCursors: cursors, bodySessionCursorAncestry: { '["group",[]]': cursors } }
+          : {}),
+      };
+      expect(approvalContextSchema.parse(JSON.parse(JSON.stringify(approval)))).toEqual(approval);
+      for (const condition of [
+        { kind: 'time' as const, resumeAt: timeWait.resumeAt },
+        { kind: 'event' as const, event: 'checks.complete', resumeAt: timeWait.resumeAt },
+        { kind: 'attention' as const, message: 'Fix checks' },
+      ]) {
+        const wait = {
+          owner: 'loop_group' as const,
+          nodeId: 'group',
+          bodyWaitId: 'checks',
+          iteration: 1,
+          sessionId: null,
+          sessionProvider: null,
+          waitingSince: timeWait.waitingSince,
+          ...condition,
+          ...(cursors
+            ? {
+                bodySessionCursors: cursors,
+                bodySessionCursorAncestry: { '["group",[]]': cursors },
+              }
+            : {}),
+        };
+        expect(workflowWaitContextSchema.parse(JSON.parse(JSON.stringify(wait)))).toEqual(wait);
+      }
+    }
+    for (const cursor of [
+      { sessionId: '', provider: 'pi' },
+      { sessionId: 'O' },
+      { sessionId: 'O', provider: '' },
+    ]) {
+      expect(bodySessionCursorsSchema.safeParse({ owner: cursor }).success).toBe(false);
+      expect(
+        bodySessionCursorAncestrySchema.safeParse({ '["group",[]]': { owner: cursor } }).success
+      ).toBe(false);
+    }
+  });
 
   test('requires the fields belonging to the persisted wait kind and owner', () => {
     expect(workflowWaitContextSchema.safeParse(timeWait).success).toBe(true);
@@ -2337,6 +2389,7 @@ describe('runAttention', () => {
         kind: 'action_required',
         runId: 'run-1',
         nodeId: 'recover-ci.operator-action',
+        occurrence: 'wait:2026-08-28T10:00:00.000Z',
         message: 'Rerun the failing check, then resume.',
       });
     });
@@ -2393,10 +2446,23 @@ describe('runAttention', () => {
         kind: 'awaiting_response',
         runId: 'run-1',
         respondTo: { runId: 'run-1', nodeId: 'review' },
+        occurrence: 'legacy:review',
         message: 'Approve the plan.',
       });
     });
   });
+
+  test.each(['approval', 'interactive_loop', 'writeback'] as const)(
+    'uses the pause id for %s and changes on a re-ask',
+    type => {
+      expect(runAttention(pausedOn(gate({ type, pauseId: 'first' })))).toMatchObject({
+        occurrence: 'first',
+      });
+      expect(runAttention(pausedOn(gate({ type, pauseId: 'second' })))).toMatchObject({
+        occurrence: 'second',
+      });
+    }
+  );
 
   describe('blocked on a child', () => {
     test('reports the block and never claims a human is needed', () => {

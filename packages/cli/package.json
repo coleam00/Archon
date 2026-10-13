@@ -9,7 +9,7 @@
   "scripts": {
     "cli": "bun src/cli.ts",
     "test": "bun run ../../scripts/package-tests.ts",
-    "test:integration": "bun test src/utils/detached-run-control.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-adopt-source.integration.spec.ts && bun test src/commands/workflow-resume-conversation.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-interrupt.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts && bun test src/commands/workflow-wake.integration.spec.ts && bun test src/commands/workflow-codebase-resolution.integration.spec.ts",
+    "test:integration": "bun test src/utils/detached-run-control.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-adopt-source.integration.spec.ts && bun test src/commands/workflow-resume-conversation.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-interrupt.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts && bun test src/commands/workflow-wake.integration.spec.ts && bun test src/commands/workflow-codebase-resolution.integration.spec.ts && bun test src/commands/workflow-launch-config.integration.spec.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -20,23 +20,36 @@
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
     "@archon/providers": "workspace:*",
-    "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",
     "@archon/forge": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "dotenv": "^17.2.3",
-    "@archon/plugin-manifest": "workspace:*"
+    "@archon/plugin-manifest": "workspace:*",
+    "@archon/chat-contract": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
   },
   "testGroups": [
     [
+      "src/commands/plugin-chat.test.ts"
+    ],
+    [
+      "src/commands/inspect-chat-plugin.test.ts"
+    ],
+    [
+      "src/commands/publish-plugin.test.ts"
+    ],
+    [
+      "src/commands/workflow-provider-plugin.integration.spec.ts"
+    ],
+    [
       "src/commands/version.test.ts",
       "src/commands/setup.test.ts",
       "src/commands/skill.test.ts",
       "src/commands/doctor.test.ts",
+      "src/commands/doctor-process-provider.test.ts",
       "src/commands/telemetry.test.ts"
     ],
     [
@@ -55,7 +68,16 @@
       "src/commands/serve.test.ts"
     ],
     [
+      "src/commands/serve-binary.test.ts"
+    ],
+    [
+      "src/commands/serve-source.integration.spec.ts"
+    ],
+    [
       "src/commands/ai.test.ts"
+    ],
+    [
+      "src/commands/provider.test.ts"
     ],
     [
       "src/commands/validate.test.ts"
@@ -66,7 +88,8 @@
       "src/default-cwd-canonicalization.test.ts",
       "src/utils/stdout.test.ts",
       "src/utils/safe-console.test.ts",
-      "src/utils/cli-start-telemetry.test.ts"
+      "src/utils/cli-start-telemetry.test.ts",
+      "src/utils/cli-program-arguments.test.ts"
     ],
     [
       "src/utils/detached-run-control.integration.spec.ts"
@@ -125,6 +148,34 @@
     ],
     [
       "src/commands/workflow-codebase-resolution.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-github-app.integration.spec.ts"
+    ],
+    [
+      "src/commands/user.test.ts"
+    ],
+    [
+      "src/commands/auth.test.ts"
+    ],
+    [
+      "src/commands/trigger-store.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-store.integration.spec.ts"
+    ],
+    [
+      "src/test-support/workflow-store.conformance.test.ts"
+    ],
+    [
+      "src/commands/workflow-launch-config.integration.spec.ts"
+    ],
+    [
+      "src/commands/state.test.ts",
+      "src/test-support/state-document-store.conformance.test.ts"
+    ],
+    [
+      "src/commands/state.integration.spec.ts"
     ]
   ]
 }

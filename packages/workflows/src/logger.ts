@@ -5,7 +5,7 @@ import type { NodeExecutionMetadata } from './schemas/node-execution';
 import { appendFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import type { WorkflowTokenUsage } from './deps';
-import type { MessageChunk } from '@archon/providers/types';
+import type { MessageChunk } from '@archon/provider-contract';
 import type { SkipCause } from './schemas';
 import type { ProviderEventEnvelope } from './schemas/provider-event';
 import { createLogger } from '@archon/paths';

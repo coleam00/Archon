@@ -8,6 +8,7 @@
  * Lives in @archon/workflows (no @archon/core dependency) so both CLI and
  * REST API can use it.
  */
+import type { ProviderRegistry } from '@archon/provider-contract';
 
 import { join, resolve, isAbsolute } from 'path';
 import { access, readFile, stat } from 'fs/promises';
@@ -24,14 +25,11 @@ import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
   claudeSkillSearchRoots,
-  compileOutputSchema,
   findInstalledSkillNames,
-  findStrictSchemaIssues,
-  getProviderCapabilities,
-  isRegisteredProvider,
-  isObjectSchemaNode,
   skillSearchRoots,
-} from '@archon/providers';
+} from '@archon/paths/skills';
+import { compileOutputSchema } from './structured-output';
+import { findStrictSchemaIssues, isObjectSchemaNode } from '@archon/provider-contract';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -69,6 +67,7 @@ import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './mode
 /** A single validation issue with actionable hint */
 export interface ValidationIssue {
   level: 'error' | 'warning';
+  code?: 'shell_output_ref';
   nodeId?: string;
   field: string;
   message: string;
@@ -323,22 +322,24 @@ function resolveValidationProvider(
 }
 
 /**
- * Bundled workflow definitions, parsed once and cached (#2470). Used only by the
+ * Bundled workflow definitions admitted by the supplied registry, parsed once per
+ * registry and cached (#2470). Used only by the
  * bundled-set-only `workflow:` target check below — a bundled workflow's sub-run target
  * must itself resolve within the bundled set (a bundled workflow can't depend on a
  * project/global workflow that may not exist on another install). Resolution reuses the
  * runtime fuzzy `resolveWorkflowName` so a legal suffix/substring ref isn't reported broken.
  * parseWorkflow never expands includes, so `workflow.name` is the authoritative id here.
  */
-let bundledWorkflowDefsCache: WorkflowDefinition[] | undefined;
-function getBundledWorkflowDefs(): WorkflowDefinition[] {
-  if (bundledWorkflowDefsCache) return bundledWorkflowDefsCache;
+const bundledWorkflowDefsCache = new WeakMap<ProviderRegistry, WorkflowDefinition[]>();
+function getBundledWorkflowDefs(providers: ProviderRegistry): WorkflowDefinition[] {
+  const cached = bundledWorkflowDefsCache.get(providers);
+  if (cached) return cached;
   const defs: WorkflowDefinition[] = [];
   for (const [filename, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-    const { workflow } = parseWorkflow(content, filename);
+    const { workflow } = parseWorkflow(content, filename, providers);
     if (workflow) defs.push(workflow);
   }
-  bundledWorkflowDefsCache = defs;
+  bundledWorkflowDefsCache.set(providers, defs);
   return defs;
 }
 
@@ -353,6 +354,7 @@ export async function validateWorkflowResources(
     readonly nodes: readonly (DagNode | IncludeDirective)[];
   },
   cwd: string,
+  providers: ProviderRegistry,
   config?: ValidationConfig,
   defaultProvider?: string
 ): Promise<ValidationIssue[]> {
@@ -362,7 +364,7 @@ export async function validateWorkflowResources(
     config?.workflowSource === 'bundled' ||
     config?.workflowSource === 'global' ||
     config?.workflowSource === 'installed';
-  const modelProfileProvider = config?.assistant ?? defaultProvider ?? 'claude';
+  const modelProfileProvider = config?.assistant ?? defaultProvider;
   let aiProfile: ResolvedAiProfile | undefined;
 
   try {
@@ -479,8 +481,7 @@ export async function validateWorkflowResources(
       });
     }
 
-    const providerCaps =
-      provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
+    const providerCaps = provider ? providers.get(provider)?.capabilities : undefined;
 
     // --- Strict-schema compatibility (#2945, #3557) ---
     // A schema with a bare object or incomplete 'required' coverage is rejected
@@ -559,7 +560,7 @@ export async function validateWorkflowResources(
       let resolvedTarget: WorkflowDefinition | undefined;
       let ambiguityMessage: string | undefined;
       try {
-        resolvedTarget = resolveWorkflowName(node.workflow, getBundledWorkflowDefs());
+        resolvedTarget = resolveWorkflowName(node.workflow, getBundledWorkflowDefs(providers));
       } catch (err) {
         ambiguityMessage = (err as Error).message;
       }
@@ -945,6 +946,7 @@ export async function validateWorkflowResources(
         if (bare) {
           issues.push({
             level: 'warning',
+            code: 'shell_output_ref',
             nodeId: node.id,
             field: slot.path,
             message:
@@ -955,6 +957,7 @@ export async function validateWorkflowResources(
         if (!quoted) return;
         issues.push({
           level: 'warning',
+          code: 'shell_output_ref',
           nodeId: node.id,
           field: slot.path,
           message:

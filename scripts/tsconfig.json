@@ -19,5 +19,9 @@
     // extensions (pack scripts run under Bun with no build step).
     "allowImportingTsExtensions": true
   },
-  "include": ["*.ts"]
+  "include": [
+    "*.ts",
+    "../packages/workflows/src/defaults/text-imports.d.ts",
+    "../packages/core/src/sql-text-imports.d.ts"
+  ]
 }

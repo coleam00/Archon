@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { mkdtemp } from 'node:fs/promises';
@@ -5,16 +6,18 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
-import {
+import { createWorkflowStore } from '../workflows/store-adapter';
+import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+const {
+  listStartReceipts,
   acceptStartReceipt,
   admitResourceStart,
   completeStartBindingPreparation,
   drainResourceStarts,
   getResourceStartRequest,
   getStartReceipt,
-  SourceReceiptDigestConflictError,
   withdrawQueuedResourceStart,
-} from './resource-starts';
+} = createWorkflowStore();
 import {
   addResourceSlotHolder,
   liveResourceSlotHolders,
@@ -22,7 +25,12 @@ import {
   ResourceSlotCapacityConflictError,
 } from './resource-slots';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
-import { claimPendingWorkflowRun, resumeWorkflowRun, WorkflowResourceBusyError } from './workflows';
+import {
+  claimPendingWorkflowRun,
+  getWorkflowRun,
+  resumeWorkflowRun,
+  WorkflowResourceBusyError,
+} from './workflows';
 
 let root = '';
 const CODEBASE_ID = '33333333-3333-4333-8333-333333333333';
@@ -31,15 +39,17 @@ const originalDatabaseUrl = process.env.DATABASE_URL;
 
 function launch(id: string): PreparedWorkflowLaunch {
   return {
-    version: 1,
+    version: 2,
     run: {
       id,
       workflow_name: 'test',
-      conversation_id: '11111111-1111-4111-8111-111111111111',
+      origin: {
+        conversationId: '11111111-1111-4111-8111-111111111111',
+        userId: '22222222-2222-4222-8222-222222222222',
+      },
       codebase_id: CODEBASE_ID,
       user_message: '',
       metadata: {},
-      user_id: '22222222-2222-4222-8222-222222222222',
     },
     execution: {
       cwd: '/tmp/test',
@@ -112,6 +122,16 @@ afterEach(async () => {
 });
 
 describe('durable resource starts', () => {
+  test('receipt inspection rejects invalid limits through the SQL store', async () => {
+    for (const limit of [NaN, 1.5, 0, 1001]) {
+      await expect(listStartReceipts(limit)).rejects.toThrow(
+        'Receipt limit must be an integer from 1 to 1000.'
+      );
+    }
+    expect(await listStartReceipts(1)).toEqual([]);
+    expect(await listStartReceipts(1000)).toEqual([]);
+  });
+
   test('paused ownership skips same-resource requests while unrelated resources progress', async () => {
     const owner = crypto.randomUUID();
     const skipped = crypto.randomUUID();
@@ -264,6 +284,123 @@ describe('durable resource starts', () => {
     ]);
   });
 
+  test('drains a version-1 launch queued by an older writer with its provenance as origin', async () => {
+    const blockerId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const legacyId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    for (const id of [blockerId, legacyId]) {
+      await admitResourceStart({
+        resource: 'repo:legacy',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: launch(id),
+      });
+    }
+    const stored = await getDatabase().query<{ launch: string }>(
+      'SELECT launch FROM remote_agent_resource_start_requests WHERE id = $1',
+      [legacyId]
+    );
+    // New launches store only the canonical origin.
+    const written = JSON.parse(stored.rows[0]?.launch ?? 'null') as Record<string, unknown>;
+    expect(written).toMatchObject({ version: 2, run: { origin: launch(legacyId).run.origin } });
+    expect(JSON.stringify(written)).not.toContain('conversation_id');
+
+    const { origin: _origin, ...run } = launch(legacyId).run;
+    await getDatabase().query(
+      'UPDATE remote_agent_resource_start_requests SET launch = $1 WHERE id = $2',
+      [
+        JSON.stringify({
+          ...launch(legacyId),
+          version: 1,
+          run: {
+            ...run,
+            conversation_id: '11111111-1111-4111-8111-111111111111',
+            user_id: '22222222-2222-4222-8222-222222222222',
+          },
+        }),
+        legacyId,
+      ]
+    );
+    expect((await getResourceStartRequest(legacyId))?.launch).toEqual(launch(legacyId));
+
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [blockerId]
+    );
+    expect(await drainResourceStarts({ resource: 'repo:legacy', hostId: 'host' })).toEqual([
+      { status: 'admitted', requestId: legacyId, runId: legacyId },
+    ]);
+    expect(await getWorkflowRun(legacyId)).toMatchObject({
+      origin: launch(legacyId).run.origin,
+      conversation_id: '11111111-1111-4111-8111-111111111111',
+      user_id: '22222222-2222-4222-8222-222222222222',
+    });
+  });
+
+  test('preparation, request, run and holder roll back together when run insertion fails', async () => {
+    const store = createWorkflowStore();
+    const receiptId = crypto.randomUUID();
+    const prepared = launch(crypto.randomUUID());
+    const identity = { receiptId, bindingId: 'binding', ownerId: 'owner' };
+    await store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: 'rollback',
+        deliveryId: null,
+        contentDigest: 'local',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'binding',
+          bindingRevision: null,
+          hostId: 'host',
+          runAsUserId: '22222222-2222-4222-8222-222222222222',
+          resource: 'rollback',
+          capacity: 1,
+          overlap: 'queue',
+          launch: {
+            cwd: '/tmp/test',
+            workflowName: 'test',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+      ],
+    });
+    expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+    await getDatabase().query(
+      `CREATE TRIGGER refuse_prepared_run BEFORE INSERT ON remote_agent_workflow_runs BEGIN SELECT RAISE(ABORT, 'run refused'); END`
+    );
+    await expect(
+      store.completeStartBindingPreparation({ ...identity, launch: prepared })
+    ).rejects.toThrow();
+    expect((await store.getStartReceipt(receiptId))?.bindings[0]).toMatchObject({
+      status: 'preparing',
+      ownerId: 'owner',
+      requestStatus: null,
+    });
+    expect(await store.getResourceStartRequest(prepared.run.id)).toBeNull();
+    expect(await store.getWorkflowRun(prepared.run.id)).toBeNull();
+    expect(
+      (
+        await getDatabase().query(
+          'SELECT * FROM remote_agent_resource_slots WHERE resource_key = $1',
+          ['rollback']
+        )
+      ).rows
+    ).toEqual([]);
+    await getDatabase().query('DROP TRIGGER refuse_prepared_run');
+    expect(await store.completeStartBindingPreparation({ ...identity, launch: prepared })).toEqual({
+      status: 'admitted',
+      requestId: prepared.run.id,
+      runId: prepared.run.id,
+    });
+  });
+
   test('deduplicates trusted delivery identity and rejects digest conflicts', async () => {
     const receipt = {
       id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
@@ -335,7 +472,7 @@ describe('durable resource starts', () => {
         },
       ],
     });
-    const { claimStartBindingPreparation } = await import('./resource-starts');
+    const { claimStartBindingPreparation } = createWorkflowStore();
     expect(
       await claimStartBindingPreparation({ receiptId, bindingId: 'binding', ownerId: 'owner' })
     ).toBe(true);
@@ -430,7 +567,7 @@ describe('durable resource starts', () => {
         },
       ],
     });
-    const { claimStartBindingPreparation } = await import('./resource-starts');
+    const { claimStartBindingPreparation } = createWorkflowStore();
     expect(
       await claimStartBindingPreparation({ receiptId, bindingId: 'binding', ownerId: 'owner' })
     ).toBe(true);
@@ -453,7 +590,8 @@ describe('durable resource starts', () => {
   test('serializes same-resource admission across independent SQLite processes', async () => {
     await closeDatabase();
     const script = `
-      import { admitResourceStart } from './packages/core/src/db/resource-starts.ts';
+      import { createWorkflowStore } from './packages/core/src/workflows/store-adapter.ts';
+      const { admitResourceStart } = createWorkflowStore();
       import { closeDatabase } from './packages/core/src/db/connection.ts';
       const disposition = await admitResourceStart(JSON.parse(process.env.TEST_START_INTENT));
       console.log(JSON.stringify(disposition));

@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 
 export interface RecordedGitInvocation {
@@ -15,54 +15,20 @@ export interface RecordingGitFixture {
   readInvocations(): Promise<RecordedGitInvocation[]>;
 }
 
-const RECORDING_GIT_SOURCE = `#!/usr/bin/env bun
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const argv = process.argv.slice(2);
-const recordPath = process.env.ARCHON_TEST_GIT_RECORD_PATH;
-if (!recordPath) throw new Error('ARCHON_TEST_GIT_RECORD_PATH is required');
-
-appendFileSync(recordPath, JSON.stringify({
-  argv,
-  env: {
-    GIT_TERMINAL_PROMPT: process.env.GIT_TERMINAL_PROMPT,
-    ARCHON_GIT_USERNAME: process.env.ARCHON_GIT_USERNAME,
-    ARCHON_GIT_PASSWORD: process.env.ARCHON_GIT_PASSWORD,
-  },
-}) + '\\n');
-
-const cloneIndex = argv.indexOf('clone');
-if (cloneIndex >= 0) {
-  const failure = process.env.ARCHON_TEST_GIT_STDERR;
-  if (failure) {
-    process.stderr.write(failure);
-    process.exit(1);
-  }
-
-  const url = argv[cloneIndex + 1];
-  const targetPath = argv[cloneIndex + 2];
-  const gitDir = join(targetPath, '.git');
-  mkdirSync(gitDir, { recursive: true });
-  writeFileSync(
-    join(gitDir, 'config'),
-    '[remote "origin"]\\n\\turl = ' + url + '\\n',
-    'utf8'
-  );
-}
-`;
+/**
+ * A committed executable, not one written per test: macOS assesses each new executable
+ * file on its first exec (200-370 ms measured at load 20, longer under heavy load), and
+ * a fresh fake per test paid that inside the test's 5 s budget on every run.
+ */
+const RECORDING_GIT_BIN = join(import.meta.dir, 'test-fixtures', 'recording-git-bin');
 
 export async function createRecordingGitFixture(root: string): Promise<RecordingGitFixture> {
   if (process.platform === 'win32') {
     throw new Error('The recording Git fixture requires a POSIX executable script');
   }
 
-  const binPath = join(root, 'bin');
+  const binPath = RECORDING_GIT_BIN;
   const recordPath = join(root, 'git-invocations.jsonl');
-  const gitPath = join(binPath, 'git');
-  await mkdir(binPath, { recursive: true });
-  await writeFile(gitPath, RECORDING_GIT_SOURCE, 'utf8');
-  await chmod(gitPath, 0o755);
 
   return {
     async run<T>(action: () => Promise<T>, stderr?: string): Promise<T> {

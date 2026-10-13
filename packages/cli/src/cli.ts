@@ -13,7 +13,7 @@ import '@archon/paths/strip-cwd-env-boot';
 // Then load archon-owned env from ~/.archon/.env (user scope) and
 // <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
 // See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
-import { loadArchonEnv } from '@archon/paths/env-loader';
+import { loadCliEnv } from './load-cli-env';
 import {
   captureDetachedInstallContext,
   getPluginsPath,
@@ -29,15 +29,7 @@ const hasDetachedRunConfigHandoff = process.argv
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
-let forgeTrustedEnv: NodeJS.ProcessEnv = {};
-loadArchonEnv(process.cwd(), {
-  afterUserLoad: () => {
-    // Forge plugin processes run with the environment as the user scope left it, so
-    // the repository's `.archon/.env` can supply a credential (passed separately) but
-    // cannot change the environment an executable plugin runs in.
-    forgeTrustedEnv = { ...process.env };
-  },
-});
+const forgeTrustedEnv = await loadCliEnv(process.cwd());
 // The detached parent sealed this payload with its effective install key. Repo
 // env still loads normally, but it cannot replace any input that derives the
 // install home before the child consumes the accepted snapshot.
@@ -62,7 +54,6 @@ import {
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
   rejectModelOnContinue,
-  isContinueSubcommand,
   RESUME_RUN_CONFIG_CONFLICT,
 } from './dispatch-guards';
 import { resolveCliExitCode } from './utils/workflow-exit-code';
@@ -72,7 +63,6 @@ installPipeSafeConsole();
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
 import { shouldReportCliStart } from './utils/cli-start-telemetry';
-import { renderHelp } from './help';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { stat } from 'fs/promises';
@@ -90,6 +80,7 @@ import {
   getLogLevel,
   createLogger,
   checkForUpdate,
+  takeCachedUpdateNotice,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   shutdownTelemetry,
@@ -103,8 +94,8 @@ import { publishArchonCliCommand } from '@archon/paths/cli-command';
 publishArchonCliCommand();
 
 let providersRegistered = false;
-let providerProcessErrorHandlersInstalled = false;
 let databaseRouteLoaded = false;
+let providerProcessErrorHandlersInstalled = false;
 
 function installProviderProcessErrorHandlers(
   claimPiExtensionProcessError: (reason: unknown) => boolean
@@ -139,24 +130,28 @@ function installProviderProcessErrorHandlers(
 
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
-  const { claimPiExtensionProcessError, registerBuiltinProviders, registerCommunityProviders } =
-    await import('@archon/providers');
-  installProviderProcessErrorHandlers(claimPiExtensionProcessError);
-  registerBuiltinProviders();
-  registerCommunityProviders();
+  const { registerHostProviders } = await import('@archon/core/providers/register-host-providers');
+  if (BUNDLED_IS_BINARY) {
+    const { claimPiExtensionProcessError } =
+      await import('@archon/providers/pi/extension-error-broker');
+    installProviderProcessErrorHandlers(claimPiExtensionProcessError);
+  }
+  await registerHostProviders();
   providersRegistered = true;
 }
 
 async function loadRoute<T>(
   loader: () => Promise<T>,
-  options: { providers?: boolean; database?: boolean } = {}
+  options: { providers?: false; database?: boolean } = {}
 ): Promise<T> {
-  const [{ setPlatformPolicies }, { bundledPlatformPolicies }] = await Promise.all([
-    import('@archon/core/platforms/registry'),
-    import('@archon/adapters/platform-policies'),
-  ]);
-  setPlatformPolicies(bundledPlatformPolicies);
-  if (options.providers) await registerProviders();
+  const [{ setPlatformPolicies }, { defaultPlatformPolicies }, { loadPlatformPolicies }] =
+    await Promise.all([
+      import('@archon/core/platforms/registry'),
+      import('@archon/adapters/platform-policies'),
+      import('@archon/core/platforms/chat-plugins'),
+    ]);
+  setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
+  if (options.providers !== false) await registerProviders();
   const route = await loader();
   if (options.database) databaseRouteLoaded = true;
   return route;
@@ -192,7 +187,8 @@ async function fail(json: boolean | undefined, message: string): Promise<1> {
   return 1;
 }
 
-function printUsageFor(command?: string, subcommand?: string): void {
+async function printUsageFor(command?: string, subcommand?: string): Promise<void> {
+  const { renderHelp } = await import('./help');
   console.log(renderHelp(command, subcommand));
 }
 
@@ -211,13 +207,16 @@ async function closeDb(): Promise<void> {
   }
 }
 
-async function printUpdateNotice(quiet: boolean | undefined): Promise<void> {
-  if (quiet || !BUNDLED_IS_BINARY) return;
+function printUpdateNotice(): void {
   try {
-    const result = await checkForUpdate(BUNDLED_VERSION);
-    if (result?.updateAvailable) {
+    const result = takeCachedUpdateNotice(BUNDLED_VERSION);
+    if (result) {
       process.stderr.write(
-        `Update available: v${result.currentVersion} → v${result.latestVersion} — ${result.releaseUrl}\n`
+        `Update available: v${result.currentVersion} → v${result.latestVersion}\n` +
+          'Homebrew: brew upgrade archon\n' +
+          'Quick installer: re-run https://archon.diy/install (PowerShell: https://archon.diy/install.ps1)\n' +
+          `Release notes: ${result.releaseUrl}\n` +
+          'Updating Archon: https://archon.diy/getting-started/updating/\n'
       );
     }
   } catch (err) {
@@ -254,7 +253,7 @@ async function main(): Promise<number> {
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
-    printUsageFor();
+    await printUsageFor();
     await shutdownTelemetry();
     return 0;
   }
@@ -264,7 +263,7 @@ async function main(): Promise<number> {
   if (isVersionRequest(args)) {
     try {
       refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
-      const { versionCommand } = await loadRoute(() => import('./commands/version'));
+      const { versionCommand } = await import('./commands/version');
       await versionCommand();
       return 0;
     } finally {
@@ -293,18 +292,30 @@ async function main(): Promise<number> {
     if (json) setLogLevel('silent');
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
     await fail(json, `Error parsing arguments: ${err.message}`);
-    if (!json) printUsageFor();
+    if (!json) await printUsageFor();
     await shutdownTelemetry();
     return 1;
   }
 
   const { values, positionals } = parsedArgs;
+  if (
+    values['base-branch'] !== undefined &&
+    (positionals[0] !== 'workflow' || positionals[1] !== 'run')
+  ) {
+    await fail(
+      values.json === true,
+      '--base-branch is only supported by workflow run for initial project registration.'
+    );
+    await shutdownTelemetry();
+    return 1;
+  }
   const cwdValue = values.cwd;
   const cwd = resolve(typeof cwdValue === 'string' ? cwdValue : process.cwd());
   const branchName = values.branch as string | undefined;
   const fromBranch =
     (values.from as string | undefined) ?? (values['from-branch'] as string | undefined);
   const baseBranch = values.base as string | undefined;
+  const registrationBaseBranch = values['base-branch'] as string | undefined;
   const workflowSourceFlag = values['workflow-source'] as string | undefined;
   const noWorktree = values['no-worktree'] as boolean | undefined;
   const folderFlag = values.folder as boolean | undefined;
@@ -346,13 +357,14 @@ async function main(): Promise<number> {
   // parsed positionals so `archon <command> [--subcommand] --help` shows only
   // the matching slice instead of the full index.
   if (values.help) {
-    printUsageFor(command, subcommand);
+    await printUsageFor(command, subcommand);
     await shutdownTelemetry();
     return 0;
   }
 
   // Commands that don't require git repo validation
   const noGitCommands = [
+    'state',
     'trigger',
     'version',
     'help',
@@ -364,10 +376,19 @@ async function main(): Promise<number> {
     'doctor',
     'telemetry',
     'auth',
+    'user',
     'ai',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
   let detachedRunConfig: WorkflowRunConfigInput | undefined;
+
+  const showUpdateNotice =
+    BUNDLED_IS_BINARY &&
+    !values.quiet &&
+    !jsonFlag &&
+    command === 'workflow' &&
+    (subcommand === 'run' || subcommand === 'resume');
+  if (showUpdateNotice) void checkForUpdate(BUNDLED_VERSION);
 
   try {
     const detachedRunConfigPayload = values['internal-detached-run-config'];
@@ -398,11 +419,19 @@ async function main(): Promise<number> {
 
     if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
       const schedule = subcommand === 'wake' && positionals[2] === 'schedule';
-      const { workflowContinuationCommand } = await loadRoute(
+      const { workflowContinuationCommand, workflowWakeScheduleCommand } = await loadRoute(
         () => import('./commands/workflow-continuations'),
-        { providers: !schedule, database: !schedule }
+        schedule ? { providers: false } : { database: true }
       );
-      return await workflowContinuationCommand(subcommand, positionals.slice(2), values);
+      if (schedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
+      const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+      const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+      return await workflowContinuationCommand(
+        createSqlWorkflowHost(createCliWorkflowDeps()),
+        subcommand,
+        positionals.slice(2),
+        values
+      );
     }
 
     const configOutsideRun = rejectConfigOutsideRun(command, subcommand, values.config);
@@ -420,9 +449,23 @@ async function main(): Promise<number> {
           'Find a prior run id with: archon workflow runs --open (or workflow get <run-id>)'
       );
     }
+    if (command === 'provider') {
+      const { providerCommand } = await loadRoute(() => import('./commands/provider'), {
+        providers: false,
+      });
+      return await providerCommand(subcommand, positionals.slice(2), {
+        pluginsDir: getPluginsPath(),
+        archonVersion: BUNDLED_VERSION,
+        projectDir: cwd,
+      });
+    }
     if (command === 'plugin') {
-      const { pluginCommand } = await loadRoute(() => import('./commands/plugin'));
-      const { getArchonVersion } = await loadRoute(() => import('./commands/version'));
+      const { pluginCommand } = await loadRoute(() => import('./commands/plugin'), {
+        providers: false,
+      });
+      const { getArchonVersion } = await loadRoute(() => import('./commands/version'), {
+        providers: false,
+      });
       return await pluginCommand(subcommand, positionals.slice(2), {
         // The trusted plugins directory forge and workflow-pack discovery read, so repo
         // env cannot redirect where an install lands.
@@ -485,14 +528,18 @@ async function main(): Promise<number> {
         // "database unavailable" instead of the misleading "not a git repository".
         let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
         let gateLookupError: Error | null = null;
+        let codebaseDb: typeof import('@archon/core/db/codebases') | undefined;
         try {
-          const codebaseDb = await loadRoute(() => import('@archon/core/db/codebases'), {
+          codebaseDb = await loadRoute(() => import('@archon/core/db/codebases'), {
             database: true,
           });
           folderCodebase =
             (await codebaseDb.findCodebaseByDefaultCwd(realCwd)) ??
             (await codebaseDb.findCodebaseByPathPrefix(realCwd));
         } catch (dbError) {
+          if (codebaseDb && dbError instanceof codebaseDb.InvalidCodebaseDefaultCwdError) {
+            return await fail(jsonFlag, dbError.message);
+          }
           gateLookupError = dbError as Error;
           getLog().warn(
             { err: gateLookupError, cwd: realCwd },
@@ -537,23 +584,55 @@ async function main(): Promise<number> {
     }
 
     switch (command) {
-      case 'trigger': {
-        const { triggerCommand } = await loadRoute(() => import('./commands/trigger'), {
-          providers: subcommand === 'fire' || subcommand === 'drain' || subcommand === 'execute',
+      case 'state': {
+        const { stateCommand } = await loadRoute(() => import('./commands/state'), {
           database: true,
         });
-        await triggerCommand(subcommand, positionals.slice(2), {
-          config: typeof values.config === 'string' ? values.config : undefined,
-          host: typeof values.host === 'string' ? values.host : undefined,
-          owner: typeof values.owner === 'string' ? values.owner : undefined,
-          limit: typeof values.limit === 'string' ? values.limit : undefined,
-          yes: values.yes === true,
-        });
+        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+        const { getDatabaseType } = await import('@archon/core/db/connection');
+        return await stateCommand(
+          createSqlWorkflowHost(createCliWorkflowDeps()),
+          subcommand,
+          positionals.slice(2),
+          {
+            cwd,
+            ...(typeof values['if-revision'] === 'string'
+              ? { ifRevision: values['if-revision'] }
+              : {}),
+            ...(typeof values.limit === 'string' ? { limit: values.limit } : {}),
+          },
+          { storeKind: getDatabaseType() }
+        );
+      }
+      case 'trigger': {
+        const { triggerCommand, spawnAdmitted } = await loadRoute(
+          () => import('./commands/trigger'),
+          {
+            database: true,
+          }
+        );
+        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
+        const host = createSqlWorkflowHost(createCliWorkflowDeps());
+        await triggerCommand(
+          host,
+          subcommand,
+          positionals.slice(2),
+          {
+            config: typeof values.config === 'string' ? values.config : undefined,
+            host: typeof values.host === 'string' ? values.host : undefined,
+            owner: typeof values.owner === 'string' ? values.owner : undefined,
+            limit: typeof values.limit === 'string' ? values.limit : undefined,
+            yes: values.yes === true,
+          },
+          (requestId, hostId) => spawnAdmitted(host, requestId, hostId)
+        );
         break;
       }
 
       case 'version': {
-        const { versionCommand } = await loadRoute(() => import('./commands/version'));
+        const { versionCommand } = await import('./commands/version');
         await versionCommand();
         break;
       }
@@ -562,7 +641,7 @@ async function main(): Promise<number> {
         // Mirror `archon <command> [--subcommand] --help`: bare `archon help`
         // is the global index; `archon help <cmd>` scopes to one command;
         // `archon help <cmd> <subcmd>` scopes further to one subcommand.
-        printUsageFor(positionals[1], positionals[2]);
+        await printUsageFor(positionals[1], positionals[2]);
         break;
       }
 
@@ -570,7 +649,6 @@ async function main(): Promise<number> {
         const chatMessage = positionals.slice(1).join(' ');
         if (!chatMessage) return await fail(jsonFlag, 'Usage: archon chat <message>');
         const { chatCommand } = await loadRoute(() => import('./commands/chat'), {
-          providers: true,
           database: true,
         });
         await chatCommand(chatMessage);
@@ -606,7 +684,6 @@ async function main(): Promise<number> {
           repoPath = repoRoot;
         }
         const { setupCommand } = await loadRoute(() => import('./commands/setup'), {
-          providers: true,
           database: true,
         });
         const setupExitCode = await setupCommand({
@@ -644,16 +721,20 @@ async function main(): Promise<number> {
           workflowEventEmitCommand,
           isValidEventType,
         } = await loadRoute(() => import('./commands/workflow'), {
-          // `resume`, `approve`, `reject`, and `respond` all reach `workflowRunCommand`,
-          // so they need the registry for the same reason `run` does. They need it more,
-          // in fact: a continuation resolves its workflow from the run's captured source,
-          // and passing that capture's `source_config` into discovery is what skips
-          // `loadConfig()` — the call that self-registers providers for every other
-          // route. Without this, the loader rejects any `provider:`-scoped workflow and
-          // the run is reported as missing from its own capture.
-          providers: subcommand === 'run' || isContinueSubcommand(subcommand),
           database: true,
         });
+        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        // The host's deps capture GitHub App auth when built, so commands that can
+        // execute a workflow initialize it first. A misconfigured App fails here,
+        // before any run row exists; query commands stay usable without it.
+        const executesWorkflow = ['run', 'resume', 'approve', 'reject', 'respond'].includes(
+          subcommand ?? ''
+        );
+        const workflowHost = createSqlWorkflowHost(
+          executesWorkflow
+            ? (await import('./utils/workflow-deps')).createCliWorkflowDeps()
+            : undefined
+        );
         switch (subcommand) {
           case 'list': {
             const workflowName = positionals[2];
@@ -761,6 +842,7 @@ async function main(): Promise<number> {
               branchName,
               fromBranch,
               baseBranch,
+              registrationBaseBranch,
               adoptRunId: values.adopt as string | undefined,
               supersedesRunId: values.supersedes as string | undefined,
               // `--workflow-source` selects WHERE the workflow is read from; `--cwd`
@@ -795,7 +877,13 @@ async function main(): Promise<number> {
               detachedRunConfig,
               detachedRunId: values['internal-detached-run-id'] as string | undefined,
             };
-            await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
+            await workflowRunCommand(
+              workflowHost,
+              effectiveCwd,
+              workflowName,
+              userMessage,
+              options
+            );
             break;
           }
 
@@ -807,7 +895,7 @@ async function main(): Promise<number> {
                   'To show a single run, use: archon workflow get <run-id>'
               );
             }
-            await workflowStatusCommand(effectiveCwd, {
+            await workflowStatusCommand(workflowHost, effectiveCwd, {
               json: jsonFlag,
               verbose: values.verbose as boolean | undefined,
               rawEvents: values.events as boolean | undefined,
@@ -826,6 +914,7 @@ async function main(): Promise<number> {
             // Propagate the command's exit code so `get <id> && ...` and CI
             // pipelines see a non-zero status when the run is missing.
             return await workflowGetCommand(
+              workflowHost,
               getRunId,
               jsonFlag,
               values.verbose as boolean | undefined,
@@ -862,6 +951,7 @@ async function main(): Promise<number> {
               );
             }
             return await workflowLogsCommand(
+              workflowHost,
               logsRunId,
               Boolean(values.follow),
               effectiveCwd,
@@ -890,7 +980,13 @@ async function main(): Promise<number> {
             }
             // `return await`, not `break`: the wait's own exit code (3 for a deadline)
             // has to reach the shell instead of falling through to the generic success.
-            return await workflowWaitCommand(waitRunId, jsonFlag, effectiveCwd, timeoutSeconds);
+            return await workflowWaitCommand(
+              workflowHost,
+              waitRunId,
+              jsonFlag,
+              effectiveCwd,
+              timeoutSeconds
+            );
           }
 
           case 'runs': {
@@ -905,7 +1001,7 @@ async function main(): Promise<number> {
                 );
               }
             }
-            await workflowRunsCommand(effectiveCwd, {
+            await workflowRunsCommand(workflowHost, effectiveCwd, {
               json: jsonFlag,
               all: values.all as boolean | undefined,
               status: values.status as string | undefined,
@@ -921,7 +1017,13 @@ async function main(): Promise<number> {
             if (!resumeRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow resume <run-id>');
             }
-            await workflowResumeCommand(resumeRunId, jsonFlag, effectiveCwd, detachFlag);
+            await workflowResumeCommand(
+              workflowHost,
+              resumeRunId,
+              jsonFlag,
+              effectiveCwd,
+              detachFlag
+            );
             break;
           }
 
@@ -930,7 +1032,7 @@ async function main(): Promise<number> {
             if (!abandonRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow abandon <run-id>');
             }
-            await workflowAbandonCommand(abandonRunId, jsonFlag, effectiveCwd);
+            await workflowAbandonCommand(workflowHost, abandonRunId, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -939,7 +1041,7 @@ async function main(): Promise<number> {
             if (!cancelRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow cancel <run-id>');
             }
-            await workflowCancelCommand(cancelRunId, jsonFlag, effectiveCwd);
+            await workflowCancelCommand(workflowHost, cancelRunId, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -956,6 +1058,7 @@ async function main(): Promise<number> {
               (values.comment as string | undefined) || positionals.slice(3).join(' ');
             const approveComment = rawApproveComment.length > 0 ? rawApproveComment : undefined;
             await workflowApproveCommand(
+              workflowHost,
               approveRunId,
               approveComment,
               jsonFlag,
@@ -974,6 +1077,7 @@ async function main(): Promise<number> {
               (values.reason as string | undefined) || positionals.slice(3).join(' ');
             const rejectReason = rawRejectReason.length > 0 ? rawRejectReason : undefined;
             await workflowRejectCommand(
+              workflowHost,
               rejectRunId,
               rejectReason,
               jsonFlag,
@@ -998,6 +1102,7 @@ async function main(): Promise<number> {
               (values.text as string | undefined) || positionals.slice(4).join(' ');
             const respondText = rawRespondText.length > 0 ? rawRespondText : undefined;
             await workflowRespondCommand(
+              workflowHost,
               respondRunId,
               decision,
               respondText,
@@ -1017,7 +1122,7 @@ async function main(): Promise<number> {
                   '  days: delete terminal runs older than N days (default: 7)'
               );
             }
-            await workflowCleanupCommand(days);
+            await workflowCleanupCommand(workflowHost, days);
             break;
           }
 
@@ -1041,7 +1146,7 @@ async function main(): Promise<number> {
                   `Error: unexpected positional argument(s): ${extras.join(' ')}. Use --node <id> to filter by node.`
               );
             }
-            await workflowResetSessionsCommand(workflowName, {
+            await workflowResetSessionsCommand(workflowHost, workflowName, {
               scope: values.scope as string | undefined,
               node: values.node as string | undefined,
               yes: values.yes as boolean | undefined,
@@ -1093,7 +1198,7 @@ async function main(): Promise<number> {
                 );
               }
             }
-            await workflowEventEmitCommand(runId, eventType, eventData, effectiveCwd);
+            await workflowEventEmitCommand(workflowHost, runId, eventType, eventData, effectiveCwd);
             break;
           }
 
@@ -1107,6 +1212,41 @@ async function main(): Promise<number> {
               `${problem}\nAvailable: list, run, test, status, get, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, cleanup, reset-sessions, event, wake, signal`
             );
           }
+        }
+        break;
+      }
+
+      case 'user': {
+        const { userListCommand, userRoleCommand, userLinkCommand } = await loadRoute(
+          () => import('./commands/user'),
+          { database: true }
+        );
+        switch (subcommand) {
+          case 'list':
+            if (positionals.length !== 2) return await fail(jsonFlag, 'Usage: archon user list');
+            await userListCommand();
+            break;
+          case 'role':
+            if (positionals.length !== 4) {
+              const { userRoleSchema } = await import('@archon/core/schemas/user');
+              return await fail(
+                jsonFlag,
+                `Usage: archon user role <id> <${userRoleSchema.options.join('|')}>`
+              );
+            }
+            await userRoleCommand(positionals[2] ?? '', positionals[3] ?? '');
+            break;
+          case 'link':
+            if (positionals.length !== 4) {
+              return await fail(
+                jsonFlag,
+                'Usage: archon user link <user-id> <platform>:<platform-user-id> [--move]'
+              );
+            }
+            await userLinkCommand(positionals[2] ?? '', positionals[3] ?? '', Boolean(values.move));
+            break;
+          default:
+            return await fail(jsonFlag, 'Usage: archon user <list|role|link>');
         }
         break;
       }
@@ -1183,9 +1323,7 @@ async function main(): Promise<number> {
       case 'serve': {
         const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
-        const { serveCommand } = await loadRoute(() => import('./commands/serve'), {
-          database: !downloadOnly,
-        });
+        const { serveCommand } = await import('./commands/serve');
         return await serveCommand({ port: servePort, downloadOnly });
       }
 
@@ -1230,7 +1368,6 @@ async function main(): Promise<number> {
           aiCapacityListCommand,
           aiCapacityReleaseCommand,
         } = await loadRoute(() => import('./commands/ai'), {
-          providers: true,
           database: true,
         });
         switch (subcommand) {
@@ -1324,7 +1461,8 @@ async function main(): Promise<number> {
 
       case 'telemetry': {
         const { telemetryStatusCommand, telemetryResetCommand } = await loadRoute(
-          () => import('./commands/telemetry')
+          () => import('./commands/telemetry'),
+          { providers: false }
         );
         switch (subcommand) {
           case 'status':
@@ -1347,7 +1485,9 @@ async function main(): Promise<number> {
             // Optional positional path; otherwise install into the resolved cwd.
             const targetArg = positionals[2];
             const targetPath = targetArg ? resolve(targetArg) : cwd;
-            const { skillInstallCommand } = await loadRoute(() => import('./commands/skill'));
+            const { skillInstallCommand } = await loadRoute(() => import('./commands/skill'), {
+              providers: false,
+            });
             return await skillInstallCommand(targetPath);
           }
 
@@ -1369,11 +1509,10 @@ async function main(): Promise<number> {
           return await fail(true, problem);
         }
         console.error(problem);
-        printUsageFor();
+        await printUsageFor();
         return 1;
       }
     }
-    await printUpdateNotice(values.quiet as boolean | undefined);
     return 0;
   } catch (error) {
     const err = error as Error;
@@ -1390,6 +1529,7 @@ async function main(): Promise<number> {
     }
     return exitCode;
   } finally {
+    if (showUpdateNotice) printUpdateNotice();
     // Flush queued telemetry events before the CLI process exits.
     // Short-lived CLI commands lose buffered events if shutdown() is skipped.
     await shutdownTelemetry();

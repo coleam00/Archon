@@ -41,6 +41,16 @@ describe('MessagePersistence', () => {
     persistence.clearAll();
   });
 
+  test.each(['patch text', 0, false, null, ['a', 1]].map(input => [input] as const))(
+    'persists non-object tool input %j',
+    async input => {
+      persistence.setConversationDbId('conv-1', 'db-uuid-1');
+      persistence.appendToolCall('conv-1', { toolCallId: 'patch', name: 'apply_patch', input });
+      await persistence.flush('conv-1');
+      expect(mockAddMessage.mock.calls[0]?.[3]).toMatchObject({ toolCalls: [{ input }] });
+    }
+  );
+
   describe('flush — sync-clear before async work (race condition fix)', () => {
     test('clears buffer before async db write so new appendText creates fresh entry', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');

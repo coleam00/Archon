@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { getArchonConfigPath } from '@archon/paths/archon-paths';
+import { getArchonConfigPath, getArchonHome } from '@archon/paths/archon-paths';
 import { getPluginsPath } from '@archon/paths';
 import { dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
 import { forgePluginConfigSchema } from '@archon/forge/plugin-config';
@@ -8,6 +8,7 @@ import {
   forgeRequestSchema,
   isMutationRequest,
   mutationTarget,
+  mutationAttempt,
   type ForgeRequest,
   type ForgeResponse,
 } from '@archon/forge/operations';
@@ -60,11 +61,15 @@ export async function forgeCommand(
 ): Promise<number> {
   const write = dependencies.write ?? writeJsonLine;
   const env = dependencies.env ?? process.env;
+  const trustedEnv = options.trustedEnv ?? env;
   const operationId = randomUUID();
   let response: ForgeResponse;
   let request: ForgeRequest | undefined;
   let dispatched = false;
   try {
+    // Config and plugin discovery resolve from the same trusted environment the plugin
+    // runs in, never from this process's ambient env.
+    const archonHome = getArchonHome(trustedEnv);
     const op = subcommand === 'checks' ? 'checks.state' : subcommand;
     if (options.data !== undefined && options.dataFile !== undefined) {
       throw new Error('Supply the request through --data or --data-file, not both');
@@ -81,14 +86,14 @@ export async function forgeCommand(
     const config = forgePluginConfigSchema.parse(
       dependencies.readConfig
         ? await dependencies.readConfig()
-        : await readForgeConfig(options.configPath ?? getArchonConfigPath())
+        : await readForgeConfig(options.configPath ?? getArchonConfigPath(archonHome))
     );
     dispatched = true;
     const result = await (dependencies.dispatch ?? dispatchForge)(request, {
       config,
-      env: options.trustedEnv ?? env,
+      env: trustedEnv,
       // The trusted directory `archon plugin install` writes; repo env cannot move it.
-      pluginsDir: getPluginsPath(),
+      pluginsDir: getPluginsPath(archonHome),
       // Repo scope may supply the credential named by trusted user config. It
       // cannot replace executable discovery or the plugin's runtime identity.
       credentialEnv: env,
@@ -126,6 +131,7 @@ export async function forgeCommand(
             mutation: {
               op: request.op,
               target: mutationTarget(request),
+              ...mutationAttempt(request),
               outcome: dispatched ? ('outcome_unknown' as const) : ('refused' as const),
             },
           }

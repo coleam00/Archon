@@ -5,7 +5,7 @@ triage:
   route: plan
   design_first: false
   complexity: small
-  item: { repository: "", number: 0 }
+  item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
   proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" }
   blocked_reason: ""

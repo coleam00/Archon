@@ -1,3 +1,4 @@
+import { beginPiExtensionTurn } from '@archon/providers/pi/extension-error-broker';
 import { describe, expect, mock, spyOn, test } from 'bun:test';
 
 const order: string[] = [];
@@ -14,6 +15,7 @@ const logger = {
   },
 };
 mock.module('@archon/paths', () => ({
+  BUNDLED_IS_BINARY: true,
   createLogger: () => logger,
   logArchonPaths: noop,
   validateAppDefaultsPaths: noop,
@@ -23,8 +25,6 @@ mock.module('@archon/paths', () => ({
   }),
 }));
 
-import { beginPiExtensionTurn } from '@archon/providers/community/pi';
-
 import {
   exitAfterTelemetryFlush,
   handleUncaughtException,
@@ -32,55 +32,27 @@ import {
 } from './index';
 
 describe('exitAfterTelemetryFlush', () => {
-  test('a fatal unhandled rejection flushes before exiting; an SDK cleanup race does not exit', async () => {
-    order.length = 0;
-    const exited = Promise.withResolvers<void>();
-    const exitSpy = spyOn(process, 'exit').mockImplementation(((code?: number) => {
-      order.push(`exit ${code}`);
-      exited.resolve();
-      return undefined as never;
-    }) as typeof process.exit);
-    try {
-      handleUnhandledRejection(new Error('Operation aborted'));
-      handleUnhandledRejection(new Error('boom'));
-      await exited.promise;
-      expect(order).toEqual(['flush', 'exit 1']);
-    } finally {
-      exitSpy.mockRestore();
+  test.each(['Operation aborted', 'boom'])(
+    'an unhandled rejection flushes before exiting regardless of message: %s',
+    async message => {
+      order.length = 0;
+      const exited = Promise.withResolvers<void>();
+      const exitSpy = spyOn(process, 'exit').mockImplementation(((code?: number) => {
+        order.push(`exit ${code}`);
+        exited.resolve();
+        return undefined as never;
+      }) as typeof process.exit);
+      try {
+        handleUnhandledRejection(new Error(message));
+        await exited.promise;
+        expect(order).toEqual(['flush', 'exit 1']);
+      } finally {
+        exitSpy.mockRestore();
+      }
     }
-  });
+  );
 
-  test('stack-attested Pi extension rejections and exceptions fail the turn without exiting', async () => {
-    order.length = 0;
-    const exitSpy = spyOn(process, 'exit').mockImplementation(
-      (() => undefined as never) as typeof process.exit
-    );
-    const extensionPath = '/extensions/fake-extension.ts';
-    const turn = beginPiExtensionTurn([extensionPath]);
-    const received: Error[] = [];
-    turn.onError(error => received.push(error));
-    const rejection = new Error('extension rejection');
-    rejection.stack = `Error: extension rejection\n    at callback (${extensionPath}:4:2)`;
-    const cleanupNamedRejection = new Error('Operation aborted');
-    cleanupNamedRejection.stack = `Error: Operation aborted\n    at callback (${extensionPath}:8:2)`;
-    const exception = new Error('extension exception');
-    exception.stack = `Error: extension exception\n    at callback (${extensionPath}:12:2)`;
-    try {
-      handleUnhandledRejection(cleanupNamedRejection);
-      handleUnhandledRejection(rejection);
-      handleUncaughtException(exception, 'uncaughtException');
-      await Promise.resolve();
-
-      expect(received).toEqual([cleanupNamedRejection]);
-      expect(exitSpy).not.toHaveBeenCalled();
-      expect(order).toEqual([]);
-    } finally {
-      turn.close();
-      exitSpy.mockRestore();
-    }
-  });
-
-  test('an exception outside an active Pi extension turn exits non-zero', async () => {
+  test('a fatal exception flushes telemetry and exits non-zero', async () => {
     order.length = 0;
     const exited = Promise.withResolvers<void>();
     const exitSpy = spyOn(process, 'exit').mockImplementation(((code?: number) => {
@@ -111,3 +83,26 @@ describe('exitAfterTelemetryFlush', () => {
     }
   });
 });
+
+test.each(['unhandledRejection', 'uncaughtException'] as const)(
+  'retained Pi routes %s to its extension turn before fatal fallback',
+  event => {
+    const turn = beginPiExtensionTurn(['/extensions/review.ts']);
+    const error = new Error('extension callback failed');
+    error.stack = 'Error: extension callback failed\n    at callback (/extensions/review.ts:12:3)';
+    const exitSpy = spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('host exited');
+    });
+    order.length = 0;
+    try {
+      if (event === 'unhandledRejection') handleUnhandledRejection(error);
+      else handleUncaughtException(error, 'uncaughtException');
+      expect(() => turn.throwIfFailed()).toThrow(error);
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(order).toEqual([]);
+    } finally {
+      turn.close();
+      exitSpy.mockRestore();
+    }
+  }
+);

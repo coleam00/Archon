@@ -7,8 +7,17 @@
  * `credential./secret./password./token.`. No secret values appear in any of
  * these shapes — list/responses are metadata only.
  */
+import type { AgentCredentialStatus, AgentCredentialMatrixEntry } from '@archon/core';
 import { z } from '@hono/zod-openapi';
 import { CREDENTIAL_KINDS } from '@archon/providers';
+
+// Exact equality catches additional optional fields that structural assignment permits.
+type Shape<T> = { [K in keyof T]: T[K] };
+type Equal<A, B> =
+  (<T>(value: T) => T extends A ? 1 : 2) extends <T>(value: T) => T extends B ? 1 : 2
+    ? true
+    : false;
+type Assert<T extends true> = T;
 
 /** One connected provider — metadata only, never a secret value. */
 export const providerKeyConnectionSchema = z
@@ -22,10 +31,6 @@ export const providerKeyConnectionSchema = z
 /**
  * One credential a given agent can consume, with the caller's connection
  * state and server-side detection (install env / ambient). No secret values.
- *
- * Hand-synced with `AgentCredentialStatus` in
- * `@archon/core/credentials/catalog.ts` — the type lives in core (which can't
- * own route schemas) and the schema lives here; update both together.
  */
 export const agentCredentialStatusSchema = z
   .object({
@@ -39,13 +44,14 @@ export const agentCredentialStatusSchema = z
   })
   .openapi('AgentCredentialStatus');
 
+export type AgentCredentialStatusSchemaConformance = Assert<
+  Equal<Shape<AgentCredentialStatus>, Shape<z.output<typeof agentCredentialStatusSchema>>>
+>;
+
 /**
  * One agent's credential surface. `catalog: 'dynamic'` (OpenCode) means the
  * vendor set is resolved at runtime via the agent's own introspection
  * endpoint; `credentials` is empty and `ready` is always false for those.
- *
- * Hand-synced with `AgentCredentialMatrixEntry` in
- * `@archon/core/credentials/catalog.ts` — update both together.
  */
 export const agentCredentialsSchema = z
   .object({
@@ -56,6 +62,10 @@ export const agentCredentialsSchema = z
     credentials: z.array(agentCredentialStatusSchema),
   })
   .openapi('AgentCredentials');
+
+export type AgentCredentialsSchemaConformance = Assert<
+  Equal<Shape<AgentCredentialMatrixEntry>, Shape<z.output<typeof agentCredentialsSchema>>>
+>;
 
 /**
  * GET /api/auth/providers response. `enabled` reflects the per-user-keys gate

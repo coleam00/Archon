@@ -14,47 +14,74 @@ Thank you for your interest in contributing to Archon!
 
 ### Code Quality
 
-`bun run validate` is the gate. Run it before opening a pull request: it runs every
-check that gates a pull request except the five listed below. A green run means CI's `test`
-and `workflow-fixtures` jobs will pass on your OS. CI runs the `static` job on Linux only; a
-green run on another OS predicts it because type-check, lint and format do not depend on the
-OS, and the generated-file checks run on both Linux and Windows. It needs no network and no
-services, takes a couple of minutes, and prints what each check cost so you can see
-where the time goes.
+Packages using the shared test runner without legacy `testGroups` discover tests
+under `src` automatically (`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents).
+Core uses this default. A test that uses `mock.module()`, directly
+or through a helper, must start with the exact line `// @archon-test-isolated`;
+discovery fails on a direct call without it.
+Use the same directive for any other test requiring a fresh process. Unmarked tests
+share one process. Run package test scripts to preserve isolation; requested selectors
+are forwarded to Bun verbatim and bypass default grouping.
+
+CI is the full validation gate. While working, choose checks for the files and packages
+you changed: package `type-check` and `test` scripts, `bun run lint --max-warnings 0`,
+or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
+
+Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
+`generated-files`, `type-check`, `lint`, `installer` (POSIX only), and `tests`.
+The generated group checks bundled defaults, the Pi vendor map, the capability matrix,
+provider and chat contract schemas, and API types. Tests default to 20 seconds on every
+platform. Lint runs two separate typed ESLint processes at a time with their default heaps.
 
 ```bash
-bun run validate                            # the whole gate
-bun run validate --only workflow-fixtures   # one check, while iterating
+bun run validate                            # optional local checks
+bun run validate --only generated-files     # generated artifacts
+bun run validate --only format              # formatting, also run by the staged-file hook
+bun run validate --only workflow-fixtures   # when changing pack or fixture execution
 ```
 
-`scripts/validate.ts` owns the list of checks, and the CI jobs call that script instead
-of restating its commands, so the two cannot describe different work.
+`scripts/validate.ts` owns the check commands and CI selects them by ID.
+CI runs formatting and every default check on ready pull requests. Workflow fixtures run
+when `.archon/workflows/sdlc/`, `packages/workflows/src/`, or
+`packages/cli/src/commands/workflow.ts` changes; both fixture jobs still report success
+when their execution steps skip. Dispatch runs fixtures regardless of paths.
 
-While you work, run the narrow check instead — `bun run type-check`, `bun run lint`,
-`bun run test <path>`, `bun run check:bundled` — and keep the full gate for the end.
+Local validation has no fixed duration: tests and typed analysis dominate, and machine
+load matters. The audit for [#3985](https://github.com/coleam00/Archon/issues/3985)
+estimated the previous total at about 25 minutes under load, including fixtures and
+formatting. Those two checks now require explicit selection. Each validate run prints
+its actual elapsed time per check. A local success does not predict service, build,
+or other-platform CI results.
 
 **Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
 
-**macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Set `ARCHON_TEST_COMPILED_BINARIES=1` to run them on a Mac anyway. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`.
+**macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Do not compile binaries locally on macOS. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`. One exception: the file-store lock tests compile their probe only under GitHub Actions, on every OS, and skip it everywhere else whatever `ARCHON_TEST_COMPILED_BINARIES` says. The `file-store-primitives-macos` job runs that file on a disposable Mac so the probe is also proved on macOS.
 
 #### What `bun run validate` deliberately leaves out
 
-These PR-gating jobs need something a contributor may not have, so they stay in CI only.
-If you touched what they cover, run them yourself.
+These additional PR-gating jobs need services or build environments a contributor may
+not have. Run applicable service checks only against scratch databases you create and
+drop; never run destructive verification against a configured live database.
 
 | CI job | Needs | Run it yourself |
 | --- | --- | --- |
 | `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
-| `postgres-parity` | a live PostgreSQL | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.metadata-merge.postgres.integration.test.ts`, and `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts` |
+| `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts`, and `packages/core/src/db/state-documents.postgres.integration.test.ts`; then `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/users.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
+| `serve-binary` | compiled CLI and server artifacts; CI runs the build and smoke on Linux and Windows | CI only; no local compilation on macOS |
 | `docs-build` | Node (Astro's CLI does not run under Bun); path-filtered to `packages/docs-web/` | `bun run build:docs` — run it when you change the docs site |
+| `file-store-primitives-macos` | GitHub Actions, which the compiled-binary probe requires; the rest of the file also runs under `validate` | `bun run --cwd packages/workflows test src/file-store/lock.integration.test.ts` runs everything except the compiled probe |
+
+The `serve-binary` CI job builds matching CLI and server executables on Linux and
+Windows, then checks `archon serve` against `/api/health` and the console. The
+release workflow runs the same smoke with its release artifacts. These compiled
+checks, and the server-free bundle assertion (including a restored-import
+negative proof), run in CI. Local `check:cli-import-boundary` still checks startup
+and policy import boundaries. Do not compile these binaries locally on macOS.
 
 **Schema changes**: run `bun run check:schema-upgrades` and `bun run check:sqlite-vintages`
 yourself if you touched `migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can
 abort the whole apply on an upgrade, and nothing before that job catches it.
-
-`scripts/validate-ci-parity.test.ts` holds the same exclusions as a machine-checked list,
-so another PR-gating command cannot appear without a deliberate decision to leave it out.
 
 **SDLC workflows**: We do not accept pull requests that change
 `.archon/workflows/sdlc/`. Open an issue instead and describe the problem or
@@ -126,6 +153,12 @@ Preserve the pull request template's structure and fill every applicable section
 with concrete information from the issue, diff, commits, and validation
 evidence. Lead with the problem and outcome, not an implementation inventory.
 
+### Changelog entries
+
+Writing a hand-written entry under `[Unreleased]` in `CHANGELOG.md` is optional.
+At release time, the release skill keeps their substance, drafts entries
+for merged PRs they do not cover, and removes duplicates.
+
 ## Code style
 
 - Follow [`AGENTS.md`](./AGENTS.md) and
@@ -146,6 +179,7 @@ See [AGENTS.md](./AGENTS.md) for detailed architecture documentation.
 ## Sharing workflows
 
 Publish a workflow pack from your own GitHub repository: add an `archon-plugin.json` with `"kind": "workflow-pack"` and users install it with `archon plugin install owner/repo[/path][@tag]`. The layout and manifest are described in the [installed workflow packs guide](https://archon.diy/guides/global-workflows/#installed-workflow-packs).
+
 
 ## Questions?
 

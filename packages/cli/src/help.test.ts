@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { forgeRequestSchema } from '@archon/forge/operations';
 import { renderHelp } from './help';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
@@ -156,6 +157,23 @@ describe('CLI help output', () => {
     expect(scoped).toContain('--data <json>');
   });
 
+  it('documents converting a pull request back to draft with structured input', () => {
+    const scoped = renderHelp('forge', 'pr.draft');
+    expect(scoped).toContain('forge pr.draft');
+    expect(scoped).toContain('Convert a pull request to draft and verify the result');
+    const options = scopedHelpOptions(['forge', 'pr.draft']);
+    expect(options).toContain('--data <json>');
+    expect(options).toContain('--data-file <path>');
+  });
+
+  for (const request of forgeRequestSchema.options) {
+    const op = request.shape.op.value;
+    it(`renders scoped help for the admitted forge operation ${op}`, () => {
+      expect(renderHelp('forge', op)).toContain(`forge ${op}`);
+      expect(scopedHelpOptions(['forge', op])).toContain('--data <json>');
+    });
+  }
+
   // Frozen pre-refactor template literal (557788e0d:packages/cli/src/cli.ts:140-260).
   // The byte-identical guarantee on global help is a load-bearing contract: shell
   // completions and downstream scripts pin the exact text. Embedding the frozen
@@ -169,8 +187,10 @@ Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
+  state <get|put|patch|log|delete> Read and audit durable project JSON documents
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
+  user <list|role|link>      List users, link identities and manage roles as the operator
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator
@@ -203,10 +223,11 @@ Commands:
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into the base branch
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
-  serve                      Start the web UI server (binary installs download it on first run)
+  serve                      Start the web UI server (binary installs download server and UI on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
+  provider install <id...>   Install maintained providers matching this Archon release
   plugin install <owner/repo[/path][@tag]>
-                             Install a plugin from GitHub (default: forge plugins the latest release, workflow packs the default branch)
+                             Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
   plugin update <id>[@tag]   Reinstall an installed plugin at a tag, or its latest release or default branch
   plugin remove <id>         Delete the files an installed plugin wrote
   plugin copy <id>           Copy an installed workflow pack into this project's .archon/workflows/
@@ -237,6 +258,7 @@ Options:
   --cwd <path>               Override working directory (default: current directory)
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
+  --base-branch <name>       Initial repository registration only; omit to follow the remote default. Use --base for a run override.
   --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
   --workflow-source <path>   Read the workflow, its commands and scripts from this directory
                              instead of --cwd (which stays the workspace the run acts on)
@@ -268,10 +290,10 @@ Options:
   --follow                   For 'workflow logs': stream appended rows until the run ends
   --format <jsonl|text>      For 'workflow logs': jsonl (default) prints the exact transcript;
                              text renders it as progress lines for a human
-  --conversation-id <id>     Reuse a stable conversation scope across runs (enables
-                             persist_session resume between separate CLI invocations)
+  --conversation-id <id>     Correlation id for the run's messages. It creates no
+                             conversation and no persist_session scope
   --port <port>              Override server port for 'serve' (default: 3090)
-  --download-only            Download web UI without starting the server
+  --download-only            Download server and web UI without starting the server
   --force                    For 'setup': overwrite existing values instead of merging
                              For 'complete': remove even when safety checks block it
 
@@ -351,4 +373,24 @@ Examples:
   it('renders --full in workflow list --help', () => {
     expect(scopedHelpOptions(['workflow', 'list'])).toContain('--full');
   });
+});
+
+it('workflow run help distinguishes initial registration from the dispatch override', () => {
+  const text = scopedHelpOptions(['workflow', 'run']);
+  expect(text).toContain('--base-branch <name>');
+  expect(text).toContain('Initial repository registration only');
+  expect(text).toContain('--base <branch>');
+});
+
+it('forge work-item and repository-label help exposes file requests', () => {
+  for (const operation of [
+    'workitem.create',
+    'workitem.labels.set',
+    'repo.labels.list',
+    'repo.label.ensure',
+  ]) {
+    const text = renderHelp('forge', operation);
+    expect(text).toContain(operation);
+    expect(text).toContain('--data-file <path>');
+  }
 });

@@ -1,5 +1,7 @@
 name: Publish
 
+# Tag pushes already publish releases. A release: published trigger caused duplicate
+# publication in #3012; manual dispatch is the intentional republish route.
 on:
   push:
     tags:

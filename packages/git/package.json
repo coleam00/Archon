@@ -22,7 +22,8 @@
     [
       "src/forge.test.ts",
       "src/git.test.ts",
-      "src/refresh-worktree-index.test.ts"
+      "src/refresh-worktree-index.test.ts",
+      "src/worktree-path.test.ts"
     ],
     [
       "src/merge-signals.test.ts"

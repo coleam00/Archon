@@ -13,7 +13,10 @@
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
-    "zod": "^4.4.3"
+    "@archon/paths": "workspace:*",
+    "@archon/provider-contract": "workspace:*",
+    "zod": "^4.4.3",
+    "@archon/chat-contract": "workspace:*"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

@@ -259,41 +259,6 @@ describe('three-tree project gate evidence', () => {
   });
 });
 
-it('equal predecessor trees do not preserve subsequent merge ancestry', () => {
-  const f = fixture();
-  git(f.cwd, 'checkout', '--detach', f.request.original_base);
-  writeFileSync(join(f.cwd, 'value.txt'), 'A\n');
-  git(f.cwd, 'add', '.');
-  git(f.cwd, 'commit', '-qm', 'A');
-  const a = git(f.cwd, 'rev-parse', 'HEAD');
-  writeFileSync(join(f.cwd, 'value.txt'), 'C\n');
-  git(f.cwd, 'add', '.');
-  git(f.cwd, 'commit', '-qm', 'C stacked on A');
-  const c = git(f.cwd, 'rev-parse', 'HEAD');
-  const tree = git(f.cwd, 'rev-parse', `${a}^{tree}`);
-  const merged = git(
-    f.cwd,
-    'commit-tree',
-    tree,
-    '-p',
-    f.request.original_base,
-    '-p',
-    a,
-    '-m',
-    'merge A'
-  );
-  const squash = git(f.cwd, 'commit-tree', tree, '-p', f.request.original_base, '-m', 'squash A');
-  expect(git(f.cwd, 'rev-parse', `${merged}^{tree}`)).toBe(
-    git(f.cwd, 'rev-parse', `${squash}^{tree}`)
-  );
-  expect(
-    Bun.spawnSync(['git', 'merge-tree', '--write-tree', merged, c], { cwd: f.cwd }).exitCode
-  ).toBe(0);
-  expect(
-    Bun.spawnSync(['git', 'merge-tree', '--write-tree', squash, c], { cwd: f.cwd }).exitCode
-  ).toBe(1);
-});
-
 it('keeps the validation producer schemas and script vocabulary in agreement', () => {
   type Workflow = {
     returns: string;

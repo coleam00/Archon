@@ -145,9 +145,10 @@ export class AppServerConnection {
 
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
-    env: Record<string, string>
+    env: Record<string, string>,
+    protectedEnvKeys?: readonly string[]
   ) {
-    this.credentialValues = collectCredentialValues(env);
+    this.credentialValues = collectCredentialValues(env, protectedEnvKeys);
     let buffered = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
@@ -184,7 +185,8 @@ export class AppServerConnection {
     binary: CodexBinary,
     args: string[],
     env: Record<string, string>,
-    spawner: Spawner = spawn as unknown as Spawner
+    spawner: Spawner = spawn as unknown as Spawner,
+    protectedEnvKeys?: readonly string[]
   ): AppServerConnection {
     const childEnv = { ...env };
     if (binary.pathDirs.length > 0) {
@@ -195,7 +197,7 @@ export class AppServerConnection {
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return new AppServerConnection(child, childEnv);
+    return new AppServerConnection(child, childEnv, protectedEnvKeys);
   }
 
   /** Sends a request and resolves with its result, or rejects with a {@link JsonRpcError}. */
@@ -234,14 +236,15 @@ export class AppServerConnection {
    * exited within `graceMs`. Never SIGKILL: SIGTERM lets Codex stop the commands it
    * started, while SIGKILL orphans them.
    */
-  async shutdown(graceMs: number): Promise<void> {
-    if (this.endedWith) return;
+  async shutdown(graceMs: number): Promise<ConnectionEnd | undefined> {
+    if (this.endedWith) return this.endedWith;
     this.child.stdin.end();
-    if (await this.exitsWithin(graceMs)) return;
+    if (await this.exitsWithin(graceMs)) return this.endedWith;
     this.child.kill('SIGTERM');
     if (!(await this.exitsWithin(graceMs))) {
       getLog().warn({ pid: this.child.pid }, 'codex.app_server_ignored_sigterm');
     }
+    return this.endedWith;
   }
 
   private exitsWithin(ms: number): Promise<boolean> {

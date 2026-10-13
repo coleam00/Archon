@@ -1,3 +1,5 @@
+// @archon-test-isolated
+import { clearRegistry, getRegisteredProviders, registerProvider } from '@archon/providers';
 import { platformStreamingSchema } from './config-types';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import type { PlatformPolicy } from '../platforms/types';
@@ -30,6 +32,10 @@ mock.module('fs/promises', () => ({
   writeFile: mockFsWriteFile,
   mkdir: mockFsMkdir,
 }));
+
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+registerBuiltinProviders();
+registerCommunityProviders();
 
 import {
   loadGlobalConfig,
@@ -189,6 +195,19 @@ ${field}:
         ];
         expect(event).toBe('config_load_error');
         expect(err.message).toMatch(new RegExp(`${field}\\..*thinking.*effort:`));
+      }
+    );
+
+    test.each([0, 60000])('accepts tool attention policy %s at config ingress', async threshold => {
+      mockFsReadFile.mockResolvedValue(`workflows:\n  toolCallAttentionMs: ${threshold}\n`);
+      expect((await loadGlobalConfig()).workflows?.toolCallAttentionMs).toBe(threshold);
+    });
+
+    test.each([-1, 1.5])(
+      'rejects invalid tool attention policy %s at config ingress',
+      async threshold => {
+        mockFsReadFile.mockResolvedValue(`workflows:\n  toolCallAttentionMs: ${threshold}\n`);
+        expect(await loadGlobalConfig()).toEqual({});
       }
     );
 
@@ -440,7 +459,7 @@ recommendedWorkflows: "archon-plan"
 
       const config = await loadConfig();
 
-      expect(config.assistant).toBe('claude');
+      expect(config.assistant).toBeUndefined();
       // Built-ins always present; community providers (like `pi`) are
       // seeded dynamically from the registry — check the built-ins
       // explicitly rather than asserting an exhaustive shape.
@@ -449,6 +468,7 @@ recommendedWorkflows: "archon-plan"
       expect(config.streaming.streamtest).toBe('stream');
       expect(config.concurrency.maxConversations).toBe(10);
       expect(config.workflows).toEqual({
+        toolCallAttentionMs: 1800000,
         autoResumeOnQuotaReset: false,
         quotaMaxAttempts: 1,
         quotaDeadlineMs: 86_400_000,
@@ -458,11 +478,13 @@ recommendedWorkflows: "archon-plan"
     test('merges global and repo quota continuation policy per field', async () => {
       mockFsReadFile.mockResolvedValueOnce(`
 workflows:
+  toolCallAttentionMs: 60000
   autoResumeOnQuotaReset: true
   quotaFallbackDelayMs: 3600000
   quotaMaxAttempts: 2
 `).mockResolvedValueOnce(`
 workflows:
+  toolCallAttentionMs: 0
   quotaMaxAttempts: 3
   quotaDeadlineMs: 43200000
 `);
@@ -470,11 +492,35 @@ workflows:
       const config = await loadConfig('/test/repo');
 
       expect(config.workflows).toEqual({
+        toolCallAttentionMs: 0,
         autoResumeOnQuotaReset: true,
         quotaFallbackDelayMs: 3_600_000,
         quotaMaxAttempts: 3,
         quotaDeadlineMs: 43_200_000,
       });
+    });
+
+    test('only one installed provider is the default; zero or multiple leave it unset', async () => {
+      const providers = getRegisteredProviders();
+      try {
+        clearRegistry();
+        clearConfigCache();
+        expect((await loadConfig()).assistant).toBeUndefined();
+        const codex = providers.find(provider => provider.id === 'codex');
+        if (!codex) throw new Error('missing fixture');
+        registerProvider(codex);
+        clearConfigCache();
+        expect((await loadConfig()).assistant).toBe('codex');
+        const pi = providers.find(provider => provider.id === 'pi');
+        if (!pi) throw new Error('missing fixture');
+        registerProvider(pi);
+        clearConfigCache();
+        expect((await loadConfig()).assistant).toBeUndefined();
+      } finally {
+        clearRegistry();
+        for (const provider of providers) registerProvider(provider);
+        clearConfigCache();
+      }
     });
 
     test('env var DEFAULT_AI_ASSISTANT is a fallback — config file assistant wins', async () => {
@@ -533,7 +579,7 @@ streaming:
       mockFsReadFile.mockResolvedValue('');
       process.env.DEFAULT_AI_ASSISTANT = 'nonexistent-provider';
 
-      await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
+      await expect(loadConfig()).rejects.toThrow(/Unknown provider:/);
     });
 
     test('invalid DEFAULT_AI_ASSISTANT env var is silently ignored when config file sets assistant', async () => {
@@ -548,7 +594,7 @@ streaming:
     test('throws on unknown defaultAssistant in global config', async () => {
       mockFsReadFile.mockResolvedValue('defaultAssistant: nonexistent-provider');
 
-      await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
+      await expect(loadConfig()).rejects.toThrow(/Unknown provider:/);
     });
 
     test('throws on unknown assistant in repo config', async () => {
@@ -560,7 +606,7 @@ streaming:
         return '';
       });
 
-      await expect(loadConfig('/tmp/test-repo')).rejects.toThrow(/not a registered provider/);
+      await expect(loadConfig('/tmp/test-repo')).rejects.toThrow(/Unknown provider:/);
     });
 
     test('repo config overrides global config', async () => {

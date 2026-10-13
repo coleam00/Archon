@@ -1,3 +1,8 @@
+import { gateReworkNode } from './gate-rework';
+import { createRunToolCallAttention } from './tool-call-attention';
+import { DEFAULT_TOOL_CALL_ATTENTION_MS } from './schemas/run-config';
+import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
+import { randomUUID } from 'node:crypto';
 import { nodeInvocationKey } from './node-record-reader';
 import {
   startNodeExecution,
@@ -9,6 +14,7 @@ import {
 import {
   serializeNodeEmitter,
   serializeNodeStateRecord,
+  serializeDeferredNodeUsage,
   serializeNodeTranscript,
   serializeNodeOutput,
   persistedOutputContract,
@@ -33,13 +39,14 @@ import {
   NodeEventWriteError,
   persistNodeEvent,
   recordDerivedNodeState,
+  recordDerivedExecution,
   recordNodeState,
 } from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
-import { isEffortRung } from '@archon/paths/effort';
+import { isEffortRung } from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -70,20 +77,14 @@ import type {
   ResolvedModel,
   MessageChunk,
   ExecutionContext,
-  OverlayChangeSummary,
-} from '@archon/providers/types';
-import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/providers/types';
+} from '@archon/provider-contract';
+import type { OverlayChangeSummary } from './container-context';
+import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/provider-contract';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
-import {
-  getProviderCapabilities,
-  getRegisteredProviders,
-  isRegisteredProvider,
-  findStrictSchemaIssues,
-  type StrictSchemaIssue,
-  validateStructuredOutput,
-} from '@archon/providers';
+import { findStrictSchemaIssues, type StrictSchemaIssue } from '@archon/provider-contract';
+import { validateStructuredOutput } from './structured-output';
 import type {
   DagNode,
   IncludeDirective,
@@ -114,6 +115,12 @@ import type {
   WorkflowRunStatus,
   WorkflowWaitContext,
   ScheduledWorkflowResume,
+} from './schemas';
+import {
+  bodySessionCursorsSchema,
+  bodySessionCursorAncestrySchema,
+  type BodySessionCursorAncestry,
+  type SessionCursor,
 } from './schemas';
 import {
   isExecNode,
@@ -147,7 +154,11 @@ import type { BindingDirective } from './schemas';
 import { mapNodeTemplateSlots } from './template-walker';
 import { buildExecNodeEnvironment } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
-import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from './store';
+import {
+  FAN_OUT_CANCEL_REASONS,
+  waitCompletionEvents,
+  WorkflowRunPauseConflictError,
+} from './store';
 import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
 import {
   createAttemptEventSequence,
@@ -188,7 +199,11 @@ import {
   type LoopWithCompiledCommand,
   type IncludeCommandContent,
 } from './compiled-command';
-import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
+import {
+  assistantModelDefaults,
+  resolveNodeModel,
+  resolveNodeModelScope,
+} from './node-model-resolution';
 import {
   logNodeComplete,
   logExecOutput,
@@ -208,7 +223,7 @@ import {
   type RetryClass,
   currentAdoptedRunDir,
   getRetryDelayMs,
-  RATE_LIMIT_MAX_RETRIES,
+  effectiveRetryMaxRetries,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -222,9 +237,7 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import {
-  isLiteralSpec,
   isTierName,
-  resolveModelSpec,
   resolvePresetEffort,
   type ModelAliasPreset,
   type PresetEffortRejection,
@@ -552,6 +565,7 @@ function formatWatchdogResetDiagnostic(lastReset: WatchdogReset | undefined): st
 }
 
 function applyPresetOptions(
+  providers: ProviderRegistry,
   provider: string,
   preset: ModelAliasPreset | undefined,
   node: DagNode,
@@ -570,7 +584,7 @@ function applyPresetOptions(
   // Shared with the chat orchestrator's `applyPresetToRequestOptions`, so the
   // same tier cannot mean one depth in a workflow and another in chat. The
   // classifier returns the reason; each caller keeps its own event namespace.
-  const decision = resolvePresetEffort(provider, preset.effort);
+  const decision = resolvePresetEffort(providers, provider, preset.effort);
   if (!decision.ok) {
     // Warn rather than silently drop it — fail-loud per the project's fail-fast
     // guideline. `unsupported` means the resolved provider has no reasoning
@@ -681,7 +695,7 @@ function sumTokenUsage(
 
 /**
  * Usage a resumed run already consumed in earlier passes, rebuilt from its persisted
- * node completion and failure events by `getDagResumeSnapshot`. Both axes travel
+ * node completion, failure and deferred-usage events by `getDagResumeSnapshot`. Both axes travel
  * together because they are one concept — what this run has spent so far — and seeding
  * only one of them is how cost came to under-report every resumed run while tokens did
  * not (#2469).
@@ -727,8 +741,6 @@ export interface RunChildWorkflowArgs {
   cwd: string;
   /** Platform conversation id (shared with the parent). */
   conversationId: string;
-  /** DB conversation UUID (shared with the parent — satisfies the child's NOT-NULL FK). */
-  conversationDbId: string;
   userId?: string;
   /** Codebase id inherited from the parent (env vars + attribution). */
   codebaseId?: string;
@@ -834,17 +846,8 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
   };
 }
 
-/**
- * Sequential-session threading cursor. Tagged with the resolved provider that produced
- * the session so a downstream sequential node on a DIFFERENT provider starts fresh
- * instead of attempting an impossible cross-provider resume (#1992) — a foreign session
- * id hard-fails Claude ("No conversation found with session ID") and cold-falls-back
- * on Codex.
- */
-interface SequentialSessionCursor {
-  sessionId: string;
-  provider: string;
-}
+type SequentialSessionCursor = SessionCursor;
+type SessionResumeIntent = 'ordinary' | 'source-fork' | 'owner-continuation';
 
 /** Makes a provider session durable before its node becomes authoritatively complete. */
 type SessionCheckpoint = (sessionId: string) => Promise<void>;
@@ -881,6 +884,28 @@ const CANCEL_CHECK_INTERVAL_MS = 10_000;
  */
 export function shouldContinueStreamingForStatus(status: WorkflowRunStatus | null): boolean {
   return status === 'running' || status === 'paused';
+}
+
+async function waitForNodeRetry(
+  store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
+  runId: string,
+  nodeId: string,
+  delayMs: number
+): Promise<void> {
+  for (let remaining = delayMs; remaining > 0; ) {
+    // A failed status read is not a stop signal: keep waiting, as the streaming check does.
+    try {
+      if (!shouldContinueStreamingForStatus(await store.getWorkflowRunStatus(runId))) return;
+    } catch (statusErr) {
+      getLog().warn(
+        { err: statusErr as Error, workflowRunId: runId, nodeId },
+        'dag.status_check_failed'
+      );
+    }
+    const sliceMs = Math.min(remaining, CANCEL_CHECK_INTERVAL_MS);
+    await new Promise(resolve => setTimeout(resolve, sliceMs));
+    remaining -= sliceMs;
+  }
 }
 
 /** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */
@@ -1001,9 +1026,12 @@ async function runNodeRetryLoop(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
+  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent' | 'getWorkflowRunStatus'>,
+  stepName: string,
   retryConfig: { maxRetries: number; delayMs: number; onError: 'transient' | 'all' },
   run: () => Promise<NodeExecutionResult>,
-  initialOutput: NodeExecutionResult
+  initialOutput: NodeExecutionResult,
+  iteration?: number
 ): Promise<NodeExecutionResult> {
   let output = initialOutput;
   let accumulatedCostUsd: number | undefined;
@@ -1014,6 +1042,18 @@ async function runNodeRetryLoop(
   let sawRateLimit = false;
   let attempt = 0;
   while (true) {
+    if (attempt > 0) {
+      const status = await store.getWorkflowRunStatus(workflowRun.id);
+      if (!shouldContinueStreamingForStatus(status)) {
+        output = {
+          state: 'failed',
+          output: '',
+          error: `Workflow ${status ?? 'deleted'}`,
+          failureKind: 'cancelled',
+        };
+        break;
+      }
+    }
     output = await run();
     if (output.costUsd !== undefined) {
       accumulatedCostUsd = (accumulatedCostUsd ?? 0) + output.costUsd;
@@ -1028,9 +1068,11 @@ async function runNodeRetryLoop(
 
     const retryClass = retryableFailureClass(output, retryConfig.onError);
     if (retryClass === 'rate_limited') sawRateLimit = true;
-    const effectiveMaxRetries = sawRateLimit
-      ? Math.max(retryConfig.maxRetries, RATE_LIMIT_MAX_RETRIES)
-      : retryConfig.maxRetries;
+    const effectiveMaxRetries = effectiveRetryMaxRetries(
+      retryConfig.maxRetries,
+      retryClass,
+      sawRateLimit
+    );
     if (retryClass === undefined || attempt >= effectiveMaxRetries) break;
 
     const delayMs = getRetryDelayMs(retryClass, attempt, retryConfig.delayMs);
@@ -1039,13 +1081,19 @@ async function runNodeRetryLoop(
         nodeId: node.id,
         attempt: attempt + 1,
         maxRetries: effectiveMaxRetries,
+        retryClass,
         delayMs,
         error: output.error,
       },
       'dag_node_transient_retry'
     );
 
-    const errorKind = retryClass === 'unknown' ? 'error' : 'transient error';
+    const errorKind =
+      retryClass === 'overloaded'
+        ? 'provider capacity error'
+        : retryClass === 'unknown'
+          ? 'error'
+          : 'transient error';
     await safeSendMessage(
       platform,
       conversationId,
@@ -1053,7 +1101,20 @@ async function runNodeRetryLoop(
       { workflowId: workflowRun.id, nodeName: node.id }
     );
 
-    await new Promise(resolve => setTimeout(resolve, delayMs));
+    await store.createWorkflowEvent({
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_retry_scheduled',
+      step_name: stepName,
+      data: {
+        nodeId: node.id,
+        retry_class: retryClass,
+        retry_attempt: attempt + 1,
+        max_retries: effectiveMaxRetries,
+        delay_ms: delayMs,
+        ...(iteration !== undefined ? { iteration } : {}),
+      },
+    });
+    await waitForNodeRetry(store, workflowRun.id, node.id, delayMs);
     attempt++;
   }
   output.costUsd = accumulatedCostUsd;
@@ -1075,18 +1136,32 @@ async function runDeterministicNodeWithRetry(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
-  run: () => Promise<NodeExecutionResult>
+  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent' | 'getWorkflowRunStatus'>,
+  stepName: string,
+  run: () => Promise<NodeExecutionResult>,
+  iteration?: number
 ): Promise<NodeExecutionResult> {
   const retryConfig = getExplicitNodeRetryConfig(node);
   // No explicit retry: preserve the single-attempt deterministic-node default.
   if (!retryConfig) {
     return run();
   }
-  return runNodeRetryLoop(node, platform, conversationId, workflowRun, retryConfig, run, {
-    state: 'failed',
-    output: '',
-    error: 'Node did not execute',
-  });
+  return runNodeRetryLoop(
+    node,
+    platform,
+    conversationId,
+    workflowRun,
+    store,
+    stepName,
+    retryConfig,
+    run,
+    {
+      state: 'failed',
+      output: '',
+      error: 'Node did not execute',
+    },
+    iteration
+  );
 }
 
 /**
@@ -1551,8 +1626,9 @@ export function substituteLoopPrevRefs(
  * Capability warnings inform users when features are unsupported.
  */
 async function resolveNodeProviderAndModel(
+  providers: ProviderRegistry,
   node: DagNode,
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   workflowModel: string | undefined,
   config: WorkflowConfig,
   platform: IWorkflowPlatform,
@@ -1631,17 +1707,10 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  if (!isRegisteredProvider(provider)) {
-    throw new Error(
-      `Node '${node.id}': unknown provider '${provider}'. ` +
-        `Registered: ${getRegisteredProviders()
-          .map(p => p.id)
-          .join(', ')}`
-    );
-  }
+  const descriptor = requireProvider(providers, provider);
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
-  const caps = getProviderCapabilities(provider);
+  const caps = descriptor.capabilities;
 
   // `webSearchMode:` is Codex's alone — no other provider reads it, and #2556
   // decided it keeps no node-level form, making it the single workflow-level
@@ -1656,11 +1725,8 @@ async function resolveNodeProviderAndModel(
   // The one reasoning depth this node will run at, before any preset fallback.
   const declaredEffort = resolution.declaredEffort;
 
-  // Runtime backstop for container dispatch: the run-start pre-scan
-  // (collectContainerIncompatibleProviders) hand-mirrors this same provider
-  // resolution, so it could drift. Re-check the RESOLVED provider here, at the
-  // actual dispatch point, so a container turn can never reach a provider that
-  // can't honor it — no silent host downgrade (defense in depth).
+  // Keep the container capability check at dispatch as well as preflight: every
+  // actual turn must honour the requested execution context.
   if (execContext.kind === 'container' && !caps.containerExec) {
     throw new Error(
       `Provider '${provider}' cannot run inside a container yet (containerExec ` +
@@ -1668,8 +1734,7 @@ async function resolveNodeProviderAndModel(
     );
   }
 
-  // Dispatch backstop for the run-start pre-scan (collectScopedCapabilityMismatches),
-  // which resolves providers on its own path and could drift from this one.
+  // Re-check scoped capabilities at the actual dispatch boundary.
   const unscoped = unsupportedScopedCapabilities(node, caps);
   if (unscoped.length > 0) {
     throw new Error(
@@ -1784,6 +1849,7 @@ async function resolveNodeProviderAndModel(
   // Pass assistantConfig from config — provider parses internally
   const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
   const presetEffortRejection = applyPresetOptions(
+    providers,
     provider,
     effectivePreset,
     node,
@@ -2046,7 +2112,8 @@ async function executeNodeInternal(
   stepNamePrefix = '',
   iteration?: number,
   checkpointSession?: SessionCheckpoint,
-  typedArtifactsFile?: string
+  typedArtifactsFile?: string,
+  resumeIntent: SessionResumeIntent = 'ordinary'
 ): Promise<NodeExecutionResult> {
   const {
     deps,
@@ -2099,7 +2166,7 @@ async function executeNodeInternal(
       ...(namedResumeSourceNodeId !== undefined
         ? {
             sessionSourceNodeId: namedResumeSourceNodeId,
-            sessionForkRequested: true,
+            sessionForkRequested: resumeIntent !== 'owner-continuation',
           }
         : {}),
     },
@@ -2245,13 +2312,15 @@ async function executeNodeInternal(
 
   // Create per-node abort controller for idle timeout cleanup
   const nodeAbortController = new AbortController();
-  // Request a fork when resuming. Exact-fork callers gate on sessionFork first;
-  // legacy resume-only providers may continue the source session in place.
-  const shouldForkSession = resumeSessionId !== undefined;
+  const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
     abortSignal: nodeAbortController.signal,
-    ...(shouldForkSession ? { forkSession: true } : {}),
+    ...(resumeIntent === 'owner-continuation'
+      ? { forkSession: false }
+      : shouldForkSession
+        ? { forkSession: true }
+        : {}),
   };
   let nodeIdleTimedOut = false;
   let lastWatchdogReset: WatchdogReset | undefined;
@@ -2269,7 +2338,7 @@ async function executeNodeInternal(
   // structured-output validation miss, re-run the stream with the schema errors
   // appended. Enforced providers and non-output_format nodes get 0 reasks.
   const maxReasks =
-    getProviderCapabilities(provider).structuredOutput === 'best-effort' &&
+    requireProvider(ctx.deps.providers, provider).capabilities.structuredOutput === 'best-effort' &&
     nodeOptions?.outputFormat
       ? STRUCTURED_OUTPUT_MAX_REASKS
       : 0;
@@ -2300,6 +2369,15 @@ async function executeNodeInternal(
     watchdogResets = createWatchdogResetRecorder(logDir, workflowRun.id, node.id);
     backgroundTasksIncomplete = [];
     const providerEvents = createProviderEventHandler({
+      toolAttention: ctx.toolAttention.createStream({
+        nodeId: stepName,
+        reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
+        provider: provider,
+        thresholdMs: ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
+        env: { ...(ctx.execContext.kind === 'host' ? process.env : {}), ...nodeOptions?.env },
+        protectedEnvKeys: ctx.config.protectedEnvKeys,
+        protectedCredentialValues: ctx.config.protectedCredentialValues,
+      }),
       store: deps.store,
       platform,
       conversationId,
@@ -2327,43 +2405,10 @@ async function executeNodeInternal(
         batchMessages.length = 0;
       },
     });
-    for await (const msg of withIdleTimeout(
-      aiClient.sendQuery(attemptPrompt, cwd, pass.resumeSessionId, nodeOptionsWithAbort),
-      effectiveIdleTimeout,
-      () => {
-        nodeIdleTimedOut = true;
-        getLog().warn(
-          {
-            nodeId: node.id,
-            timeoutMs: effectiveIdleTimeout,
-            ...(lastWatchdogReset
-              ? {
-                  lastResetType: lastWatchdogReset.type,
-                  lastResetAt: new Date(lastWatchdogReset.at).toISOString(),
-                }
-              : {}),
-          },
-          'dag_node_idle_timeout_reached'
-        );
-        nodeAbortController.abort();
-      },
-      undefined,
-      (msg, resetAt) => {
-        const type = msg.type;
-        lastWatchdogReset = { type, at: resetAt };
-        watchdogResets.observe(type, resetAt);
-      }
-    )) {
+    const shouldStopStream = async (): Promise<boolean> => {
+      await ctx.toolAttention.refresh();
+      await providerEvents.refreshAttention();
       const tickNow = Date.now();
-
-      // Cancel/pause check — read-only, no write contention in WAL mode (every 10s).
-      //
-      // `paused` is tolerated here: an approval node can transition the run to
-      // paused while this concurrent node is mid-stream (same topological layer).
-      // The streaming node should be allowed to finish its own output — the
-      // paused gate owns workflow progression, not individual node lifecycles.
-      // Only truly terminal / unknown states (null, cancelled, failed, completed)
-      // abort the in-flight stream.
       if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
         lastNodeCancelCheck.set(nodeKey, tickNow);
         try {
@@ -2374,7 +2419,7 @@ async function executeNodeInternal(
               'dag.stop_detected_during_streaming'
             );
             nodeAbortController.abort();
-            break;
+            return true;
           }
         } catch (cancelCheckErr) {
           getLog().warn(
@@ -2384,92 +2429,136 @@ async function executeNodeInternal(
         }
       }
 
-      // Activity heartbeat — write, throttled to every 60s (only for stale/zombie detection)
-      if (tickNow - (lastNodeActivityUpdate.get(nodeKey) ?? 0) > ACTIVITY_HEARTBEAT_INTERVAL_MS) {
-        lastNodeActivityUpdate.set(nodeKey, tickNow);
-        try {
-          await deps.store.updateWorkflowActivity(workflowRun.id);
-        } catch (e) {
+      return false;
+    };
+    try {
+      for await (const msg of withIdleTimeout(
+        aiClient.sendQuery(attemptPrompt, cwd, pass.resumeSessionId, nodeOptionsWithAbort),
+        effectiveIdleTimeout,
+        () => {
+          nodeIdleTimedOut = true;
           getLog().warn(
-            { err: e as Error, workflowRunId: workflowRun.id },
-            'dag.activity_update_failed'
+            {
+              nodeId: node.id,
+              timeoutMs: effectiveIdleTimeout,
+              ...(lastWatchdogReset
+                ? {
+                    lastResetType: lastWatchdogReset.type,
+                    lastResetAt: new Date(lastWatchdogReset.at).toISOString(),
+                  }
+                : {}),
+            },
+            'dag_node_idle_timeout_reached'
           );
-        }
-      }
+          nodeAbortController.abort();
+        },
+        (msg, resetAt) => {
+          const type = msg.type;
+          lastWatchdogReset = { type, at: resetAt };
+          watchdogResets.observe(type, resetAt);
+        },
+        () =>
+          providerEvents.hasOpenTools() ||
+          (aiClient.getCapabilities().backgroundWork === 'reported' &&
+            providerEvents.liveSubtaskIds().length > 0),
+        shouldStopStream
+      )) {
+        const tickNow = Date.now();
 
-      if (msg.type === 'result') {
-        if (pass.threadsSession) {
-          if (msg.sessionId) newSessionId = msg.sessionId;
-          if (msg.resumed !== undefined) nodeResumed = msg.resumed;
-        }
-        if (msg.tokens !== undefined) {
-          nodeTokens = sumTokenUsage([msg.tokens], { nodeId: node.id });
-        }
-        if (msg.cost !== undefined) {
-          if (Number.isFinite(msg.cost)) {
-            nodeCostUsd = msg.cost;
-          } else {
+        if (await shouldStopStream()) break;
+
+        // Activity heartbeat — write, throttled to every 60s (only for stale/zombie detection)
+        if (tickNow - (lastNodeActivityUpdate.get(nodeKey) ?? 0) > ACTIVITY_HEARTBEAT_INTERVAL_MS) {
+          lastNodeActivityUpdate.set(nodeKey, tickNow);
+          try {
+            await deps.store.updateWorkflowActivity(workflowRun.id);
+          } catch (e) {
             getLog().warn(
-              { nodeId: node.id, costUsd: msg.cost },
-              'dag_node.usage_cost_non_finite_ignored'
+              { err: e as Error, workflowRunId: workflowRun.id },
+              'dag.activity_update_failed'
             );
           }
         }
-        if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
-        if (msg.numTurns !== undefined) nodeNumTurns = msg.numTurns;
-        // Assigned UNCONDITIONALLY. A guarded assignment cannot CLEAR a stale value:
-        // Pi/Copilot reask loops yield several result chunks, and Pi omits resolvedModel
-        // when its later assistant message has no responseModel — so an earlier attempt's
-        // model would be persisted as the final attempt's answer. Fabricated attribution
-        // is the exact defect #2314 exists to prevent; absence must stay absence.
-        nodeResolvedModel = msg.resolvedModel;
-        if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
-        if (msg.failure !== undefined) {
-          throw providerReportedFailure(
-            `Node '${node.id}'`,
-            msg.failure,
-            nodeOptions?.maxBudgetUsd,
-            {
+
+        if (msg.type === 'result') {
+          if (pass.threadsSession) {
+            newSessionId = msg.sessionId;
+            if (msg.resumed !== undefined) nodeResumed = msg.resumed;
+          }
+          if (msg.tokens !== undefined) {
+            nodeTokens = sumTokenUsage([...(nodeTokens ? [nodeTokens] : []), msg.tokens], {
               nodeId: node.id,
-              durationMs: Date.now() - nodeStartTime,
+            });
+          }
+          if (msg.cost !== undefined) {
+            if (Number.isFinite(msg.cost)) {
+              nodeCostUsd = (nodeCostUsd ?? 0) + msg.cost;
+            } else {
+              getLog().warn(
+                { nodeId: node.id, costUsd: msg.cost },
+                'dag_node.usage_cost_non_finite_ignored'
+              );
             }
-          );
+          }
+          if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
+          if (msg.numTurns !== undefined) nodeNumTurns = msg.numTurns;
+          // Assigned UNCONDITIONALLY. A guarded assignment cannot CLEAR a stale value:
+          // Pi/Copilot reask loops yield several result chunks, and Pi omits resolvedModel
+          // when its later assistant message has no responseModel — so an earlier attempt's
+          // model would be persisted as the final attempt's answer. Fabricated attribution
+          // is the exact defect #2314 exists to prevent; absence must stay absence.
+          nodeResolvedModel = msg.resolvedModel;
+          if (msg.text !== undefined) {
+            nodeOutputText = msg.text;
+            batchMessages.splice(0, batchMessages.length, msg.text);
+          }
+          structuredOutput = msg.structuredOutput;
+          if (msg.failure !== undefined) {
+            throw providerReportedFailure(
+              `Node '${node.id}'`,
+              msg.failure,
+              nodeOptions?.maxBudgetUsd,
+              {
+                nodeId: node.id,
+                durationMs: Date.now() - nodeStartTime,
+              }
+            );
+          }
+          // Fail loudly on any other SDK error result. Previously we broke out of
+          // the stream silently, producing empty/partial output without signaling
+          // failure — which let failed iterations masquerade as successes.
+          // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+          // clean stop_sequence termination. The Claude provider already filters
+          // this out, but the guard here keeps a third-party IAgentProvider that
+          // forwards the SDK pair raw from producing a "SDK returned success"
+          // false failure.
+          if (msg.isError && msg.errorSubtype !== 'success') {
+            const subtype = msg.errorSubtype ?? 'unknown';
+            const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
+            getLog().error(
+              {
+                nodeId: node.id,
+                errorSubtype: subtype,
+                errors: msg.errors,
+                ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
+                stopReason: msg.stopReason,
+                durationMs: Date.now() - nodeStartTime,
+              },
+              'dag.node_sdk_error_result'
+            );
+            throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
+          }
+        } else if (msg.type === 'settled') {
+          streamSettled =
+            aiClient.getCapabilities().backgroundWork !== 'reported' ||
+            providerEvents.liveSubtaskIds().length === 0;
+          break;
+        } else {
+          await providerEvents.handle(msg);
         }
-        // Fail loudly on any other SDK error result. Previously we broke out of
-        // the stream silently, producing empty/partial output without signaling
-        // failure — which let failed iterations masquerade as successes.
-        // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
-        // clean stop_sequence termination. The Claude provider already filters
-        // this out, but the guard here keeps a third-party IAgentProvider that
-        // forwards the SDK pair raw from producing a "SDK returned success"
-        // false failure.
-        if (msg.isError && msg.errorSubtype !== 'success') {
-          const subtype = msg.errorSubtype ?? 'unknown';
-          const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
-          getLog().error(
-            {
-              nodeId: node.id,
-              errorSubtype: subtype,
-              errors: msg.errors,
-              ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
-              stopReason: msg.stopReason,
-              durationMs: Date.now() - nodeStartTime,
-            },
-            'dag.node_sdk_error_result'
-          );
-          throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
-        }
-        // A result is not the end of the node: work the turn started may still run,
-        // and a later result can follow (its fields overwrite the captures above —
-        // correct, since SDK cost/usage are session-cumulative). The node finishes on
-        // `settled` below. The wait is bounded by the idle timeout; every event
-        // (subtask progress, a hidden task's `state_update`) resets it.
-      } else if (msg.type === 'settled') {
-        streamSettled = true;
-        break; // The provider says the turn is over and nothing more runs for it.
-      } else {
-        await providerEvents.handle(msg);
       }
+    } finally {
+      await providerEvents.clearAttention();
     }
 
     // Stream ended with subtasks still live: the SDK subprocess died or the idle
@@ -2537,7 +2626,7 @@ async function executeNodeInternal(
       try {
         await runStreamPass(
           reaskPrompt,
-          structuredOutputPass(reaskAttempt, resumeSessionId, namedResumeSourceNodeId !== undefined)
+          structuredOutputPass(reaskAttempt, resumeSessionId, resumeIntent === 'source-fork')
         );
       } finally {
         await watchdogResets.flush();
@@ -2708,10 +2797,15 @@ async function executeNodeInternal(
       }
       if (newSessionId === undefined || newSessionId.trim() === '') {
         throw new Error(
-          `Node '${node.id}' forked the session from '${namedResumeSourceNodeId}' but the provider returned no branch session ID.`
+          `Node '${node.id}' resumed '${namedResumeSourceNodeId}' but the provider returned no branch session ID.`
         );
       }
-      if (newSessionId === resumeSessionId) {
+      if (resumeIntent === 'owner-continuation' && newSessionId !== resumeSessionId) {
+        throw new Error(
+          `Node '${node.id}' did not continue its private owner session: the provider replaced the session ID.`
+        );
+      }
+      if (resumeIntent !== 'owner-continuation' && newSessionId === resumeSessionId) {
         throw new Error(
           `Node '${node.id}' did not create an immutable fork of '${namedResumeSourceNodeId}': the provider reused the source session ID.`
         );
@@ -2800,7 +2894,9 @@ async function executeNodeInternal(
         diagnostics: {
           ...execution.diagnostics,
           ...(node.output_type !== undefined ? { outputType: node.output_type } : {}),
-          ...(namedResumeSourceNodeId !== undefined ? { sessionForked: true } : {}),
+          ...(namedResumeSourceNodeId !== undefined
+            ? { sessionForked: resumeIntent !== 'owner-continuation' }
+            : {}),
           ...(backgroundTasksIncomplete.length > 0 ? { backgroundTasksIncomplete } : {}),
         },
       }
@@ -4058,7 +4154,7 @@ async function finalizeLoopFromSignal(
       )
     );
   }
-  // Old approval cursors have no execution identity or observed start time.
+  // Older paused loop gates may lack execution identity and observed start time.
   // Preserve their completion without inventing historical execution metadata.
   const event: import('./store').NodeStateEventInput = {
     workflow_run_id: workflowRun.id,
@@ -4093,16 +4189,8 @@ async function finalizeLoopFromSignal(
 }
 
 /**
- * The body's designated pause node for #2707 step 3's gate-terminated pattern: a
- * `gate:` node that is the body's SOLE terminal sink (nothing depends on it, and
- * it is the only node nothing else depends on) — mirrors the placement rule
- * `loader.ts`'s `collectLoopGroupSinkWarnings` already checks at load time.
- * Returns `undefined` for a body with no gate, or one that is misplaced
- * (mid-body, or co-terminal with another sink) — 3a already warns on that at
- * load time; this runtime code makes no special attempt to handle it, and such
- * a gate simply keeps behaving as it does today (silently ignored for
- * escalation purposes, since there is no unambiguous single pause node to
- * escalate).
+ * Only a sole terminal gate or wait can resume through its enclosing group.
+ * The loader warns about other placements, which have no unambiguous owner.
  */
 function findLoopGroupTerminalSuspendNode(
   bodyNodes: readonly DagNode[]
@@ -4139,7 +4227,7 @@ function findLoopGroupTerminalSuspendNode(
 async function executeLoopGroupNode(
   ctx: RunLayersContext,
   node: LoopGroupNode,
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
   workflowPreset: ModelAliasPreset | undefined,
@@ -4156,12 +4244,14 @@ async function executeLoopGroupNode(
   const result = await executeLoopGroupBody(
     ctx,
     node,
+    execution,
     workflowProvider,
     workflowModel,
     workflowTier,
     workflowPreset,
     stepNamePrefix
   );
+  if (result.execution?.lifecycle.status === 'suspended') return result;
   let lifecycle: NodeExecutionRecord['lifecycle'];
   if (result.state === 'failed') {
     lifecycle = {
@@ -4172,7 +4262,14 @@ async function executeLoopGroupNode(
     };
   } else if (result.state === 'running') {
     const suspensionPoint = result.suspensionPoint;
-    if (suspensionPoint === undefined) return serializeNodeOutput(execution);
+    // A deferred body gate or terminal wait leaves the group running; keep the spend its
+    // iterations already made.
+    if (suspensionPoint === undefined)
+      return {
+        ...serializeNodeOutput(execution),
+        ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}),
+        ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
+      };
     lifecycle = { status: 'suspended', point: suspensionPoint };
   } else {
     lifecycle = { status: 'completed' };
@@ -4192,13 +4289,14 @@ async function executeLoopGroupNode(
 }
 
 type LoopGroupBodyResult = NodeExecutionResult & {
-  suspensionPoint?: 'approval' | 'wait' | 'interactive_loop';
+  suspensionPoint?: 'approval' | 'wait';
 };
 
 async function executeLoopGroupBody(
   ctx: RunLayersContext,
   node: LoopGroupNode,
-  workflowProvider: string,
+  execution: NodeExecutionRecord,
+  workflowProvider: string | undefined,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
   workflowPreset: ModelAliasPreset | undefined,
@@ -4246,10 +4344,8 @@ async function executeLoopGroupBody(
 
   // Detect loop resume (mirrors executeLoopNode). Two shapes recognized:
   //  - the ORIGINAL interactive_loop gate (group.interactive + gate_message).
-  //  - the #2707 step 3 ESCALATED shape — a gate node that is the body's sole
-  //    terminal sink paused generically as an ordinary 'approval' gate, then
-  //    rewritten (see the post-runLayers escalation below) so nodeId points at
-  //    THIS group and bodyGateId carries the gate's own id. `$LOOP_USER_INPUT`
+  //  - a body terminal gate paused under THIS group, with bodyGateId naming
+  //    the leaf gate. `$LOOP_USER_INPUT`
   //    does not apply to this shape — the human's text flows via the ordinary
   //    $LOOP_PREV.<gateId>.output.text channel instead, like any other body
   //    node's output — so `loopUserInput` below stays scoped to the legacy shape.
@@ -4258,17 +4354,79 @@ async function executeLoopGroupBody(
   const rawWait = workflowRun.metadata?.wait;
   const loopWaitMeta = isWorkflowWaitContext(rawWait) ? rawWait : undefined;
   const loopOwnedWaitMeta = loopWaitMeta?.owner === 'loop_group' ? loopWaitMeta : undefined;
+  const ownerInvocationKey = nodeInvocationKey(stepName, ctx.loopGroupPath);
+  const rawAncestry =
+    loopGateMeta?.bodySessionCursorAncestry ?? loopOwnedWaitMeta?.bodySessionCursorAncestry;
+  const restoredAncestry =
+    rawAncestry === undefined ? undefined : bodySessionCursorAncestrySchema.parse(rawAncestry);
+  const matchesOwnerInvocation =
+    restoredAncestry === undefined || Object.hasOwn(restoredAncestry, ownerInvocationKey);
   const isLegacyInteractiveLoopResume =
-    loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
+    matchesOwnerInvocation &&
+    loopGateMeta?.type === 'interactive_loop' &&
+    loopGateMeta.nodeId === node.id;
   const isEscalatedGateResume =
+    matchesOwnerInvocation &&
     loopGateMeta?.type === 'approval' &&
     loopGateMeta.nodeId === node.id &&
     loopGateMeta.bodyGateId !== undefined;
-  const isEscalatedWaitResume = loopOwnedWaitMeta?.nodeId === node.id;
+  const isEscalatedWaitResume = matchesOwnerInvocation && loopOwnedWaitMeta?.nodeId === node.id;
   const isLoopResume =
     isLegacyInteractiveLoopResume || isEscalatedGateResume || isEscalatedWaitResume;
+  const ownerIds = new Set(bodyNodes.filter(n => isNodeContextResume(n.context)).map(n => n.id));
+  const bodySessionCursors = ownerIds.size === 0 ? undefined : new Map<string, SessionCursor>();
+  const rawLoopWait =
+    typeof rawWait === 'object' &&
+    rawWait !== null &&
+    'nodeId' in rawWait &&
+    rawWait.nodeId === node.id;
+  if (bodySessionCursors !== undefined && rawLoopWait && !isEscalatedWaitResume) {
+    throw new Error(
+      `Loop group '${node.id}' cannot restore named owner sessions: invalid loop wait state.`
+    );
+  }
+  const pauseLoopPath = loopGateMeta?.execution?.invocation.loopPath;
+  const pauseFrame = pauseLoopPath?.[ctx.loopGroupPath.length];
+  const enclosingPauseFrame =
+    pauseFrame?.groupId === node.id &&
+    nodeInvocationKey(stepName, pauseLoopPath?.slice(0, ctx.loopGroupPath.length) ?? []) ===
+      ownerInvocationKey
+      ? pauseFrame
+      : undefined;
+  const restoredOwnerCursors = restoredAncestry?.[ownerInvocationKey];
+  if (
+    bodySessionCursors !== undefined &&
+    (isLoopResume || restoredOwnerCursors !== undefined || enclosingPauseFrame !== undefined)
+  ) {
+    const rawCursors =
+      restoredOwnerCursors ??
+      (isLoopResume && restoredAncestry === undefined
+        ? isEscalatedWaitResume
+          ? loopOwnedWaitMeta?.bodySessionCursors
+          : loopGateMeta?.bodySessionCursors
+        : undefined);
+    const parsed = bodySessionCursorsSchema.safeParse(rawCursors);
+    if (!parsed.success) {
+      throw new Error(
+        `Loop group '${node.id}' cannot restore named owner sessions: missing or invalid bodySessionCursors.`
+      );
+    }
+    for (const [id, cursor] of Object.entries(parsed.data)) {
+      if (!ownerIds.has(id))
+        throw new Error(`Loop group '${node.id}' has an unknown restored session owner '${id}'.`);
+      bodySessionCursors.set(id, cursor);
+    }
+  }
+  const bodySessionCursorAncestry = new Map(ctx.bodySessionCursorAncestry);
+  if (bodySessionCursors !== undefined || bodySessionCursorAncestry.size > 0) {
+    bodySessionCursorAncestry.set(ownerInvocationKey, bodySessionCursors ?? new Map());
+  }
   const resumeIteration = loopGateMeta?.iteration ?? loopOwnedWaitMeta?.iteration ?? 0;
-  const startIteration = isLoopResume ? resumeIteration + 1 : 1;
+  const startIteration = isLoopResume
+    ? resumeIteration + 1
+    : restoredAncestry !== undefined
+      ? (enclosingPauseFrame?.iteration ?? 1)
+      : 1;
   // max_iterations bounds autonomous work. An attention wait contributes no work while
   // paused, so each explicit resume authorizes one fresh iteration even after that bound.
   // This keeps manual recovery resumable without turning a concluded-red wait into polling.
@@ -4323,6 +4481,10 @@ async function executeLoopGroupBody(
         iteration: resumeIteration,
         sessionId: loopOwnedWaitMeta?.sessionId ?? null,
         sessionProvider: loopOwnedWaitMeta?.sessionProvider ?? null,
+        ...(bodySessionCursors !== undefined
+          ? { bodySessionCursors: Object.fromEntries(bodySessionCursors) }
+          : {}),
+        ...snapshotBodySessionCursorAncestry(bodySessionCursorAncestry),
       }
     );
     const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
@@ -4619,7 +4781,13 @@ async function executeLoopGroupBody(
     // needed (the body is sealed against depends_on, but prompt refs remain valid).
     const scopedNodeOutputs = new Map<string, NodeOutput>(outerNodeOutputs);
 
+    const terminalSuspendNode = findLoopGroupTerminalSuspendNode(iterBodyNodes);
     const iterCtx: RunLayersContext = {
+      toolAttention: ctx.toolAttention,
+      bodyGateOwner:
+        terminalSuspendNode && isGateNode(terminalSuspendNode)
+          ? { nodeId: node.id, bodyGateId: terminalSuspendNode.id, iteration: i }
+          : undefined,
       unfinishedInvocations: ctx.unfinishedInvocations,
       deps: ctx.deps,
       platform: ctx.platform,
@@ -4676,6 +4844,10 @@ async function executeLoopGroupBody(
       // session forward so a body AI node resumes the prior iteration's conversation.
       // Gate on the literal i === 1 (not startIteration): on interactive resume the
       // first processed iteration must continue the restored pre-pause session.
+      nodeSessionHandles: new Map(ctx.nodeSessionHandles),
+      namedResumeSourceIds: ctx.namedResumeSourceIds,
+      bodySessionCursors,
+      bodySessionCursorAncestry,
       lastSequentialSession: group.fresh_context || i === 1 ? undefined : loopLastSequentialSession,
       warnedProviderConflicts: ctx.warnedProviderConflicts,
       totalCostUsd: undefined,
@@ -4726,85 +4898,10 @@ async function executeLoopGroupBody(
 
     // Carry the body's final sequential session into the next iteration (unless
     // fresh_context forces a reset, handled above by seeding undefined). Taken
-    // before the escalation below, which returns early: its pause persists this
+    // before handling the terminal gate below: its pause persists this
     // cursor, and a cursor from before the paused iteration would resume without
     // that iteration's turns (#3532).
     loopLastSequentialSession = iterCtx.lastSequentialSession;
-
-    // #2707 step 3: pause escalation. A gate node that is the body's sole terminal
-    // sink pauses generically via executeApprovalNode (called through runLayers,
-    // like any other body node) — that pause alone does NOT stop this loop: the
-    // `paused` tolerance above (needed for a genuinely unrelated sibling gate
-    // pausing in the same layer) would otherwise let the loop barrel straight into
-    // the next iteration, immediately re-pausing and burning cost every time. This
-    // detects THAT specific pause and escalates it: rewrite the ApprovalContext so
-    // it points at THIS group (the top-level DAG only knows top-level node ids,
-    // never a nested body id — mirrors exactly how the interactive_loop gate below
-    // already works) and return the same "paused" shape that path uses. Placed
-    // AFTER the usage accumulation above (not right after runLayers) so this
-    // iteration's own spend — the 'work' node plus the gate check that just ran —
-    // is already folded into loopTotalCostUsd/loopTotalTokens by the time the
-    // escalation return reads them; reading them any earlier would silently drop
-    // this iteration's cost from the run's live totals for the whole pause window.
-    const terminalSuspendNode = findLoopGroupTerminalSuspendNode(iterBodyNodes);
-    if (terminalSuspendNode && postBodyStatus === 'paused') {
-      // Fresh read — workflowRun is this call's stale snapshot from before
-      // runLayers ran; the gate's own pause just wrote metadata.approval.
-      const freshRun = await deps.store.getWorkflowRun(workflowRun.id);
-      const freshApproval = isApprovalContext(freshRun?.metadata?.approval)
-        ? freshRun.metadata.approval
-        : undefined;
-      if (isGateNode(terminalSuspendNode) && freshApproval?.nodeId === terminalSuspendNode.id) {
-        const rewritten: ApprovalContext = {
-          ...freshApproval,
-          nodeId: node.id,
-          bodyGateId: terminalSuspendNode.id,
-          iteration: i,
-          sessionId: loopLastSequentialSession?.sessionId ?? null,
-          sessionProvider: loopLastSequentialSession?.provider ?? null,
-        };
-        const { resolved } = await deps.store.rewriteApprovalContext(workflowRun.id, rewritten);
-        if (resolved) {
-          return {
-            state: 'running',
-            output: lastIterationOutput,
-            costUsd: loopTotalCostUsd,
-            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-            loopIterations: i,
-            suspensionPoint: 'approval',
-          };
-        }
-        // A human resolved the ORIGINAL bare-gate pause before the rewrite landed
-        // (an astronomically narrow race) — fall through rather than error or
-        // corrupt state. This does NOT behave the same as a normal resolved gate,
-        // though: the resolution was written under the bare gate id, with
-        // bodyGateId still unset, so it's unreachable by the namespaced restore
-        // path this mechanism depends on — the loop proceeds toward
-        // max_iterations instead of honoring the human's answer. Accepted for
-        // this race's vanishingly narrow window rather than built out further.
-        // (The postBodyStatus tolerance above already let a 'paused' status
-        // through; nothing here re-checks it.)
-      }
-      const freshWait = isWorkflowWaitContext(freshRun?.metadata?.wait)
-        ? freshRun.metadata.wait
-        : undefined;
-      if (
-        terminalSuspendNode.kind === 'wait' &&
-        freshWait?.owner === 'loop_group' &&
-        freshWait.nodeId === node.id &&
-        freshWait.bodyWaitId === terminalSuspendNode.id &&
-        freshWait.iteration === i
-      ) {
-        return {
-          state: 'running',
-          output: lastIterationOutput,
-          costUsd: loopTotalCostUsd,
-          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-          loopIterations: i,
-          suspensionPoint: 'wait',
-        };
-      }
-    }
 
     // A failed body node fails the group immediately — mirrors the top-level DAG
     // (any failed node fails the run) and executeLoopNode (an iteration failure stops
@@ -4833,6 +4930,57 @@ async function executeLoopGroupBody(
         error: errorMsg,
         failureKind: 'child_failed',
         ...(providerFailure !== undefined ? { providerFailure } : {}),
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i,
+      };
+    }
+
+    if (terminalSuspendNode && postBodyStatus === 'paused') {
+      const suspendOutput = scopedNodeOutputs.get(terminalSuspendNode.id);
+      // Still running means the terminal gate or wait either suspended this group or was
+      // deferred behind a sibling that holds the paused slot. Either way the iteration
+      // stops here; only a suspension this group owns is marked as one.
+      if (suspendOutput === undefined || suspendOutput.state === 'running') {
+        let suspensionPoint: 'approval' | 'wait' | undefined;
+        if (isGateNode(terminalSuspendNode)) {
+          if (suspendOutput?.execution?.lifecycle.status === 'suspended') {
+            suspensionPoint = 'approval';
+          }
+        } else {
+          const freshRun = await deps.store.getWorkflowRun(workflowRun.id);
+          const freshWait = freshRun?.metadata?.wait;
+          if (
+            isWorkflowWaitContext(freshWait) &&
+            freshWait.owner === 'loop_group' &&
+            freshWait.nodeId === node.id &&
+            freshWait.bodyWaitId === terminalSuspendNode.id &&
+            freshWait.iteration === i
+          ) {
+            suspensionPoint = 'wait';
+          }
+        }
+        return {
+          state: 'running',
+          output: lastIterationOutput,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+          ...(suspensionPoint !== undefined ? { suspensionPoint } : {}),
+        };
+      }
+    }
+
+    if (
+      postBodyStatus === 'paused' &&
+      bodySessionCursorAncestry.size > 0 &&
+      iterBodyNodes.some(
+        n => n.kind === 'loop_group' && scopedNodeOutputs.get(n.id)?.state === 'running'
+      )
+    ) {
+      return {
+        state: 'running',
+        output: lastIterationOutput,
         costUsd: loopTotalCostUsd,
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
         loopIterations: i,
@@ -5056,6 +5204,59 @@ async function executeLoopGroupBody(
         lastIterationOutput,
         group.gate_message
       );
+      const suspended = finishNodeExecution(
+        execution,
+        { status: 'suspended', point: 'interactive_loop' },
+        {
+          output: { text: lastIterationOutput, structured: lastIterationStructuredOutput },
+          costUsd: loopTotalCostUsd,
+          tokens: loopTotalTokens,
+          diagnostics: { loopIterations: i },
+        }
+      );
+      const approvalContext: ApprovalContext = {
+        execution: executionMetadata(suspended),
+        nodeId: node.id,
+        message: honestMessage,
+        type: 'interactive_loop',
+        iteration: i,
+        // Persist the body's session cursor so a resumed fresh_context: false loop
+        // continues the pre-pause conversation (restored into the cursor on resume).
+        // The provider tag rides along so the restore never threads the session into
+        // a different provider (#1992). null = this pause has no cursor to restore.
+        sessionId: loopLastSequentialSession?.sessionId ?? null,
+        sessionProvider: loopLastSequentialSession?.provider ?? null,
+        ...(bodySessionCursors !== undefined
+          ? { bodySessionCursors: Object.fromEntries(bodySessionCursors) }
+          : {}),
+        ...snapshotBodySessionCursorAncestry(bodySessionCursorAncestry),
+        // Signal state for finalize-on-bare-approve (#2074). The structured payload
+        // rides along (#2637) so the finalize attaches it like a natural completion.
+        completionSignaled: completionDetected,
+        signaledOutput: completionDetected ? lastIterationOutput : null,
+        signaledStructuredOutput: completionDetected
+          ? (lastIterationStructuredOutput ?? null)
+          : null,
+        // NO `signaledTokens` — a loop_group gate has no consumer for it. The body's
+        // own `<groupId>.<nodeId>` rows already persisted this iteration's usage before
+        // the pause, so the finalize path deliberately writes no `tokens` (see the
+        // finalizeLoopFromSignal call above). Only the plain `loop` gate carries it.
+      };
+      const paused = await pauseGateRespectingExternalTransition(
+        deps,
+        workflowRun.id,
+        approvalContext,
+        { suspension: serializeNodeStateRecord(suspended) }
+      );
+      if (!paused)
+        return {
+          state: 'running',
+          output: lastIterationOutput,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+        };
+      await recordDerivedExecution({ logDir }, suspended);
       const gateMsg =
         `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
@@ -5066,6 +5267,22 @@ async function executeLoopGroupBody(
         nodeName: node.id,
       });
       if (!gateSent) {
+        const { failed } = await requireTerminalStatusWrite(
+          deps.store.failPausedApproval(
+            workflowRun.id,
+            paused,
+            undeliveredGatePromptError('Loop-group gate', node.id)
+          ),
+          { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
+        );
+        if (!failed)
+          return {
+            state: 'running',
+            output: lastIterationOutput,
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i,
+          };
         getLog().error(
           { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
           'loop_group_node.gate_message_send_failed'
@@ -5087,37 +5304,8 @@ async function executeLoopGroupBody(
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
-      const paused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
-        nodeId: node.id,
-        message: honestMessage,
-        type: 'interactive_loop',
-        iteration: i,
-        // Persist the body's session cursor so a resumed fresh_context: false loop
-        // continues the pre-pause conversation (restored into the cursor on resume).
-        // The provider tag rides along so the restore never threads the session into
-        // a different provider (#1992). null = this pause has no cursor to restore.
-        sessionId: loopLastSequentialSession?.sessionId ?? null,
-        sessionProvider: loopLastSequentialSession?.provider ?? null,
-        // Signal state for finalize-on-bare-approve (#2074). The structured payload
-        // rides along (#2637) so the finalize attaches it like a natural completion.
-        completionSignaled: completionDetected,
-        signaledOutput: completionDetected ? lastIterationOutput : null,
-        signaledStructuredOutput: completionDetected
-          ? (lastIterationStructuredOutput ?? null)
-          : null,
-        // NO `signaledTokens` — a loop_group gate has no consumer for it. The body's
-        // own `<groupId>.<nodeId>` rows already persisted this iteration's usage before
-        // the pause, so the finalize path deliberately writes no `tokens` (see the
-        // finalizeLoopFromSignal call above). Only the plain `loop` gate carries it.
-      });
-      return {
-        state: 'running',
-        output: lastIterationOutput,
-        costUsd: loopTotalCostUsd,
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-        loopIterations: i,
-        ...(paused ? { suspensionPoint: 'interactive_loop' as const } : {}),
-      };
+
+      return serializeNodeOutput(suspended);
     }
   }
 
@@ -5610,11 +5798,18 @@ async function executeLoopNode(
     ): Promise<boolean> => {
       const retryClass = retryClassOf(failure.failureKind);
       if (retryClass === 'rate_limited') iterSawRateLimit = true;
-      if (retryClass !== 'transient' && retryClass !== 'rate_limited') return false;
+      if (
+        retryClass !== 'transient' &&
+        retryClass !== 'rate_limited' &&
+        retryClass !== 'overloaded'
+      )
+        return false;
       const message = failure.error;
-      const maxRetries = iterSawRateLimit
-        ? Math.max(DEFAULT_NODE_MAX_RETRIES, RATE_LIMIT_MAX_RETRIES)
-        : DEFAULT_NODE_MAX_RETRIES;
+      const maxRetries = effectiveRetryMaxRetries(
+        DEFAULT_NODE_MAX_RETRIES,
+        retryClass,
+        iterSawRateLimit
+      );
       if (attempt >= maxRetries) return false;
       const delayMs = getRetryDelayMs(retryClass, attempt, DEFAULT_NODE_RETRY_DELAY_MS);
       getLog().warn(
@@ -5623,6 +5818,7 @@ async function executeLoopNode(
           iteration: i,
           attempt: attempt + 1,
           maxRetries,
+          retryClass,
           delayMs,
           error: message,
         },
@@ -5631,14 +5827,39 @@ async function executeLoopNode(
       await safeSendMessage(
         platform,
         conversationId,
-        `⚠️ Loop \`${node.id}\` iteration ${String(i)} failed with a transient error (attempt ${String(attempt + 1)}/${String(maxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
+        `⚠️ Loop \`${node.id}\` iteration ${String(i)} failed with ${retryClass === 'overloaded' ? 'a provider capacity error' : 'a transient error'} (attempt ${String(attempt + 1)}/${String(maxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
         msgContext
       );
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      await deps.store.createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_retry_scheduled',
+        step_name: stepName,
+        data: {
+          nodeId: node.id,
+          iteration: i,
+          retry_class: retryClass,
+          retry_attempt: attempt + 1,
+          max_retries: maxRetries,
+          delay_ms: delayMs,
+        },
+      });
+      await waitForNodeRetry(deps.store, workflowRun.id, node.id, delayMs);
       return true;
     };
 
     iterationAttempt: for (let iterRetry = 0; ; iterRetry++) {
+      if (iterRetry > 0) {
+        const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
+        if (!shouldContinueStreamingForStatus(status)) {
+          return failLoopNode(`Workflow ${status ?? 'deleted'}`, {
+            failureKind: 'cancelled',
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i - 1,
+            data: { status: status ?? 'deleted', iteration: i },
+          });
+        }
+      }
       // A failed attempt's session is not the one the iteration completed in.
       iterationSessionId = undefined;
       let iterationAbortController = new AbortController();
@@ -5653,14 +5874,21 @@ async function executeLoopNode(
       // message); undefined when the stream ends for any other reason.
       let streamStopStatus: string | undefined;
 
-      // One provider-event handler per attempt (see provider-events.ts): it owns the
-      // attempt's tool and subtask state. A result is not the end of an iteration, so a
-      // single iteration can observe MULTIPLE result chunks. SDK cost/usage are
-      // session-cumulative, so the per-result `+=` accumulation used before would
-      // double-count: capture last-seen values (overwrite semantics) and fold them into
-      // the loop totals once, after the stream ends.
       const createIterationProviderEvents = (): ProviderEventHandler =>
         createProviderEventHandler({
+          toolAttention: ctx.toolAttention.createStream({
+            nodeId: stepName,
+            reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
+            provider: workflowProvider,
+            thresholdMs:
+              ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
+            env: {
+              ...(ctx.execContext.kind === 'host' ? process.env : {}),
+              ...resolvedOptions?.env,
+            },
+            protectedEnvKeys: ctx.config.protectedEnvKeys,
+            protectedCredentialValues: ctx.config.protectedCredentialValues,
+          }),
           store: deps.store,
           platform,
           conversationId,
@@ -5685,7 +5913,7 @@ async function executeLoopNode(
       let iterationCost: number | undefined;
       let iterationTokens: TokenUsage | undefined;
       let iterationNumTurns: number | undefined;
-      // Fold the last-seen per-attempt values into the loop totals exactly once per
+      // Fold the summed per-attempt usage into the loop totals exactly once per
       // ATTEMPT — called on both the normal exit and the catch path (an SDK-error
       // result still carries the attempt's cost, which the totals reported on the
       // failure return must include, matching the old += behavior). Reaskedattempts
@@ -5717,7 +5945,8 @@ async function executeLoopNode(
       const wantsStructured = resolvedOptions?.outputFormat !== undefined;
       const maxReasks =
         wantsStructured &&
-        getProviderCapabilities(workflowProvider).structuredOutput === 'best-effort'
+        requireProvider(ctx.deps.providers, workflowProvider).capabilities.structuredOutput ===
+          'best-effort'
           ? STRUCTURED_OUTPUT_MAX_REASKS
           : 0;
 
@@ -5788,41 +6017,9 @@ async function executeLoopNode(
           );
           const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
 
-          for await (const msg of withIdleTimeout(
-            generator,
-            effectiveIdleTimeout,
-            () => {
-              iterationIdleTimedOut = true;
-              getLog().warn(
-                {
-                  nodeId: node.id,
-                  iteration: i,
-                  timeoutMs: effectiveIdleTimeout,
-                  ...(lastWatchdogReset
-                    ? {
-                        lastResetType: lastWatchdogReset.type,
-                        lastResetAt: new Date(lastWatchdogReset.at).toISOString(),
-                      }
-                    : {}),
-                },
-                'loop_node.idle_timeout_reached'
-              );
-              iterationAbortController.abort();
-            },
-            undefined,
-            (msg, resetAt) => {
-              const type = msg.type;
-              lastWatchdogReset = { type, at: resetAt };
-              watchdogResets.observe(type, resetAt);
-            }
-          )) {
-            // Mid-stream cancel/pause check (every CANCEL_CHECK_INTERVAL_MS) —
-            // lifted from the AI-node stream loop in executeNodeInternal. Same
-            // posture: `paused` is tolerated (a sibling approval node may pause
-            // the run while this loop streams); only terminal/unknown states
-            // abort the in-flight iteration. Without this, a cancelled run kept
-            // streaming until the iteration finished on its own — and the
-            // post-stream `cancelled` exemption below was unreachable.
+          const shouldStopStream = async (): Promise<boolean> => {
+            await ctx.toolAttention.refresh();
+            await providerEvents.refreshAttention();
             const tickNow = Date.now();
             if (tickNow - lastStreamStatusCheckAt > CANCEL_CHECK_INTERVAL_MS) {
               lastStreamStatusCheckAt = tickNow;
@@ -5840,7 +6037,7 @@ async function executeLoopNode(
                     'loop_node.stop_detected_during_streaming'
                   );
                   iterationAbortController.abort();
-                  break;
+                  return true;
                 }
               } catch (statusErr) {
                 getLog().warn(
@@ -5850,17 +6047,53 @@ async function executeLoopNode(
               }
             }
 
-            if (msg.type === 'result') {
-              // A reask's throwaway session is not the thread (structuredOutputPass):
-              // adopting it would silently discard iterations 1…N and break the
-              // `fresh_context: false` contract ("each iteration resumes the prior
-              // conversation"). The repaired answer still reaches the next iteration
-              // through $LOOP_PREV_OUTPUT, which is prompt text rather than session state.
-              if (msg.sessionId) {
+            return false;
+          };
+          try {
+            for await (const msg of withIdleTimeout(
+              generator,
+              effectiveIdleTimeout,
+              () => {
+                iterationIdleTimedOut = true;
+                getLog().warn(
+                  {
+                    nodeId: node.id,
+                    iteration: i,
+                    timeoutMs: effectiveIdleTimeout,
+                    ...(lastWatchdogReset
+                      ? {
+                          lastResetType: lastWatchdogReset.type,
+                          lastResetAt: new Date(lastWatchdogReset.at).toISOString(),
+                        }
+                      : {}),
+                  },
+                  'loop_node.idle_timeout_reached'
+                );
+                iterationAbortController.abort();
+              },
+              (msg, resetAt) => {
+                const type = msg.type;
+                lastWatchdogReset = { type, at: resetAt };
+                watchdogResets.observe(type, resetAt);
+              },
+              () =>
+                providerEvents.hasOpenTools() ||
+                (aiClient.getCapabilities().backgroundWork === 'reported' &&
+                  providerEvents.liveSubtaskIds().length > 0),
+              shouldStopStream
+            )) {
+              if (await shouldStopStream()) break;
+
+              if (msg.type === 'result') {
+                // A reask's throwaway session is not the thread (structuredOutputPass):
+                // adopting it would silently discard iterations 1…N and break the
+                // `fresh_context: false` contract ("each iteration resumes the prior
+                // conversation"). The repaired answer still reaches the next iteration
+                // through $LOOP_PREV_OUTPUT, which is prompt text rather than session state.
                 if (pass.threadsSession) {
                   currentSessionId = msg.sessionId;
                   iterationSessionId = msg.sessionId;
-                } else if (currentSessionId !== msg.sessionId) {
+                } else if (msg.sessionId && currentSessionId !== msg.sessionId) {
                   getLog().debug(
                     {
                       nodeId: node.id,
@@ -5873,79 +6106,86 @@ async function executeLoopNode(
                     'loop_node.reask_session_not_threaded'
                   );
                 }
-              }
-              // Overwrite, don't accumulate — a later result in the same iteration
-              // (background-task wait, #2083) carries session-cumulative values.
-              if (msg.cost !== undefined) {
-                if (Number.isFinite(msg.cost)) {
-                  iterationCost = msg.cost;
-                } else {
-                  getLog().warn(
-                    { nodeId: node.id, iteration: i, costUsd: msg.cost },
-                    'loop_node.usage_cost_non_finite_ignored'
+                if (msg.cost !== undefined) {
+                  if (Number.isFinite(msg.cost)) {
+                    iterationCost = (iterationCost ?? 0) + msg.cost;
+                  } else {
+                    getLog().warn(
+                      { nodeId: node.id, iteration: i, costUsd: msg.cost },
+                      'loop_node.usage_cost_non_finite_ignored'
+                    );
+                  }
+                }
+                if (msg.tokens !== undefined) {
+                  iterationTokens = sumTokenUsage(
+                    [...(iterationTokens ? [iterationTokens] : []), msg.tokens],
+                    {
+                      nodeId: node.id,
+                      iteration: i,
+                    }
                   );
                 }
-              }
-              if (msg.tokens !== undefined) {
-                iterationTokens = sumTokenUsage([msg.tokens], {
-                  nodeId: node.id,
-                  iteration: i,
-                });
-              }
-              if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
-              if (msg.numTurns !== undefined) {
-                iterationNumTurns = msg.numTurns;
-              }
-              // Unconditional, for the same reason as the AI-node path above: a later
-              // iteration or result chunk that reports no resolved model must clear the
-              // previous one rather than leave it to be recorded as this node's answer.
-              loopResolvedModel = msg.resolvedModel;
-              if (msg.structuredOutput !== undefined) {
+                if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
+                if (msg.numTurns !== undefined) {
+                  iterationNumTurns = msg.numTurns;
+                }
+                // Unconditional, for the same reason as the AI-node path above: a later
+                // iteration or result chunk that reports no resolved model must clear the
+                // previous one rather than leave it to be recorded as this node's answer.
+                loopResolvedModel = msg.resolvedModel;
+                if (msg.text !== undefined) {
+                  fullOutput = msg.text;
+                  cleanOutput = stripCompletionTags(msg.text, loop.until);
+                }
                 attemptStructured = msg.structuredOutput;
+                if (msg.failure !== undefined) {
+                  throw providerReportedFailure(
+                    `Loop '${node.id}' iteration ${String(i)}`,
+                    msg.failure,
+                    resolvedOptions?.maxBudgetUsd,
+                    { nodeId: node.id, iteration: i }
+                  );
+                }
+                // Fail the iteration loudly on SDK error results. Previously we broke
+                // silently, producing empty output and continuing to the next iteration —
+                // which made `error_during_execution` on resumed interactive loops look
+                // like a "5-second crash" that kept burning iterations.
+                // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+                // clean stop_sequence termination (the SDK sets is_error: true alongside
+                // subtype: 'success' to encode "non-default termination, not a failure").
+                // The Claude provider already filters this; the guard here defends
+                // against a third-party IAgentProvider that forwards the SDK pair raw.
+                if (msg.isError && msg.errorSubtype !== 'success') {
+                  const subtype = msg.errorSubtype ?? 'unknown';
+                  const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
+                  getLog().error(
+                    {
+                      nodeId: node.id,
+                      iteration: i,
+                      errorSubtype: subtype,
+                      errors: msg.errors,
+                      ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
+                      stopReason: msg.stopReason,
+                    },
+                    'loop_node.iteration_sdk_error'
+                  );
+                  throw new Error(
+                    `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
+                  );
+                }
+                // A result is not the end of the iteration; `settled` is. See the
+                // AI-node stream loop for the full rationale.
+              } else if (msg.type === 'settled') {
+                iterationSettled =
+                  aiClient.getCapabilities().backgroundWork !== 'reported' ||
+                  providerEvents.liveSubtaskIds().length === 0;
+                break;
+              } else {
+                await providerEvents.handle(msg);
               }
-              if (msg.failure !== undefined) {
-                throw providerReportedFailure(
-                  `Loop '${node.id}' iteration ${String(i)}`,
-                  msg.failure,
-                  resolvedOptions?.maxBudgetUsd,
-                  { nodeId: node.id, iteration: i }
-                );
-              }
-              // Fail the iteration loudly on SDK error results. Previously we broke
-              // silently, producing empty output and continuing to the next iteration —
-              // which made `error_during_execution` on resumed interactive loops look
-              // like a "5-second crash" that kept burning iterations.
-              // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
-              // clean stop_sequence termination (the SDK sets is_error: true alongside
-              // subtype: 'success' to encode "non-default termination, not a failure").
-              // The Claude provider already filters this; the guard here defends
-              // against a third-party IAgentProvider that forwards the SDK pair raw.
-              if (msg.isError && msg.errorSubtype !== 'success') {
-                const subtype = msg.errorSubtype ?? 'unknown';
-                const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
-                getLog().error(
-                  {
-                    nodeId: node.id,
-                    iteration: i,
-                    errorSubtype: subtype,
-                    errors: msg.errors,
-                    ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
-                    stopReason: msg.stopReason,
-                  },
-                  'loop_node.iteration_sdk_error'
-                );
-                throw new Error(
-                  `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
-                );
-              }
-              // A result is not the end of the iteration; `settled` is. See the
-              // AI-node stream loop for the full rationale.
-            } else if (msg.type === 'settled') {
-              iterationSettled = true;
-              break; // The provider says the turn is over and nothing more runs for it.
-            } else {
-              await providerEvents.handle(msg);
             }
+          } finally {
+            await providerEvents.clearAttention();
           }
           foldIterationUsage();
 
@@ -6544,41 +6784,6 @@ async function executeLoopNode(
         lastIterationOutput,
         loop.gate_message
       );
-      const gateMsg =
-        `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
-        `Run ID: \`${workflowRun.id}\`\n` +
-        `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
-        `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-      const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
-        workflowId: workflowRun.id,
-        nodeName: node.id,
-      });
-      if (!gateSent) {
-        // Gate message failed to deliver — do not pause; fail the node so the user
-        // sees a clear error rather than a silently orphaned paused run.
-        getLog().error(
-          { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
-          'loop_node.gate_message_send_failed'
-        );
-        return failLoopNode(undeliveredGatePromptError('Loop gate', node.id), {
-          failureKind: 'unknown',
-          output: lastIterationOutput,
-          costUsd: loopTotalCostUsd,
-          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-          loopIterations: i,
-          data: { iteration: i },
-        });
-      }
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'approval_requested',
-          step_name: stepName,
-          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
-        })
-        .catch((err: Error) => {
-          logEventStoreError(err, i);
-        });
       const suspended = finishNodeExecution(
         execution,
         { status: 'suspended', point: 'interactive_loop' },
@@ -6593,7 +6798,7 @@ async function executeLoopNode(
           diagnostics: { loopIterations: i },
         }
       );
-      const paused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
+      const approvalContext: ApprovalContext = {
         execution: executionMetadata(suspended),
         nodeId: node.id,
         message: honestMessage,
@@ -6617,10 +6822,69 @@ async function executeLoopNode(
         // Included command-backed loops use their load-time compiled body here, so
         // snapshotting both forms preserves resume determinism after source deletion.
         commandSnapshot: loopPromptTemplate,
+      };
+      const deferredLoopOutput: NodeExecutionResult = {
+        ...serializeNodeOutput(execution),
+        ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+      };
+      const paused = await pauseGateRespectingExternalTransition(
+        deps,
+        workflowRun.id,
+        approvalContext,
+        { suspension: serializeNodeStateRecord(suspended) }
+      );
+      if (!paused) {
+        if (loopTotalCostUsd !== undefined || loopTotalTokens !== undefined) {
+          await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
+        }
+        return deferredLoopOutput;
+      }
+      await recordDerivedExecution({ logDir }, suspended);
+      const gateMsg =
+        `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
+        `Run ID: \`${workflowRun.id}\`\n` +
+        `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
+        `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
+      const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
+        workflowId: workflowRun.id,
+        nodeName: node.id,
       });
-      return paused
-        ? recordNodeState({ store: deps.store, logDir }, suspended)
-        : serializeNodeOutput(execution);
+      if (!gateSent) {
+        const { failed } = await requireTerminalStatusWrite(
+          deps.store.failPausedApproval(
+            workflowRun.id,
+            paused,
+            undeliveredGatePromptError('Loop gate', node.id)
+          ),
+          { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
+        );
+        if (!failed) return deferredLoopOutput;
+        getLog().error(
+          { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
+          'loop_node.gate_message_send_failed'
+        );
+        return failLoopNode(undeliveredGatePromptError('Loop gate', node.id), {
+          failureKind: 'unknown',
+          output: lastIterationOutput,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+          data: { iteration: i },
+        });
+      }
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'approval_requested',
+          step_name: stepName,
+          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
+        })
+        .catch((err: Error) => {
+          logEventStoreError(err, i);
+        });
+
+      return serializeNodeOutput(suspended);
     }
   }
 
@@ -6641,11 +6905,6 @@ async function executeLoopNode(
   });
 }
 
-/**
- * The failure of a gate whose prompt could not be delivered. The prompt is the only place
- * a human learns how to resume, so a gate that cannot send it fails its node instead of
- * pausing a run nobody was told about.
- */
 function undeliveredGatePromptError(
   gate: 'Approval' | 'Loop gate' | 'Loop-group gate',
   nodeId: string
@@ -6654,45 +6913,29 @@ function undeliveredGatePromptError(
 }
 
 /**
- * Pause the run for a human/system gate — the single persist path for all five
- * suspend sites (`loop_group`, `loop`, `approval`, `workflow:` child, and the
- * container write-back gate). By default, tolerates a lost CAS when the run
- * was externally transitioned while the gate was being raised — e.g. a killed
- * CLI's signal cleanup marked the run failed mid-pause (#1123), or an operator
- * cancelled it from another surface. `pauseWorkflowRun`'s UPDATE only matches
- * status='running'; when it misses, re-read the status: any non-running status
- * means the pause lost a legitimate external race — log, skip the
- * approval_pending emit, and return `false` so the caller's normal
- * completed-shaped output lets the between-layer status check halt the DAG
- * cleanly (the same path a successful pause takes). On a successful pause, the
- * approval_pending live signal is emitted HERE (from the ApprovalContext's own
- * nodeId/message) so no call site can accidentally emit it after a lost CAS. A
- * store error while the run is still 'running' is a genuine pause failure and
- * rethrows.
- *
- * `options.failClosed` inverts the CAS-tolerance for a caller that must never
- * treat a lost pause as anything but a genuine failure — used by the container
- * write-back gate, where a lost pause must never fall through toward the
- * apply/teardown path (throwing is the safe behavior; the H2 teardown-preserve
- * logic keeps the overlay volume for a retry). `options.extraMetadata` is
- * forwarded verbatim to `pauseWorkflowRun`'s third argument (the write-back
- * gate's `pending_writeback` marker, folded into the same atomic write).
- *
- * Returns whether the pause actually persisted (`true`) or was skipped due to
- * a tolerated lost CAS (`false`) — callers with a post-pause side effect (e.g.
- * notifying a user) should gate it on this so a skipped pause stays silent.
+ * A same-run gate that loses the running-to-paused CAS stays unfinished for resume.
+ * External stops retain ownership of terminal state; other store failures propagate.
+ * Write-back requires a successful pause before its apply/teardown path can proceed.
+ * Returns the persisted context, including its minted `pauseId`, so callers that later
+ * compare against the stored gate (failPausedApproval) match it exactly; undefined when
+ * the gate did not pause.
  */
 async function pauseGateRespectingExternalTransition(
   deps: WorkflowDeps,
   runId: string,
   approvalContext: ApprovalContext,
-  options: { extraMetadata?: Record<string, unknown>; failClosed?: boolean } = {}
-): Promise<boolean> {
+  options: {
+    extraMetadata?: Record<string, unknown>;
+    failClosed?: boolean;
+    suspension?: ReturnType<typeof serializeNodeStateRecord>;
+  } = {}
+): Promise<ApprovalContext | undefined> {
   const { extraMetadata, failClosed = false } = options;
+  approvalContext = { ...approvalContext, pauseId: randomUUID() };
   try {
-    await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata);
+    await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.suspension);
   } catch (pauseErr) {
-    if (failClosed) throw pauseErr;
+    if (failClosed || !(pauseErr instanceof WorkflowRunPauseConflictError)) throw pauseErr;
     let status: WorkflowRunStatus | null;
     try {
       status = await deps.store.getWorkflowRunStatus(runId);
@@ -6700,30 +6943,69 @@ async function pauseGateRespectingExternalTransition(
       // Status unknowable — surface the original pause failure.
       throw pauseErr;
     }
-    if (status === 'running') throw pauseErr;
+    if (status === 'running' || status === 'pending') throw pauseErr;
+    if (status === 'paused') {
+      const run = await deps.store.getWorkflowRun(runId);
+      const active = run?.metadata?.approval;
+      const wait = run?.metadata?.wait;
+      if (isWorkflowWaitContext(wait)) {
+        getLog().info(
+          { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: wait.nodeId },
+          'dag.gate_deferred'
+        );
+        return undefined;
+      }
+      if (
+        !isApprovalContext(active) ||
+        (active.nodeId === approvalContext.nodeId &&
+          active.bodyGateId === approvalContext.bodyGateId)
+      )
+        throw pauseErr;
+      getLog().info(
+        { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: active.nodeId },
+        'dag.gate_deferred'
+      );
+      return undefined;
+    }
     getLog().warn(
       { workflowRunId: runId, status, err: pauseErr as Error },
       'dag.gate_pause_skipped_external_transition'
     );
-    return false;
+    return undefined;
   }
   getWorkflowEventEmitter().emit({
     type: 'approval_pending',
     runId,
     nodeId: approvalContext.nodeId,
     message: approvalContext.message,
+    decisions: approvalContext.decisions,
+    pauseId: approvalContext.pauseId,
   });
-  return true;
+  return approvalContext;
 }
 
-/** Execute a durable wait without holding a subprocess or provider slot. */
+function snapshotBodySessionCursorAncestry(
+  ancestry: RunLayersContext['bodySessionCursorAncestry']
+): { bodySessionCursorAncestry?: BodySessionCursorAncestry } {
+  return ancestry === undefined || ancestry.size === 0
+    ? {}
+    : {
+        bodySessionCursorAncestry: Object.fromEntries(
+          [...ancestry].map(([key, cursors]) => [key, Object.fromEntries(cursors)])
+        ),
+      };
+}
+
 interface WaitLoopOwner {
   groupId: string;
   iteration: number;
   sessionId: string | null;
   sessionProvider: string | null;
+  bodySessionCursors?: Record<string, SessionCursor>;
+  bodySessionCursorAncestry?: BodySessionCursorAncestry;
 }
 
+/** Execute a durable wait without holding a subprocess or provider slot. */
 async function executeWaitNode(
   ctx: RunLayersContext,
   node: WaitNode,
@@ -6761,6 +7043,12 @@ async function executeWaitNode(
           iteration: loopOwner.iteration,
           sessionId: loopOwner.sessionId,
           sessionProvider: loopOwner.sessionProvider,
+          ...(loopOwner.bodySessionCursors !== undefined
+            ? { bodySessionCursors: loopOwner.bodySessionCursors }
+            : {}),
+          ...(loopOwner.bodySessionCursorAncestry !== undefined
+            ? { bodySessionCursorAncestry: loopOwner.bodySessionCursorAncestry }
+            : {}),
         } as const);
   const condition = waitCondition(node.wait);
   let context: WorkflowWaitContext;
@@ -7053,13 +7341,10 @@ async function executeApprovalNode(
     // execution view during an on_reject cycle. This is cosmetic-only — the approval gate
     // still re-presents correctly and the human gate contract is preserved. A follow-up can
     // filter synthetic `:on_reject` IDs from the UI's nodeMap if needed.
-    const syntheticNode: AgentNode = {
-      id: `${node.id}:on_reject`,
-      kind: 'agent',
-      source: { kind: 'inline', prompt: substituteNodeOutputRefs(substitutedPrompt, nodeOutputs) },
-      ...(node.depends_on ? { depends_on: node.depends_on } : {}),
-      ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
-    };
+    const syntheticNode = gateReworkNode(
+      node,
+      substituteNodeOutputRefs(substitutedPrompt, nodeOutputs)
+    );
 
     const {
       provider,
@@ -7068,6 +7353,7 @@ async function executeApprovalNode(
       tier: resolvedTier,
       effort: resolvedEffort,
     } = await resolveNodeProviderAndModel(
+      ctx.deps.providers,
       syntheticNode,
       workflowProvider,
       workflowModel,
@@ -7108,16 +7394,77 @@ async function executeApprovalNode(
     // Fall through to re-pause at the approval gate
   }
 
-  // Standard approval gate — send message and pause.
   // Resolve $nodeId.output[.field] references so the human sees concrete values
   // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
   const renderedMessage = substituteNodeOutputRefs(node.message, nodeOutputs);
+  const choices = node.decisions.map(decision => {
+    const label =
+      decision.label ??
+      (decision.id === 'approve' ? 'Approve' : decision.id === 'reject' ? 'Reject' : decision.id);
+    const display = decision.label ? `${label} (${decision.id})` : label;
+    const command =
+      decision.id === 'approve' || decision.id === 'reject'
+        ? `${decision.id} ${workflowRun.id}`
+        : `respond ${workflowRun.id} ${decision.id} [text]`;
+    return `${display}: \`${spellWorkflowCommand(platform, command)}\``;
+  });
+  const suspended = finishNodeExecution(
+    execution,
+    { status: 'suspended', point: 'approval' },
+    {
+      output: { text: '' },
+      diagnostics: { iteration },
+    }
+  );
+  const bodyGateOwner = ctx.bodyGateOwner?.bodyGateId === node.id ? ctx.bodyGateOwner : undefined;
+  const approvalContext: ApprovalContext = {
+    execution: executionMetadata(suspended),
+    message: renderedMessage,
+    nodeId: bodyGateOwner?.nodeId ?? node.id,
+    ...(bodyGateOwner
+      ? {
+          bodyGateId: bodyGateOwner.bodyGateId,
+          iteration: bodyGateOwner.iteration,
+          sessionId: ctx.lastSequentialSession?.sessionId ?? null,
+          sessionProvider: ctx.lastSequentialSession?.provider ?? null,
+          ...(ctx.bodySessionCursors !== undefined
+            ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
+            : {}),
+          ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
+        }
+      : {}),
+    type: 'approval',
+    captureResponse: node.captureResponse,
+    onRejectPrompt: rework?.prompt,
+    onRejectMaxAttempts: rework?.maxAttempts,
+    decisions: node.decisions.map(d => ({
+      id: d.id,
+      ...(d.label !== undefined ? { label: d.label } : {}),
+    })),
+    decisionsAuthored: node.decisionsAuthored,
+  };
+  const paused = await pauseGateRespectingExternalTransition(
+    deps,
+    workflowRun.id,
+    approvalContext,
+    { suspension: serializeNodeStateRecord(suspended) }
+  );
+  if (!paused) return serializeNodeOutput(execution);
+  await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
   const approvalMsg =
     `⏸ **Approval required**: ${renderedMessage}\n\n` +
     `Run ID: \`${workflowRun.id}\`\n` +
-    `Approve: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id}`)}\` | ` +
-    `Reject: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
+    choices.join(' | ');
   if (!(await safeSendMessage(platform, conversationId, approvalMsg, msgContext))) {
+    const { failed } = await requireTerminalStatusWrite(
+      deps.store.failPausedApproval(
+        workflowRun.id,
+        paused,
+        undeliveredGatePromptError('Approval', node.id)
+      ),
+      { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
+    );
+    if (!failed) return serializeNodeOutput(execution);
     getLog().error(
       { nodeId: node.id, workflowRunId: workflowRun.id },
       'approval_node.gate_message_send_failed'
@@ -7150,32 +7497,7 @@ async function executeApprovalNode(
       );
     });
 
-  const suspended = finishNodeExecution(
-    execution,
-    { status: 'suspended', point: 'approval' },
-    {
-      output: { text: '' },
-      diagnostics: { iteration },
-    }
-  );
-  const paused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
-    execution: executionMetadata(suspended),
-    message: renderedMessage,
-    nodeId: node.id,
-    type: 'approval',
-    captureResponse: node.captureResponse,
-    onRejectPrompt: rework?.prompt,
-    onRejectMaxAttempts: rework?.maxAttempts,
-    decisions: node.decisions.map(d => ({
-      id: d.id,
-      ...(d.label !== undefined ? { label: d.label } : {}),
-    })),
-    decisionsAuthored: node.decisionsAuthored,
-  });
-
-  return paused
-    ? recordNodeState({ store: deps.store, logDir: ctx.logDir }, suspended)
-    : serializeNodeOutput(execution);
+  return serializeNodeOutput(suspended);
 }
 
 /**
@@ -7369,15 +7691,6 @@ async function executeWorkflowNode(
   // is no human decision to audit for a gate that resolves automatically on
   // child completion.
   const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
-    // KNOWN LIMITATION (#2180): the run has a SINGLE approval-gate slot. If two
-    // gate-pausing nodes (two `workflow:` children, or a `workflow:` + an `approval:`)
-    // land in the SAME topological layer, the second pause attempt loses the CAS
-    // (the first already flipped running→paused) — the shared helper tolerates this
-    // the same way it does for every other gate type: skip silently, no message, no
-    // node failure. The loser's child is real but unmentioned until a later resume
-    // re-pauses on it. A retry can't fix this (there is nowhere to record a second
-    // simultaneous block); the real fix is a gate queue or a load-time reject of
-    // multiple gate-pausing nodes per layer — tracked in #2180.
     const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
     // The persisted gate message is read on every surface (web, CLI status, chat), so it
     // keeps the surface-neutral chat grammar; the notice below goes to this platform only.
@@ -7469,7 +7782,6 @@ async function executeWorkflowNode(
     input,
     cwd,
     conversationId,
-    conversationDbId: parentRun.conversation_id,
     userId: parentRun.user_id ?? undefined,
     codebaseId: parentRun.codebase_id ?? undefined,
     isolation: node.isolation,
@@ -7667,6 +7979,7 @@ export async function resolveFanOutChildDefinition(
     const { workflows, support, errors } = await discoverWorkflowsWithConfig(
       cwd,
       deps.loadConfig,
+      deps.providers,
       sourceRoots
     );
     // Discovery qualified a pack's composed targets to that pack, so a support workflow
@@ -7738,6 +8051,16 @@ function sumFanOutTokens(
   );
 }
 
+async function findFanOutChildRuns(
+  store: WorkflowDeps['store'],
+  parentRunId: string,
+  nodePath: string
+): Promise<WorkflowRun[]> {
+  return (await store.findChildRuns(parentRunId)).filter(
+    child => readSubrunMetadata(child.metadata).parentNodeId === nodePath
+  );
+}
+
 /**
  * Execute a fan-out `workflow:` node (#2121 slice 2, PR-C): expand the node into N
  * governed child runs over a data-driven item list, bound by a `max_parallel` sliding
@@ -7760,14 +8083,14 @@ function sumFanOutTokens(
  *     lifecycle rule), surfacing a staleness-keyed wait/abandon action;
  *   - EVERY index is spawned and every child runs to its own terminal state — no child's
  *     outcome ends another's — and only then does the join reduce: `all_success` (any
- *     failed/cancelled child fails the node) / `all_done` (aggregate all terminal;
- *     failed/cancelled entries represented);
+ *     failed/cancelled child fails the node) / `all_done` (aggregate all terminal if a
+ *     child run exists; failed/cancelled entries represented);
  *   - aggregate `$<id>.output` = JSON array in item order; cost/tokens = Σ children.
  *
  * Execution failures return a failed NodeExecutionResult; lifecycle persistence
  * rejection escapes to the run failure boundary. `node_completed` is written ONLY when the join is
  * satisfied, so a failed fan-out node re-runs and re-inspects its children on resume
- * (resume correctness is sourced from child-run status, not the node's own events).
+ * against the durable child-run rows.
  */
 async function executeFanOutWorkflowNode(
   node: WorkflowNode,
@@ -7937,11 +8260,7 @@ async function executeFanOutWorkflowNode(
   //    on the first run; carries the ordered instance set on resume.
   const existingByIndex = new Map<number, WorkflowRun>();
   try {
-    const children = (await deps.store.findChildRuns(parentRun.id)).filter(
-      c =>
-        readSubrunMetadata(c.metadata as Record<string, unknown> | undefined).parentNodeId ===
-        stepName
-    );
+    const children = await findFanOutChildRuns(deps.store, parentRun.id, stepName);
     for (const child of children) {
       const meta = readSubrunMetadata(child.metadata as Record<string, unknown> | undefined);
       const idx = meta.childIndex;
@@ -8148,6 +8467,13 @@ async function executeFanOutWorkflowNode(
     }
   }
 
+  if (ctx.priorCompletedNodes !== undefined && existingByIndex.size === 0) {
+    await notify(
+      `Re-driving fan_out node '${node.id}': no child run rows exist for its ${String(items.length)} children. ` +
+        'Resume uses the captured parent source; changes to that source require a fresh launch.'
+    );
+  }
+
   // 6. Execute EVERY index through a bounded sliding window. Classification per index: an
   //    existing completed child threads its recorded outcome (resume skip); an existing
   //    failed OR fan-out-cancelled (recoverable) child is re-driven; a user-cancelled child
@@ -8206,7 +8532,6 @@ async function executeFanOutWorkflowNode(
         input,
         cwd,
         conversationId,
-        conversationDbId: parentRun.conversation_id,
         userId: parentRun.user_id ?? undefined,
         codebaseId: parentRun.codebase_id ?? undefined,
         isolation: node.isolation,
@@ -8314,6 +8639,25 @@ async function executeFanOutWorkflowNode(
     const elements = outcomes.map((o, i) => childElement(o, i));
     const aggregate = JSON.stringify(elements);
     return writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
+  }
+
+  let children: WorkflowRun[];
+  try {
+    children = await findFanOutChildRuns(deps.store, parentRun.id, stepName);
+  } catch (error) {
+    const msg = `Failed to look up settled fan-out child runs for node '${node.id}': ${(error as Error).message}`;
+    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg, 'unknown', totalCostUsd, totalTokens);
+  }
+  const anyChildStarted = children.some(child => {
+    const index = readSubrunMetadata(child.metadata).childIndex;
+    return index !== undefined && index >= 0 && index < items.length;
+  });
+  if (!anyChildStarted) {
+    const reason = outcomes[0].error ?? `child ${outcomes[0].status}`;
+    const msg = `fan_out node '${node.id}' refused all ${String(items.length)} children at spawn: ${reason}`;
+    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg, 'child_failed', totalCostUsd, totalTokens);
   }
 
   // join: all_done — node succeeds once all children are terminal; a failed/cancelled
@@ -8748,6 +9092,7 @@ async function executeComposeFanOutNode(
         };
       }
       const instanceCtx: RunLayersContext = {
+        toolAttention: ctx.toolAttention,
         unfinishedInvocations: resumeSnapshot.unfinishedInvocations,
         deps: ctx.deps,
         platform: ctx.platform,
@@ -9023,7 +9368,7 @@ interface RunInputs {
   runChildWorkflow?: RunChildWorkflowFn;
   workflowRun: WorkflowRun;
   config: WorkflowConfig;
-  workflowProvider: string;
+  workflowProvider: string | undefined;
   workflowModel: string | undefined;
   aiProfile?: ResolvedAiProfile;
   workflowPreset?: ModelAliasPreset;
@@ -9043,6 +9388,7 @@ interface RunInputs {
 
 /** Run-level values derived exactly once at the DAG boundary, never supplied by callers. */
 interface RunDerived {
+  toolAttention: ReturnType<typeof createRunToolCallAttention>;
   /**
    * The roots nodes READ executable source from — command files and named scripts.
    *
@@ -9105,6 +9451,7 @@ interface RunLayersContext extends RunInputs, RunDerived {
    * layer runs sequentially. Set per layer; never inherited.
    */
   guardedLayerSnapshots?: Set<string>;
+  bodyGateOwner?: { nodeId: string; bodyGateId: string; iteration: number };
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
@@ -9129,14 +9476,10 @@ interface RunLayersContext extends RunInputs, RunDerived {
   claimedWorkPausePolicy?: ClaimedWorkPausePolicy;
   /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
-  /**
-   * Private provider session handles produced by completed top-level nodes. Undefined
-   * inside loop_group bodies because repeated local IDs have no addressable lineage
-   * contract yet.
-   */
   nodeSessionHandles?: Map<string, SequentialSessionCursor>;
-  /** Top-level node IDs whose sessions are named by at least one downstream consumer. */
   namedResumeSourceIds?: ReadonlySet<string>;
+  bodySessionCursors?: Map<string, SessionCursor>;
+  bodySessionCursorAncestry?: Map<string, Map<string, SessionCursor>>;
   /** Sequential-session threading cursor (mutated by runLayers). Provider-tagged so the
    *  session is only threaded into nodes that resolve to the SAME provider (#1992). */
   lastSequentialSession: SequentialSessionCursor | undefined;
@@ -9331,12 +9674,14 @@ async function settleSequentially(
  */
 async function runLayers(parentCtx: RunLayersContext): Promise<void> {
   const ctx = parentCtx;
+  const providers = ctx.deps.providers;
   // Lifecycle events expose only the immediate enclosing iteration; artifact
   // identity retains the complete outermost-to-innermost lineage.
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
+    await ctx.toolAttention.refresh();
     const layer = ctx.layers[layerIdx];
     const isParallelLayer = layer.length > 1;
 
@@ -9379,7 +9724,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               return async (sessionId: string): Promise<void> => {
                 await ctx.deps.store.upsertWorkflowRunNodeSession({
                   workflow_run_id: ctx.workflowRun.id,
-                  node_id: node.id,
+                  node_id: ctx.stepNamePrefix + node.id,
                   provider,
                   provider_session_id: sessionId,
                 });
@@ -9535,6 +9880,40 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   if (cachedOutput === undefined) {
                     throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
                   }
+                  if (node.kind === 'workflow' && node.fan_out !== undefined) {
+                    const aggregate: unknown =
+                      'structuredOutput' in cachedOutput &&
+                      cachedOutput.structuredOutput !== undefined
+                        ? cachedOutput.structuredOutput
+                        : JSON.parse(cachedOutput.output);
+                    if (!Array.isArray(aggregate)) {
+                      throw new Error(
+                        `Cached fan_out node '${node.id}' aggregate is not a JSON array`
+                      );
+                    }
+                    const children = await findFanOutChildRuns(
+                      ctx.deps.store,
+                      ctx.workflowRun.id,
+                      skipStepName
+                    );
+                    const started = new Set(
+                      children
+                        .map(child => readSubrunMetadata(child.metadata).childIndex)
+                        .filter(
+                          (index): index is number =>
+                            index !== undefined && index >= 0 && index < aggregate.length
+                        )
+                    );
+                    const refused = aggregate.length - started.size;
+                    if (refused > 0) {
+                      await safeSendMessage(
+                        ctx.platform,
+                        ctx.conversationId,
+                        `Skipping fan_out node '${node.id}': fan-out previously refused ${String(refused)} of ${String(aggregate.length)} children.`,
+                        { workflowId: ctx.workflowRun.id, nodeName: node.id }
+                      );
+                    }
+                  }
                   await recordNodeState(
                     { store: ctx.deps.store, logDir: ctx.logDir },
                     {
@@ -9664,6 +10043,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.platform,
                     ctx.conversationId,
                     ctx.workflowRun,
+                    ctx.deps.store,
+                    ctx.stepNamePrefix + node.id,
                     () =>
                       executeBashNode(
                         ctx,
@@ -9674,7 +10055,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                         ctx.stepNamePrefix,
                         iteration,
                         ctx.bodyLoopUserInput ?? ''
-                      )
+                      ),
+                    iteration
                   );
                   return {
                     nodeId: node.id,
@@ -9703,6 +10085,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.platform,
                   ctx.conversationId,
                   ctx.workflowRun,
+                  ctx.deps.store,
+                  ctx.stepNamePrefix + node.id,
                   () =>
                     executeScriptNode(
                       ctx,
@@ -9713,7 +10097,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                       ctx.stepNamePrefix,
                       iteration,
                       ctx.bodyLoopUserInput ?? ''
-                    )
+                    ),
+                  iteration
                 );
                 return {
                   nodeId: node.id,
@@ -9746,6 +10131,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   tier: resolvedLoopTier,
                   effort: resolvedLoopEffort,
                 } = await resolveNodeProviderAndModel(
+                  providers,
                   node,
                   ctx.workflowProvider,
                   ctx.workflowModel,
@@ -9792,27 +10178,43 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 // Resolve provider and model for the group: both are forwarded to body
                 // AI nodes as their defaults. The group itself never calls sendQuery, so
                 // the resolved SendQueryOptions are not needed here.
+                const groupScope = resolveNodeModelScope(
+                  node,
+                  {
+                    provider: ctx.workflowProvider,
+                    model: ctx.workflowModel,
+                    preset: ctx.workflowPreset,
+                    tier: ctx.workflowLevelOptions.workflowTier,
+                    effort: ctx.workflowLevelOptions.effort,
+                    providerOrigin: 'workflow',
+                  },
+                  assistantModelDefaults(ctx.config),
+                  ctx.aiProfile
+                );
                 const {
                   provider: loopGroupProvider,
                   model: loopGroupModel,
                   tier: loopGroupTier,
                   preset: loopGroupPreset,
-                } = await resolveNodeProviderAndModel(
-                  node,
-                  ctx.workflowProvider,
-                  ctx.workflowModel,
-                  ctx.config,
-                  ctx.platform,
-                  ctx.conversationId,
-                  ctx.workflowRun.id,
-                  ctx.cwd,
-                  ctx.workflowLevelOptions,
-                  ctx.aiProfile,
-                  ctx.workflowPreset,
-                  resolveAiConfigText,
-                  ctx.warnedProviderConflicts,
-                  ctx.execContext
-                );
+                } = groupScope.provider === undefined
+                  ? groupScope
+                  : await resolveNodeProviderAndModel(
+                      providers,
+                      node,
+                      ctx.workflowProvider,
+                      ctx.workflowModel,
+                      ctx.config,
+                      ctx.platform,
+                      ctx.conversationId,
+                      ctx.workflowRun.id,
+                      ctx.cwd,
+                      ctx.workflowLevelOptions,
+                      ctx.aiProfile,
+                      ctx.workflowPreset,
+                      resolveAiConfigText,
+                      ctx.warnedProviderConflicts,
+                      ctx.execContext
+                    );
 
                 const output = await executeLoopGroupNode(
                   ctx,
@@ -9844,6 +10246,10 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                         iteration: loopFrame.iteration,
                         sessionId: ctx.lastSequentialSession?.sessionId ?? null,
                         sessionProvider: ctx.lastSequentialSession?.provider ?? null,
+                        ...(ctx.bodySessionCursors !== undefined
+                          ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
+                          : {}),
+                        ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
                       }
                 );
                 return { nodeId: node.id, output };
@@ -9921,6 +10327,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               tier: resolvedTier,
               effort: resolvedEffort,
             } = await resolveNodeProviderAndModel(
+              providers,
               node,
               ctx.workflowProvider,
               ctx.workflowModel,
@@ -9944,9 +10351,14 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               : undefined;
             const hasNamedSessionResume = namedResumeSourceNodeId !== undefined;
             let resumeSessionId: string | undefined;
+            let resumeIntent: SessionResumeIntent = hasNamedSessionResume
+              ? 'source-fork'
+              : 'ordinary';
             if (hasNamedSessionResume) {
               const sourceNodeId = namedResumeSourceNodeId;
-              const sourceHandle = ctx.nodeSessionHandles?.get(sourceNodeId);
+              const ownerCursor = ctx.bodySessionCursors?.get(node.id);
+              if (ownerCursor !== undefined) resumeIntent = 'owner-continuation';
+              const sourceHandle = ownerCursor ?? ctx.nodeSessionHandles?.get(sourceNodeId);
               if (sourceHandle === undefined) {
                 throw new Error(
                   `Node '${node.id}' cannot resume '${sourceNodeId}': the completed source has no available provider session.`
@@ -9963,7 +10375,10 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 );
               }
               const caps = ctx.deps.getAgentProvider(provider).getCapabilities();
-              if (!caps.sessionResume || caps.sessionFork !== true) {
+              if (
+                !caps.sessionResume ||
+                (resumeIntent === 'source-fork' && caps.sessionFork !== true)
+              ) {
                 throw new Error(
                   `Node '${node.id}' cannot resume '${sourceNodeId}': resolved provider '${provider}' does not support immutable session forks.`
                 );
@@ -10106,6 +10521,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.platform,
               ctx.conversationId,
               ctx.workflowRun,
+              ctx.deps.store,
+              ctx.stepNamePrefix + node.id,
               getEffectiveNodeRetryConfig(node),
               async () => {
                 // Fresh per attempt: an attempt after a transient failure observes
@@ -10120,9 +10537,6 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   node,
                   provider,
                   nodeOptions,
-                  // Always pass the prior session ID. executeNodeInternal requests a fork,
-                  // but legacy resume-only providers may continue in place; named resume
-                  // separately capability-gates and verifies an exact fork.
                   resumeSessionId,
                   resolvedNodeModel,
                   resolvedTier,
@@ -10130,10 +10544,12 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.stepNamePrefix,
                   iteration,
                   checkpointSessionForProvider(provider),
-                  attemptTypedArtifactsFile
+                  attemptTypedArtifactsFile,
+                  resumeIntent
                 );
               },
-              { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
+              { state: 'failed', output: '', error: 'Node did not execute' },
+              iteration
             );
             const output = await assertCheckoutUntouched(
               node,
@@ -10325,6 +10741,19 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             provider: sessionProvider,
           });
         }
+        const ownerNode = nodeById.get(nodeId);
+        if (
+          ownerNode &&
+          isNodeContextResume(ownerNode.context) &&
+          output.state === 'completed' &&
+          output.sessionId !== undefined &&
+          sessionProvider !== undefined
+        ) {
+          ctx.bodySessionCursors?.set(nodeId, {
+            sessionId: output.sessionId,
+            provider: sessionProvider,
+          });
+        }
         // Typed artifact: when a node declares `output_type`, persist its output
         // as a typed sidecar so other nodes and later runs can locate it by type.
         // The writer keeps top-level node paths stable and qualifies loop body
@@ -10437,51 +10866,64 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
 }
 
 /**
- * Resolve the AI provider a node would use, WITHOUT the messaging/side effects
- * of `resolveNodeProviderAndModel` — just enough for the container capability
- * pre-flight. Mirrors the provider half of that resolver: `node.provider ??
- * workflowProvider`, then a model tier/alias ref may override the provider.
- */
-function resolveNodeProviderForPreflight(
-  node: DagNode,
-  workflowProvider: string,
-  aiProfile?: ResolvedAiProfile
-): string {
-  let provider: string = node.provider ?? workflowProvider;
-  if (node.model && aiProfile) {
-    const spec = resolveModelSpec(aiProfile, node.model);
-    if (!isLiteralSpec(spec)) provider = spec.provider;
-  }
-  return provider;
-}
-
-/**
  * Walk every node (including loop_group bodies) that can invoke a provider.
- * bash/script/cancel nodes are skipped (deterministic, no provider). An approval
+ * Execution and coordination nodes are skipped (no direct provider call). An approval
  * node counts only when it has an `on_reject` reprompt (the one AI turn it can
  * spawn). For each visited node the resolved provider is passed to `visit`.
  * Unknown providers are passed through — the caller decides how to handle them.
  */
-function visitProviderInvokingNodes(
+export function visitProviderInvokingNodes(
   nodes: readonly (DagNode | IncludeDirective)[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile: ResolvedAiProfile | undefined,
   visit: (node: DagNode, provider: string) => void
 ): void {
   const resolve = (node: DagNode): string =>
-    resolveNodeProviderForPreflight(node, workflowProvider, aiProfile);
+    resolveNodeModel(
+      node,
+      {
+        provider: workflowProvider,
+        providerOrigin: 'workflow',
+        model: undefined,
+        preset: undefined,
+        tier: undefined,
+        effort: undefined,
+      },
+      {},
+      aiProfile
+    ).provider;
   for (const node of nodes) {
-    if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node) || isWaitNode(node))
+    if (
+      isIncludeDirective(node) ||
+      isExecNode(node) ||
+      isHaltNode(node) ||
+      isWaitNode(node) ||
+      node.kind === 'workflow' ||
+      node.kind === 'compose_fan_out'
+    )
       continue;
     if (isLoopGroupNode(node)) {
-      const groupProvider = resolve(node);
-      visit(node, groupProvider);
+      const groupProvider = resolveNodeModelScope(
+        node,
+        {
+          provider: workflowProvider,
+          providerOrigin: 'workflow',
+          model: undefined,
+          preset: undefined,
+          tier: undefined,
+          effort: undefined,
+        },
+        {},
+        aiProfile
+      ).provider;
+      if (groupProvider !== undefined) visit(node, groupProvider);
       visitProviderInvokingNodes(node.loop_group.nodes, groupProvider, aiProfile, visit);
       continue;
     }
     if (isGateNode(node)) {
-      if (node.decisions.some(d => d.rework !== undefined)) {
-        visit(node, resolve(node));
+      const rework = node.decisions.find(d => d.rework !== undefined)?.rework;
+      if (rework) {
+        visit(node, resolve(gateReworkNode(node, rework.prompt)));
       }
       continue;
     }
@@ -10499,14 +10941,15 @@ function visitProviderInvokingNodes(
  * skipped here — they fail later with a clearer "unknown provider" error.
  */
 export function collectContainerIncompatibleProviders(
+  providers: ProviderRegistry,
   nodes: readonly DagNode[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile?: ResolvedAiProfile
 ): Set<string> {
   const incompatible = new Set<string>();
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (_node, provider) => {
-    if (!isRegisteredProvider(provider)) return;
-    if (!getProviderCapabilities(provider).containerExec) incompatible.add(provider);
+    const descriptor = providers.get(provider);
+    if (descriptor && !descriptor.capabilities.containerExec) incompatible.add(provider);
   });
   return incompatible;
 }
@@ -10552,14 +10995,16 @@ export interface ScopedCapabilityMismatch {
  * they fail later with a clearer "unknown provider" error.
  */
 export function collectScopedCapabilityMismatches(
+  providers: ProviderRegistry,
   nodes: readonly DagNode[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile?: ResolvedAiProfile
 ): ScopedCapabilityMismatch[] {
   const mismatches: ScopedCapabilityMismatch[] = [];
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
-    if (!isRegisteredProvider(provider)) return;
-    const capabilities = unsupportedScopedCapabilities(node, getProviderCapabilities(provider));
+    const descriptor = providers.get(provider);
+    if (!descriptor) return;
+    const capabilities = unsupportedScopedCapabilities(node, descriptor.capabilities);
     if (capabilities.length > 0) mismatches.push({ nodeId: node.id, provider, capabilities });
   });
   return mismatches;
@@ -10598,14 +11043,14 @@ export type StrictSchemaViolation = StrictSchemaIssue & {
  * opt-out: the workflow owner chose a provider that accepts optional-by-omission.
  */
 export function collectStrictSchemaViolations(
+  providers: ProviderRegistry,
   nodes: readonly (DagNode | IncludeDirective)[],
-  workflowProvider: string,
+  workflowProvider: string | undefined,
   aiProfile?: ResolvedAiProfile
 ): StrictSchemaViolation[] {
   const violations: StrictSchemaViolation[] = [];
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
-    if (!isRegisteredProvider(provider)) return;
-    if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) return;
+    if (!providers.get(provider)?.capabilities.requiresAllPropertiesRequired) return;
     // Only nodes whose output_format is enforced by the engine — gate/loop_group
     // schemas are inert even when present, so their issues cost nothing.
     if (!isOutputFormatEnforced(node)) return;
@@ -11066,11 +11511,13 @@ export async function executeDagWorkflow(
     priorNodeSessions,
     workflowSourceRoots,
   } = options;
+  const providers = deps.providers;
   const dagStartTime = Date.now();
 
   // Scoped-capability fail-fast: before ANY node runs, so no node spends in a run
   // that would later reach a node whose MCP servers, skills or plugins cannot load.
   const capabilityMismatches = collectScopedCapabilityMismatches(
+    providers,
     workflow.nodes,
     workflowProvider,
     aiProfile
@@ -11085,6 +11532,7 @@ export async function executeDagWorkflow(
   // asked for isolation and must get it or a clear error.
   if (execContext.kind === 'container') {
     const incompatible = collectContainerIncompatibleProviders(
+      providers,
       workflow.nodes,
       workflowProvider,
       aiProfile
@@ -11150,7 +11598,12 @@ export async function executeDagWorkflow(
   // coverage). Container scoping is irrelevant — this fires on host too, and it
   // protects the setup costs a first-turn 400 would otherwise burn.
   {
-    const violations = collectStrictSchemaViolations(workflow.nodes, workflowProvider, aiProfile);
+    const violations = collectStrictSchemaViolations(
+      providers,
+      workflow.nodes,
+      workflowProvider,
+      aiProfile
+    );
     if (violations.length > 0) {
       const [first] = violations;
       const more = violations.length > 1 ? ` (+${violations.length - 1} more)` : '';
@@ -11262,9 +11715,13 @@ export async function executeDagWorkflow(
     persistScope = { key: runPersistScopeKey, sessionsAtStart };
   }
   const namedResumeSourceIds = new Set<string>();
-  for (const node of workflow.nodes) {
-    if (isNodeContextResume(node.context)) namedResumeSourceIds.add(node.context.resume);
-  }
+  const collectNamedSources = (nodes: readonly DagNode[]): void => {
+    for (const node of nodes) {
+      if (isNodeContextResume(node.context)) namedResumeSourceIds.add(node.context.resume);
+      if (isLoopGroupNode(node)) collectNamedSources(resolvedBodyNodes(node.loop_group));
+    }
+  };
+  collectNamedSources(workflow.nodes);
   const nodeSessionHandles = new Map<string, SequentialSessionCursor>();
   for (const row of priorNodeSessions ?? []) {
     // The completed-output snapshot is the authority for which nodes actually
@@ -11320,6 +11777,7 @@ export async function executeDagWorkflow(
       ? undefined
       : (await deps.store.getDagResumeSnapshot(workflowRun.id)).unfinishedInvocations;
   const runCtx: RunLayersContext = {
+    toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
     deps,
     platform,
@@ -11503,6 +11961,8 @@ export async function executeDagWorkflow(
       );
     }
     throw error;
+  } finally {
+    await runCtx.toolAttention.refresh();
   }
 
   // Normal return has no primary error to preserve, so a verdict persistence failure

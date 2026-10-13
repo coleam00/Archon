@@ -1,7 +1,8 @@
 # Dry-run fixture: the other half of `docs: auto` — the scope node finds no shipped-doc
 # change, so the docs lens stays off. It has no stub, so a regression that runs it anyway
 # fails the run instead of passing quietly.
-mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
+coverage: { full: true }
 scope:
   docs: false
   # A standalone review of the working diff: no pull request to publish to.

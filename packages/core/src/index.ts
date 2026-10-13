@@ -74,6 +74,7 @@ export {
   createWorkflowStore,
   createWorkflowDeps,
   registerGitHubAppAuthProvider,
+  initializeWorkflowGitHubAppAuth,
 } from './workflows/store-adapter';
 
 // Per-child isolation resolver (#2121 slice 2, PR-A)
@@ -108,7 +109,11 @@ export {
   registerRepository,
   registerFolder,
   type RegisterResult,
-} from './handlers/clone';
+  inspectProjectBaseBranch,
+  ProjectRegistrationError,
+  type RegistrationOptions,
+  type ProjectBaseBranchInspection,
+} from './handlers/sql-registration';
 
 // =============================================================================
 // Config
@@ -171,6 +176,7 @@ export type {
   RunLiveOwnerStopLease,
   RunLiveOwnerWatch,
   RunLiveOwnerWatchEvent,
+  RunLiveOwnerWatchResult,
 } from './services/run-live-owner';
 
 // =============================================================================
@@ -265,7 +271,6 @@ export {
   startOAuth,
   pollOAuth,
   cancelOAuth,
-  OAuthCallbackPortBusyError,
   type ResolvedCredential,
   type DeliveryResult,
   type DeliveryOptions,
@@ -305,3 +310,13 @@ export { getPort } from './utils/port-allocation';
 
 // Worktree sync
 export { resolveWorkflowSourceRoot } from './utils/workflow-source-root';
+
+export type { RunActor } from './operations/run-authorization';
+
+export { authorizeRunAction, RunActionForbiddenError } from './operations/run-authorization';
+
+export { processProviderRegistration } from './providers/process-registration';
+
+export { loadProviderPlugins } from './providers/load-provider-plugins';
+
+export { registerHostProviders } from './providers/register-host-providers';

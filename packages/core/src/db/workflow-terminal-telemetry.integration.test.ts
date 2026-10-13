@@ -1,9 +1,10 @@
+// @archon-test-isolated
 /**
  * Terminal telemetry against a REAL bun:sqlite database: every terminal writer reports
  * its committed transition exactly once, a lost CAS reports nothing, and the projected
  * payload accumulates across resume segments.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with workflows.test.ts's fake.
  */
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
@@ -174,6 +175,45 @@ describe('terminal writers report each committed transition once', () => {
 });
 
 describe('the projected payload', () => {
+  test('includes deferred own spend once alongside later completion and aggregate rollups', async () => {
+    await seedRun('t-deferred', 'running');
+    await seedEvent(
+      't-deferred',
+      'node_deferred_usage',
+      ago(3),
+      {
+        cost_usd: 0.25,
+        tokens: { input: 10, output: 5 },
+        accounting: 'node',
+      },
+      'group.review'
+    );
+    await seedEvent(
+      't-deferred',
+      'node_completed',
+      ago(1),
+      {
+        cost_usd: 0.5,
+        tokens: { input: 20, output: 10 },
+      },
+      'group.review'
+    );
+    await seedEvent(
+      't-deferred',
+      'node_completed',
+      ago(1),
+      {
+        cost_usd: 0.5,
+        tokens: { input: 20, output: 10 },
+        aggregate: true,
+      },
+      'group'
+    );
+    await completeWorkflowRun('t-deferred', { duration_ms: 1 });
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ costUsd: 0.75, tokensIn: 30, tokensOut: 15 });
+  });
+
   test('accumulates duration, loop iterations and cost across a failed-then-resumed run', async () => {
     await seedRun('t-resume', 'running', {
       metadata: { dispatch: { base_branch: 'main', source: 'bundled' } },

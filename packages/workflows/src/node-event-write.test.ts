@@ -8,9 +8,11 @@ import {
   deriveEmitterEvent,
   deriveTranscriptEvent,
   NodeEventWriteError,
+  persistNodeEvent,
   recordDerivedNodeState,
   recordNodeState,
 } from './node-event-write';
+import { serializeDeferredNodeUsage } from './node-record-serialization';
 import type { NodeExecutionRecord } from './schemas/node-execution';
 import type { NodeStateEventInput } from './store';
 
@@ -34,6 +36,23 @@ const completedRecord = (): NodeExecutionRecord => ({
 });
 
 describe('node-event-write', () => {
+  it('propagates deferred accounting persistence rejection', async () => {
+    const cause = new Error('database unavailable');
+    const store = {
+      persistWorkflowEvent: mock(async () => {
+        throw cause;
+      }),
+    };
+    await expect(
+      persistNodeEvent(store, serializeDeferredNodeUsage(completedRecord()))
+    ).rejects.toMatchObject({
+      name: 'NodeEventWriteError',
+      cause,
+      message: expect.stringContaining('node_deferred_usage for group.build'),
+    });
+    expect(store.persistWorkflowEvent).toHaveBeenCalledTimes(1);
+  });
+
   let logDir: string;
   beforeEach(async () => {
     logDir = join(tmpdir(), `node-event-write-${crypto.randomUUID()}`);

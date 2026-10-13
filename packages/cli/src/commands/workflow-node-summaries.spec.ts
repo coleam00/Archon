@@ -8,7 +8,7 @@
  * would be neither type-checked nor linted.
  */
 import { describe, expect, it } from 'bun:test';
-import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
+import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
 import { NODE_SUMMARY_EVENT_TYPES, buildNodeSummaries, buildRunNodes } from './workflow';
 
@@ -180,18 +180,10 @@ describe('buildNodeSummaries', () => {
   });
 });
 
-// #3271: SQLite writes `created_at` as `datetime('now')` — UTC, "YYYY-MM-DD HH:MM:SS",
-// no zone marker — and `new Date()` reads a marker-less string as LOCAL time. A
-// constant UTC offset cancels out of `end - start`, so the defect only shows when
-// the offset changes between the two events: across a DST transition the local
-// reading skips or repeats an hour and the duration is off by that hour.
 describe('buildNodeSummaries durations', () => {
-  // 01:30 → 03:30 UTC on 2026-03-08 is two hours. Read as America/New_York local
-  // time, the 02:00 → 03:00 hour does not exist that morning, so the naive parse
-  // yields one hour. UTC and Asia/Kolkata (no DST) are the controls.
-  const SQLITE_DST_INTERVAL = [
-    event('dst-start', 'node_started', 'build', '2026-03-08 01:30:00'),
-    event('dst-end', 'node_completed', 'build', '2026-03-08 03:30:00'),
+  const HYDRATED_DST_INTERVAL = [
+    event('dst-start', 'node_started', 'build', '2026-03-08T01:30:00.000Z'),
+    event('dst-end', 'node_completed', 'build', '2026-03-08T03:30:00.000Z'),
   ];
 
   function withTimezone<T>(tz: string, fn: () => T): T {
@@ -206,9 +198,9 @@ describe('buildNodeSummaries durations', () => {
   }
 
   it.each(['America/New_York', 'UTC', 'Asia/Kolkata'])(
-    'measures a SQLite interval across a DST boundary as two hours under %s',
+    'measures a hydrated interval across a DST boundary as two hours under %s',
     tz => {
-      const [summary] = withTimezone(tz, () => buildNodeSummaries(SQLITE_DST_INTERVAL));
+      const [summary] = withTimezone(tz, () => buildNodeSummaries(HYDRATED_DST_INTERVAL));
       expect(summary?.durationMs).toBe(7_200_000);
     }
   );
@@ -216,8 +208,8 @@ describe('buildNodeSummaries durations', () => {
   it('measures a failed node the same way as a completed one', () => {
     const [summary] = withTimezone('America/New_York', () =>
       buildNodeSummaries([
-        event('fail-start', 'node_started', 'build', '2026-03-08 01:30:00'),
-        event('fail-end', 'node_failed', 'build', '2026-03-08 03:30:00', { error: 'boom' }),
+        event('fail-start', 'node_started', 'build', '2026-03-08T01:30:00.000Z'),
+        event('fail-end', 'node_failed', 'build', '2026-03-08T03:30:00.000Z', { error: 'boom' }),
       ])
     );
     expect(summary?.durationMs).toBe(7_200_000);

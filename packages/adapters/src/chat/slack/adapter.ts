@@ -40,6 +40,7 @@ const MAX_TRACKED_TRIGGERS = 1000;
 
 export class SlackAdapter implements IPlatformAdapter {
   readonly capabilities = {
+    canDetachProject: true as const,
     messagePersistence: 'core',
     defaultWorkflowDispatch: 'foreground',
   } as const;
@@ -329,14 +330,13 @@ export class SlackAdapter implements IPlatformAdapter {
       const slackErrorCode = err.data?.error;
       // Strip err.data from the log — Slack SDK error bodies can include API
       // response metadata (workspace/user info) that's not relevant for ops.
-      const errMessage = err.message;
       if (slackErrorCode === 'missing_scope') {
         if (!this.missingScopeLogged) {
           this.missingScopeLogged = true;
           getLog().warn({ scope: 'users:read' }, 'slack.users_info_missing_scope');
         }
       } else {
-        getLog().warn({ errMessage, slackUserId, slackErrorCode }, 'slack.users_info_failed');
+        getLog().warn({ slackErrorCode }, 'slack.users_info_failed');
       }
       return undefined;
     }
@@ -413,8 +413,7 @@ export class SlackAdapter implements IPlatformAdapter {
       // Authorization check
       const userId = event.user;
       if (!isSlackUserAuthorized(userId, this.allowedUserIds)) {
-        const maskedId = userId ? `${userId.slice(0, 4)}***` : 'unknown';
-        getLog().info({ maskedUserId: maskedId }, 'slack.unauthorized_message');
+        getLog().info('slack.unauthorized_message');
         return;
       }
 
@@ -455,8 +454,7 @@ export class SlackAdapter implements IPlatformAdapter {
       // Authorization check
       const userId = 'user' in event ? event.user : undefined;
       if (!isSlackUserAuthorized(userId, this.allowedUserIds)) {
-        const maskedId = userId ? `${userId.slice(0, 4)}***` : 'unknown';
-        getLog().info({ maskedUserId: maskedId }, 'slack.unauthorized_dm');
+        getLog().info('slack.unauthorized_dm');
         return;
       }
 
@@ -506,13 +504,10 @@ export class SlackAdapter implements IPlatformAdapter {
   ): Promise<void> {
     const actorId = command.user_id;
     if (!isSlackUserAuthorized(actorId, this.allowedUserIds)) {
-      // Silent rejection with masked logging — matches the inbound event-handler
+      // Silent rejection — matches the inbound event-handler
       // policy (see app_mention / message.im handlers above). Posting a denial
       // would tell unauthorized users a bot exists and is listening.
-      getLog().info(
-        { maskedUserId: `${actorId.slice(0, 4)}***`, kind },
-        'slack.slash_unauthorized'
-      );
+      getLog().info({ kind }, 'slack.slash_unauthorized');
       return;
     }
 
@@ -627,7 +622,7 @@ export class SlackAdapter implements IPlatformAdapter {
       const user = await userDb.findOrCreateUserByPlatformIdentity('slack', actorId, displayName);
       archonUserId = user.id;
     } catch (err) {
-      getLog().warn({ err: err as Error }, 'slack.connect_github_identity_failed');
+      getLog().warn({ err, platform: 'slack' }, 'slack.connect_github_identity_failed');
       await respond({
         response_type: 'ephemeral',
         text: 'Could not resolve your Archon identity — try again in a moment.',
@@ -657,7 +652,7 @@ export class SlackAdapter implements IPlatformAdapter {
             : err instanceof DeviceFlowError
               ? `✗ Device flow failed (${err.code}).`
               : '✗ GitHub connect failed — try again.';
-        getLog().warn({ err: err as Error }, 'slack.connect_github_failed');
+        getLog().warn({ err, platform: 'slack' }, 'slack.connect_github_failed');
         await respond({ response_type: 'ephemeral', text });
       });
   }

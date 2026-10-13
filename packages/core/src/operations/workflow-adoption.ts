@@ -19,8 +19,8 @@ import {
   type ContinuationMode,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import * as workflowDb from '../db/workflows';
-import * as isolationDb from '../db/isolation-environments';
+import type { IWorkflowStore } from '@archon/workflows/store';
+import type { IWorkflowHostStore } from '../workflows/host-store';
 
 /** Refusal reasons carry the operator's next action, not just the failure. */
 export class WorkflowAdoptionError extends Error {
@@ -54,17 +54,13 @@ export interface ResolvedWorkflowAdoption {
 
 export interface ResolveWorkflowAdoptionArgs {
   adoptedRunId: string;
-  /**
-   * Seam overrides for tests (and embedders with exotic filesystems): path
-   * existence and git branch verification. Defaults are the real fs and git.
-   */
-  deps?: {
+  deps: {
     existsSync?: (path: string) => boolean;
     branchExists?: (repoPath: string, branch: string) => Promise<boolean>;
     currentBranch?: (workingPath: string) => Promise<string | null>;
-    getRun?: typeof workflowDb.getWorkflowRun;
-    getActiveRunByPath?: typeof workflowDb.getActiveWorkflowRunByPath;
-    findEnvironmentByPath?: typeof isolationDb.findLatestByCodebaseAndWorkingPath;
+    getRun: IWorkflowStore['getWorkflowRun'];
+    getActiveRunByPath: IWorkflowStore['getActiveWorkflowRunByPath'];
+    findEnvironmentByPath: IWorkflowHostStore['isolation']['findLatestByCodebaseAndWorkingPath'];
   };
   /** Codebase of the NEW run; cross-workflow is fine, cross-codebase is not. */
   codebaseId: string | null | undefined;
@@ -97,13 +93,12 @@ async function defaultCurrentBranch(workingPath: string): Promise<string | null>
 export async function resolveWorkflowAdoption(
   args: ResolveWorkflowAdoptionArgs
 ): Promise<ResolvedWorkflowAdoption> {
-  const pathExists = args.deps?.existsSync ?? existsSync;
-  const branchExists = args.deps?.branchExists ?? defaultBranchExists;
-  const currentBranch = args.deps?.currentBranch ?? defaultCurrentBranch;
-  const getRun = args.deps?.getRun ?? workflowDb.getWorkflowRun;
-  const getActiveRunByPath = args.deps?.getActiveRunByPath ?? workflowDb.getActiveWorkflowRunByPath;
-  const findEnvironmentByPath =
-    args.deps?.findEnvironmentByPath ?? isolationDb.findLatestByCodebaseAndWorkingPath;
+  const pathExists = args.deps.existsSync ?? existsSync;
+  const branchExists = args.deps.branchExists ?? defaultBranchExists;
+  const currentBranch = args.deps.currentBranch ?? defaultCurrentBranch;
+  const getRun = args.deps.getRun;
+  const getActiveRunByPath = args.deps.getActiveRunByPath;
+  const findEnvironmentByPath = args.deps.findEnvironmentByPath;
   const adoptedRun = await getRun(args.adoptedRunId);
   if (!adoptedRun) {
     throw new WorkflowAdoptionError(

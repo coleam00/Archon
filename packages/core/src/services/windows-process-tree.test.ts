@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, it } from 'bun:test';
 import {
   parseWindowsProcessListing,

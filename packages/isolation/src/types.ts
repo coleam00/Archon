@@ -7,16 +7,13 @@
  */
 
 import type { RepoPath, BranchName } from '@archon/git';
+import type { ExecutionContext } from '@archon/provider-contract';
 import type {
-  ExecutionContext,
   WriteBackFinalizeResult,
   WriteBackApplySummary,
-} from '@archon/providers/types';
+} from '@archon/workflows/container-context';
 
-// Re-exported so isolation consumers can source the execution-context contract
-// (and the write-back result shapes) from `@archon/isolation` alongside the
-// backend types that produce them, without reaching into
-// `@archon/providers/types` directly.
+// Isolation backends implement the engine-owned write-back port.
 export type { ExecutionContext, WriteBackFinalizeResult, WriteBackApplySummary };
 
 // --- Provider Types ---
@@ -77,15 +74,6 @@ interface IsolationRequestBase {
   baseOverride?: BranchName;
 
   description?: string;
-
-  /**
-   * Optional git author identity to stamp on the new worktree (`git config
-   * user.email`/`user.name`). Populated from the originating user's connected
-   * GitHub no-reply email so workflow commits attribute to the human. Absent in
-   * solo installs and for unconnected users — the worktree then inherits the
-   * ambient git identity (unchanged behavior).
-   */
-  gitIdentity?: { email: string; name?: string };
 }
 
 export interface IssueIsolationRequest extends IsolationRequestBase {
@@ -137,19 +125,30 @@ export type IsolationRequest =
 // --- Isolated Environment Types ---
 
 export interface AdoptedWorktreeMetadata {
+  provenance: 'adopted';
   adopted: true;
   adoptedFrom?: 'path' | 'branch';
   request?: IsolationRequest;
 }
 
 export interface CreatedWorktreeMetadata {
+  provenance: 'created';
   adopted: false;
+  creationId: string;
   request?: IsolationRequest;
   /** The commit a newly created branch was cut from; absent when an existing branch was checked out. */
   cutFromCommit?: string;
 }
 
-export type WorktreeMetadata = AdoptedWorktreeMetadata | CreatedWorktreeMetadata;
+export interface ObservedWorktreeMetadata {
+  provenance: 'observed';
+  adopted: false;
+}
+
+export type WorktreeMetadata =
+  | AdoptedWorktreeMetadata
+  | CreatedWorktreeMetadata
+  | ObservedWorktreeMetadata;
 
 interface IsolatedEnvironmentBase {
   /** For worktrees, this is the filesystem path */
@@ -165,13 +164,36 @@ interface IsolatedEnvironmentBase {
   warnings?: string[];
 }
 
-export interface WorktreeEnvironment extends IsolatedEnvironmentBase {
+export interface WorktreeEnvironment<
+  Metadata extends WorktreeMetadata = WorktreeMetadata,
+> extends IsolatedEnvironmentBase {
   provider: 'worktree';
   branchName: BranchName;
-  metadata: WorktreeMetadata;
+  metadata: Metadata;
 }
 
 export type IsolatedEnvironment = WorktreeEnvironment;
+export type WorktreeCreationEnvironment = WorktreeEnvironment<
+  CreatedWorktreeMetadata | AdoptedWorktreeMetadata
+>;
+
+/** Isolation-record metadata carrying a worktree's creation proof; null when adopted. */
+export interface WorktreeRegistrationMetadata {
+  worktree_creation_id: string | null;
+}
+
+/** The one encoding of creation provenance every isolation-record writer persists. */
+export function worktreeRegistrationMetadata(
+  metadata: WorktreeCreationEnvironment['metadata']
+): WorktreeRegistrationMetadata {
+  return { worktree_creation_id: metadata.provenance === 'created' ? metadata.creationId : null };
+}
+
+/** Read the creation proof that worktreeRegistrationMetadata persisted. */
+export function readWorktreeCreationId(metadata: Record<string, unknown>): string | null {
+  const id = (metadata as Partial<WorktreeRegistrationMetadata>).worktree_creation_id;
+  return typeof id === 'string' ? id : null;
+}
 
 // --- Provider Interface ---
 
@@ -180,6 +202,14 @@ export interface DestroyOptions {
 }
 
 export interface WorktreeDestroyOptions extends DestroyOptions {
+  /** Expected creation proof; required to remove a present checkout outside guarded release. */
+  creationId?: string;
+  /**
+   * Remove a checkout Archon created, with force, after proving its creation ID.
+   * `beforeRemove` runs while the checkout is locked against adoption; throwing
+   * refuses the removal and drops the lock.
+   */
+  guardedRemoval?: { creationId: string; beforeRemove: () => Promise<void> };
   branchName?: BranchName;
   /**
    * Remove the worktree even while it is locked. Implies `force`: `git worktree
@@ -187,7 +217,7 @@ export interface WorktreeDestroyOptions extends DestroyOptions {
    * the lock may pass this — for anyone else, a lock means "not yours".
    */
   removeLocked?: boolean;
-  /** Required for branch cleanup if worktree path doesn't exist */
+  /** Expected repository; required for present-checkout removal and absent-path branch cleanup. */
   canonicalRepoPath?: RepoPath;
   /** Delete the remote branch (best-effort, e.g., after PR merge) */
   deleteRemoteBranch?: boolean;
@@ -225,7 +255,7 @@ export interface DestroyResult {
 export interface IIsolationProvider {
   readonly providerType: IsolationProviderType;
 
-  create(request: IsolationRequest): Promise<IsolatedEnvironment>;
+  create(request: IsolationRequest): Promise<WorktreeCreationEnvironment>;
 
   /**
    * Best-effort cleanup. Throws only for unexpected errors (permissions, git failures).
@@ -354,7 +384,7 @@ export interface WorktreeStatusBreakdown {
   active: number;
   mergedEnvs: { id: string; branchName: string }[];
   staleEnvs: { id: string; branchName: string; daysInactive: number }[];
-  activeEnvs: { id: string; branchName: string }[];
+  activeEnvs: { id: string; branchName: string; reason?: string }[];
 }
 
 // --- Store Types ---
@@ -397,12 +427,6 @@ export interface ResolveRequest {
   platformType: string;
   /** Archon user UUID; populated by chat/forge adapter handlers. */
   userId?: string;
-  /**
-   * Git author identity to stamp on a newly-created worktree (no-reply email of
-   * the originating user's connected GitHub account). Forwarded into the
-   * IsolationRequest passed to the provider. Absent → ambient git identity.
-   */
-  gitIdentity?: { email: string; name?: string };
 }
 
 export type ResolutionMethod =
@@ -410,8 +434,10 @@ export type ResolutionMethod =
   | { type: 'workflow_reuse' }
   | { type: 'linked_issue_reuse'; issueNumber: number }
   | { type: 'branch_adoption'; branch: string }
+  | { type: 'provider_adoption' }
   | {
       type: 'created';
+      creationId: string;
       autoCleanedCount?: number;
       /** The commit the new branch was cut from, when this resolution created one. */
       cutFromCommit?: string;

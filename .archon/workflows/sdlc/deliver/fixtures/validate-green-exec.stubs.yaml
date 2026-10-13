@@ -18,7 +18,8 @@ impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__coverage: { full: true }
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
@@ -40,7 +41,7 @@ review__publish:
   findings_summary: "stub: clean on initial review"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 gate-ready: '{"ready":"true"}'
-validate__discover: { checks: [{ name: "project gate", argv: ["bun", "-e", "console.log('gate passed')"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__discover: { checks: [{ name: "project gate", argv: ["bun", "-e", "console.log('gate passed')"] }], notes: "stub: the project's aggregate gate" }
 # validate__run, validate__result and gate-validated are deliberately unstubbed:
 # the real scripts run (exec-code: true) and prove a check that exits 0 reaches
 # the gate as green.
@@ -48,6 +49,7 @@ ci-probe: '{"state":"concluded","detail":"no checks configured on this repositor
 ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
+review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
   errors: false

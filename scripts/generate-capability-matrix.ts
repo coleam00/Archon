@@ -14,8 +14,8 @@
  * ignored-capability warnings — makes a capability change a `bun run validate`
  * failure until the docs are regenerated.
  *
- * Source of truth: the provider registry (registerBuiltinProviders +
- * registerCommunityProviders → getRegisteredProviders). The factories stay lazy,
+ * Source of truth: the provider registry (registerInProcessProviders →
+ * getRegisteredProviders). The factories stay lazy,
  * so no provider is instantiated; we only read the static capability metadata.
  *
  * Usage:
@@ -29,12 +29,8 @@
  */
 import { readFile, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
-import {
-  registerBuiltinProviders,
-  registerCommunityProviders,
-  getRegisteredProviders,
-  DEPRECATED_PROVIDERS_DOCS_PATH,
-} from '@archon/providers';
+import { getRegisteredProviders, DEPRECATED_PROVIDERS_DOCS_PATH } from '@archon/providers';
+import { registerInProcessProviders } from '@archon/providers/in-process';
 import type { ProviderCapabilities, ProviderRegistration } from '@archon/providers';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
@@ -51,6 +47,7 @@ const CHECK_ONLY = process.argv.includes('--check');
  * matrix can never silently omit a capability.
  */
 const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
+  { key: 'backgroundWork', label: 'Background work observation' },
   { key: 'sessionResume', label: 'Session resume' },
   {
     key: 'sessionFork',
@@ -128,6 +125,7 @@ interface ResolvedCaveat {
 
 /** Render a single provider's value for an axis. */
 export function renderCell(caps: ProviderCapabilities, key: keyof ProviderCapabilities): string {
+  if (key === 'backgroundWork') return caps.backgroundWork;
   if (key === 'structuredOutput') {
     const tier = caps.structuredOutput;
     if (tier === 'enforced') return '**enforced**';
@@ -251,12 +249,28 @@ function buildMarkdown(providers: ProviderRegistration[], caveats: ResolvedCavea
     'starts, and `context.resume` rejects an explicitly unsupported provider at load',
     'time and an implicitly resolved one at runtime.',
     '',
+    'Installed provider plugins declare capabilities in their install-time descriptor.',
+    'The CLI and server register them alongside these bundled providers; they are not',
+    'columns in this generated table. The same pre-spend capability checks apply.',
+    '',
     'Reporting flags describe SDK fields that Archon translates into execution results.',
     'Supported does not guarantee that every result reports a value or that usage includes',
     'all nested agents. Unsupported fields remain absent; Archon does not estimate cost,',
     'count events as turns, or substitute the requested model for an unreported model.',
     'Cost reporting is independent of spend-limit support. Older providers may omit',
     'reporting declarations; absence means unknown, not unsupported.',
+    '',
+    'Background work: `reported` waits for runtime-reported task endings; `none` means verified absent;',
+    '`unobserved` means background work may exist without an observable lifecycle. A process',
+    'backgrounded inside a foreground shell command (`cmd &`) is invisible to every provider.',
+    'Codex observes subagents through `subAgentActivity` notifications and unified-exec processes',
+    'through `commandExecution` items with source `unifiedExecStartup`. It keeps the app-server',
+    'running after the parent result until those observed lifecycles end. This covers starts',
+    "observed before the parent's `turn/completed` and work started by those tasks (their",
+    'descendants). After parent completion the parent model cannot initiate new work, so',
+    'settlement is valid once the observed live set is empty. Starts first observed after',
+    'that point are outside this lifecycle contract. Idle thread status is not evidence',
+    'that this work has ended.',
     '',
     '## Providers',
     '',
@@ -288,8 +302,7 @@ function buildMarkdown(providers: ProviderRegistration[], caveats: ResolvedCavea
 }
 
 async function main(): Promise<void> {
-  registerBuiltinProviders();
-  registerCommunityProviders();
+  registerInProcessProviders();
   const providers = getRegisteredProviders();
   if (providers.length === 0) {
     throw new Error('No providers registered — registry bootstrap failed.');

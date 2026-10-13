@@ -1,6 +1,8 @@
+import { missingProviderMessage } from '@archon/provider-contract';
 /**
  * Workflow loader - discovers and parses workflow YAML files
  */
+import type { ProviderRegistry } from '@archon/provider-contract';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
@@ -26,12 +28,8 @@ import {
 } from './schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { createLogger } from '@archon/paths';
-import {
-  compileOutputSchema,
-  isRegisteredProvider,
-  getRegisteredProviders,
-  getProviderCapabilities,
-} from '@archon/providers';
+import { compileOutputSchema } from './structured-output';
+
 import {
   dagNodeSchema,
   ignoredFieldsForNode,
@@ -65,9 +63,8 @@ import { workflowNodeHooksSchema } from './schemas/hooks';
 import {
   findUnsupportedNestedWhenRef,
   assertSupportedWhenOutputRefs,
-  parseLoopPrevWhenAtom,
-  parseWhenAtom,
-  whenAtoms,
+  parseWhenExpression,
+  splitOutsideQuotes,
   WHEN_INPUTS_SCOPE,
 } from './when-atom';
 import {
@@ -124,10 +121,12 @@ function parseOptionalField<S extends z.ZodType>(
 }
 
 /**
- * Parse YAML using Bun's native YAML parser
+ * Parse workflow YAML with Bun's parser. Every reader of a workflow file goes through here.
+ * CRLF is normalized first: Bun keeps the line break of a multi-line quoted scalar in a CRLF
+ * file where the YAML spec (and LF input) folds it to a space.
  */
-function parseYaml(content: string): unknown {
-  return Bun.YAML.parse(content);
+export function parseYaml(content: string): unknown {
+  return Bun.YAML.parse(content.replaceAll('\r\n', '\n'));
 }
 
 /**
@@ -410,6 +409,42 @@ function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boole
 }
 
 /**
+ * A condition-skipped dependency is neither a success nor a failure, so a
+ * `none_failed_min_one_success` node whose ONLY dependency has a `when:` skips
+ * whenever that condition is false (#3783). Two or more conditional dependencies
+ * are usually mutually exclusive branches where one always runs, so they are not
+ * flagged. This judges the authored graph, not the expanded one: expansion copies
+ * an include's `when:` onto the block's entry nodes, where a whole block skipping
+ * together is the intent rather than a mistake.
+ */
+function collectConditionalJoinWarnings(
+  nodes: readonly (DagNode | IncludeDirective)[],
+  warnings: string[]
+): void {
+  const conditional = new Set(nodes.filter(node => node.when !== undefined).map(node => node.id));
+  for (const node of nodes) {
+    const [dependency, ...rest] = node.depends_on ?? [];
+    if (
+      node.trigger_rule === 'none_failed_min_one_success' &&
+      dependency !== undefined &&
+      rest.length === 0 &&
+      conditional.has(dependency)
+    ) {
+      warnings.push(
+        `Node '${node.id}': its only dependency '${dependency}' has a 'when', and ` +
+          "'none_failed_min_one_success' needs a successful dependency, so this node skips " +
+          `whenever '${dependency}' is condition-skipped. To run after an optional gate, also ` +
+          "depend on an unconditional node that runs before it, or use 'all_done' to run even after " +
+          'a failure. See /guides/authoring-workflows/#trigger_rule-values.'
+      );
+    }
+    if (!isIncludeDirective(node) && isLoopGroupNode(node)) {
+      collectConditionalJoinWarnings(node.loop_group.nodes, warnings);
+    }
+  }
+}
+
+/**
  * Loop-group sink-shape warnings, judged against the EXPANDED node graph (#2756).
  *
  * Both checks below read resolved nodes only — `depends_on` edges and node kinds —
@@ -424,7 +459,8 @@ function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boole
  */
 export function collectLoopGroupSinkWarnings(
   nodes: readonly (DagNode | IncludeDirective)[],
-  warnings: string[]
+  warnings: string[],
+  enclosingOwnerSessions = false
 ): void {
   for (const node of nodes) {
     if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
@@ -434,6 +470,9 @@ export function collectLoopGroupSinkWarnings(
     // these checks at all. The body type still admits one, so it stays a participant in
     // the sink count and is never itself classified as a gate or an interactive sink.
     const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
+    const hasOwnerSessions =
+      enclosingOwnerSessions ||
+      node.loop_group.nodes.some(n => !isIncludeDirective(n) && isNodeContextResume(n.context));
 
     // A gate node inside a loop_group body only pauses the enclosing loop when it is
     // the body's SOLE terminal sink (#2707 step 3, target-model decision (b)) — a
@@ -493,7 +532,7 @@ export function collectLoopGroupSinkWarnings(
       }
     }
 
-    // A body-terminal sink that is itself an interactive loop/loop_group can pause
+    // Interactive plain loops and ambient-only nested groups can pause
     // without stopping THIS group (#2753) — a bare gate sink is excluded here since
     // that case is already correctly handled above (and by #2707 step 3 at runtime);
     // this covers a sink whose own pause is trapped one level down instead.
@@ -501,7 +540,8 @@ export function collectLoopGroupSinkWarnings(
       soleSink !== undefined &&
       !isIncludeDirective(soleSink) &&
       !isGateNode(soleSink) &&
-      isUnescalatableInteractiveSink(soleSink)
+      isUnescalatableInteractiveSink(soleSink) &&
+      !(hasOwnerSessions && isLoopGroupNode(soleSink))
     ) {
       const message =
         `Node '${node.id}': this loop_group's terminal sink ('${soleSink.id}') is itself an ` +
@@ -517,7 +557,7 @@ export function collectLoopGroupSinkWarnings(
       );
     }
 
-    collectLoopGroupSinkWarnings(node.loop_group.nodes, warnings);
+    collectLoopGroupSinkWarnings(node.loop_group.nodes, warnings, hasOwnerSessions);
   }
 }
 
@@ -788,6 +828,17 @@ const GATE_ON_A_SHELL_NODE =
   "compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead";
 
 /**
+ * The load error for a `when:` that `parseWhenExpression` rejects. The grouping hint is
+ * added only when a parenthesis sits outside a quoted literal, so a typo like
+ * `$a.output = 'x'` is not blamed on grouping.
+ */
+function unsupportedConditionSyntax(nodeId: string, field: string, text: string): string {
+  const hasGrouping = ['(', ')'].some(paren => splitOutsideQuotes(text, paren).length > 1);
+  const hint = hasGrouping ? 'Grouping parentheses are not supported; use' : 'Use';
+  return `Node '${nodeId}' field '${field}' has unsupported condition syntax: "${text}". ${hint} comparisons joined by '&&'/'||' (AND binds tighter), or compute a decision in a script node`;
+}
+
+/**
  * Validate DAG structure: unique IDs, depends_on references exist, no cycles,
  * every runtime-substituted node-output reference points to a known node in its
  * current or enclosing loop scope, and no `when:` compares a free-form AI output to
@@ -808,7 +859,8 @@ const GATE_ON_A_SHELL_NODE =
 export function validateDagStructure(
   nodes: readonly (DagNode | IncludeDirective)[],
   enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>,
-  includeAliases?: ReadonlyMap<string, string>
+  includeAliases?: ReadonlyMap<string, string>,
+  eligibleResumeSources?: ReadonlyMap<string, DagNode | IncludeDirective>
 ): string | null {
   // Check ID uniqueness
   const nodesById = new Map<string, DagNode | IncludeDirective>();
@@ -890,7 +942,7 @@ export function validateDagStructure(
       );
     if (sharedNode === undefined) continue;
     if (enclosingNodes !== undefined) {
-      return `Node '${sharedNode.id}' uses scalar context: 'shared' in a structurally parallel loop_group body. Scalar 'shared' only inherits the ambient session in sequential layers. Serialize the body nodes with 'depends_on' or use fresh context; context.resume is not supported inside loop_group bodies`;
+      return `Node '${sharedNode.id}' uses scalar context: 'shared' in a structurally parallel loop_group body. Scalar 'shared' only inherits the ambient session in sequential layers. Serialize the body nodes with 'depends_on' or use fresh context; use context: { resume: <pre-loop-node-id> } for a private owner session`;
     }
     return `Node '${sharedNode.id}' uses scalar context: 'shared' in a structurally parallel layer. Scalar 'shared' only inherits the ambient session in sequential layers. Use 'context: { resume: <upstream-node-id> }' to fork an exact upstream session, or serialize the nodes with 'depends_on'`;
   }
@@ -977,9 +1029,12 @@ export function validateDagStructure(
       }
       const refs: { nodeId: string; field?: string; reference: string; prior: boolean }[] = [];
       if (source.surface === 'condition') {
-        for (const text of whenAtoms(source.text)) {
-          const atom = parseLoopPrevWhenAtom(text);
-          if (!atom || atom.ref.kind === 'input') continue;
+        const expression = parseWhenExpression(source.text, enclosingNodes !== undefined);
+        if (expression === null) {
+          return unsupportedConditionSyntax(node.id, source.field, source.text);
+        }
+        for (const atom of expression.flat()) {
+          if (atom.ref.kind === 'input') continue;
           const { nodeId, field } = atom.ref;
           const prior = atom.ref.kind === 'loop_prev';
           refs.push({
@@ -1076,6 +1131,10 @@ export function validateDagStructure(
     }
 
     if (node.when !== undefined) {
+      const expression = parseWhenExpression(node.when, enclosingNodes !== undefined);
+      if (expression === null) {
+        return unsupportedConditionSyntax(node.id, 'when', node.when);
+      }
       let m: RegExpExecArray | null;
       whenRefPattern.lastIndex = 0;
       while ((m = whenRefPattern.exec(node.when)) !== null) {
@@ -1104,12 +1163,9 @@ export function validateDagStructure(
       // The atom decomposition comes from the shared `when-atom` parser (the same one
       // the evaluator runs), because the coarse `whenRefPattern` sweep above captures
       // only the first path segment and so cannot tell `$n.output` from
-      // `$n.output.field`. An atom that does not parse is left alone: the executor
-      // already fails closed on it, loudly.
-      for (const atomText of whenAtoms(node.when)) {
-        const atom =
-          enclosingNodes !== undefined ? parseLoopPrevWhenAtom(atomText) : parseWhenAtom(atomText);
-        if (atom?.ref.kind !== 'node' || atom.ref.field !== undefined) continue;
+      // `$n.output.field`.
+      for (const atom of expression.flat()) {
+        if (atom.ref.kind !== 'node' || atom.ref.field !== undefined) continue;
         const producerId = atom.ref.nodeId;
         const producer = nodesById.get(producerId) ?? enclosingNodes?.get(producerId);
         if (!producer || isIncludeDirective(producer)) continue;
@@ -1130,23 +1186,26 @@ export function validateDagStructure(
     }
   }
 
-  // A named session source must be in the same static scope and complete before its
-  // consumer. Runtime validation owns provider/session facts that loading cannot know.
+  // Body ancestry is proven at group entry, separately from output visibility.
   for (const node of nodes) {
     if (isIncludeDirective(node)) continue;
     if (!isNodeContextResume(node.context)) continue;
-    if (enclosingNodes !== undefined) {
-      return `Node '${node.id}' uses context.resume inside a loop_group body, which is not supported`;
-    }
     const sourceId = node.context.resume;
-    const source = nodesById.get(sourceId);
+    if (enclosingNodes !== undefined && nodesById.has(sourceId)) {
+      return `Node '${node.id}' context.resume cannot name a source inside the same loop_group body`;
+    }
+    const source =
+      enclosingNodes === undefined ? nodesById.get(sourceId) : eligibleResumeSources?.get(sourceId);
+    if (source === undefined && enclosingNodes?.has(sourceId)) {
+      return `Node '${node.id}' context.resume source '${sourceId}' is not an upstream dependency of the loop_group`;
+    }
     if (source === undefined) {
       return `Node '${node.id}' context.resume references unknown node '${sourceId}'`;
     }
     if (isIncludeDirective(source) || !(isAgentNode(source) || isLoopNode(source))) {
       return `Node '${node.id}' context.resume source '${sourceId}' is not a session-producing command, prompt, or loop node`;
     }
-    if (!transitiveDepsOf(node.id).has(sourceId)) {
+    if (enclosingNodes === undefined && !transitiveDepsOf(node.id).has(sourceId)) {
       return `Node '${node.id}' context.resume source '${sourceId}' is not an upstream dependency`;
     }
   }
@@ -1292,7 +1351,17 @@ export function validateDagStructure(
         ...(enclosingNodes ?? []),
         ...nodesById,
       ]);
-      const bodyError = validateDagStructure(node.loop_group.nodes, scopeNodes, includeAliases);
+      const eligible = new Map(eligibleResumeSources);
+      for (const id of transitiveDepsOf(node.id)) {
+        const ancestor = nodesById.get(id);
+        if (ancestor !== undefined) eligible.set(id, ancestor);
+      }
+      const bodyError = validateDagStructure(
+        node.loop_group.nodes,
+        scopeNodes,
+        includeAliases,
+        eligible
+      );
       if (bodyError) {
         return `loop_group '${node.id}' body: ${bodyError}`;
       }
@@ -1447,6 +1516,36 @@ export function validateNodeOutputFormats(
   return null;
 }
 
+/** A root `type` without "string" means the node's output is serialized JSON, never prose. */
+function outputSchemaExcludesStrings(schema: Record<string, unknown>): boolean {
+  const { type } = schema;
+  if (type === undefined) return false;
+  return Array.isArray(type) ? !type.includes('string') : type !== 'string';
+}
+
+export function validateLoopGroupProseCompletion(
+  nodes: readonly (DagNode | IncludeDirective)[]
+): string | null {
+  for (const node of nodes) {
+    if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
+    const bodyError = validateLoopGroupProseCompletion(node.loop_group.nodes);
+    if (bodyError) return bodyError;
+    const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
+    if (
+      node.loop_group.until !== undefined &&
+      node.loop_group.until_bash === undefined &&
+      soleSink !== undefined &&
+      !isIncludeDirective(soleSink) &&
+      isOutputFormatEnforced(soleSink) &&
+      soleSink.output_format !== undefined &&
+      outputSchemaExcludesStrings(soleSink.output_format)
+    ) {
+      return `loop_group '${node.id}': terminal node '${soleSink.id}' declares a non-string output_format, so the prose until signal cannot be detected in serialized structured output. Use loop_group.until_bash to read the terminal node's structured field instead`;
+    }
+  }
+  return null;
+}
+
 export type ParseResult =
   | { workflow: WorkflowDefinition; error: null; warnings: string[] }
   | { workflow: null; error: WorkflowLoadError; warnings?: never };
@@ -1457,6 +1556,7 @@ export type ParseResult =
 export function parseWorkflow(
   content: string,
   filename: string,
+  providers: ProviderRegistry,
   configuredEnvNames?: ReadonlySet<string>
 ): ParseResult {
   try {
@@ -1579,6 +1679,17 @@ export function parseWorkflow(
       };
     }
 
+    const proseCompletionError = validateLoopGroupProseCompletion(dagNodes);
+    if (proseCompletionError) {
+      getLog().debug({ filename, proseCompletionError }, 'loop_group_prose_completion_rejected');
+      return {
+        workflow: null,
+        error: { filename, error: proseCompletionError, errorType: 'validation_error' },
+      };
+    }
+
+    collectConditionalJoinWarnings(dagNodes, parseWarnings);
+
     // Workflow-class placement (#2707 step 2) + the typed `interactive` field share
     // one raw-value coercion, computed here so the class check and the field the
     // engine actually reads can never disagree.
@@ -1609,43 +1720,65 @@ export function parseWorkflow(
     // per node. Model strings are NOT validated — they pass through to the SDK
     // at run time, which is the source of truth for what model names exist
     // (vendor SDKs ship new models faster than Archon can update).
-    if (provider && !isRegisteredProvider(provider)) {
+    if (provider && !providers.get(provider)) {
       return {
         workflow: null,
         error: {
           filename,
-          error: `Unknown provider '${provider}'. Registered: ${getRegisteredProviders()
-            .map(p => p.id)
-            .join(', ')}`,
+          error: missingProviderMessage(providers, provider),
           errorType: 'validation_error',
         },
       };
     }
     for (const node of dagNodes) {
       if (isIncludeDirective(node)) continue;
-      if (node.provider !== undefined && !isRegisteredProvider(node.provider)) {
+      if (node.provider !== undefined && !providers.get(node.provider)) {
         return {
           workflow: null,
           error: {
             filename,
-            error: `Node '${node.id}': unknown provider '${node.provider}'. Registered: ${getRegisteredProviders()
-              .map(p => p.id)
-              .join(', ')}`,
+            error: `Node '${node.id}': ${missingProviderMessage(providers, node.provider)}`,
             errorType: 'validation_error',
           },
         };
       }
     }
 
-    for (const node of dagNodes) {
-      if (isIncludeDirective(node)) continue;
+    interface SessionNode {
+      node: DagNode;
+      provider: string | undefined;
+    }
+    const sessionConsumers: { consumer: SessionNode; sources: ReadonlyMap<string, SessionNode> }[] =
+      [];
+    const collectSessionNodes = (
+      nodes: readonly (DagNode | IncludeDirective)[],
+      inheritedProvider: string | undefined,
+      enclosing = new Map<string, SessionNode>()
+    ): void => {
+      const scope = new Map(enclosing);
+      for (const node of nodes) {
+        if (!isIncludeDirective(node))
+          scope.set(node.id, { node, provider: node.provider ?? inheritedProvider });
+      }
+      for (const node of nodes) {
+        if (isIncludeDirective(node)) continue;
+        const consumer = scope.get(node.id);
+        if (consumer === undefined) continue;
+        if (isNodeContextResume(node.context)) sessionConsumers.push({ consumer, sources: scope });
+        if (isLoopGroupNode(node))
+          collectSessionNodes(node.loop_group.nodes, consumer.provider, scope);
+      }
+    };
+    collectSessionNodes(dagNodes, provider);
+    for (const {
+      consumer: { node, provider: consumerProvider },
+      sources,
+    } of sessionConsumers) {
       if (!isNodeContextResume(node.context)) continue;
-      const sourceNodeId = node.context.resume;
-      const source = dagNodes.find(candidate => candidate.id === sourceNodeId);
-      if (source === undefined || isIncludeDirective(source)) continue; // validateDagStructure already reports this case.
-
-      const consumerProvider = node.provider ?? provider;
-      const sourceProvider = source.provider ?? provider;
+      const sourceEntry = sources.get(node.context.resume);
+      if (sourceEntry === undefined) continue;
+      const source = sourceEntry.node;
+      const sourceProvider = sourceEntry.provider;
       if (
         consumerProvider !== undefined &&
         sourceProvider !== undefined &&
@@ -1662,8 +1795,10 @@ export function parseWorkflow(
       }
 
       const knownProvider = consumerProvider ?? sourceProvider;
-      if (knownProvider !== undefined && isRegisteredProvider(knownProvider)) {
-        const caps = getProviderCapabilities(knownProvider);
+      const knownDescriptor =
+        knownProvider === undefined ? undefined : providers.get(knownProvider);
+      if (knownDescriptor) {
+        const caps = knownDescriptor.capabilities;
         if (!caps.sessionResume || caps.sessionFork !== true) {
           return {
             workflow: null,
@@ -1694,8 +1829,9 @@ export function parseWorkflow(
       if (!nodeUsesPersistedScope(node, workflowPersistSessions)) continue;
 
       const explicitProvider = ('provider' in node ? node.provider : undefined) ?? provider;
-      if (!explicitProvider || !isRegisteredProvider(explicitProvider)) continue;
-      const handling = persistedSessionHandling(getProviderCapabilities(explicitProvider));
+      const descriptor = explicitProvider ? providers.get(explicitProvider) : undefined;
+      if (!descriptor) continue;
+      const handling = persistedSessionHandling(descriptor.capabilities);
       if (handling === 'unsupported') {
         return {
           workflow: null,

@@ -1,3 +1,4 @@
+import { ToolCallAttentionSection } from './ToolCallAttentionSection';
 import { useState, type ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { StatusStrip } from './StatusStrip';
@@ -22,9 +23,8 @@ interface ActiveRunCardProps {
   showProject?: boolean;
   selected?: boolean;
   /**
-   * True when this run's approval is currently surfaced in the pending-input
-   * banner at the top of the feed. The card then shows a pointer instead of a
-   * second live ApprovalPanel; dismissing the banner restores the inline panel.
+   * Promoted runs show a pointer instead of duplicating the banner's actions.
+   * Dismissing the banner restores the inline controls.
    */
   inputPromoted?: boolean;
 }
@@ -168,6 +168,8 @@ export function ActiveRunCard({
           </div>
         </div>
 
+        <ToolCallAttentionSection run={run} />
+
         {/* Provenance + activity detail: the triggering input (when present, truncated —
             full text on hover), plus live node/tool rows while running. */}
         {showDetailGrid ? (
@@ -202,7 +204,13 @@ export function ActiveRunCard({
           </div>
         ) : null}
 
-        {run.status === 'paused' && run.wait != null ? (
+        {run.status === 'paused' && inputPromoted ? (
+          <div className="mt-2 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px] text-warning">
+            Waiting for your input — see the banner at the top.
+          </div>
+        ) : null}
+
+        {run.status === 'paused' && !inputPromoted && run.wait != null ? (
           <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px]">
             <span className="font-mono text-text-tertiary">node</span>
             <span className="font-mono text-text-primary">{run.wait.nodeId}</span>
@@ -212,10 +220,10 @@ export function ActiveRunCard({
                 <span className="font-mono text-text-primary">{run.wait.event}</span>
               </>
             ) : null}
-            {run.wait.kind === 'attention' ? (
+            {run.attention?.kind === 'action_required' ? (
               <>
                 <span className="font-mono text-text-tertiary">action</span>
-                <span className="text-text-secondary">{run.wait.message}</span>
+                <span className="text-text-secondary">{run.attention.message}</span>
                 <span className="font-mono text-text-tertiary">then</span>
                 <span className="flex flex-wrap items-center gap-2">
                   <button
@@ -245,7 +253,7 @@ export function ActiveRunCard({
                   ) : null}
                 </span>
               </>
-            ) : (
+            ) : run.wait.kind !== 'attention' ? (
               <>
                 <span className="font-mono text-text-tertiary">
                   {run.wait.kind === 'event' ? 'deadline' : 'resume'}
@@ -254,7 +262,7 @@ export function ActiveRunCard({
                   {new Date(run.wait.resumeAt).toLocaleString()}
                 </span>
               </>
-            )}
+            ) : null}
           </div>
         ) : null}
 
@@ -262,20 +270,11 @@ export function ActiveRunCard({
             The context block shows the actual question the agent asked (pulled
             from the last text event), because the approval node's own
             `message` is usually just a pointer ("answer the questions above"). */}
-        {run.status === 'paused' && run.approval !== null && run.approval !== undefined ? (
-          inputPromoted ? (
-            <div className="mt-2 flex items-center gap-2 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px] text-warning">
-              <span aria-hidden className="leading-none">
-                ⚠
-              </span>
-              <span>Waiting for your input — see the banner at the top.</span>
-            </div>
-          ) : (
-            <>
-              <ApprovalContext run={run} />
-              <ApprovalPanel run={run} />
-            </>
-          )
+        {!inputPromoted && run.attention?.kind === 'awaiting_response' ? (
+          <>
+            <ApprovalContext run={run} />
+            <ApprovalPanel run={run} />
+          </>
         ) : null}
 
         {/* Resolved gate awaiting auto-resume — the run is still 'paused' in the

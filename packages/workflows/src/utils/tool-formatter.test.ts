@@ -83,14 +83,18 @@ describe('tool-formatter', () => {
       });
     });
 
+    test.each(['patch text', 0, false, null, ['a', 1]].map(input => [input] as const))(
+      'formats non-object JSON input %j',
+      input => {
+        expect(formatToolCall('apply_patch', input)).toBe(
+          `🔧 APPLY_PATCH\n${JSON.stringify(input)}`
+        );
+      }
+    );
+
     describe('no toolInput', () => {
       test('returns tool name only when toolInput is undefined', () => {
         const result = formatToolCall('SomeTool');
-        expect(result).toBe('🔧 SOMETOOL');
-      });
-
-      test('returns tool name only when toolInput is null', () => {
-        const result = formatToolCall('SomeTool', undefined);
         expect(result).toBe('🔧 SOMETOOL');
       });
     });

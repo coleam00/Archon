@@ -57,7 +57,11 @@ function createTemplateRepo(): string {
   writeFileSync(join(repoRoot, OUTPUT_REL), SENTINEL);
   runGit(repoRoot, ['init']);
   runGit(repoRoot, ['add', '.']);
+  // A commit starts `git maintenance run --auto --detach`, which can create and delete
+  // `.git/objects/maintenance.lock` while createRepo copies this tree.
   runGit(repoRoot, [
+    '-c',
+    'maintenance.auto=false',
     '-c',
     'user.email=test@example.com',
     '-c',

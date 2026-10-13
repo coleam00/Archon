@@ -2017,6 +2017,86 @@ describe('dryRunWorkflow', () => {
     expect(childResult.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
   });
 
+  test('a stubbed child workflow node completes with the stub as its output', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'parent',
+      nodes: [
+        { id: 'pick', bash: 'echo 7' },
+        { id: 'child', workflow: 'other', with: { target: '$pick.output' }, depends_on: ['pick'] },
+        {
+          id: 'after',
+          bash: 'echo next',
+          depends_on: ['child'],
+          when: '$child.output.merged == true',
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { pick: '7', child: { merged: true }, after: 'next' },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(result.trace.find(entry => entry.nodeId === 'child')).toMatchObject({
+      nodeType: 'workflow',
+      state: 'stubbed',
+    });
+    // The child's stubbed output feeds a downstream field condition like any node's.
+    expect(result.trace.find(entry => entry.nodeId === 'after')?.state).toBe('stubbed');
+  });
+
+  test('a stubbed child workflow node still fails on a binding a real launch would reject', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'parent',
+      nodes: [{ id: 'child', workflow: 'other', with: { target: '$missing.output' } }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { child: { merged: true } },
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]).toMatchObject({ nodeId: 'child', state: 'failed' });
+  });
+
+  test('a --default-stubs placeholder never stands in for a child workflow run', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'parent',
+      nodes: [{ id: 'child', workflow: 'other' }],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      defaultStubs: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
+  });
+
+  test('a fan-out child workflow node cannot be stubbed and still fails loud', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'parent',
+      nodes: [
+        {
+          id: 'spread',
+          workflow: 'other',
+          fan_out: { items: '["a"]', max_parallel: 1, join: 'all_done' },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { spread: 'stub' },
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
+  });
+
   test('fails loud on a reachable composed fan-out node instead of simulating it', async () => {
     const workflow = makeTestWorkflow({
       name: 'compose-fan',

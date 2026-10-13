@@ -103,7 +103,7 @@ packages/cli/
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │ @archon/workflows/workflow-discovery                              │
-│ discoverWorkflowsWithConfig(cwd, config)                          │
+│ discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry)    │
 │ - Loads bundled defaults                                         │
 │ - Searches .archon/workflows/ recursively                        │
 │ - Merges (repo overrides defaults by name)                       │
@@ -389,7 +389,7 @@ Implements `IPlatformAdapter` for terminal output.
 
 | Function | Package | Location | Purpose |
 |----------|---------|----------|---------|
-| `discoverWorkflowsWithConfig(cwd, config)` | `@archon/workflows/workflow-discovery` | `workflows/src/workflow-discovery.ts` | Find and parse workflow YAML |
+| `discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry)` | `@archon/workflows/workflow-discovery` | `workflows/src/workflow-discovery.ts` | Find and parse workflow YAML |
 | `executeWorkflow(...)` | `@archon/workflows/executor` | `workflows/src/executor.ts` | Run workflow steps |
 | `getIsolationProvider()` | `@archon/isolation` | `isolation/src/factory.ts` | Get WorktreeProvider singleton |
 | `conversationDb.*` | `@archon/core` | `core/src/db/conversations.ts` | Conversation CRUD |

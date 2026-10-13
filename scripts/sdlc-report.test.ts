@@ -45,9 +45,9 @@ function gate(
 }
 
 /** The report as a tail composes it: with the engine listing this node received. */
-async function report(dir: string, failed: boolean): Promise<string> {
+async function report(dir: string): Promise<string> {
   const listingFile = await writeNodeArtifactsListing(dir, 'run');
-  return caveats(dir, { failed, listingFile });
+  return caveats(dir, { listingFile });
 }
 
 describe("the terminal report reads passed reds from the gates' typed artifacts", () => {
@@ -72,7 +72,7 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
       summary: '',
     });
 
-    const text = await report(dir, false);
+    const text = await report(dir);
     expect(text).toContain('Delivered on red (2)');
     expect(text.indexOf('The implementation: environment red')).toBeLessThan(
       text.indexOf('The project gate: inherited red')
@@ -83,20 +83,20 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
 
   it('says nothing when no gate passed red, and nothing when no gate ran', async () => {
     const dir = artifactsDir();
-    expect(await report(dir, false)).toBe('');
+    expect(await report(dir)).toBe('');
     gate(dir, 'gate-green', '2026-09-10T09:00:00.000Z', {
       gate: 'green',
       red_cause: '',
       stage: 'The implementation',
       summary: '',
     });
-    expect(await report(dir, false)).toBe('');
+    expect(await report(dir)).toBe('');
   });
 
   it('names a gate record it cannot read instead of dropping it', async () => {
     const dir = artifactsDir();
     gate(dir, 'gate-green', '2026-09-10T09:00:00.000Z', 'not json');
-    const text = await report(dir, false);
+    const text = await report(dir);
     expect(text).toContain("could not read the gate's record");
     expect(text).toContain(join(dir, 'nodes', 'gate-green.md'));
   });
@@ -112,7 +112,7 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
     writeFileSync(join(dir, 'nodes', 'gate-green.md'), JSON.stringify({ gate: 'green' }));
     writeFileSync(join(dir, 'nodes', 'gate-green.meta.json'), 'not json');
 
-    const text = await report(dir, false);
+    const text = await report(dir);
     expect(text).toContain('Delivered on red (1)');
     expect(text).toContain('The project gate: inherited red');
     expect(text).toContain('nodes/gate-green.meta.json');
@@ -127,10 +127,8 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
       stage: 'The project gate',
       summary: '',
     });
-    expect(caveats(dir, { failed: false, listingFile: undefined })).toContain(
-      'could not be verified'
-    );
-    expect(caveats(dir, { failed: false, listingFile: join(dir, 'nope.json') })).toContain(
+    expect(caveats(dir, { listingFile: undefined })).toContain('could not be verified');
+    expect(caveats(dir, { listingFile: join(dir, 'nope.json') })).toContain(
       'could not be verified'
     );
   });
@@ -153,7 +151,7 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
     malformedEnvelopes.forEach((envelope, index) => {
       const listingFile = join(dir, `malformed-${String(index)}.json`);
       writeFileSync(listingFile, JSON.stringify(envelope));
-      const text = caveats(dir, { failed: false, listingFile });
+      const text = caveats(dir, { listingFile });
       expect(text).toContain('could not be verified');
       expect(text).toContain('malformed');
     });
@@ -163,9 +161,7 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
       badErrors,
       JSON.stringify({ runId: 'run', artifactsByType: { 'green-gate': [] }, errors: 'also' })
     );
-    expect(caveats(dir, { failed: false, listingFile: badErrors })).toContain(
-      '`errors` value is not an array'
-    );
+    expect(caveats(dir, { listingFile: badErrors })).toContain('`errors` value is not an array');
   });
 
   it('ignores typed artifacts of other kinds', async () => {
@@ -182,7 +178,7 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
         size: 8,
       })
     );
-    expect(await report(dir, false)).toBe('');
+    expect(await report(dir)).toBe('');
   });
 });
 
@@ -193,7 +189,7 @@ describe('discoveries', () => {
     const dir = artifactsDir();
     const filed = { title: 'Stale mock type', relation: 'unrelated', issue: 'https://x/issues/7' };
     writeFileSync(join(dir, 'discoveries.json'), JSON.stringify([filed]));
-    const allFiled = await report(dir, false);
+    const allFiled = await report(dir);
     expect(allFiled).toContain('- Stale mock type — https://x/issues/7');
     expect(allFiled).not.toContain('If you are an agent reading this');
 
@@ -201,7 +197,7 @@ describe('discoveries', () => {
       join(dir, 'discoveries.json'),
       JSON.stringify([filed, { title: 'Flaky timeout', relation: 'unrelated' }])
     );
-    const oneUnfiled = await report(dir, false);
+    const oneUnfiled = await report(dir);
     expect(oneUnfiled).toContain('- Flaky timeout\n');
     expect(oneUnfiled).toContain('If you are an agent reading this');
   });
@@ -209,22 +205,8 @@ describe('discoveries', () => {
   it('reports a consolidated file that is not an array with its path', async () => {
     const dir = artifactsDir();
     writeFileSync(join(dir, 'discoveries.json'), '{}');
-    const text = await report(dir, false);
+    const text = await report(dir);
     expect(text).toContain('is not a JSON array of records');
     expect(text).toContain(join(dir, 'discoveries.json'));
-  });
-
-  it('on a failed run, reports raw producer sidecars and names a malformed one', async () => {
-    const dir = artifactsDir();
-    mkdirSync(join(dir, 'discoveries'));
-    writeFileSync(
-      join(dir, 'discoveries', 'code.json'),
-      JSON.stringify([{ title: 'Unused export', relation: 'unrelated', claim: 'dead code' }])
-    );
-    writeFileSync(join(dir, 'discoveries', 'seams.json'), '{"title":"not a list"}');
-    const text = await report(dir, true);
-    expect(text).toContain('Unconsolidated discoveries (1)');
-    expect(text).toContain('- Unused export [unrelated]');
-    expect(text).toContain('seams.json: not a JSON array of records');
   });
 });

@@ -2,8 +2,8 @@
  * The provider-attempt admission seam. Every provider Archon calls comes from this
  * `getAgentProvider`; lint forbids importing the registry's unadmitted one elsewhere.
  *
- * With no `concurrency.providers.<id>` cap the provider is returned behavior-for-
- * behavior: no database access and no waiting. With a cap, each `sendQuery` takes one
+ * Without a provider cap or Pi `maxConcurrent`, queries run unchanged: no database
+ * access and no waiting. With a cap, each `sendQuery` takes one
  * slot before the provider starts and gives it back only after the provider's own
  * stream has closed, so an aborted attempt keeps its slot until the provider has
  * actually stopped. Waiting for a slot is an abortable in-process poll.
@@ -156,8 +156,14 @@ async function* admittedQuery(
 /** A registered provider whose `sendQuery` is admitted against its configured cap. */
 export function getAgentProvider(id: string, pollMs = DEFAULT_POLL_MS): IAgentProvider {
   const provider = getRegisteredAgentProvider(id);
+  const resolveCredentialModel = provider.resolveCredentialModel?.bind(provider);
+  const diagnose = provider.diagnose?.bind(provider);
+  const listModels = provider.listModels?.bind(provider);
   return {
     checkCredential: request => provider.checkCredential(request),
+    ...(resolveCredentialModel ? { resolveCredentialModel } : {}),
+    ...(diagnose ? { diagnose } : {}),
+    ...(listModels ? { listModels } : {}),
     getType: () => provider.getType(),
     getCapabilities: () => provider.getCapabilities(),
     sendQuery: (prompt, cwd, resumeSessionId, options) =>

@@ -47,8 +47,9 @@ Archon provides a unified directory and configuration system with:
 ├── temp/                           # Ephemeral scratch (per-simulation dry-run dirs; removed when the run ends)
 ├── worktrees/                      # Legacy global worktrees (repos not in workspaces/)
 ├── vendor/codex/                   # Codex native binary (binary builds, user-placed)
+├── server/<version>/               # Cached server executable (archon serve, binary only)
 ├── web-dist/<version>/             # Cached web UI dist (archon serve, binary only)
-├── update-check.json               # Update check cache (binary builds only, 24h TTL)
+├── update-check.json               # Update check cache (binary builds only, 1h release-data TTL; 24h CLI notice interval)
 ├── tier-notice.json                # One-time tier-default notice state (CLI, per version)
 ├── install.json                    # Last compiled CLI path and version (discovery hint)
 ├── credential-key                  # Auto-provisioned per-user credential encryption key
@@ -236,7 +237,7 @@ Key configuration options:
 | Option | Env Override | Default |
 |--------|--------------|---------|
 | `ARCHON_HOME` | `ARCHON_HOME` | `~/.archon` |
-| Default AI Assistant | `DEFAULT_AI_ASSISTANT` | `claude` |
+| Default AI Assistant | `DEFAULT_AI_ASSISTANT` | Only registered provider, otherwise unset |
 | Telegram Streaming | `TELEGRAM_STREAMING_MODE` | `stream` |
 | Discord Streaming | `DISCORD_STREAMING_MODE` | `batch` |
 | Slack Streaming | `SLACK_STREAMING_MODE` | `batch` |

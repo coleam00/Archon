@@ -2,6 +2,7 @@ import { createLogger } from '@archon/paths';
 
 import {
   sessionPreview,
+  toolCallSchema,
   truncateToolOutput,
   type ProviderStopReason,
 } from '@archon/provider-contract';
@@ -84,7 +85,7 @@ export function toolPartEvents(
       toolCallId,
       name: typeof part.tool === 'string' ? part.tool : 'unknown',
     };
-    if (isRecord(state?.input)) call.rawInput = state.input;
+    if (isRecord(state?.input)) call.rawInput = toolCallSchema.shape.rawInput.parse(state.input);
     events.push(call);
   }
   if (!closed.has(toolCallId)) {

@@ -1,5 +1,5 @@
 import type { OpencodeProviderDefaults } from '../../types';
-import { InvalidProviderRunConfigError } from '../../errors';
+import { InvalidProviderRunConfigError } from '@archon/provider-contract';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,

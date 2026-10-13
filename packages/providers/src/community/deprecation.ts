@@ -9,7 +9,7 @@ export const DEPRECATED_PROVIDERS_DOCS_PATH =
 export function unownedProviderNotice(name: string): string {
   return (
     `${name} is deprecated: no Archon maintainer owns it. It keeps working and stays bundled ` +
-    'until a community owner publishes it as a plugin. To take it on or follow the plan, see ' +
-    `https://archon.diy${DEPRECATED_PROVIDERS_DOCS_PATH}`
+    'until a community owner publishes it as a plugin. To publish a community provider plugin, see ' +
+    'https://archon.diy/contributing/adding-a-community-provider/'
   );
 }

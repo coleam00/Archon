@@ -2,9 +2,7 @@
  * Tests for `archon doctor` check functions.
  *
  * Uses spyOn for `@archon/git.execFileAsync` and `globalThis.fetch`.
- * `BUNDLED_IS_BINARY` is a static const re-export and cannot be spied at
- * runtime — `checkClaudeBinary` accepts it as an injectable parameter for
- * testability. Avoids `mock.module()` because it is process-global and
+ * Avoids `mock.module()` because it is process-global and
  * irreversible in Bun, which would pollute other test files in this package.
  */
 import { describe, it, expect, mock, spyOn, afterEach, beforeEach } from 'bun:test';
@@ -44,7 +42,7 @@ import {
   type ProviderDeps,
 } from './doctor';
 import type { MergedConfig } from '@archon/core';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 
 // doctor creates its logger on first use and keeps it; hand it one this file can observe.
 // Module scope, so the spy is in place before any test makes doctor log.
@@ -55,27 +53,61 @@ spyOn(paths, 'createLogger').mockImplementation(module =>
 );
 
 describe('checkClaudeBinary', () => {
+  let savedPin: string | undefined;
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
 
   beforeEach(() => {
+    savedPin = process.env.CLAUDE_BIN_PATH;
+    delete process.env.CLAUDE_BIN_PATH;
     execSpy = spyOn(git, 'execFileAsync');
   });
 
   afterEach(() => {
     execSpy.mockRestore();
+    if (savedPin === undefined) delete process.env.CLAUDE_BIN_PATH;
+    else process.env.CLAUDE_BIN_PATH = savedPin;
   });
 
   const noDeps = async (): Promise<ClaudeBinaryDeps> => ({});
 
-  it('returns skip when not in binary mode', async () => {
-    const result = await checkClaudeBinary(false);
+  it('returns skip when the resolver delegates to the SDK', async () => {
+    const result = await checkClaudeBinary(noDeps);
     expect(result.status).toBe('skip');
     expect(result.label).toBe('Claude binary');
+    expect(result.message).toBe('dev mode (SDK resolves via node_modules)');
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it('checks a config pin in dev mode through the runtime resolver', async () => {
+    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
+    const result = await checkClaudeBinary(async () => ({ configBinaryPath: process.execPath }));
+    expect(result.status).toBe('pass');
+    expect(result.message).toBe(`${process.execPath} (via config, spawns OK)`);
+    expect(execSpy).toHaveBeenCalledWith(process.execPath, ['--version'], { timeout: 5000 });
+  });
+
+  it('checks an env pin before an invalid config pin in dev mode', async () => {
+    process.env.CLAUDE_BIN_PATH = process.execPath;
+    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
+    const result = await checkClaudeBinary(async () => ({
+      configBinaryPath: '/missing/config/claude',
+    }));
+    expect(result.status).toBe('pass');
+    expect(result.message).toBe(`${process.execPath} (via env, spawns OK)`);
+    expect(execSpy).toHaveBeenCalledWith(process.execPath, ['--version'], { timeout: 5000 });
+  });
+
+  it('reports an invalid config pin in dev mode rather than skipping', async () => {
+    const result = await checkClaudeBinary(async () => ({
+      configBinaryPath: '/missing/config/claude',
+    }));
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('assistants.claude.claudeBinaryPath');
     expect(execSpy).not.toHaveBeenCalled();
   });
 
   it('returns fail in binary mode when the whole resolution chain is empty', async () => {
-    const result = await checkClaudeBinary(true, noDeps, async () => {
+    const result = await checkClaudeBinary(noDeps, async () => {
       throw new Error('Claude Code not found. Archon requires the Claude Code executable');
     });
     expect(result.status).toBe('fail');
@@ -87,7 +119,7 @@ describe('checkClaudeBinary', () => {
 
   it('returns pass in binary mode when binary spawns successfully', async () => {
     execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(true, noDeps, async () => ({
+    const result = await checkClaudeBinary(noDeps, async () => ({
       path: '/opt/claude',
       source: 'env',
     }));
@@ -98,7 +130,7 @@ describe('checkClaudeBinary', () => {
 
   it('returns fail in binary mode when spawn throws', async () => {
     execSpy.mockRejectedValue(new Error('ENOENT'));
-    const result = await checkClaudeBinary(true, noDeps, async () => ({
+    const result = await checkClaudeBinary(noDeps, async () => ({
       path: '/opt/claude',
       source: 'env',
     }));
@@ -114,7 +146,6 @@ describe('checkClaudeBinary', () => {
     execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
     let sawConfigPath: string | undefined;
     const result = await checkClaudeBinary(
-      true,
       async () => ({ configBinaryPath: '/Users/me/bin/claude' }),
       async configPath => {
         sawConfigPath = configPath;
@@ -133,7 +164,7 @@ describe('checkClaudeBinary', () => {
 
   it('reports the autodetect tier when the native installer path resolves', async () => {
     execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(true, noDeps, async () => ({
+    const result = await checkClaudeBinary(noDeps, async () => ({
       path: '/home/me/.local/bin/claude',
       source: 'autodetect',
     }));
@@ -144,7 +175,6 @@ describe('checkClaudeBinary', () => {
   it('degrades to env/autodetect when config loading throws', async () => {
     execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
     const result = await checkClaudeBinary(
-      true,
       async () => {
         throw new Error('malformed config.yaml');
       },
@@ -157,9 +187,7 @@ describe('checkClaudeBinary', () => {
     expect(result.status).toBe('pass');
   });
 
-  // The tests above inject BOTH seams, so they only prove parameter plumbing
-  // inside checkClaudeBinary. The two below exercise the real
-  // defaultLoadClaudeBinaryDeps, which is where #2263 actually lived: reading
+  // The real defaultLoadClaudeBinaryDeps is where #2263 actually lived: reading
   // the wrong config key type-checks and would otherwise ship green.
   // The stub config deliberately carries a DIFFERENT value under
   // assistants.codex.codexBinaryPath so a key mix-up fails loudly rather than
@@ -181,7 +209,6 @@ describe('checkClaudeBinary', () => {
     let sawConfigPath: string | undefined;
 
     const result = await checkClaudeBinary(
-      true,
       // The real loader, not a fake — this is the link the bug broke.
       () => defaultLoadClaudeBinaryDeps(stubConfig),
       async configPath => {
@@ -320,23 +347,42 @@ describe('checkCodexBinary', () => {
 describe('checkOpenCode', () => {
   const makeDeps = (over: Partial<OpenCodeDeps> = {}): OpenCodeDeps => ({
     isDefaultAssistant: false,
-    probeRuntimeModule: async () => true,
+    probeRuntime: async () => 'ready',
     ...over,
   });
 
   it('skips when OpenCode is not configured and --full is absent', async () => {
-    const result = await checkOpenCode({}, false, async () => makeDeps());
+    const probe = mock(async () => 'ready' as const);
+    const result = await checkOpenCode({}, false, async () => makeDeps({ probeRuntime: probe }));
+    expect(probe).not.toHaveBeenCalled();
     expect(result.status).toBe('skip');
     expect(result.label).toBe('OpenCode runtime');
     expect(result.message).toContain('pass --full');
   });
 
-  it('passes when OpenCode is the configured assistant and the SDK resolves', async () => {
+  it('passes when OpenCode is the configured assistant and both dependencies are present', async () => {
     const result = await checkOpenCode({}, false, async () =>
       makeDeps({ isDefaultAssistant: true })
     );
     expect(result.status).toBe('pass');
     expect(result.message).toContain('server not started');
+  });
+
+  it('fails when the SDK is present but the executable is missing', async () => {
+    const result = await checkOpenCode({}, true, async () =>
+      makeDeps({ probeRuntime: async () => 'executable-missing' })
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('opencode');
+    expect(result.message).toContain('PATH');
+  });
+
+  it('fails for a configured assistant when the executable is missing', async () => {
+    const result = await checkOpenCode({}, false, async () =>
+      makeDeps({ isDefaultAssistant: true, probeRuntime: async () => 'executable-missing' })
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('Install the OpenCode CLI');
   });
 
   it('passes under --full even when OpenCode is not configured', async () => {
@@ -351,13 +397,13 @@ describe('checkOpenCode', () => {
     expect(result.status).toBe('pass');
   });
 
-  it('never boots the runtime — only the cheap module probe is called', async () => {
+  it('calls the cheap dependency probe once', async () => {
     let probeCalls = 0;
     await checkOpenCode({}, true, async () =>
       makeDeps({
-        probeRuntimeModule: async () => {
+        probeRuntime: async () => {
           probeCalls += 1;
-          return true;
+          return 'ready';
         },
       })
     );
@@ -367,7 +413,7 @@ describe('checkOpenCode', () => {
   it('fails when the runtime SDK cannot be resolved', async () => {
     const result = await checkOpenCode({}, true, async () =>
       makeDeps({
-        probeRuntimeModule: async () => {
+        probeRuntime: async () => {
           throw new Error('Cannot find module @opencode-ai/sdk');
         },
       })
@@ -379,7 +425,7 @@ describe('checkOpenCode', () => {
 
   it('fails when the SDK resolves but the entrypoint is missing', async () => {
     const result = await checkOpenCode({}, true, async () =>
-      makeDeps({ probeRuntimeModule: async () => false })
+      makeDeps({ probeRuntime: async () => 'sdk-entrypoint-missing' })
     );
     expect(result.status).toBe('fail');
     expect(result.message).toContain('createOpencode');
@@ -508,7 +554,7 @@ describe('checkAssistantLogin', () => {
   }
 
   it('checks only the configured Claude assistant and reports not checked', async () => {
-    const { ClaudeProvider } = await import('@archon/providers');
+    const { ClaudeProvider } = await import('@archon/providers/in-process');
     const check = spyOn(ClaudeProvider.prototype, 'checkCredential');
     try {
       const result = await checkAssistantLogin({ DEFAULT_AI_ASSISTANT: 'pi' }, async () => ({
@@ -526,7 +572,7 @@ describe('checkAssistantLogin', () => {
   it('loads the merged default assistant without consulting the Pi login', async () => {
     const core = await import('@archon/core');
     const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers');
+      await import('@archon/providers/in-process');
     registerBuiltinProviders();
     registerCommunityProviders();
     const load = spyOn(core, 'loadConfig').mockResolvedValue(config);
@@ -547,7 +593,7 @@ describe('checkAssistantLogin', () => {
   it('checks a Pi key supplied only by merged assistant config', async () => {
     const core = await import('@archon/core');
     const { registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers');
+      await import('@archon/providers/in-process');
     registerBuiltinProviders();
     registerCommunityProviders();
     const root = mkdtempSync(join(tmpdir(), 'doctor-pi-config-'));
@@ -591,7 +637,7 @@ describe('checkAssistantLogin', () => {
     const core = await import('@archon/core');
     const userDb = await import('@archon/core/db/users');
     const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers');
+      await import('@archon/providers/in-process');
     registerBuiltinProviders();
     registerCommunityProviders();
     const load = spyOn(core, 'loadConfig').mockResolvedValue({ ...config, assistant: 'pi' });
@@ -670,7 +716,7 @@ describe('checkAssistantLogin', () => {
     const core = await import('@archon/core');
     const userDb = await import('@archon/core/db/users');
     const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
-      await import('@archon/providers');
+      await import('@archon/providers/in-process');
     registerBuiltinProviders();
     registerCommunityProviders();
     const lookupError = new Error('database unreachable');

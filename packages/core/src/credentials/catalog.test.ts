@@ -1,11 +1,19 @@
+// @archon-test-isolated
 import { describe, test, expect, beforeAll, afterEach } from 'bun:test';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import { getRegisteredProviders } from '@archon/providers';
 import {
   getVendorCatalog,
   listConnectableVendors,
   isConnectableVendor,
   buildAgentCredentialMatrix,
 } from './catalog';
+
+import {
+  SUBSCRIPTION_PROVIDERS,
+  OPENAI_SUBSCRIPTION_VENDOR,
+  subscriptionOAuthProviderFor,
+} from './oauth-providers';
 
 beforeAll(() => {
   // The catalog derives from the provider registry — bootstrap like entrypoints do.
@@ -23,6 +31,24 @@ afterEach(() => {
 });
 
 describe('credentials/catalog', () => {
+  test('every static subscription spec has a core login flow and every flow is advertised', () => {
+    const vendors = new Set(
+      getRegisteredProviders().flatMap(reg =>
+        reg.credentials.kind === 'static'
+          ? reg.credentials.specs
+              .filter(spec => spec.kinds.includes('subscription'))
+              .map(spec => spec.vendor)
+          : []
+      )
+    );
+    expect([...vendors].sort()).toEqual([...SUBSCRIPTION_PROVIDERS].sort());
+    for (const vendor of vendors) {
+      if (vendor === OPENAI_SUBSCRIPTION_VENDOR) continue;
+      const provider = subscriptionOAuthProviderFor(vendor);
+      expect(provider?.login).toBeFunction();
+      expect(provider?.refreshToken).toBeFunction();
+    }
+  });
   test('union catalog merges vendors across agents with agent attribution', () => {
     const catalog = getVendorCatalog();
     // anthropic is consumed by both Claude Code and Pi.
@@ -36,6 +62,21 @@ describe('credentials/catalog', () => {
     expect(catalog.get('openrouter')?.agents).toEqual(['pi']);
     // Ambient-only vendors are present but not api_key-connectable.
     expect(catalog.get('amazon-bedrock')?.kinds).toEqual(['ambient']);
+  });
+
+  test('Azure uses the new Pi vendor id while existing connections remain visible', () => {
+    expect(getVendorCatalog().get('azure')).toEqual({
+      vendor: 'azure',
+      displayName: 'Azure OpenAI',
+      kinds: ['api_key'],
+      agents: ['pi'],
+    });
+    const pi = buildAgentCredentialMatrix([
+      { provider: 'azure-openai-responses', kind: 'api_key' },
+    ]).find(agent => agent.id === 'pi');
+    expect(pi?.credentials.find(credential => credential.vendor === 'azure')?.connected).toBe(
+      'api_key'
+    );
   });
 
   test('legacy agent ids are not catalog vendors; opencode contributes nothing static', () => {

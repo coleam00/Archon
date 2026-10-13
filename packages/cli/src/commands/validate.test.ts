@@ -155,6 +155,33 @@ describe('validateWorkflowsCommand', () => {
     expect(output).toContain('1 valid, 0 with errors');
   });
 
+  test('renders conditional-join load warnings and exits successfully', async () => {
+    const warning =
+      "Node 'join': its only dependency 'gate' has a 'when', and 'none_failed_min_one_success' needs a successful dependency. Use 'all_done'.";
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+      workflows: [
+        {
+          ...makeTestWorkflowWithSource(
+            {
+              name: 'conditional-join',
+              nodes: [{ id: 'join', bash: 'echo joined' }],
+            },
+            'project'
+          ),
+          parseWarnings: [warning],
+        },
+      ],
+      errors: [],
+    });
+
+    expect(await validateWorkflowsCommand(validationCwd)).toBe(0);
+    const output = JSON.stringify(mockConsoleLog.mock.calls);
+    expect(output).toContain(warning);
+    expect(output).toContain('WARNINGS');
+    expect(output).toContain('WARNING');
+    expect(output).toContain('1 valid, 0 with errors, 1 with warnings');
+  });
+
   test('rejects bundled @custom model refs via discovered source', async () => {
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
       workflows: [

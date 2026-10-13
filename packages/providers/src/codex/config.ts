@@ -3,12 +3,14 @@
  * Validates and narrows the opaque assistantConfig to typed fields.
  */
 import type { CodexProviderDefaults } from '../types';
-import { EFFORT_LADDER, type EffortRung } from '@archon/paths/effort';
 import {
-  assertKnownRunConfigKeys,
-  invalidRunConfigValue,
-  normalizeRunConfigString,
-} from '../shared/run-config';
+  EFFORT_LADDER,
+  snapshotConfigSchema,
+  type EffortRung,
+  type ProviderConfigScope,
+} from '@archon/provider-contract';
+import { z } from 'zod';
+import { configStringSchema, parseConfigSchema } from '../shared/run-config';
 
 // Re-export so consumers can import the type from either location
 export type { CodexProviderDefaults } from '../types';
@@ -56,40 +58,31 @@ export function parseCodexConfig(raw: Record<string, unknown>): CodexProviderDef
   return result;
 }
 
-/** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
-export function parseCodexConfigStrict(raw: Record<string, unknown>): CodexProviderDefaults {
-  assertKnownRunConfigKeys(raw, [
-    'model',
-    'modelReasoningEffort',
-    'webSearchMode',
-    'additionalDirectories',
-    'codexBinaryPath',
-  ]);
-  const model = normalizeRunConfigString(raw.model, 'model');
-  const codexBinaryPath = normalizeRunConfigString(raw.codexBinaryPath, 'codexBinaryPath');
-  if (raw.modelReasoningEffort !== undefined && !isCodexEffort(raw.modelReasoningEffort)) {
-    invalidRunConfigValue('modelReasoningEffort', CODEX_EFFORTS.join(', '));
-  }
-  if (
-    raw.webSearchMode !== undefined &&
-    (typeof raw.webSearchMode !== 'string' ||
-      !['disabled', 'cached', 'live'].includes(raw.webSearchMode))
-  ) {
-    invalidRunConfigValue('webSearchMode', 'disabled, cached, or live');
-  }
-  if (raw.additionalDirectories !== undefined) {
-    if (!Array.isArray(raw.additionalDirectories)) {
-      invalidRunConfigValue('additionalDirectories', 'an array of strings');
+const fields = {
+  model: configStringSchema.optional(),
+  modelReasoningEffort: z
+    .enum(CODEX_EFFORTS, { error: `expected ${CODEX_EFFORTS.join(', ')}` })
+    .optional(),
+  webSearchMode: z.enum(['disabled', 'cached', 'live']).optional(),
+  additionalDirectories: z.array(z.string()).optional(),
+  codexBinaryPath: configStringSchema.optional(),
+};
+export const configSchemas = {
+  install: z.strictObject(fields),
+  run: z.strictObject(fields),
+  snapshot: snapshotConfigSchema(
+    { model: fields.model, modelReasoningEffort: fields.modelReasoningEffort },
+    {
+      webSearchMode: fields.webSearchMode,
+      additionalDirectories: fields.additionalDirectories,
+      codexBinaryPath: fields.codexBinaryPath,
     }
-    const invalidIndex = raw.additionalDirectories.findIndex(value => typeof value !== 'string');
-    if (invalidIndex >= 0) {
-      invalidRunConfigValue(`additionalDirectories.${invalidIndex}`, 'a string');
-    }
-  }
-  const parsed = parseCodexConfig(raw);
-  return {
-    ...parsed,
-    ...(model === undefined ? {} : { model }),
-    ...(codexBinaryPath === undefined ? {} : { codexBinaryPath }),
-  };
+  ),
+};
+
+export function parseCodexConfigStrict(
+  raw: Record<string, unknown>,
+  scope: ProviderConfigScope = 'install'
+): CodexProviderDefaults {
+  return parseConfigSchema(configSchemas[scope], raw);
 }

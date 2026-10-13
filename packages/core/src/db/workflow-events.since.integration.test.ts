@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: listWorkflowEventsSince against a REAL bun:sqlite database.
  *
@@ -7,7 +8,7 @@
  * ("…T…Z") sorts wrong (space at index 10 < 'T'), so `created_at >= cursor` matched
  * nothing. This runs the actual function end-to-end to lock the fix (C1).
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with other db tests' fakes.
  */
 import { describe, test, expect, mock } from 'bun:test';

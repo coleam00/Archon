@@ -304,18 +304,19 @@ export async function disposeInstanceForDirectory(
   }
 }
 
-/**
- * Cheap availability probe for `archon doctor` — resolves the embedded
- * OpenCode SDK module WITHOUT starting the server.
- *
- * `acquireEmbeddedRuntime` spawns a child process and binds a port, which is
- * far too heavy for a diagnostic. This only confirms the SDK is installed and
- * its `createOpencode` entrypoint is present, so doctor can report runtime
- * readiness without the boot. Throws if the module cannot be resolved.
- */
-export async function probeOpencodeRuntimeModule(): Promise<boolean> {
+/** Check SDK and executable availability without starting a server or binding a port. */
+export async function probeOpencodeRuntime(): Promise<
+  'ready' | 'sdk-entrypoint-missing' | 'executable-missing'
+> {
   const mod = await import('@opencode-ai/sdk');
-  return typeof (mod as { createOpencode?: unknown }).createOpencode === 'function';
+  if (typeof mod.createOpencode !== 'function') return 'sdk-entrypoint-missing';
+
+  // Bun searches PATH (on Windows for .exe/.cmd/.bat/.com, not PATHEXT or cwd),
+  // so a custom-PATHEXT or cwd-only install reads as missing. Without the option
+  // it uses the PATH from process start, not the env the SDK spawn inherits.
+  return Bun.which('opencode', { PATH: process.env.PATH }) === null
+    ? 'executable-missing'
+    : 'ready';
 }
 
 /** Reset the embedded runtime state. For testing only. */

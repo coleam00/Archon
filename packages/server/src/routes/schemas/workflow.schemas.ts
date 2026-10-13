@@ -1,4 +1,8 @@
 import {
+  toolCallAttentionArraySchema,
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+} from '@archon/workflows/schemas/workflow-run';
+import {
   runNodeStateSchema,
   terminalRecordSchema,
 } from '@archon/workflows/schemas/terminal-record';
@@ -12,6 +16,8 @@ import {
   workflowSourceSchema as engineWorkflowSourceSchema,
 } from '@archon/workflows/schemas/workflow';
 import {
+  createRunAttentionSchema,
+  approvalContextSchema,
   workflowRunSchema as engineWorkflowRunSchema,
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
   workflowWaitContextSchema as engineWorkflowWaitContextSchema,
@@ -140,22 +146,37 @@ export const workflowWaitContextSchema =
 export const runStopReasonSchema = engineRunStopReasonSchema.openapi('RunStopReason');
 
 /**
- * Run metadata stays open-ended, but its durable-wait and stop-reason contracts are
+ * Run metadata stays open-ended, but approval, waits, tool advisories and stop reasons are
  * engine-owned and typed.
  */
 export const workflowRunMetadataSchema = z
   .object({
+    [TOOL_CALL_ATTENTION_METADATA_KEY]: toolCallAttentionArraySchema.optional(),
+    approval: approvalContextSchema.optional(),
     wait: workflowWaitContextSchema.optional(),
     [RUN_STOP_REASON_METADATA_KEY]: runStopReasonSchema.optional(),
   })
   .catchall(z.unknown())
   .openapi('WorkflowRunMetadata');
 
+export const RUN_ATTENTION_SCHEMA_NAME = 'RunAttention';
+export const runAttentionSchema = createRunAttentionSchema(z.string().datetime()).openapi(
+  RUN_ATTENTION_SCHEMA_NAME
+);
+// OpenAPI 3.0's union null arm needs an explicit type or generated clients erase the entire union.
+const nullableRunAttentionSchema = z.union([runAttentionSchema, z.literal(null)]).openapi({
+  anyOf: [
+    { $ref: `#/components/schemas/${RUN_ATTENTION_SCHEMA_NAME}` },
+    { type: 'object', nullable: true, enum: [null] },
+  ],
+});
+
 /** A workflow run record (wire shape with ISO string dates). */
 export const workflowRunSchema = engineWorkflowRunSchema
   .extend({
     outcome: workflowRunOutcomeSchema,
     metadata: workflowRunMetadataSchema,
+    attention: nullableRunAttentionSchema,
     started_at: z.string(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
@@ -260,7 +281,11 @@ export const rejectWorkflowRunBodySchema = z
  * outcome the dedicated routes above produce.
  */
 export const respondWorkflowRunBodySchema = z
-  .object({ decision: z.string().min(1), text: z.string().optional() })
+  .object({
+    decision: z.string().min(1),
+    text: z.string().optional(),
+    expectedGate: approvalContextSchema.pick({ nodeId: true, pauseId: true }).required().optional(),
+  })
   .openapi('RespondWorkflowRunBody');
 
 /** DELETE /api/workflows/:name/node-sessions path params. */
@@ -295,11 +320,18 @@ export const resetWorkflowNodeSessionsResponseSchema = z
 export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   .extend({
     metadata: workflowRunMetadataSchema,
+    attention: nullableRunAttentionSchema,
     started_at: z.string(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
   })
   .openapi('DashboardWorkflowRun');
+
+export const runsNeedingAttentionResponseSchema = z
+  .object({
+    runs: z.array(dashboardWorkflowRunSchema),
+  })
+  .openapi('RunsNeedingAttentionResponse');
 
 /** GET /api/dashboard/runs response. */
 export const dashboardRunsResponseSchema = z

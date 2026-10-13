@@ -1,10 +1,13 @@
 import { describe, test, expect } from 'bun:test';
 import { toRun, normalizeOrigin, runDetailPath, runMessageConversationId } from './run';
+import { detailFixture } from './run.test-fixtures';
 import { runStatusLabel } from '../lib/run-status';
 
 type Raw = Parameters<typeof toRun>[0];
 
-function raw(over: Partial<Raw> & { id: string; workflow_name: string; status: string }): Raw {
+function raw(
+  over: Partial<Raw> & { id: string; workflow_name: string; status: Raw['status'] }
+): Raw {
   return {
     codebase_id: null,
     started_at: '2026-06-05T10:00:00Z',
@@ -156,11 +159,6 @@ describe('toRun — provenance', () => {
     const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'pending' }));
     expect(r.status).toBe('running');
   });
-
-  test('an unrecognised status falls back to running', () => {
-    const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'banana' }));
-    expect(r.status).toBe('running');
-  });
 });
 
 describe('runMessageConversationId', () => {
@@ -286,36 +284,8 @@ describe('toRun — approval parsing', () => {
     expect(r.approval?.completionSignaled).toBe(true);
   });
 
-  test('defaults message to empty string when only nodeId is present', () => {
-    const r = toRun(
-      raw({
-        id: 'r1',
-        workflow_name: 'review',
-        status: 'paused',
-        metadata: { approval: { nodeId: 'gate' } },
-      })
-    );
-    expect(r.approval).toEqual({
-      nodeId: 'gate',
-      message: '',
-      completionSignaled: false,
-      decisions: [{ id: 'approve' }, { id: 'reject' }],
-      decisionsAuthored: false,
-    });
-  });
-
-  test('approval is null when absent or malformed (no string nodeId)', () => {
+  test('approval is null when absent', () => {
     expect(toRun(raw({ id: 'r1', workflow_name: 'review', status: 'paused' })).approval).toBeNull();
-    expect(
-      toRun(
-        raw({
-          id: 'r1',
-          workflow_name: 'review',
-          status: 'paused',
-          metadata: { approval: { message: 'no node id' } },
-        })
-      ).approval
-    ).toBeNull();
   });
 });
 
@@ -354,25 +324,6 @@ describe('toRun — resolved gate (approved/rejected awaiting resume)', () => {
         workflow_name: 'review',
         status: 'paused',
         metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: null } },
-      })
-    );
-    expect(r.approval).toEqual({
-      nodeId: 'gate',
-      message: 'Approve?',
-      completionSignaled: false,
-      decisions: [{ id: 'approve' }, { id: 'reject' }],
-      decisionsAuthored: false,
-    });
-    expect(r.gateResolved).toBeNull();
-  });
-
-  test('unknown resolved values are treated as unresolved', () => {
-    const r = toRun(
-      raw({
-        id: 'r1',
-        workflow_name: 'review',
-        status: 'paused',
-        metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: 'weird' } },
       })
     );
     expect(r.approval).toEqual({
@@ -569,4 +520,46 @@ describe('stop reason', () => {
     expect(runStatusLabel(interrupted({ reason: 'node_error' }))).toBe('Failed');
     expect(runStatusLabel(interrupted(undefined))).toBe('Failed');
   });
+});
+
+describe('toRun — terminal record', () => {
+  test('preserves the full record and authored value without flattening', () => {
+    expect(toRun(detailFixture.run)).toHaveProperty(
+      'terminalRecord',
+      detailFixture.run.terminal_record
+    );
+  });
+
+  test('normalizes missing and null records to null', () => {
+    expect(toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'completed' }))).toHaveProperty(
+      'terminalRecord',
+      null
+    );
+    expect(toRun({ ...detailFixture.run, terminal_record: null })).toHaveProperty(
+      'terminalRecord',
+      null
+    );
+  });
+});
+
+test('running advisories are normalized through API metadata and disappear for terminal rows', () => {
+  const call = {
+    streamId: 's',
+    nodeId: 'node',
+    provider: 'codex',
+    toolCallId: 'call',
+    name: 'bash',
+    startedAt: '2026-10-01T00:00:00Z',
+    lastProgressAt: '2026-10-01T00:00:00Z',
+    raisedAt: '2026-10-01T00:30:00Z',
+    thresholdMs: 1800000,
+  };
+  const metadata = { tool_call_attention: [call] };
+  const live = toRun(raw({ id: 'live', workflow_name: 'work', status: 'running', metadata }));
+  expect(live.toolCallAttention).toEqual([call]);
+  expect(runStatusLabel(live)).toBe('Running · tool call needs attention');
+  expect(
+    toRun(raw({ id: 'done', workflow_name: 'work', status: 'completed', metadata }))
+      .toolCallAttention
+  ).toEqual([]);
 });

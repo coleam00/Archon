@@ -33,6 +33,10 @@ import { TelegramAdapter } from './adapter';
 type SendMessage = Api['sendMessage'];
 
 describe('TelegramAdapter', () => {
+  test('supports durable conversation project detachment', () => {
+    expect(new TelegramAdapter('fake-token-for-testing').capabilities.canDetachProject).toBe(true);
+  });
+
   describe('streaming mode configuration', () => {
     test('should return batch mode when configured', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing', 'batch');
@@ -55,6 +59,9 @@ describe('TelegramAdapter', () => {
     let mockSendMessage: Mock<SendMessage>;
 
     beforeEach(() => {
+      mockLogger.info.mockClear();
+      mockLogger.debug.mockClear();
+      mockLogger.warn.mockClear();
       adapter = new TelegramAdapter('fake-token-for-testing');
       mockSendMessage = mock<SendMessage>(async (chatId, text) => ({
         message_id: 1,
@@ -71,6 +78,7 @@ describe('TelegramAdapter', () => {
 
     test('should send with MarkdownV2 parse_mode', async () => {
       await adapter.sendMessage('12345', '**test**');
+      expect(mockLogger.debug).toHaveBeenCalledWith({ messageLength: 8 }, 'telegram.send_message');
 
       // Should send with MarkdownV2 parse_mode
       expect(mockSendMessage).toHaveBeenCalledWith(
@@ -81,10 +89,15 @@ describe('TelegramAdapter', () => {
     });
 
     test('should fallback to plain text when MarkdownV2 fails', async () => {
-      mockSendMessage.mockRejectedValueOnce(new Error("Bad Request: can't parse entities"));
+      mockLogger.warn.mockClear();
+      mockSendMessage.mockRejectedValueOnce(new Error('Bad Request for @alice 987654321'));
 
-      await adapter.sendMessage('12345', '**test**');
+      await adapter.sendMessage('12345', '**@alice 987654321**');
 
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { chunkLength: 20 },
+        'telegram.markdownv2_failed'
+      );
       expect(mockSendMessage).toHaveBeenCalledTimes(2);
       // First call with MarkdownV2
       expect(mockSendMessage).toHaveBeenNthCalledWith(
@@ -245,7 +258,54 @@ describe('TelegramAdapter', () => {
     beforeEach(() => {
       mockLogger.warn.mockClear();
       mockLogger.info.mockClear();
+      mockLogger.debug.mockClear();
     });
+
+    test.each([true, false])(
+      'inbound message logs no identity (unauthorized=%s)',
+      async unauthorized => {
+        const original = process.env.TELEGRAM_ALLOWED_USER_IDS;
+        process.env.TELEGRAM_ALLOWED_USER_IDS = unauthorized ? '111' : '';
+        try {
+          const adapter = new TelegramAdapter('fake-token-for-testing');
+          const bot = adapter.getBot();
+          bot.botInfo = {
+            id: 111,
+            is_bot: true,
+            first_name: 'Archon',
+            username: 'archon',
+            can_join_groups: true,
+            can_read_all_group_messages: false,
+            supports_inline_queries: false,
+            can_connect_to_business: false,
+            has_main_web_app: false,
+            can_manage_bots: false,
+            has_topics_enabled: false,
+            allows_users_to_create_topics: false,
+          };
+          bot.start = mock(async options => {
+            await options?.onStart?.(bot.botInfo);
+          });
+          await adapter.start();
+          await bot.handleUpdate({
+            update_id: 1,
+            message: {
+              message_id: 1,
+              date: 0,
+              chat: { id: 987654321, type: 'private', first_name: 'Alice' },
+              from: { id: 987654321, is_bot: false, first_name: 'Alice', username: 'alice' },
+              text: '@alice private message',
+            },
+          });
+          if (unauthorized)
+            expect(mockLogger.info).toHaveBeenCalledWith('telegram.unauthorized_message');
+          else expect(mockLogger.debug).toHaveBeenCalledWith('telegram.message_dropped_no_handler');
+        } finally {
+          if (original === undefined) delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+          else process.env.TELEGRAM_ALLOWED_USER_IDS = original;
+        }
+      }
+    );
 
     test('should retry on 409 and succeed on second attempt', async () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');

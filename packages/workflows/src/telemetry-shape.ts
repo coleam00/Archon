@@ -1,3 +1,4 @@
+import { type ProviderRegistry } from '@archon/provider-contract';
 import {
   createLogger,
   isTelemetryDisabled,
@@ -105,21 +106,23 @@ interface BundledSignature {
   signature: readonly string[];
 }
 
-let bundledSignatures: readonly BundledSignature[] | undefined;
-
 /**
  * The bundled workflows as shipped: parsed, pack-owned resources qualified, and includes
  * expanded against the shipped command bodies (`BUNDLED_COMMANDS`). A copy is compared
  * with what Archon ships, not with this install's command overrides: an override changes
  * the prompts the copy runs, so such a copy is truthfully `modified`. Built once per
- * process, in memory. A bundled workflow that fails to parse or expand is left out.
+ * registry, in memory. A bundled workflow that fails to parse with the supplied registry
+ * or expand is left out.
  */
-function getBundledSignatures(): readonly BundledSignature[] {
-  if (bundledSignatures) return bundledSignatures;
+const bundledSignatures = new WeakMap<ProviderRegistry, readonly BundledSignature[]>();
+
+function getBundledSignatures(providers: ProviderRegistry): readonly BundledSignature[] {
+  const cached = bundledSignatures.get(providers);
+  if (cached) return cached;
   const rawByName = new Map<string, WorkflowDefinition>();
   for (const [key, content] of Object.entries(BUNDLED_WORKFLOWS)) {
     const path = BUNDLED_WORKFLOW_PATHS[key];
-    const { workflow } = parseWorkflow(content, path ? basename(path) : `${key}.yaml`);
+    const { workflow } = parseWorkflow(content, path ? basename(path) : `${key}.yaml`, providers);
     if (!workflow || rawByName.has(workflow.name)) continue;
     const owner = BUNDLED_WORKFLOW_OWNERS[key];
     if (owner) qualifyWorkflowResources(workflow, { source: 'bundled', ...owner });
@@ -129,12 +132,13 @@ function getBundledSignatures(): readonly BundledSignature[] {
     rawByName,
     new Map(Object.entries(BUNDLED_COMMANDS))
   );
-  bundledSignatures = [...workflows.values()].map(workflow => ({
+  const signatures = [...workflows.values()].map(workflow => ({
     name: workflow.name,
     ids: new Set(flattenNodes(workflow.nodes).map(entry => entry.path)),
     signature: signatureOf(workflow),
   }));
-  return bundledSignatures;
+  bundledSignatures.set(providers, signatures);
+  return signatures;
 }
 
 function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
@@ -153,9 +157,10 @@ const MODIFIED_MIN_SIMILARITY = 0.5;
  * Only the bundled name and the similarity class are returned.
  */
 export function deriveBundledAncestry(
+  providers: ProviderRegistry,
   workflow: ResolvedWorkflow
 ): WorkflowAncestryProperties | undefined {
-  const bundled = getBundledSignatures();
+  const bundled = getBundledSignatures(providers);
   const ids = new Set(flattenNodes(workflow.nodes).map(entry => entry.path));
   let candidate = bundled.find(entry => entry.name === workflow.name);
   let similarity = candidate ? jaccard(ids, candidate.ids) : 0;
@@ -183,12 +188,13 @@ export function deriveBundledAncestry(
  * a run: an error here is logged and the event goes out without these fields.
  */
 export function workflowTelemetryShape(
+  providers: ProviderRegistry,
   workflow: ResolvedWorkflow,
   source: WorkflowTelemetrySource | undefined
 ): Pick<WorkflowInvokedProperties, 'shape' | 'ancestry'> {
   if (isTelemetryDisabled()) return {};
   try {
-    const ancestry = source === 'bundled' ? undefined : deriveBundledAncestry(workflow);
+    const ancestry = source === 'bundled' ? undefined : deriveBundledAncestry(providers, workflow);
     return { shape: describeWorkflowShape(workflow), ...(ancestry ? { ancestry } : {}) };
   } catch (error) {
     createLogger('workflow.telemetry-shape').debug(

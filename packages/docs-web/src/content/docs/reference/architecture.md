@@ -142,8 +142,12 @@ if (yourPlatformToken) {
   const adapter = new YourPlatformAdapter(yourPlatformToken, yourPlatformMode);
 
   // Set up message handler
-  adapter.onMessage(async (conversationId, message) => {
-    await handleMessage(adapter, conversationId, message);
+  adapter.onMessage(async (conversationId, message, platformUserId) => {
+    // resolveUserId (defined in this file) returns undefined when resolution fails.
+    const userId = await resolveUserId(adapter.getPlatformType(), platformUserId, undefined);
+    await handleMessage(adapter, conversationId, message, {
+      actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
+    });
   });
 
   await adapter.start();
@@ -264,12 +268,23 @@ async handleWebhook(payload: any, signature: string): Promise<void> {
   if (!this.verifySignature(payload, signature)) return;
 
   // Parse event, extract conversationId and message
-  const { conversationId, message } = this.parseEvent(payload);
+  const { conversationId, message, platformUserId } = this.parseEvent(payload);
+  let userId: string | undefined;
+  try {
+    const user = await findOrCreateUserByPlatformIdentity(this.getPlatformType(), platformUserId);
+    userId = user.id;
+  } catch (err) {
+    getLog().warn({ err }, 'your_platform.user_resolve_failed');
+  }
 
   // Route to orchestrator
-  await handleMessage(this, conversationId, message);
+  await handleMessage(this, conversationId, message, {
+    actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
+  });
 }
 ```
+
+Resolve the authenticated sender to an Archon user before dispatch. If resolution fails, pass `{ kind: 'unidentified' }`; this refuses run actions. Chat and forge adapters never pass `operator`.
 
 **Reference:** `packages/adapters/src/forge/github/adapter.ts`
 
@@ -279,11 +294,11 @@ async handleWebhook(payload: any, signature: string): Promise<void> {
 
 AI agent providers wrap AI SDKs and provide a unified streaming interface. Implement the `IAgentProvider` interface to add new providers.
 
-> **Note:** This section covers built-in providers maintained by the core team (Claude, Codex). For community providers (`builtIn: false`) — which live under `packages/providers/src/community/` and register through `registerCommunityProviders()` — see [Adding a Community Provider](../contributing/adding-a-community-provider/).
+> **Note:** This section covers maintained in-repo providers (Claude, Codex and Pi). OpenCode and Copilot remain bundled transition providers under `packages/providers/src/community/`. New community providers attach as independently installed process plugins; see [Adding a Community Provider](../contributing/adding-a-community-provider/).
 
 ### IAgentProvider Interface
 
-**Location:** `packages/providers/src/types.ts` (contract layer — zero SDK deps). That file is the definition; this page does not copy it.
+**Location:** `packages/provider-contract/src/agent-provider.ts` (SDK-free contract), exported by `@archon/provider-contract`. That file is the definition; this page does not copy it.
 
 A provider answers `getType()` and `getCapabilities()`, streams a turn from `sendQuery(prompt, cwd, resumeSessionId, options)`, and checks its native login in `checkCredential`. The `checkCredential` request carries the configured `model`, the assistant's merged config (`assistantConfig`), the caller's `env`, and an abort `signal`.
 
@@ -321,8 +336,14 @@ Readers go through the engine's store seam: `IWorkflowStore.listProviderEvents(r
 **2. Implement the interface:**
 
 ```typescript
-import type { CredentialStatus } from '@archon/provider-contract';
-import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../types';
+import type {
+  CredentialStatus,
+  IAgentProvider,
+  MessageChunk,
+  ProviderCapabilities,
+  SendQueryOptions,
+} from '@archon/provider-contract';
+import { truncateToolOutput } from '@archon/provider-contract';
 
 export class YourAssistantProvider implements IAgentProvider {
   async checkCredential(): Promise<CredentialStatus> {
@@ -382,7 +403,7 @@ export class YourAssistantProvider implements IAgentProvider {
 }
 ```
 
-**3. Register via the typed registry:** `packages/providers/src/registry.ts`
+**3. Register in process:** `packages/providers/src/in-process.ts`
 
 Built-in providers are registered by `registerBuiltinProviders()`:
 
@@ -399,12 +420,16 @@ export function registerBuiltinProviders(): void {
     // ...existing entries
   ];
   for (const entry of builtins) {
-    if (!registry.has(entry.id)) registry.set(entry.id, entry);
+    if (!isRegisteredProvider(entry.id)) registerProvider(entry);
   }
 }
 ```
 
-Community providers use `registerCommunityProviders()` (same file). See the [community provider guide](../contributing/adding-a-community-provider/) for that path.
+CLI and server call `registerHostProviders()` before loading config or workflows. It registers maintained providers over the process transport in source checkouts and Docker, retains them in process in release binaries until provider release artifacts ship, admits installed provider receipts, registers OpenCode and Copilot in process, and initializes the credential catalog. The host supplies the read-only `ProviderRegistry` to workflow parsing, discovery and validation, and through `WorkflowDeps.providers` for execution. The port exposes provider metadata without factories; provider instances still pass through host admission.
+
+`@archon/providers` exports SDK-free registry functions and maintained-provider descriptors. SDK consumers and tests can import `registerInProcessProviders()` from `@archon/providers/in-process` to register all maintained and transition providers. Each maintained provider also exports `createProvider` and `descriptor` from `@archon/providers/claude`, `@archon/providers/codex`, or `@archon/providers/pi`; the corresponding `/plugin` entry serves it over stdio when executed.
+
+The bundled transition providers expose `registerOpencodeProvider()` and `registerCopilotProvider()` from the same module. New community providers use the external process-plugin path described in the [community provider guide](../contributing/adding-a-community-provider/). Hosts reconstruct their registrations from installed receipts; the server must restart after install, update or removal.
 
 **4. Add environment variables:** `.env.example`
 
@@ -696,17 +721,22 @@ The provider adopts existing worktrees before creating new ones:
 2. **Branch match**: If a same-repository PR branch or a task request with `taskBranch.kind: 'existing'` has an existing worktree -> adopt
 
 Only a worktree whose setup finished can be adopted. `create()` adds every worktree already
-locked (`git worktree add --lock`) and releases the lock once setup — git identity, submodule
-init, configured file copies — completes, so the checkout is never visible as ready while it is
-still half-built. A setup failure removes the worktree it locked before rethrowing, so the next
-run creates a fresh one.
+locked (`git worktree add --lock --reason <attempt reason>`) and releases the lock once setup
+completes. Each creation attempt has a unique reason, so another attempt cannot remove its
+checkout. Existing directories that are not adoptable worktrees are refused and preserved.
 
-A worktree still carrying that lock is refused rather than adopted: either another run is
-setting it up right now, or a run died before finishing and left a checkout with no
-submodules. Both cases need an operator decision, so the error names the path and the command
-that clears it (`git worktree remove --force --force <path>`). The same error carries the path
-when the rollback itself cannot remove the worktree — a locked submodule `.git` file or a
-permission problem — because the leftover is then the operator's to delete.
+If add fails after creating the checkout (for example, a failing `post-checkout` hook), or
+later setup fails, rollback removes it only while its lock still matches this attempt and
+Git reports no tracked, untracked, or ignored changes and the index has no submodules or
+flags that can hide changes. Branches are preserved. An owned registration can also be
+removed when a failing hook has already removed its checkout directory.
+A dirty checkout or one whose ownership cannot be proved stays in place; the original error
+includes the leftover path and cleanup failure. Inspect it and preserve any changes before
+removing it.
+
+A worktree still carrying an Archon setup lock is refused rather than adopted: another run
+may still be setting it up, or setup may have failed. This includes locks created by older
+Archon versions. The operator decides whether to wait, finish setup and unlock it for reuse, or remove the checkout.
 
 ```typescript
 // Inside create()
@@ -1064,8 +1094,8 @@ remote_agent_codebases
 ├── name (VARCHAR)
 ├── repository_url (VARCHAR)
 ├── default_cwd (VARCHAR)
-├── default_branch (VARCHAR, nullable) -- detected branch used as sync context when available
-├── ai_assistant_type (VARCHAR) -- registered provider identifier (e.g. 'claude', 'codex')
+├── default_branch (VARCHAR, nullable) -- optional explicit base branch; NULL resolves the remote default at use
+├── ai_assistant_type (VARCHAR, nullable) -- optional explicit provider choice; NULL follows project configuration for new conversations
 ├── kind (VARCHAR, default 'repo') -- 'repo' | 'folder' (folder projects are non-git, run in place)
 └── commands (JSONB) -- {command_name: {path, description}}
 
@@ -1329,7 +1359,7 @@ Post single comment on issue with summary
 
 ### Adding a New AI Agent Provider
 
-This checklist is for **built-in** providers only. For community providers (`builtIn: false`), see [Adding a Community Provider](../contributing/adding-a-community-provider/) — the folder layout, registration, and capability discipline are covered there in depth.
+This checklist is for **built-in** providers only. For community providers (`builtIn: false`), see [Adding a Community Provider](../contributing/adding-a-community-provider/) — the external process-plugin manifest, descriptor, installation and conformance are covered there.
 
 - [ ] Create `packages/providers/src/your-assistant/provider.ts`
 - [ ] Implement `IAgentProvider` interface (checkCredential + sendQuery + getType + getCapabilities)
@@ -1337,7 +1367,7 @@ This checklist is for **built-in** providers only. For community providers (`bui
 - [ ] Handle session creation and resumption
 - [ ] Declare `ProviderCapabilities` honestly — under-declare rather than over-promise
 - [ ] Implement error handling and retry classification (see Claude/Codex patterns)
-- [ ] Register in `registerBuiltinProviders()` at `packages/providers/src/registry.ts`
+- [ ] Register in `@archon/providers/in-process`, with an SDK-free descriptor and an executable plugin entry
 - [ ] Add environment variables to `.env.example`
 - [ ] Test session persistence across restarts
 - [ ] Test plan-to-execute transition (new session)
@@ -1413,7 +1443,7 @@ try {
 ### Context Injection
 
 ```typescript
-// GitHub: Pass issue/PR context as separate parameter
+// GitHub: Supply issue/PR context alongside the resolved actor
 let contextToAppend: string | undefined;
 
 if (eventType === 'issue' && issue) {
@@ -1424,10 +1454,15 @@ Use 'gh issue view ${String(issue.number)}' for full details if needed.`;
 Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
 }
 
-await handleMessage(adapter, conversationId, finalMessage, contextToAppend);
+await handleMessage(adapter, conversationId, finalMessage, {
+  actor: archonUserId
+    ? { kind: 'user', userId: archonUserId }
+    : { kind: 'unidentified' },
+  issueContext: contextToAppend,
+});
 ```
 
-Context is passed as a dedicated `issueContext` parameter to `handleMessage()`, keeping it separate from the user's message. For workflows, context is injected via `$CONTEXT` / `$ISSUE_CONTEXT` variable substitution in `buildPromptWithContext()`.
+The adapter supplies its resolved Archon user ID as `archonUserId`, or `undefined` when identity resolution fails. Context is passed in the `issueContext` field of the required context object to `handleMessage()`, keeping it separate from the user's message. For workflows, context is injected via `$CONTEXT` / `$ISSUE_CONTEXT` variable substitution in `buildPromptWithContext()`.
 
 **Reference:** `packages/adapters/src/forge/github/adapter.ts`, `packages/core/src/orchestrator/orchestrator.ts`
 

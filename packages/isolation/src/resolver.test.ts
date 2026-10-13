@@ -1,13 +1,16 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import * as git from '@archon/git';
 
+const mockCleanupError = mock<(...args: unknown[]) => void>(() => undefined);
+const mockCleanupInfo = mock<(...args: unknown[]) => void>(() => undefined);
+
 // Mock logger to suppress noisy output
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
     fatal: () => undefined,
-    error: () => undefined,
+    error: mockCleanupError,
     warn: () => undefined,
-    info: () => undefined,
+    info: mockCleanupInfo,
     debug: () => undefined,
     trace: () => undefined,
     child: () => undefined,
@@ -18,7 +21,11 @@ import { IsolationResolver } from './resolver';
 import { MissingProjectDirectoryError } from './errors';
 import type { IsolationResolverDeps } from './resolver';
 import type { IIsolationStore } from './store';
-import type { IsolationEnvironmentRow, IsolatedEnvironment, IsolationRequest } from './types';
+import type {
+  IsolationEnvironmentRow,
+  WorktreeCreationEnvironment,
+  IsolationRequest,
+} from './types';
 
 function makeEnvRow(overrides?: Partial<IsolationEnvironmentRow>): IsolationEnvironmentRow {
   return {
@@ -59,14 +66,18 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
 function makeMockProvider() {
   return {
     providerType: 'worktree' as const,
-    create: async (_request: unknown): Promise<IsolatedEnvironment> => ({
+    create: async (_request: unknown): Promise<WorktreeCreationEnvironment> => ({
       id: '/worktrees/new-branch',
       provider: 'worktree',
       workingPath: '/worktrees/new-branch',
       branchName: git.toBranchName('new-branch'),
       status: 'active',
       createdAt: new Date(),
-      metadata: { adopted: false },
+      metadata: {
+        provenance: 'created',
+        adopted: false,
+        creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+      },
     }),
     destroy: async () => ({
       worktreeRemoved: true,
@@ -359,7 +370,11 @@ describe('IsolationResolver', () => {
             branchName: git.toBranchName('new-branch'),
             status: 'active',
             createdAt: new Date(),
-            metadata: { adopted: false },
+            metadata: {
+              provenance: 'created',
+              adopted: false,
+              creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+            },
           };
         },
       },
@@ -405,13 +420,13 @@ describe('IsolationResolver', () => {
             branchName: git.toBranchName('feature/live-pr'),
             status: 'active',
             createdAt: new Date(),
-            metadata: { adopted: true },
+            metadata: { provenance: 'adopted', adopted: true },
           };
         },
       },
     });
 
-    await resolver.resolve({
+    const result = await resolver.resolve({
       existingEnvId: null,
       codebase: defaultCodebase,
       hints: {
@@ -425,6 +440,9 @@ describe('IsolationResolver', () => {
       platformType: 'web',
     });
 
+    expect(result.status).toBe('resolved');
+    if (result.status !== 'resolved') throw new Error('expected resolved adoption');
+    expect(result.method).toEqual({ type: 'provider_adoption' });
     expect(capturedRequest).toEqual(
       expect.objectContaining({
         workflowType: 'task',
@@ -670,6 +688,12 @@ describe('IsolationResolver', () => {
         destroy: async (_envId, options) => {
           destroyCalled = true;
           destroyCalledWithForce = options?.force === true;
+          expect(options).toEqual({
+            canonicalRepoPath: git.toRepoPath('/repos/myrepo'),
+            creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+            branchName: git.toBranchName('new-branch'),
+            force: true,
+          });
           return {
             worktreeRemoved: true,
             branchDeleted: null,
@@ -697,6 +721,45 @@ describe('IsolationResolver', () => {
 
     expect(destroyCalled).toBe(true);
     expect(destroyCalledWithForce).toBe(true);
+  });
+
+  test('incomplete rollback reports the leftover without masking the store failure', async () => {
+    mockCleanupError.mockClear();
+    mockCleanupInfo.mockClear();
+    const resolver = createResolver({
+      provider: {
+        ...makeMockProvider(),
+        destroy: async () => ({
+          worktreeRemoved: true,
+          directoryClean: false,
+          branchDeleted: null,
+          remoteBranchDeleted: null,
+          warnings: ['Retained directory'],
+        }),
+      },
+      store: makeMockStore({
+        create: async () => {
+          throw new Error('DB constraint violation');
+        },
+      }),
+    });
+    await expect(
+      resolver.resolve({
+        existingEnvId: null,
+        codebase: defaultCodebase,
+        hints: { workflowType: 'issue', workflowId: '602' },
+        platformType: 'web',
+      })
+    ).rejects.toThrow('DB constraint violation');
+    expect(mockCleanupError.mock.calls).toContainEqual([
+      expect.objectContaining({
+        err: expect.objectContaining({ message: expect.stringContaining('Retained directory') }),
+      }),
+      'isolation_orphan_cleanup_failed',
+    ]);
+    expect(
+      mockCleanupInfo.mock.calls.some(args => args[1] === 'isolation_orphan_cleanup_completed')
+    ).toBe(false);
   });
 
   test('store.create() failure still rethrows when orphan cleanup also fails', async () => {
@@ -731,14 +794,18 @@ describe('IsolationResolver', () => {
     const resolver = createResolver({
       provider: {
         ...makeMockProvider(),
-        create: async (): Promise<IsolatedEnvironment> => ({
+        create: async (): Promise<WorktreeCreationEnvironment> => ({
           id: '/worktrees/new-branch',
           provider: 'worktree',
           workingPath: '/worktrees/new-branch',
           branchName: git.toBranchName('new-branch'),
           status: 'active',
           createdAt: new Date(),
-          metadata: { adopted: false },
+          metadata: {
+            provenance: 'created',
+            adopted: false,
+            creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+          },
           warnings: ['Config file could not be loaded — copyFiles not applied.'],
         }),
       },
@@ -780,7 +847,7 @@ describe('IsolationResolver', () => {
     const resolver = createResolver({
       provider: {
         ...makeMockProvider(),
-        create: async (request: IsolationRequest): Promise<IsolatedEnvironment> => {
+        create: async (request: IsolationRequest): Promise<WorktreeCreationEnvironment> => {
           capturedRequests.push(request);
           return {
             id: '/worktrees/new-branch',
@@ -789,7 +856,11 @@ describe('IsolationResolver', () => {
             branchName: git.toBranchName('new-branch'),
             status: 'active' as const,
             createdAt: new Date(),
-            metadata: { adopted: false },
+            metadata: {
+              provenance: 'created',
+              adopted: false,
+              creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+            },
           };
         },
       },
@@ -815,7 +886,7 @@ describe('IsolationResolver', () => {
     const resolver = createResolver({
       provider: {
         ...makeMockProvider(),
-        create: async (request: IsolationRequest): Promise<IsolatedEnvironment> => {
+        create: async (request: IsolationRequest): Promise<WorktreeCreationEnvironment> => {
           capturedRequests.push(request);
           return {
             id: '/worktrees/new-branch',
@@ -824,7 +895,11 @@ describe('IsolationResolver', () => {
             branchName: git.toBranchName('new-branch'),
             status: 'active' as const,
             createdAt: new Date(),
-            metadata: { adopted: false },
+            metadata: {
+              provenance: 'created',
+              adopted: false,
+              creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+            },
           };
         },
       },
@@ -853,7 +928,7 @@ describe('IsolationResolver', () => {
     const resolver = createResolver({
       provider: {
         ...makeMockProvider(),
-        create: async (request: IsolationRequest): Promise<IsolatedEnvironment> => {
+        create: async (request: IsolationRequest): Promise<WorktreeCreationEnvironment> => {
           capturedRequests.push(request);
           return {
             id: '/worktrees/new-branch',
@@ -862,7 +937,11 @@ describe('IsolationResolver', () => {
             branchName: git.toBranchName('new-branch'),
             status: 'active' as const,
             createdAt: new Date(),
-            metadata: { adopted: false },
+            metadata: {
+              provenance: 'created',
+              adopted: false,
+              creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+            },
           };
         },
       },
@@ -891,7 +970,7 @@ describe('IsolationResolver', () => {
     const resolver = createResolver({
       provider: {
         ...makeMockProvider(),
-        create: async (request: IsolationRequest): Promise<IsolatedEnvironment> => {
+        create: async (request: IsolationRequest): Promise<WorktreeCreationEnvironment> => {
           capturedRequests.push(request);
           throw new Error('provider.create must not be called for folder projects');
         },
@@ -1247,14 +1326,18 @@ describe('IsolationResolver', () => {
         new git.CanonicalRepoPathUnavailableError(defaultCwd, '/metadata/repository')
       );
       const createSpy = mock(
-        async (_request: IsolationRequest): Promise<IsolatedEnvironment> => ({
+        async (_request: IsolationRequest): Promise<WorktreeCreationEnvironment> => ({
           id: '/worktrees/new-branch',
           provider: 'worktree',
           workingPath: '/worktrees/new-branch',
           branchName: git.toBranchName('new-branch'),
           status: 'active',
           createdAt: new Date(),
-          metadata: { adopted: false },
+          metadata: {
+            provenance: 'created',
+            adopted: false,
+            creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+          },
         })
       );
       const resolver = createResolver({

@@ -12,18 +12,14 @@
  *   when the deliver branch was skipped (no_action). The value is validated at the
  *   producer, so nothing here re-reads it for URL shape.
  *
- * A delivery that STARTED and died no longer reaches this node at all: the failure
+ * A failed delivery cannot reach this node: the failure
  * cascades an `upstream_failed` skip that blocks this join, and the run's terminal
  * record names the node that actually failed.
  */
 
-import { artifactsDir, emit, refuse, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, text } from '../../.shared/io.ts';
 import { caveats } from '../../.shared/report.ts';
 
-// Which actions exist is the assessment's vocabulary, declared in its own schema.
-// Re-enumerating it here would be a second owner that nothing keeps in step, and an
-// action this script does not recognise cannot open the spend gate, so it always
-// arrives with no delivered value and refuses through the branch below.
 const artifacts = artifactsDir();
 const listingFile = process.env.TYPED_ARTIFACTS_FILE;
 const action = text(process.env.INPUTS_ACTION);
@@ -35,15 +31,9 @@ if (action === 'no_action') {
     delivered: false,
     summary:
       `No update needed: ${summary}\nReport: ${artifacts}/upkeep-assessment.md` +
-      caveats(artifacts, { failed: false, listingFile }),
+      caveats(artifacts, { listingFile }),
   });
-} else if (delivered === 'null') {
-  refuse(
-    "outcome: the assessment chose 'update' but delivery never ran — " +
-      "see the run's terminal record for the node it stopped at." +
-      caveats(artifacts, { failed: true, listingFile })
-  );
 } else {
   // Deliver ran, so the record it returned is the report.
-  emit({ delivered: true, summary: delivered + caveats(artifacts, { failed: false, listingFile }) });
+  emit({ delivered: true, summary: delivered + caveats(artifacts, { listingFile }) });
 }

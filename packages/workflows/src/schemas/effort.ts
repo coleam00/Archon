@@ -1,4 +1,4 @@
-import { EFFORT_LADDER } from '@archon/paths/effort';
+import { EFFORT_LADDER } from '@archon/provider-contract/effort';
 import { z } from '@hono/zod-openapi';
 
 export const effortLevelSchema = z.enum(EFFORT_LADDER);

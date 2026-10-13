@@ -20,12 +20,13 @@
  * it means. A failed read refuses: it is never evidence that no CI exists.
  *
  * The one in-process wait: when nothing has registered yet, registration gets a
- * single 60 s grace before the maintainer-gated skip is declared. The gh source first
+ * single 60 s grace before reporting an empty observation. The gh source first
  * asks whether the repository has any active workflow, so a repository without CI
  * skips the wait.
  */
 
 import {
+  approvalPending,
   atRevision,
   describeUnits,
   gateState,
@@ -42,7 +43,7 @@ const boundPr = process.env.INPUTS_PR;
 function classify(read: CheckRead): void {
   const at = atRevision(read);
   const units = read.units;
-  switch (gateState(units)) {
+  switch (gateState(units, approvalPending(read))) {
     case 'pending': {
       const count = units.filter(unit => unit.state === 'pending').length;
       emit({ state: 'pending', detail: `${count} check(s) running${at}` });
@@ -53,14 +54,18 @@ function classify(read: CheckRead): void {
       const red = units.filter(unit => unit.state === 'red');
       const unknown = units.filter(unit => unit.state === 'unknown');
       if (red.length > 0) parts.push(`non-green checks${at}: ${describeUnits(red)}`);
-      if (unknown.length > 0) parts.push(`checks have unknown state${at}: ${describeUnits(unknown)}`);
+      if (unknown.length > 0)
+        parts.push(`checks have unknown state${at}: ${describeUnits(unknown)}`);
       emit({ state: 'red', detail: parts.join('; ') });
       return;
     }
     case 'gated':
       emit({
         state: 'concluded',
-        detail: `checks gated${at}: ${describeUnits(units.filter(unit => unit.state === 'gated'))}`,
+        detail:
+          read.approvalPending === true
+            ? `CI needs a maintainer's approval${at}`
+            : `checks gated${at}: ${describeUnits(units.filter(unit => unit.state === 'gated'))}`,
       });
       return;
     case 'green': {
@@ -83,29 +88,32 @@ function classify(read: CheckRead): void {
 function probe(): void {
   const pr = parseQualifiedPr(boundPr);
   const first = readPrChecks(pr);
-  if (first.units.length > 0) {
+  if (first.units.length > 0 || approvalPending(first)) {
     classify(first);
     return;
   }
   if (first.source === 'gh' && hasActiveWorkflows(pr) === false) {
-    emit({ state: 'concluded', detail: 'no checks configured on this repository — nothing to await' });
+    emit({
+      state: 'concluded',
+      detail: 'no checks configured on this repository — nothing to await',
+    });
     return;
   }
-  // CI exists (or could not be ruled out) but nothing started. Give registration one
-  // grace interval, then skip with the reason: starting gated CI is a maintainer's
-  // power, not this run's.
+  // No units or explicit approval evidence: give registration one grace interval.
   Bun.sleepSync(60_000);
   const second = readPrChecks(pr);
-  if (second.units.length > 0) {
+  if (second.units.length > 0 || approvalPending(second)) {
     classify(second);
     return;
   }
   emit({
     state: 'concluded',
     detail:
-      `CI is configured but no checks started on this PR${atRevision(second)} — most likely ` +
-      "awaiting a maintainer's approval to run (fork or first contribution), or path " +
-      'filters. Skipping the CI gate; running and verifying checks stays with the maintainer.',
+      second.source === 'forge'
+        ? `No checks registered${atRevision(second)}; no approval requirement was established.`
+        : `CI is configured but no checks started on this PR${atRevision(second)} — most likely ` +
+          "awaiting a maintainer's approval to run (fork or first contribution), or path " +
+          'filters. Skipping the CI gate; running and verifying checks stays with the maintainer.',
   });
 }
 

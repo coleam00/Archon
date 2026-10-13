@@ -1,8 +1,13 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { Hono, type Context } from 'hono';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager, User } from '@archon/core';
-import type { WebAdapter } from '../adapters/web';
+import { SSEStreamingApi } from 'hono/streaming';
+import { WebAdapter } from '../adapters/web';
+import { MessagePersistence } from '../adapters/web/persistence';
+import { WorkflowEventBridge } from '../adapters/web/workflow-bridge';
+import { DASHBOARD_STREAM, SSETransport } from '../adapters/web/transport';
+import { DASHBOARD_SSE_PATH } from '../../../web/src/experiments/console/lib/sse-endpoints';
 import { validationErrorHook } from './openapi-defaults';
 import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
 
@@ -13,7 +18,7 @@ import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workf
 // the X-Archon-User header, threaded into the DB query as a userId filter).
 // ---------------------------------------------------------------------------
 
-const noopLogger = () => ({
+const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
   warn: mock(() => undefined),
@@ -26,7 +31,7 @@ const noopLogger = () => ({
   bindings: mock(() => ({ module: 'test' })),
   isLevelEnabled: mock(() => true),
   level: 'info',
-});
+};
 
 // --- Controllable web-auth module (../auth) ---
 let authEnabled = false;
@@ -73,6 +78,12 @@ mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'postgresql',
   loadConfig: mock(async () => ({})),
+  ProjectRegistrationError: class ProjectRegistrationError extends Error {},
+  inspectProjectBaseBranch: mock(async () => ({
+    kind: 'repo',
+    defaultBranch: 'dev',
+    reason: null,
+  })),
   cloneRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   registerRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   ConversationNotFoundError: class ConversationNotFoundError extends Error {},
@@ -80,11 +91,12 @@ mock.module('@archon/core', () => ({
   resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   isPerUserGitHubEnabled: () => false,
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
-  createLogger: noopLogger,
+  createLogger: () => mockLogger,
 }));
 
 mock.module('@archon/paths', () => ({
-  createLogger: noopLogger,
+  canonicalizeProjectPath: async (path: string) => path,
+  createLogger: () => mockLogger,
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
   getBundledWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows'),
@@ -143,10 +155,18 @@ mock.module('@archon/core/utils/commands', () => ({
   findCommandFiles: mock(async () => []),
 }));
 
-import { registerApiRoutes, resolveAuthContext, resolveWebUserId, requireWebUser } from './api';
+import {
+  registerApiRoutes,
+  resolveAuthContext,
+  resolveWebUserId,
+  resolveRunActor,
+  requireWebUser,
+} from './api';
 
-function makeApp(): OpenAPIHono {
-  const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+function makeApp(
+  webAdapter?: WebAdapter,
+  app = new OpenAPIHono({ defaultHook: validationErrorHook })
+): OpenAPIHono {
   const mockWebAdapter = {
     setConversationDbId: mock(() => {}),
     emitSSE: mock(async () => {}),
@@ -159,9 +179,83 @@ function makeApp(): OpenAPIHono {
     }),
     getStats: mock(() => ({ active: 0, queued: 0 })),
   } as unknown as ConversationLockManager;
-  registerApiRoutes(app, mockWebAdapter, mockLockManager);
+  registerApiRoutes(app, webAdapter ?? mockWebAdapter, mockLockManager);
   return app;
 }
+
+describe('console dashboard SSE endpoint and disconnect lifecycle', () => {
+  for (const cleanup of ['abort', 'finally'] as const) {
+    test(`${cleanup} removes only the disconnected dashboard connection`, async () => {
+      apiGateEnabled = false;
+      const transport = new SSETransport();
+      const adapter = new WebAdapter(
+        transport,
+        new MessagePersistence((id, event) => transport.emit(id, event)),
+        new WorkflowEventBridge(transport)
+      );
+      const sleepers = new Map<SSEStreamingApi, (reason: Error) => void>();
+      // Control the heartbeat wait so both cleanup paths run without a 30-second timer.
+      const sleep = spyOn(SSEStreamingApi.prototype, 'sleep').mockImplementation(function (
+        this: SSEStreamingApi
+      ) {
+        return new Promise<void>((_resolve, reject) => sleepers.set(this, reject));
+      });
+      const readers: Pick<ReadableStreamDefaultReader<Uint8Array>, 'read' | 'cancel'>[] = [];
+      const decoder = new TextDecoder();
+      try {
+        const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+        app.use('*', async (c, next) => {
+          await next();
+          c.header('X-Test-Route', c.req.routePath);
+        });
+        makeApp(adapter, app);
+        for (let i = 0; i < 2; i++) {
+          const response = await app.request(DASHBOARD_SSE_PATH);
+          expect(response.status).toBe(200);
+          expect(response.headers.get('content-type')).toBe('text/event-stream');
+          expect(response.headers.get('X-Test-Route')).toBe(DASHBOARD_SSE_PATH);
+          if (!response.body) throw new Error('Missing SSE response body');
+          const reader = response.body.getReader();
+          readers.push(reader);
+          expect(decoder.decode((await reader.read()).value)).toContain('"heartbeat"');
+        }
+        const [first, second] = readers;
+        if (!first || !second) throw new Error('Missing dashboard readers');
+        const broadcast = adapter.emitSSE(DASHBOARD_STREAM, 'first event');
+        const frames = await Promise.all([first.read(), second.read()]);
+        await broadcast;
+        expect(frames.map(frame => decoder.decode(frame.value))).toEqual([
+          'data: first event\n\n',
+          'data: first event\n\n',
+        ]);
+        const firstSleeper = sleepers.values().next().value;
+        if (!firstSleeper) throw new Error('Heartbeat wait was not reached');
+        if (cleanup === 'abort') {
+          await first.cancel();
+        } else {
+          firstSleeper(new Error('closed'));
+          expect((await first.read()).done).toBe(true);
+        }
+        expect(transport.hasActiveStream(DASHBOARD_STREAM)).toBe(true);
+        const nextBroadcast = adapter.emitSSE(DASHBOARD_STREAM, 'second event');
+        expect(decoder.decode((await second.read()).value)).toBe('data: second event\n\n');
+        await nextBroadcast;
+        if (cleanup === 'abort') {
+          firstSleeper(new Error('aborted'));
+          await first.read();
+        }
+        expect(transport.hasActiveStream(DASHBOARD_STREAM)).toBe(true);
+        await second.cancel();
+        expect(transport.hasActiveStream(DASHBOARD_STREAM)).toBe(false);
+      } finally {
+        await Promise.all(readers.map(reader => reader.cancel()));
+        for (const reject of sleepers.values()) reject(new Error('closed'));
+        sleep.mockRestore();
+        transport.stop();
+      }
+    });
+  }
+});
 
 describe('GET /api/auth/status', () => {
   beforeEach(() => {
@@ -386,6 +480,8 @@ describe('per-request auth helpers', () => {
   const originalHeader = process.env.ARCHON_WEB_AUTH_HEADER;
 
   beforeEach(() => {
+    mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
     authEnabled = false;
     authInstance = null;
     delete process.env.ARCHON_WEB_AUTH_HEADER;
@@ -397,6 +493,22 @@ describe('per-request auth helpers', () => {
     else process.env.ARCHON_WEB_AUTH_HEADER = originalHeader;
   });
 
+  test('run actor uses session identity before proxy identity', async () => {
+    authEnabled = true;
+    authInstance = { api: { getSession: async () => ({ user: { id: 'session-user' } }) } };
+    expect(await resolveRunActor(await request({ 'X-Archon-User': 'proxy-user' }))).toEqual({
+      kind: 'user',
+      userId: 'user-from-session-user',
+    });
+  });
+
+  test('run actor uses a proxy identity with web auth off', async () => {
+    expect(await resolveRunActor(await request({ 'X-Archon-User': 'proxy-user' }))).toEqual({
+      kind: 'user',
+      userId: 'user-from-proxy-user',
+    });
+  });
+
   for (const enabled of [false, true]) {
     test(`no identity with web auth ${enabled ? 'enabled' : 'disabled'} preserves unattributed requests`, async () => {
       authEnabled = enabled;
@@ -404,6 +516,7 @@ describe('per-request auth helpers', () => {
       const c = await request();
       expect(await resolveAuthContext(c)).toBeUndefined();
       expect(await resolveWebUserId(c)).toBeUndefined();
+      expect(await resolveRunActor(c)).toEqual({ kind: enabled ? 'unidentified' : 'operator' });
       const result = await requireWebUser(c, 'Login to manage keys');
       expect(result).toHaveProperty('error');
       if (!('error' in result)) throw new Error('Expected authentication refusal');
@@ -463,10 +576,11 @@ describe('per-request auth helpers', () => {
   });
 
   test('session outage permits soft proxy attribution but strict identity returns 503', async () => {
+    const sessionOutage = new Error('session store unavailable');
     authInstance = {
       api: {
         getSession: async () => {
-          throw new Error('session unavailable');
+          throw sessionOutage;
         },
       },
     };
@@ -476,6 +590,14 @@ describe('per-request auth helpers', () => {
     mockFindOrCreateUser.mockClear();
     const result = await requireWebUser(c);
     if (!('error' in result)) throw new Error('Expected backend refusal');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { err: sessionOutage, path: c.req.path },
+      'web.session_resolve_failed'
+    );
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      { err: sessionOutage },
+      'web.session_resolve_failed'
+    );
     expect(result.error.status).toBe(503);
     expect(await result.error.json()).toEqual({
       error: 'Could not verify session — backend unavailable',
@@ -490,13 +612,28 @@ describe('per-request auth helpers', () => {
       if (source === 'session')
         authInstance = { api: { getSession: async () => ({ user: { id: 'session-user' } }) } };
       const c = await request(source === 'header' ? { 'X-Archon-User': 'proxy-user' } : undefined);
-      mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+      mockLogger.warn.mockClear();
+      mockLogger.error.mockClear();
+      const storageOutage = new Error('identity store unavailable');
+      mockFindOrCreateUser.mockRejectedValueOnce(storageOutage);
       expect(await resolveAuthContext(c)).toBeUndefined();
-      mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+      mockFindOrCreateUser.mockRejectedValueOnce(storageOutage);
       expect(await resolveWebUserId(c)).toBeUndefined();
-      mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+      mockFindOrCreateUser.mockRejectedValueOnce(storageOutage);
       const result = await requireWebUser(c);
       if (!('error' in result)) throw new Error('Expected backend refusal');
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        {
+          err: storageOutage,
+          ...(source === 'header' ? { headerPresent: true } : {}),
+          path: c.req.path,
+        },
+        source === 'header' ? 'web.user_resolve_failed' : 'web.session_resolve_failed'
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { err: storageOutage, ...(source === 'header' ? { headerPresent: true } : {}) },
+        'web.user_resolve_failed'
+      );
       expect(result.error.status).toBe(503);
       expect(await result.error.json()).toEqual({
         error: 'Could not verify web identity — backend unavailable',

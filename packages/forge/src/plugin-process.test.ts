@@ -74,16 +74,21 @@ describe('forge plugin process', () => {
       );
       expect(result.timedOut).toBe(true);
       const pid = Number(await readFile(pidFile, 'utf8'));
-      let alive = true;
-      for (let attempt = 0; attempt < 20 && alive; attempt++) {
+      // A killed descendant stays visible until the OS finishes with it: Windows
+      // TerminateProcess returns before the process is gone, and a Linux zombie lingers
+      // until init reaps it. Both depend on the scheduler, so wait up to 3 s for the exit
+      // (inside the 5 s default budget); a descendant the kill missed never exits at all.
+      const alive = (): boolean => {
         try {
           process.kill(pid, 0);
-          await Bun.sleep(25);
-        } catch {
-          alive = false;
+          return true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+          throw error;
         }
-      }
-      expect(alive).toBe(false);
+      };
+      for (let attempt = 0; attempt < 120 && alive(); attempt++) await Bun.sleep(25);
+      expect(alive()).toBe(false);
     } finally {
       await removeTempTree(directory);
     }

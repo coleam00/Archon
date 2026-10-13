@@ -1,3 +1,5 @@
+import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
+
 import { describe, expect, it } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -13,19 +15,11 @@ import type {
   WorkflowResumeInput,
 } from './engine-port';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
+import { WorkflowNotResumableError } from './store';
+export { WorkflowNotResumableError } from './store';
 import type { ResolvedWorkflow, WorkflowDefinition, WorkflowRun } from './schemas';
 
 const trackTempRoot = trackTempRoots();
-
-export class WorkflowNotResumableError extends Error {
-  constructor(
-    public readonly runId: string,
-    public readonly currentStatus: string
-  ) {
-    super(`Workflow run is not resumable (id: ${runId}, status: ${currentStatus}).`);
-    this.name = 'WorkflowNotResumableError';
-  }
-}
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -62,6 +56,7 @@ function emptySnapshot(): DagResumeSnapshot {
 
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id: 'run-123',
     workflow_name: 'test-workflow',
     conversation_id: 'conv-1',
@@ -96,6 +91,18 @@ function makeWorkflow(overrides: Partial<WorkflowDefinition> = {}): ResolvedWork
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   const noop = async (): Promise<void> => undefined;
   return {
+    getStateDocument: async () => null,
+    listStateRevisions: async () => [],
+    putStateDocument: async () => {
+      throw new Error('Unsupported state documents');
+    },
+    patchStateDocument: async () => {
+      throw new Error('Unsupported state documents');
+    },
+    deleteStateDocument: async () => {
+      throw new Error('Unsupported state documents');
+    },
+    pruneStateRevisions: async () => ({ count: 0 }),
     getActiveWorkflowRunByPath: async () => null,
     findChildRuns: async () => [],
     getRunAncestry: async () => [],
@@ -129,7 +136,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
         step_name: completion.stepName,
       },
     }),
-    rewriteApprovalContext: async () => ({ resolved: true }),
+    failPausedApproval: async () => ({ failed: true }),
     claimWriteback: async () => ({ claimed: true }),
     releaseWritebackClaim: noop,
     cancelWorkflowRun: async () => ({ cancelled: false }),
@@ -159,13 +166,18 @@ function defaultConfig(): WorkflowConfig {
 }
 
 function makeDeps(
+  providers: ProviderRegistry,
   store: IWorkflowStore = makeStore(),
   overrides: Partial<WorkflowDeps> = {}
 ): WorkflowDeps {
   return {
+    providers,
     store,
     loadConfig: async () => defaultConfig(),
-    getAgentProvider: () => ({ run: async (): Promise<void> => undefined }),
+    getAgentProvider: () => ({
+      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+      run: async (): Promise<void> => undefined,
+    }),
     ...overrides,
   } as WorkflowDeps;
 }
@@ -177,7 +189,7 @@ function callInput(): Omit<WorkflowEngineSubmitInput, 'options'> {
     cwd: '/tmp/ops',
     workflow: makeWorkflow(),
     userMessage: 'hello',
-    conversationDbId: 'db-conv-1',
+    origin: { conversationId: 'db-conv-1' },
   };
 }
 
@@ -231,6 +243,7 @@ interface WorkflowEngineContractObservations {
 }
 
 export function runWorkflowEngineContractTests(
+  providers: ProviderRegistry,
   makeEngine: (deps: WorkflowDeps) => IWorkflowEngine,
   observations: WorkflowEngineContractObservations
 ): void {
@@ -245,7 +258,7 @@ export function runWorkflowEngineContractTests(
           return makeRun();
         },
       });
-      const deps = makeDeps(store, {
+      const deps = makeDeps(providers, store, {
         loadConfig: async () => {
           configLoads += 1;
           return defaultConfig();
@@ -258,9 +271,37 @@ export function runWorkflowEngineContractTests(
 
       expect(result).toMatchObject({ success: true, workflowRunId: 'run-123' });
       expect(createdRuns).toHaveLength(1);
-      expect(createdRuns[0]?.conversation_id).toBe('db-conv-1');
+      expect(createdRuns[0]?.origin).toEqual({ conversationId: 'db-conv-1' });
       expect(messages).toContain('conv-1');
       expect(configLoads).toBe(1);
+    });
+
+    it('submits and resumes without conversation or user provenance', async () => {
+      const originless = makeRun({ origin: null, conversation_id: null, user_id: null });
+      const created: Parameters<IWorkflowStore['createWorkflowRun']>[0][] = [];
+      const store = resumableStore({
+        createWorkflowRun: async input => {
+          created.push(input);
+          return originless;
+        },
+        resumeWorkflowRun: async () => originless,
+        getWorkflowRun: async () => ({ ...originless, status: 'completed' }),
+      });
+      const engine = makeEngine(makeDeps(providers, store));
+      const input = callInput();
+      delete input.origin;
+      expect(await engine.submit(input)).toMatchObject({ success: true });
+      expect(created[0]?.origin).toBeUndefined();
+      const resumeInput = resumeCallInput();
+      delete resumeInput.origin;
+      const admission = await engine.resume({
+        ...resumeInput,
+        run: { ...originless, status: 'paused' },
+      });
+      expect(admission.accepted).toBe(true);
+      if (!admission.accepted) throw new Error('expected resume');
+      expect(await admission.settled).toMatchObject({ success: true });
+      expect(created).toHaveLength(1);
     });
 
     it('allows a pending pre-created row on fresh submit', async () => {
@@ -273,7 +314,7 @@ export function runWorkflowEngineContractTests(
         },
         getWorkflowRun: async () => ({ ...pending, status: 'completed' as const }),
       });
-      const result = await makeEngine(makeDeps(store)).submit({
+      const result = await makeEngine(makeDeps(providers, store)).submit({
         ...callInput(),
         options: { preCreatedRun: pending },
       });
@@ -284,14 +325,15 @@ export function runWorkflowEngineContractTests(
     it('refuses a fresh execution whose pending claim was already consumed', async () => {
       const pending = makeRun({ id: 'pending-run', status: 'pending' });
       const store = makeStore({ claimPendingWorkflowRun: async () => null });
-      const result = await makeEngine(makeDeps(store)).submit({
+      const result = await makeEngine(makeDeps(providers, store)).submit({
         ...callInput(),
         options: { preCreatedRun: pending },
       });
       expect(result).toEqual({
         success: false,
         workflowRunId: pending.id,
-        error: 'Workflow run is no longer pending or no longer owns its admitted resource',
+        error:
+          'Workflow run is no longer pending, no longer owns its admitted resource, or its worktree was released',
       });
     });
 
@@ -312,10 +354,20 @@ export function runWorkflowEngineContractTests(
           },
         });
         const result = await makeEngine(
-          makeDeps(store, {
+          makeDeps(providers, store, {
             getAgentProvider: () => {
-              executions += 1;
-              throw new Error('must not execute');
+              return {
+                getType: (): 'claude' => 'claude',
+                getCapabilities: (): import('@archon/provider-contract').ProviderCapabilities =>
+                  requireProvider(providers, 'claude').capabilities,
+                checkCredential: async (): Promise<
+                  import('@archon/provider-contract').CredentialStatus
+                > => ({ state: 'not_checked', source: 'native' }),
+                sendQuery: (): never => {
+                  executions += 1;
+                  throw new Error('must not execute');
+                },
+              };
             },
           })
         ).submit({
@@ -350,7 +402,7 @@ export function runWorkflowEngineContractTests(
         },
       });
       const engine = makeEngine(
-        makeDeps(store, {
+        makeDeps(providers, store, {
           loadConfig: async () => {
             configLoads += 1;
             return defaultConfig();
@@ -379,7 +431,7 @@ export function runWorkflowEngineContractTests(
         resumeWorkflowRun: async () => resumed,
         getWorkflowRun: async () => ({ ...resumed, status: 'completed' as const }),
       });
-      const engine = makeEngine(makeDeps(store, { loadConfig: () => config.promise }));
+      const engine = makeEngine(makeDeps(providers, store, { loadConfig: () => config.promise }));
       const admission = await engine.resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'accepted-run', status: 'paused' }),
@@ -400,7 +452,7 @@ export function runWorkflowEngineContractTests(
         resumeWorkflowRun: async () => resumed,
         getWorkflowRun: async () => ({ ...resumed, status: 'paused' as const }),
       });
-      const admission = await makeEngine(makeDeps(store)).resume({
+      const admission = await makeEngine(makeDeps(providers, store)).resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'paused-run', status: 'paused' }),
       });
@@ -433,7 +485,7 @@ nodes:
         ],
       });
 
-      const admission = await makeEngine(makeDeps(store)).resume({
+      const admission = await makeEngine(makeDeps(providers, store)).resume({
         ...resumeCallInput(),
         legacyWorkflow: conflicting,
         run,
@@ -473,7 +525,7 @@ nodes:
       });
 
       const error = await captureRejection(
-        makeEngine(makeDeps(store)).resume({ ...resumeCallInput(), run })
+        makeEngine(makeDeps(providers, store)).resume({ ...resumeCallInput(), run })
       );
       expect(error).toBeInstanceOf(Error);
       expect(reads).toBe(0);
@@ -499,7 +551,7 @@ nodes:
       const input = resumeCallInput();
 
       const error = await captureRejection(
-        makeEngine(makeDeps(store)).resume({
+        makeEngine(makeDeps(providers, store)).resume({
           ...input,
           run: makeRun({ status: 'paused' }),
           legacyWorkflow,
@@ -518,7 +570,7 @@ nodes:
           return makeRun();
         },
       });
-      const result = await makeEngine(makeDeps(store)).resume({
+      const result = await makeEngine(makeDeps(providers, store)).resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'empty-run', status: 'paused' }),
       });
@@ -531,6 +583,7 @@ nodes:
       const caughtHydrationError = await captureRejection(
         makeEngine(
           makeDeps(
+            providers,
             makeStore({
               getDagResumeSnapshot: async () => Promise.reject(hydrationError),
             })
@@ -543,6 +596,7 @@ nodes:
       const caughtClaimError = await captureRejection(
         makeEngine(
           makeDeps(
+            providers,
             resumableStore({
               resumeWorkflowRun: async () => Promise.reject(claimError),
             })
@@ -553,6 +607,7 @@ nodes:
     });
 
     it.each([
+      ['preparedAiConfiguration', { preparedAiConfiguration: {} }],
       ['runConfig', { runConfig: { layer: {}, source: 'cli' } }],
       ['modelOverrideLayer', { modelOverrideLayer: { kind: 'raw', overrides: {} } }],
     ])('rejects resume option %s before hydration or claim', async (_field, options) => {
@@ -573,7 +628,7 @@ nodes:
         run: makeRun({ status: 'paused' }),
         options,
       } as unknown as WorkflowResumeInput;
-      const error = await captureRejection(makeEngine(makeDeps(store)).resume(input));
+      const error = await captureRejection(makeEngine(makeDeps(providers, store)).resume(input));
       expect(error).toBeInstanceOf(Error);
       expect(reads).toBe(0);
       expect(claims).toBe(0);
@@ -584,15 +639,17 @@ nodes:
       const config = deferred<WorkflowConfig>();
       const resumed = makeRun({ id: 'failed-run', status: 'running' });
       const failures: { id: string; message: string }[] = [];
+      let durableStatus: import('./schemas').WorkflowRunStatus = 'running';
       const store = resumableStore({
         resumeWorkflowRun: async () => resumed,
-        getWorkflowRunStatus: async () => 'running',
+        getWorkflowRunStatus: async () => durableStatus,
         failWorkflowRun: async (id, message) => {
+          durableStatus = 'failed';
           failures.push({ id, message });
         },
       });
       const admission = await makeEngine(
-        makeDeps(store, { loadConfig: () => config.promise })
+        makeDeps(providers, store, { loadConfig: () => config.promise })
       ).resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'failed-run', status: 'paused' }),
@@ -618,7 +675,7 @@ nodes:
         },
       });
       const admission = await makeEngine(
-        makeDeps(store, { loadConfig: () => config.promise })
+        makeDeps(providers, store, { loadConfig: () => config.promise })
       ).resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'write-failed-run', status: 'paused' }),
@@ -648,7 +705,7 @@ nodes:
         },
       });
       const admission = await makeEngine(
-        makeDeps(store, { loadConfig: async () => Promise.reject(cause) })
+        makeDeps(providers, store, { loadConfig: async () => Promise.reject(cause) })
       ).resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'terminal-error-run', status: 'paused' }),

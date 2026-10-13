@@ -39,6 +39,8 @@ nodes:
   - id: publish
     script: publish-pr
     runtime: bun
+    timeout: 30000
+    retry: { max_attempts: 2, delay_ms: 20000 }
     depends_on: [pr]
     with:
       intent: "$pr.output.intent"

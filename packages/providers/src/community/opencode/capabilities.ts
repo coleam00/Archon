@@ -23,6 +23,7 @@ import type { ProviderCapabilities } from '../../types';
  * a node's hooks silently — a fail-fast violation (#2116).
  */
 export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
+  backgroundWork: 'unobserved',
   sessionResume: true,
   mcp: false, // top-level nodeConfig.mcp has no OpenCode request translation yet
   hooks: false,

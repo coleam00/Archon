@@ -14,6 +14,9 @@
  * filters the flag and example lists by owner for scoped slices.
  */
 
+import { userRoleSchema } from '@archon/core/schemas/user';
+import type { ForgeRequest } from '@archon/forge/operations';
+
 interface FlagOwner {
   command: string;
   subcommand?: string;
@@ -51,6 +54,25 @@ interface HelpEntry {
   scopedFlags?: FlagHelp[];
 }
 
+const forgeOperationDescriptions = {
+  resolve: 'Resolve an explicit remote through optional forge plugins',
+  'checks.state': 'Observe checks for an explicit qualified pull request',
+  'workitem.view': 'Read a qualified work item',
+  'workitem.create': 'Create an issue or recover its canonical marker',
+  'workitem.labels.set': 'Set and verify the complete issue label set',
+  'repo.labels.list': 'List repository label names',
+  'repo.label.ensure': 'Explicitly ensure one repository label exists',
+  'pr.view': 'Read a pull request by number or by qualified head',
+  'pr.create': 'Open a pull request and verify it by reading it back',
+  'pr.edit-body': 'Replace a pull request body and verify the result',
+  'pr.ready': 'Take a pull request out of draft and verify the result',
+  'pr.draft': 'Convert a pull request to draft and verify the result',
+  'pr.merge': 'Merge a pull request pinned to its approved head',
+  'checks.rerun': 'Rerun selected failed checks at a revision',
+  'pr.reviews': 'Read submitted reviews and root review comments',
+  'comment.upsert': 'Write the one marked comment on a pull request',
+} satisfies Record<ForgeRequest['op'], string>;
+
 // One entry per Commands-block line, in global-help order. `renderHelp()`
 // returns the global index with no selection; `renderHelp(...)`
 // filters this list by the (command, subcommand) tuple for scoped slices.
@@ -61,10 +83,15 @@ interface HelpEntry {
 // live here so the global Commands block does not grow).
 const commandHelp: HelpEntry[] = [
   {
+    command: 'state',
+    spec: 'state <get|put|patch|log|delete>',
+    description: 'Read and audit durable project JSON documents',
+  },
+  {
     command: 'forge',
     subcommand: 'resolve',
     spec: 'forge resolve',
-    description: 'Resolve an explicit remote through optional forge plugins',
+    description: forgeOperationDescriptions.resolve,
     scopedFlags: [
       {
         spec: '--data <json>',
@@ -76,13 +103,18 @@ const commandHelp: HelpEntry[] = [
     command: 'forge',
     subcommand: 'checks',
     spec: 'forge checks',
-    description: 'Observe checks for an explicit qualified pull request',
+    description: forgeOperationDescriptions['checks.state'],
     scopedFlags: [
       {
         spec: '--data <json>',
         description: 'JSON object with ref: {repo: {host, path}, number}',
       },
     ],
+  },
+  {
+    command: 'user',
+    spec: 'user <list|role|link>',
+    description: 'List users, link identities and manage roles as the operator',
   },
   {
     command: 'trigger',
@@ -256,7 +288,7 @@ const commandHelp: HelpEntry[] = [
   {
     command: 'serve',
     spec: 'serve',
-    description: 'Start the web UI server (binary installs download it on first run)',
+    description: 'Start the web UI server (binary installs download server and UI on first run)',
   },
   {
     command: 'skill',
@@ -265,11 +297,17 @@ const commandHelp: HelpEntry[] = [
     description: 'Install archon-cli into .claude/skills and .agents/skills',
   },
   {
+    command: 'provider',
+    subcommand: 'install',
+    spec: 'provider install <id...>',
+    description: 'Install maintained providers matching this Archon release',
+  },
+  {
     command: 'plugin',
     subcommand: 'install',
     spec: 'plugin install <owner/repo[/path][@tag]>',
     description:
-      'Install a plugin from GitHub (default: forge plugins the latest release, workflow packs the default branch)',
+      'Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)',
   },
   {
     command: 'plugin',
@@ -427,31 +465,72 @@ const commandHelp: HelpEntry[] = [
 // "no flag documentation is lost" invariant honest — nothing here ships in
 // global help that was not in the original.
 const scopedOnlyHelp: HelpEntry[] = [
-  ...(
-    [
-      ['workitem.view', 'Read a qualified work item'],
-      ['pr.view', 'Read a pull request by number or by qualified head'],
-      ['pr.create', 'Open a pull request and verify it by reading it back'],
-      ['pr.edit-body', 'Replace a pull request body and verify the result'],
-      ['pr.ready', 'Take a pull request out of draft and verify the result'],
-      ['comment.upsert', 'Write the one marked comment on a pull request'],
-    ] as const
-  ).map(([subcommand, description]) => ({
-    command: 'forge',
-    subcommand,
-    spec: `forge ${subcommand}`,
-    description,
-    scopedFlags: [
-      {
-        spec: '--data <json>',
-        description: 'Structured request without operationId or op',
-      },
-      {
-        spec: '--data-file <path>',
-        description: 'Read that request from a file, keeping authored content out of argv',
-      },
-    ],
-  })),
+  {
+    command: 'state',
+    subcommand: 'get',
+    spec: 'state get <name>',
+    description: 'Read the latest value and revision as JSON',
+  },
+  {
+    command: 'state',
+    subcommand: 'put',
+    spec: 'state put <name> --if-revision <n>',
+    description: 'Replace the value with JSON from stdin; 0 creates it',
+  },
+  {
+    command: 'state',
+    subcommand: 'patch',
+    spec: 'state patch <name>',
+    description: 'Apply {ops:[...]} from stdin to the latest value',
+  },
+  {
+    command: 'state',
+    subcommand: 'delete',
+    spec: 'state delete <name> [--if-revision <n>]',
+    description: 'Append an audited tombstone',
+  },
+  {
+    command: 'state',
+    subcommand: 'log',
+    spec: 'state log <name> [--limit <n>]',
+    description: 'Read revisions newest first, including writers and operations',
+  },
+  ...Object.entries(forgeOperationDescriptions)
+    .filter(([op]) => op !== 'resolve')
+    .map(([subcommand, description]) => ({
+      command: 'forge',
+      subcommand,
+      spec: `forge ${subcommand}`,
+      description,
+      scopedFlags: [
+        {
+          spec: '--data <json>',
+          description: 'Structured request without operationId or op',
+        },
+        {
+          spec: '--data-file <path>',
+          description: 'Read that request from a file, keeping authored content out of argv',
+        },
+      ],
+    })),
+  {
+    command: 'user',
+    subcommand: 'list',
+    spec: 'user list',
+    description: 'List user ids, roles, display names and identities',
+  },
+  {
+    command: 'user',
+    subcommand: 'link',
+    spec: 'user link <user-id> <platform>:<platform-user-id> [--move]',
+    description: 'Link an identity to an existing user; --move reassigns a conflicting identity',
+  },
+  {
+    command: 'user',
+    subcommand: 'role',
+    spec: `user role <id> <${userRoleSchema.options.join('|')}>`,
+    description: 'Set a user role using the full user id',
+  },
   {
     command: 'trigger',
     subcommand: 'list',
@@ -600,6 +679,12 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--from, --from-branch <name>',
     description: 'Create new branch from specific start point',
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
+    spec: '--base-branch <name>',
+    description:
+      'Initial repository registration only; omit to follow the remote default. Use --base for a run override.',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -772,7 +857,7 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--conversation-id <id>',
     description:
-      'Reuse a stable conversation scope across runs (enables\npersist_session resume between separate CLI invocations)',
+      "Correlation id for the run's messages. It creates no\nconversation and no persist_session scope",
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -782,7 +867,7 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--download-only',
-    description: 'Download web UI without starting the server',
+    description: 'Download server and web UI without starting the server',
     owners: [{ command: 'serve' }],
   },
   {

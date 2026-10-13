@@ -27,6 +27,7 @@
 import pino from 'pino';
 import type { DestinationStream, Logger } from 'pino';
 import pretty from 'pino-pretty';
+import { serializeLoggedError } from './log-error-serializer';
 
 export type { Logger } from 'pino';
 
@@ -52,6 +53,11 @@ function getInitialLevel(): string {
 export type LogDestination = 'stdout' | 'stderr';
 
 let destination: LogDestination = 'stdout';
+let logSink: ((line: string) => void) | undefined;
+
+export function setLogSink(sink: ((line: string) => void) | undefined): void {
+  logSink = sink;
+}
 const streams: Partial<Record<LogDestination, DestinationStream>> = {};
 
 /**
@@ -106,9 +112,13 @@ function buildStream(target: LogDestination): DestinationStream {
  */
 function buildLogger(): Logger {
   return pino(
-    { level: getInitialLevel() },
+    { level: getInitialLevel(), serializers: { err: serializeLoggedError } },
     {
       write(line: string): void {
+        if (logSink) {
+          logSink(line);
+          return;
+        }
         const stream = (streams[destination] ??= buildStream(destination));
         stream.write(line);
       },

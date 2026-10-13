@@ -20,6 +20,12 @@ Every binding names a `hostId`. A host prepares accepted work for its own ID, ad
 
 Both hosts use the same admission records, so a server and a scheduled CLI command can serve the same host ID without starting a run twice.
 
+## Find runs needing your input
+
+The console's **Needs your input** banner lists every run waiting for a human, including triggered runs and runs older than the first page of the feed. Approval gates keep their decision and response controls. A `wait: attention` run shows its message with **Resume** and **Abandon** actions.
+
+Keep the console open to receive live updates from runs started by another process. **Dismiss** hides an occurrence for this browser session; reloading or a new pause brings it back. Resuming still requires the server to have access to the run's working path.
+
 ## Find your run-as user ID
 
 Every binding names the Archon user whose provider configuration and credentials the run uses, as `runAsUserId`. To use your own CLI identity, run:
@@ -226,4 +232,4 @@ The receipt freezes the evaluated bindings and resolved inputs. The execution ho
 
 A process that stops during preparation leaves its recorded preparation owner visible. After verifying that exact process has stopped, use `archon trigger recover-preparation <receipt-id> <binding-id> --owner <recorded-owner-id> --yes`, then drain the configured host. A failed validation is recorded as rejected and requires a corrected new request.
 
-Untouched queued work can be removed with `archon trigger withdraw <request-id>`. Receipt and admission records are retained in the installation database. This first version has no automatic trigger-record retention policy. Do not map credentials or unnecessary source content into workflow inputs. A run started by a trigger records its receipt and binding IDs in its `resource_start` metadata; its request ID is the run ID, so `archon trigger inspect <run-id>` shows the request. CLI-hosted execution writes the ordinary run output to `ARCHON_HOME/logs/trigger-run-<request-id>.log`. Server-hosted runs record their messages in the run's conversation.
+Untouched queued work can be removed with `archon trigger withdraw <request-id>`. Receipt and admission records are retained in the installation database. This first version has no automatic trigger-record retention policy. Do not map credentials or unnecessary source content into workflow inputs. A run started by a trigger records its receipt and binding IDs in its `resource_start` metadata; its request ID is the run ID, so `archon trigger inspect <run-id>` shows the request. CLI-hosted execution writes the ordinary run output to `ARCHON_HOME/logs/trigger-run-<request-id>.log`. Fresh trigger runs have no chat conversation or message history. Inspect their output with `archon workflow get <run-id>` and `archon workflow logs <run-id>`. Previously queued launches that carry a real conversation retain that history destination.

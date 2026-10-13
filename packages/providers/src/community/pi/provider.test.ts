@@ -1,3 +1,5 @@
+import { overStreams } from '../../test/plugin';
+import { createProvider, descriptor } from './index';
 import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -24,6 +26,7 @@ import { createMockLogger } from '../../test/mocks/logger';
 
 const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
+  BUNDLED_VERSION: 'test',
   createLogger: mock(() => mockLogger),
 }));
 
@@ -173,6 +176,7 @@ type MockModelRegistry = Pick<ModelRegistry, 'find'> &
 // the runtime passed to the constructor.
 type MockModelRuntime = {
   checkAuth: typeof mockCheckAuth;
+  getModels: import('@earendil-works/pi-coding-agent').ModelRuntime['getModels'];
   setRuntimeApiKey(providerId: string, key: string): Promise<void>;
   getAuth(providerId: string): Promise<unknown>;
   hasConfiguredAuth(providerId: string): boolean;
@@ -230,8 +234,13 @@ const mockModelRegistryConstruct = mock(
 // `authStorage.getApiKey(...)` continue to assert against the same call shape
 // (just on the runtime object now).
 const mockModelRuntimeCreate = mock(
-  async (_options?: { authPath?: string; modelsPath?: string }): Promise<MockModelRuntime> => ({
+  async (_options?: {
+    authPath?: string;
+    modelsPath?: string;
+    signal?: AbortSignal;
+  }): Promise<MockModelRuntime> => ({
     checkAuth: mockCheckAuth,
+    getModels: () => [createMockModel('google', 'gemini-2.5-pro')],
     setRuntimeApiKey: mockSetRuntimeApiKey,
     getAuth: mockGetAuth,
     hasConfiguredAuth: mockHasConfiguredAuth,
@@ -296,6 +305,13 @@ const mockCreateGrepTool = mock((_cwd: string) => ({ __piTool: 'grep' }));
 const mockCreateFindTool = mock((_cwd: string) => ({ __piTool: 'find' }));
 const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
 
+const mockDefineTool = mock(
+  (def: {
+    name: string;
+    execute: (id: string, args: Record<string, unknown>) => Promise<unknown>;
+  }) => def
+);
+
 mock.module('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   // pi 0.84.0+: ModelRuntime.create replaces AuthStorage.create; ModelRegistry
@@ -327,10 +343,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   createGrepTool: mockCreateGrepTool,
   createFindTool: mockCreateFindTool,
   createLsTool: mockCreateLsTool,
-  // Value import required by ./native-tools (added when manage_run native tools
-  // were wired into Pi). These tests don't pass nativeTools, so it's never
-  // called — but the static `import { defineTool }` needs the binding to exist.
-  defineTool: mock((def: unknown) => def),
+  defineTool: mockDefineTool,
 }));
 
 // Import AFTER mocks are set — module resolution freezes the mocks.
@@ -482,6 +495,32 @@ describe('PiProvider', () => {
     expect(failure?.evidence).toContain('Pi provider requires a model');
   });
 
+  test('preflight freezes the native default for the same model used by sendQuery', async () => {
+    process.env.GEMINI_API_KEY = 'fixture-key';
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
+      defaultProvider: 'google',
+      defaultModel: 'gemini-2.5-pro',
+    }));
+    const provider = new PiProvider();
+    const model = await provider.resolveCredentialModel({ cwd: '/configuration-root' });
+    expect(model).toBe('google/gemini-2.5-pro');
+    expect(mockSettingsManagerCreate).toHaveBeenCalledWith('/configuration-root');
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
+      defaultProvider: 'anthropic',
+      defaultModel: 'changed',
+    }));
+    for await (const _chunk of provider.sendQuery('test', '/execution-root', undefined, {
+      model,
+    })) {
+      /* drain */
+    }
+    expect(mockCreateAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({ provider: 'google', id: 'gemini-2.5-pro' }),
+      })
+    );
+  });
+
   test('falls back to the operator Pi default (settings.json) when no model is configured', async () => {
     // With no node/config model, Archon composes the operator's Pi default
     // (defaultProvider/defaultModel) so no vendor model is hardcoded — e.g. a
@@ -622,6 +661,7 @@ describe('PiProvider', () => {
       }
       return {
         checkAuth: mockCheckAuth,
+        getModels: () => [createMockModel('google', 'gemini-2.5-pro')],
         setRuntimeApiKey: mockSetRuntimeApiKey,
         getAuth: mockGetAuth,
         hasConfiguredAuth: mockHasConfiguredAuth,
@@ -2356,7 +2396,8 @@ describe('PiProvider', () => {
     expect(mockDispose).toHaveBeenCalledTimes(1);
   });
 
-  test('conforms to the provider contract', async () => {
+  test.each([false, true])('conforms to the provider contract (streams: %s)', async remote => {
+    const client = remote ? overStreams(createProvider, descriptor) : createProvider();
     process.env.GEMINI_API_KEY = 'sk-test';
     const erroredAgentEnd = (): FakeEvent[] => {
       const events = scriptedAgentEnd();
@@ -2396,23 +2437,37 @@ describe('PiProvider', () => {
       ];
     };
     const violations = await runProviderConformance({
-      capabilities: new PiProvider().getCapabilities(),
+      capabilities: client.getCapabilities(),
       turns: [
         {
           name: 'completed prompt',
           run: () => {
             resetScript(scriptedAgentEnd());
-            return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+            return client.sendQuery('hi', '/tmp', undefined, {
               model: 'google/gemini-2.5-pro',
             });
           },
         },
       ],
+      forkTurn: {
+        name: 'forked session',
+        source: 'source-id',
+        run: () => {
+          mockSessionList.mockImplementationOnce(async () => [
+            { id: 'source-id', path: '/sessions/source-id.jsonl', cwd: '/tmp' },
+          ]);
+          resetScript(scriptedAgentEnd());
+          return client.sendQuery('hi', '/tmp', 'source-id', {
+            model: 'google/gemini-2.5-pro',
+            forkSession: true,
+          });
+        },
+      },
       toolTurn: {
         name: 'interrupted tool turn',
         run: () => {
           resetScript(interruptedToolTurn());
-          return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          return client.sendQuery('hi', '/tmp', undefined, {
             model: 'google/gemini-2.5-pro',
           });
         },
@@ -2424,7 +2479,7 @@ describe('PiProvider', () => {
           evidence: '429 Too Many Requests',
           run: () => {
             resetScript(erroredAgentEnd());
-            return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+            return client.sendQuery('hi', '/tmp', undefined, {
               model: 'google/gemini-2.5-pro',
             });
           },
@@ -2437,7 +2492,7 @@ describe('PiProvider', () => {
             mockPrompt.mockImplementationOnce(async () => {
               throw new Error('pi backend exploded');
             });
-            return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+            return client.sendQuery('hi', '/tmp', undefined, {
               model: 'google/gemini-2.5-pro',
             });
           },
@@ -2448,7 +2503,7 @@ describe('PiProvider', () => {
           evidence: 'Pi provider requires a model',
           run: () => {
             delete process.env.GEMINI_API_KEY;
-            return new PiProvider().sendQuery('hi', '/tmp');
+            return client.sendQuery('hi', '/tmp');
           },
         },
       ],
@@ -3627,5 +3682,114 @@ describe('PiProvider', () => {
         'pi.extension_provider_reapply_failed'
       );
     });
+  });
+
+  test('Pi native tools execute host callbacks and carry identical chunks over streams', async () => {
+    process.env.GEMINI_API_KEY = 'fixture-key';
+    const handler = mock(async (input: Record<string, unknown>) => JSON.stringify(input));
+    const chunks: unknown[][] = [];
+    try {
+      for (const provider of [createProvider(), overStreams(createProvider, descriptor)]) {
+        resetScript(scriptedAgentEnd());
+        let toolResult: unknown;
+        mockCreateAgentSession.mockImplementationOnce(async options => {
+          const native = options?.customTools?.find(tool => tool.name === 'manage_run');
+          expect(native).toBeDefined();
+          const defined = mockDefineTool.mock.calls.at(-1)![0];
+          expect(defined.name).toBe(native!.name);
+          toolResult = await defined.execute('native-call', { action: 'inspect' });
+          return createMockSessionResult();
+        });
+        chunks.push(
+          await Array.fromAsync(
+            provider.sendQuery('inspect', '/tmp', undefined, {
+              model: 'google/gemini-2.5-pro',
+              nativeTools: [
+                {
+                  name: 'manage_run',
+                  description: 'Inspect a run',
+                  inputSchema: { properties: { action: { kind: 'string' } }, required: ['action'] },
+                  handler,
+                },
+              ],
+            })
+          )
+        );
+        expect(toolResult).toMatchObject({
+          content: [{ type: 'text', text: '{"action":"inspect"}' }],
+        });
+      }
+      expect(chunks[1]).toEqual(chunks[0]);
+      expect(handler).toHaveBeenCalledTimes(2);
+    } finally {
+      delete process.env.GEMINI_API_KEY;
+    }
+  });
+
+  test.each(['direct', 'transport'] as const)(
+    'Pi %s model listing propagates in-flight cancellation without caching an empty catalog',
+    async mode => {
+      const started = Promise.withResolvers<AbortSignal>();
+      const runtimeCancelled = Promise.withResolvers<void>();
+      mockModelRuntimeCreate.mockImplementationOnce(async options => {
+        const signal = options?.signal;
+        if (!signal) throw new Error('catalog signal missing');
+        started.resolve(signal);
+        return await new Promise<MockModelRuntime>((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              runtimeCancelled.resolve();
+              reject(signal.reason);
+            },
+            { once: true }
+          );
+        });
+      });
+      const direct = createProvider();
+      const abort = new AbortController();
+      if (mode === 'direct') {
+        const pending = direct.listModels({ signal: abort.signal });
+        expect(await started.promise).toBe(abort.signal);
+        abort.abort(new Error('catalog deadline'));
+        await expect(pending).rejects.toThrow('catalog deadline');
+      } else {
+        const remote = overStreams(createProvider, descriptor);
+        const pending = remote.listModels!({ signal: abort.signal });
+        await started.promise;
+        abort.abort(new Error('catalog deadline'));
+        await expect(pending).rejects.toThrow('catalog deadline');
+      }
+      await runtimeCancelled.promise;
+      expect(mockModelRuntimeCreate).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  test('Pi information hooks preserve backend status and model lists over streams', async () => {
+    process.env.GEMINI_API_KEY = 'p4-backend-secret';
+    const request = { assistantConfig: { model: 'google/gemini-2.5-pro' } };
+    const direct = createProvider();
+    const remote = overStreams(createProvider, descriptor);
+    const diagnostics = await direct.diagnose(request);
+    expect(diagnostics.checks.map(check => check.status)).toEqual(['ok', 'ok']);
+    expect(await remote.diagnose!(request)).toEqual(diagnostics);
+    expect(JSON.stringify(diagnostics)).not.toContain('p4-backend-secret');
+    const models = {
+      models: [
+        {
+          id: 'google/gemini-2.5-pro',
+          label: 'google/gemini-2.5-pro',
+          details: {
+            provider: 'google',
+            modelId: 'gemini-2.5-pro',
+            reasoning: false,
+            cost: { input: 0, output: 0 },
+            contextWindow: 128_000,
+          },
+        },
+      ],
+    };
+    expect(await direct.listModels({ signal: new AbortController().signal })).toEqual(models);
+    expect(await remote.listModels!({ signal: new AbortController().signal })).toEqual(models);
   });
 });

@@ -1,5 +1,6 @@
+// @archon-test-isolated
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +38,7 @@ describe('workflow run config', () => {
         assistants: { pi: { model: 'minimax/MiniMax-M3', enableExtensions: false } },
         tiers: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
         aliases: { '@planner': { provider: 'claude', model: 'opus' } },
-        workflows: { quotaMaxAttempts: 3 },
+        workflows: { quotaMaxAttempts: 3, toolCallAttentionMs: 60000 },
         docs: { path: 'handbook' },
         env: { BENCH_TOKEN: 'top-secret' },
       },
@@ -51,7 +52,7 @@ describe('workflow run config', () => {
         assistants: { pi: { model: 'minimax/MiniMax-M3', enableExtensions: false } },
         tiers: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
         aliases: { '@planner': { provider: 'claude', model: 'opus' } },
-        workflows: { quotaMaxAttempts: 3 },
+        workflows: { quotaMaxAttempts: 3, toolCallAttentionMs: 60000 },
         docsPath: 'handbook',
         envVars: { BENCH_TOKEN: 'top-secret' },
       },
@@ -98,7 +99,7 @@ describe('workflow run config', () => {
   it('rejects model settings that cannot execute or survive resume', () => {
     expect(() =>
       parseWorkflowRunConfig({ assistant: 'not-registered' }, { kind: 'http', label: 'inline' })
-    ).toThrow("Invalid run config at 'assistant': unknown provider 'not-registered'");
+    ).toThrow("Invalid run config at 'assistant': Unknown provider: 'not-registered'");
     expect(() =>
       parseWorkflowRunConfig(
         { aliases: { planner: { provider: 'claude', model: 'opus' } } },
@@ -229,7 +230,7 @@ describe('workflow run config', () => {
       { kind: 'http', label: 'inline' }
     );
 
-    expect(parsed.layer.assistants?.copilot).toEqual({ modelReasoningEffort: 'xhigh' });
+    expect(parsed.layer.assistants?.copilot).toEqual({ modelReasoningEffort: 'max' });
     expect(
       parseWorkflowRunConfig(
         { assistants: { opencode: { model: ' anthropic / claude-sonnet-4-5 ' } } },

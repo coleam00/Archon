@@ -7,19 +7,11 @@ import {
   type DeclaredOutputPaths,
 } from '../output-ref';
 import { z } from '@hono/zod-openapi';
-import {
-  skipCauseSchema,
-  suspendReasonSchema,
-  type NodeState,
-  type SuspendReason,
-} from './node-state';
-import type { TokenUsage } from '@archon/providers/types';
+import { approvalDecisionConfigSchema } from './dag-node';
+import { skipCauseSchema, suspendReasonSchema, type NodeState } from './node-state';
+import { tokenUsageSchema } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';
-import {
-  nodeExecutionMetadataSchema,
-  nodeFailureKindSchema,
-  type NodeExecutionMetadata,
-} from './node-execution';
+import { nodeExecutionMetadataSchema, nodeFailureKindSchema } from './node-execution';
 import { checkoutObservationSchema } from './checkout-observation';
 import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
@@ -83,6 +75,19 @@ const workflowWaitNodeOwnerFields = {
   owner: z.literal('node'),
   nodeId: z.string().min(1),
 } as const;
+export const sessionCursorSchema = z.object({
+  sessionId: z.string().min(1),
+  provider: z.string().min(1),
+});
+export type SessionCursor = z.infer<typeof sessionCursorSchema>;
+export const bodySessionCursorsSchema = z.record(z.string().min(1), sessionCursorSchema);
+
+export const bodySessionCursorAncestrySchema = z.record(
+  z.string().min(1),
+  bodySessionCursorsSchema
+);
+export type BodySessionCursorAncestry = z.infer<typeof bodySessionCursorAncestrySchema>;
+
 const workflowWaitLoopOwnerFields = {
   owner: z.literal('loop_group'),
   nodeId: z.string().min(1),
@@ -90,6 +95,8 @@ const workflowWaitLoopOwnerFields = {
   iteration: z.number().int().positive(),
   sessionId: z.string().nullable(),
   sessionProvider: z.string().nullable(),
+  bodySessionCursors: bodySessionCursorsSchema.optional(),
+  bodySessionCursorAncestry: bodySessionCursorAncestrySchema.optional(),
 } as const;
 
 /**
@@ -266,13 +273,21 @@ export type NodeOutput = z.infer<typeof nodeOutputSchema>;
 // WorkflowRun
 // ---------------------------------------------------------------------------
 
-/**
- * Runtime workflow run state stored in database.
- */
+export const workflowRunOriginSchema = z
+  .object({
+    conversationId: z.string().optional(),
+    parentConversationId: z.string().optional(),
+    userId: z.string().optional(),
+  })
+  .strict();
+
+export type WorkflowRunOrigin = z.infer<typeof workflowRunOriginSchema>;
+
 export const workflowRunSchema = z.object({
+  origin: workflowRunOriginSchema.nullable(),
   id: z.string(),
   workflow_name: z.string(),
-  conversation_id: z.string(),
+  conversation_id: z.string().nullable(),
   parent_conversation_id: z.string().nullable(),
   codebase_id: z.string().nullable(),
   status: workflowRunStatusSchema,
@@ -688,9 +703,11 @@ export function isRecognizedSuspendReason(type: string | undefined): boolean {
 }
 
 /** Approval context stored in workflow run metadata when paused for human review. */
-export interface ApprovalContext {
-  nodeId: string;
-  message: string;
+export const approvalContextSchema = z.object({
+  nodeId: z.string(),
+  /** Unique occurrence identity; absent only on pauses created by older builds. */
+  pauseId: z.string().optional(),
+  message: z.string(),
   /**
    * Distinguishes the pause kind — see `SuspendReason` above for the resume-path
    * pointer each variant carries:
@@ -709,20 +726,20 @@ export interface ApprovalContext {
    *    workflow node, finds the child terminal, and threads its output. NO
    *    node_completed is written for the parent's node on this pause.
    */
-  type?: SuspendReason;
+  type: suspendReasonSchema.optional(),
   /**
    * Child run id when `type === 'child_workflow'` — the specific paused sub-run
    * the parent is blocked on. Read by the parent auto-resume guard so a DIFFERENT
    * child of the same parent can't trigger the wrong re-entry.
    */
-  childRunId?: string;
+  childRunId: z.string().optional(),
   /**
    * Set only on an ESCALATED pause: a `gate:` node that is the sole terminal sink
    * of a `loop_group` body (#2707 step 3), still `type: 'approval'`. The enclosing
    * loop_group's own id occupies `nodeId` — required for the top-level DAG's
    * resume walk to find it (it only knows top-level node ids, never a nested body
    * id) — so this field carries the body gate's own bare id, the one piece the
-   * rewrite would otherwise lose. `approveWorkflow`/`rejectWorkflow`/
+   * group address would otherwise hide. `approveWorkflow`/`rejectWorkflow`/
    * `respondToWorkflowWithDeclaredDecision` read it to namespace the resolution's
    * `node_completed` event as `<nodeId>.<bodyGateId>` instead of bare `nodeId` —
    * the exact `<groupId>.<bodyId>` step name #2748's `outerNodeOutputs`
@@ -730,15 +747,15 @@ export interface ApprovalContext {
    * findable again after a resume the same way any other body node's output is.
    * Absent for every other pause kind, including an ordinary top-level gate.
    */
-  bodyGateId?: string;
+  bodyGateId: z.string().optional(),
   /** Current loop iteration when paused (interactive loops only). */
-  iteration?: number;
+  iteration: z.number().optional(),
   /**
    * Session ID to restore on resume (interactive loops only). Gate pauses write an
    * explicit null when the loop has no session cursor to restore; readers treat that
    * exactly like an absent key.
    */
-  sessionId?: string | null;
+  sessionId: z.string().nullable().optional(),
   /**
    * Provider that created `sessionId` (#1992). Persisted by loop_group gates and
    * restored together with the session id so a resumed loop never threads the
@@ -747,13 +764,15 @@ export interface ApprovalContext {
    * Absent on single-node loop gates — those restore the session into the same
    * node, so the provider is the same by construction.
    */
-  sessionProvider?: string | null;
+  sessionProvider: z.string().nullable().optional(),
+  bodySessionCursors: bodySessionCursorsSchema.optional(),
+  bodySessionCursorAncestry: bodySessionCursorAncestrySchema.optional(),
   /** When true, the user's approval comment is stored as `$nodeId.output`. Legacy-mode gates only (see `onRejectPrompt`). */
-  captureResponse?: boolean;
+  captureResponse: z.boolean().optional(),
   /** The on_reject prompt template (stored at pause time so reject handlers don't need the workflow def). */
-  onRejectPrompt?: string;
+  onRejectPrompt: z.string().optional(),
   /** Max rejection attempts before cancellation (default 3). */
-  onRejectMaxAttempts?: number;
+  onRejectMaxAttempts: z.number().optional(),
   /**
    * The gate's declared decisions (#2707 step 1), snapshotted at pause time so
    * approve/reject handlers don't need the workflow def to know the vocabulary
@@ -763,7 +782,7 @@ export interface ApprovalContext {
    * the actual mode signal. Absent on gates paused by builds that predate
    * this field.
    */
-  decisions?: { id: string; label?: string }[];
+  decisions: z.array(approvalDecisionConfigSchema).optional(),
   /**
    * True only when the author wrote `approval.decisions:` explicitly in YAML
    * (mirrors `GateNode.decisionsAuthored` — see its doc for the full
@@ -777,7 +796,7 @@ export interface ApprovalContext {
    * on gates paused by builds that predate this field, which resolves to
    * legacy behavior — the safe default.
    */
-  decisionsAuthored?: boolean;
+  decisionsAuthored: z.boolean().optional(),
   /**
    * Gate resolution marker. Set by approve/reject handlers while the run STAYS
    * 'paused' awaiting auto-resume (#2075): 'approved' = approval recorded,
@@ -790,7 +809,7 @@ export interface ApprovalContext {
    * approval object, so a gate that sets no `resolved` stores none and a prior
    * gate's 'approved' cannot survive to block it (#2673).
    */
-  resolved?: 'approved' | 'rejected' | null;
+  resolved: z.enum(['approved', 'rejected']).nullable().optional(),
   /**
    * Interactive-loop only. True when the iteration this gate paused on emitted the
    * completion signal (detectCompletionSignal / until_bash exit 0). Read at resume by
@@ -798,13 +817,13 @@ export interface ApprovalContext {
    * finalizes the node from `signaledOutput` instead of re-running. Cleared by the next
    * fresh pause the same way `resolved` is — the whole approval object is replaced.
    */
-  completionSignaled?: boolean | null;
+  completionSignaled: z.boolean().nullable().optional(),
   /**
    * Interactive-loop only. The (stripped) output of the signal-bearing paused iteration,
    * persisted so the finalize path can write node_completed with the real output for
    * downstream `$nodeId.output` refs. Only set when completionSignaled is true; null otherwise.
    */
-  signaledOutput?: string | null;
+  signaledOutput: z.string().nullable().optional(),
   /**
    * Interactive-loop only. The signal-bearing iteration's structured payload (#2637),
    * persisted beside `signaledOutput` so a bare-approve finalize attaches the same
@@ -815,7 +834,7 @@ export interface ApprovalContext {
    * null otherwise. Absent on gates paused by builds predating this field — those
    * finalize text-only, exactly as before.
    */
-  signaledStructuredOutput?: unknown;
+  signaledStructuredOutput: z.unknown().optional(),
   /**
    * Interactive-loop only, and written by the single-node `loop` gate ONLY. Cumulative
    * token usage through this pause, restored when the loop resumes so later gates and
@@ -823,11 +842,11 @@ export interface ApprovalContext {
    * compatibility with already-paused runs. A `loop_group` gate deliberately omits it:
    * body nodes persist their own namespaced usage rows before the pause.
    */
-  signaledTokens?: TokenUsage | null;
+  signaledTokens: tokenUsageSchema.nullable().optional(),
   /** Cumulative USD cost through this single-node loop pause; paired with signaledTokens. */
-  signaledCostUsd?: number | null;
+  signaledCostUsd: z.number().nullable().optional(),
   /** Original execution facts retained across a gate; no private session handle. */
-  execution?: NodeExecutionMetadata;
+  execution: nodeExecutionMetadataSchema.optional(),
   /**
    * Interactive-loop only. Read-once snapshot of the resolved loop prompt
    * template, whether authored as `loop.prompt` or loaded from `loop.command`,
@@ -836,8 +855,13 @@ export interface ApprovalContext {
    * load-time compiled prompt/error after rediscovery. Absent on runs paused by builds
    * that predate this field; those resume from the current prompt or command source.
    */
-  commandSnapshot?: string | null;
-}
+  commandSnapshot: z.string().nullable().optional(),
+});
+
+export type ApprovalContext = z.infer<typeof approvalContextSchema>;
+
+/** Old node-only buttons may resolve only contexts without a pause identity. */
+export type ExpectedApprovalGate = string | Required<Pick<ApprovalContext, 'nodeId' | 'pauseId'>>;
 
 /**
  * Top-level (non-`approval`) run-metadata keys of the interactive-loop gate
@@ -886,13 +910,28 @@ export function isApprovalContext(val: unknown): val is ApprovalContext {
 // RunAttention — "what does this run need from outside, if anything"
 // ---------------------------------------------------------------------------
 
+export const TOOL_CALL_ATTENTION_METADATA_KEY = 'tool_call_attention';
+
+export const toolCallAttentionSchema = z
+  .object({
+    streamId: z.string().min(1),
+    nodeId: z.string().min(1),
+    provider: z.string().min(1),
+    toolCallId: z.string().min(1),
+    name: z.string().min(1).max(1024),
+    title: z.string().max(1024).optional(),
+    startedAt: z.iso.datetime(),
+    lastProgressAt: z.iso.datetime(),
+    raisedAt: z.iso.datetime(),
+    thresholdMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+export const toolCallAttentionArraySchema = z.array(toolCallAttentionSchema);
+export type ToolCallAttention = z.infer<typeof toolCallAttentionSchema>;
+
 /** Where a gate's response must be recorded — this run, or the child blocking it. */
-export interface GateAddress {
-  /** The run the response is recorded against. NOT always the run that was asked about. */
-  runId: string;
-  /** The gate node inside that run. */
-  nodeId: string;
-}
+export const gateAddressSchema = z.object({ runId: z.string(), nodeId: z.string() });
+export type GateAddress = z.infer<typeof gateAddressSchema>;
 
 /**
  * Why a run cannot be described. An enum rather than prose alone because the
@@ -900,24 +939,86 @@ export interface GateAddress {
  * run whose gate metadata is unreadable, but must refuse one whose gate type this
  * build does not know — and no caller should tell those apart by matching strings.
  *
- * `malformed_gate`, `unrecognized_gate_type`, and `child_pointer_missing` come from
+ * `malformed_tool_call_attention`, `malformed_gate`, `unrecognized_gate_type`,
+ * and `child_pointer_missing` come from
  * `runAttention` itself. `child_run_missing` and `child_chain_too_deep` can only be
  * produced by a reader that follows a `blocked_on_child` pointer into the database
  * (`waitForRunAttention`, @archon/core); the projection is pure and never does.
  */
-export type RunAttentionUnreadableReason =
-  | 'malformed_gate'
-  | 'unrecognized_gate_type'
-  | 'child_pointer_missing'
-  | 'child_run_missing'
-  | 'child_chain_too_deep';
+export const runAttentionUnreadableReasonSchema = z.enum([
+  'malformed_tool_call_attention',
+  'malformed_gate',
+  'unrecognized_gate_type',
+  'child_pointer_missing',
+  'child_run_missing',
+  'child_chain_too_deep',
+]);
+export type RunAttentionUnreadableReason = z.infer<typeof runAttentionUnreadableReasonSchema>;
 
+const terminalAttentionShape = {
+  kind: z.literal('terminal'),
+  runId: z.string(),
+  status: terminalWorkflowRunStatusSchema,
+};
+
+const nonTerminalRunAttentionSchemas = [
+  z.object({
+    kind: z.literal('stalled_tool_calls'),
+    runId: z.string(),
+    status: z.literal('running'),
+    calls: z.array(
+      toolCallAttentionSchema.extend({ elapsedMs: z.number(), stalledForMs: z.number() })
+    ),
+  }),
+  z.object({
+    kind: z.literal('awaiting_response'),
+    runId: z.string(),
+    respondTo: gateAddressSchema,
+    message: z.string(),
+    occurrence: z.string(),
+  }),
+  z.object({
+    kind: z.literal('action_required'),
+    runId: z.string(),
+    nodeId: z.string(),
+    message: z.string(),
+    occurrence: z.string(),
+  }),
+  z.object({
+    kind: z.literal('blocked_on_child'),
+    runId: z.string(),
+    childRunId: z.string(),
+    nodeId: z.string(),
+  }),
+  z.object({
+    kind: z.literal('unreadable'),
+    runId: z.string(),
+    reason: runAttentionUnreadableReasonSchema,
+    detail: z.string(),
+  }),
+] as const;
+
+export function createRunAttentionSchema<T extends z.ZodDate | z.ZodString>(
+  timestamp: T
+): z.ZodDiscriminatedUnion<
+  [
+    ...typeof nonTerminalRunAttentionSchemas,
+    z.ZodObject<typeof terminalAttentionShape & { at: z.ZodNullable<T> }>,
+  ],
+  'kind'
+> {
+  return z.discriminatedUnion('kind', [
+    ...nonTerminalRunAttentionSchemas,
+    z.object({ ...terminalAttentionShape, at: z.nullable(timestamp) }),
+  ]);
+}
+
+export const runAttentionSchema = createRunAttentionSchema(z.date());
 /**
- * A run has reached a state it will not leave without someone acting.
+ * Terminal and gate attention, or advisory attention for overdue live tools.
  *
- * `runAttention` returns null while the run is still progressing under its own
- * power, which includes a resolved gate awaiting auto-resume and a `wait:` node
- * whose timer or event has not fired.
+ * `runAttention` returns null for ordinary progress without an advisory, including
+ * a resolved gate awaiting auto-resume and a `wait:` node whose timer or event has not fired.
  *
  * `blocked_on_child` is deliberately NOT an answer to "does someone need to respond".
  * A parent pauses blocked on a child whether that child is sitting on its own gate
@@ -928,17 +1029,7 @@ export type RunAttentionUnreadableReason =
  * really is on a gate. So the projection reports what it knows — this run is blocked
  * on that child — and a reader with database access resolves the chain.
  */
-export type RunAttention =
-  | { kind: 'terminal'; runId: string; status: RunTerminalStatus; at: Date | null }
-  | { kind: 'awaiting_response'; runId: string; respondTo: GateAddress; message: string }
-  | {
-      kind: 'action_required';
-      runId: string;
-      nodeId: string;
-      message: string;
-    }
-  | { kind: 'blocked_on_child'; runId: string; childRunId: string; nodeId: string }
-  | { kind: 'unreadable'; runId: string; reason: RunAttentionUnreadableReason; detail: string };
+export type RunAttention = z.infer<typeof runAttentionSchema>;
 
 /** The run shape `runAttention` reads. Structural so a caller can pass a partial row. */
 export interface RunAttentionInput {
@@ -959,7 +1050,8 @@ function unreadableAttention(
 /**
  * The single derivation of "what does this run need from outside, if anything".
  *
- * Pure: no database, no clock, no I/O. The run ROW is the authority — attention is
+ * No database or I/O. The clock computes display durations only. The run row is
+ * the authority: attention is
  * never derived from the event log, because terminal transitions exist that write no
  * terminal event (`resolveAndCancelApprovalGate` cancels a run while inserting only
  * `approval_received`), and two gate pauses write an unreliable event or none at all.
@@ -970,9 +1062,32 @@ function unreadableAttention(
  * three different orders, and the load-bearing "act on the child, not this run"
  * conclusion survived only inside an error string.
  */
-export function runAttention(run: RunAttentionInput): RunAttention | null {
+export function runAttention(run: RunAttentionInput, now = Date.now()): RunAttention | null {
   if (isTerminalRunStatus(run.status)) {
     return { kind: 'terminal', runId: run.id, status: run.status, at: run.completed_at ?? null };
+  }
+  if (run.status === 'running') {
+    const raw = run.metadata?.[TOOL_CALL_ATTENTION_METADATA_KEY];
+    if (raw === undefined) return null;
+    const parsed = toolCallAttentionArraySchema.safeParse(raw);
+    if (!parsed.success)
+      return unreadableAttention(
+        run.id,
+        'malformed_tool_call_attention',
+        'running with unreadable tool-call attention'
+      );
+    return parsed.data.length === 0
+      ? null
+      : {
+          kind: 'stalled_tool_calls',
+          runId: run.id,
+          status: 'running',
+          calls: parsed.data.map(call => ({
+            ...call,
+            elapsedMs: Math.max(0, now - Date.parse(call.startedAt)),
+            stalledForMs: Math.max(0, now - Date.parse(call.lastProgressAt)),
+          })),
+        };
   }
   if (run.status !== 'paused') return null;
 
@@ -983,6 +1098,7 @@ export function runAttention(run: RunAttentionInput): RunAttention | null {
       runId: run.id,
       nodeId: workflowWaitStepName(wait),
       message: wait.message,
+      occurrence: `wait:${wait.waitingSince}`,
     };
   }
 
@@ -1046,6 +1162,7 @@ export function runAttention(run: RunAttentionInput): RunAttention | null {
     runId: run.id,
     respondTo: { runId: run.id, nodeId: raw.nodeId },
     message: raw.message,
+    occurrence: raw.pauseId ?? `legacy:${raw.nodeId}`,
   };
 }
 
@@ -1166,3 +1283,18 @@ type AssertNodeOutputCoversNodeState = NodeOutput['state'] extends NodeState
   : never;
 const nodeOutputStateCoverage: AssertNodeOutputCoversNodeState = true;
 void nodeOutputStateCoverage; // suppress unused-variable lint warning
+
+export const ownedWorktreeSchema = z
+  .object({
+    envId: z.string().min(1),
+    creationId: z.string().uuid(),
+  })
+  .strict();
+export type OwnedWorktree = z.infer<typeof ownedWorktreeSchema>;
+
+export function readOwnedWorktree(
+  metadata: Record<string, unknown> | undefined
+): OwnedWorktree | undefined {
+  const result = ownedWorktreeSchema.safeParse(metadata?.owned_worktree);
+  return result.success ? result.data : undefined;
+}

@@ -47,6 +47,39 @@ function publishPr(options: ScriptOptions & { intent?: object } = {}): ScriptRun
 }
 
 describe('publish-pr opens the pull request at most once', () => {
+  it.each(['gh', 'forge'] as const)(
+    'refuses another create through %s while the earlier write is unresolved',
+    source => {
+      const result = publishPr({
+        source,
+        artifacts: { 'pr-intent.json.create-started': JSON.stringify({ repo: PR.repo }) },
+        gh: { noOpenPr: true },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('a previous PR create is unresolved');
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+    }
+  );
+
+  it.each(['gh', 'forge'] as const)(
+    'reconciles a previously started create through %s when its PR is visible',
+    source => {
+      const result = publishPr({
+        source,
+        artifacts: { 'pr-intent.json.create-started': JSON.stringify({ repo: PR.repo }) },
+        gh: { pr: { headRefName: 'feature' } },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord() }) },
+      });
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+    }
+  );
+
   it('creates and verifies through gh when the head has no open pull request', () => {
     const result = publishPr({ gh: { noOpenPr: true, pr: { headRefName: 'feature' } } });
     expect(result.code).toBe(0);
@@ -119,7 +152,27 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('refused');
     expect(result.stderr).toContain('the base branch does not exist');
+    // Nothing was written, so a retry may create.
+    expect(existsSync(join(result.artifacts, 'pr-intent.json.create-started'))).toBe(false);
   });
+
+  it.each(['outcome_unknown', 'verification_failed'] as const)(
+    'keeps the create claim after a %s create so a retry cannot open a duplicate',
+    outcome => {
+      const result = publishPr({
+        source: 'forge',
+        forge: {
+          kind: 'fake',
+          response: [
+            forgeOperation('pr.view', null),
+            forgeFailure('pr.create', outcome, 'forge plugin timed out'),
+          ],
+        },
+      });
+      expect(result.code).not.toBe(0);
+      expect(existsSync(join(result.artifacts, 'pr-intent.json.create-started'))).toBe(true);
+    }
+  );
 
   it('reuses the open pull request when the head repository differs only in case', () => {
     const result = publishPr({
@@ -506,4 +559,63 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.stderr).toContain(`reviewed ${REVIEWED}, but the checkout is now at moved0000`);
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
   });
+});
+
+describe('markPrDraft uses the selected source', () => {
+  const script = '../../scripts/__tests__/mark-pr-draft';
+  it('converts through gh and reads back draft state', () => {
+    const result = runPackScript(script, { gh: { pr: { isDraft: false } } });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ is_draft: true, state: 'open' });
+    expect(result.gh).toContain('pr ready 42 --repo ghe.example.com/example/repo --undo');
+  });
+  it.each(['CLOSED', 'MERGED'] as const)('refuses %s without a write', state => {
+    const result = runPackScript(script, { gh: { pr: { state } } });
+    expect(result.code).not.toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
+  });
+  it('does not write for an already-draft PR', () => {
+    const result = runPackScript(script);
+    expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
+  });
+  it('fails when gh conversion does not read back', () => {
+    const result = runPackScript(script, { gh: { pr: { isDraft: false }, writeLost: true } });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('does not report an open draft');
+  });
+  it('calls pr.draft through forge without gh', () => {
+    const result = runPackScript(script, {
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        response: forgeOperation('pr.draft', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          pr: forgePrRecord(),
+        }),
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(result.forge[0]).toContain('forge pr.draft --json --data-file');
+    expect(JSON.parse(result.forgeRequests[0]).ref).toEqual(PR);
+    expect(JSON.parse(result.stdout)).toMatchObject({ is_draft: true });
+  });
+  it.each(['refused', 'verification_failed', 'outcome_unknown'] as const)(
+    'surfaces %s with no fallback',
+    outcome => {
+      const result = runPackScript(script, {
+        source: 'forge',
+        forge: {
+          kind: 'fake',
+          response: forgeFailure('pr.draft', outcome, 'unsupported or unverifiable conversion'),
+        },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(outcome);
+      expect(result.gh).toEqual([]);
+    }
+  );
 });

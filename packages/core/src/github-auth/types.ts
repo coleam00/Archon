@@ -7,7 +7,7 @@
 import type { Octokit } from '@octokit/rest';
 
 /**
- * Configuration for the GitHub App auth provider, sourced from env at server
+ * Configuration for the GitHub App auth provider, sourced from env at host
  * bootstrap. `privateKey` is the PEM contents (not a filesystem path) — the
  * resolution from env (inline PEM vs. file path) happens in `private-key.ts`
  * before this config reaches the factory.

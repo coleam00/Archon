@@ -27,7 +27,7 @@ This chapter collects every CLI command, variable, and YAML option in one place.
 | `archon workflow run <name> --cwd /path "<prompt>"` | Run against a specific directory |
 | `archon workflow status` | Show status of active workflow runs |
 | `archon workflow resume <run-id>` | Resume a failed or paused workflow run |
-| `archon workflow abandon <run-id>` | Abandon a workflow run (running, paused, or failed) |
+| `archon workflow abandon <run-id>` | Abandon a workflow run (running, paused, or failed) and remove its worktree, keeping the branch; rerun on a cancelled run to retry a failed removal |
 | `archon workflow cleanup [days]` | Delete old workflow run records (default: 7 days) |
 
 ### `archon isolation`
@@ -39,6 +39,9 @@ This chapter collects every CLI command, variable, and YAML option in one place.
 | `archon isolation cleanup <days>` | Remove stale worktrees older than N days |
 | `archon isolation cleanup --merged` | Remove worktrees whose branches merged into the base branch |
 | `archon isolation cleanup --merged --include-closed` | Also remove worktrees with closed (abandoned) PRs |
+
+Cleanup keeps and reports workspaces whose originating platform is no longer
+registered, including merged worktrees. Use `archon isolation list` to inspect them.
 
 ### `archon complete`
 
@@ -140,7 +143,7 @@ All nodes share these base fields:
 | `output_format` | No | JSON Schema | Enforce structured JSON output from this node |
 | `allowed_tools` | No | string[] | Restrict available tools to this list (Claude only) |
 | `denied_tools` | No | string[] | Remove specific tools from this node's context (Claude only) |
-| `idle_timeout` | No | number | Per-node idle timeout in milliseconds (default: 5 minutes) |
+| `idle_timeout` | No | number | Per-node idle timeout in milliseconds (default: 30 minutes) |
 | `retry` | No | object | Retry configuration for transient failures (see Retry Options). **Hard error on loop nodes** |
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
 | `mcp` | No | string | Path to MCP server config JSON file (Claude, Codex and Copilot; other providers fail the run) |
@@ -226,7 +229,7 @@ per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `nodes` | Yes | node[] | Sub-DAG body re-run in full each iteration. Executable nodes, `include:`, and nested `loop_group` are supported; runtime `workflow:` sub-runs are not. `depends_on` is body-scoped; body ids must not shadow outer ids |
-| `until` | One channel required | string | Completion signal — checked in the body's terminal-node output. Omit it for a deterministic group |
+| `until` | One channel required | string | Deprecated prose signal, checked in the body's terminal-node output. When it is the sole channel, the terminal node's enforced `output_format` must permit strings. Use `until_bash` for structured fields; omit `until` for a deterministic group |
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | `true` starts fresh body AI sessions each iteration (default: false — sessions continue) |
 | `until_bash` | One channel required | string | Shell script run after each iteration; exit 0 signals completion. Skipped once a cheaper channel already fired |
@@ -261,8 +264,10 @@ Defined under `retry:` inside a node:
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `max_attempts` | Yes | — | Retry attempts after the initial failure (max: 5) |
-| `delay_ms` | No | 3000 | Initial delay in milliseconds; doubles each attempt (1000-60000) |
-| `on_error` | No | `transient` | `transient` retries transient and rate-limited failures and timeouts; `all` retries everything except fatal errors |
+| `delay_ms` | No | 3000 | Initial delay in milliseconds for ordinary retries; doubles each attempt (1000-60000). Rate limits and capacity use independent delays. |
+| `on_error` | No | `transient` | `transient` retries transient, rate-limited and capacity (`overloaded`) failures and timeouts; `all` retries everything except fatal errors |
+
+Capacity failures get at least five retries with delay centers of 45, 90, 180, 300 and 300 seconds, each with ±50% jitter (up to 450 seconds per wait). Node `delay_ms` does not change this schedule; the larger budget applies only while the current failure is capacity. Rate limits retain a five-retry minimum and flat 45-second delay with ±50% jitter. See [Retry Configuration](/guides/authoring-workflows/#retry-configuration) for the full policy and audit events.
 
 > **Fatal errors are never retried**: auth failures, exhausted credit balances, cancellation, and configuration errors (a missing command file, a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable MCP config file) fail immediately regardless of retry config. Retry follows the kind of failure Archon recorded, never the error message.
 
@@ -353,7 +358,7 @@ defaults:
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
 | `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
-| `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
+| `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Pass `--base` for this run, set `worktree.baseBranch` in `.archon/config.yaml`, or repair the selected remote's symbolic HEAD |
 | Node fails with "timed out with no output" | `idle_timeout` fired before the provider emitted anything (time-to-first-token exceeded the window) | Increase `idle_timeout` on the node or reduce prompt size |
 
 ### Debug Techniques

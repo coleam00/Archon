@@ -11,7 +11,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
-import { SSETransport } from './transport';
+import { DASHBOARD_STREAM, type SSETransport } from './transport';
 import type { DagNodeSseEvent } from './workflow-event.schemas';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -23,6 +23,14 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
   switch (event.type) {
+    case 'run_attention_changed':
+      return JSON.stringify({
+        type: 'workflow_status',
+        runId: event.runId,
+        workflowName: '',
+        status: 'running',
+        timestamp: Date.now(),
+      });
     case 'workflow_started':
     case 'workflow_completed':
     case 'workflow_failed':
@@ -147,6 +155,8 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         approval: {
           nodeId: event.nodeId,
           message: event.message,
+          decisions: event.decisions,
+          pauseId: event.pauseId,
         },
       });
 
@@ -199,8 +209,14 @@ function dataSkipCause(data: Record<string, unknown>): SkipCause | undefined {
 }
 
 /** DB event_type → run-level status, emitted as a `workflow_status` SSE event. */
-const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'cancelled'> = {
+const ROW_WORKFLOW_STATUS: Record<
+  string,
+  'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
+> = {
   workflow_started: 'running',
+  run_attention_changed: 'running',
+  wait_started: 'paused',
+  wait_completed: 'running',
   workflow_completed: 'completed',
   workflow_failed: 'failed',
   workflow_cancelled: 'cancelled',
@@ -226,7 +242,10 @@ interface WorkflowStatusSsePayload {
   workflowName: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
   error?: string;
-  approval?: { nodeId: string; message: string };
+  approval?: Pick<
+    Extract<WorkflowEmitterEvent, { type: 'approval_pending' }>,
+    'nodeId' | 'message' | 'decisions' | 'pauseId'
+  >;
   timestamp: number;
 }
 
@@ -353,11 +372,11 @@ export class WorkflowEventBridge {
         if (conversationId) {
           this.transport.emitWorkflowEvent(conversationId, sseEvent);
         }
-        // Fan-out to dashboard stream — no-op when no dashboard client connected.
+        // Fan-out to dashboard connections.
         // Provider events stay on the run's own stream: the dashboard reads lifecycle
         // only, and a run streams thousands of them, tool output included.
         if (event.type !== 'provider_event') {
-          this.transport.emitWorkflowEvent('__dashboard__', sseEvent);
+          this.transport.emitWorkflowEvent(DASHBOARD_STREAM, sseEvent);
         }
       }
     });

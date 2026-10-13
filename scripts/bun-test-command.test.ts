@@ -1,26 +1,24 @@
 import { describe, expect, it } from 'bun:test';
-import { testTimeout, WINDOWS_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
+import { testTimeout, DEFAULT_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 
 describe('bunTestCommand', () => {
-  it('widens the default per-test budget on Windows only', () => {
-    expect(bunTestCommand(['src/a.test.ts'], 'win32')).toEqual([
+  it('sets the default per-test budget to 20 seconds', () => {
+    expect(bunTestCommand(['src/a.test.ts'])).toEqual([
       'bun',
       'test',
       '--timeout',
-      String(WINDOWS_TEST_TIMEOUT_MS),
+      String(DEFAULT_TEST_TIMEOUT_MS),
       'src/a.test.ts',
     ]);
-    expect(bunTestCommand(['src/a.test.ts'], 'linux')).toEqual(['bun', 'test', 'src/a.test.ts']);
-    expect(bunTestCommand(['src/a.test.ts'], 'darwin')).toEqual(['bun', 'test', 'src/a.test.ts']);
   });
 
   it('forwards selectors and flags verbatim after the budget', () => {
-    expect(bunTestCommand(['--bail', 'logger'], 'win32')).toEqual([
+    expect(bunTestCommand(['--bail', 'logger'])).toEqual([
       'bun',
       'test',
       '--timeout',
-      String(WINDOWS_TEST_TIMEOUT_MS),
+      String(DEFAULT_TEST_TIMEOUT_MS),
       '--bail',
       'logger',
     ]);
@@ -28,10 +26,9 @@ describe('bunTestCommand', () => {
 });
 
 describe('testTimeout', () => {
-  it('lifts an explicit budget to the Windows floor and leaves other platforms alone', () => {
-    expect(testTimeout(10_000, 'win32')).toBe(WINDOWS_TEST_TIMEOUT_MS);
-    expect(testTimeout(10_000, 'linux')).toBe(10_000);
-    expect(testTimeout(WINDOWS_TEST_TIMEOUT_MS + 1, 'win32')).toBe(WINDOWS_TEST_TIMEOUT_MS + 1);
+  it('lifts small explicit budgets to the default and preserves larger budgets', () => {
+    expect(testTimeout(10_000)).toBe(DEFAULT_TEST_TIMEOUT_MS);
+    expect(testTimeout(DEFAULT_TEST_TIMEOUT_MS + 1)).toBe(DEFAULT_TEST_TIMEOUT_MS + 1);
   });
 });
 
@@ -54,9 +51,11 @@ describe('every bun test entry point preloads the telemetry opt-out', () => {
       const dir = join(repoRoot, 'packages', name);
       const manifest = join(dir, 'package.json');
       if (!existsSync(manifest)) continue;
-      if (!('testGroups' in JSON.parse(await readFile(manifest, 'utf8')))) continue;
+      const declaration = JSON.parse(await readFile(manifest, 'utf8'));
+      if (declaration.scripts?.test !== 'bun run ../../scripts/package-tests.ts') continue;
       configs.push({ dir, preload: '../../scripts/test-telemetry-off.ts' });
     }
+    expect(configs.some(({ dir }) => dir === join(repoRoot, 'packages', 'core'))).toBe(true);
     const missing: string[] = [];
     for (const { dir, preload } of configs) {
       const bunfig = join(dir, 'bunfig.toml');
@@ -83,7 +82,7 @@ describe('every runner assembles its command through bunTestCommand', () => {
       if (source.includes('bunTestCommand(') && !source.includes('env: bunTestEnv()'))
         offenders.push(`${entry} (env)`);
     }
-    // A hand-built command on any runner path silently drops the Windows budget for that path.
+    // A hand-built command on any runner path silently drops the default budget for that path.
     expect(offenders).toEqual([]);
   });
 });

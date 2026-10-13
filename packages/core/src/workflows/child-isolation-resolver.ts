@@ -26,11 +26,12 @@ import {
   getIsolationProvider,
   configureIsolation,
   classifyIsolationError,
+  worktreeRegistrationMetadata,
 } from '@archon/isolation';
 import * as git from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
-import * as isolationDb from '../db/isolation-environments';
+import type { IIsolationStore } from '@archon/isolation';
 import type { Codebase } from '../schemas/codebase';
 
 /**
@@ -110,6 +111,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * returns the shared checkout as a fallback.
  */
 export function createCodebaseChildResolver(
+  isolation: IIsolationStore,
   codebase: Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'kind'>,
   surface: {
     /**
@@ -190,7 +192,7 @@ export function createCodebaseChildResolver(
         });
 
         // Register the env so `isolation list`/`cleanup`/`complete <branch>` see it.
-        const envRecord = await isolationDb.create({
+        const envRecord = await isolation.create({
           codebase_id: codebase.id,
           workflow_type: 'task',
           workflow_id: identifier,
@@ -204,36 +206,15 @@ export function createCodebaseChildResolver(
           // Durable on purpose: a log line is gone by the time anyone asks why two runs
           // touched one checkout.
           metadata: {
+            ...worktreeRegistrationMetadata(isolatedEnv.metadata),
             parent_run_id: req.parentRun.id,
             child_index: childIndex,
             adopted: isolatedEnv.metadata.adopted,
           },
         });
 
-        // `WorktreeProvider.create()` ADOPTS a worktree already sitting at the computed
-        // path instead of failing. That is what made the pre-fix identifier collision
-        // silent, so it must never be quiet on this path again.
-        //
-        // Adoption stays ALLOWED rather than rejected. The reason is NOT that resume
-        // can't reach this code — it can. The parent's re-entry finds its child by
-        // (parent_run_id, parent_node_id); when that row was never written, or was
-        // deleted, the node takes the fresh-spawn path and calls `resolve()` again.
-        // Two properties are what make that safe, and both are load-bearing:
-        //
-        //  1. `buildChildIdentifier` is deterministic in (parentRunId, nodeId,
-        //     childIndex), so re-spawning the SAME slot recomputes the SAME path.
-        //     Nothing else computes this identifier, so whatever is sitting there is
-        //     this slot's own from an earlier attempt — never a sibling's live checkout.
-        //  2. `isolationDb.create()` is an UPSERT (`ON CONFLICT (codebase_id,
-        //     workflow_type, workflow_id) WHERE status = 'active' DO UPDATE`, see
-        //     `db/isolation-environments.ts`), so the re-spawn refreshes the existing
-        //     env row rather than failing on the unique index. "Simplifying" that to a
-        //     plain INSERT breaks exactly the recovery this comment is describing.
-        //
-        // Rejecting adoption would turn a spawn that died between `provider.create()`
-        // and `createWorkflowRun` from "recovers on the next resume" into "wedged
-        // permanently". If this WARN ever fires for a SIBLING's checkout, the
-        // identifier has regressed and this line is the evidence.
+        // A spawn can fail before its run row is written. Reusing that slot
+        // recovers it, but adoption revokes the previous creation proof.
         if (isolatedEnv.metadata.adopted) {
           getLog().warn(
             {
@@ -262,6 +243,11 @@ export function createCodebaseChildResolver(
         return {
           cwd: isolatedEnv.workingPath,
           envId: envRecord.id,
+          ...(isolatedEnv.metadata.provenance === 'created'
+            ? {
+                ownedWorktree: { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId },
+              }
+            : {}),
           branchName: isolatedEnv.branchName,
           ...(!isolatedEnv.metadata.adopted && isolatedEnv.metadata.cutFromCommit !== undefined
             ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }

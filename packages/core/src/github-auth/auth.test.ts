@@ -1,10 +1,10 @@
+// @archon-test-isolated
 /**
  * Tests for the GitHub App auth module.
  *
  * Strictly mocked at the @octokit/rest boundary — no live api.github.com calls
  * in CI (PRD Q7). `mock.module` is process-global; this file is the ONLY place
- * in @archon/core that mocks @octokit/rest, and it's slotted as its own
- * `bun test` invocation in package.json's test script for isolation.
+ * in @archon/core that mocks @octokit/rest. The file directive requests a fresh process.
  */
 import { mock, spyOn, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';

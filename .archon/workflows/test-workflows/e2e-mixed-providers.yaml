@@ -24,8 +24,8 @@ nodes:
   # 3. Assert both providers returned output
   - id: assert
     bash: |
-      claude_out="$claude-node.output"
-      codex_out="$codex-node.output"
+      claude_out=$claude-node.output
+      codex_out=$codex-node.output
       if [ -z "$claude_out" ]; then
         echo "FAIL: claude-node returned empty output"
         exit 1

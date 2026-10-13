@@ -3,6 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { subtaskSchema, subtaskTerminalStatusSchema } from '@archon/provider-contract';
 import type { IWorkflowPlatform } from './deps';
 import {
   createAttemptEventSequence,
@@ -12,6 +13,7 @@ import {
 import { orderProviderEventRecords, providerEventEnvelopeSchema } from './schemas/provider-event';
 import orderFixture from './schemas/provider-event-order.fixture.json';
 import type { IWorkflowStore } from './store';
+import { createRunToolCallAttention } from './tool-call-attention';
 
 const trackTempRoot = trackTempRoots();
 
@@ -34,6 +36,16 @@ async function makeHandler(
     getPlatformType: () => 'test',
   };
   const handler = createProviderEventHandler({
+    toolAttention: createRunToolCallAttention({
+      store: { setToolCallAttention: mock(async () => true) },
+      runId: 'run-1',
+    }).createStream({
+      reportedBackgroundWork: false,
+      nodeId: 'node-1',
+      provider: 'test',
+      thresholdMs: 0,
+      env: {},
+    }),
     store: {
       createWorkflowEvent: mock(async (event: Parameters<CreateEvent>[0]) => {
         rows.push(event);
@@ -54,6 +66,16 @@ async function makeHandler(
 }
 
 describe('createProviderEventHandler', () => {
+  test('typed open tools stay live until their own terminal update', async () => {
+    const { handler } = await makeHandler();
+    await handler.handle({ type: 'tool_call', toolCallId: 'a', name: 'Bash' });
+    await handler.handle({ type: 'tool_call', toolCallId: 'b', name: 'Bash' });
+    await handler.handle({ type: 'tool_call_update', toolCallId: 'a', status: 'completed' });
+    await handler.handle({ type: 'tool_call_update', toolCallId: 'unknown', status: 'cancelled' });
+    expect(handler.hasOpenTools()).toBe(true);
+    await handler.handle({ type: 'tool_call_update', toolCallId: 'b', status: 'failed' });
+    expect(handler.hasOpenTools()).toBe(false);
+  });
   test('tracks a subtask from its start until a terminal status', async () => {
     const { handler } = await makeHandler();
 
@@ -65,6 +87,20 @@ describe('createProviderEventHandler', () => {
     await handler.handle({ type: 'subtask', taskId: 't-1', status: 'completed' });
     await handler.handle({ type: 'subtask', taskId: 't-2', status: 'stopped' });
     expect(handler.liveSubtaskIds()).toEqual([]);
+  });
+
+  test('keeps every contract non-terminal status live and removes only terminal statuses', async () => {
+    const { handler } = await makeHandler();
+    const terminalStatuses: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
+    for (const status of subtaskSchema.shape.status.options) {
+      await handler.handle({ type: 'subtask', taskId: status, status });
+      expect(handler.liveSubtaskIds().includes(status)).toBe(!terminalStatuses.has(status));
+    }
+    for (const status of subtaskTerminalStatusSchema.options) {
+      await handler.handle({ type: 'subtask', taskId: 'running', status });
+      expect(handler.liveSubtaskIds()).not.toContain('running');
+      await handler.handle({ type: 'subtask', taskId: 'running', status: 'running' });
+    }
   });
 
   test('records only what the provider reported, with no engine-made completion', async () => {

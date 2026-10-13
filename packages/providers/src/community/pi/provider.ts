@@ -1,4 +1,9 @@
-import type { CredentialStatus } from '@archon/provider-contract';
+import { listPiModels } from './model-catalog';
+import type {
+  CredentialStatus,
+  ProviderDiagnostics,
+  ProviderModelList,
+} from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -185,6 +190,70 @@ export function ensureBedrockProviderRegistered(
 /** Test-only: reset the once-per-process registration cache. */
 export function resetBedrockRegistrationForTest(): void {
   bedrockRegistrationPromise = undefined;
+}
+
+// ─── OAuth flow registration (compiled-binary parity) ────────────────────────
+
+/**
+ * Registrar for Pi's subscription OAuth flow modules. Split out from
+ * `ensurePiOAuthFlowsRegistered` for the same test-injection reason as
+ * `BedrockRegistrar`.
+ */
+export type OAuthFlowRegistrar = () => Promise<void>;
+
+/**
+ * The default registrar: dynamically import pi-ai's `bun-oauth` entrypoint and
+ * register the flow modules it imports statically.
+ *
+ * Same bug class as Bedrock (#2154). pi-ai's credential resolver loads each
+ * subscription OAuth flow (openai-codex, anthropic, github-copilot, …) through
+ * `importOAuthModule(specifier)` in `dist/auth/oauth/load.js`, a
+ * computed-specifier `import()` that Bun's `--compile` cannot follow. The flow
+ * modules are never embedded, so every Pi node on a `type: "oauth"`
+ * `auth.json` credential fails in a compiled binary with
+ * `OAuth auth derivation failed for <provider>: Cannot find module './<flow>.js'`.
+ *
+ * Each loader checks `registerBundledOAuthFlowLoaders()` first. pi-ai's public
+ * `@earendil-works/pi-ai/bun-oauth` subpath statically imports every flow and
+ * calls it via `registerBunOAuthFlows()`; Pi's own binary does exactly that.
+ * The string-literal specifier here is what lets Bun follow and embed those
+ * static imports. Registering in source mode is harmless: the same modules
+ * resolve normally, they are just loaded through the registered table.
+ */
+async function defaultOAuthFlowRegistrar(): Promise<void> {
+  const { registerBunOAuthFlows } = await import('@earendil-works/pi-ai/bun-oauth');
+  registerBunOAuthFlows();
+}
+
+let oauthFlowRegistrationPromise: Promise<void> | undefined;
+
+/**
+ * Register Pi's subscription OAuth flow loaders once per process, with the same
+ * caching, lazy-load, and failure contract as `ensureBedrockProviderRegistered`.
+ * A failure only affects OAuth-credentialed backends, so it is swallowed with a
+ * WARN: API-key and `models.json` backends keep working, and an OAuth node then
+ * surfaces pi-ai's original `Cannot find module` error.
+ *
+ * Both this and the Bedrock override register into pi-ai module state, so they
+ * only take effect while Pi resolves the same pi-ai instance this package
+ * imports. `pi-sdk-instance.test.ts` guards that.
+ */
+export function ensurePiOAuthFlowsRegistered(
+  registrar: OAuthFlowRegistrar = defaultOAuthFlowRegistrar
+): Promise<void> {
+  oauthFlowRegistrationPromise ??= registrar()
+    .then(() => {
+      getLog().debug('pi.oauth_flows_register_completed');
+    })
+    .catch((err: unknown) => {
+      getLog().warn({ err }, 'pi.oauth_flows_register_failed');
+    });
+  return oauthFlowRegistrationPromise;
+}
+
+/** Test-only: reset the once-per-process registration cache. */
+export function resetOAuthFlowRegistrationForTest(): void {
+  oauthFlowRegistrationPromise = undefined;
 }
 
 // Pi provider id → env var name used by pi-ai's getEnvApiKey(). Generated
@@ -503,6 +572,83 @@ async function createPiModelRuntime(
  * (no reuse) so concurrent calls don't collide.
  */
 export class PiProvider implements IAgentProvider {
+  async listModels(
+    request: Parameters<NonNullable<IAgentProvider['listModels']>>[0]
+  ): Promise<ProviderModelList> {
+    return {
+      models: (await listPiModels(request.signal)).map(model => ({
+        id: model.ref,
+        label: model.name,
+        details: {
+          provider: model.provider,
+          modelId: model.id,
+          reasoning: model.reasoning,
+          cost: model.cost,
+          contextWindow: model.contextWindow,
+        },
+      })),
+    };
+  }
+
+  async diagnose(
+    request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
+  ): Promise<ProviderDiagnostics> {
+    const checks: ProviderDiagnostics['checks'] = [];
+    try {
+      ensurePiPackageDirShim();
+      await import('@earendil-works/pi-coding-agent');
+      checks.push({ id: 'pi-sdk', label: 'Pi SDK', status: 'ok', message: 'Pi SDK loaded' });
+    } catch (error) {
+      return {
+        checks: [
+          {
+            id: 'pi-sdk',
+            label: 'Pi SDK',
+            status: 'fail',
+            message: `Pi SDK could not load: ${redactCredentialValues(error instanceof Error ? error.message : String(error), collectCredentialValues(process.env))}`,
+            remedy: 'Reinstall the Pi provider',
+          },
+        ],
+      };
+    }
+    const credential = await this.checkCredential({
+      ...request,
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined
+        )
+      ),
+      signal: new AbortController().signal,
+    });
+    checks.push({
+      id: 'pi-credentials',
+      label: 'Pi backend credentials',
+      status:
+        credential.state === 'usable'
+          ? 'ok'
+          : credential.state === 'not_checked'
+            ? 'skip'
+            : credential.state === 'check_failed'
+              ? 'fail'
+              : 'warn',
+      message: `Backend credential status: ${credential.state}${'evidence' in credential ? `: ${credential.evidence}` : ''}`,
+      ...(credential.state === 'usable'
+        ? {}
+        : { remedy: 'Configure a Pi model and its backend credentials' }),
+    });
+    return { checks };
+  }
+
+  async resolveCredentialModel(
+    request: Parameters<NonNullable<IAgentProvider['resolveCredentialModel']>>[0]
+  ): Promise<string> {
+    ensurePiPackageDirShim();
+    const sdk = await import('@earendil-works/pi-coding-agent');
+    const config = parsePiConfig(request.assistantConfig ?? {});
+    const parsed = resolvePiModel(request.model ?? config.model, request.cwd, sdk);
+    return `${parsed.provider}/${parsed.modelId}`;
+  }
+
   async checkCredential(
     request: Parameters<IAgentProvider['checkCredential']>[0]
   ): Promise<CredentialStatus> {
@@ -599,11 +745,14 @@ export class PiProvider implements IAgentProvider {
     // `dirname(process.execPath)/package.json` inside a compiled binary.
     ensurePiPackageDirShim();
 
-    // Register Pi's Bedrock backend override once per process so `amazon-bedrock/*`
-    // models load inside a compiled Archon binary (issue #2154). Kicked off here
-    // to run concurrently with the SDK imports below; awaited before the session
-    // streams (the override is consulted lazily when the Bedrock backend loads).
+    // Register Pi's Bedrock backend override (issue #2154) and subscription OAuth
+    // flow loaders once per process so `amazon-bedrock/*` models and
+    // `type: "oauth"` credentials work inside a compiled Archon binary. Kicked
+    // off here to run concurrently with the SDK imports below; awaited before the
+    // session streams (both are consulted lazily, when the backend loads or the
+    // credential is first resolved).
     const bedrockReady = ensureBedrockProviderRegistered();
+    const oauthFlowsReady = ensurePiOAuthFlowsRegistered();
 
     // Lazy-load Pi SDK and all Pi-dependent helper modules here. Must not move
     // these imports to module scope — see the header comment for the failure
@@ -632,11 +781,11 @@ export class PiProvider implements IAgentProvider {
     ]);
     const { createAgentSession } = piCodingAgent;
 
-    // Ensure the Bedrock override is set before any session work — the SDK reads
-    // it only when the Bedrock backend is first streamed, but awaiting here keeps
-    // the ordering obvious and the cost is one resolved-promise await after the
-    // first call.
-    await bedrockReady;
+    // Ensure both registrations are in place before any session work — the SDK
+    // reads them only when a backend is first streamed or an OAuth credential is
+    // first resolved, but awaiting here keeps the ordering obvious and the cost is
+    // one resolved-promise await after the first call.
+    await Promise.all([bedrockReady, oauthFlowsReady]);
 
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const piConfig = parsePiConfig(assistantConfig);
@@ -854,17 +1003,11 @@ export class PiProvider implements IAgentProvider {
         };
       }
 
-      // 5. Session management. Pi stores each session as a JSONL file under
-      //    ~/.pi/agent/sessions/<encoded-cwd>/<uuid>.jsonl. `resolvePiSession`
-      //    returns a SessionManager bound to either a new session (no resume
-      //    id) or an existing session (resume id matches a file); if the id
-      //    was provided but not found, it falls through to a new session and
-      //    the caller surfaces a resume_failed warning (matches the Codex
-      //    provider's fallback pattern for the same condition).
       const { sessionManager, resumeFailed } = await resolvePiSession(
         cwd,
         resumeSessionId,
-        requestOptions?.forkSession
+        requestOptions?.forkSession,
+        requestOptions?.purpose === 'title-generation'
       );
       if (resumeFailed) {
         yield {

@@ -1,114 +1,72 @@
-/**
- * The repository's pre-pull-request gate.
- *
- * `VALIDATE_CHECKS` is the single declaration of what that gate runs. `bun run validate` runs
- * every check; a CI job that gates one of them selects it by id with `--only`. Nothing in
- * `.github/workflows/` restates a command, so the gate a contributor runs and the gate a pull
- * request must pass cannot describe different work — `scripts/validate-ci-parity.test.ts` is the
- * mechanism that keeps that true, and it also holds the list of PR-gating commands deliberately
- * left out of here, each with its reason.
- *
- * Checks run in declaration order and the run stops at the first failure, so the list is ordered
- * roughly cheapest first: a type error surfaces in seconds rather than after the test suite. The
- * one exception is the last entry, and its comment says why it sits there.
- */
 import { resolve } from 'node:path';
 
+type Command = readonly [string, ...string[]];
+export type CheckCommands = readonly [Command, ...Command[]];
+
 export interface ValidateCheck {
-  /** Stable identifier. CI selects checks by it, so treat it as a contract. */
   id: string;
-  /** What the check proves. Printed as the step header. */
   label: string;
-  /** Argv, run from the repository root. */
-  command: readonly string[];
-  /** Why the check cannot run on Windows. Printed when it is skipped there. */
+  commands: CheckCommands;
+  explicitOnly?: boolean;
   skipOnWindows?: string;
 }
 
+// CI selects from this registry; local defaults omit the expensive fixture and hook formatting checks.
 export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
   {
     id: 'cli-import-boundary',
     label: 'CLI import boundaries',
-    command: ['bun', 'run', 'check:cli-import-boundary'],
+    commands: [['bun', 'run', 'check:cli-import-boundary']],
   },
   {
-    id: 'bundled-defaults',
-    label: 'Bundled workflow and command defaults are regenerated',
-    command: ['bun', 'run', 'check:bundled'],
+    id: 'package-edges',
+    label: 'Declared @archon dependencies',
+    commands: [['bun', 'run', 'check:package-edges']],
   },
   {
-    id: 'bundled-skill',
-    label: 'Bundled CLI skill is regenerated',
-    command: ['bun', 'run', 'check:bundled-skill'],
-  },
-  {
-    id: 'bundled-schema',
-    label: 'Bundled workflow schema is regenerated',
-    command: ['bun', 'run', 'check:bundled-schema'],
-  },
-  {
-    id: 'pi-vendor-map',
-    label: 'Pi vendor map is regenerated',
-    command: ['bun', 'run', 'check:pi-vendor-map'],
-  },
-  {
-    id: 'codex-protocol',
-    label: 'Codex app-server protocol types are regenerated',
-    command: ['bun', 'run', 'check:codex-protocol'],
-  },
-  {
-    id: 'capability-matrix',
-    label: 'Provider capability matrix is regenerated',
-    command: ['bun', 'run', 'check:capability-matrix'],
-  },
-  {
-    id: 'provider-contract-schema',
-    label: 'Provider contract JSON Schema is regenerated',
-    command: ['bun', 'run', 'check:provider-contract-schema'],
-  },
-  {
-    id: 'api-types',
-    label: 'Generated API types match the schemas',
-    command: ['bun', 'run', 'check:api-types'],
+    id: 'generated-files',
+    label: 'Generated files match their sources',
+    commands: [
+      ['bun', 'run', 'check:bundled'],
+      ['bun', 'run', 'check:pi-vendor-map'],
+      ['bun', 'run', 'check:capability-matrix'],
+      ['bun', 'run', 'check:provider-contract-schema'],
+      ['bun', 'run', 'check:chat-contract-schema'],
+      ['bun', 'run', 'check:api-types'],
+    ],
   },
   {
     id: 'type-check',
     label: 'TypeScript across every package and script project',
-    command: ['bun', 'run', 'type-check'],
+    commands: [['bun', 'run', 'type-check']],
   },
   {
     id: 'lint',
     label: 'ESLint, warnings included',
-    command: ['bun', 'run', 'lint', '--max-warnings', '0'],
+    commands: [['bun', 'run', 'lint', '--max-warnings', '0']],
   },
   {
     id: 'format',
     label: 'Prettier formatting',
-    command: ['bun', 'run', 'format:check'],
+    commands: [['bun', 'run', 'format:check']],
+    explicitOnly: true,
   },
   {
     id: 'installer',
     label: 'Install script, against a mocked download',
-    command: ['bun', 'run', 'test:install'],
-    // scripts/install.sh refuses MINGW/MSYS by design (Windows users are directed to WSL2),
-    // so the installer test cannot pass in a Windows shell — in CI or on a contributor's machine.
+    commands: [['bun', 'run', 'test:install']],
     skipOnWindows: 'scripts/install.sh is POSIX-only and refuses to run under MINGW/MSYS',
   },
   {
     id: 'tests',
     label: 'Test suite, per-package isolation preserved',
-    command: ['bun', 'run', 'test'],
+    commands: [['bun', 'run', 'test']],
   },
-  // The fixture check runs last because it is filesystem-heavy and the cheaper checks
-  // should fail first. `--only workflow-fixtures` remains the focused iteration command.
-  //
-  // The docs build is not here on purpose: Astro's CLI runs under Node, and this gate must
-  // run on a checkout that has only Bun. It stays a declared exclusion with its own CI job,
-  // path-filtered to the docs site — see NOT_IN_VALIDATE in validate-ci-parity.test.ts.
   {
     id: 'workflow-fixtures',
-    label: 'Every workflow fixture reaches its expected outcome under dry-run',
-    command: ['bun', 'run', 'cli', 'workflow', 'test'],
+    label: 'Workflow fixtures reach their expected dry-run outcomes',
+    commands: [['bun', 'run', 'cli', 'workflow', 'test']],
+    explicitOnly: true,
   },
 ];
 
@@ -116,7 +74,7 @@ const REPO_ROOT = resolve(import.meta.dir, '..');
 
 /** Ids in declaration order, so `--only` cannot reorder the run. */
 export function selectChecks(only: readonly string[]): ValidateCheck[] {
-  if (only.length === 0) return [...VALIDATE_CHECKS];
+  if (only.length === 0) return VALIDATE_CHECKS.filter(check => !check.explicitOnly);
   const requested = new Set(only);
   const unknown = only.filter(id => !VALIDATE_CHECKS.some(check => check.id === id));
   if (unknown.length > 0) {
@@ -162,6 +120,24 @@ interface CheckResult {
   skipped: boolean;
 }
 
+export async function runCheckCommands(commands: CheckCommands, cwd: string): Promise<number> {
+  for (const command of commands) {
+    console.log(`$ ${command.join(' ')}\n`);
+    const child = Bun.spawn([...command], {
+      cwd,
+      stdin: 'inherit',
+      stdout: 'inherit',
+      stderr: 'inherit',
+    });
+    const code = await child.exited;
+    if (code !== 0) {
+      console.error(`Command failed (${String(code)}): ${command.join(' ')}`);
+      return code;
+    }
+  }
+  return 0;
+}
+
 async function main(): Promise<number> {
   const checks = selectChecks(parseOnly(Bun.argv.slice(2)));
   const onWindows = process.platform === 'win32';
@@ -176,15 +152,8 @@ async function main(): Promise<number> {
     }
 
     console.log(`\n=== ${check.id} — ${check.label} ===`);
-    console.log(`$ ${check.command.join(' ')}\n`);
     const checkStartedAt = Date.now();
-    const child = Bun.spawn([...check.command], {
-      cwd: REPO_ROOT,
-      stdin: 'inherit',
-      stdout: 'inherit',
-      stderr: 'inherit',
-    });
-    const exitCode = await child.exited;
+    const exitCode = await runCheckCommands(check.commands, REPO_ROOT);
     const milliseconds = Date.now() - checkStartedAt;
 
     if (exitCode !== 0) {

@@ -17,6 +17,7 @@ COPY package.json bun.lock ./
 
 # Copy ALL workspace package.json files (monorepo lockfile depends on all of them)
 COPY packages/adapters/package.json ./packages/adapters/
+COPY packages/chat-contract/package.json ./packages/chat-contract/
 COPY packages/cli/package.json ./packages/cli/
 COPY packages/core/package.json ./packages/core/
 # docs-web source is NOT copied — it's a static site deployed separately
@@ -139,6 +140,7 @@ COPY --chown=appuser:appuser package.json bun.lock ./
 
 # Copy ALL workspace package.json files
 COPY --chown=appuser:appuser packages/adapters/package.json ./packages/adapters/
+COPY --chown=appuser:appuser packages/chat-contract/package.json ./packages/chat-contract/
 COPY --chown=appuser:appuser packages/cli/package.json ./packages/cli/
 COPY --chown=appuser:appuser packages/core/package.json ./packages/core/
 # docs-web source is NOT copied — it's a static site deployed separately
@@ -165,6 +167,7 @@ RUN HOME=/home/appuser BUN_INSTALL_CACHE_DIR=/tmp/bun-install-cache \
 
 # Copy application source (Bun runs TypeScript directly, no compile step needed)
 COPY --chown=appuser:appuser packages/adapters/ ./packages/adapters/
+COPY --chown=appuser:appuser packages/chat-contract/ ./packages/chat-contract/
 COPY --chown=appuser:appuser packages/cli/ ./packages/cli/
 COPY --chown=appuser:appuser packages/core/ ./packages/core/
 COPY --chown=appuser:appuser packages/forge/ ./packages/forge/

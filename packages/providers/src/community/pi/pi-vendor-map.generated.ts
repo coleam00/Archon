@@ -21,7 +21,7 @@ import type { CredentialSpec } from '../../types';
 export const PI_PROVIDER_ENV_VARS: Record<string, string> = {
   "ant-ling": "ANT_LING_API_KEY",
   "anthropic": "ANTHROPIC_API_KEY",
-  "azure-openai-responses": "AZURE_OPENAI_API_KEY",
+  "azure": "AZURE_OPENAI_API_KEY",
   "baseten": "BASETEN_API_KEY",
   "cerebras": "CEREBRAS_API_KEY",
   "cloudflare-ai-gateway": "CLOUDFLARE_API_KEY",
@@ -69,7 +69,7 @@ export const PI_CREDENTIAL_SPECS: CredentialSpec[] = [
   { vendor: "amazon-bedrock", displayName: "Amazon Bedrock", kinds: ["ambient"] },
   { vendor: "ant-ling", displayName: "Ant Ling", kinds: ["api_key"] },
   { vendor: "anthropic", displayName: "Anthropic", kinds: ["api_key", "subscription"] },
-  { vendor: "azure-openai-responses", displayName: "Azure OpenAI", kinds: ["api_key"] },
+  { vendor: "azure", displayName: "Azure OpenAI", kinds: ["api_key"] },
   { vendor: "baseten", displayName: "Baseten", kinds: ["api_key"] },
   { vendor: "cerebras", displayName: "Cerebras", kinds: ["api_key"] },
   { vendor: "cloudflare-ai-gateway", displayName: "Cloudflare AI Gateway", kinds: ["api_key"] },

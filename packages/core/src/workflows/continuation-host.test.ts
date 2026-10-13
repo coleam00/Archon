@@ -1,19 +1,20 @@
+// @archon-test-isolated
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 const mockListDueWorkflowContinuations = mock(async () => [] as WorkflowRun[]);
 const mockDeferWorkflowContinuation = mock(async () => undefined);
-mock.module('@archon/core/db/workflows', () => ({
+const store = {
   listDueWorkflowContinuations: mockListDueWorkflowContinuations,
   deferWorkflowContinuation: mockDeferWorkflowContinuation,
-}));
+};
 import { wakeDueWorkflowContinuations } from '@archon/core/workflows/continuation-host';
 
 async function scanDueWorkflowContinuations(
   now: Date,
   resume: (run: WorkflowRun, cursor: WorkflowResumeCursor) => Promise<boolean>
 ): Promise<number> {
-  const outcomes = await wakeDueWorkflowContinuations(now, async (run, cursor) =>
+  const outcomes = await wakeDueWorkflowContinuations(store, now, async (run, cursor) =>
     (await resume(run, cursor))
       ? {
           kind: 'accepted',
@@ -31,6 +32,7 @@ function run(
   metadata: Record<string, unknown>
 ): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id,
     workflow_name: 'deliver',
     conversation_id: 'conv-1',
@@ -233,6 +235,7 @@ test('reports deferral failure while admitting other rows', async () => {
   ]);
   mockDeferWorkflowContinuation.mockRejectedValueOnce(new Error('defer unavailable'));
   const outcomes = await wakeDueWorkflowContinuations(
+    store,
     new Date('2026-08-24T11:00:01.000Z'),
     async candidate => {
       if (candidate.id === 'bad') throw new Error('resume unavailable');

@@ -1,5 +1,5 @@
 import type { WorkflowTerminalProperties } from '@archon/paths';
-import type { TokenUsage } from '@archon/providers/types';
+import type { TokenUsage } from '@archon/provider-contract';
 import { readNodeRecordData } from './node-record-reader';
 import { nodeDescriptorSchema, nodeFailureKindSchema } from './schemas/node-execution';
 import { runCancelReasonSchema, runExitReasonSchema } from './schemas/run-terminal-reason';

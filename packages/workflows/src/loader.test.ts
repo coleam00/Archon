@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
 import { mkdir, writeFile, rm, readdir, readFile } from 'fs/promises';
 import { join, basename } from 'path';
@@ -30,11 +31,16 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
-import { registerBuiltinProviders, clearRegistry, type ProviderDefaults } from '@archon/providers';
+import { clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import { type ProviderDefaults } from '@archon/provider-contract';
 clearRegistry();
 registerBuiltinProviders();
 
-import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
+import {
+  discoverWorkflows as discoverWorkflowsWithProviders,
+  discoverWorkflowsWithConfig,
+} from './workflow-discovery';
 import {
   isExecNode,
   isHaltNode,
@@ -44,7 +50,8 @@ import {
   isWorkflowNode,
   isIncludeDirective,
 } from './schemas';
-import { parseWorkflow, type ParseResult } from './loader';
+import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from './loader';
+import { evaluateCondition } from './condition-evaluator';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 import { KNOWN_WORKFLOW_KEYS } from './schemas/workflow';
 import type { WorkflowDefinition } from './schemas/workflow';
@@ -53,6 +60,21 @@ import type { JsonValue } from './output-ref';
 import * as bundledDefaults from './defaults/bundled-defaults';
 import { parsePackagedResourceReference } from './packaged-workflow';
 import { discoverScriptsForCwd } from './script-discovery';
+
+function discoverWorkflows(
+  cwd: string | null,
+  options: Omit<Parameters<typeof discoverWorkflowsWithProviders>[1], 'providers'> = {}
+) {
+  return discoverWorkflowsWithProviders(cwd, { ...options, providers: providerRegistry });
+}
+
+function parseWorkflow(
+  content: string,
+  filename: string,
+  configuredEnvNames?: ReadonlySet<string>
+): ParseResult {
+  return parseWorkflowWithProviders(content, filename, providerRegistry, configuredEnvNames);
+}
 
 /** The inline prompt text of an agent node, or undefined for any other kind
  * (formerly the bare `'prompt' in node ? node.prompt : ...` idiom, #2486). */
@@ -107,6 +129,23 @@ function parseWorkflowYaml(
   if (result.workflow === null) throw new Error('expected a parsed workflow');
   return { workflow: result.workflow, warnings: result.warnings };
 }
+
+describe('workflow YAML line endings', () => {
+  it.each(['"', "'"])('folds multiline %s-quoted prompts identically for LF and CRLF', quote => {
+    const lf = `name: line-endings
+description: Quoted multiline scalar
+nodes:
+  - id: read
+    prompt: ${quote}first line
+      second line${quote}
+`;
+    const { workflow: lfWorkflow } = parseWorkflowYaml(lf);
+    const { workflow: crlfWorkflow } = parseWorkflowYaml(lf.replaceAll('\n', '\r\n'));
+
+    expect(inlinePrompt(lfWorkflow.nodes[0])).toBe('first line second line');
+    expect(crlfWorkflow).toEqual(lfWorkflow);
+  });
+});
 
 describe('Workflow Loader', () => {
   let testDir: string;
@@ -825,7 +864,7 @@ nodes:
       expect(result.workflows).toHaveLength(0);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].errorType).toBe('validation_error');
-      expect(result.errors[0].error).toContain("Unknown provider 'claud'");
+      expect(result.errors[0].error).toContain("Unknown provider: 'claud'");
     });
 
     it('should accept any model string with a known provider (SDK validates at run time)', () => {
@@ -1718,7 +1757,7 @@ nodes:
         envVars: { NAME: 'value' },
       }));
 
-      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
 
       expect(result.errors).toEqual([]);
       const entry = result.workflows.find(w => w.workflow.name === 'uses-configured-env');
@@ -1761,6 +1800,7 @@ nodes:
       const result = await discoverWorkflowsWithConfig(
         testDir,
         loadConfigShouldNotRun,
+        providerRegistry,
         capturedSourceRoots(capture.anchor)
       );
 
@@ -1777,7 +1817,7 @@ nodes:
         defaults: { loadDefaultWorkflows: false },
       }));
 
-      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
 
       // With loadDefaults: false, no archon-* defaults should appear
       const archonWorkflow = result.workflows.find(w => w.workflow.name.startsWith('archon-'));
@@ -1791,7 +1831,7 @@ nodes:
         throw new Error('Config not found');
       });
 
-      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
 
       // With config failure, defaults to true, so archon-* should appear
       const archonWorkflow = result.workflows.find(w => w.workflow.name === 'archon-review');
@@ -1823,7 +1863,7 @@ nodes:
           defaults: { loadDefaultWorkflows: false },
         }));
 
-        const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+        const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
         const entry = result.workflows.find(w => w.workflow.name === 'home-only');
         expect(entry).toBeDefined();
         expect(entry?.source).toBe('global');
@@ -3862,7 +3902,7 @@ nodes:
       expect(error?.error).toContain('compares the whole output of AI node');
     });
 
-    it('leaves an unparseable when: to the executor rather than guessing at load', async () => {
+    it('rejects an unparseable when: during discovery', async () => {
       const result = await loadYaml(
         'unparseable-when.yaml',
         `
@@ -3877,8 +3917,10 @@ nodes:
     when: "$analyze.output = 'BUG'"
 `
       );
-      expect(result.errors).toHaveLength(0);
-      expect(result.workflows).toHaveLength(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("Node 'decide' field 'when'");
+      expect(result.errors[0].error).toContain('unsupported condition syntax');
+      expect(result.workflows).toHaveLength(0);
     });
   });
 
@@ -5192,6 +5234,170 @@ nodes:
     });
   });
 
+  describe('single conditional dependency trigger rule warning (#3783)', () => {
+    const CONDITIONAL_JOIN = 'needs a successful dependency';
+
+    it.each([
+      {
+        label: 'its only dependency is conditional',
+        deps: ['a'],
+        rule: 'none_failed_min_one_success',
+        warns: true,
+      },
+      {
+        label: 'its only dependency is unconditional',
+        deps: ['c'],
+        rule: 'none_failed_min_one_success',
+        warns: false,
+      },
+      {
+        label: 'it joins conditional branches',
+        deps: ['a', 'b'],
+        rule: 'none_failed_min_one_success',
+        warns: false,
+      },
+      {
+        label: 'it joins conditional and unconditional nodes',
+        deps: ['a', 'c'],
+        rule: 'none_failed_min_one_success',
+        warns: false,
+      },
+      {
+        label: 'it uses all_done after a conditional node',
+        deps: ['a'],
+        rule: 'all_done',
+        warns: false,
+      },
+    ])('warns=$warns when $label', ({ deps, rule, warns }) => {
+      const { warnings } = parseWorkflowYaml(`name: conditional-join
+description: Conditional join warning
+inputs:
+  run: {}
+nodes:
+  - id: a
+    bash: echo a
+    when: "$INPUTS.run == true"
+  - id: b
+    bash: echo b
+    when: "$INPUTS.run != true"
+  - id: c
+    bash: echo c
+  - id: join
+    bash: echo joined
+    depends_on: ${JSON.stringify(deps)}
+    trigger_rule: ${rule}
+`);
+      const advisories = warnings.filter(w => w.includes(CONDITIONAL_JOIN));
+      expect(advisories).toHaveLength(warns ? 1 : 0);
+      if (warns) {
+        expect(advisories[0]).toContain("Node 'join'");
+        expect(advisories[0]).toContain("'a'");
+        expect(advisories[0]).toContain('all_done');
+        expect(advisories[0]).toContain('/guides/authoring-workflows/#trigger_rule-values');
+      }
+    });
+
+    it('warns when the only dependency is a conditional include', () => {
+      const { warnings } = parseWorkflowYaml(`name: conditional-include-join
+description: Join after a conditional block
+inputs:
+  run: {}
+nodes:
+  - id: inc
+    include: block
+    when: "$INPUTS.run == true"
+  - id: join
+    depends_on: [inc]
+    trigger_rule: none_failed_min_one_success
+    bash: echo joined
+`);
+      expect(warnings.filter(w => w.includes(CONDITIONAL_JOIN))).toEqual([
+        expect.stringContaining("Node 'join'"),
+      ]);
+    });
+
+    it('warns inside a loop_group body', () => {
+      const { warnings } = parseWorkflowYaml(`name: conditional-loop-join
+description: Conditional join inside a loop
+inputs:
+  run: {}
+nodes:
+  - id: group
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 1
+      nodes:
+        - id: optional
+          bash: echo optional
+          when: "$INPUTS.run == true"
+        - id: join
+          depends_on: [optional]
+          trigger_rule: none_failed_min_one_success
+          bash: echo joined
+`);
+      expect(warnings.filter(w => w.includes(CONDITIONAL_JOIN))).toEqual([
+        expect.stringContaining("Node 'join'"),
+      ]);
+    });
+
+    it('does not warn inside a block that a conditional include skips as a whole', async () => {
+      // Expansion copies the include's `when` onto the block's entry node, so judging the
+      // expanded graph would flag `inc__join` even though the whole block skipping is the intent.
+      await writeWorkflowFile(
+        testDir,
+        'block.yaml',
+        `name: block
+description: Unconditional reusable join
+nodes:
+  - id: up
+    bash: echo up
+  - id: join
+    depends_on: [up]
+    trigger_rule: none_failed_min_one_success
+    bash: echo joined
+`
+      );
+      await writeWorkflowFile(
+        testDir,
+        'top.yaml',
+        `name: top
+description: Conditional composition
+inputs:
+  run: {}
+nodes:
+  - id: inc
+    include: block
+    when: "$INPUTS.run == true"
+`
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(2);
+      for (const { parseWarnings } of result.workflows) {
+        expect((parseWarnings ?? []).filter(w => w.includes(CONDITIONAL_JOIN))).toEqual([]);
+      }
+    });
+
+    it('bundled workflows carry no conditional-join warnings', async () => {
+      const binaryBuild = spyOn(bundledDefaults, 'isBinaryBuild').mockReturnValue(true);
+      try {
+        const discovered = await discoverWorkflows(testDir, { loadDefaults: true });
+        expect(discovered.errors).toEqual([]);
+        expect(discovered.workflows.length).toBe(
+          Object.keys(bundledDefaults.BUNDLED_WORKFLOWS).length
+        );
+        const warned = discovered.workflows.flatMap(({ workflow, parseWarnings }) =>
+          (parseWarnings ?? [])
+            .filter(w => w.includes(CONDITIONAL_JOIN))
+            .map(w => `${workflow.name}: ${w}`)
+        );
+        expect(warned).toEqual([]);
+      } finally {
+        binaryBuild.mockRestore();
+      }
+    });
+  });
+
   describe('parse warnings channel (#3444)', () => {
     it('reports parse warnings to the author without logging them at warn', () => {
       // Discovery parses every workflow on each list or run, so a warn log here
@@ -6321,11 +6527,14 @@ nodes:
 `
       );
 
-      const result = await discoverWorkflowsWithConfig(testDir, () =>
-        Promise.resolve({
-          defaults: { loadDefaultWorkflows: false },
-          commands: { folder: 'my-cmds' },
-        })
+      const result = await discoverWorkflowsWithConfig(
+        testDir,
+        () =>
+          Promise.resolve({
+            defaults: { loadDefaultWorkflows: false },
+            commands: { folder: 'my-cmds' },
+          }),
+        providerRegistry
       );
       expect(result.errors.filter(error => error.filename === 'cc-parent.yaml')).toHaveLength(0);
       const parent = result.workflows.find(
@@ -6547,7 +6756,7 @@ nodes:
       // project context — running loadConfig with no cwd would silently apply
       // home-dir or working-dir defaults to a request that has neither.
       const mockLoadConfig = mock(async () => ({ defaults: { loadDefaultWorkflows: true } }));
-      await discoverWorkflowsWithConfig(null, mockLoadConfig);
+      await discoverWorkflowsWithConfig(null, mockLoadConfig, providerRegistry);
       expect(mockLoadConfig).not.toHaveBeenCalled();
     });
   });
@@ -6661,7 +6870,7 @@ nodes:
 `);
 
       expect(result.error?.error).toContain("loop_group 'group' body: Node 'shared'");
-      expect(result.error?.error).toContain('context.resume is not supported');
+      expect(result.error?.error).toContain('pre-loop-node-id');
       expect(result.error?.error).toContain('depends_on');
     });
   });
@@ -6769,7 +6978,92 @@ nodes:
       expect(sibling.error?.error).toContain('not an upstream dependency');
     });
 
-    it('rejects named resume inside a loop_group body', () => {
+    it('accepts a named pre-loop owner and rejects unordered and non-session sources', () => {
+      const workflow = (source: string, dependencies = '[source]') => `
+name: owners
+description: owners
+nodes:
+  - id: source
+    ${source}
+  - id: corrections
+    depends_on: ${dependencies}
+    loop_group:
+      until_bash: 'test $review.output.done = true'
+      max_iterations: 3
+      nodes:
+        - id: owner
+          prompt: correct
+          context: { resume: source }
+        - id: review
+          prompt: review
+          context: fresh
+          depends_on: [owner]
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+            required: [done]
+`;
+      expect(parseAddressable(workflow('prompt: implement')).error).toBeNull();
+      expect(parseAddressable(workflow('command: implement')).error).toBeNull();
+      expect(parseAddressable(workflow('prompt: implement', '[]')).error?.error).toContain(
+        'upstream dependency'
+      );
+      expect(parseAddressable(workflow('bash: echo ready')).error?.error).toContain(
+        'not a session-producing'
+      );
+      expect(
+        parseAddressable(
+          workflow('prompt: implement\n    provider: claude').replace(
+            'prompt: correct',
+            'prompt: correct\n          provider: codex'
+          )
+        ).error?.error
+      ).toContain("consumer uses 'codex'");
+    });
+
+    it('proves nested ancestry at each enclosing group entry with provider defaults', () => {
+      const yaml = `
+name: nested-owner
+description: nested owner
+provider: claude
+nodes:
+  - id: source
+    loop: { prompt: implement, until: DONE, max_iterations: 1 }
+  - id: outer
+    depends_on: [source]
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      nodes:
+        - id: local
+          prompt: local
+        - id: inner
+          depends_on: [local]
+          loop_group:
+            until_bash: exit 0
+            max_iterations: 2
+            nodes:
+              - id: owner
+                prompt: owner
+                context: { resume: local }
+              - id: ancestor-owner
+                prompt: owner
+                context: { resume: source }
+`;
+      expect(parseAddressable(yaml).error).toBeNull();
+      expect(
+        parseAddressable(yaml.replace('depends_on: [local]', 'depends_on: []')).error?.error
+      ).toContain('upstream dependency');
+      expect(
+        parseAddressable(yaml.replace('depends_on: [source]', 'depends_on: []')).error?.error
+      ).toContain('upstream dependency');
+      expect(
+        parseAddressable(yaml.replace('id: outer', 'id: outer\n    provider: codex')).error?.error
+      ).toContain("consumer uses 'codex'");
+    });
+
+    it('rejects named resume from the same loop_group body', () => {
       const result = parseAddressable(`
 name: nested
 description: nested
@@ -6786,7 +7080,7 @@ nodes:
           depends_on: [source]
           context: { resume: source }
 `);
-      expect(result.error?.error).toContain('inside a loop_group body');
+      expect(result.error?.error).toContain('inside the same loop_group body');
     });
 
     it('rejects statically mismatched and fork-incapable providers', () => {
@@ -6806,10 +7100,12 @@ nodes:
       expect(mismatch.error?.error).toContain("source 'source' uses provider 'claude'");
       expect(mismatch.error?.error).toContain("consumer uses 'codex'");
 
-      const incapable = parseAddressable(`
+      registerCommunityProviders();
+      try {
+        const incapable = parseAddressable(`
 name: incapable
 description: incapable
-provider: codex
+provider: copilot
 nodes:
   - id: source
     prompt: source
@@ -6818,7 +7114,11 @@ nodes:
     depends_on: [source]
     context: { resume: source }
 `);
-      expect(incapable.error?.error).toContain("provider 'codex' does not support sessionFork");
+        expect(incapable.error?.error).toContain("provider 'copilot' does not support sessionFork");
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
     });
 
     it('defers implicit provider resolution to runtime', () => {
@@ -6910,6 +7210,7 @@ nodes:
         credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
         parseConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
+          backgroundWork: 'unobserved' as const,
           sessionResume: false,
           mcp: false,
           hooks: false,
@@ -6936,6 +7237,7 @@ nodes:
           }),
           getType: () => 'no-resume-skip-test',
           getCapabilities: () => ({
+            backgroundWork: 'unobserved' as const,
             sessionResume: false,
             mcp: false,
             hooks: false,
@@ -6976,14 +7278,20 @@ nodes:
     });
 
     it('warns, and still loads, when the provider cannot fork the persisted session', () => {
-      const codex = parseWorkflow(
-        `name: t\ndescription: t\nprovider: codex\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
-        't.yaml'
-      );
-      expect(codex.error).toBeNull();
-      expect(codex.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
-        expect.stringContaining("Node 'planner'"),
-      ]);
+      registerCommunityProviders();
+      try {
+        const copilot = parseWorkflow(
+          `name: t\ndescription: t\nprovider: copilot\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
+          't.yaml'
+        );
+        expect(copilot.error).toBeNull();
+        expect(copilot.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
+          expect.stringContaining("Node 'planner'"),
+        ]);
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
 
       const claude = parseWorkflow(
         `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
@@ -7003,6 +7311,7 @@ nodes:
         credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
         parseConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
+          backgroundWork: 'unobserved' as const,
           sessionResume: false,
           mcp: false,
           hooks: false,
@@ -7029,6 +7338,7 @@ nodes:
           }),
           getType: () => 'no-resume-test',
           getCapabilities: () => ({
+            backgroundWork: 'unobserved' as const,
             sessionResume: false,
             mcp: false,
             hooks: false,
@@ -7720,6 +8030,41 @@ nodes:
       ]);
       expect(pw).toHaveLength(1);
       expect(pw[0]).toContain("Node 'iterate': node-level loop 'interactive:' is deprecated");
+    });
+
+    it('does not warn about nested group pauses when an enclosing group owns a named session', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: source',
+        '    prompt: Start the owner session',
+        '  - id: outer',
+        '    depends_on: [source]',
+        '    loop_group:',
+        '      until_bash: "exit 1"',
+        '      max_iterations: 2',
+        '      nodes:',
+        '        - id: owner',
+        '          prompt: Continue',
+        '          context: { resume: source }',
+        '        - id: middle',
+        '          depends_on: [owner]',
+        '          loop_group:',
+        '            until_bash: "exit 1"',
+        '            max_iterations: 2',
+        '            nodes:',
+        '              - id: inner',
+        '                loop_group:',
+        '                  until_bash: "exit 1"',
+        '                  max_iterations: 2',
+        '                  interactive: true',
+        '                  gate_message: Review',
+        '                  nodes:',
+        '                    - id: work',
+        '                      prompt: Work',
+      ]);
+      expect(pw.some(w => w.includes('#2753'))).toBe(false);
     });
 
     it('warns on a gate/interactive loop_group nested inside a loop_group body', async () => {
@@ -9222,5 +9567,248 @@ nodes:
     );
     expect(result.error?.error).toContain('$LOOP_PREV.work.output.proposal.typo');
     expect(result.error?.error).toContain("field 'typo'");
+  });
+});
+
+describe('loop_group prose completion with structured terminal output (#2998)', () => {
+  function parseGroup(outputFormat?: Record<string, unknown>, untilBash?: string): ParseResult {
+    return parseWorkflow(
+      Bun.YAML.stringify({
+        name: 'structured-group',
+        description: 'test',
+        nodes: [
+          {
+            id: 'refine',
+            loop_group: {
+              until: 'DONE',
+              ...(untilBash === undefined ? {} : { until_bash: untilBash }),
+              max_iterations: 3,
+              nodes: [
+                { id: 'work', prompt: 'work' },
+                {
+                  id: 'review',
+                  depends_on: ['work'],
+                  prompt: 'review',
+                  ...(outputFormat === undefined ? {} : { output_format: outputFormat }),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      'structured-group.yaml'
+    );
+  }
+
+  it('rejects an object terminal schema when until is the sole completion channel', () => {
+    const result = parseGroup({ type: 'object', properties: { done: { type: 'boolean' } } });
+    expect(result.workflow).toBeNull();
+    expect(result.error?.errorType).toBe('validation_error');
+    expect(result.error?.error).toContain("'refine'");
+    expect(result.error?.error).toContain("'review'");
+    expect(result.error?.error).toContain('serialized structured output');
+    expect(result.error?.error).toContain('until_bash');
+    expect(result.error?.error).toContain('structured field');
+  });
+
+  it.each([
+    { type: 'array' },
+    { type: 'number' },
+    { type: 'integer' },
+    { type: 'boolean' },
+    { type: 'null' },
+    { type: ['object', 'null'] },
+  ])('rejects a non-string terminal schema: %j', schema => {
+    expect(parseGroup(schema).error?.errorType).toBe('validation_error');
+  });
+
+  it.each([{}, { type: ['string', 'object'] }])(
+    'accepts a schema that permits string output: %j',
+    schema => {
+      expect(parseGroup(schema).error).toBeNull();
+    }
+  );
+
+  it('accepts a terminal node without output_format', () => {
+    expect(parseGroup().error).toBeNull();
+  });
+
+  it('accepts a string terminal schema', () => {
+    expect(parseGroup({ type: 'string' }).error).toBeNull();
+  });
+
+  it('accepts an object terminal schema with until_bash and retains the deprecation warning', () => {
+    const result = parseGroup(
+      { type: 'object', properties: { done: { type: 'boolean' } } },
+      'exit 0'
+    );
+    expect(result.error).toBeNull();
+    expect(
+      result.warnings?.some(w => w.includes("'loop_group.until' completion signal is deprecated"))
+    ).toBe(true);
+  });
+});
+
+it('parsing uses only the supplied registry for provider identity', () => {
+  const claude = providerRegistry.get('claude');
+  if (!claude) throw new Error('test registry must contain Claude');
+  const custom = { ...claude, id: 'custom' };
+  const providers = {
+    get: (id: string) => (id === custom.id ? custom : undefined),
+    list: () => [custom],
+  };
+  const yaml = `name: registry-port
+description: Registry boundary
+provider: custom
+nodes:
+  - id: act
+    prompt: Do something
+`;
+  expect(parseWorkflowWithProviders(yaml, 'registry.yaml', providers).error).toBeNull();
+  const result = parseWorkflowWithProviders(
+    yaml.replace('provider: custom', 'provider: claude'),
+    'registry.yaml',
+    providers
+  );
+  expect(result.error?.error).toBe(
+    "Provider 'claude' is not installed. Install it with: archon provider install claude"
+  );
+});
+
+describe('when syntax validation', () => {
+  function workflowWithWhen(when: string): string {
+    return `name: when-syntax
+description: Condition syntax
+nodes:
+  - id: a
+    bash: echo x
+  - id: b
+    bash: echo y
+  - id: c
+    bash: echo z
+  - id: guarded
+    bash: echo run
+    depends_on: [a, b, c]
+    when: ${JSON.stringify(when)}
+`;
+  }
+
+  it('rejects grouping with a diagnostic naming the node and parentheses', () => {
+    const result = parseWorkflow(
+      workflowWithWhen("$a.output == 'x' && ($b.output == 'y' || $c.output == 'z')"),
+      'when-syntax.yaml'
+    );
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain("Node 'guarded'");
+    expect(result.error?.error).toContain('parentheses');
+  });
+
+  it('rejects malformed loop-body conditions while accepting scoped prior output', () => {
+    const yaml = `name: prior-condition
+description: Prior iteration syntax
+nodes:
+  - id: refine
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      nodes:
+        - id: work
+          bash: echo done
+        - id: guarded
+          bash: echo run
+          depends_on: [work]
+          when: "$LOOP_PREV.work.output == 'done' && ($work.output == 'done')"
+`;
+    const result = parseWorkflow(yaml, 'prior-condition.yaml');
+    expect(result.error?.error).toContain("Node 'guarded' field 'when'");
+    expect(result.error?.error).toContain('parentheses');
+    expect(
+      parseWorkflow(
+        yaml.replace("&& ($work.output == 'done')", "&& $work.output == 'done'"),
+        'prior-condition.yaml'
+      ).error
+    ).toBeNull();
+  });
+
+  it.each([
+    'not a condition',
+    "$a.output = 'x'",
+    '$a.output ==',
+    '$a.output == "x"',
+    "$a.output == 'unterminated",
+    "$a.output == 'x' &&",
+    "|| $a.output == 'x'",
+    "$a.output == 'x' || || $b.output == 'y'",
+    "$a.output == 'x' && not-valid",
+    "$a.output == 'x' || not-valid",
+    "$a.output == 'absent' && not-valid",
+    "($a.output == 'x')",
+    "$a.output == 'x' && ($b.output == 'y' || $c.output == 'z')",
+  ])('rejects invalid runtime syntax: %s', when => {
+    const outputs = new Map([
+      ['a', { state: 'completed' as const, output: 'x' }],
+      ['b', { state: 'completed' as const, output: 'y' }],
+      ['c', { state: 'completed' as const, output: 'z' }],
+    ]);
+    expect(evaluateCondition(when, outputs)).toEqual({ result: false, parsed: false });
+    const result = parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml');
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain("Node 'guarded' field 'when'");
+  });
+
+  it.each([
+    "$a.output > 'high'",
+    "$a.output > ''",
+    '$a.output <= true',
+    "$a.output == 'x' || $b.output >= 'many'",
+  ])('rejects a numeric comparison against a non-numeric literal: %s', when => {
+    // A numeric output on every side still fails closed, so the node could never run.
+    const outputs = new Map(
+      ['a', 'b', 'c'].map(id => [id, { state: 'completed' as const, output: '90' }])
+    );
+    expect(evaluateCondition(when, outputs)).toEqual({ result: false, parsed: false });
+    const result = parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml');
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain("Node 'guarded' field 'when'");
+  });
+
+  it('names grouping only when the expression has a parenthesis outside quotes', () => {
+    const typo = parseWorkflow(workflowWithWhen("$a.output = '(x)'"), 'when-syntax.yaml');
+    expect(typo.error?.error).toContain('unsupported condition syntax');
+    expect(typo.error?.error).not.toContain('parentheses');
+    const grouped = parseWorkflow(workflowWithWhen("($a.output == 'x')"), 'when-syntax.yaml');
+    expect(grouped.error?.error).toContain('Grouping parentheses are not supported');
+  });
+
+  it('rejects unsupported syntax on an include node', () => {
+    const result = parseWorkflow(
+      `name: include-when
+description: Condition on an include directive
+nodes:
+  - id: a
+    bash: echo x
+  - id: blk
+    include: block
+    depends_on: [a]
+    when: "$a.output > 'high'"
+`,
+      'include-when.yaml'
+    );
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain(
+      "Node 'blk' field 'when' has unsupported condition syntax"
+    );
+  });
+
+  it.each([
+    "$a.output == 'x' && $b.output == 'y' || $a.output == 'x' && $c.output == 'z'",
+    "$a.output == '(x)'",
+    "$a.output == 'x && y || z'",
+    "$a.output != ''",
+    '$a.output >= 0.9',
+    "$a.output < '-3'",
+    '$a.output == true',
+  ])('loads supported syntax: %s', when => {
+    expect(parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml').error).toBeNull();
   });
 });

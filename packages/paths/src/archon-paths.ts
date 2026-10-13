@@ -272,8 +272,8 @@ export function getArchonTempPath(): string {
 /**
  * Get the global config file path
  */
-export function getArchonConfigPath(): string {
-  return join(getArchonHome(), 'config.yaml');
+export function getArchonConfigPath(archonHome: string = getArchonHome()): string {
+  return join(archonHome, 'config.yaml');
 }
 
 /** Path to the compiled CLI discovery manifest (`<ARCHON_HOME>/install.json`). */
@@ -561,6 +561,25 @@ export function getAppArchonBasePath(): string {
  */
 export function getSourceWebDistDir(): string {
   return join(getSourceRepoRoot(), 'packages', 'web', 'dist');
+}
+
+export function getSourceProviderEntry(id: string): string {
+  return join(
+    getSourceRepoRoot(),
+    'packages',
+    'providers',
+    'src',
+    ...(id === 'pi' ? ['community', 'pi'] : [id]),
+    'plugin.ts'
+  );
+}
+
+export function getSourceServerEntry(): string {
+  return join(getSourceRepoRoot(), 'packages', 'server', 'src', 'bin.ts');
+}
+
+export function getServerDistDir(version: string): string {
+  return join(getArchonHome(), 'server', version);
 }
 
 /**

@@ -67,6 +67,7 @@ const CLAUDE_RENAMED_TOOLS = {
 } as const;
 
 export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
+  backgroundWork: 'reported',
   sessionResume: true,
   sessionFork: true,
   mcp: true,

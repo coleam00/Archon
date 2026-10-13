@@ -7,8 +7,6 @@ import {
   getTriggerForCommand,
   safeDeactivateSession,
 } from './session-transitions';
-// Spied (NOT mock.module'd — db/sessions.test.ts tests the real module in this
-// same bun test batch, and mock.module pollution is process-global/irreversible).
 import * as sessionDb from '../db/sessions';
 import { SessionNotFoundError } from '../db/sessions';
 

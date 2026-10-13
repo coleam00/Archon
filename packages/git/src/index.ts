@@ -31,6 +31,10 @@ export {
   getGitCheckoutIdentity,
   CanonicalRepoPathUnavailableError,
   verifyWorktreeOwnership,
+  isWorktreeRegistered,
+  readWorktreeRegistration,
+  isSameWorktreePath,
+  toNativeWorktreePath,
 } from './worktree';
 export type {
   WorktreeLayout,
@@ -75,3 +79,11 @@ export {
   addSafeDirectory,
 } from './repo';
 export type { CloneCredentials, CloneRepositoryOptions } from './repo';
+
+export {
+  inspectRemoteBranches,
+  validateBranchName,
+  ConfiguredBaseBranchNotFoundError,
+  InvalidBaseBranchError,
+} from './remote-branches';
+export type { RemoteBranchTarget, RemoteBranches } from './remote-branches';

@@ -1,19 +1,22 @@
+// @archon-test-isolated
 /**
  * Provider admission against a real SQLite database: the capped wrapper, the
  * attempt-holder liveness rule, and cross-process exclusion.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { removeTempTree } from '@archon/paths/test-utils';
 import {
+  piDescriptor,
   getRegistration,
   isRegisteredProvider,
-  registerBuiltinProviders,
   registerProvider,
 } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { MessageChunk, ProviderAdmissionEvent, SendQueryOptions } from '@archon/providers';
 import { closeDatabase, getDatabase, resetDatabase } from '../db/connection';
 import { SqliteAdapter } from '../db/adapters/sqlite';
@@ -23,8 +26,9 @@ import {
   releaseProviderAttemptHolder,
   tryAdmitProviderAttempt,
 } from '../db/provider-attempts';
-import { currentProcessOwner } from '../db/process-owner';
+import { currentProcessOwner } from '@archon/paths/process-owner';
 import { ProviderConcurrencyConfigError } from '../config/provider-concurrency';
+import { processProviderRegistration } from '../providers/process-registration';
 import { getAgentProvider, ProviderAdmissionAbortedError } from './provider-admission';
 
 const PROVIDER = 'admission-fake';
@@ -38,6 +42,17 @@ let calls: (SendQueryOptions | undefined)[] = [];
 
 beforeAll(() => {
   registerBuiltinProviders();
+  const piArgv = [
+    process.execPath,
+    '--no-env-file',
+    join(import.meta.dir, '../providers/fixtures/process-provider.ts'),
+    'pi-gated',
+  ] as const;
+  registerProvider({
+    ...processProviderRegistration(piDescriptor, piArgv),
+    factory: () =>
+      processProviderRegistration(piDescriptor, [...piArgv, join(root, 'turn')]).factory(),
+  });
   if (isRegisteredProvider(PROVIDER)) return;
   const claude = getRegistration('claude');
   registerProvider({
@@ -46,6 +61,20 @@ beforeAll(() => {
     displayName: 'Admission fake',
     builtIn: false,
     factory: () => ({
+      async diagnose() {
+        return {
+          checks: [
+            { id: this.getType(), label: 'Provider', status: 'ok' as const, message: 'Ready' },
+          ],
+        };
+      },
+      async listModels({ signal }) {
+        signal.throwIfAborted();
+        return { models: [{ id: `${this.getType()}/model` }] };
+      },
+      async resolveCredentialModel(request): Promise<string> {
+        return `${this.getType()}/${request.model ?? 'default'}`;
+      },
       checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => PROVIDER,
       getCapabilities: () => claude.capabilities,
@@ -111,6 +140,21 @@ function gated(): {
   };
 }
 
+/** Resolves once an attempt has been refused a slot and is polling for one. */
+function waitingEvent(): {
+  onAdmission: (event: ProviderAdmissionEvent) => void;
+  reached: Promise<void>;
+} {
+  let markWaiting!: () => void;
+  const reached = new Promise<void>(resolve => (markWaiting = resolve));
+  return {
+    reached,
+    onAdmission: event => {
+      if (event.state === 'waiting') markWaiting();
+    },
+  };
+}
+
 async function drain(stream: AsyncGenerator<MessageChunk>): Promise<void> {
   for await (const _ of stream) {
     // consume
@@ -154,14 +198,20 @@ describe('provider admission wrapper', () => {
     const second = gated();
     scripts.set('a', first.script).set('b', second.script);
     const events: ProviderAdmissionEvent[] = [];
+    const waiting = waitingEvent();
     const provider = getAgentProvider(PROVIDER, POLL_MS);
 
     const firstRun = drain(provider.sendQuery('a', '/tmp'));
     await first.started;
     const secondRun = drain(
-      provider.sendQuery('b', '/tmp', undefined, { onAdmission: event => events.push(event) })
+      provider.sendQuery('b', '/tmp', undefined, {
+        onAdmission: event => {
+          events.push(event);
+          waiting.onAdmission(event);
+        },
+      })
     );
-    await Bun.sleep(POLL_MS * 5);
+    await waiting.reached;
     expect(calls).toHaveLength(1);
     expect(events.map(e => e.state)).toEqual(['waiting']);
     expect(await holderCount()).toBe(1);
@@ -187,10 +237,14 @@ describe('provider admission wrapper', () => {
     await first.started;
 
     const controller = new AbortController();
+    const waiting = waitingEvent();
     const waiter = drain(
-      provider.sendQuery('b', '/tmp', undefined, { abortSignal: controller.signal })
+      provider.sendQuery('b', '/tmp', undefined, {
+        abortSignal: controller.signal,
+        onAdmission: waiting.onAdmission,
+      })
     );
-    await Bun.sleep(POLL_MS * 3);
+    await waiting.reached;
     controller.abort();
     await expect(waiter).rejects.toBeInstanceOf(ProviderAdmissionAbortedError);
     expect(calls).toHaveLength(1);
@@ -242,11 +296,15 @@ describe('provider admission wrapper', () => {
     await Promise.all([a.started, b.started]);
 
     await writeCaps({ [PROVIDER]: 1 });
-    const runC = drain(provider.sendQuery('c', '/tmp'));
     a.release();
     await runA;
-    await Bun.sleep(POLL_MS * 5);
-    // One live holder already meets the lowered cap.
+    // C starts once only B holds: one live holder already meets the lowered cap, so
+    // C's first poll is refused.
+    const waiting = waitingEvent();
+    const runC = drain(
+      provider.sendQuery('c', '/tmp', undefined, { onAdmission: waiting.onAdmission })
+    );
+    await waiting.reached;
     expect(calls).toHaveLength(2);
     expect(await holderCount()).toBe(1);
 
@@ -282,8 +340,11 @@ describe('provider admission wrapper', () => {
     const provider = getAgentProvider(PROVIDER, POLL_MS);
     const runA = drain(provider.sendQuery('a', '/tmp'));
     await a.started;
-    const runB = drain(provider.sendQuery('b', '/tmp'));
-    await Bun.sleep(POLL_MS * 3);
+    const bWaiting = waitingEvent();
+    const runB = drain(
+      provider.sendQuery('b', '/tmp', undefined, { onAdmission: bWaiting.onAdmission })
+    );
+    await bWaiting.reached;
     expect(calls).toHaveLength(1);
 
     // Raised while B waits: B is admitted beside A.
@@ -293,8 +354,11 @@ describe('provider admission wrapper', () => {
 
     // Removed while C waits: C proceeds uncapped without a holder.
     await writeCaps({ [PROVIDER]: 2 });
-    const runC = drain(provider.sendQuery('c', '/tmp'));
-    await Bun.sleep(POLL_MS * 3);
+    const cWaiting = waitingEvent();
+    const runC = drain(
+      provider.sendQuery('c', '/tmp', undefined, { onAdmission: cWaiting.onAdmission })
+    );
+    await cWaiting.reached;
     expect(calls).toHaveLength(2);
     await writeCaps({ claude: 1 });
     await c.started;
@@ -384,7 +448,7 @@ describe('cross-process admission', () => {
     // Prime the schema once so the children only contend for the slot.
     await getDatabase().query('SELECT 1');
     const script = `
-      import { registerBuiltinProviders } from './packages/providers/src/index.ts';
+      import { registerBuiltinProviders } from './packages/providers/src/in-process.ts';
       import { tryAdmitProviderAttempt, releaseProviderAttempt } from './packages/core/src/db/provider-attempts.ts';
       registerBuiltinProviders();
       const id = crypto.randomUUID();
@@ -496,3 +560,92 @@ describe('schema upgrade', () => {
     }
   });
 });
+
+test('forwards the provider-owned credential model resolver with its receiver', async () => {
+  const provider = getAgentProvider(PROVIDER);
+  expect(await provider.resolveCredentialModel?.({ cwd: root, model: 'selected' })).toBe(
+    `${PROVIDER}/selected`
+  );
+  expect(calls).toHaveLength(0);
+  expect(await holderCount()).toBe(0);
+});
+
+test('forwards provider diagnostics and model listing without acquiring capacity', async () => {
+  const provider = getAgentProvider(PROVIDER);
+  expect(await provider.diagnose?.({})).toEqual({
+    checks: [{ id: PROVIDER, label: 'Provider', status: 'ok', message: 'Ready' }],
+  });
+  expect(await provider.listModels?.({ signal: new AbortController().signal })).toEqual({
+    models: [{ id: `${PROVIDER}/model` }],
+  });
+  const controller = new AbortController();
+  controller.abort(new Error('cancelled'));
+  const error = await provider
+    .listModels?.({ signal: controller.signal })
+    .catch((cause: unknown) => cause);
+  expect(error).toEqual(new Error('cancelled'));
+  expect(calls).toHaveLength(0);
+  expect(await holderCount()).toBe(0);
+});
+
+test.each([{ pi: 1 }, { pi: 1, host: 2 }, { pi: 2, host: 1 }])(
+  'Pi maxConcurrent $pi with host cap $host serializes real plugin processes and releases an aborted waiter',
+  async ({ pi, host }) => {
+    await writeFile(
+      join(root, 'config.yaml'),
+      `assistants:\n  pi:\n    maxConcurrent: ${pi}\n${host === undefined ? '' : `concurrency:\n  providers:\n    pi: ${host}\n`}`
+    );
+    const cleanup = new AbortController();
+    const options = { abortSignal: cleanup.signal };
+    const first = getAgentProvider('pi', POLL_MS).sendQuery('first', root, undefined, options);
+    const secondWaiting = waitingEvent();
+    const secondRun = getAgentProvider('pi', POLL_MS).sendQuery('second', root, undefined, {
+      abortSignal: cleanup.signal,
+      onAdmission: secondWaiting.onAdmission,
+    });
+    const waiting = waitingEvent();
+    const abort = new AbortController();
+    const cancelled = getAgentProvider('pi', POLL_MS).sendQuery('cancelled', root, undefined, {
+      ...options,
+      abortSignal: abort.signal,
+      onAdmission: waiting.onAdmission,
+    });
+    const pending: Promise<unknown>[] = [];
+    try {
+      expect((await first.next()).value).toEqual({ type: 'agent_message_chunk', text: 'started' });
+      const nextSecond = secondRun.next();
+      const cancelledNext = cancelled.next();
+      pending.push(
+        nextSecond.catch(() => undefined),
+        cancelledNext.catch(() => undefined)
+      );
+      expect(
+        await Promise.race([
+          secondWaiting.reached.then(() => 'waiting'),
+          nextSecond.then(() => 'started'),
+        ])
+      ).toBe('waiting');
+      await waiting.reached;
+      expect(existsSync(join(root, 'turn.second.pid'))).toBe(false);
+      expect(existsSync(join(root, 'turn.cancelled.pid'))).toBe(false);
+      abort.abort();
+      await expect(cancelledNext).rejects.toThrow(ProviderAdmissionAbortedError);
+      await writeFile(join(root, 'turn.first.release'), 'release');
+      await drain(first);
+      expect((await nextSecond).value).toEqual({ type: 'agent_message_chunk', text: 'started' });
+      await writeFile(join(root, 'turn.second.release'), 'release');
+      await drain(secondRun);
+      const rows = await listProviderAttemptHolders();
+      expect(rows).toEqual([]);
+    } finally {
+      cleanup.abort();
+      abort.abort();
+      await Promise.all(pending);
+      await Promise.allSettled([
+        first.return(undefined),
+        secondRun.return(undefined),
+        cancelled.return(undefined),
+      ]);
+    }
+  }
+);

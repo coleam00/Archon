@@ -234,7 +234,7 @@ describe('CopilotProvider.sendQuery', () => {
   });
 
   test.each(['max', 'ultra', 'persistent'] as const)(
-    'workflow `effort: %s` maps to SDK `xhigh`',
+    'workflow `effort: %s` maps to SDK `max`',
     async effort => {
       const session = makeFakeSession();
       nextCreateSessionResult = session;
@@ -251,12 +251,12 @@ describe('CopilotProvider.sendQuery', () => {
       await collect(gen);
 
       const opts = createSessionSpy.mock.calls[0]![0] as { reasoningEffort?: string };
-      expect(opts.reasoningEffort).toBe('xhigh');
+      expect(opts.reasoningEffort).toBe('max');
     }
   );
 
   // #2556: `minimal` is a rung on Archon's shared ladder that Copilot's SDK
-  // lacks, so it clamps to the SDK's shallowest — the same treatment `max`
+  // lacks, so it clamps to the SDK's shallowest — the same treatment `ultra`
   // already gets at the top end. Only a value that is not a rung at all is
   // dropped.
   test('effort: minimal clamps to the SDK shallowest rung', async () => {

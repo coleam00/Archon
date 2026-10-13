@@ -1,4 +1,3 @@
-import { settlingProvider } from './test-settling-provider';
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
@@ -6,6 +5,8 @@ import { settlingProvider } from './test-settling-provider';
  * without actually running uv/bun, and are isolated from dag-executor.test.ts
  * to avoid mock.module() pollution.
  */
+import { providerRegistry } from '@archon/providers';
+import { settlingProvider } from './test-settling-provider';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdir, rm } from 'fs/promises';
@@ -59,8 +60,108 @@ import type { IWorkflowStore } from './store';
 
 function createMockStore(): IWorkflowStore {
   return {
+    getStateDocument: mock<IWorkflowStore['getStateDocument']>(() => {
+      throw new Error('Unexpected getStateDocument');
+    }),
+    putStateDocument: mock<IWorkflowStore['putStateDocument']>(() => {
+      throw new Error('Unexpected putStateDocument');
+    }),
+    patchStateDocument: mock<IWorkflowStore['patchStateDocument']>(() => {
+      throw new Error('Unexpected patchStateDocument');
+    }),
+    deleteStateDocument: mock<IWorkflowStore['deleteStateDocument']>(() => {
+      throw new Error('Unexpected deleteStateDocument');
+    }),
+    listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(() => {
+      throw new Error('Unexpected listStateRevisions');
+    }),
+    pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
+      throw new Error('Unexpected pruneStateRevisions');
+    }),
+    admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
+      throw new Error('Unexpected admitResourceStart');
+    }),
+    drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
+      throw new Error('Unexpected drainResourceStarts');
+    }),
+    acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
+      throw new Error('Unexpected acceptStartReceipt');
+    }),
+    getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(() => {
+      throw new Error('Unexpected getStartReceipt');
+    }),
+    listStartReceipts: mock<IWorkflowStore['listStartReceipts']>(() => {
+      throw new Error('Unexpected listStartReceipts');
+    }),
+    listPendingStartBindings: mock<IWorkflowStore['listPendingStartBindings']>(() => {
+      throw new Error('Unexpected listPendingStartBindings');
+    }),
+    getResourceStartRequest: mock<IWorkflowStore['getResourceStartRequest']>(() => {
+      throw new Error('Unexpected getResourceStartRequest');
+    }),
+    listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(() => {
+      throw new Error('Unexpected listQueuedResourceStartsForHost');
+    }),
+    withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(() => {
+      throw new Error('Unexpected withdrawQueuedResourceStart');
+    }),
+    claimStartBindingPreparation: mock<IWorkflowStore['claimStartBindingPreparation']>(() => {
+      throw new Error('Unexpected claimStartBindingPreparation');
+    }),
+    completeStartBindingPreparation: mock<IWorkflowStore['completeStartBindingPreparation']>(() => {
+      throw new Error('Unexpected completeStartBindingPreparation');
+    }),
+    failStartBindingPreparation: mock<IWorkflowStore['failStartBindingPreparation']>(() => {
+      throw new Error('Unexpected failStartBindingPreparation');
+    }),
+    resetStartBindingPreparation: mock<IWorkflowStore['resetStartBindingPreparation']>(() => {
+      throw new Error('Unexpected resetStartBindingPreparation');
+    }),
+    listDueWorkflowContinuations: mock<IWorkflowStore['listDueWorkflowContinuations']>(() => {
+      throw new Error('Unexpected listDueWorkflowContinuations');
+    }),
+    deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
+      throw new Error('Unexpected deferWorkflowContinuation');
+    }),
+    signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
+      throw new Error('Unexpected signalWorkflowWait');
+    }),
+    resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
+      throw new Error('Unexpected resolveApprovalGate');
+    }),
+    resolveAndCancelApprovalGate: mock<IWorkflowStore['resolveAndCancelApprovalGate']>(() => {
+      throw new Error('Unexpected resolveAndCancelApprovalGate');
+    }),
+    cancelResumableRunsForConversation: mock<IWorkflowStore['cancelResumableRunsForConversation']>(
+      () => {
+        throw new Error('Unexpected cancelResumableRunsForConversation');
+      }
+    ),
+    deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
+      throw new Error('Unexpected deleteWorkflowNodeSessions');
+    }),
+    findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
+    listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
+      throw new Error('Unexpected listWorkflowRuns');
+    }),
     createWorkflowRun: mock(() =>
       Promise.resolve({
+        origin: { conversationId: 'conv-mock' },
         id: 'mock-run-id',
         workflow_name: 'mock',
         conversation_id: 'conv-mock',
@@ -92,6 +193,7 @@ function createMockStore(): IWorkflowStore {
     findResumableRun: mock(() => Promise.resolve(null)),
     resumeWorkflowRun: mock(() =>
       Promise.resolve({
+        origin: { conversationId: 'conv-mock' },
         id: 'mock-run-id',
         workflow_name: 'mock',
         conversation_id: 'conv-mock',
@@ -132,11 +234,12 @@ function createMockStore(): IWorkflowStore {
         },
       })
     ),
-    rewriteApprovalContext: mock(() => Promise.resolve({ resolved: true })),
+    failPausedApproval: mock(() => Promise.resolve({ failed: true })),
     claimWriteback: mock(() => Promise.resolve({ claimed: true })),
     releaseWritebackClaim: mock(() => Promise.resolve()),
     cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: false })),
     cancelFanOutRun: mock(() => Promise.resolve({ cancelled: false })),
+    setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
     createWorkflowEvent: mock(() => Promise.resolve()),
     persistWorkflowEvent: mock(() => Promise.resolve()),
     persistWorkflowEventIfRunning: mock(() => Promise.resolve({ persisted: true })),
@@ -171,6 +274,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
   checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
   getType: () => 'claude',
   getCapabilities: () => ({
+    backgroundWork: 'unobserved' as const,
     sessionResume: true,
     mcp: true,
     hooks: true,
@@ -194,6 +298,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
 
 function createMockDeps(): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store: createMockStore(),
     getAgentProvider: provider => settlingProvider(mockGetAgentProvider(provider)),
     loadConfig: mock(() =>
@@ -218,6 +323,7 @@ function createMockPlatform(): IWorkflowPlatform {
 
 function makeWorkflowRun(id: string): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-deps' },
     id,
     workflow_name: 'deps-test',
     conversation_id: 'conv-deps',

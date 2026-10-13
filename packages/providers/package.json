@@ -7,7 +7,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
-    "./structured-output": "./src/shared/structured-output.ts",
     "./claude/provider": "./src/claude/provider.ts",
     "./claude/config": "./src/claude/config.ts",
     "./claude/binary-resolver": "./src/claude/binary-resolver.ts",
@@ -16,34 +15,47 @@
     "./codex/binary-resolver": "./src/codex/binary-resolver.ts",
     "./codex/setup-env": "./src/codex/setup-env.ts",
     "./mcp/config": "./src/mcp/config.ts",
-    "./oauth": "./src/oauth.ts",
     "./community/pi": "./src/community/pi/index.ts",
     "./community/copilot": "./src/community/copilot/index.ts",
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
     "./community/opencode/runtime": "./src/community/opencode/runtime.ts",
     "./errors": "./src/errors.ts",
-    "./registry": "./src/registry.ts"
+    "./registry": "./src/registry.ts",
+    "./claude/plugin": "./src/claude/plugin.ts",
+    "./claude/descriptor": "./src/claude/descriptor.ts",
+    "./claude": "./src/claude/index.ts",
+    "./codex/plugin": "./src/codex/plugin.ts",
+    "./codex/descriptor": "./src/codex/descriptor.ts",
+    "./codex": "./src/codex/index.ts",
+    "./pi/plugin": "./src/community/pi/plugin.ts",
+    "./pi/extension-error-broker": "./src/community/pi/extension-error-broker.ts",
+    "./pi/model-ref": "./src/community/pi/model-ref.ts",
+    "./pi/config": "./src/community/pi/config.ts",
+    "./pi/descriptor": "./src/community/pi/descriptor.ts",
+    "./pi": "./src/community/pi/index.ts",
+    "./in-process": "./src/in-process.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.287",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.289",
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
-    "@github/copilot-sdk": "~1.0.1",
-    "@earendil-works/pi-ai": "^1.0.2",
-    "@earendil-works/pi-coding-agent": "^1.0.2",
-    "@opencode-ai/sdk": "^1.17.3",
+    "@earendil-works/pi-ai": "^1.0.4",
+    "@earendil-works/pi-coding-agent": "^1.0.4",
+    "@github/copilot-sdk": "~1.0.16",
     "@openai/codex": "0.160.0",
+    "@opencode-ai/sdk": "^1.18.34",
     "@sinclair/typebox": "^0.34.41",
-    "ajv": "^8.20.0",
     "jsonrepair": "^3.14.0",
+    "undici": "8.10.2",
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "pino": "^9"
+    "pino": "^9",
+    "ajv": "^8.20.0"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -68,15 +80,6 @@
     ],
     [
       "src/registry.test.ts"
-    ],
-    [
-      "src/types.test.ts"
-    ],
-    [
-      "src/community/_template/capabilities.test.ts"
-    ],
-    [
-      "src/oauth.test.ts"
     ],
     [
       "src/codex/binary-guard.test.ts"
@@ -149,6 +152,12 @@
       "src/community/pi/provider-bedrock-register.test.ts"
     ],
     [
+      "src/community/pi/provider-oauth-register.test.ts"
+    ],
+    [
+      "src/community/pi/pi-sdk-instance.test.ts"
+    ],
+    [
       "src/community/pi/ui-context-stub.test.ts"
     ],
     [
@@ -176,19 +185,23 @@
       "src/community/opencode/provider.test.ts"
     ],
     [
-      "src/shared/structured-output.test.ts"
+      "src/community/opencode/runtime.test.ts"
     ],
     [
-      "src/shared/skills.test.ts"
+      "src/shared/structured-output.test.ts"
     ],
     [
       "src/shared/resumed.test.ts"
     ],
     [
-      "src/shared/tool-calls.test.ts"
+      "src/shared/tool-calls.test.ts",
+      "src/shared/provider-event-schema.test.ts"
     ],
     [
       "src/mcp/config.test.ts"
+    ],
+    [
+      "src/claude/container-sdk.test.ts"
     ],
     [
       "src/claude/container-spawn.test.ts"
@@ -201,6 +214,12 @@
     ],
     [
       "src/community/pi/credential-check.test.ts"
+    ],
+    [
+      "src/plugin.test.ts"
+    ],
+    [
+      "src/shared/plugin-logging.test.ts"
     ]
   ]
 }

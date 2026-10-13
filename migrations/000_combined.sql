@@ -181,6 +181,7 @@ COMMENT ON TABLE remote_agent_isolation_environments IS
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
+  origin JSONB,
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workflow_name VARCHAR(255) NOT NULL,
   conversation_id UUID REFERENCES remote_agent_conversations(id) ON DELETE CASCADE,
@@ -483,8 +484,8 @@ ALTER TABLE remote_agent_user_ai_prefs
 -- Web auth (opt-in): role on the canonical user + Better Auth tables
 -- ============================================================================
 --
--- `role` is the durable identity seam: everyone defaults to 'admin' for now;
--- 'member' is reserved for future per-resource scoping. Visibility stays open.
+-- Keep 'admin' for older writers and existing rows. New writers explicitly
+-- insert 'member'; SQLite cannot change a column default without a table rebuild.
 ALTER TABLE remote_agent_users
   ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'admin';
 
@@ -527,6 +528,20 @@ CREATE TABLE IF NOT EXISTS remote_agent_schema_version (
   app_version VARCHAR(64) NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
+  project_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  value TEXT,
+  operation TEXT NOT NULL,
+  writer_kind TEXT NOT NULL CHECK (writer_kind IN ('run', 'operator')),
+  writer_run_id TEXT,
+  writer_node_path TEXT,
+  writer_identity TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (project_key, name, revision)
 );
 
 CREATE TABLE IF NOT EXISTS remote_agent_start_receipts (
@@ -666,6 +681,9 @@ CREATE TABLE IF NOT EXISTS remote_agent_auth_verification (
   "updatedAt" timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
+-- Optional provenance leaves shipped conversation columns valid for older writers.
+ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS origin JSONB;
+
 -- ============================================================================
 -- Indexes and column comments
 -- ============================================================================
@@ -777,6 +795,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_adopted_from
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_last_activity
   ON remote_agent_workflow_runs(last_activity_at)
   WHERE status = 'running';
+
+CREATE INDEX IF NOT EXISTS idx_state_revisions_created_at ON remote_agent_state_revisions(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_resource_start_queue
   ON remote_agent_resource_start_requests(resource_key, status, queue_position);

@@ -200,7 +200,7 @@ You've just built a condensed version of the pattern behind the bundled `archon-
 
 These options apply at the node level (inside `nodes:`). `provider` and `model` can also be set at the top level of the YAML to apply to all nodes.
 
-Named resume is available to command and prompt nodes when the source is a transitively upstream command, prompt, or plain loop on the same provider. Claude and Pi support immutable forks; Codex does not. An exact fork failure stops the node rather than silently starting fresh.
+Named resume is available to command and prompt nodes when the source is a transitively upstream command, prompt, or plain loop on the same provider. Claude, Codex and Pi support immutable forks. An exact fork failure stops the node rather than silently starting fresh.
 
 **Per-node model override:**
 ```yaml

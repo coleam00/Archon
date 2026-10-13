@@ -45,6 +45,8 @@ let repo: string;
 let hookLog: string;
 let stub: ReturnType<typeof Bun.serve>;
 let modelRequests: string[] = [];
+/** The request an unscoped turn sends: the control a scoped request is compared against. */
+let unscopedRequest: string;
 
 const bun = process.execPath;
 /** TOML basic strings take JSON string escapes, so a Windows path survives. */
@@ -199,6 +201,11 @@ beforeAll(async () => {
     ].join('\n')
   );
   await installPlugins(marketplaceFile);
+  // The first unscoped turn on a fresh home pays a one-time cost: on windows-latest it
+  // took 6 to 18 s, against 2 to 4 s for each later one. Taking it here, under the setup
+  // budget, keeps it off whichever case would otherwise run first.
+  await runRequest({});
+  unscopedRequest = modelRequests[0] ?? '';
 }, testTimeout(60_000));
 
 afterAll(async () => {
@@ -228,9 +235,13 @@ const PROMPT = 'Use $alpha:alpha-skill and $beta:beta-skill.';
 /** One workflow-node turn against the fixture home; returns its chunks. */
 async function runNode(
   nodeConfig: SendQueryOptions['nodeConfig'],
-  resumeSessionId?: string
+  resumeSessionId?: string,
+  forkSession?: boolean
 ): Promise<MessageChunk[]> {
-  return await runRequest({ nodeConfig: { nodeId: 'scoped', ...nodeConfig } }, resumeSessionId);
+  return await runRequest(
+    { nodeConfig: { nodeId: 'scoped', ...nodeConfig }, forkSession },
+    resumeSessionId
+  );
 }
 
 async function runRequest(
@@ -252,6 +263,14 @@ function resultOf(chunks: MessageChunk[]): Extract<MessageChunk, { type: 'result
   const result = chunks.find(c => c.type === 'result');
   if (result?.type !== 'result') throw new Error('no result chunk');
   return result;
+}
+
+/** The rollout file Codex writes for `threadId` under the fixture home. */
+async function rolloutOf(threadId: string): Promise<string> {
+  for await (const path of new Bun.Glob('sessions/**/*.jsonl').scan(home)) {
+    if (path.endsWith(`${threadId}.jsonl`)) return join(home, path);
+  }
+  throw new Error(`no rollout for thread ${threadId}`);
 }
 
 interface Seen {
@@ -297,10 +316,7 @@ describe('Codex capability scope on the real binary', () => {
   test(
     'a title keeps native guidance and hooks but has no ambient capabilities and a read-only rollout',
     async () => {
-      await runRequest({});
-      expect(modelRequests[0]).toContain('AMBIENT-CATALOGUE-MARKER');
-      modelRequests = [];
-      await rm(hookLog, { force: true });
+      expect(unscopedRequest).toContain('AMBIENT-CATALOGUE-MARKER');
       const result = resultOf(await runRequest({ purpose: 'title-generation' }));
       expect(result.failure?.evidence).toContain('stub model');
       expect(await seen()).toEqual({ tools: [], skills: [], hooks: ['user'], guidance: true });
@@ -309,12 +325,8 @@ describe('Codex capability scope on the real binary', () => {
       expect(modelRequests[0]).not.toContain('## Skills');
       expect(modelRequests[0]).not.toContain('# Apps');
       expect(modelRequests[0]).not.toContain('# Plugins');
-      expect(result.sessionId).toBeDefined();
-      const rollouts: string[] = [];
-      for await (const path of new Bun.Glob('sessions/**/*.jsonl').scan(home)) rollouts.push(path);
-      const file = rollouts.find(path => path.endsWith(`${result.sessionId}.jsonl`));
-      if (!file) throw new Error('title rollout missing');
-      const entries: unknown[] = (await readFile(join(home, file), 'utf8'))
+      if (!result.sessionId) throw new Error('title thread missing');
+      const entries: unknown[] = (await readFile(await rolloutOf(result.sessionId), 'utf8'))
         .trim()
         .split('\n')
         .map(line => JSON.parse(line) as unknown);
@@ -372,6 +384,37 @@ describe('Codex capability scope on the real binary', () => {
       await rm(hookLog, { force: true });
       await runNode({ plugins: ['alpha@fixture'] }, sessionId);
       expect(await seen()).toEqual(ALPHA_ONLY);
+    },
+    testTimeout(20_000)
+  );
+
+  test(
+    'a forked thread is a new thread that keeps a named plugin’s scope',
+    async () => {
+      const source = resultOf(await runNode({ plugins: ['alpha@fixture'] })).sessionId;
+      expect(source).toBeDefined();
+      modelRequests = [];
+      await rm(hookLog, { force: true });
+      const fork = resultOf(await runNode({ plugins: ['alpha@fixture'] }, source, true));
+      expect(fork).toMatchObject({ resumed: true, sessionId: expect.any(String) });
+      expect(fork.sessionId).not.toBe(source);
+      // A fork that drops the thread config loads the user's server and both plugins again.
+      expect(await seen()).toEqual(ALPHA_ONLY);
+    },
+    testTimeout(20_000)
+  );
+
+  test(
+    'two runs continuing one thread at once each get their own fork and leave it unchanged',
+    async () => {
+      const source = resultOf(await runNode({})).sessionId;
+      if (!source) throw new Error('source thread missing');
+      const rollout = await rolloutOf(source);
+      const before = await readFile(rollout, 'utf8');
+      const forks = await Promise.all([runNode({}, source, true), runNode({}, source, true)]);
+      const ids = forks.map(chunks => resultOf(chunks).sessionId);
+      expect(new Set([source, ...ids]).size).toBe(3);
+      expect(await readFile(rollout, 'utf8')).toBe(before);
     },
     testTimeout(20_000)
   );

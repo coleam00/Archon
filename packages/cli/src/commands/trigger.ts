@@ -1,3 +1,5 @@
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { toPersistedMessageMetadata } from '@archon/core/types';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -6,20 +8,9 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
-  acceptStartReceipt,
-  getResourceStartRequest,
-  getStartReceipt,
-  listStartReceipts,
-  resetStartBindingPreparation,
-  withdrawQueuedResourceStart,
-} from '@archon/core/db/resource-starts';
-import { findOrCreateUserByPlatformIdentity, getUserById } from '@archon/core/db/users';
-import {
   drainResourceStartHost,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
-import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { CLIAdapter } from '../adapters/cli-adapter';
@@ -44,6 +35,7 @@ export const timerTriggerConfigSchema = z
   .strict();
 
 async function loadTimerConfig(
+  host: WorkflowHost,
   path: string,
   validateRunAs = true
 ): Promise<z.infer<typeof timerTriggerConfigSchema>> {
@@ -56,14 +48,18 @@ async function loadTimerConfig(
     );
   if (!isAbsolute(value.data.binding.launch.cwd))
     throw new Error('Trigger execution cwd must be absolute.');
-  if (validateRunAs && !(await getUserById(value.data.binding.runAsUserId)))
+  if (validateRunAs && !(await host.records.users.getUserById(value.data.binding.runAsUserId)))
     throw new Error('Trigger binding names an unknown run-as user.');
   return value.data;
 }
 
 /** Hand one admitted request to a detached `trigger execute` process with its own log. */
-async function spawnAdmitted(requestId: string, hostId: string): Promise<void> {
-  const request = await getResourceStartRequest(requestId);
+export async function spawnAdmitted(
+  host: WorkflowHost,
+  requestId: string,
+  hostId: string
+): Promise<void> {
+  const request = await host.deps.store.getResourceStartRequest(requestId);
   if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
   const [executable, ...prefix] = cliProgramArguments();
   const logDirectory = join(getArchonHome(), 'logs');
@@ -91,41 +87,51 @@ async function spawnAdmitted(requestId: string, hostId: string): Promise<void> {
   }
 }
 
-function drainHost(hostId: string): Promise<void> {
+function drainHost(
+  host: WorkflowHost,
+  hostId: string,
+  dispatch: (requestId: string, hostId: string) => Promise<void>
+): Promise<void> {
   return drainResourceStartHost({
+    ...host,
     hostId,
-    startAdmitted: requestId => spawnAdmitted(requestId, hostId),
+    startAdmitted: requestId => dispatch(requestId, hostId),
   });
 }
 
 export async function triggerCommand(
+  host: WorkflowHost,
   action: string | undefined,
   args: string[],
-  options: { config?: string; host?: string; owner?: string; yes?: boolean; limit?: string }
+  options: { config?: string; host?: string; owner?: string; yes?: boolean; limit?: string },
+  dispatch: (requestId: string, hostId: string) => Promise<void> = (requestId, hostId) =>
+    triggerCommand(host, 'execute', [requestId], { host: hostId })
 ): Promise<void> {
   if (action === 'whoami') {
     const cliId = resolveCliUserId();
     if (!cliId)
       throw new Error('Could not determine your CLI identity. Set ARCHON_USER_ID or $USER.');
-    const user = await findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+    const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
     await writeJsonLine({ runAsUserId: user.id, cliIdentity: cliId });
     return;
   }
   if (action === 'list') {
     await writeJsonLine(
-      await listStartReceipts(options.limit === undefined ? undefined : Number(options.limit))
+      await host.deps.store.listStartReceipts(
+        options.limit === undefined ? undefined : Number(options.limit)
+      )
     );
     return;
   }
   if (action === 'fire') {
     if (!options.config)
       throw new Error('Usage: archon trigger fire --config <timer-binding.json>');
-    const config = await loadTimerConfig(options.config);
+    const config = await loadTimerConfig(host, options.config);
     const binding = {
       ...config.binding,
       bindingRevision: createHash('sha256').update(JSON.stringify(config.binding)).digest('hex'),
     };
-    const receipt = await acceptStartReceipt({
+    const receipt = await host.deps.store.acceptStartReceipt({
       receipt: {
         id: randomUUID(),
         sourceInstanceId: config.sourceInstanceId,
@@ -139,19 +145,19 @@ export async function triggerCommand(
       bindings: [binding],
     });
     try {
-      await drainHost(binding.hostId);
+      await drainHost(host, binding.hostId, dispatch);
     } catch (error) {
       throw new Error(
         `Receipt ${receipt.receiptId} is retained, but its host drain failed. Inspect that receipt before recovery.`,
         { cause: error }
       );
     }
-    await writeJsonLine(await getStartReceipt(receipt.receiptId));
+    await writeJsonLine(await host.deps.store.getStartReceipt(receipt.receiptId));
     return;
   }
   if (action === 'drain') {
     if (!options.host) throw new Error('Usage: archon trigger drain --host <configured-host>');
-    await drainHost(options.host);
+    await drainHost(host, options.host, dispatch);
     await writeJsonLine({ hostId: options.host, drained: true });
     return;
   }
@@ -168,16 +174,28 @@ export async function triggerCommand(
       Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
       assertDetachedRunProcessOwner();
     }
-    const adapter = new CLIAdapter();
+    const { deps } = host;
     const result = await startAdmittedResourceStart({
       requestId: args[0],
       hostId: options.host,
-      engine: new InProcessWorkflowEngine(createWorkflowDeps()),
-      createPlatform: ({ conversationId, conversationDbId }) => {
-        adapter.setConversationDbId(conversationId, conversationDbId);
-        return adapter;
+      host,
+      createPlatform: ({ origin }) => {
+        const conversationDbId = origin?.conversationId;
+        return new CLIAdapter({
+          recordMessage: conversationDbId
+            ? async (_id, message, metadata): Promise<void> => {
+                await host.records.messages.addMessage(
+                  conversationDbId,
+                  'assistant',
+                  message,
+                  toPersistedMessageMetadata(metadata)
+                );
+              }
+            : undefined,
+        });
       },
-      guardOwnedRun: owned => registerOwnedRunTermination({ ...owned, logModule: 'cli.trigger' }),
+      guardOwnedRun: owned =>
+        registerOwnedRunTermination({ store: deps.store, ...owned, logModule: 'cli.trigger' }),
       ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
     });
     if (!result.success) throw new Error(`Run ${args[0]} did not complete: ${result.error}`);
@@ -185,7 +203,9 @@ export async function triggerCommand(
   }
   if (action === 'inspect') {
     if (!args[0]) throw new Error('Usage: archon trigger inspect <receipt-or-request-id>');
-    const value = (await getStartReceipt(args[0])) ?? (await getResourceStartRequest(args[0]));
+    const value =
+      (await host.deps.store.getStartReceipt(args[0])) ??
+      (await host.deps.store.getResourceStartRequest(args[0]));
     if (!value) throw new Error('Trigger receipt or request not found.');
     if ('launch' in value) {
       const runId =
@@ -233,7 +253,7 @@ export async function triggerCommand(
       throw new Error(
         'After confirming the exact preparation owner is stopped: archon trigger recover-preparation <receipt-id> <binding-id> --owner <recorded-owner-id> --yes'
       );
-    const reset = await resetStartBindingPreparation({
+    const reset = await host.deps.store.resetStartBindingPreparation({
       receiptId: args[0],
       bindingId: args[1],
       ownerId: options.owner,
@@ -245,8 +265,8 @@ export async function triggerCommand(
   }
   if (action === 'withdraw') {
     if (!args[0]) throw new Error('Usage: archon trigger withdraw <queued-request-id>');
-    const request = await getResourceStartRequest(args[0]);
-    if (!request || !(await withdrawQueuedResourceStart(args[0])))
+    const request = await host.deps.store.getResourceStartRequest(args[0]);
+    if (!request || !(await host.deps.store.withdrawQueuedResourceStart(args[0])))
       throw new Error('Only untouched queued requests can be withdrawn.');
     const source = readWorkflowSourceState(request.launch.run.metadata);
     if (source.kind === 'recorded') await rm(source.record.root, { recursive: true, force: true });
@@ -262,7 +282,7 @@ export async function triggerCommand(
       throw new Error(
         'Usage: archon trigger schedule <install|remove> --config <timer-binding.json>'
       );
-    const config = await loadTimerConfig(options.config, args[0] !== 'remove');
+    const config = await loadTimerConfig(host, options.config, args[0] !== 'remove');
     const scheduleId = createHash('sha256')
       .update(JSON.stringify([getArchonHome(), config.sourceInstanceId, config.binding.bindingId]))
       .digest('hex');

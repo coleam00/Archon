@@ -4,6 +4,8 @@
  * Note: These tests focus on argument parsing logic.
  * Full integration tests would require mocking the database and commands.
  */
+import { receiptPath } from '@archon/plugin-manifest/store';
+import { GITHUB_TOKEN_KEYS } from '@archon/workflows/utils/github-token-policy';
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -12,9 +14,9 @@ import { cliArgOptions } from './args';
 import { generateConversationId } from './utils/conversation-id';
 import * as git from '@archon/git';
 import { canonicalizeProjectPath } from '@archon/paths';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -24,6 +26,7 @@ import {
   rejectConfigOutsideRun,
   rejectModelOnContinue,
 } from './dispatch-guards';
+import { loadCliEnv } from './load-cli-env';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 // The enclosing git worktree — a valid repo for the git gate, with a real
@@ -46,6 +49,145 @@ describe('forge user trust boundary', () => {
       expect(result.status).toBe(1);
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain(`${repoEnv} sets ARCHON_HOME`);
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+
+  // The engine expresses a run's GitHub identity by setting the key (a token, or '' to
+  // scrub). An absent key is no opinion, so Archon's env files supply it. Exercised in
+  // process: a CLI subprocess per scenario is too slow on Windows runners.
+  for (const key of GITHUB_TOKEN_KEYS) {
+    it(`${key}: a run's credential state wins over Archon env files`, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-run-token-'));
+      const home = join(root, 'home');
+      mkdirSync(home);
+      writeFileSync(join(home, '.env'), `${key}=home-test-token\n`);
+      const saved = { ...process.env };
+      const cases = [
+        {
+          name: 'outside',
+          run: false,
+          inherited: undefined,
+          repoEnv: false,
+          gets: 'home-test-token',
+        },
+        {
+          name: 'absent',
+          run: true,
+          inherited: undefined,
+          repoEnv: false,
+          gets: 'home-test-token',
+        },
+        {
+          name: 'absent-repo',
+          run: true,
+          inherited: undefined,
+          repoEnv: true,
+          gets: 'repo-test-token',
+        },
+        {
+          name: 'engine',
+          run: true,
+          inherited: 'engine-test-token',
+          repoEnv: false,
+          gets: 'engine-test-token',
+        },
+        {
+          name: 'engine-repo',
+          run: true,
+          inherited: 'engine-test-token',
+          repoEnv: true,
+          gets: 'engine-test-token',
+        },
+        { name: 'empty', run: true, inherited: '', repoEnv: false, gets: '' },
+        { name: 'empty-repo', run: true, inherited: '', repoEnv: true, gets: '' },
+      ] as const;
+      try {
+        for (const { name, run, inherited, repoEnv, gets } of cases) {
+          const repo = join(root, name);
+          mkdirSync(join(repo, '.archon'), { recursive: true });
+          if (repoEnv) writeFileSync(join(repo, '.archon', '.env'), `${key}=repo-test-token\n`);
+          process.env.ARCHON_HOME = home;
+          process.env.WORKFLOW_ID = run ? 'credential-run' : '';
+          if (inherited === undefined) delete process.env[key];
+          else process.env[key] = inherited;
+          await loadCliEnv(repo);
+          expect({ name, token: process.env[key] }).toEqual({ name, token: gets });
+        }
+      } finally {
+        for (const name of Object.keys(process.env)) {
+          if (!(name in saved)) delete process.env[name];
+        }
+        Object.assign(process.env, saved);
+        await removeTempTree(root);
+      }
+    });
+  }
+
+  // One end-to-end case proves cli.ts applies loadCliEnv's result to the credential a
+  // forge plugin receives.
+  it("a run's engine token reaches a forge plugin over both Archon env files", async () => {
+    const key = 'GH_TOKEN';
+    const root = mkdtempSync(join(tmpdir(), 'archon-forge-run-token-'));
+    const home = join(root, 'home');
+    const repo = join(root, 'repo');
+    const plugin = join(root, 'plugin.ts');
+    const marker = join(root, 'marker');
+    mkdirSync(home);
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    writeFileSync(join(home, '.env'), `${key}=home-test-token\n`);
+    writeFileSync(join(repo, '.archon', '.env'), `${key}=repo-test-token\n`);
+    writeFileSync(
+      plugin,
+      `import { writeFileSync } from 'node:fs';
+if (process.argv[3] === 'metadata') {
+  console.log(JSON.stringify({ protocol: 1, name: 'marker', version: '1', forge: 'test', hosts: ['forge.example'], capabilities: ['checks.state'], token_env: [${JSON.stringify(key)}] }));
+} else {
+  writeFileSync(process.argv[2], process.env.ARCHON_FORGE_TOKEN ?? 'absent');
+  const request = JSON.parse(await Bun.stdin.text());
+  console.log(JSON.stringify({ operationId: request.operationId, ok: true, result: { op: 'checks.state', value: { ref: request.ref, revision: 'marker', units: [], required: null, summary: { state: 'none', counts: { total: 0, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 } } } } }));
+}
+`
+    );
+    writeFileSync(
+      join(home, 'config.yaml'),
+      `forge:\n  plugins:\n    - plugin: marker\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}, ${JSON.stringify(marker)}]\n  hosts:\n    forge.example: marker\n`
+    );
+    try {
+      const db = new SqliteAdapter(join(home, 'archon.db'));
+      try {
+        await db.query(
+          "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('conversation', 'cli', 'credential-test')"
+        );
+        await db.query(
+          "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ('credential-run', 'conversation', 'credential-test', '')"
+        );
+      } finally {
+        await db.close();
+      }
+      const ref = { repo: { host: 'forge.example', path: 'owner/repo' }, number: 7 };
+      const result = spawnSync(
+        process.execPath,
+        [CLI_ENTRY, 'forge', 'checks', '--data', JSON.stringify({ ref })],
+        {
+          cwd: repo,
+          encoding: 'utf8',
+          env: {
+            PATH: process.env.PATH,
+            HOME: root,
+            USERPROFILE: root,
+            ARCHON_HOME: home,
+            ARCHON_TELEMETRY_DISABLED: '1',
+            DATABASE_URL: '',
+            WORKFLOW_ID: 'credential-run',
+            [key]: 'engine-test-token',
+          },
+        }
+      );
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+      expect(JSON.parse(result.stdout)).toMatchObject({ ok: true });
+      expect(readFileSync(marker, 'utf8')).toBe('engine-test-token');
     } finally {
       await removeTempTree(root);
     }
@@ -1274,6 +1416,35 @@ describe('workflow list arguments', () => {
     expect(output.workflows[0].descriptionTruncated).toBe(false);
   });
 
+  // Core no longer registers providers, so the CLI route default is what makes a
+  // provider-scoped workflow parse.
+  it('registers providers before discovering workflows', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'archon-cli-provider-route-'));
+    try {
+      mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+      spawnSync('git', ['init', '-q', '.'], { cwd: repo });
+      writeFileSync(
+        join(repo, '.archon', 'workflows', 'scoped.yaml'),
+        'name: scoped\ndescription: Provider scoped.\nprovider: claude\nnodes:\n  - id: a\n    prompt: hi\n'
+      );
+      const { status, envelope } = spawnJsonError([
+        'workflow',
+        'list',
+        'scoped',
+        '--json',
+        '--cwd',
+        repo,
+      ]);
+
+      expect(status).toBe(0);
+      const output = envelope() as { workflows: Array<{ name: string }>; errors: unknown[] };
+      expect(output.errors).toEqual([]);
+      expect(output.workflows.map(w => w.name)).toEqual(['scoped']);
+    } finally {
+      await removeTempTree(repo);
+    }
+  });
+
   it('rejects extra positionals with human-readable usage', () => {
     const result = spawnSync(
       process.execPath,
@@ -1665,4 +1836,279 @@ it('CLI cleanup retains historical Telegram workspaces with no adapter credentia
   } finally {
     await removeTempTree(root);
   }
+});
+
+describe('registration base branch parsing', () => {
+  it('rejects the registration flag outside workflow run', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'version', '--base-branch', 'release', '--json'],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('--base-branch is only supported by workflow run');
+  });
+  for (const choice of [['--base-branch', 'release'], ['--base-branch=release']]) {
+    it(`keeps ${choice[0]} distinct from the dispatch base`, () => {
+      const { values } = parseArgs({
+        args: ['workflow', 'run', 'deliver', ...choice, '--base', 'dev'],
+        options: cliArgOptions,
+        allowPositionals: true,
+      });
+      expect(values['base-branch']).toBe('release');
+      expect(values.base).toBe('dev');
+    });
+  }
+});
+
+describe('compiled CLI update notices', () => {
+  const cases = [
+    { args: ['workflow', 'run'], notice: true, status: 1 },
+    { args: ['workflow', 'resume'], notice: true, status: 1 },
+    { args: ['version'], notice: false, status: 0 },
+    { args: ['workflow', 'run', '--quiet'], notice: false, status: 1 },
+    { args: ['workflow', 'run', '--json'], notice: false, status: 1 },
+    { args: ['workflow', 'run'], notice: false, status: 1, stale: true },
+    { args: ['workflow', 'run'], notice: false, status: 1, stale: true, pending: true },
+    { args: ['workflow', 'run'], notice: false, status: 1, source: true },
+    {
+      args: ['workflow', 'run', '--internal-detached-run-config', 'invalid'],
+      notice: true,
+      status: 1,
+    },
+  ];
+  for (const entry of cases) {
+    it(`${entry.args.join(' ')} ${entry.pending ? 'with a pending network request' : entry.source ? 'in a source build' : entry.stale ? 'offline with stale cache' : 'with fresh cache'}`, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-cli-update-'));
+      const preload = join(root, 'preload.ts');
+      writeFileSync(
+        join(root, 'update-check.json'),
+        JSON.stringify({
+          latestVersion: '99.0.0',
+          releaseUrl: 'https://example.com/release',
+          checkedAt: entry.stale ? 0 : Date.now(),
+        })
+      );
+      writeFileSync(
+        preload,
+        `import { mock } from 'bun:test';
+const bundledBuild = await import(${JSON.stringify(join(repoRoot, 'packages/paths/src/bundled-build.ts'))});
+mock.module(${JSON.stringify(join(repoRoot, 'packages/paths/src/bundled-build.ts'))}, () => ({
+  ...bundledBuild,
+  BUNDLED_IS_BINARY: ${!entry.source}, BUNDLED_VERSION: '0.11.1', BUNDLED_GIT_COMMIT: 'test', BUNDLED_WEB_DIST_SHA256: '',
+}));
+globalThis.fetch = () => ${entry.pending ? 'new Promise(() => {})' : "Promise.reject(new Error('Network unavailable'))"};
+`
+      );
+      try {
+        const result = spawnSync(
+          process.execPath,
+          ['--preload', preload, CLI_ENTRY, ...entry.args, '--cwd', join(root, 'missing')],
+          {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            timeout: 5000,
+            env: { ...process.env, ARCHON_HOME: root, ARCHON_TELEMETRY_DISABLED: '1' },
+          }
+        );
+        expect({ status: result.status, stderr: result.stderr }).toMatchObject({
+          status: entry.status,
+        });
+        expect(result.stderr.includes('Update available:')).toBe(entry.notice);
+        if (entry.notice) {
+          expect(result.stdout).toBe('');
+          expect(result.stderr).toContain('brew upgrade archon');
+          expect(result.stderr).toContain('https://archon.diy/getting-started/updating/');
+        }
+        if (entry.args.includes('--json')) expect(JSON.parse(result.stdout).ok).toBe(false);
+      } finally {
+        await removeTempTree(root);
+      }
+    });
+  }
+});
+
+describe('receipt policies in the CLI host', () => {
+  it.each(['--version', 'version'])(
+    '%s works with a malformed installed receipt',
+    async command => {
+      const root = mkdtempSync(join(tmpdir(), 'cli-version-receipt-'));
+      const home = join(root, 'home');
+      const file = receiptPath(join(home, 'plugins'), 'owner/broken');
+      mkdirSync(join(home, 'plugins', 'installed', 'owner', 'broken'), { recursive: true });
+      writeFileSync(file, '{invalid json');
+      try {
+        const result = spawnSync(process.execPath, [CLI_ENTRY, command], {
+          cwd: root,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            ARCHON_HOME: home,
+            DATABASE_URL: '',
+            ARCHON_TELEMETRY_DISABLED: '1',
+          },
+        });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain('Archon CLI v');
+        expect(result.stderr).not.toContain(file);
+      } finally {
+        await removeTempTree(root);
+      }
+    }
+  );
+
+  it(
+    'registers a receipt without executing its binary, then keeps and reports its workspace after removal',
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), 'cli-chat-policy-'));
+      const home = join(root, 'home');
+      const workspace = join(root, 'workspace');
+      const executable = join(home, 'plugins', 'archon-chat-fixture');
+      const marker = join(root, 'executed');
+      const file = receiptPath(join(home, 'plugins'), 'owner/chat-fixture');
+      mkdirSync(join(home, 'plugins', 'installed', 'owner', 'chat-fixture'), { recursive: true });
+      mkdirSync(workspace);
+      mkdirSync(join(workspace, '.git'));
+      writeFileSync(
+        executable,
+        `#!/bin/sh\necho executed > '${marker.replaceAll("'", "'\\''")}'\nexit 99\n`,
+        { mode: 0o755 }
+      );
+      const receipt = {
+        schemaVersion: 1,
+        id: 'owner/chat-fixture',
+        manifest: {
+          schemaVersion: 1,
+          kind: 'chat',
+          name: 'fixture',
+          description: 'Fixture',
+          executable: 'archon-chat-fixture',
+        },
+        tag: 'v1',
+        commit: 'a'.repeat(40),
+        installedAt: new Date(0).toISOString(),
+        files: [{ path: 'archon-chat-fixture', sha256: 'b'.repeat(64) }],
+        descriptor: {
+          protocol: 'archon-chat/1',
+          id: 'slack',
+          displayName: 'Fixture',
+          version: '1',
+          capabilities: { defaultWorkflowDispatch: 'background' },
+          policy: { workspaceRetention: 'retain' },
+        },
+      };
+      writeFileSync(file, JSON.stringify(receipt));
+      const db = new SqliteAdapter(join(home, 'archon.db'));
+      const run = () =>
+        spawnSync(process.execPath, [CLI_ENTRY, 'isolation', 'cleanup'], {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            ARCHON_HOME: home,
+            DATABASE_URL: '',
+            ARCHON_TELEMETRY_DISABLED: '1',
+          },
+        });
+      try {
+        await db.query(
+          "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('cb', 'fixture', $1)",
+          [workspace]
+        );
+        await db.query(
+          `INSERT INTO remote_agent_isolation_environments
+        (id, codebase_id, workflow_type, workflow_id, provider, working_path, branch_name, status, created_by_platform, created_at)
+        VALUES ('env', 'cb', 'thread', 'fixture', 'worktree', $1, 'fixture', 'active', 'slack', datetime('now', '-30 days'))`,
+          [workspace]
+        );
+        const registered = run();
+        expect(registered.status).toBe(0);
+        expect(registered.stdout).toContain('No stale environments found.');
+        expect(registered.stdout).not.toContain('not registered');
+        expect(registered.stdout).not.toContain('Reconciled');
+        expect(existsSync(marker)).toBe(false);
+        receipt.descriptor.id = 'matrix-chat';
+        writeFileSync(file, JSON.stringify(receipt));
+        await db.query(
+          "UPDATE remote_agent_isolation_environments SET created_by_platform = 'matrix-chat' WHERE id = 'env'",
+          []
+        );
+        const installed = run();
+        expect(installed.status).toBe(0);
+        expect(installed.stdout).toContain('No stale environments found.');
+        expect(installed.stdout).not.toContain('not registered');
+        await import('node:fs/promises').then(fs => fs.unlink(file));
+        await removeTempTree(workspace);
+        const removed = run();
+        expect(removed.status).toBe(0);
+        expect(removed.stdout).toContain("platform 'matrix-chat' is not registered");
+        expect(removed.stdout).not.toContain('Reconciled');
+        expect(
+          (
+            await db.query<{ status: string }>(
+              "SELECT status FROM remote_agent_isolation_environments WHERE id = 'env'",
+              []
+            )
+          ).rows[0]?.status
+        ).toBe('active');
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        await db.close();
+        await removeTempTree(root);
+      }
+    },
+    testTimeout(60_000)
+  );
+});
+
+describe('retained Pi process-error routing', () => {
+  it.each(['unhandledRejection', 'uncaughtException'] as const)(
+    'routes %s to the extension turn without exiting the CLI',
+    async event => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-cli-pi-error-'));
+      const preload = join(root, 'preload.ts');
+      writeFileSync(
+        preload,
+        `
+import { mock } from 'bun:test';
+const bundledPath = ${JSON.stringify(join(repoRoot, 'packages/paths/src/bundled-build.ts'))};
+const bundled = await import(bundledPath);
+mock.module(bundledPath, () => ({ ...bundled, BUNDLED_IS_BINARY: true }));
+mock.module('@archon/core/providers/register-host-providers', () => ({ registerHostProviders: async () => {} }));
+const { beginPiExtensionTurn } = await import(${JSON.stringify(join(repoRoot, 'packages/providers/src/community/pi/extension-error-broker.ts'))});
+mock.module(${JSON.stringify(join(repoRoot, 'packages/cli/src/commands/ai.ts'))}, () => ({
+  aiListCommand: async () => {
+    const turn = beginPiExtensionTurn(['/extensions/review.ts']);
+    const error = new Error('extension callback failed');
+    error.stack = 'Error: extension callback failed\\n    at callback (/extensions/review.ts:12:3)';
+    try {
+      process.emit('${event}', error${event === 'unhandledRejection' ? ', Promise.resolve()' : ", 'uncaughtException'"});
+      try { turn.throwIfFailed(); } catch (failure) {
+        if (failure === error) { console.log('extension turn failed; host alive'); return 0; }
+        throw failure;
+      }
+      throw new Error('extension error was not routed');
+    } finally { turn.close(); }
+  },
+}));
+`
+      );
+      try {
+        const result = spawnSync(
+          process.execPath,
+          ['--no-env-file', '--preload', preload, CLI_ENTRY, 'ai', 'list'],
+          {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            timeout: testTimeout(10_000),
+            env: { ...process.env, ARCHON_HOME: root, ARCHON_TELEMETRY_DISABLED: '1' },
+          }
+        );
+        expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 0 });
+        expect(result.stdout).toContain('extension turn failed; host alive');
+      } finally {
+        await removeTempTree(root);
+      }
+    }
+  );
 });

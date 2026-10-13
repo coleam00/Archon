@@ -162,6 +162,37 @@ describe('RunStream tool rendering', () => {
       </StreamContextProvider>
     );
 
+  test.each(['patch text', 0, false, null, ['a', 1]].map(input => [input] as const))(
+    'renders and preserves non-object tool input %j',
+    input => {
+      const events: RunProviderEvents = new Map([
+        [
+          'implement',
+          [
+            record('implement', 'a1', 0, '2026-10-02T10:00:00.500Z', {
+              type: 'tool_call',
+              toolCallId: 'patch',
+              name: 'apply_patch',
+              rawInput: input,
+            }),
+          ],
+        ],
+      ]);
+      expect(pairProviderToolCalls(events)[0]?.call.input).toEqual(input);
+      const html = render(events);
+      expect(html).toContain('apply_patch');
+      expect(html).toContain('▸');
+      if (
+        typeof input === 'string' ||
+        typeof input === 'number' ||
+        typeof input === 'boolean' ||
+        input === null
+      ) {
+        expect(html).toContain(String(input));
+      } else expect(html).toContain('[&quot;a&quot;,1]');
+    }
+  );
+
   test('shows provider-event tools under their node, and not the message-inline copy', () => {
     const html = render(
       new Map([

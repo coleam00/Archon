@@ -30,6 +30,7 @@ import type {
   WorktreeStatusBreakdown,
   ResolveRequest,
 } from './types';
+import { worktreeRegistrationMetadata } from './types';
 import type { IIsolationStore } from './store';
 import { classifyIsolationError, isKnownIsolationError } from './errors';
 import { resolveFolderBackend } from './backend-router';
@@ -225,8 +226,7 @@ export class IsolationResolver {
       hints,
       canonicalPath,
       request.platformType,
-      request.userId,
-      request.gitIdentity
+      request.userId
     );
   }
 
@@ -474,8 +474,7 @@ export class IsolationResolver {
     hints: IsolationHints | undefined,
     canonicalPath: RepoPath,
     platformType: string,
-    userId: string | undefined,
-    gitIdentity: { email: string; name?: string } | undefined
+    userId: string | undefined
   ): Promise<IsolationResolution> {
     // Construct request based on workflow type
     const baseRequest = {
@@ -484,7 +483,6 @@ export class IsolationResolver {
       canonicalRepoPath: canonicalPath,
       baseBranch: codebase.defaultBranch ?? undefined,
       identifier: workflowId,
-      gitIdentity,
     };
 
     let isolationRequest: IsolationRequest;
@@ -554,6 +552,7 @@ export class IsolationResolver {
         created_by_platform: platformType,
         created_by_user_id: userId,
         metadata: {
+          ...worktreeRegistrationMetadata(isolatedEnv.metadata),
           related_issues: hints?.linkedIssues ?? [],
           related_prs: hints?.linkedPRs ?? [],
         },
@@ -573,11 +572,17 @@ export class IsolationResolver {
       if (!isolatedEnv.metadata.adopted) {
         // Clean up the orphaned worktree — best-effort, don't mask the original error
         try {
-          await this.provider.destroy(isolatedEnv.workingPath, {
+          const result = await this.provider.destroy(isolatedEnv.workingPath, {
             canonicalRepoPath: canonicalPath,
+            creationId: isolatedEnv.metadata.creationId,
             branchName: isolatedEnv.branchName,
             force: true,
           });
+          if (!result.worktreeRemoved || !result.directoryClean) {
+            throw new Error(
+              `Worktree cleanup incomplete at ${isolatedEnv.workingPath}: ${result.warnings.join('; ')}`
+            );
+          }
           getLog().info(
             { worktreePath: isolatedEnv.workingPath },
             'isolation_orphan_cleanup_completed'
@@ -603,12 +608,16 @@ export class IsolationResolver {
       status: 'resolved',
       env,
       cwd: env.working_path,
-      method: {
-        type: 'created',
-        ...(!isolatedEnv.metadata.adopted && isolatedEnv.metadata.cutFromCommit !== undefined
-          ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
-          : {}),
-      },
+      method:
+        isolatedEnv.metadata.provenance === 'created'
+          ? {
+              type: 'created',
+              creationId: isolatedEnv.metadata.creationId,
+              ...(isolatedEnv.metadata.cutFromCommit !== undefined
+                ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
+                : {}),
+            }
+          : { type: 'provider_adoption' },
       ...(isolatedEnv.warnings?.length ? { warnings: isolatedEnv.warnings } : {}),
     };
   }

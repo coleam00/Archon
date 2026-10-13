@@ -294,6 +294,25 @@ export function markPrReady(ref: QualifiedPr, source: ForgeSource): PrRecord {
   return after.pr;
 }
 
+export function markPrDraft(ref: QualifiedPr, source: ForgeSource): PrRecord {
+  if (source === 'forge') {
+    const value = forgeResult('pr.draft', { ref: { repo: ref.repo, number: ref.number } });
+    return parsePrRecord(value.pr);
+  }
+  const before = viewPr(ref, source).pr;
+  if (before.state !== 'open') {
+    throw new Error(`${before.url} is ${before.state} and cannot be converted to draft`);
+  }
+  if (before.is_draft) return before;
+  const draft = gh('pr', 'ready', String(ref.number), '--repo', ghRepo(ref.repo), '--undo');
+  if (!draft.ok) throw new Error(`the draft conversion failed: ${draft.stderr}`);
+  const after = viewPr(ref, source).pr;
+  if (!after.is_draft || after.state !== 'open') {
+    throw new Error(`${after.url} does not report an open draft after conversion`);
+  }
+  return after;
+}
+
 interface GhComment {
   readonly id: string;
   readonly body: string;

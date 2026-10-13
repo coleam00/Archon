@@ -56,14 +56,19 @@ nano /opt/archon/.env
 #   DOMAIN=archon.example.com
 #   DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 
-# (Optional) Set up basic auth to protect Web UI:
-# docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
-# Add to .env: CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$<hash> }
+# (Optional) Basic Auth: see Authentication (Optional Basic Auth) below.
+# Uncomment the whole assignment in .env; replace admin and paste the complete hash:
+# docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
+# CADDY_BASIC_AUTH='basic_auth @protected {
+#   admin REPLACE_WITH_COMPLETE_HASH_OUTPUT
+# }'
 
 # Start
 cd /opt/archon
 docker compose --profile with-db --profile cloud up -d
 ```
+
+See [Authentication (Optional Basic Auth)](#authentication-optional-basic-auth) for the complete recipe.
 
 > **Don't forget DNS**: Before starting, point your domain's A record to the server's IP.
 
@@ -187,8 +192,12 @@ DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 
 # Basic Auth (optional) — protects Web UI when exposed to the internet
 # Skip if using IP-based firewall rules instead.
-# Generate hash: docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
-# CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$... }
+# See Authentication (Optional Basic Auth) below for the complete steps.
+# Uncomment the whole assignment; replace admin and paste the complete hash unchanged.
+# Generate hash: docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
+# CADDY_BASIC_AUTH='basic_auth @protected {
+#   admin REPLACE_WITH_COMPLETE_HASH_OUTPUT
+# }'
 
 # Platform tokens (set the ones you use)
 # TELEGRAM_BOT_TOKEN=123456789:ABCdef...
@@ -294,29 +303,33 @@ Caddy handles HTTPS certificates, HTTP->HTTPS redirect, HTTP/3, and SSE streamin
 
 ### Authentication (Optional Basic Auth)
 
-Caddy can enforce HTTP Basic Auth on all routes except webhooks (`/webhooks/*`) and the health check (`/api/health`). This is optional — skip it if you use IP-based firewall rules or other network-level access control.
+Caddy can enforce HTTP Basic Auth on routes matched by `@protected`, which excludes `/internal/*`, `/webhooks/*`, and `/api/health`. This is optional — skip it if you use IP-based firewall rules or other network-level access control.
 
 **To enable:**
 
 1. Generate a bcrypt password hash:
 
    ```bash
-   docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
+   docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
    ```
 
-2. Set `CADDY_BASIC_AUTH` in `.env` (use `$$` to escape `$` in bcrypt hashes):
+2. Set `CADDY_BASIC_AUTH` in the Compose `.env`. Replace `admin` with your username and paste the command's complete hash output unchanged:
 
    ```ini
-   CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$abc123... }
+   CADDY_BASIC_AUTH='basic_auth @protected {
+     admin REPLACE_WITH_COMPLETE_HASH_OUTPUT
+   }'
    ```
 
-3. Restart: `docker compose --profile cloud restart caddy`
+   This is a single-quoted multiline Compose dotenv value: real newlines and literal `$` characters are preserved. Do not double the dollars or source this assignment as a shell command. See [Compose interpolation](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/) and [Caddy Basic Auth syntax](https://caddyserver.com/docs/caddyfile/directives/basic_auth).
 
-Your browser will prompt for username/password when accessing the Archon URL. Webhook endpoints bypass auth since they use HMAC signature verification.
+3. Recreate Caddy to apply the changed container environment: `docker compose --profile cloud up -d --force-recreate caddy`
+
+Your browser will prompt for username/password when accessing the Archon URL. The protected matcher excludes `/internal/*`, `/webhooks/*`, and `/api/health`; webhook endpoints use HMAC signature verification.
 
 To disable, leave `CADDY_BASIC_AUTH` empty or unset — the Caddyfile expands it to nothing.
 
-> **Important:** Always use the `docker run caddy caddy hash-password` command to generate hashes — never put plaintext passwords in `.env`.
+> **Important:** Always use the `docker run --rm caddy caddy hash-password` command to generate hashes — never put plaintext passwords in `.env`.
 
 ### Form-Based Authentication (HTML Login Page)
 

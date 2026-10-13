@@ -12,6 +12,8 @@ export type {
   IsolationRequest,
   AdoptedWorktreeMetadata,
   CreatedWorktreeMetadata,
+  ObservedWorktreeMetadata,
+  WorktreeCreationEnvironment,
   WorktreeMetadata,
   WorktreeEnvironment,
   IsolatedEnvironment,
@@ -38,7 +40,12 @@ export type {
   ContainerBackendConfig,
 } from './types';
 
-export { isPRIsolationRequest, CONTAINER_LABELS } from './types';
+export {
+  isPRIsolationRequest,
+  CONTAINER_LABELS,
+  worktreeRegistrationMetadata,
+  readWorktreeCreationId,
+} from './types';
 
 // --- Backend seam (folder projects) ---
 export { resolveFolderBackend } from './backend-router';
@@ -58,6 +65,7 @@ export type { IIsolationStore } from './store';
 export {
   IsolationBlockedError,
   MissingProjectDirectoryError,
+  WorktreeLeftoverError,
   classifyIsolationError,
 } from './errors';
 

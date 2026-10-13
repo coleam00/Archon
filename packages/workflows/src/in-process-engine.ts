@@ -39,7 +39,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       input.cwd,
       input.workflow,
       input.userMessage,
-      input.conversationDbId,
+      input.origin,
       input.options
     );
   }
@@ -71,7 +71,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       input.cwd,
       workflow,
       input.userMessage,
-      input.conversationDbId,
+      hydrated.preCreatedRun.origin ?? undefined,
       { ...input.options, ...hydrated }
     ).catch(async (error: unknown) => {
       // Hydration already claimed the row. The executor's early setup can throw

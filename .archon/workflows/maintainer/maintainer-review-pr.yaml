@@ -51,9 +51,10 @@ nodes:
 
   - id: fetch-pr
     bash: |
-      PR_NUM=$(echo "$extract-pr-number.output" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
+      extracted_pr=$extract-pr-number.output
+      PR_NUM=$(echo "$extracted_pr" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
       if [ -z "$PR_NUM" ]; then
-        echo "Failed to extract PR number from: $extract-pr-number.output" >&2
+        echo "Failed to extract PR number from: $extracted_pr" >&2
         exit 1
       fi
       echo "$PR_NUM" > "$ARTIFACTS_DIR/.pr-number"

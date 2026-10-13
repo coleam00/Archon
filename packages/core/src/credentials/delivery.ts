@@ -30,22 +30,13 @@ import { CODEX_AUTH_JSON_RELATIVE_PATH, PI_AUTH_JSON_RELATIVE_PATH } from '@arch
 
 export { LEGACY_VENDOR_ALIASES, normalizeCredentialVendor } from '@archon/providers';
 
-/**
- * Raw OAuth credential blob minted at login — by `@earendil-works/pi-ai/oauth`
- * provider `login()` for anthropic/github-copilot, or by Archon's own OpenAI
- * PKCE flow (`openai-oauth.ts`, which additionally captures the `id_token`
- * Pi drops, #1924). The exact shape varies per vendor but is always a
- * JSON-serializable object. It's stored opaquely and passed through verbatim:
- * refresh is handled by Pi's `getOAuthApiKey` (keyed by Pi's provider id) or
- * the Archon OpenAI refresh, and the only field-level parsing is
- * `buildCodexAuthJson` below.
- */
+/** Vendor-specific JSON blob, stored encrypted and refreshed by core's OAuth flows. */
 export type OAuthCredentials = Record<string, unknown>;
 
 /**
  * A decrypted user credential ready to be delivered to a provider. For API
  * keys the secret is a plain bearer string; for OAuth subscriptions the
- * `oauthApiKey` is a usable bearer derived via Pi's `getOAuthApiKey` (with
+ * `oauthApiKey` is a usable bearer derived by core's subscription flow (with
  * `rawCreds` preserved so refresh-on-rotation can re-save).
  */
 export type ResolvedCredential =

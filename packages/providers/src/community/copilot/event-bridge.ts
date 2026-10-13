@@ -187,7 +187,7 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
     case 'tool.execution_start': {
       const { toolCallId, toolName, arguments: args } = event.data;
       const call: MessageChunk = { type: 'tool_call', toolCallId, name: toolName };
-      if (args) call.rawInput = args;
+      if (args !== undefined) call.rawInput = args;
       return [call];
     }
     case 'tool.execution_complete': {

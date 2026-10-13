@@ -14,6 +14,7 @@ export const RESUME_FORBIDDEN_OPTIONS = [
   ...FRESH_RUN_FORBIDDEN_OPTIONS,
   'preCreatedRun',
   'runConfig',
+  'preparedAiConfiguration',
   'modelOverrideLayer',
   'inputs',
   'preparedSource',
@@ -34,7 +35,7 @@ interface WorkflowEngineCallBase {
   conversationId: string;
   cwd: string;
   userMessage: string;
-  conversationDbId: string;
+  origin?: import('./schemas/workflow-run').WorkflowRunOrigin;
 }
 
 export interface WorkflowEngineSubmitInput extends WorkflowEngineCallBase {

@@ -11,6 +11,25 @@ export class MissingProjectDirectoryError extends Error {
 }
 
 /**
+ * Git unregistered a worktree it was removing but left files behind that Archon
+ * could not delete. No retry can prove the directory is Archon's again, so the
+ * operator must delete it by hand.
+ */
+export class WorktreeLeftoverError extends Error {
+  constructor(
+    readonly path: string,
+    cause: unknown,
+    detail: string
+  ) {
+    super(
+      `Git unregistered the worktree at ${path} but left files it could not delete, and removing them failed (${detail}). Retrying abandon cannot finish this; delete ${path} by hand.`,
+      { cause }
+    );
+    this.name = 'WorktreeLeftoverError';
+  }
+}
+
+/**
  * Error thrown when isolation is required but cannot be provided.
  * This error signals that ALL message handling should stop - not just workflows.
  * The user has already been notified of the specific reason (worktree limit reached,

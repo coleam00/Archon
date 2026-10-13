@@ -6,6 +6,10 @@ import { z } from 'zod';
  * node names MCP servers, skills or plugins the provider cannot load.
  */
 export const providerCapabilitiesSchema = z.object({
+  /** reported: runtime reports live work and its ends; none: verified absent;
+   * unobserved: background work may exist but the provider cannot observe it.
+   */
+  backgroundWork: z.enum(['reported', 'none', 'unobserved']),
   sessionResume: z.boolean(),
   /**
    * Given a session ID, create a new session containing the source history

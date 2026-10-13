@@ -30,10 +30,11 @@ export type WorkflowNodeSession = z.infer<typeof workflowNodeSessionSchema>;
  * thread that launched it. `parent_conversation_id` records that thread on every
  * surface that has one (a web dispatch runs in a fresh hidden worker conversation,
  * so its own `conversation_id` differs on every run); a run without a parent, such
- * as a CLI run, is its own thread. Also keys the scope artifacts directory.
+ * as a CLI run, is its own thread. Origin-free runs have no cross-run scope.
+ * Also keys the scope artifacts directory.
  */
 export function persistScopeKey(
   run: Pick<WorkflowRun, 'conversation_id' | 'parent_conversation_id'>
-): string {
-  return run.parent_conversation_id ?? run.conversation_id;
+): string | undefined {
+  return run.parent_conversation_id ?? run.conversation_id ?? undefined;
 }

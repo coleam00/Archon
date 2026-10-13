@@ -1,7 +1,24 @@
+import {
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+  toolCallAttentionArraySchema,
+  type ToolCallAttention,
+} from '@archon/workflows/schemas/workflow-run';
+import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
+import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 /**
  * Database operations for workflow runs
  */
-import type { ResourceStartDisposition } from '@archon/workflows/schemas/resource-start';
+import { lockConversationOwnership } from './conversation-ownership';
+import {
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+  type GateResolutionEvent,
+} from '@archon/workflows/store';
+export {
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+  type GateResolutionEvent,
+} from '@archon/workflows/store';
 import type { RunExitReason, RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
 
@@ -15,24 +32,37 @@ import {
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
-import { normalizeWorkflowRun } from './workflow-run-normalization';
+import {
+  normalizeWorkflowRun,
+  readWorkflowRunOrigin,
+  type WorkflowRunRow,
+} from './workflow-run-normalization';
+import { workflowRunOriginSchema } from '@archon/workflows/schemas/workflow-run';
+import {
+  assertPublicConversation,
+  ensureWorkflowOriginAnchor,
+  notOriginAnchor,
+} from './workflow-origin-anchor';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
   WorkflowRunOutcome,
   WorkflowRunStatus,
   ApprovalContext,
+  ExpectedApprovalGate,
   WorkflowAttentionWaitContext,
   WorkflowWaitContext,
   ScheduledWorkflowResume,
 } from '@archon/workflows/schemas/workflow-run';
 import {
+  runAttention,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   scheduledWorkflowResumeSchema,
   workflowWaitStepName,
   workflowWaitContextSchema,
   TERMINAL_WORKFLOW_STATUSES,
+  RESUMABLE_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
@@ -44,37 +74,20 @@ import { createLogger } from '@archon/paths';
 import type {
   FanOutCancelReason,
   WorkflowCancellationEventDetails,
-  WorkflowEventType,
   WorkflowResumeCursor,
   WorkflowWaitCompletion,
   WorkflowWaitPause,
   NodeStateEventInput,
 } from '@archon/workflows/store';
-import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from '@archon/workflows/store';
+import {
+  FAN_OUT_CANCEL_REASONS,
+  waitCompletionEvents,
+  WorkflowRunPauseConflictError,
+} from '@archon/workflows/store';
 
-export interface WorkflowRunInsert {
-  id?: string;
-  workflow_name: string;
-  conversation_id: string;
-  codebase_id?: string;
-  user_message: string;
-  metadata?: Record<string, unknown>;
-  working_path?: string;
-  parent_conversation_id?: string;
-  user_id?: string;
-  parent_run_id?: string;
-  adopted_from_run_id?: string;
-}
-
-/** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
-function rollback(): Promise<void> {
-  return pool.query('ROLLBACK', []).then(
-    () => undefined,
-    rollbackErr => {
-      getLog().warn({ err: rollbackErr as Error }, 'db.rollback_failed');
-    }
-  );
-}
+export type WorkflowRunInsert = Parameters<
+  import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']
+>[0];
 
 /** Guard error for deleteWorkflowRun — re-thrown without wrapping in the outer catch. */
 class WorkflowRunGuardError extends Error {}
@@ -110,8 +123,9 @@ function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): stri
  * `FOR UPDATE` on Postgres, empty on SQLite (which has no such syntax and does
  * not need it — the adapter serializes transactions on one connection, and a
  * cross-process writer that commits between our read and our write makes the
- * deferred BEGIN's read→write upgrade fail with SQLITE_BUSY rather than let a
- * stale snapshot through). Used to pin rows across a read-then-write pair so
+ * deferred BEGIN's read→write upgrade fail with SQLITE_BUSY, which the adapter
+ * answers by rerunning the whole transaction, rather than let a stale snapshot
+ * through). Used to pin rows across a read-then-write pair so
  * the values read are the values the mutation acts on. Dialect-branched here
  * rather than in SqlDialect because this lock is local DB policy.
  */
@@ -164,12 +178,29 @@ function readScheduledResume(raw: unknown): ScheduledWorkflowResume | null {
  * This is the compare-and-swap guard resolveApprovalGate uses to serialize
  * concurrent approve/reject.
  */
-function unresolvedGateClause(): string {
+function unresolvedGateClause(expectedNodeParamIndex?: number): string {
   const resolvedExpr =
     getDatabaseType() === 'postgresql'
       ? "metadata->'approval'->>'resolved'"
       : "json_extract(metadata, '$.approval.resolved')";
-  return `status = 'paused' AND ${resolvedExpr} IS NULL`;
+  const nodeExpr =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'approval'->>'nodeId'"
+      : "json_extract(metadata, '$.approval.nodeId')";
+  const pauseExpr =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'approval'->>'pauseId'"
+      : "json_extract(metadata, '$.approval.pauseId')";
+  const expectedNodeClause =
+    expectedNodeParamIndex === undefined
+      ? ''
+      : ` AND ${nodeExpr} = $${String(expectedNodeParamIndex)} AND ${pauseExpr} IS NOT DISTINCT FROM $${String(expectedNodeParamIndex + 1)}`;
+  return `status = 'paused' AND ${resolvedExpr} IS NULL${expectedNodeClause}`;
+}
+
+function expectedGateParams(expected: ExpectedApprovalGate | undefined): (string | null)[] {
+  if (expected === undefined) return [];
+  return typeof expected === 'string' ? [expected, null] : [expected.nodeId, expected.pauseId];
 }
 
 /**
@@ -211,21 +242,6 @@ function replaceWaitMetadata(paramIndex: number): string {
 }
 
 /**
- * An audit event written atomically with a gate resolution (#2146). The winning
- * resolver inserts these in the SAME transaction as the resolution UPDATE, so a
- * failed event write rolls the resolution back — a resolved gate can never be
- * left with no audit trail, which the fast-path guard would then wrongly block
- * from retrying. `workflow_run_id` is supplied by the CAS function.
- */
-export type GateResolutionEvent =
-  | Omit<NodeStateEventInput, 'workflow_run_id'>
-  | {
-      event_type: Exclude<WorkflowEventType, NodeStateEventInput['event_type']>;
-      step_name: string;
-      data: Record<string, unknown>;
-    };
-
-/**
  * Atomically resolve a paused approval gate (compare-and-swap) and record its
  * audit events in one transaction.
  *
@@ -234,7 +250,7 @@ export type GateResolutionEvent =
  * (unresolvedGateClause). When the CAS matches, the same transaction inserts
  * `events`; when it loses (rowCount 0) nothing is written. Returns
  * `{ resolved }`: `true` = this caller won the race and its events are committed;
- * `false` = a concurrent approve/reject already resolved the gate.
+ * `false` = the gate is no longer open or its occurrence differs from `expectedGate`.
  *
  * This closes the read-then-write TOCTOU window in approveWorkflow /
  * rejectWorkflow: the atomic conditional UPDATE — not a prior in-memory
@@ -256,7 +272,8 @@ export type GateResolutionEvent =
 export async function resolveApprovalGate(
   id: string,
   metadata: Record<string, unknown>,
-  events: GateResolutionEvent[]
+  events: GateResolutionEvent[],
+  expectedGate?: ExpectedApprovalGate
 ): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
   try {
@@ -264,8 +281,8 @@ export async function resolveApprovalGate(
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET metadata = ${dialect.jsonMerge('metadata', 2)}
-         WHERE id = $1 AND ${unresolvedGateClause()}`,
-        [id, JSON.stringify(metadata)]
+         WHERE id = $1 AND ${unresolvedGateClause(expectedGate === undefined ? undefined : 3)}`,
+        [id, JSON.stringify(metadata), ...expectedGateParams(expectedGate)]
       );
       const resolved = (result.rowCount ?? 0) > 0;
       if (resolved) {
@@ -306,12 +323,13 @@ export async function resolveApprovalGate(
  * The status flip and every audit event commit in ONE transaction (#2146), so a
  * failed event write rolls the cancellation back rather than terminating the run
  * with no audit trail. Returns `{ resolved }`; `false` means a concurrent
- * resolver already won (the gate is no longer open), so nothing is written.
+ * resolver already won or the occurrence differs from `expectedGate`, so nothing is written.
  */
 export async function resolveAndCancelApprovalGate(
   id: string,
   events: GateResolutionEvent[],
-  cancellation: WorkflowCancellationEventDetails
+  cancellation: WorkflowCancellationEventDetails,
+  expectedGate?: ExpectedApprovalGate
 ): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
   let outcome: { resolved: boolean };
@@ -321,8 +339,8 @@ export async function resolveAndCancelApprovalGate(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled',
              completed_at = ${dialect.now()}
-         WHERE id = $1 AND ${unresolvedGateClause()}`,
-        [id]
+         WHERE id = $1 AND ${unresolvedGateClause(expectedGate === undefined ? undefined : 2)}`,
+        [id, ...expectedGateParams(expectedGate)]
       );
       const resolved = (result.rowCount ?? 0) > 0;
       if (resolved) {
@@ -350,37 +368,6 @@ export async function resolveAndCancelApprovalGate(
   return outcome;
 }
 
-/**
- * Thrown by resumeWorkflowRun when the target run is no longer in a resumable
- * state (already running/terminal, or concurrently resumed). Callers translate
- * this into a user-facing "already being resumed" message instead of leaking
- * the raw internal error string.
- */
-export class WorkflowNotResumableError extends Error {
-  constructor(
-    public readonly runId: string,
-    public readonly currentStatus: string
-  ) {
-    super(
-      `Workflow run is not resumable (id: ${runId}, status: ${currentStatus}). ` +
-        'It may have already been resumed, completed, or cancelled.'
-    );
-    this.name = 'WorkflowNotResumableError';
-  }
-}
-
-export class WorkflowResourceBusyError extends Error {
-  constructor(
-    public readonly runId: string,
-    public readonly blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker']
-  ) {
-    super(
-      `Workflow run '${runId}' cannot resume while ${blocker.kind === 'run' ? 'resource owner' : 'queued request'} '${blocker.id}' has priority.`
-    );
-    this.name = 'WorkflowResourceBusyError';
-  }
-}
-
 export async function insertWorkflowRun(
   query: TransactionQuery,
   data: WorkflowRunInsert
@@ -392,18 +379,18 @@ export async function insertWorkflowRun(
   } catch (serializeError) {
     const err = serializeError as Error;
 
-    // Check if metadata contains critical context that must not be silently lost
-    if (data.metadata && 'github_context' in data.metadata) {
-      // Critical context (e.g., GitHub issue/PR details) must not be silently discarded.
-      // Failing here surfaces the problem to the user instead of running the workflow
-      // with empty context variables ($CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT).
+    // Losing launch policy would silently change execution on the next resume.
+    if (
+      data.metadata &&
+      ('github_context' in data.metadata || RUN_AI_CONFIGURATION_METADATA_KEY in data.metadata)
+    ) {
       getLog().error(
         { err, metadataKeys: Object.keys(data.metadata) },
         'db.workflow_run_metadata_serialize_failed'
       );
       throw new Error(
         `Failed to serialize workflow metadata: ${err.message}. ` +
-          'Metadata contains github_context which is required for this workflow.'
+          'Metadata contains required workflow context or AI configuration.'
       );
     }
 
@@ -415,28 +402,40 @@ export async function insertWorkflowRun(
     metadataJson = '{}';
   }
 
+  const origin = workflowRunOriginSchema.parse(data.origin ?? {});
+  if (origin.conversationId) assertPublicConversation(origin.conversationId);
+  if (origin.parentConversationId) assertPublicConversation(origin.parentConversationId);
+  const physicalConversationId = origin.conversationId ?? (await ensureWorkflowOriginAnchor(query));
   try {
-    const result = await query<WorkflowRun>(
+    // Lock the origin's conversations so a concurrent project detach cannot interleave.
+    // An origin-free run has none to lock: its hidden anchor never has a project, so a
+    // detach always refuses it.
+    await lockConversationOwnership(query, [
+      ...(origin.conversationId ? [origin.conversationId] : []),
+      ...(origin.parentConversationId ? [origin.parentConversationId] : []),
+    ]);
+    const result = await query<WorkflowRunRow>(
       data.id === undefined
         ? `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING *`
-        : `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, id)
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING *`,
+       RETURNING *, CAST(origin AS TEXT) AS origin`
+        : `INSERT INTO remote_agent_workflow_runs
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *, CAST(origin AS TEXT) AS origin`,
       [
         data.workflow_name,
-        data.conversation_id,
+        physicalConversationId,
         data.codebase_id ?? null,
         data.user_message,
         metadataJson,
         data.working_path ?? null,
-        data.parent_conversation_id ?? null,
-        data.user_id ?? null,
+        origin.parentConversationId ?? null,
+        origin.userId ?? null,
         data.parent_run_id ?? null,
         data.adopted_from_run_id ?? null,
+        JSON.stringify(origin),
         ...(data.id === undefined ? [] : [data.id]),
       ]
     );
@@ -454,7 +453,7 @@ export async function insertWorkflowRun(
 
 export async function createWorkflowRun(data: WorkflowRunInsert): Promise<WorkflowRun> {
   try {
-    return await insertWorkflowRun((sql, params) => pool.query(sql, params), data);
+    return await getDatabase().withTransaction(query => insertWorkflowRun(query, data));
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_create_failed');
@@ -462,12 +461,34 @@ export async function createWorkflowRun(data: WorkflowRunInsert): Promise<Workfl
   }
 }
 
-export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null> {
+/**
+ * A run whose checkout belongs only to destroyed worktree records cannot start.
+ * Abandonment marks the record destroyed before its final claimant check, so a run
+ * that reused the record too late to be seen fails here instead of starting in a
+ * checkout that is being removed.
+ *
+ * `workingPath` is stamped by the claim itself on a row created without one
+ * (`run --detach`), so the check and the claimant lookup see the checkout the
+ * run is about to use. An existing path is never replaced.
+ */
+export async function claimPendingWorkflowRun(
+  id: string,
+  workingPath?: string
+): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
-          SET status = 'running', last_activity_at = ${getDialect().now()}
+          SET status = 'running', last_activity_at = ${getDialect().now()},
+              working_path = COALESCE(working_path, CAST($2 AS TEXT))
         WHERE id = $1 AND status = 'pending'
+          AND NOT EXISTS (
+            SELECT 1 FROM remote_agent_isolation_environments e
+             WHERE e.provider = 'worktree'
+               AND e.codebase_id = remote_agent_workflow_runs.codebase_id
+               AND e.working_path = COALESCE(remote_agent_workflow_runs.working_path, CAST($2 AS TEXT))
+             GROUP BY e.working_path
+            HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
+          )
           AND (
             NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
             OR EXISTS (
@@ -478,11 +499,11 @@ export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun |
                WHERE q.id = $1 AND q.status = 'admitted'
             )
           )`,
-      [id]
+      [id, workingPath ?? null]
     );
     if (claimed.rowCount !== 1) return null;
-    const selected = await query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+    const selected = await query<WorkflowRunRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     return selected.rows[0] ? normalizeWorkflowRun(selected.rows[0]) : null;
@@ -513,8 +534,8 @@ export async function recordWorkflowRunCheckoutBaseline(
 
 export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+    const result = await pool.query<WorkflowRunRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     const row = result.rows[0];
@@ -539,8 +560,8 @@ export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun
       ? "metadata->>'isolation_env_id'"
       : "json_extract(metadata, '$.isolation_env_id')";
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE ${extract} = $1
        ORDER BY started_at DESC LIMIT 1`,
       [envId]
@@ -567,9 +588,9 @@ export async function findWorkflowRunsByIdPrefix(
 ): Promise<WorkflowRun[]> {
   if (idPrefix.length === 0 || !/^[0-9a-fA-F-]+$/.test(idPrefix)) return [];
   try {
-    const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id LIKE $2 LIMIT 2',
-      [codebaseId, `${idPrefix}%`]
+    const result = await pool.query<WorkflowRunRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND CAST(id AS TEXT) LIKE $2 LIMIT 2',
+      [codebaseId, `${idPrefix.toLowerCase()}%`]
     );
     return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
@@ -595,8 +616,8 @@ export async function getWorkflowRunStatus(id: string): Promise<string | null> {
 
 export async function getActiveWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (conversation_id = $1 OR parent_conversation_id = $2) AND status = 'running'
        ORDER BY started_at DESC LIMIT 1`,
       [conversationId, conversationId]
@@ -618,8 +639,8 @@ export async function getActiveWorkflowRun(conversationId: string): Promise<Work
  */
 export async function getPausedWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (conversation_id = $1 OR parent_conversation_id = $2) AND status = 'paused'
        ORDER BY started_at DESC LIMIT 1`,
       [conversationId, conversationId]
@@ -661,14 +682,16 @@ export async function getPausedWorkflowRun(conversationId: string): Promise<Work
  * than reporting a false all-clear.
  */
 export async function cancelResumableRunsForConversation(
-  conversationId: string
+  conversationId: string,
+  assertMayCancel?: (runs: WorkflowRun[]) => void
 ): Promise<WorkflowRun[]> {
   const dialect = getDialect();
   let cancelledRuns: WorkflowRun[];
+  let authorizationRefused = false;
   try {
     cancelledRuns = await getDatabase().withTransaction(async query => {
-      const snapshot = await query<WorkflowRun>(
-        `SELECT * FROM remote_agent_workflow_runs
+      const snapshot = await query<WorkflowRunRow>(
+        `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
          WHERE conversation_id = $1 OR parent_conversation_id = $2
          ORDER BY started_at DESC${rowLockClause()}`,
         [conversationId, conversationId]
@@ -676,6 +699,12 @@ export async function cancelResumableRunsForConversation(
       const resumable = snapshot.rows.filter(
         run => run.status === 'paused' || run.status === 'failed'
       );
+      try {
+        assertMayCancel?.(resumable.map(run => normalizeWorkflowRun(run)));
+      } catch (error) {
+        authorizationRefused = true;
+        throw error;
+      }
       if (resumable.length === 0) return [];
 
       const result = await query(
@@ -701,6 +730,7 @@ export async function cancelResumableRunsForConversation(
     });
   } catch (error) {
     const err = error as Error;
+    if (authorizationRefused) throw error;
     getLog().error({ err, conversationId }, 'db.workflow_run_cancel_resumable_for_conv_failed');
     throw new Error(`Failed to cancel resumable runs for conversation: ${err.message}`);
   }
@@ -796,8 +826,8 @@ export async function getActiveWorkflowRunByPath(
   }
 
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE ${clauses.join(' AND ')}
        ORDER BY started_at ASC, id ASC LIMIT 1`,
       params
@@ -819,8 +849,8 @@ export async function getActiveWorkflowRunByPath(
  */
 export async function findChildRuns(parentRunId: string): Promise<WorkflowRun[]> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE parent_run_id = $1 ORDER BY started_at ASC',
+    const result = await pool.query<WorkflowRunRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE parent_run_id = $1 ORDER BY started_at ASC',
       [parentRunId]
     );
     return result.rows.map(row => normalizeWorkflowRun(row));
@@ -864,19 +894,27 @@ export async function getRunAncestry(runId: string): Promise<WorkflowRun[]> {
 }
 
 export async function getRunningWorkflows(): Promise<
-  { id: string; conversation_id: string; workflow_name: string; started_at: string }[]
+  { id: string; conversation_id: string | null; workflow_name: string; started_at: string }[]
 > {
   try {
     const result = await pool.query<{
       id: string;
-      conversation_id: string;
+      conversation_id: string | null;
+      parent_conversation_id: string | null;
+      user_id: string | null;
+      origin: unknown;
       workflow_name: string;
       started_at: string;
     }>(
-      "SELECT id, conversation_id, workflow_name, started_at FROM remote_agent_workflow_runs WHERE status = 'running' ORDER BY started_at ASC LIMIT 100",
+      "SELECT id, conversation_id, parent_conversation_id, user_id, CAST(origin AS TEXT) AS origin, workflow_name, started_at FROM remote_agent_workflow_runs WHERE status = 'running' ORDER BY started_at ASC LIMIT 100",
       []
     );
-    return [...result.rows];
+    return result.rows.map(row => ({
+      id: row.id,
+      workflow_name: row.workflow_name,
+      started_at: row.started_at,
+      conversation_id: readWorkflowRunOrigin(row)?.conversationId ?? null,
+    }));
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_runs_get_running_failed');
@@ -890,8 +928,8 @@ export async function findResumableRun(
 ): Promise<WorkflowRun | null> {
   const dialect = getDialect();
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND working_path = $2
          AND ${resumableStatusClause(dialect, 3)}
@@ -939,8 +977,8 @@ export async function findResumableRunByParentConversation(
   codebaseId: string
 ): Promise<WorkflowRun | null> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND parent_conversation_id = $2
          AND codebase_id = $3
@@ -1070,6 +1108,7 @@ export async function resumeWorkflowRun(
       const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
       const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
       const metadataPatch = {
+        [TOOL_CALL_ATTENTION_METADATA_KEY]: null,
         error: null,
         [RUN_STOP_REASON_METADATA_KEY]: null,
         continuation_retry_at: null,
@@ -1149,10 +1188,10 @@ export async function resumeWorkflowRun(
     throw new WorkflowNotResumableError(id, currentStatus);
   }
 
-  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRun>>>;
+  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRunRow>>>;
   try {
-    selectResult = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+    selectResult = await pool.query<WorkflowRunRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
   } catch (error) {
@@ -1190,11 +1229,15 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
              completed_at = NULL,
              started_at = ${dialect.now()},
              last_activity_at = ${dialect.now()},
-             metadata = ${metadataWithoutCancelledReason}
+             metadata = ${dialect.jsonMerge(metadataWithoutCancelledReason, 5)}
          WHERE id = $1
            AND status = 'cancelled'
            AND ${cancelledReason} IN ($2, $3, $4)`,
-        [id, ...FAN_OUT_CANCEL_REASONS]
+        [
+          id,
+          ...FAN_OUT_CANCEL_REASONS,
+          JSON.stringify({ [TOOL_CALL_ATTENTION_METADATA_KEY]: null }),
+        ]
       );
       if ((result.rowCount ?? 0) === 0) {
         throw new Error(`Workflow run is not an engine-cancelled fan-out child (id: ${id})`);
@@ -1206,8 +1249,8 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
            AND ${eventReason} IN ($2, $3, $4)`,
         [id, ...FAN_OUT_CANCEL_REASONS]
       );
-      const recovered = await query<WorkflowRun>(
-        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+      const recovered = await query<WorkflowRunRow>(
+        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
         [id]
       );
       const row = recovered.rows[0];
@@ -1230,10 +1273,10 @@ export async function getWorkflowRunByWorkerPlatformId(
   platformConversationId: string
 ): Promise<WorkflowRun | null> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT r.* FROM remote_agent_workflow_runs r
+    const result = await pool.query<WorkflowRunRow>(
+      `SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
        JOIN remote_agent_conversations c ON r.conversation_id = c.id
-       WHERE c.platform_conversation_id = $1
+       WHERE c.platform_conversation_id = $1 AND ${notOriginAnchor('c.id')}
        ORDER BY r.started_at DESC LIMIT 1`,
       [platformConversationId]
     );
@@ -1244,6 +1287,56 @@ export async function getWorkflowRunByWorkerPlatformId(
     getLog().error({ err }, 'db.workflow_run_get_by_worker_platform_id_failed');
     throw new Error(`Failed to get workflow run by worker platform ID: ${err.message}`);
   }
+}
+
+export async function setToolCallAttention(
+  runId: string,
+  streamId: string,
+  calls: ToolCallAttention[]
+): Promise<boolean> {
+  const snapshot = toolCallAttentionArraySchema.parse(calls);
+  if (snapshot.some(call => call.streamId !== streamId))
+    throw new Error('Tool attention stream mismatch');
+  const dialect = getDialect();
+  const changed = await getDatabase().withTransaction(async query => {
+    if (getDatabaseType() === 'sqlite') {
+      await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [runId]);
+    }
+    const result = await query<{ status: string; metadata: unknown }>(
+      `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+      [runId]
+    );
+    const row = result.rows[0];
+    if (row?.status !== 'running') return false;
+    const metadata = normalizeMetadata(row.metadata);
+    const previous = toolCallAttentionArraySchema.parse(
+      metadata[TOOL_CALL_ATTENTION_METADATA_KEY] ?? []
+    );
+    const own = previous.filter(call => call.streamId === streamId);
+    if (JSON.stringify(own) === JSON.stringify(snapshot)) return false;
+    const combined = [...previous.filter(call => call.streamId !== streamId), ...snapshot];
+    await query(
+      `UPDATE remote_agent_workflow_runs SET metadata = ${dialect.jsonMerge('metadata', 2)} WHERE id = $1`,
+      [
+        runId,
+        JSON.stringify({ [TOOL_CALL_ATTENTION_METADATA_KEY]: combined.length ? combined : null }),
+      ]
+    );
+    await insertWorkflowEvent(query, {
+      workflow_run_id: runId,
+      event_type: 'run_attention_changed',
+      data: { streamId, hasAttention: snapshot.length > 0 },
+    });
+    return true;
+  });
+  if (changed)
+    getWorkflowEventEmitter().emit({
+      type: 'run_attention_changed',
+      runId,
+      streamId,
+      hasAttention: snapshot.length > 0,
+    });
+  return changed;
 }
 
 /**
@@ -1568,34 +1661,75 @@ export async function cancelFanOutRun(
 export async function pauseWorkflowRun(
   id: string,
   approvalContext: ApprovalContext,
-  extraMetadata?: Record<string, unknown>
+  extraMetadata?: Record<string, unknown>,
+  suspension?: NodeStateEventInput
 ): Promise<void> {
   try {
-    const result = await pool.query(
-      `UPDATE remote_agent_workflow_runs
+    await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
        SET status = 'paused', metadata = ${writeApprovalMetadata(2, 3)}
        WHERE id = $1 AND status = 'running'`,
-      [
-        id,
-        // Caller-supplied run-level metadata (e.g. `pending_writeback`) rides the SAME
-        // atomic write so there is no window where the run is paused without it (M3).
-        JSON.stringify(extraMetadata ?? {}),
-        // The complete gate context. JSON.stringify drops undefined, and the write
-        // replaces rather than merges, so an optional field the caller left unset is
-        // simply absent — no explicit-null reset list to keep in sync.
-        JSON.stringify(approvalContext),
-      ]
-    );
-    if (result.rowCount === 0) {
-      getLog().warn({ workflowRunId: id }, 'db.workflow_run_pause_no_match');
-      throw new Error(`Workflow run not found or not in running state (id: ${id})`);
-    }
+        [
+          id,
+          // Caller-supplied run-level metadata (e.g. `pending_writeback`) rides the SAME
+          // atomic write so there is no window where the run is paused without it (M3).
+          JSON.stringify(extraMetadata ?? {}),
+          // The complete gate context. JSON.stringify drops undefined, and the write
+          // replaces rather than merges, so an optional field the caller left unset is
+          // simply absent — no explicit-null reset list to keep in sync.
+          JSON.stringify(approvalContext),
+        ]
+      );
+      if (result.rowCount === 0) {
+        getLog().warn({ workflowRunId: id }, 'db.workflow_run_pause_no_match');
+        throw new WorkflowRunPauseConflictError(id);
+      }
+      if (suspension) await insertWorkflowEvent(query, suspension);
+    });
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Workflow run not found')) throw error;
+    if (error instanceof WorkflowRunPauseConflictError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_pause_failed');
     throw new Error(`Failed to pause workflow run: ${err.message}`);
   }
+}
+
+/** Fail an undelivered gate only while the persisted approval still matches its owner. */
+export async function failPausedApproval(
+  id: string,
+  approvalContext: ApprovalContext,
+  error: string
+): Promise<{ failed: boolean }> {
+  const dialect = getDialect();
+  const approvalMatches =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'approval' = $2::jsonb"
+      : "json_extract(metadata, '$.approval') = json($2)";
+  const outcome = await getDatabase().withTransaction(async query => {
+    const update = await query(
+      `UPDATE remote_agent_workflow_runs
+       SET status = 'failed', completed_at = ${dialect.now()},
+           metadata = ${dialect.jsonMerge('metadata', 3)}
+       WHERE id = $1 AND status = 'paused' AND ${approvalMatches}`,
+      [
+        id,
+        JSON.stringify(approvalContext),
+        JSON.stringify({ error, stop_reason: { reason: 'node_error' } }),
+      ]
+    );
+    const failed = (update.rowCount ?? 0) > 0;
+    if (failed) {
+      await insertTerminalWorkflowEvent(query, {
+        workflow_run_id: id,
+        event_type: 'workflow_failed',
+        data: { error, exit_reason: 'node_error' },
+      });
+    }
+    return { failed };
+  });
+  if (outcome.failed) await reportRunTerminal(id);
+  return outcome;
 }
 
 /** Pause a running run on a persisted wait condition. */
@@ -1772,8 +1906,8 @@ export async function listDueWorkflowContinuations(
       ? "metadata->>'continuation_retry_at'"
       : "json_extract(metadata, '$.continuation_retry_at')";
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (${retryAt} IS NULL OR ${retryAt} <= $1)
          AND ((status = 'paused' AND ${waitKind} IN ('time', 'event')
                AND (${signaledAt} IS NOT NULL OR ${resumeAt} <= $1))
@@ -2108,6 +2242,23 @@ function buildDashboardWhereClauses(
   return whereClauses;
 }
 
+type JoinedWorkflowRunRow = WorkflowRunRow &
+  Pick<
+    DashboardWorkflowRun,
+    'codebase_name' | 'platform_type' | 'worker_platform_id' | 'parent_platform_id'
+  >;
+
+type DashboardRunRow = JoinedWorkflowRunRow & {
+  // COUNT is BIGINT on PostgreSQL, which node-postgres returns as text.
+  agents_completed: number | string | null;
+  agents_failed: number | string | null;
+  agents_total: number | string | null;
+};
+
+function toCount(value: number | string | null): number | null {
+  return value === null ? null : Number(value);
+}
+
 /**
  * Returns a SQL fragment to extract and cast an integer from a JSON data column.
  * Handles SQLite (`json_extract`) and PostgreSQL (`->>`/`::INTEGER`) dialects.
@@ -2151,13 +2302,8 @@ export async function listDashboardRuns(
 
   try {
     const [listResult, countResult] = await Promise.all([
-      pool.query<
-        Omit<
-          DashboardWorkflowRun,
-          'active_nodes' | 'current_step_name' | 'current_step_status' | 'total_steps'
-        >
-      >(
-        `SELECT r.*,
+      pool.query<DashboardRunRow>(
+        `SELECT r.*, CAST(r.origin AS TEXT) AS origin,
                 c.platform_type,
                 c.platform_conversation_id AS worker_platform_id,
                 pc.platform_conversation_id AS parent_platform_id,
@@ -2171,7 +2317,7 @@ export async function listDashboardRuns(
                  WHERE e.workflow_run_id = r.id AND e.event_type = 'parallel_agent_started'
                  ORDER BY e.created_at DESC LIMIT 1) AS agents_total
          FROM remote_agent_workflow_runs r
-         LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id
+         LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND ${notOriginAnchor('c.id')}
          LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id
          LEFT JOIN remote_agent_codebases cb ON r.codebase_id = cb.id
          ${whereStr}
@@ -2216,6 +2362,9 @@ export async function listDashboardRuns(
       const hasSingleActiveNode = activeNodes.length === 1;
       return normalizeWorkflowRun({
         ...run,
+        agents_completed: toCount(run.agents_completed),
+        agents_failed: toCount(run.agents_failed),
+        agents_total: toCount(run.agents_total),
         active_nodes: activeNodes,
         current_step_name: hasSingleActiveNode ? (activeNodes[0] ?? null) : null,
         current_step_status: hasSingleActiveNode ? ('running' as const) : null,
@@ -2229,6 +2378,51 @@ export async function listDashboardRuns(
     getLog().error({ err }, 'list_dashboard_runs_failed');
     throw new Error(`Failed to list dashboard runs: ${err.message}`);
   }
+}
+
+export async function listRunsNeedingAttention(): Promise<DashboardWorkflowRun[]> {
+  const result = await pool.query<JoinedWorkflowRunRow>(
+    `SELECT r.*, CAST(r.origin AS TEXT) AS origin,
+            c.platform_type,
+            c.platform_conversation_id AS worker_platform_id,
+            pc.platform_conversation_id AS parent_platform_id,
+            cb.name AS codebase_name
+     FROM remote_agent_workflow_runs r
+     LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND ${notOriginAnchor('c.id')}
+     LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id
+     LEFT JOIN remote_agent_codebases cb ON r.codebase_id = cb.id
+     WHERE r.status = 'paused'
+     ORDER BY r.started_at DESC`
+  );
+  const runs: DashboardWorkflowRun[] = [];
+  for (const row of result.rows) {
+    let run: DashboardWorkflowRun;
+    try {
+      run = normalizeWorkflowRun({
+        ...row,
+        agents_completed: null,
+        agents_failed: null,
+        agents_total: null,
+        active_nodes: [],
+        current_step_name: null,
+        current_step_status: null,
+        total_steps: null,
+      });
+    } catch {
+      // Parser errors can quote stored data, including message text.
+      getLog().error({ workflowRunId: row.id }, 'attention_run_normalization_failed');
+      continue;
+    }
+    const attention = runAttention(run);
+    if (
+      attention?.kind === 'awaiting_response' ||
+      attention?.kind === 'action_required' ||
+      attention?.kind === 'unreadable'
+    ) {
+      runs.push(run);
+    }
+  }
+  return runs;
 }
 
 /**
@@ -2277,8 +2471,8 @@ export async function listWorkflowRuns(options?: {
   const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs ${whereStr} ORDER BY started_at DESC LIMIT ${limitParam}`,
+    const result = await pool.query<WorkflowRunRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs ${whereStr} ORDER BY started_at DESC LIMIT ${limitParam}`,
       values
     );
     return result.rows.map(normalizeWorkflowRun);
@@ -2312,8 +2506,8 @@ export async function findOpenWorkRuns(options?: {
   const limitParam = `$${String(values.length)}`;
 
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs r
+    const result = await pool.query<WorkflowRunRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
        WHERE r.status = 'failed'
          ${codebaseClause}
          AND NOT EXISTS (
@@ -2338,8 +2532,8 @@ export async function findOpenWorkRuns(options?: {
  */
 export async function findAdoptingRuns(runId: string): Promise<WorkflowRun[]> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE adopted_from_run_id = $1 ORDER BY started_at DESC',
+    const result = await pool.query<WorkflowRunRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE adopted_from_run_id = $1 ORDER BY started_at DESC',
       [runId]
     );
     return result.rows.map(normalizeWorkflowRun);
@@ -2380,26 +2574,25 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
       ? `NOW() - INTERVAL '${String(olderThanDays)} days'`
       : `datetime('now', '-${String(olderThanDays)} days')`;
   try {
-    await pool.query('BEGIN', []);
-    // Delete events first (FK reference)
-    await pool.query(
-      `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
-        SELECT id FROM remote_agent_workflow_runs
-        WHERE status IN ('completed', 'failed', 'cancelled')
-          AND started_at < ${cutoff}
-      )`,
-      []
-    );
-    const result = await pool.query(
-      `DELETE FROM remote_agent_workflow_runs
-       WHERE status IN ('completed', 'failed', 'cancelled')
-         AND started_at < ${cutoff}`,
-      []
-    );
-    await pool.query('COMMIT', []);
-    return { count: result.rowCount ?? 0 };
+    return await getDatabase().withTransaction(async query => {
+      // Delete events first (FK reference)
+      await query(
+        `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
+          SELECT id FROM remote_agent_workflow_runs
+          WHERE status IN ('completed', 'failed', 'cancelled')
+            AND started_at < ${cutoff}
+        )`,
+        []
+      );
+      const result = await query(
+        `DELETE FROM remote_agent_workflow_runs
+         WHERE status IN ('completed', 'failed', 'cancelled')
+           AND started_at < ${cutoff}`,
+        []
+      );
+      return { count: result.rowCount ?? 0 };
+    });
   } catch (error) {
-    await rollback();
     const err = error as Error;
     getLog().error({ err, olderThanDays }, 'db.workflow_runs_cleanup_failed');
     throw new Error(`Failed to clean up old workflow runs: ${err.message}`);
@@ -2412,28 +2605,42 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
  */
 export async function deleteWorkflowRun(id: string): Promise<void> {
   try {
-    await pool.query('BEGIN', []);
-    // Guard: verify run exists and is terminal before deleting
-    const check = await pool.query<{ status: string }>(
-      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
-      [id]
-    );
-    if (check.rows.length === 0) {
-      throw new WorkflowRunGuardError(`Workflow run not found: ${id}`);
-    }
-    if (!TERMINAL_WORKFLOW_STATUSES.includes(check.rows[0].status as WorkflowRunStatus)) {
-      throw new WorkflowRunGuardError(
-        `Cannot delete workflow run in '${check.rows[0].status}' status — cancel it first`
+    await getDatabase().withTransaction(async query => {
+      // Guard: verify run exists and is terminal before deleting
+      const check = await query<{ status: string }>(
+        'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+        [id]
       );
-    }
-    await pool.query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);
-    await pool.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
-    await pool.query('COMMIT', []);
+      if (check.rows.length === 0) {
+        throw new WorkflowRunGuardError(`Workflow run not found: ${id}`);
+      }
+      if (!TERMINAL_WORKFLOW_STATUSES.includes(check.rows[0].status as WorkflowRunStatus)) {
+        throw new WorkflowRunGuardError(
+          `Cannot delete workflow run in '${check.rows[0].status}' status — cancel it first`
+        );
+      }
+      await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);
+      await query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
+    });
   } catch (error) {
-    await rollback();
     if (error instanceof WorkflowRunGuardError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_delete_failed');
     throw new Error(`Failed to delete workflow run: ${err.message}`);
   }
+}
+
+export async function listConversationDetachBlockers(
+  query: TransactionQuery,
+  conversationId: string
+): Promise<readonly Pick<WorkflowRun, 'id' | 'status'>[]> {
+  const result = await query<Pick<WorkflowRun, 'id' | 'status'>>(
+    `SELECT id, status FROM remote_agent_workflow_runs
+     WHERE (conversation_id = $1 OR parent_conversation_id = $1)
+       AND (status NOT IN (${TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ')})
+            OR status IN (${RESUMABLE_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ')}))
+     ORDER BY id`,
+    [conversationId]
+  );
+  return result.rows;
 }

@@ -1,4 +1,15 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+// @archon-test-isolated
+import type { RunActor } from '../operations/run-authorization';
+import type { ProviderRegistry } from '@archon/provider-contract';
+mock.module('../workflows/branch-launch-source', () => ({
+  withBranchLaunchSource: async (
+    _repo: string,
+    _branch: string,
+    prepare: (path: string) => Promise<unknown>
+  ) => prepare('/adopted/snapshot'),
+}));
+import * as git from '@archon/git';
+import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import { mkdtemp, realpath } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { tmpdir } from 'os';
@@ -31,6 +42,8 @@ import type * as TitleGenerator from '../services/title-generator';
 import type * as WorkflowDb from '../db/workflows';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
+
+const operator: RunActor = { kind: 'operator' };
 
 const mockLogger = createMockLogger();
 // Stands in for the real shared canonicalizer. Tests build their expected
@@ -110,6 +123,12 @@ const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
   listCodebases: mockListCodebases,
+  listCodebaseRegistrations: async () =>
+    (await mockListCodebases()).map(row => ({
+      id: row.id,
+      name: row.name,
+      stored_default_cwd: row.default_cwd,
+    })),
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
 }));
@@ -194,6 +213,7 @@ const mockGetAgentProvider = mock<typeof Providers.getAgentProvider>(() => {
   throw new Error('Agent provider mock is not configured');
 });
 const providerCapabilities: ProviderCapabilities = {
+  backgroundWork: 'unobserved' as const,
   sessionResume: true,
   mcp: true,
   hooks: true,
@@ -217,13 +237,26 @@ const mockGetProviderCapabilities = mock<typeof Providers.getProviderCapabilitie
   () => providerCapabilities
 );
 
+const providerRegistry: ProviderRegistry = {
+  get: id => ({
+    id,
+    displayName: id,
+    builtIn: true,
+    capabilities: mockGetProviderCapabilities(id),
+    parseConfig: raw => raw,
+    credentials: { kind: 'static', specs: [], vendorFor: () => 'anthropic' },
+  }),
+  list: () => [],
+};
+
 mock.module('@archon/providers', () => ({
+  providerRegistry,
+  getRegistration: () => ({
+    parseConfig: (raw: Record<string, unknown>) => raw,
+    credentials: { vendorFor: () => 'anthropic' },
+  }),
   getAgentProvider: mockGetAgentProvider,
   getProviderCapabilities: mockGetProviderCapabilities,
-  // `validEffortsForProvider` (@archon/workflows/model-validation) reads the
-  // registry to decide whether a tier's `effort` reaches this provider (#2556).
-  // Without this the REAL implementation runs against an empty registry and
-  // every provider looks unregistered.
   isRegisteredProvider: mock(() => true),
   getRegisteredProviders: mock(() => []),
   // credentials/delivery (#1955) imports these from '@archon/providers'.
@@ -244,9 +277,18 @@ const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflo
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
-    store: {},
-    getAgentProvider: () => ({}),
-    loadConfig: async () => ({}),
+    providers: providerRegistry,
+    store: { getCodebaseEnvVars: async () => ({}) },
+    sealRunConfig: (_layer: unknown, source: unknown) => ({
+      version: 1,
+      ciphertext: 'sealed',
+      source,
+      keys: [],
+    }),
+    getAgentProvider: () => ({
+      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+    }),
+    loadConfig: async () => ({ assistant: 'claude', assistants: { claude: {} }, commands: {} }),
   })),
 }));
 
@@ -327,10 +369,10 @@ const mockBuildOrchestratorPrompt = mock<typeof PromptBuilder.buildOrchestratorP
   () => 'You are the orchestrator agent.'
 );
 const mockBuildProjectScopedPrompt = mock<typeof PromptBuilder.buildProjectScopedPrompt>(
-  () => 'You are scoped to project X.'
+  async () => 'You are scoped to project X.'
 );
 const mockBuildOrchestratorSystemAppend = mock<typeof PromptBuilder.buildOrchestratorSystemAppend>(
-  () => 'orchestrator system append'
+  async () => 'orchestrator system append'
 );
 
 mock.module('./prompt-builder', () => ({
@@ -762,7 +804,7 @@ describe('orchestrator-agent handleMessage', () => {
         success: true,
       });
 
-      await handleMessage(platform, 'chat-456', '/status');
+      await handleMessage(platform, 'chat-456', '/status', { actor: operator });
 
       expect(mockHandleCommand).toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Status info');
@@ -776,7 +818,7 @@ describe('orchestrator-agent handleMessage', () => {
         success: true,
       });
 
-      await handleMessage(platform, 'chat-456', '/help');
+      await handleMessage(platform, 'chat-456', '/help', { actor: operator });
 
       expect(mockHandleCommand).toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Help text');
@@ -789,7 +831,7 @@ describe('orchestrator-agent handleMessage', () => {
         success: true,
       });
 
-      await handleMessage(platform, 'chat-456', '/reset');
+      await handleMessage(platform, 'chat-456', '/reset', { actor: operator });
 
       expect(mockHandleCommand).toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Session cleared');
@@ -808,7 +850,9 @@ describe('orchestrator-agent handleMessage', () => {
         workflow: { kind: 'start', definition: workflowDefinition, args: 'payload' },
       });
 
-      await handleMessage(platform, 'chat-456', '/workflow run test-workflow payload');
+      await handleMessage(platform, 'chat-456', '/workflow run test-workflow payload', {
+        actor: operator,
+      });
 
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
@@ -825,7 +869,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', '/unknown-command');
+      await handleMessage(platform, 'chat-456', '/unknown-command', { actor: operator });
 
       expect(mockHandleCommand).not.toHaveBeenCalled();
       // Should go through AI path
@@ -842,7 +886,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'Hello, help me');
+      await handleMessage(platform, 'chat-456', 'Hello, help me', { actor: operator });
 
       expect(mockClient.sendQuery).toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'I can help you with that!');
@@ -855,7 +899,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hi');
+      await handleMessage(platform, 'chat-456', 'hi', { actor: operator });
 
       // Should NOT send an error about missing codebase
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Hello!');
@@ -868,7 +912,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help me');
+      await handleMessage(platform, 'chat-456', 'help me', { actor: operator });
 
       expect(mockListCodebases).toHaveBeenCalled();
       expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
@@ -887,7 +931,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
         expect.objectContaining({ codebase_id: 'codebase-789' }),
@@ -901,7 +945,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockTouchConversation).toHaveBeenCalledWith('conv-123');
     });
@@ -916,7 +960,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockTransitionSession).toHaveBeenCalledWith('conv-123', 'first-message', {
         ai_assistant_type: 'claude',
@@ -929,7 +973,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'new-ai-session' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockTransitionSession).not.toHaveBeenCalled();
       // Should pass existing assistant_session_id to AI provider
@@ -947,7 +991,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'new-ai-session-456' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockUpdateSession).toHaveBeenCalledWith('session-abc', 'new-ai-session-456');
     });
@@ -980,7 +1024,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockClient.sendQuery).toHaveBeenCalledWith(
         expect.any(String),
@@ -1028,7 +1072,7 @@ describe('orchestrator-agent handleMessage', () => {
       } satisfies IAgentProvider;
       mockGetAgentProvider.mockReturnValueOnce(codexClient);
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       // Should pass codex assistantConfig, not claude's
       const callArgs = codexClient.sendQuery.mock.calls[0];
@@ -1066,7 +1110,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockGetAgentProvider).toHaveBeenCalledWith('codex');
       expect(mockClient.sendQuery).toHaveBeenCalledWith(
@@ -1106,7 +1150,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'First chunk');
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Second chunk');
@@ -1124,7 +1168,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'list files');
+      await handleMessage(platform, 'chat-456', 'list files', { actor: operator });
 
       // formatToolCall mock returns '🔧 BASH'
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', '🔧 BASH', {
@@ -1153,7 +1197,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       // Should dispatch the workflow
       expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
@@ -1185,7 +1229,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       // Prefix text streamed to platform
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', "I'll help with that.");
@@ -1217,7 +1261,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'set up my app');
+      await handleMessage(platform, 'chat-456', 'set up my app', { actor: operator });
 
       // The /register-project chunk itself should NOT be streamed
       expect(platform.sendMessage).not.toHaveBeenCalledWith(
@@ -1244,7 +1288,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       // Partial chunk is sent (pre-existing behavior: detection fires on accumulated text)
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', '/invoke-work');
@@ -1272,7 +1316,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       expect(
         platform.sendMessage.mock.calls.some(
@@ -1298,7 +1342,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       // Batch mode should send ONE combined message
       expect(platform.sendMessage).toHaveBeenCalledTimes(1);
@@ -1313,7 +1357,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'run tests');
+      await handleMessage(platform, 'chat-456', 'run tests', { actor: operator });
 
       const sentMessage = platform.sendMessage.mock.calls[0][1] as string;
       expect(sentMessage).not.toContain('🔧');
@@ -1325,7 +1369,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(platform.sendMessage).not.toHaveBeenCalled();
     });
@@ -1352,7 +1396,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the login bug');
+      await handleMessage(platform, 'chat-456', 'fix the login bug', { actor: operator });
 
       // Should dispatch to workflow after validation
       expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
@@ -1367,7 +1411,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix it');
+      await handleMessage(platform, 'chat-456', 'fix it', { actor: operator });
 
       // First sendMessage should be the explanation text
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Let me investigate this.');
@@ -1382,7 +1426,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix it');
+      await handleMessage(platform, 'chat-456', 'fix it', { actor: operator });
 
       // Since parseOrchestratorCommands won't match (unknown project), the response
       // is sent as-is in stream mode
@@ -1395,7 +1439,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'what can you do?');
+      await handleMessage(platform, 'chat-456', 'what can you do?', { actor: operator });
 
       expect(mockExecuteWorkflow).not.toHaveBeenCalled();
       expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
@@ -1412,7 +1456,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
     });
@@ -1426,7 +1470,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the bug');
+      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
 
       expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
       expect(
@@ -1449,10 +1493,8 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'do that analysis thing');
+      await handleMessage(platform, 'chat-456', 'do that analysis thing', { actor: operator });
 
-      // userMessage (position 5) carries the synthesized prompt; the opts bag
-      // (trailing arg) carries parentConversationId for approve/reject resume.
       expect(mockExecuteWorkflow).toHaveBeenCalledWith(
         expect.anything(), // deps
         expect.anything(), // platform
@@ -1460,10 +1502,11 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(), // cwd
         expect.anything(), // workflow
         synthesized, // synthesizedPrompt, not original message
-        expect.anything(), // conversation.id
         expect.objectContaining({
-          parentConversationId: expect.anything() as unknown, // web approval auto-resume
-        })
+          conversationId: 'conv-123',
+          parentConversationId: 'conv-123',
+        }),
+        expect.anything()
       );
     });
 
@@ -1478,7 +1521,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'fix the login bug');
+      await handleMessage(platform, 'chat-456', 'fix the login bug', { actor: operator });
 
       expect(mockExecuteWorkflow).toHaveBeenCalledWith(
         expect.anything(), // deps
@@ -1487,10 +1530,11 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(), // cwd
         expect.anything(), // workflow
         'fix the login bug', // original message used as fallback
-        expect.anything(), // conversation.id
         expect.objectContaining({
-          parentConversationId: expect.anything() as unknown, // web approval auto-resume
-        })
+          conversationId: 'conv-123',
+          parentConversationId: 'conv-123',
+        }),
+        expect.anything()
       );
     });
 
@@ -1516,7 +1560,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help me');
+      await handleMessage(platform, 'chat-456', 'help me', { actor: operator });
 
       expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith(
@@ -1535,13 +1579,14 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       // Discovery is called positionally with (cwd, loadConfig) — no options arg.
       // Home-scoped workflows (~/.archon/workflows/) are discovered internally.
       expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
         '/home/test/.archon/workspaces',
-        expect.any(Function)
+        expect.any(Function),
+        providerRegistry
       );
     });
 
@@ -1553,13 +1598,14 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       // Should call discoverWorkflows twice: global + repo-specific
       expect(mockDiscoverWorkflows).toHaveBeenCalledTimes(2);
       expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
         '/workspace/project',
         expect.any(Function),
+        providerRegistry,
         undefined // non-worktree cwd: source root is the cwd itself
       );
     });
@@ -1579,12 +1625,12 @@ describe('orchestrator-agent handleMessage', () => {
       );
 
       const seenRoots: (string | undefined)[] = [];
-      mockDiscoverWorkflows.mockImplementation(async (cwd, _loadConfig, roots) => {
+      mockDiscoverWorkflows.mockImplementation(async (cwd, _loadConfig, _providers, roots) => {
         if (cwd === '/workspace/project') seenRoots.push(roots?.project ?? undefined);
         return { workflows: [], errors: [] };
       });
 
-      await handleMessage(platform, 'chat-456', 'help');
+      await handleMessage(platform, 'chat-456', 'help', { actor: operator });
 
       expect(mockResolveWorkflowSourceRoot).toHaveBeenCalledWith('/workspace/project');
       // Discovery is pointed at the canonical repo's source, not the worktree's.
@@ -1599,7 +1645,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       // Should not throw
-      await handleMessage(platform, 'chat-456', 'help me');
+      await handleMessage(platform, 'chat-456', 'help me', { actor: operator });
 
       // AI should still be called, just without workflows
       expect(mockClient.sendQuery).toHaveBeenCalled();
@@ -1612,7 +1658,7 @@ describe('orchestrator-agent handleMessage', () => {
     test('sends classified error message on failure', async () => {
       mockGetOrCreateConversation.mockRejectedValue(new Error('Database error'));
 
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', '⚠️ Error: Database error');
     });
@@ -1622,7 +1668,7 @@ describe('orchestrator-agent handleMessage', () => {
       platform.sendMessage.mockRejectedValueOnce(new Error('Send failed'));
 
       // Should not throw
-      await handleMessage(platform, 'chat-456', 'hello');
+      await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ conversationId: 'chat-456' }),
@@ -1679,6 +1725,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       await handleMessage(platform, 'thread-123', 'hello', {
+        actor: operator,
         parentConversationId: 'channel-456',
       });
 
@@ -1703,6 +1750,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       await handleMessage(platform, 'thread-123', 'hello', {
+        actor: operator,
         parentConversationId: 'channel-456',
       });
 
@@ -1717,6 +1765,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       await handleMessage(platform, 'thread-123', 'hello', {
+        actor: operator,
         parentConversationId: 'channel-456',
       });
 
@@ -1733,6 +1782,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       await handleMessage(platform, 'thread-123', 'hello', {
+        actor: operator,
         parentConversationId: 'channel-456',
       });
 
@@ -1764,13 +1814,14 @@ describe('orchestrator-agent handleMessage', () => {
           default_cwd: canonicalPath,
         });
 
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`);
+        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+          actor: operator,
+        });
 
         expect(mockCreateCodebase).toHaveBeenCalledWith({
           name: 'my-app',
           default_cwd: canonicalPath,
           default_branch: null,
-          ai_assistant_type: 'claude',
           kind: 'folder',
         });
         expect(platform.sendMessage).toHaveBeenCalledWith(
@@ -1782,27 +1833,13 @@ describe('orchestrator-agent handleMessage', () => {
       }
     });
 
-    test('/register-project stores detected current branch', async () => {
+    test('/register-project stores no branch choice and asks nothing', async () => {
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-project-'));
       // handleRegisterProject canonicalizes before storing (macOS tmpdir lives
       // under /var → /private/var), so the stored default_cwd is canonical.
       const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
+      const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(git.toRepoPath(canonicalPath));
       try {
-        const initExit = await Bun.spawn(['git', 'init', '-b', 'develop'], {
-          cwd: projectPath,
-        }).exited;
-        expect(initExit, 'git init failed during registration fixture setup').toBe(0);
-        const commitExit = await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
-          cwd: projectPath,
-          env: {
-            ...process.env,
-            GIT_AUTHOR_NAME: 'Archon Test',
-            GIT_AUTHOR_EMAIL: 'archon-test@example.com',
-            GIT_COMMITTER_NAME: 'Archon Test',
-            GIT_COMMITTER_EMAIL: 'archon-test@example.com',
-          },
-        }).exited;
-        expect(commitExit, 'git commit failed during registration fixture setup').toBe(0);
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
         mockCreateCodebase.mockResolvedValue({
@@ -1812,16 +1849,18 @@ describe('orchestrator-agent handleMessage', () => {
           default_cwd: projectPath,
         });
 
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`);
+        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+          actor: operator,
+        });
 
         expect(mockCreateCodebase).toHaveBeenCalledWith({
           name: 'my-app',
           default_cwd: canonicalPath,
-          default_branch: 'develop',
-          ai_assistant_type: 'claude',
+          default_branch: null,
           kind: 'repo',
         });
       } finally {
+        repoSpy.mockRestore();
         await removeTempTree(projectPath);
       }
     });
@@ -1829,7 +1868,9 @@ describe('orchestrator-agent handleMessage', () => {
     test('/register-project rejects non-existent path', async () => {
       mockExistsSync.mockReturnValue(false);
 
-      await handleMessage(platform, 'chat-456', '/register-project my-app /nonexistent/path');
+      await handleMessage(platform, 'chat-456', '/register-project my-app /nonexistent/path', {
+        actor: operator,
+      });
 
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
@@ -1842,7 +1883,9 @@ describe('orchestrator-agent handleMessage', () => {
       mockExistsSync.mockReturnValue(true);
       mockListCodebases.mockResolvedValue([mockCodebase]);
 
-      await handleMessage(platform, 'chat-456', '/register-project test-project /some/path');
+      await handleMessage(platform, 'chat-456', '/register-project test-project /some/path', {
+        actor: operator,
+      });
 
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
@@ -1852,7 +1895,7 @@ describe('orchestrator-agent handleMessage', () => {
     });
 
     test('/register-project shows usage for missing args', async () => {
-      await handleMessage(platform, 'chat-456', '/register-project');
+      await handleMessage(platform, 'chat-456', '/register-project', { actor: operator });
 
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
@@ -1881,7 +1924,9 @@ describe('orchestrator-agent handleMessage', () => {
           default_cwd: canonicalPath,
         });
 
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${suppliedPath}`);
+        await handleMessage(platform, 'chat-456', `/register-project my-app ${suppliedPath}`, {
+          actor: operator,
+        });
 
         expect(mockCreateCodebase).toHaveBeenCalledWith(
           expect.objectContaining({ default_cwd: canonicalPath })
@@ -1910,7 +1955,9 @@ describe('orchestrator-agent handleMessage', () => {
           default_cwd: realPath,
         });
 
-        await handleMessage(platform, 'chat-456', '/register-project my-app ~/some-project');
+        await handleMessage(platform, 'chat-456', '/register-project my-app ~/some-project', {
+          actor: operator,
+        });
 
         expect(mockCreateCodebase).toHaveBeenCalledWith(
           expect.objectContaining({ default_cwd: realPath })
@@ -1932,12 +1979,16 @@ describe('orchestrator-agent handleMessage', () => {
         await handleMessage(
           platform,
           'chat-456',
-          `/update-project ${mockCodebase.name} ${suppliedPath}`
+          `/update-project ${mockCodebase.name} ${suppliedPath}`,
+          { actor: operator }
         );
 
-        expect(mockUpdateCodebase).toHaveBeenCalledWith(mockCodebase.id, {
-          default_cwd: canonicalPath,
-        });
+        expect(mockUpdateCodebase).toHaveBeenCalledWith(
+          expect.objectContaining({ id: mockCodebase.id, name: mockCodebase.name }),
+          {
+            default_cwd: canonicalPath,
+          }
+        );
       } finally {
         await removeTempTree(suppliedPath);
         await removeTempTree(canonicalPath);
@@ -1955,6 +2006,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       await handleMessage(platform, 'chat-456', 'fix this', {
+        actor: operator,
         issueContext: 'Issue #42: "Login bug"\nLabels: bug',
       });
 
@@ -1970,6 +2022,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
 
       await handleMessage(platform, 'chat-456', 'continue', {
+        actor: operator,
         threadContext: 'Previous: user said hello\nAssistant: Hi there!',
       });
 
@@ -1987,7 +2040,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'Hello world');
+      await handleMessage(platform, 'chat-456', 'Hello world', { actor: operator });
 
       expect(mockGenerateAndSetTitle).toHaveBeenCalledTimes(1);
       expect(mockGenerateAndSetTitle).toHaveBeenCalledWith(
@@ -2011,7 +2064,7 @@ describe('orchestrator-agent handleMessage', () => {
         success: true,
       });
 
-      await handleMessage(platform, 'chat-456', '/status');
+      await handleMessage(platform, 'chat-456', '/status', { actor: operator });
 
       expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
     });
@@ -2026,7 +2079,7 @@ describe('orchestrator-agent handleMessage', () => {
         yield { type: 'result', sessionId: 'session-id' };
       });
 
-      await handleMessage(platform, 'chat-456', 'Hello world');
+      await handleMessage(platform, 'chat-456', 'Hello world', { actor: operator });
 
       expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
     });

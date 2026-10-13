@@ -5,6 +5,7 @@
  * the previous round reviewed: its delta would run backwards and reopen findings
  * the newer commits fixed.
  */
+import { FULL_REVIEW_RISKS } from '../../workflows/sdlc/.shared/review-policy';
 import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,7 +29,18 @@ function history(): { cwd: string; older: string; newer: string } {
   const commit = (message: string): string => {
     writeFileSync(join(cwd, 'file.txt'), message);
     git(cwd, 'add', 'file.txt');
-    git(cwd, '-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'commit', '-qm', message);
+    git(
+      cwd,
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '-qm',
+      message
+    );
     return git(cwd, 'rev-parse', 'HEAD');
   };
   const older = commit('older');
@@ -42,6 +54,8 @@ function round(cwd: string, head: string, cursor?: string): ScriptRun {
     inputs: {
       INPUTS_PRIOR_REPORT: cursor === undefined ? '' : '{ARTIFACTS}/review/report.md',
       ARCHON_NODE_EXECUTION: JSON.stringify({
+        path: 'review__mode',
+        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
         attempt: { checkoutStart: { kind: 'git', commit: head } },
       }),
     },
@@ -57,14 +71,34 @@ describe('review-round', () => {
     const { cwd, newer } = history();
     const run = round(cwd, newer);
     expect(run.code).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual({ continuation: false, head: newer, cursor: '' });
+    expect(JSON.parse(run.stdout)).toEqual({
+      continuation: false,
+      head: newer,
+      cursor: '',
+      risks: FULL_REVIEW_RISKS,
+      execution: {
+        path: 'review__mode',
+        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
+        attempt: { checkoutStart: { kind: 'git', commit: newer } },
+      },
+    });
   });
 
-  it('continues from the previous round\'s reviewed commit to a head that descends from it', () => {
+  it("continues from the previous round's reviewed commit to a head that descends from it", () => {
     const { cwd, older, newer } = history();
     const run = round(cwd, newer, older);
     expect(run.code).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual({ continuation: true, head: newer, cursor: older });
+    expect(JSON.parse(run.stdout)).toEqual({
+      continuation: true,
+      head: newer,
+      cursor: older,
+      risks: FULL_REVIEW_RISKS,
+      execution: {
+        path: 'review__mode',
+        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
+        attempt: { checkoutStart: { kind: 'git', commit: newer } },
+      },
+    });
   });
 
   it('refuses a head that is an ancestor of the commit the previous round reviewed', () => {

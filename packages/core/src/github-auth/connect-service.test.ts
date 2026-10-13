@@ -1,5 +1,11 @@
+// @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import * as paths from '@archon/paths';
+import { createMockLogger } from '../test/mocks/logger';
 import type { SaveUserGithubTokenParams } from '../db/user-github-token-store';
+
+const logger = createMockLogger();
+mock.module('@archon/paths', () => ({ ...paths, createLogger: () => logger }));
 
 // Device-flow + DB collaborators are mocked so the test exercises the
 // orchestration (ordering, persistence, profile cache) without network or DB.
@@ -44,6 +50,8 @@ import { connectGithubForUser } from './connect-service';
 
 describe('connectGithubForUser', () => {
   beforeEach(() => {
+    logger.info.mockClear();
+    logger.error.mockClear();
     mockStart.mockClear();
     mockPoll.mockClear();
     mockFetchUser.mockClear();
@@ -58,6 +66,10 @@ describe('connectGithubForUser', () => {
       codes.push(info.user_code);
     });
 
+    expect(logger.info).toHaveBeenCalledWith(
+      { userId: 'user-1', platform: 'github' },
+      'github_connect.completed'
+    );
     expect(result).toEqual({ githubLogin: 'alice' });
     expect(codes).toEqual(['ABCD-1234']);
     expect(mockLink).toHaveBeenCalledWith('user-1', 'alice');
@@ -75,10 +87,17 @@ describe('connectGithubForUser', () => {
   });
 
   test('does NOT persist a token when the identity bind throws (no orphan row)', async () => {
+    const conflict = Object.assign(new Error('identity conflict'), {
+      name: 'GithubIdentityConflictError',
+    });
     mockLink.mockImplementationOnce(async () => {
-      throw new Error('identity conflict');
+      throw conflict;
     });
     await expect(connectGithubForUser('user-1', () => {})).rejects.toThrow('identity conflict');
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: conflict, userId: 'user-1', platform: 'github' },
+      'github_connect.failed'
+    );
     expect(mockSave).not.toHaveBeenCalled();
     expect(mockUpdateProfile).not.toHaveBeenCalled();
   });

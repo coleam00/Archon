@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: the provider-event reader against a REAL Postgres server, where
  * `data` is jsonb. Same contract as the SQLite suite

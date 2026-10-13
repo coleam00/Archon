@@ -10,8 +10,8 @@
  * Authentication:
  * - Credentials reach the subprocess via process.env (already cleaned by
  *   stripCwdEnv) PLUS any per-request `requestOptions.env` (per-user delivered
- *   keys/subscriptions), merged LAST so it wins. `buildSubprocessEnv` does NOT
- *   filter tokens — it only logs which posture process.env shows (explicit
+ *   keys/subscriptions), merged LAST so it wins. `buildProviderSubprocessEnv` does NOT
+ *   filter tokens — the Claude wrapper logs which posture process.env shows (explicit
  *   token present vs not); the historical env-token allowlist was removed in
  *   #1067, so the log can read "global" while a per-request token authenticates.
  * - CLAUDE_USE_GLOBAL_AUTH is an Archon-only boot sentinel (set for solo
@@ -28,7 +28,8 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
-import type { CredentialStatus } from '@archon/provider-contract';
+import { buildProviderSubprocessEnv } from '@archon/provider-contract';
+import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
   query,
   type Options,
@@ -43,6 +44,8 @@ import {
   type SDKResultMessage,
   type SDKStartupFailureReason,
   type SDKStatusMessage,
+  type SDKUserMessage,
+  type SDKBackgroundTasksChangedMessage,
   type ModelUsage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
@@ -58,6 +61,7 @@ import type {
 } from '../types';
 import {
   sessionPreview,
+  toolCallSchema,
   truncateToolOutput,
   type ProviderFailure,
   type ProviderFailureClass,
@@ -66,7 +70,11 @@ import {
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
-import { resolveClaudeBinaryPath, pathKind } from './binary-resolver';
+import {
+  resolveClaudeBinaryPath,
+  resolveClaudeBinaryWithSource,
+  pathKind,
+} from './binary-resolver';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import {
   SessionSpendLedger,
@@ -79,19 +87,20 @@ import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
 import { closeOpenToolCalls } from '../shared/tool-calls';
 import { ClassifiedProviderError } from '../shared/failure';
+import { diagnoseBinary } from '../shared/binary-diagnostics';
 import {
   buildClaudePluginSettings,
   buildPluginListCommand,
   readClaudePluginIds,
   withPluginScopeCheck,
 } from './plugins';
-import { clampEffort, type AssertNever } from '@archon/paths/effort';
+import { clampEffort, type AssertNever } from '@archon/provider-contract';
 import {
   claudeSkillSearchRoots,
   findInstalledSkillNames,
   resolveClaudeSkillDirectories,
   skillSearchRoots,
-} from '../shared/skills';
+} from '@archon/paths/skills';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -195,54 +204,18 @@ function selectResolvedModelId(
   return selected[0];
 }
 
-/**
- * Build environment for Claude subprocess.
- *
- * process.env is already clean at this point:
- * - stripCwdEnv() at entry point removed CWD .env keys + CLAUDECODE markers
- * - ~/.archon/.env loaded with override:true as the trusted source
- */
-function buildSubprocessEnv(): NodeJS.ProcessEnv {
-  // Using || intentionally: empty string should be treated as missing credential
-  const hasExplicitTokens = Boolean(
-    process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_API_KEY
-  );
-  const authMode = hasExplicitTokens ? 'explicit' : 'global';
-  getLog().info(
-    { authMode },
-    authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
-  );
-  return { ...process.env };
-}
-
-/**
- * Build the base env for a CONTAINER run. Deliberately does NOT spread
- * `process.env` — that is the isolation boundary itself (the container must
- * never inherit the host's environment). The Archon-managed bag
- * (`requestOptions.env`: codebase env vars + per-user AI creds + GitHub token)
- * is layered on top by the caller, and PATH/HOME/CLAUDE_CONFIG_DIR come from the
- * runner image. Only a minimal, host-independent base is seeded here.
- */
-function buildContainerBaseEnv(): NodeJS.ProcessEnv {
-  return { TERM: 'dumb' };
-}
-
-/**
- * Resolve the environment delivered to the Claude subprocess for a request.
- *
- * This is the env-isolation ENFORCEMENT POINT. A container run
- * (`execContext.kind === 'container'`) gets ONLY the Archon-managed bag
- * (`requestOptions.env`: codebase env + per-user creds + GitHub token) layered
- * over a minimal base — host `process.env` NEVER crosses the boundary. A host run
- * inherits the (already-cleaned) host env exactly as before. Exported so the
- * invariant can be unit-tested with a `process.env` canary.
- */
 export function buildRequestSubprocessEnv(
   requestOptions: SendQueryOptions | undefined
 ): NodeJS.ProcessEnv {
-  const isContainerRun = requestOptions?.execContext?.kind === 'container';
-  const subprocessEnv = isContainerRun ? buildContainerBaseEnv() : buildSubprocessEnv();
-  const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
+  if (requestOptions?.execContext?.kind !== 'container') {
+    const authMode =
+      process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_API_KEY ? 'explicit' : 'global';
+    getLog().info(
+      { authMode },
+      authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
+    );
+  }
+  const env = buildProviderSubprocessEnv(requestOptions);
   // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
   // ANTHROPIC_API_KEY, so mirror it or solo .env installs never authenticate
   // (delivery.ts sets both vars on the per-user api_key path). Guarded on the
@@ -349,7 +322,7 @@ export function classifyClaudeApiError(
       return failure;
     }
     case 'overloaded':
-      return failureOf('rate_limited', evidence);
+      return failureOf('overloaded', evidence);
     case 'server_error':
       return failureOf('transient', evidence);
     case 'invalid_request':
@@ -938,22 +911,22 @@ function buildBaseClaudeOptions(
   const isJsExecutable = shouldPassNoEnvFile(cliPath);
   getLog().debug({ cliPath: cliPath ?? null, isJsExecutable }, 'claude.subprocess_env_file_flag');
 
-  // Container execution: the SDK runs Claude via our `docker exec` spawn hook
-  // instead of a local process. When the hook is set the SDK bypasses ALL disk
-  // resolution, so `pathToClaudeCodeExecutable` and the host-only
-  // `--no-env-file` executableArg are intentionally omitted — the in-container
-  // binary is resolved from the runner image's PATH.
+  // The SDK resolves a native host binary before calling the spawn hook unless
+  // an executable path is supplied. This placeholder is never executed: the
+  // container hook ignores the SDK command and uses the runner image's Claude.
   const containerExecContext =
     requestOptions?.execContext?.kind === 'container' ? requestOptions.execContext : undefined;
   const spawnOverride = containerExecContext
-    ? { spawnClaudeCodeProcess: buildContainerSpawn(containerExecContext) }
+    ? {
+        pathToClaudeCodeExecutable: 'claude',
+        spawnClaudeCodeProcess: buildContainerSpawn(containerExecContext),
+      }
     : {};
 
   return {
     cwd,
     // In compiled binaries, the resolver supplies an absolute executable path;
     // in dev mode it returns undefined and the SDK resolves from node_modules.
-    // Both are skipped for container runs (spawn hook bypasses disk resolution).
     ...(cliPath !== undefined && containerExecContext === undefined
       ? { pathToClaudeCodeExecutable: cliPath }
       : {}),
@@ -1115,7 +1088,8 @@ function claudeStopReason(resultMsg: SDKResultMessage): ProviderStopReason | und
 async function* streamClaudeMessages(
   events: AsyncGenerator,
   toolResultQueue: ToolResultEntry[],
-  spendBaseline: SpendBaseline
+  spendBaseline: SpendBaseline,
+  closeInput: () => void
 ): AsyncGenerator<MessageChunk> {
   // Synthetic error message recorded while waiting for the terminal result to
   // confirm it (#1797). Detection is two-signal: the typed wrapper `error`
@@ -1125,15 +1099,18 @@ async function* streamClaudeMessages(
   // The last subscription-window report; a failure reads it to tell an exhausted
   // window (`status: 'rejected'`) from load shedding.
   let lastRateLimit: SDKRateLimitInfo | undefined;
-  // A result can arrive while background agents still run; only the session going idle
-  // after a result means the turn is over.
+  // A wake turn must report its own result before idle can settle it.
   let resultSeen = false;
+  let resultReported = false;
+  let backgroundObserved = false;
+  let idleReached = false;
   // Progress frames carry no visibility marker, so retain the start decision
   // for the lifetime of this query and suppress the complete hidden lifecycle.
   const hiddenTaskIds = new Set<string>();
   // Tasks announced as subtasks. Their notification closes them even when it is marked
   // ambient, so a subtask the reader saw start never stays open.
   const visibleTaskIds = new Set<string>();
+  let liveBackgroundIds = new Set<string>();
   // Tool calls yielded and not yet closed. The PostToolUse hooks close most of them with
   // their output; a call no hook reports (a permission denial) closes from the
   // `tool_result` block the CLI sends back to the model. Whichever arrives first closes
@@ -1189,7 +1166,16 @@ async function* streamClaudeMessages(
             type: 'tool_call',
             toolCallId: block.id,
             name: block.name,
-            rawInput: block.input ?? {},
+            ...(block.name === 'Bash' &&
+            typeof block.input === 'object' &&
+            block.input !== null &&
+            'command' in block.input &&
+            typeof block.input.command === 'string'
+              ? { title: block.input.command }
+              : {}),
+            rawInput: toolCallSchema.shape.rawInput.parse(
+              block.input === undefined ? {} : block.input
+            ),
           };
           openToolIds.add(block.id);
           yield call;
@@ -1236,13 +1222,41 @@ async function* streamClaudeMessages(
       };
       const subtype = sysMsg.subtype;
       if (subtype === 'session_state_changed') {
-        // The SDK documents `idle` as its authoritative turn-over signal: it fires after
-        // the held-back result flushes and background agents drain. Stop reading there
-        // rather than waiting for the subprocess to exit, which can hang (#854).
-        if (sysMsg.state === 'idle' && resultSeen) break;
+        // Idle can precede background completion. Only a subsequent idle with no
+        // observed work can close streaming input without killing those tasks.
+        if (
+          sysMsg.state === 'idle' &&
+          resultSeen &&
+          liveBackgroundIds.size === 0 &&
+          visibleTaskIds.size === 0
+        ) {
+          idleReached = true;
+          closeInput();
+          break;
+        }
+        if (sysMsg.state === 'running') resultSeen = false;
         getLog().debug({ state: sysMsg.state, resultSeen }, 'claude.session_state_changed');
         if (sysMsg.state === 'running' || sysMsg.state === 'requires_action') {
           yield { type: 'state_update', state: sysMsg.state };
+        }
+      } else if (subtype === 'background_tasks_changed') {
+        const { tasks } = msg as SDKBackgroundTasksChangedMessage;
+        liveBackgroundIds = new Set(tasks.filter(task => !task.ambient).map(task => task.task_id));
+        backgroundObserved ||= liveBackgroundIds.size > 0;
+        for (const task of tasks) {
+          if (task.ambient) {
+            hiddenTaskIds.add(task.task_id);
+            continue;
+          }
+          if (visibleTaskIds.has(task.task_id)) continue;
+          visibleTaskIds.add(task.task_id);
+          yield {
+            type: 'subtask',
+            taskId: task.task_id,
+            status: 'started',
+            description: task.description,
+            taskType: task.task_type,
+          };
         }
       } else if (subtype === 'init' && sysMsg.mcp_servers) {
         for (const server of sysMsg.mcp_servers) {
@@ -1288,6 +1302,7 @@ async function* streamClaudeMessages(
           if (sysMsg.task_type !== undefined) started.taskType = sysMsg.task_type;
           if (sysMsg.tool_use_id !== undefined) started.parentToolCallId = sysMsg.tool_use_id;
           visibleTaskIds.add(sysMsg.task_id);
+          backgroundObserved = true;
           yield started;
         }
       } else if (subtype === 'task_progress' && sysMsg.task_id) {
@@ -1298,6 +1313,8 @@ async function* streamClaudeMessages(
           yield { type: 'state_update', state: 'running' };
           continue;
         }
+        visibleTaskIds.add(sysMsg.task_id);
+        backgroundObserved = true;
         const progress: ProviderEvent = {
           type: 'subtask',
           taskId: sysMsg.task_id,
@@ -1310,7 +1327,7 @@ async function* streamClaudeMessages(
         if (sysMsg.tool_use_id !== undefined) progress.parentToolCallId = sysMsg.tool_use_id;
         yield progress;
       } else if (subtype === 'task_notification' && sysMsg.task_id) {
-        const announced = visibleTaskIds.delete(sysMsg.task_id);
+        const announced = visibleTaskIds.has(sysMsg.task_id);
         if (
           !announced &&
           (hiddenTaskIds.has(sysMsg.task_id) ||
@@ -1325,19 +1342,15 @@ async function* streamClaudeMessages(
         }
         const status = sysMsg.status;
         if (status !== 'completed' && status !== 'failed' && status !== 'stopped') {
-          // Still close the subtask: an unknown terminal status must not leave it open.
-          getLog().warn(
-            { taskId: sysMsg.task_id, status },
-            'claude.task_notification_unknown_status'
+          throw new Error(
+            `Claude task ${sysMsg.task_id} reported unknown terminal status: ${String(status)}`
           );
         }
+        visibleTaskIds.delete(sysMsg.task_id);
         const ended: ProviderEvent = {
           type: 'subtask',
           taskId: sysMsg.task_id,
-          status:
-            status === 'completed' || status === 'failed' || status === 'stopped'
-              ? status
-              : 'stopped',
+          status,
         };
         if (sysMsg.summary !== undefined) ended.summary = sysMsg.summary;
         if (sysMsg.output_file) ended.outputFile = sysMsg.output_file;
@@ -1383,7 +1396,7 @@ async function* streamClaudeMessages(
     } else if (event.type === 'result') {
       const resultMsg = msg as SDKResultMessage;
       // The SDK's cost and per-model totals are cumulative for the session; report
-      // this query's share (see session-spend.ts). Record even on an error result
+      // this result's share (see session-spend.ts). Record even on an error result
       // so a later resume of this session differences against current totals.
       // Typed as required, but it crosses an IPC boundary (see selectResolvedModelId).
       const modelUsage = (resultMsg.modelUsage as Record<string, ModelUsage> | undefined) ?? {};
@@ -1401,6 +1414,7 @@ async function* streamClaudeMessages(
             'claude.query_cost_unknown'
           );
         }
+        spendBaseline = { kind: 'known', spend: cumulative };
       }
       const resolvedModelId = selectResolvedModelId(spend.modelUsage);
       // The terminal result resolves any recorded synthetic error message.
@@ -1503,6 +1517,7 @@ async function* streamClaudeMessages(
 
       // Built by assignment on a typed value so a misspelled key fails to compile.
       const result: ResultChunk = { type: 'result', sessionId: resultMsg.session_id };
+      if (failure === undefined && resultText !== undefined) result.text = resultText;
       if (tokens) result.tokens = tokens;
       if ('structured_output' in resultMsg && resultMsg.structured_output !== undefined) {
         result.structuredOutput = resultMsg.structured_output;
@@ -1522,6 +1537,7 @@ async function* streamClaudeMessages(
       if (resultMsg.num_turns !== undefined) result.numTurns = resultMsg.num_turns;
       if (resolvedModelId) result.resolvedModel = { id: resolvedModelId };
       resultSeen = true;
+      resultReported = true;
       yield result;
       // A failed turn is over: nothing after it belongs to this query.
       if (failure !== undefined) break;
@@ -1530,6 +1546,9 @@ async function* streamClaudeMessages(
 
   // Drain any remaining tool results after the stream ends
   yield* drainHookResults();
+
+  if (visibleTaskIds.size > 0 || liveBackgroundIds.size > 0 || (backgroundObserved && !idleReached))
+    return;
 
   // Stream ended after a synthetic error message with no terminal result to
   // confirm or contradict it. A dangling synthetic error is a failure — the
@@ -1547,7 +1566,15 @@ async function* streamClaudeMessages(
         pendingSdkError.text || 'API error with no error text'
       )
     );
+  } else if (!resultReported) {
+    getLog().error('claude.stream_ended_without_result');
+    const noResult = failureResultChunk(
+      failureOf('unknown', 'Claude Code ended the turn without a result')
+    );
+    noResult.errorSubtype = 'stream_ended_without_result';
+    yield noResult;
   }
+  yield { type: 'settled' };
 }
 // ─── Claude Provider ───────────────────────────────────────────────────────
 
@@ -1562,6 +1589,15 @@ async function* streamClaudeMessages(
  * - classifyClaudeThrownError: typed failure for an error thrown by the SDK
  */
 export class ClaudeProvider implements IAgentProvider {
+  async diagnose(
+    request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
+  ): Promise<ProviderDiagnostics> {
+    const config = parseClaudeConfig(request.assistantConfig ?? {});
+    return diagnoseBinary('claude-binary', 'Claude binary', () =>
+      resolveClaudeBinaryWithSource(config.claudeBinaryPath)
+    );
+  }
+
   async checkCredential(): Promise<CredentialStatus> {
     return { state: 'not_checked', source: 'native' };
   }
@@ -1582,7 +1618,7 @@ export class ClaudeProvider implements IAgentProvider {
   /**
    * Send a query to Claude and stream responses. One call is one SDK query: a failure
    * ends in a `result` carrying a typed `failure`, and the engine decides whether to
-   * try again. Every turn ends in `settled`. Only cancellation throws.
+   * try again. Observed completion ends in `settled`. Cancellation throws; lost observation does not settle.
    */
   // No security gate lives here on purpose. Env hygiene for a target repo is
   // structural (the platform strips what must not reach a subprocess before a
@@ -1604,7 +1640,7 @@ export class ClaudeProvider implements IAgentProvider {
       requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
     }
     let resultReported = false;
-    // Subtasks started and not yet ended; they are closed before `settled`.
+    let closeInput: (() => void) | undefined;
     const openSubtaskIds = new Set<string>();
 
     try {
@@ -1613,12 +1649,7 @@ export class ClaudeProvider implements IAgentProvider {
       }
       const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
-      // In binary mode this throws if neither env nor config supplies a valid path.
-      // SKIP entirely for container runs: the SDK bypasses disk resolution when
-      // `spawnClaudeCodeProcess` is set (buildBaseClaudeOptions omits
-      // pathToClaudeCodeExecutable), and Claude is baked into the runner image — a
-      // compiled Archon binary has no host Claude, so resolving it here would throw
-      // and kill an otherwise-valid container run.
+      // Container runs use the runner image's Claude, so never resolve a host binary.
       const resolvedCliPath = isContainerRun
         ? undefined
         : await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);
@@ -1703,7 +1734,21 @@ export class ClaudeProvider implements IAgentProvider {
         getLog().debug({ cwd }, 'starting_new_session');
       }
 
-      const rawEvents = query({ prompt, options });
+      const { promise: inputClosed, resolve: finishInput } = Promise.withResolvers<undefined>();
+      closeInput = (): void => {
+        finishInput(undefined);
+      };
+      controller.signal.addEventListener('abort', closeInput, { once: true });
+      async function* input(): AsyncGenerator<SDKUserMessage> {
+        yield {
+          type: 'user',
+          message: { role: 'user', content: prompt },
+          parent_tool_use_id: null,
+          session_id: resumeSessionId ?? '',
+        };
+        await inputClosed;
+      }
+      const rawEvents = query({ prompt: input(), options });
       const diagnostics = buildFirstEventHangDiagnostics(
         options.env as Record<string, string>,
         options.model
@@ -1723,7 +1768,12 @@ export class ClaudeProvider implements IAgentProvider {
       // whenever a resume was requested.
       for await (const chunk of withResumedOutcome(
         closeOpenToolCalls(
-          streamClaudeMessages(events, toolResultQueue, sessionSpend.baselineFor(resumeSessionId)),
+          streamClaudeMessages(
+            events,
+            toolResultQueue,
+            sessionSpend.baselineFor(resumeSessionId),
+            closeInput
+          ),
           // A result can arrive while background agents still run their tools.
           { resultEndsTurn: false }
         ),
@@ -1731,8 +1781,9 @@ export class ClaudeProvider implements IAgentProvider {
       )) {
         if (chunk.type === 'result') resultReported = true;
         else if (chunk.type === 'subtask') {
-          if (chunk.status === 'started') openSubtaskIds.add(chunk.taskId);
-          else if (chunk.status !== 'running') openSubtaskIds.delete(chunk.taskId);
+          if (chunk.status === 'started' || chunk.status === 'running')
+            openSubtaskIds.add(chunk.taskId);
+          else openSubtaskIds.delete(chunk.taskId);
         }
         yield chunk;
       }
@@ -1752,36 +1803,18 @@ export class ClaudeProvider implements IAgentProvider {
         { err, stderrContext: stderr, failureClass: failure.class, resultReported },
         'query_error'
       );
-      // The turn already reported its one result; an error while the subprocess
-      // shut down afterwards does not change that outcome.
-      if (!resultReported) {
+      // Lost observation of live work belongs to the engine's unsettled-stream
+      // failure, which names the tasks. Keep the vendor evidence in the log above.
+      if (!resultReported && openSubtaskIds.size === 0) {
         resultReported = true;
         yield failureResultChunk(failure);
+        yield { type: 'settled' };
       }
     } finally {
+      closeInput?.();
+      if (closeInput) controller.signal.removeEventListener('abort', closeInput);
       requestOptions?.abortSignal?.removeEventListener('abort', onAbort);
     }
-    // The SDK ends every turn with a result. A stream that closed without one, and
-    // without an error, is a failed turn: say so rather than settle a turn that
-    // never reported its outcome.
-    if (!resultReported) {
-      getLog().error('claude.stream_ended_without_result');
-      const noResult = failureResultChunk(
-        failureOf('unknown', 'Claude Code ended the turn without a result')
-      );
-      noResult.errorSubtype = 'stream_ended_without_result';
-      yield noResult;
-    }
-    // A task the SDK never reported finished (killed with its subprocess, or the stream
-    // closed first) is over once the turn settles; the contract has no open subtask at
-    // `settled`.
-    if (openSubtaskIds.size > 0) {
-      getLog().warn({ taskIds: [...openSubtaskIds] }, 'claude.subtasks_stopped_at_settle');
-      for (const taskId of openSubtaskIds) {
-        yield { type: 'subtask', taskId, status: 'stopped' };
-      }
-    }
-    yield { type: 'settled' };
   }
 
   getType(): string {

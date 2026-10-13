@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: getLiveRunOwningEnv against a REAL Postgres server.
  *
@@ -14,11 +15,7 @@
 import { describe, test, expect, beforeAll, afterAll, mock } from 'bun:test';
 import type { Pool as PgPool } from 'pg';
 
-// The barrel is fully replaced (no partial merge), so re-export the constants
-// the real module graph needs: bundled-schema reads BUNDLED_IS_BINARY. The
-// '@archon/paths/bundled-build' subpath is a separate specifier and stays real.
 mock.module('@archon/paths', () => ({
-  BUNDLED_IS_BINARY: false,
   createLogger: () => ({
     info() {},
     warn() {},
@@ -146,4 +143,20 @@ describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () =
 
     await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: runId, status: 'failed' });
   });
+  test.each(['pending', 'running', 'paused', 'failed'])(
+    'same-path %s run pins environment without a conversation link',
+    async status => {
+      const { randomUUID } = await import('node:crypto');
+      const env = await createEnv(`path-${status}`);
+      const conversation = randomUUID();
+      const run = randomUUID();
+      await seedConversation(conversation, null);
+      await seedRun(run, conversation, status);
+      await db.query(
+        'UPDATE remote_agent_workflow_runs SET codebase_id = $1, working_path = $2 WHERE id = $3',
+        [env.codebase_id, env.working_path, run]
+      );
+      await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: run, status });
+    }
+  );
 });

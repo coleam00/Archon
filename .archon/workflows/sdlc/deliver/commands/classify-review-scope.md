@@ -13,13 +13,10 @@ actually in the change. Do not modify any file.
 
 ## The tier
 
-- **full** — the diff touches a wire format or persisted state, concurrency
-  over shared state, an isolation, auth or security boundary, a destructive or
-  irreversible path, or anything that could lose data. When you cannot tell
-  whether it does, it is full.
-- **focused** — a small fix, a deletion, a mechanical refactor, a prose or
-  documentation change, or any other change that touches none of the above.
-  A runnable documented snippet counts as code.
+Apply the supplied policy: **$review-policy.output.risks**.
+
+- **full** — the diff engages a risk in that policy, or you cannot tell.
+- **focused** — the diff engages none of those risks. A runnable documented snippet counts as code.
 
 Review depth scales with what a change can destroy, not with its line count:
 a one-line change to a persisted format is full, and a large pure deletion can
@@ -27,9 +24,9 @@ be focused.
 
 ## What each optional lens hunts
 
-- **errors** — failure paths made silent: new catch/fallback/retry/default-value
+- **errors** — failure visibility and containment: new catch/fallback/retry/default-value
   code, error translation, recovery behavior, anything where a failure could
-  become indistinguishable from success.
+  become indistinguishable from success or abort independent work outside its owning item.
 - **docs** — shipped documentation changed by the diff.
 
 ## Calibration

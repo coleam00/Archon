@@ -1,7 +1,8 @@
 /**
  * SQLite adapter using bun:sqlite
  */
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { Database, SQLiteError, type SQLQueryBindings } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import type { IDatabase, QueryResult, SqlDialect } from './types';
@@ -16,6 +17,48 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('db.sqlite');
   return cachedLog;
+}
+
+/**
+ * SQLITE_BUSY and its extended codes (BUSY_SNAPSHOT, BUSY_RECOVERY, BUSY_TIMEOUT):
+ * another connection holds the lock. SQLITE_LOCKED (6) is a same-connection conflict
+ * that waiting cannot clear, so it is not included.
+ */
+function isSqliteBusy(error: unknown): error is SQLiteError {
+  return error instanceof SQLiteError && (error.errno & 0xff) === 5;
+}
+
+const BUSY_RETRY_MAX_DELAY_MS = 2000;
+const BUSY_WARN_INTERVAL_MS = 30_000;
+
+/**
+ * Run `attempt` until it stops failing with SQLITE_BUSY. Each attempt already waits
+ * up to busy_timeout inside SQLite; between attempts this backs off without blocking
+ * the event loop. There is deliberately no deadline: the lock belongs to another live
+ * process, and a timer that gives up would end a run whose work is not lost, only
+ * waiting. A lock that never clears shows up as a repeating warning, not a failure.
+ */
+async function retryWhileBusy<T>(
+  operation: 'statement' | 'transaction',
+  attempt: () => Promise<T>
+): Promise<T> {
+  const startedAt = Date.now();
+  let delayMs = 50;
+  let nextWarnAtMs = 0;
+  for (;;) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      const waitedMs = Date.now() - startedAt;
+      if (waitedMs >= nextWarnAtMs) {
+        getLog().warn({ operation, code: error.code, waitedMs }, 'db.sqlite_busy_waiting');
+        nextWarnAtMs = waitedMs + BUSY_WARN_INTERVAL_MS;
+      }
+      await Bun.sleep(delayMs);
+      delayMs = Math.min(delayMs * 2, BUSY_RETRY_MAX_DELAY_MS);
+    }
+  }
 }
 
 /**
@@ -41,10 +84,11 @@ export class SqliteAdapter implements IDatabase {
   readonly dialect = 'sqlite' as const;
   readonly sql: SqlDialect = sqliteDialect;
   /**
-   * Tail of the transaction queue. bun:sqlite is a single connection, so two
+   * Tail of the connection queue. bun:sqlite is a single connection, so two
    * overlapping `withTransaction` blocks would interleave their BEGINs and throw
-   * "cannot start a transaction within a transaction." Chaining each transaction
-   * onto this tail serializes them: the second waits for the first to COMMIT,
+   * "cannot start a transaction within a transaction", and a plain `query()` would
+   * run inside whichever transaction is open. Chaining every transaction and every
+   * plain statement onto this tail serializes them: the second waits for the first to COMMIT,
    * then sees its committed state — exactly what the approval-gate CAS needs so a
    * concurrent second resolver cleanly loses (rowCount 0) instead of erroring.
    */
@@ -73,7 +117,30 @@ export class SqliteAdapter implements IDatabase {
     this.initSchema();
   }
 
+  /**
+   * Marks code running inside one of this adapter's transaction blocks. The public
+   * query() and withTransaction() queue behind that open transaction, so calling them
+   * from inside it would wait forever; they throw instead.
+   */
+  private readonly transactionScope = new AsyncLocalStorage<SqliteAdapter>();
+
+  private assertNotInOwnTransaction(): void {
+    if (this.transactionScope.getStore() === this) {
+      throw new Error(
+        "SQLite query() or withTransaction() was called inside withTransaction; use the transaction's query instead"
+      );
+    }
+  }
+
   async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
+    this.assertNotInOwnTransaction();
+    // bun:sqlite is one connection shared by every caller. Queue each attempt behind
+    // open transactions, or the statement would join another caller's transaction
+    // and vanish if that transaction rolls back.
+    return retryWhileBusy('statement', () => this.serialize(() => this.execute<T>(sql, params)));
+  }
+
+  private async execute<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
     // Convert $1, $2, etc. to ? placeholders and reorder params to match
     const { sql: convertedSql, params: reorderedParams } = this.convertPlaceholders(
       sql,
@@ -117,8 +184,21 @@ export class SqliteAdapter implements IDatabase {
         return { rows: [], rowCount };
       }
     } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, sql: convertedSql, params }, 'db.sqlite_query_failed');
+      // A busy statement is retried by query() or withTransaction(), which log the wait.
+      if (!isSqliteBusy(error)) {
+        // Driver messages and stacks can echo bound values (e.g. invalid JSON paths).
+        getLog().error(
+          {
+            err: {
+              message: 'Query failed (error details withheld to protect bound values)',
+              ...(error instanceof SQLiteError ? { code: error.code, errno: error.errno } : {}),
+            },
+            sql,
+            paramCount: params?.length ?? 0,
+          },
+          'db.sqlite_query_failed'
+        );
+      }
       throw error;
     }
   }
@@ -126,24 +206,51 @@ export class SqliteAdapter implements IDatabase {
   async withTransaction<T>(
     fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
   ): Promise<T> {
-    const run = async (): Promise<T> => {
-      await this.query('BEGIN');
+    this.assertNotInOwnTransaction();
+    // The block's own statements run directly on the open transaction, without a
+    // per-statement retry: under SQLITE_BUSY_SNAPSHOT the read snapshot is stale for
+    // good, so only rerunning the whole block can succeed.
+    const execute = this.execute.bind(this);
+    const runOnce = async (): Promise<T> => {
+      // A busy statement spoils this attempt however the block handles it: callers wrap
+      // errors in their own messages, which would hide the busy code from the retry. So
+      // the adapter remembers it, rolls back, and rethrows the busy error itself.
+      let busy: SQLiteError | undefined;
+      const blockQuery = async <U>(sql: string, params?: unknown[]): Promise<QueryResult<U>> => {
+        try {
+          return await execute<U>(sql, params);
+        } catch (error) {
+          if (isSqliteBusy(error)) busy = error;
+          throw error;
+        }
+      };
+      await execute('BEGIN');
       try {
-        const result = await fn(this.query.bind(this));
-        await this.query('COMMIT');
+        const result = await this.transactionScope.run(this, () => fn(blockQuery));
+        if (busy) throw busy;
+        await execute('COMMIT');
         return result;
       } catch (e) {
         try {
-          await this.query('ROLLBACK');
+          await execute('ROLLBACK');
         } catch (rollbackError) {
           getLog().error({ err: rollbackError as Error }, 'db.sqlite_transaction_rollback_failed');
         }
-        throw e;
+        throw busy ?? e;
       }
     };
-    // Serialize against any in-flight transaction (see `txTail`). The stored tail
-    // is made non-rejecting so one transaction's failure never blocks the next.
-    const result = this.txTail.then(run, run);
+    // A busy failure anywhere in the block, COMMIT included, has already rolled back,
+    // so the block reruns from BEGIN against fresh state. Callers' blocks only issue
+    // queries and compute a return value, which makes rerunning them safe.
+    return this.serialize(() => retryWhileBusy('transaction', runOnce));
+  }
+
+  /**
+   * Run `work` after every queued transaction and statement (see `txTail`). The stored tail is
+   * made non-rejecting so one failure never blocks the next.
+   */
+  private serialize<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.txTail.then(work, work);
     this.txTail = result.then(
       () => undefined,
       () => undefined
@@ -183,7 +290,12 @@ export class SqliteAdapter implements IDatabase {
   private prepareRun(sql: string, params: SQLQueryBindings[] = []): number {
     const stmt = this.db.prepare(sql);
     try {
-      return stmt.run(...params).changes;
+      const changes = stmt.run(...params).changes;
+      // Bun includes foreign-key actions in .changes; rowCount must describe only
+      // the statement's rows, as PostgreSQL does (not children updated by SET NULL).
+      return changes === 0
+        ? 0
+        : (this.prepareGet<{ count: number }>('SELECT changes() AS count')?.count ?? 0);
     } finally {
       stmt.finalize();
     }
@@ -300,7 +412,8 @@ export class SqliteAdapter implements IDatabase {
     // database missing a failed migration must NOT be stamped as fully applied
     // by this build, or the vintage becomes a wrong answer that gets believed.
     let allApplied = true;
-    // Users columns. `role` is the web-auth identity seam (default 'admin').
+    // Keep 'admin' for older writers and existing rows; new writers insert 'member'.
+    // Changing a SQLite column default would require a table rebuild.
     // Better Auth's own tables are PostgreSQL-only — web auth is never enabled
     // on SQLite — so only the role column is backfilled here.
     try {
@@ -394,6 +507,10 @@ export class SqliteAdapter implements IDatabase {
         this.db.run(
           'ALTER TABLE remote_agent_workflow_runs ADD COLUMN parent_conversation_id TEXT'
         );
+      }
+
+      if (!wfColNames.has('origin')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN origin TEXT');
       }
 
       if (!wfColNames.has('working_path')) {
@@ -814,6 +931,7 @@ export class SqliteAdapter implements IDatabase {
       -- the COMMENT ON COLUMN in migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        origin TEXT,
         conversation_id TEXT NOT NULL REFERENCES remote_agent_conversations(id) ON DELETE CASCADE,
         codebase_id TEXT REFERENCES remote_agent_codebases(id) ON DELETE SET NULL,
         workflow_name TEXT NOT NULL,
@@ -832,6 +950,20 @@ export class SqliteAdapter implements IDatabase {
         working_path TEXT,
         output_root TEXT,
         checkout_baseline TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
+        project_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        value TEXT,
+        operation TEXT NOT NULL,
+        writer_kind TEXT NOT NULL CHECK (writer_kind IN ('run', 'operator')),
+        writer_run_id TEXT,
+        writer_node_path TEXT,
+        writer_identity TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (project_key, name, revision)
       );
 
       CREATE TABLE IF NOT EXISTS remote_agent_start_receipts (
@@ -886,6 +1018,8 @@ export class SqliteAdapter implements IDatabase {
         admitted_at TEXT,
         FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
       );
+
+      CREATE INDEX IF NOT EXISTS idx_state_revisions_created_at ON remote_agent_state_revisions(created_at);
 
       CREATE INDEX IF NOT EXISTS idx_resource_start_queue
         ON remote_agent_resource_start_requests(resource_key, status, queue_position);

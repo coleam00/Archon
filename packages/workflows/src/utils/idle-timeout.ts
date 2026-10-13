@@ -37,11 +37,6 @@ const TICK = Symbol('WATCHDOG_TICK');
  * clean exit. Time the consumer spends handling a value does not count, and neither
  * does time the machine spends suspended.
  *
- * When `shouldResetTimer` is provided and returns `false` for a yielded value, the
- * timer is NOT reset — it keeps counting from the previous reset point. Most callers
- * should omit this parameter (every message resets the timer, which is the correct
- * default for a deadlock detector).
- *
  * When timeout fires:
  * 1. `onTimeout` callback is invoked (use this to abort the subprocess and log)
  * 2. The pending `generator.next()` promise gets a `.catch()` to prevent unhandled rejection
@@ -51,17 +46,19 @@ const TICK = Symbol('WATCHDOG_TICK');
  * @param generator - The async generator to wrap
  * @param timeoutMs - Maximum idle time in milliseconds before terminating
  * @param onTimeout - Optional callback invoked when idle timeout fires (before return)
- * @param shouldResetTimer - Optional predicate; return false to NOT reset the timer for a value
  * @param onTimerReset - Optional observer invoked with the value and exact reset timestamp
+ * @param isWorkLive - Runtime-reported live work suspends the silence watchdog
+ * @param shouldStop - Checks operator cancellation during silence and aborts the producer
  */
 export async function* withIdleTimeout<T>(
   generator: AsyncGenerator<T>,
   timeoutMs: number,
   onTimeout?: () => void,
-  shouldResetTimer?: (value: T) => boolean,
-  onTimerReset?: (value: T, resetAt: number) => void
+  onTimerReset?: (value: T, resetAt: number) => void,
+  isWorkLive?: () => boolean,
+  shouldStop?: () => Promise<boolean>
 ): AsyncGenerator<T> {
-  let timedOut = false;
+  let nextAbandoned = false;
   let idleMs = 0;
 
   try {
@@ -82,12 +79,18 @@ export async function* withIdleTimeout<T>(
         const settled = await Promise.race([nextPromise, tick]);
         clearTimeout(timer);
         // Wall-clock time beyond the scheduled delay was spent suspended.
-        idleMs += Math.max(0, Math.min(Date.now() - tickStartedAt, tickMs));
+        if (isWorkLive?.()) idleMs = 0;
+        else idleMs += Math.max(0, Math.min(Date.now() - tickStartedAt, tickMs));
 
         if (settled !== TICK) {
           result = settled;
+        } else if (shouldStop && (await shouldStop())) {
+          nextAbandoned = true;
+          // The caller aborts the producer; do not await return behind its pending next.
+          nextPromise.catch(() => undefined);
+          return;
         } else if (idleMs >= timeoutMs) {
-          timedOut = true;
+          nextAbandoned = true;
           // Prevent unhandled rejection when the subprocess is aborted via onTimeout
           nextPromise.catch((_err: unknown) => {
             // Intentional: swallow rejection from aborted subprocess
@@ -99,11 +102,8 @@ export async function* withIdleTimeout<T>(
 
       if (result.done) return;
 
-      // Reset the timer unless the predicate says not to
-      if (!shouldResetTimer || shouldResetTimer(result.value)) {
-        idleMs = 0;
-        onTimerReset?.(result.value, Date.now());
-      }
+      idleMs = 0;
+      onTimerReset?.(result.value, Date.now());
 
       // Idle time accrues only while waiting on the generator, so the time the consumer
       // spends on the value (the engine records every provider event before it asks for
@@ -111,7 +111,7 @@ export async function* withIdleTimeout<T>(
       yield result.value;
     }
   } finally {
-    if (!timedOut) {
+    if (!nextAbandoned) {
       // Normal exit (generator exhausted or consumer broke out) — safe to clean up
       try {
         await generator.return(undefined as never);

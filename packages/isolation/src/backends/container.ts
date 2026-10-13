@@ -23,7 +23,10 @@ import { randomUUID } from 'crypto';
 import { isAbsolute, sep } from 'path';
 import type { BranchName } from '@archon/git';
 import { createLogger, isInsideArchonHome } from '@archon/paths';
-import type { WriteBackFinalizeResult, WriteBackApplySummary } from '@archon/providers/types';
+import type {
+  WriteBackFinalizeResult,
+  WriteBackApplySummary,
+} from '@archon/workflows/container-context';
 import type {
   BackendPrepareRequest,
   ContainerBackendConfig,

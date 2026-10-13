@@ -4,6 +4,7 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
+import { giteaPolicy } from './policy';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
@@ -34,7 +35,6 @@ import {
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
-import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { parseAllowedUsers, isGiteaUserAuthorized } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
 import type { WebhookEvent } from './types';
@@ -91,7 +91,7 @@ export class GiteaAdapter implements IPlatformAdapter {
 
     this.retryDelayFn = options?.retryDelayMs ?? ((attempt: number): number => 1000 * attempt);
 
-    getLog().info({ botMention: this.botMention, baseUrl: this.baseUrl }, 'adapter_initialized');
+    getLog().info({ baseUrl: this.baseUrl }, 'adapter_initialized');
   }
 
   /**
@@ -243,7 +243,7 @@ export class GiteaAdapter implements IPlatformAdapter {
    * Get platform type
    */
   getPlatformType(): string {
-    return 'gitea';
+    return giteaPolicy.id;
   }
 
   /**
@@ -647,7 +647,7 @@ export class GiteaAdapter implements IPlatformAdapter {
       const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
       if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
         getLog().info({ codebaseName: existing.name, canonicalPath }, 'stale_worktree_path_fixed');
-        await codebaseDb.updateCodebase(existing.id, { default_cwd: canonicalPath });
+        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
       }
 
@@ -663,7 +663,6 @@ export class GiteaAdapter implements IPlatformAdapter {
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
-      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'codebase_created');
@@ -685,7 +684,7 @@ export class GiteaAdapter implements IPlatformAdapter {
     getLog().info({ conversationId, merged }, 'isolation_cleanup_started');
 
     try {
-      await onConversationClosed('gitea', conversationId, { merged });
+      await onConversationClosed(giteaPolicy.id, conversationId, { merged });
       getLog().info({ conversationId }, 'isolation_cleanup_complete');
     } catch (error) {
       const err = error as Error;
@@ -763,9 +762,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     // 2b. Authorization check - verify sender is in whitelist
     const senderUsername = event.sender?.login;
     if (!isGiteaUserAuthorized(senderUsername, this.allowedUsers)) {
-      // Log unauthorized attempt (mask username for privacy)
-      const maskedUser = senderUsername ? `${senderUsername.slice(0, 3)}***` : 'unknown';
-      getLog().info({ maskedUser }, 'unauthorized_webhook');
+      getLog().info({ platform: giteaPolicy.id }, 'unauthorized_webhook');
       return; // Silent rejection - no error response
     }
 
@@ -797,13 +794,13 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     // Primary: Check for hidden marker in comment body (works with user's token)
     const commentBody = event.comment?.body ?? '';
     if (commentBody.includes(BOT_RESPONSE_MARKER)) {
-      getLog().debug({ commentAuthor: event.comment?.user?.login }, 'ignoring_marked_comment');
+      getLog().debug('ignoring_marked_comment');
       return;
     }
     // Secondary: Check comment author (works with dedicated bot account)
     const commentAuthor = event.comment?.user?.login;
     if (commentAuthor?.toLowerCase() === this.botMention.toLowerCase()) {
-      getLog().debug({ commentAuthor }, 'ignoring_own_comment');
+      getLog().debug('ignoring_own_comment');
       return;
     }
 
@@ -822,25 +819,18 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     if (attributedLogin) {
       try {
         const user = await userDb.findOrCreateUserByPlatformIdentity(
-          'gitea',
+          giteaPolicy.id,
           attributedLogin,
           attributedLogin
         );
         archonUserId = user.id;
       } catch (err) {
-        getLog().warn(
-          { err: toError(err), giteaLogin: attributedLogin },
-          'gitea.user_resolve_failed'
-        );
+        getLog().warn({ err: toError(err), platform: giteaPolicy.id }, 'gitea.user_resolve_failed');
       }
     }
 
     // 7. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number, isPR);
-
-    // 8. Check if new conversation
-    const existingConv = await db.getOrCreateConversation('gitea', conversationId);
-    const isNewConversation = !existingConv.codebase_id;
 
     // 9. Get/create codebase (checks for existing first!)
     const {
@@ -849,8 +839,20 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       isNew: isNewCodebase,
     } = await this.getOrCreateCodebaseForRepo(owner, repo);
 
-    // 9b. Link conversation to codebase
-    if (isNewConversation) {
+    // 10. Get default branch from repository info
+    const defaultBranch = event.repository.default_branch;
+
+    // 11. Ensure repo ready (clone if needed, sync if new conversation)
+    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+
+    const existingConv = await db.getOrCreateConversation(
+      giteaPolicy.id,
+      conversationId,
+      codebase.id
+    );
+    const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
+
+    if (needsProjectContext) {
       try {
         await db.updateConversation(existingConv.id, {
           codebase_id: codebase.id,
@@ -868,12 +870,6 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
         throw updateError;
       }
     }
-
-    // 10. Get default branch from repository info
-    const defaultBranch = event.repository.default_branch;
-
-    // 11. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
 
     // 12. Auto-load commands if new codebase
     if (isNewCodebase) {
@@ -918,7 +914,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     if (isSlashCommand) {
       // For slash commands, use only the first line
       finalMessage = strippedComment.split('\n')[0].trim();
-      getLog().debug({ command: finalMessage }, 'slash_command_processing');
+      getLog().debug('slash_command_processing');
 
       // Add issue/PR reference context
       if (isPR && pullRequest) {
@@ -952,7 +948,7 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
           issueContext: contextToAppend,
           threadContext,
           isolationHints,
-          userId: archonUserId,
+          actor: archonUserId ? { kind: 'user', userId: archonUserId } : { kind: 'unidentified' },
         });
       } catch (error) {
         const err = toError(error);

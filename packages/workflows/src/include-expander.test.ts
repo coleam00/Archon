@@ -464,13 +464,13 @@ describe('expandWorkflowIncludes — namespacing', () => {
         id: 'review',
         include: 'blk',
         depends_on: ['gate'],
-        when: 'true',
+        when: "$gate.output == 'gate'",
         trigger_rule: 'all_success',
       },
     ]);
     const { workflows } = expandWorkflowIncludes(mapOf(blockWorkflow(), parent));
     const entry = nodeById(workflows.get('parent')!, 'review__verify');
-    expect(entry?.when).toBe('true');
+    expect(entry?.when).toBe("$gate.output == 'gate'");
     expect(entry?.trigger_rule).toBe('all_success');
   });
 
@@ -815,15 +815,15 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     expect(error).toContain('right-hand side');
   });
 
-  test('does not broaden the load error to an unchanged malformed when expression', () => {
+  test('rejects an unchanged malformed when expression', () => {
     const block = wf('parameterized', [{ id: 'use', prompt: 'work', when: 'not an atom' }]);
     block.inputs = { mode: { default: 'fast' } };
     const parent = wf('parent', [{ id: 'review', include: 'parameterized' }]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
 
-    expect(errors).toHaveLength(0);
-    expect(nodeById(workflows.get('parent')!, 'review__use')?.when).toBe('not an atom');
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.some(error => error.error.includes('unsupported condition syntax'))).toBe(true);
   });
 
   test('substitutes inputs across every other supported inline node surface', () => {
@@ -2822,4 +2822,90 @@ test('include aliases and prior-iteration namespaces retain complete nested suff
     '$sub__work.output.proposal.action $LOOP_PREV.sub__work.output.proposal.details.count'
   );
   expect(inlinePrompt(nodeById(expanded, 'summary'))).toBe('$sub__read.output.proposal.action');
+});
+
+describe('loop_group structured completion after include expansion (#2998)', () => {
+  test.each([
+    { type: 'object', properties: { done: { type: 'boolean' } } },
+    { type: ['object', 'null'] },
+  ])('checks an included terminal schema: %j', outputFormat => {
+    for (const withBash of [false, true]) {
+      const block = wf('structured-review', [
+        {
+          id: 'review',
+          prompt: 'Review',
+          output_format: outputFormat,
+        },
+      ]);
+      const parent = wf('parent', [
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            ...(withBash ? { until_bash: 'exit 0' } : {}),
+            nodes: [{ id: 'check', include: 'structured-review' }],
+          },
+        },
+      ]);
+      const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+      if (withBash) {
+        expect(errors).toEqual([]);
+        expect(workflows.has('parent')).toBe(true);
+      } else {
+        expect(errors).toHaveLength(1);
+        expect(errors[0].error).toContain("terminal node 'check__review'");
+        expect(errors[0].error).toContain('until_bash');
+        expect(workflows.has('parent')).toBe(false);
+      }
+    }
+  });
+
+  test.each([{ type: 'string' }, { type: ['string', 'object'] }])(
+    'preserves included schemas that permit strings: %j',
+    outputFormat => {
+      const block = wf('string-review', [
+        { id: 'review', prompt: 'Review', output_format: outputFormat },
+      ]);
+      const parent = wf('parent', [
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            nodes: [{ id: 'check', include: 'string-review' }],
+          },
+        },
+      ]);
+      const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+      expect(errors).toEqual([]);
+      expect(workflows.has('parent')).toBe(true);
+    }
+  );
+});
+
+describe('named loop owner ancestry after composition', () => {
+  test('namespaces both the pre-loop source and the body selector', () => {
+    const block = wf('correction-block', [
+      { id: 'implement', prompt: 'Implement' },
+      {
+        id: 'corrections',
+        depends_on: ['implement'],
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 2,
+          nodes: [{ id: 'owner', prompt: 'Correct', context: { resume: 'implement' } }],
+        },
+      },
+    ]);
+    const parent = wf('parent', [{ id: 'delivery', include: 'correction-block' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toEqual([]);
+    const group = workflows.get('parent')?.nodes.find(n => n.id === 'delivery__corrections');
+    if (group?.kind !== 'loop_group') throw new Error('missing expanded group');
+    expect(resolvedBodyNodes(group.loop_group)[0]?.context).toEqual({
+      resume: 'delivery__implement',
+    });
+    expect(group.depends_on).toEqual(['delivery__implement']);
+  });
 });

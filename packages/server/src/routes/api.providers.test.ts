@@ -1,15 +1,10 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import {
-  registerBuiltinProviders,
-  clearRegistry,
-  getRegistration,
-  registerProvider,
-  registerOpencodeProvider,
-} from '@archon/providers';
+import { clearRegistry, getRegistration, registerProvider } from '@archon/providers';
+import { registerBuiltinProviders, registerOpencodeProvider } from '@archon/providers/in-process';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
-import { EFFORT_LADDER } from '@archon/paths/effort';
+import { EFFORT_LADDER } from '@archon/provider-contract';
 import { InvalidConfigError } from '@archon/core/config';
 import {
   makeDiscoverWorkflowsMock,
@@ -33,6 +28,12 @@ mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: mockGetDatabaseType,
   loadConfig: mockLoadConfig,
+  ProjectRegistrationError: class ProjectRegistrationError extends Error {},
+  inspectProjectBaseBranch: mock(async () => ({
+    kind: 'repo',
+    defaultBranch: 'dev',
+    reason: null,
+  })),
   cloneRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   registerRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   ConversationNotFoundError: class ConversationNotFoundError extends Error {
@@ -63,6 +64,7 @@ mock.module('@archon/core', () => ({
 }));
 
 mock.module('@archon/paths', () => ({
+  canonicalizeProjectPath: async (path: string) => path,
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),

@@ -209,6 +209,10 @@ export {
   workflowRunStatusSchema,
   workflowRunOutcomeSchema,
   workflowWaitContextSchema,
+  sessionCursorSchema,
+  bodySessionCursorsSchema,
+  bodySessionCursorAncestrySchema,
+  type BodySessionCursorAncestry,
   scheduledWorkflowResumeSchema,
   workflowStepStatusSchema,
   nodeStateSchema,
@@ -304,3 +308,19 @@ export type {
 
 // DagWorkflow — alias kept for backward compatibility
 export type { WorkflowDefinition as DagWorkflow } from './workflow';
+
+export * from './workflow-run-listing';
+
+export { workflowRunOriginSchema } from './workflow-run';
+export type { WorkflowRunOrigin } from './workflow-run';
+
+export * from './workflow-event';
+
+export {
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+  toolCallAttentionSchema,
+  toolCallAttentionArraySchema,
+  type ToolCallAttention,
+} from './workflow-run';
+
+export type { SessionCursor } from './workflow-run';

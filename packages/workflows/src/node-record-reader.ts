@@ -6,9 +6,12 @@ import {
   type NodeInvocation,
 } from './schemas/node-execution';
 import {
+  DEFERRED_NODE_USAGE_EVENT_TYPE,
+  serializedDeferredNodeUsageDataSchema,
   serializedNodeDataSchema,
   type SerializedNodeData,
   type SerializedNodeEvent,
+  type SerializedDeferredNodeUsageEvent,
 } from './node-record-serialization';
 import { outputPathsFromRootFields } from './output-ref';
 
@@ -156,4 +159,19 @@ export function readNodeRecordEvent(
 
 export function nodeInvocationKey(path: string, loopPath: NodeInvocation['loopPath']): string {
   return JSON.stringify([path, loopPath]);
+}
+
+export function readDeferredNodeUsageEvent(envelope: NodeRecordEventEnvelope):
+  | (Pick<ReadNodeRecordEvent, 'path' | 'rawUsage'> & {
+      data: SerializedDeferredNodeUsageEvent['data'];
+    })
+  | undefined {
+  if (!envelope.step_name || envelope.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE)
+    return undefined;
+  const raw = readNodeRecordData(envelope.data);
+  return {
+    path: envelope.step_name,
+    data: serializedDeferredNodeUsageDataSchema.parse(projectSerializedData(raw)),
+    rawUsage: { tokens: raw.tokens, costUsd: raw.cost_usd },
+  };
 }

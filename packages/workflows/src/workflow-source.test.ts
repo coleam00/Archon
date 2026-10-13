@@ -2,6 +2,7 @@
  * Source capture: what a run freezes, and what it must keep resolving after the
  * authoring checkout moves on.
  */
+import { providerRegistry } from '@archon/providers';
 import { readBundleIndex } from './defaults/bundle-inventory';
 import { describe, test, expect, afterAll, mock } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm, readFile, readdir, symlink, stat } from 'fs/promises';
@@ -710,7 +711,10 @@ describe('the capture is authoritative, not advisory', () => {
     );
 
     await expect(
-      discoverWorkflows(target, { sourceRoots: capturedSourceRoots(capture.anchor) })
+      discoverWorkflows(target, {
+        providers: providerRegistry,
+        sourceRoots: capturedSourceRoots(capture.anchor),
+      })
     ).rejects.toThrow(WorkflowSourceIntegrityError);
   });
 

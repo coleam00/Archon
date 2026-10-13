@@ -138,7 +138,6 @@ const OPAQUE_LABELS: Record<OpaqueKind, string> = {
   include: 'Include',
 };
 
-/** Read-only nodes expose no editable fields, so no affordance applies to them. */
 const OPAQUE_CAPABILITIES: VariantCapabilities = { honorsAiFields: false };
 
 /** Badge label for any builder node, read-only ones included. */

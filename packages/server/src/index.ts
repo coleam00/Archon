@@ -44,7 +44,7 @@ loadArchonEnv(process.cwd());
 // Workflow scripts started by this server call back into the CLI through the
 // same host command the CLI publishes for its own runs.
 import { publishArchonCliCommand } from '@archon/paths/cli-command';
-publishArchonCliCommand();
+if (!BUNDLED_IS_BINARY) publishArchonCliCommand();
 
 // Smart default: fall back to Claude Code's built-in OAuth (`claude /login`)
 // ONLY for solo installs with no explicit credentials. Per-user installs
@@ -54,22 +54,13 @@ if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
-import {
-  claimPiExtensionProcessError,
-  registerBuiltinProviders,
-  registerCommunityProviders,
-} from '@archon/providers';
-import { getVendorCatalog } from '@archon/core';
+import { getPluginsPath } from '@archon/paths';
+import { registerHostProviders } from '@archon/core/providers/register-host-providers';
+import { claimPiExtensionProcessError } from '@archon/providers/pi/extension-error-broker';
 import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
 import { CODEX_BOOT_CHECKED, readCodexBootAuth } from './boot/codex-auth-posture';
 
-// Bootstrap provider registry before any provider lookups
-registerBuiltinProviders();
-registerCommunityProviders();
-// Fail fast at boot (not on first API request) if any registration declares a
-// credential vendor the delivery map can't deliver — that's a provider bug
-// that must block startup, not surface as a runtime 500 (#1955).
-getVendorCatalog();
+await registerHostProviders();
 
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import { serveWebUi } from './static-cache';
@@ -81,7 +72,9 @@ import {
   SlackAdapter,
   SlackWorkflowBridge,
 } from '@archon/adapters';
-import { bundledPlatformPolicies } from '@archon/adapters/platform-policies';
+import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
+import { loadPlatformPolicies, loadChatPlugins } from '@archon/core/platforms/chat-plugins';
+import { createChatHost } from './chat-host/runtime';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { telegramPolicy } from '@archon/adapters/chat/telegram/policy';
 import { slackPolicy } from '@archon/adapters/chat/slack/policy';
@@ -98,6 +91,7 @@ import { registerApiRoutes } from './routes/api';
 import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
+import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import {
   resumeWorkflowRunFromServer,
   startWorkflowContinuationScheduler,
@@ -108,28 +102,21 @@ import {
   handleMessage,
   pool,
   ConversationLockManager,
-  classifyAndFormatError,
   startCleanupScheduler,
   stopCleanupScheduler,
   getDbNotificationListener,
   loadConfig,
   logConfig,
   getPort,
-  createGitHubAppAuthProvider,
-  loadAppPrivateKey,
-  registerGitHubAppAuthProvider,
+  initializeWorkflowGitHubAppAuth,
   isPerUserGitHubEnabled,
   isPerUserProviderKeysEnabled,
   getDatabaseType,
-  assertEncryptionKeyAtBoot,
   assertProviderKeysKeyAtBoot,
   getDecryptedAccessToken,
   type GitHubAuth,
   type IGitHubAppAuthProvider,
 } from '@archon/core';
-import type { IPlatformAdapter } from '@archon/core';
-import type { IdentityPlatform } from '@archon/core';
-import * as userDb from '@archon/core/db/users';
 import * as workflowDb from '@archon/core/db/workflows';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
@@ -159,95 +146,18 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/**
- * Resolve a platform-native user identifier (Slack U-id, Telegram chat id,
- * Discord snowflake) to an Archon user UUID via auto-create-on-first-sight.
- *
- * Contract: NEVER THROWS. On any failure, warn-log and return undefined so
- * message handling proceeds (writes user_id = NULL on the conversation/run
- * row). This invariant is load-bearing — message processing across three
- * adapters depends on it. Covered by resolve-user-id.test.ts.
- *
- * Exported for testability.
- */
-export async function resolveUserId(
-  platform: IdentityPlatform,
-  platformUserId: string | number | undefined,
-  displayName: string | undefined
-): Promise<string | undefined> {
-  if (platformUserId === undefined || platformUserId === '') {
-    return undefined;
-  }
-  try {
-    const user = await userDb.findOrCreateUserByPlatformIdentity(
-      platform,
-      String(platformUserId),
-      displayName
-    );
-    return user.id;
-  } catch (err) {
-    getLog().warn(
-      { err: err as Error, platform, platformUserId: String(platformUserId) },
-      'server.user_resolve_failed'
-    );
-    return undefined;
-  }
-}
-
-/**
- * Creates an error handler for message processing failures.
- * Logs the error and attempts to send a user-friendly message to the platform.
- */
-function createMessageErrorHandler(
-  platform: string,
-  adapter: IPlatformAdapter,
-  conversationId: string
-): (error: unknown) => Promise<void> {
-  return async (error: unknown): Promise<void> => {
-    getLog().error({ err: error, platform, conversationId }, 'message_processing_failed');
-    try {
-      const userMessage = classifyAndFormatError(error as Error, adapter);
-      await adapter.sendMessage(conversationId, userMessage);
-    } catch (sendError) {
-      getLog().error({ err: sendError, platform, conversationId }, 'error_message_send_failed');
-    }
-  };
-}
-
-/**
- * Handles unhandled promise rejections from the process.
- *
- * Exported for testability. Filters specifically for SDK cleanup races
- * ("Operation aborted" when the PostToolUse hook writes to a closed pipe after
- * a DAG node abort). Those are logged at error level but do not exit the process.
- * An error whose stack names an extension loaded by a running Pi turn is handed
- * back to that node; when several running turns loaded it, each of them fails. Every other rejection is logged at fatal level and exits after
- * queued telemetry flushes (bounded, so still Fail Fast).
- */
+import { resolveUserId, createMessageErrorHandler } from './chat-host/inbound';
 export function handleUnhandledRejection(reason: unknown): void {
-  if (claimPiExtensionProcessError(reason)) return;
-  const message = (reason instanceof Error ? reason.message : String(reason)).toLowerCase();
-  // SDK cleanup race: PostToolUse hook writes to a closed pipe after a DAG node
-  // abort. Safe to absorb — these are transient artifacts, not application bugs.
-  if (message.includes('operation aborted')) {
-    getLog().error({ reason }, 'unhandled_rejection.sdk_cleanup_race');
-    return;
-  }
-  // All other unhandled rejections are unexpected — crash loudly so they are
-  // not silently swallowed (CLAUDE.md: "Fail Fast + Explicit Errors").
+  if (BUNDLED_IS_BINARY && claimPiExtensionProcessError(reason)) return;
   getLog().fatal({ reason }, 'unhandled_rejection.fatal');
   void exitAfterTelemetryFlush(1);
 }
 
-/**
- * Handles exceptions that escape detached Pi extension callbacks. Errors whose
- * stacks do not identify an active extension retain the fatal process fallback.
- */
 export function handleUncaughtException(
   error: Error,
   origin?: NodeJS.UncaughtExceptionOrigin
 ): void {
-  if (claimPiExtensionProcessError(error)) return;
+  if (BUNDLED_IS_BINARY && claimPiExtensionProcessError(error)) return;
   getLog().fatal({ err: error, origin }, 'uncaught_exception.fatal');
   void exitAfterTelemetryFlush(1);
 }
@@ -274,7 +184,7 @@ export interface ServerOptions {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
-  setPlatformPolicies(bundledPlatformPolicies);
+  setPlatformPolicies(await loadPlatformPolicies(getPluginsPath(), defaultPlatformPolicies));
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
@@ -444,6 +354,23 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Must be a live reference because Telegram starts after the HTTP listener begins
   // accepting requests, so a snapshot taken at registration time would miss it.
   const activePlatforms: string[] = ['Web'];
+  const chatPlugins = opts.skipPlatformAdapters ? [] : await loadChatPlugins(getPluginsPath());
+  const installedChatIds = new Set(chatPlugins.map(plugin => plugin.descriptor.id));
+  const chatHost = createChatHost(
+    chatPlugins,
+    config.streaming,
+    lockManager,
+    workflowPlatforms,
+    activePlatforms
+  );
+  for (const plugin of chatPlugins) {
+    getLog().info(
+      { plugin: plugin.descriptor.id },
+      defaultPlatformPolicies.some(policy => policy.id === plugin.descriptor.id)
+        ? 'chat.plugin.registered_superseding_bundled_adapter'
+        : 'chat.plugin.registered'
+    );
+  }
 
   // Platform adapters (skipped in CLI serve mode or when not configured)
   let github: GitHubAdapter | null = null;
@@ -477,35 +404,18 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     }
 
     if (ghAuthMode.kind === 'app') {
-      // Locals avoid `!` non-null assertions: hasGitHubApp already guarantees
-      // GITHUB_APP_ID and WEBHOOK_SECRET are set, but the linter can't infer that.
-      const appId = process.env.GITHUB_APP_ID;
       const webhookSecret = process.env.WEBHOOK_SECRET;
-      if (!appId || !webhookSecret) {
-        throw new Error('GitHub App mode misconfigured: GITHUB_APP_ID and WEBHOOK_SECRET required');
+      githubAppAuthProvider = initializeWorkflowGitHubAppAuth();
+      if (!githubAppAuthProvider || !webhookSecret) {
+        throw new Error(
+          'GitHub App mode misconfigured: App credentials and WEBHOOK_SECRET required'
+        );
       }
-      const privateKey = loadAppPrivateKey();
-      // Fail fast on a malformed TOKEN_ENCRYPTION_KEY when per-user is enabled,
-      // so we never store unencryptable tokens at runtime. If the key is absent,
-      // per-user GitHub is simply disabled (App-for-bot-only remains valid).
-      assertEncryptionKeyAtBoot();
       if (!isPerUserGitHubEnabled()) {
         getLog().warn(
           'github_app.per_user_disabled — set TOKEN_ENCRYPTION_KEY (and GITHUB_APP_CLIENT_ID) to enable per-user GitHub identity'
         );
       }
-      const defaultInstallationId = process.env.GITHUB_APP_INSTALLATION_ID
-        ? Number(process.env.GITHUB_APP_INSTALLATION_ID)
-        : undefined;
-      githubAppAuthProvider = createGitHubAppAuthProvider({
-        appId,
-        privateKey,
-        slug: process.env.GITHUB_APP_SLUG ?? 'archon',
-        defaultInstallationId,
-      });
-      // Register on the module-level singleton consumed by createWorkflowDeps()
-      // so bash/script subprocess env injection picks up the provider.
-      registerGitHubAppAuthProvider(githubAppAuthProvider);
       const botMention =
         process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
       const auth: GitHubAuth = { kind: 'app', provider: githubAppAuthProvider };
@@ -522,10 +432,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       await github.start();
       workflowPlatforms.set(github.getPlatformType(), github);
       activePlatforms.push('GitHub (App)');
-      getLog().info(
-        { slug: githubAppAuthProvider.slug, defaultInstallationId },
-        'github.adapter_mode_app'
-      );
+      getLog().info({ slug: githubAppAuthProvider.slug }, 'github.adapter_mode_app');
     } else if (ghAuthMode.kind === 'pat') {
       const patToken = process.env.GITHUB_TOKEN;
       const webhookSecret = process.env.WEBHOOK_SECRET;
@@ -581,7 +488,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     }
 
     // Initialize Discord adapter (conditional)
-    if (process.env.DISCORD_BOT_TOKEN) {
+    if (!installedChatIds.has(discordPolicy.id) && process.env.DISCORD_BOT_TOKEN) {
       const discordStreamingMode = (process.env[discordPolicy.streaming.envVar] ??
         discordPolicy.streaming.defaultMode) as 'stream' | 'batch';
       discord = new DiscordAdapter(process.env.DISCORD_BOT_TOKEN, discordStreamingMode);
@@ -637,7 +544,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
@@ -667,7 +574,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     }
 
     // Initialize Slack adapter (conditional)
-    if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
+    if (
+      !installedChatIds.has(slackPolicy.id) &&
+      process.env.SLACK_BOT_TOKEN &&
+      process.env.SLACK_APP_TOKEN
+    ) {
       const slackStreamingMode = (process.env[slackPolicy.streaming.envVar] ??
         slackPolicy.streaming.defaultMode) as 'stream' | 'batch';
       slack = new SlackAdapter(
@@ -714,7 +625,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
@@ -729,7 +640,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         if (!run) return false;
         const actorUserId = await resolveUserId('slack', slackUserId, undefined);
         const target = await workflowResumeTargetForRun(run, workflowPlatforms);
-        return resumeWorkflowRunFromServer(run, actorUserId, target);
+        return resumeWorkflowRunFromServer(createSqlWorkflowHost(), run, actorUserId, target);
       });
       slackBridge.attach();
 
@@ -751,14 +662,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
 
+  const resourceStartWorkflowHost = createSqlWorkflowHost();
   const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
   const webhookSources = webhookSourcesConfigPath
-    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath)
+    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath, {
+        acceptReceipt: input => resourceStartWorkflowHost.deps.store.acceptStartReceipt(input),
+        isKnownUser: async id =>
+          (await resourceStartWorkflowHost.records.users.getUserById(id)) !== null,
+      })
     : undefined;
   // Explicit only: bindings choose their execution host, so the server never guesses one.
   const resourceStartHostId = process.env.ARCHON_TRIGGER_HOST?.trim();
   const resourceStartHost = resourceStartHostId
-    ? createServerResourceStartHost(resourceStartHostId)
+    ? createServerResourceStartHost(resourceStartHostId, resourceStartWorkflowHost)
     : undefined;
   const requestResourceStartDrain = resourceStartHost
     ? (): void => void resourceStartHost.requestDrain()
@@ -1010,7 +926,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)
   let telegram: TelegramAdapter | null = null;
-  if (!opts.skipPlatformAdapters && process.env.TELEGRAM_BOT_TOKEN) {
+  if (
+    !opts.skipPlatformAdapters &&
+    !installedChatIds.has(telegramPolicy.id) &&
+    process.env.TELEGRAM_BOT_TOKEN
+  ) {
     const streamingMode = (process.env[telegramPolicy.streaming.envVar] ??
       telegramPolicy.streaming.defaultMode) as 'stream' | 'batch';
     telegram = new TelegramAdapter(process.env.TELEGRAM_BOT_TOKEN, streamingMode);
@@ -1027,7 +947,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           .acquireLock(conversationId, async () => {
             await handleMessage(telegramAdapter, conversationId, message, {
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));
@@ -1047,11 +967,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('telegram_adapter_skipped');
   }
 
-  // Continuations can execute only after every credential provider and platform
-  // adapter is initialized. Web background runs execute against a hidden worker
-  // conversation but deliver to their visible parent; other runs use their owning
-  // conversation directly.
+  // Web background runs execute against a hidden worker conversation but deliver
+  // to their visible parent; other runs use their owning conversation directly.
   startWorkflowContinuationScheduler(
+    createSqlWorkflowHost(),
     run => workflowResumeTargetForRun(run, workflowPlatforms),
     requestResourceStartDrain
   );
@@ -1072,6 +991,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         getLog().error({ err: e }, 'shutdown_flush_failed');
       })
       .then(async () => {
+        try {
+          await chatHost.stop();
+        } catch (error) {
+          getLog().error({ err: error }, 'chat_host_stop_error');
+        }
         // Stop adapters (these should not throw, but be defensive)
         try {
           telegram?.stop();
@@ -1109,15 +1033,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
+  chatHost.start();
 
-  // Guard against SDK cleanup races and hand stack-attested Pi extension
-  // failures back to the Pi turns that loaded that extension. When a DAG node is aborted,
-  // the Claude Agent SDK's PostToolUse hook may be in-flight. After the hook
-  // returns { continue: true }, handleControlRequest() tries to write() back to
-  // the subprocess pipe — but the pipe is already closed (abort fired). The
-  // write() throws "Operation aborted", which becomes an unhandled rejection
-  // because it occurs AFTER the for-await generator loop exits (and thus outside
-  // the try/catch in claude.ts). These are SDK cleanup races, not fatal app errors.
+  // Every unhandled rejection or exception exits: vendor error text (such as the Claude
+  // SDK's "Operation aborted") must not decide what gets suppressed. The one exception is
+  // a stack-attested Pi extension failure, which goes back to the Pi turn that loaded it.
   process.on('unhandledRejection', handleUnhandledRejection);
   process.on('uncaughtException', handleUncaughtException);
 

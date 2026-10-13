@@ -1,13 +1,52 @@
+import { providerRegistry } from '@archon/providers';
 import { chmod, mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { afterEach, describe, expect, test } from 'bun:test';
-import { discoverWorkflows } from './workflow-discovery';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import * as fs from 'fs/promises';
+import { removeTempTree } from '@archon/paths/test-utils';
+import { discoverWorkflows, liveSourceRoots } from './workflow-discovery';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 import { isLoopGroupNode, isLoopNode } from './schemas';
 import type { DagNode } from './schemas';
 
 const tempDirectories: string[] = [];
+
+test('discovery reports an inaccessible global workflow scope but tolerates a missing one', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'archon-global-workflow-read-'));
+  const globalWorkflows = join(root, 'workflows');
+  const sourceRoots = { ...liveSourceRoots(null), globalWorkflows };
+  const realAccess = fs.access;
+  let code = 'EACCES';
+  const accessSpy = spyOn(fs, 'access').mockImplementation(async (path, mode) => {
+    if (path === globalWorkflows) {
+      throw Object.assign(new Error('global workflow scope unavailable'), { code });
+    }
+    return realAccess(path, mode);
+  });
+  try {
+    const result = await discoverWorkflows(null, {
+      providers: providerRegistry,
+      loadDefaults: false,
+      sourceRoots,
+    });
+    expect(result.errors).toContainEqual({
+      filename: globalWorkflows,
+      error: 'global workflow scope unavailable',
+      errorType: 'read_error',
+    });
+    code = 'ENOENT';
+    const missing = await discoverWorkflows(null, {
+      providers: providerRegistry,
+      loadDefaults: false,
+      sourceRoots,
+    });
+    expect(missing.errors).toEqual([]);
+  } finally {
+    accessSpy.mockRestore();
+    await removeTempTree(root);
+  }
+});
 
 afterEach(async () => {
   await Promise.all(
@@ -53,7 +92,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
     );
     await writeFile(join(commandDir, 'review-item.md'), 'Review $INPUTS.item.');
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
 
     expect(result.errors.filter(error => error.filename === 'parent.yaml')).toHaveLength(0);
     expect(result.workflows.map(item => item.workflow.name)).toContain('parent');
@@ -112,7 +154,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
     );
     await writeFile(join(commandDir, 'body-review.md'), 'Review $INPUTS.context and emit DONE.');
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
 
     expect(result.errors.filter(error => error.filename === 'parent.yaml')).toHaveLength(0);
     const parent = result.workflows.find(item => item.workflow.name === 'parent')?.workflow;
@@ -174,7 +219,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
     );
     await writeFile(join(commandDir, 'nested-command.md'), 'Read $seed.output and continue.');
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
 
     expect(result.errors.filter(error => error.filename === 'parent.yaml')).toHaveLength(0);
     const parent = result.workflows.find(item => item.workflow.name === 'parent')?.workflow;
@@ -220,7 +268,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
     );
     await writeFile(join(commandDir, 'leaky-command.md'), 'Use $caller.output directly.');
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
 
     expect(result.workflows.map(item => item.workflow.name)).not.toContain('parent');
     const message = result.errors.find(error => error.filename === 'parent.yaml')?.error;
@@ -271,7 +322,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
       const originalArchonHome = process.env.ARCHON_HOME;
       process.env.ARCHON_HOME = archonHome;
       try {
-        const result = await discoverWorkflows(cwd, { loadDefaults: false });
+        const result = await discoverWorkflows(cwd, {
+          providers: providerRegistry,
+          loadDefaults: false,
+        });
 
         expect(result.workflows.map(item => item.workflow.name)).not.toContain('parent');
         const message = result.errors.find(error => error.filename === 'parent.yaml')?.error;
@@ -328,7 +382,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
       const originalArchonHome = process.env.ARCHON_HOME;
       process.env.ARCHON_HOME = archonHome;
       try {
-        const result = await discoverWorkflows(cwd, { loadDefaults: false });
+        const result = await discoverWorkflows(cwd, {
+          providers: providerRegistry,
+          loadDefaults: false,
+        });
 
         expect(result.workflows.map(item => item.workflow.name)).not.toContain('parent');
         const message = result.errors.find(error => error.filename === 'parent.yaml')?.error;

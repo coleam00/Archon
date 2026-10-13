@@ -91,7 +91,10 @@ export function pairProviderToolCalls(providerEvents: RunProviderEvents): Paired
           id: `${stepName}:${key}`,
           timestamp: record.observedAt,
           nodeId: stepName,
-          call: { name: event.title || event.name, input: event.rawInput ?? {} },
+          call: {
+            name: event.title || event.name,
+            input: event.rawInput === undefined ? {} : event.rawInput,
+          },
         };
         byId.set(key, entry);
         paired.push(entry);

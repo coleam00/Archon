@@ -25,7 +25,7 @@ Local development with SQLite is the recommended default. No database setup is n
 - At least one AI assistant installed and configured (Claude Code or Codex — Archon orchestrates them, it does not bundle them)
 - A GitHub token for repository cloning (`GH_TOKEN` / `GITHUB_TOKEN`)
 
-> Source installs (`bun run`) auto-resolve Claude Code's `cli.js` via `node_modules`. Compiled Archon binaries require `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` — see [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only).
+> Source installs (`bun run`) let the SDK resolve Claude Code via `node_modules` unless `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` is set. Compiled Archon binaries use those pins before autodetecting the native-installer path — see [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only).
 
 ### Setup
 

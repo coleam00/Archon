@@ -98,6 +98,12 @@ WEBHOOK_SECRET=<same value as on the GitHub side>
 #                                    # repo after a restart.
 ```
 
+CLI workflow run, `--detach`, resume, wake, and signal use `GITHUB_APP_ID` plus either private-key setting. They do not require `WEBHOOK_SECRET`; that setting is required for the server's webhook adapter. Each detached child initializes its own provider from the inherited configuration.
+
+Incomplete App settings, malformed App or installation IDs, an unusable RSA private key, and a malformed per-user encryption key fail before workflow execution. App/key correspondence and installation access are checked remotely when resolving the repository token. A resolution failure fails the run before any node executes; it cannot fall back to another credential. With no App settings, CLI behavior is unchanged. CLI runs follow the same per-user policy as server runs: connected user credentials override the bot, and unconnected users have GitHub credentials scrubbed unless org fallback is explicitly enabled.
+
+Each workflow execution, including a resumed segment, resolves the codebase repository's installation token. The provider caches fresh tokens in memory and refreshes them near expiry; tokens are not cached on disk. A node's environment stays fixed during one execution, so this does not rotate tokens inside a workflow that runs longer than the token lifetime.
+
 ### Inline private key (alternative)
 
 If you can't write a file (e.g. a managed PaaS), set the PEM contents inline:
@@ -121,7 +127,7 @@ Archon refuses to start if both modes are configured. Remove `GITHUB_TOKEN` from
 
 ## Step 8 (optional): Enable per-user GitHub identity
 
-By default every comment, commit, and push goes through the **bot** (`<slug>[bot]`). On a multi-user install you can let each teammate connect their own GitHub identity so those actions attribute to the human instead.
+By default GitHub API requests and pushes authenticate as the **bot** (`<slug>[bot]`), while commit authorship uses the checkout's ambient git identity. On a multi-user install teammates can connect their own GitHub identity for authentication and commit authorship.
 
 Enable the feature by adding two env vars on top of App mode:
 
@@ -143,6 +149,7 @@ Teammates connect once via any surface:
 
 Once enabled:
 
+- Run commits use the initiating connected user's GitHub login as author name and `<numeric_id>+<login>@users.noreply.github.com` as author email. The committer remains the ambient git identity. This applies to new and adopted worktrees, in-place runs, and folder projects without changing repository git config. Unconnected users and runs without an initiating user keep ambient authorship.
 - Workflows declaring `requires: [github]` **hard-block** unconnected users before any worktree/clone/AI cost.
 - An unconnected user's workflow `gh`/`git` has its GitHub token **scrubbed** by default (rather than silently using the shared org/bot token). Opt back into the shared token with `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true`.
 - Rotating `TOKEN_ENCRYPTION_KEY` invalidates all stored user tokens — everyone must reconnect.

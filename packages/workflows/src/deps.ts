@@ -1,12 +1,13 @@
+import type { ResolvedWorkflowPolicy } from './schemas/run-config';
 /**
  * Workflow dependency injection types.
  *
  * Defines narrow interfaces for what the workflow engine needs from external systems.
  * Callers in @archon/core satisfy these structurally — no adapter wrappers needed.
  *
- * Provider types are imported directly from @archon/providers/types (contract layer).
- * No more mirror copies — single source of truth for IAgentProvider, MessageChunk, etc.
+ * Provider types are imported directly from @archon/provider-contract.
  */
+import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
 import type { IWorkflowStore } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type {
@@ -19,7 +20,7 @@ import type {
   NodeConfig,
   ProviderDefaultsMap,
   ProviderCapabilities,
-} from '@archon/providers/types';
+} from '@archon/provider-contract';
 import type { RawAliasesConfig, RawTiersConfig } from './model-validation';
 import type {
   WorkflowRunConfigLayer,
@@ -45,7 +46,7 @@ export type {
   ProviderCapabilities,
 };
 
-// Backwards compat alias — deprecated, prefer direct import from @archon/providers/types
+// Backwards compat alias — deprecated, prefer direct import from @archon/provider-contract
 export type WorkflowTokenUsage = TokenUsage;
 
 // ---------------------------------------------------------------------------
@@ -114,23 +115,19 @@ export function spellWorkflowCommand(surface: WorkflowCommandSurface, command: s
 
 export interface WorkflowConfig {
   /** Default assistant provider (validated against provider registry at runtime) */
-  assistant: string;
+  assistant: string | undefined;
   baseBranch?: string;
+  remote?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
-  /** Archon-injected credential entries within envVars. */
+  /** Archon-managed env entries that nodes cannot override. */
   protectedEnvKeys?: readonly string[];
   /** Exact injected credential values, including credentials delivered through files. */
   protectedCredentialValues?: readonly string[];
   aliases?: RawAliasesConfig;
   tiers?: RawTiersConfig;
   commands: { folder?: string };
-  workflows?: {
-    autoResumeOnQuotaReset: boolean;
-    quotaFallbackDelayMs?: number;
-    quotaMaxAttempts: number;
-    quotaDeadlineMs: number;
-  };
+  workflows?: ResolvedWorkflowPolicy;
   defaults?: {
     loadDefaultWorkflows?: boolean;
     loadDefaultCommands?: boolean;
@@ -164,6 +161,7 @@ export type AgentProviderFactory = (provider: string) => IAgentProvider;
 // ---------------------------------------------------------------------------
 
 export interface WorkflowDeps {
+  providers: ProviderRegistry;
   store: IWorkflowStore;
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
@@ -180,16 +178,16 @@ export interface WorkflowDeps {
    * AI-driven `gh` and `git push` operations inside worktrees authenticate
    * correctly.
    *
-   *  - App mode (server bootstrap registered a provider): returns a fresh
+   *  - App mode (host registered a provider): returns a fresh
    *    installation access token, refreshed transparently from the cache.
-   *  - PAT mode / not configured: returns undefined. The subprocess inherits
+   *  - PAT mode / not configured: this resolver is absent. The subprocess inherits
    *    whatever GITHUB_TOKEN already lives on `process.env` (the legacy
    *    behaviour), so solo installs see zero functional change.
    *
-   * Implementations must not throw — return undefined on any failure so the
-   * workflow execution falls back to env inheritance rather than aborting.
+   * A registered App provider must throw on resolution failure so execution
+   * fails before a node can use another credential.
    */
-  resolveBotGitHubToken?: (owner: string, repo: string) => Promise<string | undefined>;
+  resolveBotGitHubToken?: (owner: string, repo: string) => Promise<string>;
   /**
    * Optional: resolve the originating user's personal GitHub token (decrypted,
    * refreshed on read). Used by the per-user token policy to route a run's
@@ -198,6 +196,8 @@ export interface WorkflowDeps {
    * throw — return undefined on any failure.
    */
   getUserGithubToken?: (userId: string) => Promise<string | undefined>;
+  /** Connected commit author; undefined when this user has no GitHub connection. */
+  getUserGithubAuthor?: (userId: string) => Promise<{ name: string; email: string } | undefined>;
   /**
    * Optional: whether per-user GitHub attribution is active for this install
    * (GitHub App configured + TOKEN_ENCRYPTION_KEY set). When false/absent, the
@@ -212,19 +212,22 @@ export interface WorkflowDeps {
    */
   isPerUserProviderKeysEnabled?: () => boolean;
   /**
-   * Optional: resolve every connected provider credential for a user into a
+   * Optional: resolve the required connected provider credentials into a
    * delivery bag (env vars + files to write under `artifactsDir`) plus the
    * decrypted values that must be scrubbed from subprocess failures. Called
    * once per run from `executeWorkflow`. Implementations own the delivery
    * map — the engine just merges `env` into `config.envVars` and writes the
    * `files` before any provider invocation.
    *
-   * Must never throw — return empty bags on any failure so the
-   * workflow continues with whatever env inheritance was already in place.
+   * Vendors selected as connected during preflight must remain connected at
+   * delivery. Failures must throw to prevent fallback to another account.
    */
+  getUserProviderCredentialStatus?: (userId: string, vendor: string) => Promise<CredentialStatus>;
   getUserProviderEnv?: (
     userId: string,
-    artifactsDir: string
+    artifactsDir: string,
+    vendors: readonly string[],
+    connectedVendors: readonly string[]
   ) => Promise<{
     env: Record<string, string>;
     files: { path: string; contents: string }[];

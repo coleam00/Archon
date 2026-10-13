@@ -1,6 +1,12 @@
+import {
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  registerInProcessProviders,
+} from './in-process';
 import { describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import * as paths from '@archon/paths';
 import {
+  providerRegistry,
   getAgentProvider,
   getProviderCapabilities,
   registerProvider,
@@ -8,16 +14,13 @@ import {
   getRegisteredProviders,
   getProviderInfoList,
   isRegisteredProvider,
-  registerBuiltinProviders,
-  registerCommunityProviders,
   clearRegistry,
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
-import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider } from './types';
-import { EFFORT_LADDER } from '@archon/paths/effort';
+import { EFFORT_LADDER, UnknownProviderError } from '@archon/provider-contract';
 
 // The registry creates its logger on first use and keeps it; hand it one this file can
 // observe. Module scope, so the spy is in place before any test makes the registry log.
@@ -33,6 +36,7 @@ function makeMockProvider(id: string): IAgentProvider {
     getType: () => id,
     checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
     getCapabilities: () => ({
+      backgroundWork: 'unobserved' as const,
       sessionResume: false,
       mcp: false,
       hooks: false,
@@ -78,6 +82,34 @@ describe('registry', () => {
   beforeEach(() => {
     clearRegistry();
     registerBuiltinProviders();
+  });
+
+  test('read-only registry reflects registration order without instantiating providers', () => {
+    const factory = () => {
+      throw new Error('metadata reads must not instantiate');
+    };
+    expect(providerRegistry.get('absent')).toBeUndefined();
+    const entry = makeMockRegistration('custom', { factory });
+    registerProvider(entry);
+    expect(providerRegistry.get('custom')).toEqual(entry);
+    expect(providerRegistry.list().map(provider => provider.id)).toEqual([
+      'claude',
+      'codex',
+      'custom',
+    ]);
+    clearRegistry();
+    expect(providerRegistry.list()).toEqual([]);
+  });
+
+  test('only one provider can own unprefixed model refs', () => {
+    registerProvider(makeMockRegistration('first', { ownsUnprefixedModelRefs: true }));
+    expect(() =>
+      registerProvider(makeMockRegistration('second', { ownsUnprefixedModelRefs: true }))
+    ).toThrow("Provider 'first' already owns unprefixed model refs");
+    expect(providerRegistry.get('second')).toBeUndefined();
+    expect(() => registerPiProvider()).toThrow(
+      "Provider 'first' already owns unprefixed model refs"
+    );
   });
 
   describe('getAgentProvider', () => {
@@ -166,7 +198,7 @@ describe('registry', () => {
 
     test('returns Codex capabilities without instantiation', () => {
       const caps = getProviderCapabilities('codex');
-      expect(caps.sessionFork).toBe(false);
+      expect(caps.sessionFork).toBe(true);
       expect(caps.mcp).toBe(true);
       expect(caps.hooks).toBe(false);
       expect(caps.envInjection).toBe(true);
@@ -218,6 +250,7 @@ describe('registry', () => {
         capabilities: {
           ...makeMockProvider('invalid-fork').getCapabilities(),
           sessionFork: true,
+          backgroundWork: 'unobserved' as const,
           sessionResume: false,
         },
       });
@@ -333,12 +366,12 @@ describe('registry', () => {
   });
 
   describe('registerPiProvider (community provider)', () => {
-    test('registers pi with builtIn: false', () => {
+    test('registers pi with builtIn: true', () => {
       registerPiProvider();
       const reg = getRegistration('pi');
       expect(reg.id).toBe('pi');
-      expect(reg.displayName).toBe('Pi (community)');
-      expect(reg.builtIn).toBe(false);
+      expect(reg.displayName).toBe('Pi');
+      expect(reg.builtIn).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -371,11 +404,11 @@ describe('registry', () => {
       expect(caps.sandbox).toBe(false);
     });
 
-    test('appears in getProviderInfoList with builtIn: false', () => {
+    test('appears in getProviderInfoList with builtIn: true', () => {
       registerPiProvider();
       const info = getProviderInfoList().find(p => p.id === 'pi');
       expect(info).toBeDefined();
-      expect(info?.builtIn).toBe(false);
+      expect(info?.builtIn).toBe(true);
     });
 
     test('does not collide with built-ins', () => {
@@ -521,4 +554,25 @@ describe('credential vendor mapping', () => {
   test('OpenCode has no stored-credential mapping', () => {
     expect(getRegistration('opencode').credentials.vendorFor('anthropic/claude')).toBeUndefined();
   });
+});
+
+test('in-process registration includes maintained and transition providers and agrees with their factories', () => {
+  clearRegistry();
+  registerInProcessProviders();
+  registerInProcessProviders();
+  expect(
+    getRegisteredProviders()
+      .map(provider => provider.id)
+      .sort()
+  ).toEqual(['claude', 'codex', 'copilot', 'opencode', 'pi']);
+  for (const registration of getRegisteredProviders()) {
+    const provider = registration.factory();
+    expect(provider.getType()).toBe(registration.id);
+    expect(provider.getCapabilities()).toEqual(registration.capabilities);
+  }
+  expect(
+    getRegisteredProviders()
+      .filter(provider => provider.builtIn)
+      .map(provider => provider.id)
+  ).toEqual(['claude', 'codex', 'pi']);
 });

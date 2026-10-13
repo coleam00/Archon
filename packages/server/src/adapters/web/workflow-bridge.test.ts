@@ -20,7 +20,12 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { mapWorkflowEvent, mapWorkflowEventRow, WorkflowEventBridge } from './workflow-bridge';
+import {
+  DASHBOARD_SOURCE_EVENT_TYPES,
+  mapWorkflowEvent,
+  mapWorkflowEventRow,
+  WorkflowEventBridge,
+} from './workflow-bridge';
 import type { SSETransport } from './transport';
 import {
   getWorkflowEventEmitter,
@@ -80,19 +85,22 @@ test('persisted typed node rows retain public execution metadata through dashboa
   expect(JSON.stringify(payload)).not.toContain('sessionId');
 });
 
-test('workflow start projection does not expose the host transcript path', () => {
-  const event: WorkflowEmitterEvent = {
-    type: 'workflow_started',
-    runId: 'run-1',
-    workflowName: 'implement',
-    conversationId: 'conv-1',
-    transcriptPath: '/host/.archon/workspaces/acme/widget/logs/run-1.jsonl',
-  };
+test.each(['conv-1', null])(
+  'workflow start projection accepts optional provenance and hides the host transcript path',
+  conversationId => {
+    const event: WorkflowEmitterEvent = {
+      type: 'workflow_started',
+      runId: 'run-1',
+      workflowName: 'implement',
+      conversationId,
+      transcriptPath: '/host/.archon/workspaces/acme/widget/logs/run-1.jsonl',
+    };
 
-  const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
-  expect(payload).toMatchObject({ type: 'workflow_status', runId: 'run-1', status: 'running' });
-  expect(payload).not.toHaveProperty('transcriptPath');
-});
+    const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+    expect(payload).toMatchObject({ type: 'workflow_status', runId: 'run-1', status: 'running' });
+    expect(payload).not.toHaveProperty('transcriptPath');
+  }
+);
 
 test('node skip projection preserves the live skip cause', () => {
   const event: WorkflowEmitterEvent = {
@@ -250,3 +258,83 @@ describe('mapWorkflowEvent — container_lifecycle (Phase B)', () => {
     expect(payload).not.toHaveProperty('containerId');
   });
 });
+
+test('live approval frames retain the exact declared vocabulary', () => {
+  const decisions = [
+    { id: 'approve', label: 'Ship it' },
+    { id: 'revise', label: 'Try again' },
+    { id: 'cancel' },
+  ];
+  const payload: unknown = JSON.parse(
+    mapWorkflowEvent({
+      type: 'approval_pending',
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Choose',
+      decisions,
+      pauseId: 'pause-one',
+    }) ?? '{}'
+  );
+  expect(payload).toMatchObject({
+    type: 'workflow_status',
+    status: 'paused',
+    approval: { nodeId: 'review', message: 'Choose', decisions, pauseId: 'pause-one' },
+  });
+});
+
+test('attention publication and clearing invalidate existing dashboard readers without command contents', () => {
+  expect(DASHBOARD_SOURCE_EVENT_TYPES).toContain('run_attention_changed');
+  for (const hasAttention of [true, false]) {
+    const local = JSON.parse(
+      mapWorkflowEvent({
+        type: 'run_attention_changed',
+        runId: 'run',
+        streamId: 'stream',
+        hasAttention,
+      })!
+    );
+    const durable = JSON.parse(
+      mapWorkflowEventRow({
+        id: 'event',
+        workflow_run_id: 'run',
+        event_type: 'run_attention_changed',
+        step_index: null,
+        step_name: null,
+        created_at: new Date().toISOString(),
+        data: { streamId: 'stream', hasAttention },
+      })!
+    );
+    for (const payload of [local, durable])
+      expect(payload).toEqual({
+        type: 'workflow_status',
+        runId: 'run',
+        workflowName: '',
+        status: 'running',
+        timestamp: expect.any(Number),
+      });
+  }
+});
+
+test.each([
+  ['wait_started', 'paused'],
+  ['wait_completed', 'running'],
+] as const)(
+  'persisted %s cues the dashboard without wait message contents',
+  (event_type, status) => {
+    const mapped = mapWorkflowEventRow({
+      id: 'event',
+      workflow_run_id: 'detached',
+      event_type,
+      step_index: null,
+      step_name: 'hold',
+      created_at: new Date().toISOString(),
+      data: { message: 'MESSAGE_SENTINEL' },
+    });
+    expect(JSON.parse(mapped!)).toMatchObject({
+      type: 'workflow_status',
+      runId: 'detached',
+      status,
+    });
+    expect(mapped).not.toContain('MESSAGE_SENTINEL');
+  }
+);

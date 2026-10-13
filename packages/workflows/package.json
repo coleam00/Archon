@@ -4,10 +4,13 @@
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
+    "./run-ai-configuration": "./src/run-ai-configuration.ts",
+    "./run-preflight": "./src/run-preflight.ts",
     "./executor": "./src/executor.ts",
     "./loader": "./src/loader.ts",
     "./deprecation": "./src/deprecation.ts",
     "./router": "./src/router.ts",
+    "./resource-start-store": "./src/resource-start-store.ts",
     "./store": "./src/store.ts",
     "./terminal-record": "./src/terminal-record.ts",
     "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",
@@ -22,9 +25,11 @@
     "./fixture-layout": "./src/fixture-layout.ts",
     "./defaults": "./src/defaults/bundled-defaults.ts",
     "./validator": "./src/validator.ts",
+    "./validation-config": "./src/validation-config.ts",
     "./dry-run": "./src/dry-run.ts",
     "./graph-plan": "./src/graph-plan.ts",
     "./utils/tool-formatter": "./src/utils/tool-formatter.ts",
+    "./utils/github-token-policy": "./src/utils/github-token-policy.ts",
     "./utils/workflow-requirements": "./src/utils/workflow-requirements.ts",
     "./workflow-inputs": "./src/workflow-inputs.ts",
     "./fixture-runner": "./src/fixture-runner.ts",
@@ -39,7 +44,13 @@
     "./node-execution": "./src/node-execution.ts",
     "./node-record-serialization": "./src/node-record-serialization.ts",
     "./node-event-write": "./src/node-event-write.ts",
-    "./logger": "./src/logger.ts"
+    "./logger": "./src/logger.ts",
+    "./container-context": "./src/container-context.ts",
+    "./structured-output": "./src/structured-output.ts",
+    "./dag-resume-snapshot": "./src/dag-resume-snapshot.ts",
+    "./store-conformance": "./src/store-conformance.ts",
+    "./state-document-store": "./src/state-document-store.ts",
+    "./state-document-conformance": "./src/state-document-conformance.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -50,9 +61,12 @@
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
     "@archon/plugin-manifest": "workspace:*",
-    "@archon/providers": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "ajv": "^8.20.0"
+  },
+  "devDependencies": {
+    "@archon/providers": "workspace:*"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -97,6 +111,9 @@
       "src/provider-events.test.ts"
     ],
     [
+      "src/tool-call-attention.test.ts"
+    ],
+    [
       "src/load-command-prompt.test.ts"
     ],
     [
@@ -117,6 +134,8 @@
     [
       "src/defaults/",
       "src/run-config.test.ts",
+      "src/run-preflight.test.ts",
+      "src/run-ai-configuration.test.ts",
       "src/model-validation.test.ts",
       "src/router.test.ts",
       "src/utils/",
@@ -131,6 +150,9 @@
     ],
     [
       "src/validator.test.ts"
+    ],
+    [
+      "src/workflow-corpus.test.ts"
     ],
     [
       "src/script-discovery.test.ts"
@@ -178,11 +200,25 @@
       "src/node-record-reader.test.ts"
     ],
     [
-      "src/node-record-serialization.test.ts"
+      "src/node-record-serialization.test.ts",
+      "src/scripts/generate-node-execution-reference.test.ts"
     ],
     [
       "src/checkout-observation.test.ts",
       "src/implement-guard-conformance.test.ts"
+    ],
+    [
+      "src/structured-output.test.ts"
+    ],
+    [
+      "src/store-conformance.test.ts"
+    ],
+    [
+      "src/file-store/"
+    ],
+    [
+      "src/state-document-store.test.ts",
+      "src/state-document-conformance.test.ts"
     ]
   ]
 }

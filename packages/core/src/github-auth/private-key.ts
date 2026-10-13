@@ -6,11 +6,9 @@
  *      convention of representing newlines as the literal two-char `\n`.
  *   2. GITHUB_APP_PRIVATE_KEY_PATH — absolute path to a `.pem` file.
  *
- * Throws AppPrivateKeyError on missing config or unparseable PEM. We don't
- * crypto-validate the key here — that happens at the first JWT signing inside
- * `@octokit/auth-app`; this layer only catches obviously-bad shapes (missing
- * BEGIN/END markers) so the failure mode is "fail at bootstrap" rather than
- * "fail at first webhook".
+ * Throws AppPrivateKeyError on missing config or missing PEM markers.
+ * Cryptographic validation belongs to `loadGitHubAppConfig`; this helper owns
+ * key-source precedence and normalization.
  */
 import { readFileSync } from 'node:fs';
 import { AppPrivateKeyError } from './errors';

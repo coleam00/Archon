@@ -8,7 +8,8 @@
  *   Named inputs:     "$INPUTS.mode == 'fast'"  (#2470 inputs, supplied by a caller's
  *                     `with:` — see `resolveInputRef`)
  *   Numeric ops:      "$nodeId.output > '80'"  / ">=" / "<" / "<="
- *                     (both sides must parse as finite numbers; fail-closed otherwise)
+ *                     (the parser rejects a non-numeric RHS; a non-numeric output
+ *                     fails closed at run time)
  *   Unquoted RHS:     "$nodeId.exit_code == 0"  / "$nodeId.passed == true"
  *                     (numbers and booleans may be written without surrounding quotes)
  *   Compound AND/OR:  "$a.output == 'X' && $b.output != 'Y'"
@@ -47,9 +48,8 @@ import {
 import {
   findUnsupportedNestedWhenRef,
   assertSupportedWhenOutputRefs,
-  parseLoopPrevWhenAtom,
-  parseWhenAtom,
-  splitOutsideQuotes,
+  parseWhenExpression,
+  type WhenAtom,
   type WhenAtomRef,
 } from './when-atom';
 
@@ -227,35 +227,29 @@ function resolveAtomRef(
  * Evaluate a single atomic condition expression against upstream node outputs.
  */
 function evaluateAtom(
+  atom: WhenAtom,
   expr: string,
   nodeOutputs: Map<string, NodeOutput>,
   inputs: Record<string, JsonValue> | undefined,
   loopPrevOutputs: ReadonlyMap<string, NodeOutput> | undefined
 ): { result: boolean; parsed: boolean } {
-  const atom = loopPrevOutputs !== undefined ? parseLoopPrevWhenAtom(expr) : parseWhenAtom(expr);
-
-  if (!atom) {
-    getLog().debug({ expr }, 'condition_parse_failed');
-    return { result: false, parsed: false };
-  }
-
   const { ref, operator, expected } = atom;
 
   // Reference resolution may throw — OutputRefError for an unresolvable `.field` ref
   // (typo / schemaless non-JSON / missing key), InputRefError for an undeclared
   // `$INPUTS.<name>`. Deliberately NOT caught here: under the no-silent-drop contract
-  // it must propagate to fail the node, not fail-closed to a silent skip. (Pure-syntax
-  // parse failures still return {parsed:false} via the parse miss above.)
+  // it must propagate to fail the node, not fail-closed to a silent skip.
   const actual = resolveAtomRef(ref, nodeOutputs, inputs, loopPrevOutputs, expr);
 
   let result: boolean;
   if (operator === '==' || operator === '!=') {
     result = operator === '==' ? actual === expected : actual !== expected;
   } else {
-    // Numeric comparison
+    // Numeric comparison. `parseWhenExpression` only admits a finite-number RHS here,
+    // so only the runtime output can fail to parse.
     const actualNum = parseFloat(actual);
     const expectedNum = parseFloat(expected);
-    if (!Number.isFinite(actualNum) || !Number.isFinite(expectedNum)) {
+    if (!Number.isFinite(actualNum)) {
       getLog().debug({ expr, actual, expected }, 'condition_numeric_parse_failed');
       return { result: false, parsed: false };
     }
@@ -306,16 +300,23 @@ export function evaluateCondition(
       `Reference '${nestedRef.reference}' uses nested shorthand; use canonical '.output' spelling for nested paths.`
     );
 
-  // Split on || — OR has lower precedence
-  const orClauses = splitOutsideQuotes(trimmed, '||');
+  const orClauses = parseWhenExpression(trimmed, options?.loopPrevOutputs !== undefined);
+  if (orClauses === null) {
+    getLog().debug({ expr }, 'condition_parse_failed');
+    return { result: false, parsed: false };
+  }
 
   for (const orClause of orClauses) {
-    // Split each OR clause on && — AND has higher precedence
-    const andAtoms = splitOutsideQuotes(orClause, '&&');
     let orClauseResult = true;
 
-    for (const atom of andAtoms) {
-      const { result, parsed } = evaluateAtom(atom, nodeOutputs, inputs, options?.loopPrevOutputs);
+    for (const atom of orClause) {
+      const { result, parsed } = evaluateAtom(
+        atom,
+        trimmed,
+        nodeOutputs,
+        inputs,
+        options?.loopPrevOutputs
+      );
       if (!parsed) return { result: false, parsed: false }; // fail-closed on any parse error
       if (!result) {
         orClauseResult = false;

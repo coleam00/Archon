@@ -1,3 +1,4 @@
+import type { createRunToolCallAttention } from './tool-call-attention';
 /**
  * What the engine does with each non-terminal event a provider streams. Both AI-node
  * loops in `dag-executor.ts` (the agent node and the loop node) hand every event to one
@@ -9,8 +10,8 @@
  * reads an event's type only to decide side effects (what the user sees, the subtask
  * tracker); it never rebuilds the event.
  */
-import type { ProviderEvent } from '@archon/providers/types';
-import { toolCallDisplayName } from '@archon/provider-contract';
+import type { ProviderEvent } from '@archon/provider-contract';
+import { subtaskTerminalStatusSchema, toolCallDisplayName } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
@@ -20,6 +21,8 @@ import { logProviderEvent } from './logger';
 import type { ProviderEventEnvelope } from './schemas/provider-event';
 import type { IWorkflowStore } from './store';
 import { formatToolCall } from './utils/tool-formatter';
+
+const terminalSubtaskStatuses: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -46,6 +49,7 @@ export function createAttemptEventSequence(attemptId: string): AttemptEventSeque
 }
 
 export interface ProviderEventHandlerDeps {
+  toolAttention: ReturnType<ReturnType<typeof createRunToolCallAttention>['createStream']>;
   store: Pick<IWorkflowStore, 'createWorkflowEvent'>;
   platform: IWorkflowPlatform;
   conversationId: string;
@@ -76,6 +80,9 @@ export interface ProviderEventHandler {
   handle(event: ProviderEvent): Promise<void>;
   /** Subtasks that started and have not ended: the work a stream cut short would lose. */
   liveSubtaskIds(): string[];
+  hasOpenTools(): boolean;
+  refreshAttention(): Promise<void>;
+  clearAttention(): Promise<void>;
 }
 
 /** One handler per provider stream pass: its subtask state belongs to that pass. */
@@ -117,6 +124,7 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
 
   return {
     async handle(event): Promise<void> {
+      await deps.toolAttention.observe(event);
       await record(event);
       const streaming = platform.getStreamingMode() === 'stream';
       switch (event.type) {
@@ -166,8 +174,8 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           }
           return;
         case 'subtask':
-          if (event.status === 'started') liveSubtasks.add(event.taskId);
-          else if (event.status !== 'running') liveSubtasks.delete(event.taskId);
+          if (terminalSubtaskStatuses.has(event.status)) liveSubtasks.delete(event.taskId);
+          else liveSubtasks.add(event.taskId);
           return;
         case 'hook':
         case 'agent_thought_chunk':
@@ -180,6 +188,13 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           throw new Error(`Unhandled provider event: ${JSON.stringify(unhandled)}`);
         }
       }
+    },
+    hasOpenTools: () => deps.toolAttention.hasOpenTools(),
+    refreshAttention: async (): Promise<void> => {
+      await deps.toolAttention.refresh();
+    },
+    clearAttention: async (): Promise<void> => {
+      await deps.toolAttention.clear();
     },
     liveSubtaskIds(): string[] {
       return [...liveSubtasks];

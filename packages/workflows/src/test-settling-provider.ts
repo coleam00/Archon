@@ -1,4 +1,5 @@
 /** The part of a provider this helper touches; test mocks type their chunks loosely. */
+import type { IAgentProvider } from '@archon/provider-contract';
 interface QueryingProvider {
   sendQuery(...args: never[]): AsyncIterable<unknown> | Iterable<unknown>;
 }
@@ -11,8 +12,11 @@ interface QueryingProvider {
 export function settlingProvider<P extends QueryingProvider>(provider: P): P {
   const sendQuery = (...args: Parameters<P['sendQuery']>): AsyncGenerator =>
     settleAtEnd(provider.sendQuery(...args));
-  // Only sendQuery changes, and only by appending a chunk the provider type allows.
-  return { ...provider, sendQuery } as P;
+  const checkCredential: IAgentProvider['checkCredential'] = async () => ({
+    state: 'not_checked',
+    source: 'native',
+  });
+  return { checkCredential, ...provider, sendQuery } as P;
 }
 
 async function* settleAtEnd(stream: AsyncIterable<unknown> | Iterable<unknown>): AsyncGenerator {

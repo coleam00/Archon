@@ -1,8 +1,5 @@
-export interface PlatformPolicy {
+import type { ChatPluginDescriptor } from '@archon/chat-contract';
+
+export interface PlatformPolicy extends Readonly<ChatPluginDescriptor['policy']> {
   readonly id: string;
-  readonly workspaceRetention: 'age-based' | 'retain';
-  readonly streaming?: {
-    readonly defaultMode: 'stream' | 'batch';
-    readonly envVar: string;
-  };
 }

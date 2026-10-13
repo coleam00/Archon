@@ -4,7 +4,7 @@
  */
 import { z } from 'zod';
 import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
-import type { CredentialStatus } from '@archon/provider-contract';
+import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -23,14 +23,17 @@ import type {
 } from '../types';
 import {
   sessionPreview,
+  toolCallSchema,
   truncateToolOutput,
   type ProviderFailureClass,
 } from '@archon/provider-contract';
 import { failureClassOfThrown, failureResult } from '../shared/failure';
-import { clampEffort } from '@archon/paths/effort';
+import { diagnoseBinary } from '../shared/binary-diagnostics';
+import { readCodexSetupEnv, formatCodexSetupDeprecation } from './setup-env';
+import { clampEffort } from '@archon/provider-contract';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
-import { resolveCodexBinary } from './binary-resolver';
+import { resolveCodexBinary, resolveCodexBinaryWithSource } from './binary-resolver';
 import { BUNDLED_VERSION, createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import {
@@ -392,8 +395,8 @@ function toolCallOf(item: ToolItem): ToolCallEvent {
         name: item.tool,
         title: `${item.server}/${item.tool}`,
       };
-      if (typeof item.arguments === 'object' && item.arguments !== null) {
-        call.rawInput = item.arguments as Record<string, unknown>;
+      if (item.arguments !== undefined) {
+        call.rawInput = toolCallSchema.shape.rawInput.parse(item.arguments);
       }
       return call;
     }
@@ -439,6 +442,43 @@ function toolCallUpdateOf(item: ToolItem): ToolCallUpdateEvent {
   }
 }
 
+type SubtaskEvent = Extract<ProviderEvent, { type: 'subtask' }>;
+
+function backgroundEventOf(
+  item: ThreadItem,
+  completed: boolean,
+  threadId: string
+): SubtaskEvent | undefined {
+  if (item.type === 'subAgentActivity') {
+    if (item.kind !== 'started' && item.kind !== 'completed') return undefined;
+    return {
+      type: 'subtask',
+      taskId: `agent:${item.agentThreadId}`,
+      taskType: 'local_agent',
+      description: item.agentPath,
+      status: item.kind,
+    };
+  }
+  if (item.type === 'commandExecution' && item.source === 'unifiedExecStartup') {
+    const terminalStatuses = {
+      inProgress: undefined,
+      completed: 'completed',
+      failed: 'failed',
+      declined: 'stopped',
+    } as const;
+    const status = completed ? terminalStatuses[item.status] : 'started';
+    if (!status) return undefined;
+    return {
+      type: 'subtask',
+      taskId: `command:${threadId}:${item.id}`,
+      taskType: 'command_execution',
+      description: item.command,
+      status,
+    };
+  }
+  return undefined;
+}
+
 /**
  * The turn's usage: the thread's cumulative total at the end less the total before the
  * turn's first request (`total - last` of the turn's first snapshot), clamped at zero as
@@ -481,6 +521,11 @@ interface TurnRequest {
   apiKey: string | undefined;
   cwd: string;
   resumeSessionId: string | undefined;
+  /**
+   * Continue `resumeSessionId` in a new thread with its history, leaving it unchanged, so
+   * concurrent runs that continue one thread never write into it together.
+   */
+  forkSession: boolean;
   threadParams: Pick<ParamsOf<'thread/start'>, 'sandbox' | 'approvalPolicy' | 'model' | 'config'>;
   turnParams: Omit<ParamsOf<'turn/start'>, 'threadId'>;
   /**
@@ -497,8 +542,8 @@ interface TurnRequest {
 }
 
 /**
- * Runs one turn and yields its events, then its one result. A JSON-RPC error or the
- * process ending before `turn/completed` is thrown for `sendQuery` to classify.
+ * Keeps observing background work after the parent completes.
+ * Lost observation is thrown for `sendQuery` to classify; it never settles.
  */
 async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const { connection, nodePlugins } = request;
@@ -525,9 +570,10 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
     threadParams = { ...threadParams, config: scope.config };
     declared = scope.declared;
   }
-  // A resumed thread needs the same config: Codex does not store it with the thread.
+  // A resumed or forked thread needs the same config: Codex does not store it with the
+  // thread, and a fork without it loads the user's MCP servers and plugins again.
   const threadResponse = request.resumeSessionId
-    ? await connection.request('thread/resume', {
+    ? await connection.request(request.forkSession ? 'thread/fork' : 'thread/resume', {
         threadId: request.resumeSessionId,
         cwd: request.cwd,
         ...threadParams,
@@ -539,7 +585,11 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   request.onThread(threadId);
   if (declared) await checkThreadMcpScope(connection, threadId, declared);
   getLog().debug(
-    { sessionIdPreview: sessionPreview(threadId), resumed: !!request.resumeSessionId },
+    {
+      sessionIdPreview: sessionPreview(threadId),
+      resumed: !!request.resumeSessionId,
+      forked: !!request.resumeSessionId && request.forkSession,
+    },
     'codex.thread_ready'
   );
 
@@ -552,6 +602,10 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   request.onTurn(turnId);
 
   const startedToolIds = new Set<string>();
+  const liveTasks = new Set<string>();
+  const agentThreads = new Set<string>();
+  let parentCompleted = false;
+  let pendingFailure: ResultChunk | undefined;
   const errors: string[] = [];
   let lastAgentMessage = '';
   // `last` is one request and is re-sent unchanged with later snapshots, so the turn's usage
@@ -572,7 +626,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
 
       case 'thread/tokenUsage/updated':
         // Usage reported for another turn of the thread is not this turn's.
-        if (notification.params.turnId === turnId) {
+        if (notification.params.threadId === threadId && notification.params.turnId === turnId) {
           const { tokenUsage } = notification.params;
           usageSpan = { first: usageSpan?.first ?? tokenUsage, end: tokenUsage.total };
         }
@@ -602,25 +656,36 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         break;
       }
 
-      case 'item/started': {
-        const { item } = notification.params;
-        if (isToolItem(item) && !startedToolIds.has(item.id)) {
-          startedToolIds.add(item.id);
-          yield toolCallOf(item);
-        }
-        break;
-      }
-
+      case 'item/started':
       case 'item/completed': {
-        const { item } = notification.params;
-        getLog().debug({ itemType: item.type, itemId: item.id }, 'item_completed');
+        const { item, threadId: itemThreadId, turnId: itemTurnId } = notification.params;
+        const parentItem = itemThreadId === threadId && itemTurnId === turnId;
+        if (!parentItem && !agentThreads.has(itemThreadId)) break;
+        const completed = notification.method === 'item/completed';
+        // Unified exec is a process lifecycle, not a foreground tool call: its end may
+        // arrive after the result, which closes foreground tool calls in the contract.
+        if (
+          item.type === 'subAgentActivity' ||
+          (item.type === 'commandExecution' && item.source === 'unifiedExecStartup')
+        ) {
+          const event = backgroundEventOf(item, completed, itemThreadId);
+          if (event) {
+            if (event.status === 'started') {
+              if (liveTasks.has(event.taskId)) break;
+              liveTasks.add(event.taskId);
+              if (item.type === 'subAgentActivity') agentThreads.add(item.agentThreadId);
+            } else if (!liveTasks.delete(event.taskId)) break;
+            yield event;
+          }
+          break;
+        }
+        if (!parentItem) break;
         if (isToolItem(item)) {
-          // A file change is reported only once it is applied: open the call here so its
-          // update always has one.
           if (!startedToolIds.has(item.id)) {
             startedToolIds.add(item.id);
             yield toolCallOf(item);
           }
+          if (!completed) break;
           if (item.type === 'mcpToolCall' && item.status === 'failed') {
             getLog().warn(
               { server: item.server, tool: item.tool, error: item.error, itemId: item.id },
@@ -628,12 +693,10 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
             );
           }
           yield toolCallUpdateOf(item);
-        } else if (item.type === 'agentMessage' && item.text) {
-          // A turn can hold several messages (preamble + answer); the last is the
-          // structured-output candidate.
+        } else if (completed && item.type === 'agentMessage' && item.text) {
           lastAgentMessage = item.text;
           yield { type: 'agent_message_chunk', text: item.text };
-        } else if (item.type === 'reasoning') {
+        } else if (completed && item.type === 'reasoning') {
           const text = item.summary.join('\n\n');
           if (text) yield { type: 'agent_thought_chunk', text };
         }
@@ -641,21 +704,34 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
       }
 
       case 'turn/completed': {
-        const { turn } = notification.params;
-        if (turn.id !== turnId) break;
-        yield* completeTurn(turn.status, turn.error, request, {
+        const { turn, threadId: completedThreadId } = notification.params;
+        if (completedThreadId !== threadId || turn.id !== turnId || parentCompleted) break;
+        parentCompleted = true;
+        for (const chunk of completeTurn(turn.status, turn.error, request, {
           threadId,
           usage: usageSpan && turnUsageOf(usageSpan.first, usageSpan.end),
           rateLimits,
           lastAgentMessage,
-        });
-        return;
+        })) {
+          // The executor stops reading on failure results, so live work must drain first.
+          if (chunk.type === 'result' && chunk.failure) pendingFailure = chunk;
+          else yield chunk;
+        }
+        break;
       }
 
       default:
         break;
     }
+    // The lifecycle contract covers starts observed before the parent's turn/completed
+    // and their descendants. After that, the parent model cannot initiate new work;
+    // later starts belong to already-live work, so an empty observed set can settle.
+    if (parentCompleted && liveTasks.size === 0) {
+      if (pendingFailure) yield pendingFailure;
+      return;
+    }
   }
+  if (pendingFailure) yield pendingFailure;
   throw connection.closedError(await connection.ended, errors);
 }
 
@@ -709,7 +785,7 @@ function* completeTurn(
   }
   result.sessionId = state.threadId;
   if (state.usage) result.tokens = state.usage;
-  // Reaching a turn means `thread/resume` succeeded.
+  // Reaching a turn means `thread/resume` or `thread/fork` succeeded.
   if (request.resumeSessionId) result.resumed = true;
   yield result;
 }
@@ -773,6 +849,25 @@ function failureClassOfStop(error: unknown): ProviderFailureClass {
 // ─── Codex Provider ──────────────────────────────────────────────────────
 
 export class CodexProvider implements IAgentProvider {
+  async diagnose(
+    request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
+  ): Promise<ProviderDiagnostics> {
+    const config = parseCodexConfig(request.assistantConfig ?? {});
+    const diagnostics = await diagnoseBinary('codex-binary', 'Codex binary', () =>
+      resolveCodexBinaryWithSource(config.codexBinaryPath)
+    );
+    const { deprecated } = readCodexSetupEnv(process.env);
+    diagnostics.checks.push({
+      id: 'codex-setup-env',
+      label: 'Codex setup environment',
+      status: deprecated.length ? 'warn' : 'ok',
+      message: deprecated.length
+        ? formatCodexSetupDeprecation(deprecated)
+        : 'No deprecated Codex setup variables',
+    });
+    return diagnostics;
+  }
+
   /**
    * @param spawner starts the app-server process; tests pass a fake.
    * @param shutdownGraceMs each cancel and shutdown wait; tests shorten it.
@@ -863,7 +958,7 @@ export class CodexProvider implements IAgentProvider {
   /**
    * One call is one Codex turn on its own app-server process. A failure ends in a
    * `result` carrying a typed `failure`, and the engine decides whether to try again.
-   * Every turn ends in `settled`. Only cancellation throws.
+   * Observed work must drain before `settled`; lost observation never settles.
    */
   async *sendQuery(
     prompt: string,
@@ -873,6 +968,7 @@ export class CodexProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const abortSignal = requestOptions?.abortSignal;
     let resultReported = false;
+    let observationLost = false;
     let threadId: string | undefined;
     let turnId: string | undefined;
     let connection: AppServerConnection | undefined;
@@ -960,7 +1056,8 @@ export class CodexProvider implements IAgentProvider {
           ...(nodePlugins?.length ? ['-c', 'features.plugins=true'] : []),
         ],
         env,
-        this.spawner
+        this.spawner,
+        requestOptions?.protectedEnvKeys
       );
       // An abort while the setup above awaited found no process to stop.
       if (abortSignal?.aborted) throw new Error('Query aborted');
@@ -970,6 +1067,7 @@ export class CodexProvider implements IAgentProvider {
         apiKey,
         cwd,
         resumeSessionId,
+        forkSession: requestOptions?.forkSession === true,
         threadParams: {
           sandbox: titleRequest ? 'read-only' : 'danger-full-access',
           approvalPolicy: 'never',
@@ -993,7 +1091,6 @@ export class CodexProvider implements IAgentProvider {
           turnId = id;
         },
       });
-      // A Codex turn has no background work: its result ends it.
       for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
         if (chunk.type === 'result') {
           // An interrupted turn completes before its process ends; a cancel is not a result.
@@ -1006,6 +1103,7 @@ export class CodexProvider implements IAgentProvider {
       if (abortSignal?.aborted === true) {
         throw new Error('Query aborted');
       }
+      observationLost = error instanceof ConnectionClosedError || resultReported;
       getLog().error({ err: error, resultReported }, 'query_error');
       if (!resultReported) {
         const failureClass = failureClassOfStop(error);
@@ -1025,10 +1123,16 @@ export class CodexProvider implements IAgentProvider {
       }
     } finally {
       abortSignal?.removeEventListener('abort', onAbort);
-      await connection?.shutdown(this.shutdownGraceMs);
+      if (connection) {
+        const end = await connection.shutdown(this.shutdownGraceMs);
+        if (end?.kind !== 'exited' || end.code !== 0 || end.signal !== null) {
+          observationLost = true;
+          if (end)
+            getLog().error({ err: connection.closedError(end) }, 'codex.app_server_abnormal_exit');
+        }
+      }
     }
-    // A Codex turn has no background work: once its result is in, nothing more runs.
-    yield { type: 'settled' };
+    if (!observationLost) yield { type: 'settled' };
   }
 
   getType(): string {

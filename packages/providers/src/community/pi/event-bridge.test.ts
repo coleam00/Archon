@@ -247,6 +247,7 @@ describe('buildResultChunk', () => {
   // and the words are kept as evidence.
   test.each([
     ['429 Too Many Requests: rate limit exceeded'],
+    ['Selected model is at capacity'],
     ['401 Unauthorized: invalid x-api-key'],
     ["400 invalid_request_error: You're out of extra usage"],
   ])('an errored turn "%s" reports an unknown failure with the vendor text', errorMessage => {
@@ -331,6 +332,25 @@ describe('mapPiEvent', () => {
     expect(chunks).toEqual([]);
   });
 
+  test('bash commands supply provider display titles', () => {
+    expect(
+      mapPiEvent({
+        type: 'tool_execution_start',
+        toolCallId: 'shell',
+        toolName: 'bash',
+        args: { command: 'bun test' },
+      })
+    ).toEqual([
+      {
+        type: 'tool_call',
+        toolCallId: 'shell',
+        name: 'bash',
+        title: 'bun test',
+        rawInput: { command: 'bun test' },
+      },
+    ]);
+  });
+
   test('tool_execution_start → tool_call with its args as rawInput', () => {
     const chunks = mapPiEvent({
       type: 'tool_execution_start',
@@ -343,14 +363,29 @@ describe('mapPiEvent', () => {
     ]);
   });
 
-  test('tool_execution_start omits rawInput when args are not an object', () => {
-    const chunks = mapPiEvent({
-      type: 'tool_execution_start',
-      toolCallId: 'call-1',
-      toolName: 'bash',
-      args: 'just-a-string',
-    });
-    expect(chunks).toEqual([{ type: 'tool_call', toolCallId: 'call-1', name: 'bash' }]);
+  test.each(['just-a-string', 0, false, null, ['a', 1]].map(value => [value] as const))(
+    'tool_execution_start preserves JSON args %j',
+    args => {
+      expect(
+        mapPiEvent({
+          type: 'tool_execution_start',
+          toolCallId: 'call-1',
+          toolName: 'bash',
+          args,
+        })
+      ).toEqual([{ type: 'tool_call', toolCallId: 'call-1', name: 'bash', rawInput: args }]);
+    }
+  );
+
+  test('tool_execution_start omits undefined args', () => {
+    expect(
+      mapPiEvent({
+        type: 'tool_execution_start',
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        args: undefined,
+      })
+    ).toEqual([{ type: 'tool_call', toolCallId: 'call-1', name: 'bash' }]);
   });
 
   test('tool_execution_end → completed tool_call_update with matching id', () => {

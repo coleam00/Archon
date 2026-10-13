@@ -1,3 +1,6 @@
+import { missingProviderMessage } from '@archon/provider-contract';
+import { providerRegistry } from '@archon/providers';
+import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '@archon/workflows/schemas/run-config';
 /**
  * Configuration loader for Archon YAML config files
  *
@@ -45,8 +48,6 @@ import {
   getRegisteredProviders,
   getRegistration,
   InvalidProviderRunConfigError,
-  registerBuiltinProviders,
-  registerCommunityProviders,
 } from '@archon/providers';
 import { buildAiProfile, TIER_NAMES } from '@archon/workflows/model-validation';
 import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation';
@@ -68,23 +69,7 @@ export type TiersPatch = Partial<Record<TierName, RawAliasEntry | null>>;
  */
 export type AliasesPatch = Record<string, RawAliasEntry | null>;
 
-/**
- * Populate the provider registry. Idempotent, and called from every config
- * entrypoint because each one validates `assistants.*` against the registry —
- * a loader reached directly (not through `loadConfig`) would otherwise see an
- * empty registry and skip every provider.
- */
-function ensureProvidersRegistered(): void {
-  registerBuiltinProviders();
-  registerCommunityProviders();
-}
-
-/**
- * Pure read of registered provider IDs. Registration is guaranteed by
- * `ensureProvidersRegistered()` at each config entrypoint, so this helper must
- * NOT trigger side-effecting registration itself — that hid the ordering
- * coupling and surprised readers.
- */
+/** The host registers providers before loading configuration. */
 function getRegisteredProviderNames(): string[] {
   return getRegisteredProviders().map(p => p.id);
 }
@@ -433,7 +418,6 @@ export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfi
     return cachedGlobalConfig;
   }
 
-  ensureProvidersRegistered();
   const configPath = getArchonConfigPath();
   const parsed = await readGlobalConfigOrDegrade(configPath);
   validateAssistantDefaults(parsed, configPath);
@@ -504,7 +488,6 @@ async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> 
  * other failure degrades to defaults.
  */
 export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
-  ensureProvidersRegistered();
   const configPath = join(repoPath, '.archon', 'config.yaml');
   const parsed = await readRepoConfigOrDegrade(configPath);
   validateAssistantDefaults(parsed, configPath);
@@ -515,12 +498,6 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
  * Get default configuration
  */
 function getDefaults(): MergedConfig {
-  // Seed one empty entry per registered provider — built-in OR community.
-  // No per-provider listing here: adding a new provider must not require
-  // editing this function. `registerBuiltinProviders()` + any community
-  // registrations run at process bootstrap (see `packages/providers/src/
-  // registry.ts#registerCommunityProviders`), so by the time this runs the
-  // registry is populated.
   const providers = getRegisteredProviders();
   const registeredAssistants: AssistantDefaults = { claude: {}, codex: {} };
   for (const provider of providers) {
@@ -536,7 +513,7 @@ function getDefaults(): MergedConfig {
 
   return {
     botName: 'Archon',
-    assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
+    assistant: providers.length === 1 ? providers[0].id : undefined,
     assistants: registeredAssistants,
     streaming,
     paths: {
@@ -547,6 +524,7 @@ function getDefaults(): MergedConfig {
       maxConversations: 10,
     },
     workflows: {
+      toolCallAttentionMs: DEFAULT_TOOL_CALL_ATTENTION_MS,
       autoResumeOnQuotaReset: false,
       quotaMaxAttempts: 1,
       quotaDeadlineMs: 24 * 60 * 60 * 1000,
@@ -589,8 +567,7 @@ function applyEnvOverrides(
         config.assistant = envAssistant;
       } else {
         throw new Error(
-          `DEFAULT_AI_ASSISTANT='${envAssistant}' is not a registered provider. ` +
-            `Available providers: ${getRegisteredProviderNames().join(', ')}`
+          `DEFAULT_AI_ASSISTANT='${envAssistant}': ${missingProviderMessage(providerRegistry, envAssistant)}`
         );
       }
     } else if (!isRegisteredProvider(envAssistant)) {
@@ -644,8 +621,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
       result.assistant = global.defaultAssistant;
     } else {
       throw new Error(
-        `defaultAssistant: '${global.defaultAssistant}' in global config (~/.archon/config.yaml) ` +
-          `is not a registered provider. Available: ${getRegisteredProviderNames().join(', ')}`
+        `defaultAssistant in global config (~/.archon/config.yaml): ${missingProviderMessage(providerRegistry, global.defaultAssistant)}`
       );
     }
   }
@@ -697,8 +673,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
       result.assistant = repo.assistant;
     } else {
       throw new Error(
-        `assistant: '${repo.assistant}' in repo config (.archon/config.yaml) ` +
-          `is not a registered provider. Available: ${getRegisteredProviderNames().join(', ')}`
+        `assistant in repo config (.archon/config.yaml): ${missingProviderMessage(providerRegistry, repo.assistant)}`
       );
     }
   }
@@ -777,8 +752,6 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
  * @returns Merged configuration with all overrides applied
  */
 export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
-  ensureProvidersRegistered();
-
   // 1. Start with defaults
   let config = getDefaults();
 
@@ -887,7 +860,6 @@ export async function updateGlobalConfig(
   const configPath = getArchonConfigPath();
 
   try {
-    ensureProvidersRegistered();
     const current = await readGlobalConfigForUpdate(configPath);
 
     // Deep-merge: only overwrite defined keys
@@ -976,7 +948,7 @@ export async function updateGlobalConfig(
  * unset tier resolves to. Never throws — an unknown/odd provider (or a throw)
  * yields `undefined` (every consumer uses optional chaining).
  */
-function tierDefaultsFor(provider: string): RawTiersConfig | undefined {
+function tierDefaultsFor(provider: string | undefined): RawTiersConfig | undefined {
   try {
     const profile = buildAiProfile(provider);
     const out: RawTiersConfig = {};

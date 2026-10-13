@@ -10,6 +10,7 @@ import type * as CleanupService from '@archon/core/services/cleanup-service';
 import type * as Git from '@archon/git';
 import type * as Isolation from '@archon/isolation';
 import { toBranchName } from '@archon/git';
+import { readWorktreeCreationId } from '@archon/isolation';
 import {
   isolationCompleteCommand,
   isolationCleanupCommand,
@@ -142,6 +143,7 @@ const mockDestroyWorktree = mock<ReturnType<typeof Isolation.getIsolationProvide
 );
 
 mock.module('@archon/isolation', () => ({
+  readWorktreeCreationId,
   getIsolationProvider: mock(() => ({
     destroy: mockDestroyWorktree,
   })),
@@ -157,6 +159,7 @@ function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvi
     branch_name: 'feature-branch',
     working_path: '/test/worktree',
     codebase_id: 'cb-123',
+    codebase_name: 'test-project',
     codebase_default_cwd: '/test/repo',
     workflow_id: 'wf-123',
     workflow_type: 'task',
@@ -170,7 +173,7 @@ function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvi
   };
 }
 
-const mockEnv = makeEnvironment();
+const mockEnv = makeEnvironment({ metadata: { worktree_creation_id: 'checkout-proof' } });
 
 type ActiveWorkflowRun = NonNullable<
   Awaited<ReturnType<typeof WorkflowDb.getActiveWorkflowRunByPath>>
@@ -178,6 +181,7 @@ type ActiveWorkflowRun = NonNullable<
 
 function makeActiveWorkflowRun(overrides: Partial<ActiveWorkflowRun> = {}): ActiveWorkflowRun {
   return {
+    origin: { conversationId: 'conv-123' },
     id: 'run-abc',
     workflow_name: 'implement',
     conversation_id: 'conv-123',
@@ -788,13 +792,30 @@ describe('isolationCleanupCommand', () => {
     mockFindStaleEnvironments.mockResolvedValue([]);
     mockGetLiveRunOwningEnv.mockReset();
     mockGetLiveRunOwningEnv.mockResolvedValue(null);
-    mockDestroyWorktree.mockReset();
+    mockDestroyWorktree.mockReset().mockResolvedValue({
+      worktreeRemoved: true,
+      directoryClean: true,
+      branchDeleted: true,
+      remoteBranchDeleted: null,
+      warnings: [],
+    });
     mockUpdateStatus.mockReset();
   });
 
   afterEach(() => {
     consoleLogSpy.mockRestore();
     consoleErrorSpy.mockRestore();
+  });
+
+  it('rejects before reconciliation or destruction when the initial list rejects a legacy path', async () => {
+    const { InvalidCodebaseDefaultCwdError } = await import('@archon/core/db/codebases');
+    mockListEnvironments.mockRejectedValueOnce(
+      new InvalidCodebaseDefaultCwdError('legacy', 'projects/repo')
+    );
+    await expect(isolationCleanupCommand()).rejects.toThrow('/register-project "legacy"');
+    expect(mockDestroyWorktree).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(consoleLogSpy.mock.calls.flat().join(' ')).not.toContain('Status: Cleaned');
   });
 
   it('destroys a stale environment with no live owning run', async () => {
@@ -807,10 +828,37 @@ describe('isolationCleanupCommand', () => {
     expect(mockDestroyWorktree).toHaveBeenCalledWith('/test/worktree', {
       branchName: 'stale-branch',
       canonicalRepoPath: '/test/repo',
+      creationId: 'checkout-proof',
     });
     expect(mockUpdateStatus).toHaveBeenCalledWith('env-stale-1', 'destroyed');
     expect(consoleLogSpy).toHaveBeenCalledWith('  Status: Cleaned');
   });
+
+  it.each(['refusal', 'partial'])(
+    'reports %s without marking the stale environment destroyed',
+    async mode => {
+      mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
+      if (mode === 'refusal')
+        mockDestroyWorktree.mockRejectedValueOnce(new Error('ownership changed'));
+      else
+        mockDestroyWorktree.mockResolvedValueOnce({
+          worktreeRemoved: true,
+          directoryClean: false,
+          branchDeleted: null,
+          remoteBranchDeleted: null,
+          warnings: ['Retained directory'],
+        });
+      await isolationCleanupCommand(7);
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(consoleErrorSpy.mock.calls.flat().join(' ')).toContain(
+        mode === 'refusal' ? 'ownership changed' : 'Retained directory'
+      );
+      expect(consoleLogSpy.mock.calls.flat().join(' ')).not.toContain('Status: Cleaned');
+      expect(consoleLogSpy).toHaveBeenCalledWith(
+        '\nCleanup complete: 0 cleaned, 0 skipped, 1 failed'
+      );
+    }
+  );
 
   it('skips a stale environment owned by a live run without destroying it', async () => {
     mockFindStaleEnvironments.mockResolvedValueOnce([

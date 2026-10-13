@@ -1,13 +1,20 @@
+import * as containerSpawnModule from './container-spawn';
+import { overStreams } from '../test/plugin';
+import { createProvider, descriptor } from './index';
 import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import type { Options, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { createMockLogger } from '../test/mocks/logger';
 import type { MessageChunk } from '../types';
 
+const backgroundTempRoots = trackTempRoots();
+
 const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
+  BUNDLED_VERSION: 'test',
   createLogger: mock(() => mockLogger),
 }));
 
@@ -32,7 +39,23 @@ const mockQuery = mock<MockQuery>(async function* (_params) {
 });
 
 // Mock the claude-agent-sdk
+const sdkToolHandlers = new Map<
+  string,
+  (args: Record<string, unknown>) => Promise<{ content: { type: 'text'; text: string }[] }>
+>();
 mock.module('@anthropic-ai/claude-agent-sdk', () => ({
+  tool: (
+    name: string,
+    _description: string,
+    _schema: unknown,
+    handler: (
+      args: Record<string, unknown>
+    ) => Promise<{ content: { type: 'text'; text: string }[] }>
+  ) => {
+    sdkToolHandlers.set(name, handler);
+    return { name, handler };
+  },
+  createSdkMcpServer: ({ name }: { name: string }) => ({ type: 'sdk', name, instance: {} }),
   query: mockQuery,
 }));
 
@@ -153,6 +176,7 @@ describe('ClaudeProvider', () => {
     test('returns full capability set for Claude provider', () => {
       const caps = client.getCapabilities();
       expect(caps).toMatchObject({
+        backgroundWork: 'reported',
         sessionResume: true,
         sessionFork: true,
         mcp: true,
@@ -236,6 +260,7 @@ describe('ClaudeProvider', () => {
           type: 'tool_call',
           toolCallId: 'toolu_1',
           name: 'Bash',
+          title: 'npm test',
           rawInput: { command: 'npm test' },
         },
         { type: 'tool_call_update', toolCallId: 'toolu_1', status: 'cancelled' },
@@ -744,7 +769,13 @@ describe('ClaudeProvider', () => {
 
       expect(chunks.slice(0, 3)).toEqual([
         { type: 'agent_message_chunk', text: 'I will run a command.' },
-        { type: 'tool_call', toolCallId: 'toolu_ls', name: 'Bash', rawInput: { command: 'ls' } },
+        {
+          type: 'tool_call',
+          toolCallId: 'toolu_ls',
+          name: 'Bash',
+          title: 'ls',
+          rawInput: { command: 'ls' },
+        },
         { type: 'agent_message_chunk', text: 'Command completed.' },
       ]);
     });
@@ -762,7 +793,7 @@ describe('ClaudeProvider', () => {
       }
 
       expect(mockQuery).toHaveBeenCalledWith({
-        prompt: 'my prompt',
+        prompt: expect.any(Object),
         options: expect.objectContaining({
           cwd: '/my/workspace',
           model: 'sonnet',
@@ -781,7 +812,7 @@ describe('ClaudeProvider', () => {
       }
 
       expect(mockQuery).toHaveBeenCalledWith({
-        prompt: 'prompt',
+        prompt: expect.any(Object),
         options: expect.objectContaining({
           cwd: '/workspace',
           resume: 'session-to-resume',
@@ -844,8 +875,6 @@ describe('ClaudeProvider', () => {
           description: 'Investigating the bug',
           taskType: 'general-purpose',
         },
-        // The SDK never reported it finished, so it closes before the turn settles.
-        { type: 'subtask', taskId: 't-1', status: 'stopped' },
       ]);
     });
 
@@ -1089,8 +1118,8 @@ describe('ClaudeProvider', () => {
         types.push(chunk.type);
       }
 
-      // background_tasks_changed has no vocabulary event; the subtask carries its end.
-      expect(types).toEqual(['state_update', 'result', 'subtask', 'result', 'settled']);
+      // The background snapshot announces the task; its notification reports the end.
+      expect(types).toEqual(['state_update', 'result', 'subtask', 'subtask', 'result', 'settled']);
       expect(readAfterIdle).toBe(false);
       // The CLI emits its session-state events only when asked.
       const options = (mockQuery.mock.calls[0][0] as { options: { env: Record<string, string> } })
@@ -1571,10 +1600,10 @@ describe('ClaudeProvider', () => {
       spy.mockRestore();
     });
 
-    test('container run SKIPS host binary resolution (works when host Claude is absent)', async () => {
+    test('container run skips host binary resolution even with a configured host path', async () => {
       // Simulate a compiled binary with no host Claude — resolveClaudeBinaryPath
       // would throw. A container run must NOT call it (Claude is baked into the
-      // runner image; the SDK bypasses disk resolution via spawnClaudeCodeProcess).
+      // runner image).
       const spy = spyOn(binaryResolver, 'resolveClaudeBinaryPath').mockRejectedValue(
         new Error('Claude Code not found — set CLAUDE_BIN_PATH')
       );
@@ -1585,6 +1614,7 @@ describe('ClaudeProvider', () => {
       // Must not throw at resolution time.
       for await (const _ of client.sendQuery('test', '/workspace', undefined, {
         execContext: { kind: 'container', containerId: 'c-1' },
+        assistantConfig: { claudeBinaryPath: '/missing-host-claude' },
       })) {
         // consume
       }
@@ -1593,9 +1623,9 @@ describe('ClaudeProvider', () => {
       const callArgs = mockQuery.mock.calls[0][0] as {
         options: { pathToClaudeCodeExecutable?: string; spawnClaudeCodeProcess?: unknown };
       };
-      // SDK spawn hook is set; host disk path is omitted.
+      // The placeholder prevents SDK host resolution before the hook runs.
       expect(typeof callArgs.options.spawnClaudeCodeProcess).toBe('function');
-      expect(callArgs.options.pathToClaudeCodeExecutable).toBeUndefined();
+      expect(callArgs.options.pathToClaudeCodeExecutable).toBe('claude');
 
       spy.mockRestore();
     });
@@ -3214,14 +3244,14 @@ describe('typed failures (#1797, #3524)', () => {
     ['cloud_credential_error', 'auth'],
     ['billing_error', 'quota_exhausted'],
     ['rate_limit', 'rate_limited'],
-    ['overloaded', 'rate_limited'],
+    ['overloaded', 'overloaded'],
     ['server_error', 'transient'],
     ['invalid_request', 'unknown'],
     ['model_not_found', 'misconfigured'],
     ['max_output_tokens', 'unknown'],
     ['unknown', 'unknown'],
   ])('API error code %s reports a %s failure and keeps the evidence', async (code, expected) => {
-    const text = `API Error: vendor text for ${code}`;
+    const text = 'API Error: opaque vendor evidence';
     mockQuery.mockImplementation(async function* () {
       yield syntheticAssistantMessage(code, text);
       yield apiErrorResult(text);
@@ -3722,7 +3752,141 @@ describe('typed failures (#1797, #3524)', () => {
     );
   });
 
-  test('conforms to the provider contract', async () => {
+  test('wake turns can start more work before the final idle', async () => {
+    mockQuery.mockImplementation(async function* () {
+      for (let i = 0; i < 3; i++) {
+        const taskId = `task-${String(i)}`;
+        yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+        yield {
+          type: 'system',
+          subtype: 'background_tasks_changed',
+          tasks: [{ task_id: taskId, task_type: 'local_agent', description: taskId }],
+        };
+        yield { type: 'result', subtype: 'success', session_id: 's', result: taskId };
+        yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+        yield {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: taskId,
+          status: 'completed',
+        };
+      }
+      yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+      yield { type: 'result', subtype: 'success', session_id: 's', result: 'final' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+    });
+    const stream = await collect(client.sendQuery('test', '/workspace'));
+    expect(stream.chunks.filter(chunk => chunk.type === 'result').map(chunk => chunk.text)).toEqual(
+      ['task-0', 'task-1', 'task-2', 'final']
+    );
+    expect(stream.chunks.at(-1)).toEqual({ type: 'settled' });
+  });
+
+  test('a task announced before its background snapshot still requires the final idle', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield { type: 'system', subtype: 'task_started', task_id: 't' };
+      yield {
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [{ task_id: 't', task_type: 'local_bash', description: 'work' }],
+      };
+      yield { type: 'result', subtype: 'success', session_id: 's' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+      yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+      yield { type: 'system', subtype: 'task_notification', task_id: 't', status: 'completed' };
+    });
+    const stream = await collect(client.sendQuery('test', '/workspace'));
+    expect(stream.chunks.some(chunk => chunk.type === 'settled')).toBe(false);
+    expect(
+      stream.chunks.filter(chunk => chunk.type === 'subtask').map(chunk => chunk.status)
+    ).toEqual(['started', 'completed']);
+  });
+
+  for (const subtype of ['task_started', 'task_progress']) {
+    for (const finalIdle of [false, true]) {
+      test(`direct ${subtype} requires a later idle after completion (final idle: ${String(finalIdle)})`, async () => {
+        mockQuery.mockImplementation(async function* () {
+          yield { type: 'system', subtype, task_id: 'direct' };
+          yield { type: 'result', subtype: 'success', session_id: 's', result: 'first' };
+          yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+          yield {
+            type: 'system',
+            subtype: 'task_notification',
+            task_id: 'direct',
+            status: 'completed',
+          };
+          if (finalIdle) {
+            yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+            yield { type: 'result', subtype: 'success', session_id: 's', result: 'final' };
+            yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+          }
+        });
+        const stream = await collect(client.sendQuery('test', '/workspace'));
+        expect(stream.chunks.some(chunk => chunk.type === 'settled')).toBe(finalIdle);
+        expect(stream.chunks.filter(chunk => chunk.type === 'result').at(-1)?.text).toBe(
+          finalIdle ? 'final' : 'first'
+        );
+      });
+    }
+  }
+
+  test('lost observation leaves a live task open and never settles', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'live',
+        description: 'never finished',
+      };
+      yield { type: 'result', subtype: 'success', session_id: 's', result: 'partial' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+    });
+    const stream = await collect(client.sendQuery('test', '/workspace'));
+    expect(stream.chunks.some(chunk => chunk.type === 'settled')).toBe(false);
+    expect(stream.chunks.filter(chunk => chunk.type === 'subtask')).toEqual([
+      { type: 'subtask', taskId: 'live', status: 'started', description: 'never finished' },
+    ]);
+  });
+
+  test('cancelling quiet background work closes streaming input without settling or inventing a stop', async () => {
+    const abort = new AbortController();
+    let inputClosed = false;
+    mockQuery.mockImplementation(async function* ({ prompt, options }) {
+      if (typeof prompt === 'string') throw new Error('Expected streaming input');
+      const input = prompt[Symbol.asyncIterator]();
+      await input.next();
+      const closed = input.next().then(value => {
+        inputClosed = value.done === true;
+      });
+      yield {
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [{ task_id: 'server', task_type: 'local_bash', description: 'dev server' }],
+      };
+      yield { type: 'result', subtype: 'success', session_id: 's' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+      abort.abort();
+      await closed;
+      expect(options?.abortController?.signal.aborted).toBe(true);
+      throw new Error('aborted');
+    });
+    const chunks: MessageChunk[] = [];
+    await expect(
+      (async () => {
+        for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
+          abortSignal: abort.signal,
+        }))
+          chunks.push(chunk);
+      })()
+    ).rejects.toThrow('Query aborted');
+    expect(inputClosed).toBe(true);
+    expect(chunks.some(chunk => chunk.type === 'settled')).toBe(false);
+    expect(chunks.filter(chunk => chunk.type === 'subtask')).toHaveLength(1);
+  });
+
+  test.each([false, true])('conforms to the provider contract (streams: %s)', async remote => {
+    const client = remote ? overStreams(createProvider, descriptor) : createProvider();
     function turn(events: unknown[] | Error): () => AsyncIterable<unknown> {
       return () => {
         mockQuery.mockImplementation(async function* () {
@@ -3732,8 +3896,67 @@ describe('typed failures (#1797, #3524)', () => {
         return client.sendQuery('test', '/workspace');
       };
     }
+    const backgroundRoot = backgroundTempRoots(mkdtempSync(join(tmpdir(), 'claude-background-')));
+    let runtimeEnded = false;
+    const backgroundCase = {
+      name: 'streaming background bash survives idle and a wake turn',
+      runtimeStatus: () => (runtimeEnded ? ('completed' as const) : ('running' as const)),
+      run: () => {
+        runtimeEnded = false;
+        mockQuery.mockImplementation(async function* ({ prompt }) {
+          if (typeof prompt === 'string') throw new Error('Print mode kills background tasks');
+          const input = prompt[Symbol.asyncIterator]();
+          expect((await input.next()).value).toMatchObject({ message: { content: 'test' } });
+          let inputEnded = false;
+          const closing = input.next().then(value => {
+            inputEnded = value.done === true;
+          });
+          yield {
+            type: 'system',
+            subtype: 'background_tasks_changed',
+            tasks: [
+              { task_id: 'bash', task_type: 'local_bash', description: 'write output' },
+              { task_id: 'watcher', task_type: 'monitor', description: 'ambient', ambient: true },
+            ],
+          };
+          yield { type: 'system', subtype: 'task_progress', task_id: 'watcher' };
+          yield {
+            type: 'result',
+            subtype: 'success',
+            session_id: 's',
+            result: 'first',
+            total_cost_usd: 0.1,
+          };
+          yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+          await Promise.resolve();
+          expect(inputEnded).toBe(false);
+          writeFileSync(join(backgroundRoot, 'background-output.txt'), 'finished');
+          yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+          runtimeEnded = true;
+          yield {
+            type: 'system',
+            subtype: 'task_notification',
+            task_id: 'bash',
+            status: 'completed',
+            output_file: join(backgroundRoot, 'background-output.txt'),
+          };
+          yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+          yield {
+            type: 'result',
+            subtype: 'success',
+            session_id: 's',
+            result: 'final',
+            total_cost_usd: 0.3,
+          };
+          yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+          await closing;
+        });
+        return client.sendQuery('test', '/workspace');
+      },
+    };
     const violations = await runProviderConformance({
       capabilities: client.getCapabilities(),
+      backgroundCases: [backgroundCase],
       turns: [
         {
           name: 'plain turn',
@@ -3752,6 +3975,7 @@ describe('typed failures (#1797, #3524)', () => {
               tasks: [{ task_id: 't', task_type: 'local_agent', description: 'bg' }],
             },
             { type: 'system', subtype: 'background_tasks_changed', tasks: [] },
+            { type: 'system', subtype: 'task_notification', task_id: 't', status: 'completed' },
             { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
             { type: 'system', subtype: 'session_state_changed', state: 'idle' },
           ]),
@@ -3775,13 +3999,6 @@ describe('typed failures (#1797, #3524)', () => {
           name: 'CLI without session-state events',
           run: turn([{ type: 'result', subtype: 'success', is_error: false, session_id: 's' }]),
         },
-        {
-          name: 'subtask the SDK never reports finished',
-          run: turn([
-            { type: 'system', subtype: 'task_started', task_id: 't', description: 'bg' },
-            { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
-          ]),
-        },
       ],
       failureCases: [
         {
@@ -3795,7 +4012,7 @@ describe('typed failures (#1797, #3524)', () => {
         },
         {
           name: 'overloaded API',
-          expected: 'rate_limited',
+          expected: 'overloaded',
           evidence: 'Overloaded',
           run: turn([
             syntheticAssistantMessage('overloaded', 'Overloaded'),
@@ -3875,6 +4092,16 @@ describe('typed failures (#1797, #3524)', () => {
           },
         },
       ],
+      forkTurn: {
+        name: 'forked session',
+        source: 's',
+        run: () => {
+          mockQuery.mockImplementation(async function* () {
+            yield { type: 'result', subtype: 'success', is_error: false, session_id: 's-fork' };
+          });
+          return client.sendQuery('test', '/workspace', 's', { forkSession: true });
+        },
+      },
       toolTurn: {
         name: 'tool turn with an interrupted call',
         run: () => {
@@ -3913,6 +4140,113 @@ describe('typed failures (#1797, #3524)', () => {
         },
       },
     });
+    expect(await Bun.file(join(backgroundRoot, 'background-output.txt')).text()).toBe('finished');
+    const backgroundStream = await collect(backgroundCase.run());
+    expect(
+      backgroundStream.chunks.some(chunk => chunk.type === 'subtask' && chunk.taskId === 'watcher')
+    ).toBe(false);
+    expect(
+      backgroundStream.chunks
+        .filter(chunk => chunk.type === 'result')
+        .map(chunk => [chunk.text, chunk.cost])
+    ).toEqual([
+      ['first', 0.1],
+      ['final', 0.19999999999999998],
+    ]);
     expect(violations).toEqual([]);
   });
+});
+
+test('Claude native tool callbacks and chunks match over streams', async () => {
+  const handler = mock(async (input: Record<string, unknown>) => JSON.stringify(input));
+  const options = {
+    nativeTools: [
+      {
+        name: 'manage_run',
+        description: 'Inspect a run',
+        inputSchema: { properties: { action: { kind: 'string' as const } }, required: ['action'] },
+        handler,
+      },
+    ],
+  };
+  const chunks: MessageChunk[][] = [];
+  for (const provider of [createProvider(), overStreams(createProvider, descriptor)]) {
+    mockQuery.mockImplementation(async function* ({ options }) {
+      expect(options?.mcpServers?.archon).toBeDefined();
+      const result = await sdkToolHandlers.get('manage_run')!({ action: 'inspect' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        session_id: 'tool-session',
+        result: result.content[0].text,
+      };
+    });
+    chunks.push(
+      await Array.fromAsync(provider.sendQuery('inspect', '/workspace', undefined, options))
+    );
+  }
+  expect(chunks[1]).toEqual(chunks[0]);
+  expect(chunks[0]).toContainEqual(
+    expect.objectContaining({ type: 'result', text: '{"action":"inspect"}' })
+  );
+  expect(handler).toHaveBeenCalledTimes(2);
+});
+
+test('Claude container spawn hook receives request environment over streams', async () => {
+  const canary = 'ARCHON_P4_HOST_SECRET';
+  process.env[canary] = 'host-secret';
+  const envs: NodeJS.ProcessEnv[] = [];
+  const hookSpy = spyOn(containerSpawnModule, 'buildContainerSpawn').mockImplementation(
+    () => spawnOptions => {
+      envs.push(spawnOptions.env);
+      throw new Error('fixture-container-hook');
+    }
+  );
+  try {
+    for (const provider of [createProvider(), overStreams(createProvider, descriptor)]) {
+      mockQuery.mockImplementation(async function* ({ options }) {
+        expect(options?.spawnClaudeCodeProcess).toBeDefined();
+        expect(() =>
+          options!.spawnClaudeCodeProcess!({
+            command: 'claude',
+            args: [],
+            env: options?.env ?? {},
+            signal: new AbortController().signal,
+          })
+        ).toThrow('fixture-container-hook');
+        yield { type: 'result', subtype: 'success', session_id: 'container-session' };
+      });
+      await Array.fromAsync(
+        provider.sendQuery('container', '/workspace', undefined, {
+          execContext: { kind: 'container', containerId: 'fixture-container' },
+          env: { ANTHROPIC_API_KEY: 'request-secret', PROJECT_VAR: 'configured' },
+        })
+      );
+    }
+    expect(envs[1]).toEqual(envs[0]);
+    expect(envs[1]).not.toHaveProperty(canary);
+    expect(envs[1]).toMatchObject({
+      ANTHROPIC_API_KEY: 'request-secret',
+      PROJECT_VAR: 'configured',
+    });
+  } finally {
+    hookSpy.mockRestore();
+    delete process.env[canary];
+  }
+});
+
+test('Claude diagnostic hook uses configured binary resolution over streams', async () => {
+  const resolver = spyOn(binaryResolver, 'resolveClaudeBinaryWithSource').mockResolvedValue({
+    path: process.execPath,
+    source: 'config',
+  });
+  try {
+    const request = { assistantConfig: { claudeBinaryPath: process.execPath } };
+    const direct = await createProvider().diagnose(request);
+    expect(await overStreams(createProvider, descriptor).diagnose!(request)).toEqual(direct);
+    expect(direct.checks[0].status).toBe('ok');
+    expect(resolver).toHaveBeenCalledWith(process.execPath);
+  } finally {
+    resolver.mockRestore();
+  }
 });

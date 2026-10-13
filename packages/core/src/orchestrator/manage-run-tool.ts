@@ -1,3 +1,4 @@
+import type { RunActor } from '../operations/run-authorization';
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import {
@@ -7,23 +8,29 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { listDashboardRuns, findWorkflowRunsByIdPrefix } from '../db/workflows';
 import { toError } from '../utils/error';
 import {
-  abandonWorkflow,
-  cancelWorkflow,
   CancelRefusedError,
   workflowOperationErrorMessage,
   describeAbandonOwner,
-  approveWorkflow,
-  rejectWorkflow,
-  respondToWorkflow,
-  resumeWorkflow,
 } from '../operations/workflow-operations';
+import type { WorkflowOperations } from '../operations/workflow-operations';
 
 const log = createLogger('orchestrator.manage_run');
 
 export interface ManageRunContext {
+  actor: RunActor;
+  operations: Pick<
+    WorkflowOperations,
+    | 'abandonWorkflow'
+    | 'cancelWorkflow'
+    | 'approveWorkflow'
+    | 'rejectWorkflow'
+    | 'respondToWorkflow'
+    | 'resumeWorkflow'
+    | 'listWorkflowRuns'
+    | 'findWorkflowRunsByIdPrefix'
+  >;
   /** The project (codebase) this chat is scoped to. */
   codebaseId: string;
   /**
@@ -255,7 +262,7 @@ function handleHelp(subtool: string): string {
 }
 
 async function handleList(ctx: ManageRunContext): Promise<string> {
-  const { runs } = await listDashboardRuns({ codebaseId: ctx.codebaseId, limit: 20 });
+  const { runs } = await ctx.operations.listWorkflowRuns({ codebaseId: ctx.codebaseId, limit: 20 });
   log.info({ codebaseId: ctx.codebaseId, count: runs.length }, 'manage_run.list_completed');
   if (runs.length === 0) return 'No workflow runs for this project yet.';
 
@@ -291,6 +298,14 @@ function formatRunDetail(run: WorkflowRun): string {
   // AI approver can decide finalize-vs-iterate without parsing prose.
   const rawApproval = run.metadata.approval;
   const attention = runAttention(run);
+  if (attention?.kind === 'stalled_tool_calls') {
+    parts.push('tool calls need attention; work remains running');
+    for (const call of attention.calls)
+      parts.push(
+        `${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)`
+      );
+    parts.push(`inspect with archon workflow logs ${run.id}, or explicitly cancel`);
+  }
   if (attention?.kind === 'action_required') {
     parts.push(`action required: ${attention.message.slice(0, 300)}`);
     parts.push(
@@ -401,7 +416,7 @@ async function handleWrite(
   const id = run.id;
   switch (action) {
     case 'resume': {
-      const resumed = await resumeWorkflow(id);
+      const resumed = await ctx.operations.resumeWorkflow(id, ctx.actor);
       return (
         `Run ${resumed.id.slice(0, 8)} (${resumed.workflow_name}) can resume from its completed ` +
         'nodes. It does not restart automatically — continue it from the run’s controls or by ' +
@@ -410,13 +425,14 @@ async function handleWrite(
     }
     case 'cancel': {
       try {
-        const result = await cancelWorkflow(id);
+        const result = await ctx.operations.cancelWorkflow(id, ctx.actor);
         if (result.kind === 'cooperative') {
           return result.cancelled
             ? `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}). Its executor stops at its next status check.`
             : `Run ${id.slice(0, 8)} (${result.run.workflow_name}) already finished; nothing to cancel.`;
         }
         let msg = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}).`;
+        for (const warning of result.cleanupWarnings ?? []) msg += ` Warning: ${warning}`;
         if (result.cascadeFailures > 0) {
           msg += ` Warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
         }
@@ -435,10 +451,12 @@ async function handleWrite(
       const {
         run: cancelled,
         cascadeFailures,
+        cleanupWarnings,
         blockedParentRunId,
         owner,
-      } = await abandonWorkflow(id);
+      } = await ctx.operations.abandonWorkflow(id, ctx.actor);
       let msg = `${describeAbandonOwner(owner).join(' ')} Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
+      for (const warning of cleanupWarnings ?? []) msg += ` Warning: ${warning}`;
       if (cascadeFailures > 0) {
         msg += ` Warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
       }
@@ -451,7 +469,7 @@ async function handleWrite(
       // accept=true forces the finalize path (#2074): no feedback reaches the gate,
       // so a loop with a completed condition finalizes from its persisted output on resume.
       const feedback = willFinalize ? undefined : message;
-      const result = await approveWorkflow(id, feedback);
+      const result = await ctx.operations.approveWorkflow(id, feedback, ctx.actor);
       const continues = await signalGateResolved(ctx, run, 'approve');
       if (result.type !== 'interactive_loop') {
         return `Approved ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
@@ -462,7 +480,7 @@ async function handleWrite(
     }
     case 'reject': {
       const rejectText = message.length > 0 ? message : 'Rejected';
-      const result = await rejectWorkflow(id, rejectText);
+      const result = await ctx.operations.rejectWorkflow(id, rejectText, ctx.actor);
       if (result.cancelled) {
         const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
         return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
@@ -480,7 +498,7 @@ async function handleWrite(
       // gate's structured output as ''.
       const respondText =
         message.length > 0 ? message : decision === 'reject' ? 'Rejected' : undefined;
-      const result = await respondToWorkflow(id, decision, respondText);
+      const result = await ctx.operations.respondToWorkflow(id, decision, respondText, ctx.actor);
       if ('cancelled' in result) {
         // decision === 'reject' resolved through the legacy cancel/rework path.
         if (result.cancelled) {
@@ -529,7 +547,7 @@ async function signalGateResolved(
   }
   let continuationRun: WorkflowRun;
   try {
-    continuationRun = await resumeWorkflow(run.id);
+    continuationRun = await ctx.operations.resumeWorkflow(run.id, ctx.actor);
   } catch (error) {
     const err = toError(error);
     log.warn({ err, runId: run.id, action }, 'manage_run.gate_continuation_prepare_failed');
@@ -554,7 +572,7 @@ async function signalGateResolved(
  * or ambiguous prefix.
  */
 async function getScopedRun(runId: string, ctx: ManageRunContext): Promise<WorkflowRun | string> {
-  const matches = await findWorkflowRunsByIdPrefix(runId, ctx.codebaseId);
+  const matches = await ctx.operations.findWorkflowRunsByIdPrefix(runId, ctx.codebaseId);
   if (matches.length > 1) {
     return `manage_run: id '${runId}' matches more than one run — use more characters or the full id.`;
   }

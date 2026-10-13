@@ -86,9 +86,6 @@ function lookupKey(owner: string, repo: string): string {
 }
 
 export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubAppAuthProvider {
-  // Validate config at the boundary so misconfiguration surfaces at server
-  // bootstrap, not at the first webhook. loadAppPrivateKey already enforces
-  // the same "fail at start" contract for the PEM.
   if (!config.appId.trim()) {
     throw new AppPrivateKeyError(
       'createGitHubAppAuthProvider: appId is empty. Set GITHUB_APP_ID to the numeric App ID.'

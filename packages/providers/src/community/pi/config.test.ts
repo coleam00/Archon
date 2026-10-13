@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { InvalidProviderRunConfigError } from '../../errors';
+import { InvalidProviderRunConfigError } from '@archon/provider-contract';
 import { parsePiConfig, parsePiConfigStrict, resolvePiExtensionSettings } from './config';
 
 describe('parsePiConfig', () => {
@@ -474,4 +474,19 @@ describe('resolvePiExtensionSettings', () => {
       extensionFlags: { plan: true },
     });
   });
+});
+
+test('snapshot scope validates portable settings and excludes process environment and concurrency', () => {
+  const raw = {
+    model: 'openai/gpt',
+    env: { API_KEY: 'secret' },
+    maxConcurrent: 3,
+    enableExtensions: false,
+  };
+  expect(parsePiConfigStrict(raw, 'snapshot')).toEqual({
+    model: 'openai/gpt',
+    enableExtensions: false,
+  });
+  expect(() => parsePiConfigStrict({ env: { API_KEY: 1 } }, 'snapshot')).toThrow();
+  expect(() => parsePiConfigStrict({ model: 'missing-vendor' }, 'snapshot')).toThrow();
 });

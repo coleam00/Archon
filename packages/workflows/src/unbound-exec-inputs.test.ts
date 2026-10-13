@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -41,7 +42,8 @@ nodes:
       printf '%s' "$INPUTS_BASH_BARE"
       printf '%s' "\${INPUTS_BASH_BRACED}"
 `,
-      'supported-forms.yaml'
+      'supported-forms.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).toBeNull();
@@ -95,7 +97,8 @@ nodes:
       literal: true
       directive: { from: $produce.output.value, if_skipped: fallback }
 `,
-      'provided-values.yaml'
+      'provided-values.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).not.toBeNull();
@@ -115,7 +118,8 @@ nodes:
     with:
       ignored: value
 `,
-      'bash-declared.yaml'
+      'bash-declared.yaml',
+      providerRegistry
     );
     expect(declared.workflow).not.toBeNull();
     expect((declared.warnings ?? []).join('\n')).toContain("'with' is only supported");
@@ -131,7 +135,8 @@ nodes:
     with:
       local: value
 `,
-      'bash-ignored.yaml'
+      'bash-ignored.yaml',
+      providerRegistry
     );
     expect(ignored.workflow).toBeNull();
     expect(ignored.error?.error).toContain('INPUTS_LOCAL');
@@ -155,7 +160,8 @@ nodes:
       zeta: true
       alpha: false
 `,
-      'advisory-read.yaml'
+      'advisory-read.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).not.toBeNull();
@@ -191,7 +197,8 @@ nodes:
   - id: shell
     bash: printf '%s' "$HOME"
 `,
-      'unsupported-forms.yaml'
+      'unsupported-forms.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).not.toBeNull();
@@ -214,7 +221,8 @@ nodes:
           script: console.log(process.env.INPUTS_MISSING)
           runtime: bun
 `,
-      'nested-body.yaml'
+      'nested-body.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).toBeNull();
@@ -251,7 +259,10 @@ print(fix, repetitions)
 `
       );
 
-      const result = await discoverWorkflows(root, { loadDefaults: false });
+      const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
 
       expect(result.errors).toEqual([]);
       expect(result.workflows).toHaveLength(1);
@@ -290,7 +301,10 @@ nodes:
         'console.log(process.env.PROJECT_SECRET)\n'
       );
 
-      const result = await discoverWorkflows(root, { loadDefaults: false });
+      const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
 
       expect(result.errors).toEqual([]);
       expect(result.workflows).toHaveLength(1);
@@ -325,6 +339,7 @@ nodes:
       );
 
       const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
         loadDefaults: false,
         envVarNames: ['NAME'],
       });
@@ -363,7 +378,10 @@ nodes:
         'console.log(process.env.REPO_DOTENV_ONLY)\n'
       );
 
-      const result = await discoverWorkflows(root, { loadDefaults: false });
+      const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
 
       expect(result.errors).toEqual([]);
       expect(result.workflows).toHaveLength(1);
@@ -401,7 +419,10 @@ nodes:
         'console.log(process.env.MY_RANDOM_CI_RUNNER_VAR)\n'
       );
 
-      const result = await discoverWorkflows(root, { loadDefaults: false });
+      const result = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
 
       expect(result.errors).toEqual([]);
       expect(result.workflows).toHaveLength(1);
@@ -428,7 +449,8 @@ nodes:
       print(os.environ["INPUTS_MISSING"])
     runtime: uv
 `,
-      'inline-unbound.yaml'
+      'inline-unbound.yaml',
+      providerRegistry
     );
 
     expect(result.workflow).toBeNull();
@@ -461,7 +483,10 @@ nodes:
 `
       );
 
-      const unbound = await discoverWorkflows(root, { loadDefaults: false });
+      const unbound = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
       expect(unbound.workflows).toEqual([]);
       expect(unbound.errors).toHaveLength(1);
       expect(unbound.errors[0]?.error).toContain('INPUTS_FIX');
@@ -481,7 +506,10 @@ nodes:
       fix: ready
 `
       );
-      const bound = await discoverWorkflows(root, { loadDefaults: false });
+      const bound = await discoverWorkflows(root, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
       expect(bound.errors).toEqual([]);
       expect(bound.workflows).toHaveLength(1);
       expect(bound.workflows[0]?.parseWarnings ?? []).toEqual([]);

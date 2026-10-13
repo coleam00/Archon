@@ -78,15 +78,6 @@ class InvalidProviderKeyError extends Error {
   }
 }
 
-// Mirror core's retryable port-wedge error so the oauth/start route's
-// `instanceof` check (actionable 503 vs opaque 500) is exercised (#1963).
-class OAuthCallbackPortBusyError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'OAuthCallbackPortBusyError';
-  }
-}
-
 let keysEnabled = true;
 let savedKeys: { userId: string; provider: string; apiKey: string; label: string | null }[] = [];
 
@@ -130,6 +121,12 @@ mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'postgresql',
   loadConfig: mock(async () => ({})),
+  ProjectRegistrationError: class ProjectRegistrationError extends Error {},
+  inspectProjectBaseBranch: mock(async () => ({
+    kind: 'repo',
+    defaultBranch: 'dev',
+    reason: null,
+  })),
   cloneRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   registerRepository: mock(async () => ({ codebaseId: 'x', alreadyExisted: false })),
   ConversationNotFoundError: class ConversationNotFoundError extends Error {},
@@ -158,10 +155,10 @@ mock.module('@archon/core', () => ({
   SUBSCRIPTION_PROVIDERS: SUBSCRIPTION,
   startOAuth: mockStartOAuth,
   pollOAuth: mockPollOAuth,
-  OAuthCallbackPortBusyError,
 }));
 
 mock.module('@archon/paths', () => ({
+  canonicalizeProjectPath: async (path: string) => path,
   createLogger: noopLogger,
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
@@ -548,23 +545,6 @@ describe('POST /api/auth/providers/:provider/oauth/start', () => {
     });
     expect(res.status).toBe(500);
     expect(await res.text()).not.toContain('53999');
-  });
-
-  test('held callback port → 503 with the actionable message (#1963)', async () => {
-    mockStartOAuth.mockRejectedValueOnce(
-      new OAuthCallbackPortBusyError(
-        "A previous 'anthropic' login attempt is still holding the OAuth callback port. " +
-          'Wait a few seconds and retry; if it persists, restart the Archon server.'
-      )
-    );
-    const res = await makeApp().request('/api/auth/providers/claude/oauth/start', {
-      method: 'POST',
-      headers: ALICE,
-    });
-    expect(res.status).toBe(503);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain('callback port');
-    expect(body.error).toContain('retry');
   });
 
   test('no identity → 401', async () => {

@@ -38,7 +38,7 @@ archon plugin remove coleam00/Archon/plugins/forge-github          # deletes onl
 
 Nothing updates in the background. To build the plugin yourself instead, compile `packages/adapters/src/forge/github/plugin.ts` from a source checkout (`bun run --cwd packages/adapters build:github-plugin`, or `bun build --compile <entry> --outfile archon-forge-github.exe` on Windows) and copy the executable into `ARCHON_HOME/plugins/`, or configure its absolute path under `forge.plugins` below. `archon plugin` leaves such a file alone.
 
-Forge plugins and workflow packs install the same way: `archon plugin install owner/repo[/path][@tag]` reads the repository's `archon-plugin.json`, and no central registry is involved. Other plugin kinds will use the same command when their install path exists. The Archon-maintained GitHub plugin may move to its own repository, which changes the reference you install from, not this runtime protocol. Setup does not install it for you. Other production forges are community-maintained; the existing bundled Gitea/GitLab transition is not settled by this contract.
+Forge plugins, provider plugins, chat plugins, and workflow packs install the same way: `archon plugin install owner/repo[/path][@tag]` reads the repository's `archon-plugin.json`, and no central registry is involved. Other plugin kinds will use the same command when their install path exists. The Archon-maintained GitHub plugin may move to its own repository, which changes the reference you install from, not this runtime protocol. Setup does not install it for you. Other production forges are community-maintained; the existing bundled Gitea/GitLab transition is not settled by this contract.
 
 ## Commands
 
@@ -47,13 +47,21 @@ archon forge resolve --data '{"remote":"git@github.com:owner/repository.git"}'
 archon forge checks --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
 archon forge workitem.view --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":31}}'
 archon forge pr.view --data '{"selector":{"kind":"number","ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}}'
+archon forge workitem.create --data-file ./issue.json
+archon forge workitem.labels.set --data-file ./labels.json
+archon forge repo.labels.list --data-file ./repository.json
+archon forge repo.label.ensure --data-file ./label.json
 archon forge pr.create --data-file ./create.json
 archon forge pr.edit-body --data-file ./body.json
 archon forge pr.ready --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
+archon forge pr.draft --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
 archon forge comment.upsert --data-file ./comment.json
+archon forge pr.merge --data-file ./merge.json
+archon forge checks.rerun --data-file ./rerun.json
+archon forge pr.reviews --data-file ./reviews.json
 ```
 
-Every command emits JSON. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation names its target explicitly: a qualified repository for `pr.create` and for a `pr.view` head selector, a qualified repository and number otherwise. None is inferred from the checkout.
+Every command emits JSON. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation names its target explicitly: a qualified repository for creation and repository-label operations and for a `pr.view` head selector, a qualified repository and number otherwise. None is inferred from the checkout.
 
 `pr.view` accepts either selector: `{"kind":"number","ref":…}`, or `{"kind":"head","repo":…,"headRepo":…,"head":"branch"}` with an optional `base`. The head form answers "does this branch have a pull request", so it resolves the **open** one and returns `null` when there is none. A head matching more than one open pull request is a conflict rather than a guess.
 
@@ -63,7 +71,7 @@ Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the o
 
 ## What a write reports
 
-`pr.create`, `pr.edit-body`, `pr.ready` and `comment.upsert` each perform at most one write and then read the result back. A valid write request reports exactly one outcome, so a caller never has to guess which happened. A request that fails validation before dispatch is answered with `invalid_request` and no `mutation`; nothing was written.
+`workitem.create`, `workitem.labels.set`, `repo.label.ensure`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft` and `comment.upsert` each perform at most one write and then read the result back. A valid write request reports exactly one outcome, so a caller never has to guess which happened. A request that fails validation before dispatch is answered with `invalid_request` and no `mutation`; nothing was written.
 
 | Outcome | Shape | What it means |
 | --- | --- | --- |
@@ -74,25 +82,51 @@ Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the o
 
 A read-back never claims to have *prevented* a wrong write; it only reports what it could and could not confirm. A vendor that accepts a write and silently does not apply it is reported as a verification failure, never as success.
 
+`pr.draft` converts an open pull request to draft and returns its verified PR record. An already-draft PR returns `applied` with `changed: false`; closed or merged PRs are refused with the observed record. A plugin that does not advertise `pr.draft` returns `unsupported_op` before execution. The forge source never falls back to `gh`. The GitHub plugin uses [the GraphQL draft mutation](https://docs.github.com/en/graphql/reference/pulls#convertpullrequesttodraft) and reads the PR back before reporting success.
+
 `comment.upsert` writes the one comment whose first line is the exact `marker`, creating it when absent and replacing it in place when present. A body that does not begin with that marker is refused, and more than one marked comment is a conflict.
+
+## Pinned merges, failed-check reruns and reviews
+
+`pr.merge` takes `{ref, method: "merge" | "squash", conditions: {head, base?, tree?}}`. Every merge requires the caller's approved full head object ID. Missing heads and unsupported conditions are refused before operation execution. The conditions object rejects unknown keys. Plugin metadata declares enforced conditions under `mutationConditions["pr.merge"]`; absence declares none.
+
+The GitHub plugin advertises and atomically enforces **only `head`**, through the REST merge endpoint's `sha` parameter. It refuses `base` and `tree` before writing. Reading the base before merging would not enforce a base condition. A stale head, draft, closed or already merged PR is refused. No head is refreshed or substituted to make a merge proceed.
+
+An applied result includes `pr`, `method`, echoed `conditions`, `enforcedConditions` and `landed: {commit, tree, parents}`. Landed fields come from read-back; unavailable supplemental tree or parents are null. Parent order is preserved. The landed commit can differ from the PR head after a squash or merge. A mismatched PR/head/commit is a verification failure, never a successful merge with guessed evidence.
+
+`checks.rerun` takes `{ref, revision, units: [{unit: {kind, id, name}, rerun: {id, attempt} | null}]}` from a prior `checks.state` observation. Revision and IDs are opaque; names are display facts. Empty selections and duplicate unit identities fail validation. Unsupported units, stale attempts, wrong revisions and ineligible checks are refused before any write, including when another selected unit is eligible.
+
+GitHub associates Actions checks with workflow runs using structured check-suite and app identities. Commit statuses and checks from other apps have `rerun: null`. Eligible completed failed, cancelled or timed-out checks cause one failed-job rerun per distinct owning run. GitHub also reruns dependent jobs, so this can rerun more jobs than the selected units. Attempt checks are preflight evidence, **not an atomic condition** on GitHub's rerun endpoint. Success requires read-back of the same run and revision with a newer attempt for every selected unit.
+
+Multi-run requests can have partial effects. Submission stops at the first failure. After an earlier acknowledged write, a later definitive refusal reports `verification_failed`; a lost submission response reports `outcome_unknown`. Failure evidence retains the requested units and observed newer attempts. Merge failures retain the attempted method and conditions and any landed observation. No operation retries, polls, rolls back or deletes after an uncertain write. Reconcile using reads before taking another action.
+
+`pr.reviews` takes `{ref}` and returns `{ref, items}` with submitted review and root diff-review comment items. Each carries `kind`, `id`, `author`, `commit`, vendor `state`, `createdAt`, `url` and `body`; unavailable facts are null. GitHub excludes pending draft reviews and thread replies, and includes dismissed submissions. Issue-conversation comments are not diff reviews. Bodies remain available to the caller but become digest/byte-count projections in audit events. The operation does not classify findings or choose required reviewers.
 
 ## GitHub credentials and check observations
 
 The GitHub plugin uses `GH_TOKEN` or `GITHUB_TOKEN`. The dispatcher passes the selected value to the child as `ARCHON_FORGE_TOKEN`. Tokens never belong in command arguments, JSON requests or remote URLs.
 
+Inside a workflow (`WORKFLOW_ID` is set), a `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN` the command inherits is the run's credential. Neither `~/.archon/.env` nor the repository's `.archon/.env` replaces it, and an empty value (a credential the run withholds) stays empty. When the run sets no value, or a project `.env` names the key so startup strips it, those files supply the credential as they do outside a workflow.
+
 Checks identify the evaluated revision and each check-run or commit-status unit. GitHub enumeration includes current check runs and the latest status for each context. The plugin preserves distinct runs with the same name. It does not use GitHub's aggregate status as evidence that checks exist.
 
 The summary states are `none`, `pending`, `green`, `red`, `gated` and `unknown`. `none` means zero enumerated units. The summary precedence is red, gated, unknown, pending, then green. `gated` names an explicit action-required conclusion; missing checks are not evidence of an approval gate. Unrecognized vendor states remain unknown with their native value retained.
+
+`approvalPending` is independent of the unit summary. True means explicit approval evidence at the evaluated revision, false means the authoritative lookup found none, and null/absence means it was not established. GitHub reads head-filtered Actions workflow runs, including approval-blocked runs that registered no check units. Thus `summary.state: "none"` can coexist with `approvalPending: true`. Generic waiting states and zero units never imply approval. A failed Actions read or a query exceeding GitHub's 1,000-result search cap fails the observation rather than certifying no approval requirement.
+
+GitHub tokens need repository pull-request and check/status read permissions, plus Actions read permission for check observations and Actions write permission for reruns. Merge requires Contents write permission. An authorization failure stays explicit; there is no CLI fallback.
 
 `required` is null when no authoritative required set was obtained. The current GitHub plugin returns null; it does not infer branch protection from check names.
 
 ## Use the forge path in the SDLC pack
 
-The bundled SDLC pack reads checks and performs its pull-request writes through `gh` by default. The forge path is an explicit opt-in until the GitHub plugin installs through the marketplace. To opt in, install a plugin for the pull request's host and set `ARCHON_SDLC_FORGE=forge` in the environment Archon runs with, for example `~/.archon/.env`. One switch covers both reads and writes on the pull request and its checks; a value other than `gh` or `forge` fails the steps that use it. The forge contract has no issue operation, so the issues `file-discoveries` files go through `gh` whichever source is selected.
+The bundled SDLC pack reads checks and performs its pull-request writes through `gh` by default. The forge path is an explicit opt-in until the GitHub plugin installs through the marketplace. To opt in, install a plugin for the pull request's host and set `ARCHON_SDLC_FORGE=forge` in the environment Archon runs with, for example `~/.archon/.env`. One switch covers both reads and writes on the pull request and its checks; a value other than `gh` or `forge` fails the steps that use it. The same switch covers triage labels and discovery filing. A selected non-GitHub plugin must advertise the operations those steps use; an unsupported operation fails without falling back to `gh`.
 
 The pack's pull-request writes are the draft pull request, the body resync, the canonical review comment and the ready flip. Each happens in a deterministic node — `publish-pr`, `publish-pr-body`, `publish-review` and `flip-ready` — that publishes through the selected source and fails unless the result reads back. The agents around them establish the target, author the body and decide the verdict; they never write to the forge themselves. Whether a branch already has a pull request is decided by an open-head lookup, so a second one is never opened for it.
 
-For reads, the pack prefers a supplied required set, otherwise the full observation. It classifies each GitHub check the same way through either source and applies the same gate policy: it waits once for registration when no checks exist and refuses the final ready preflight for pending, red, gated, unknown or failed reads. The workflow owns this policy. Archon never switches to the forge path because a plugin is installed, and a selected forge path that cannot answer never falls back to `gh`: the step fails with the reason, for example `no forge plugin claims <host>`.
+Initial PR publication has a 30-second attempt budget and up to two transient retries, starting with a 20-second backoff. A retry only publishes; it does not repeat the completed push. Before creating a PR, publish records a durable `<intent-path>.create-started` file beside the run's intent. After a timeout, the next attempt looks for the PR again. If it finds one, it reuses it; if a create was started but no PR is visible, it fails with an unresolved-write message instead of submitting a competing create. Resume can reconcile the PR once it becomes visible. Keep the record while the write is unresolved: stopping a local client does not cancel a request already submitted to the forge.
+
+For reads, the pack prefers a supplied required set, otherwise the full observation. It classifies each GitHub check the same way through either source and applies the same gate policy: it waits once for registration when neither checks nor explicit approval evidence exist. An observation with `approvalPending: true` immediately reports a maintainer gate, even with no check units. For an open PR, the final ready preflight refuses pending, red, gated, unknown or failed reads. An already-merged PR is reported as delivered before checking CI; a PR closed without a merge is refused. The workflow owns this policy. Archon never switches to the forge path because a plugin is installed, and a selected forge path that cannot answer never falls back to `gh`: the step fails with the reason, for example `no forge plugin claims <host>`.
 
 ## Plugin configuration
 
@@ -123,9 +157,9 @@ The authoritative Zod schemas and derived TypeScript types are exported by `@arc
 
 It also exports `runForgeMutationConformance` for write fixtures. Pass the plugin operation function, its metadata, and cases naming the request and the outcome the fixture sets up. The kit validates the response schema, correlation, qualified target, the applied result against the request that asked for it, and that the reported outcome is the expected one.
 
-The host invokes `PLUGIN metadata` before any operation. Metadata declares integer protocol version 1, plugin name/version, forge family, static hosts, operation capabilities and credential environment names. Protocol incompatibility and unsupported operations fail before operation execution.
+The host invokes `PLUGIN metadata` before any operation. Metadata declares integer protocol version 1, plugin name/version, forge family, static hosts, operation capabilities, enforced mutation conditions and credential environment names. Protocol incompatibility and unsupported operations fail before operation execution.
 
-For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
+For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `workitem.create`, `workitem.labels.set`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
 
 A plugin that fails a write must state which outcome it was under `mutation`, and an applied result must answer the request that asked for it — the same pull request, the same head and draft state for a create, the digest of the body it was given for an edit or comment. The host checks both rather than trusting the claim. A failed write with no stated outcome, or an applied result that does not answer the request, becomes `outcome_unknown`: the plugin ran, so what it did to the forge is no longer knowable from here. A write whose plugin process never started, or whose operation the plugin does not declare, is a refusal.
 
@@ -135,6 +169,21 @@ On Windows, discovered executables must have an `.exe` extension. `.cmd` and `.b
 
 ## Workflow host integration and audit
 
-The CLI and the server both set `ARCHON_CLI_COMMAND` at startup to a JSON argv array for the install's CLI: the executable of a compiled binary, or the Bun runtime and CLI source entry in a source checkout. Runs launched from the CLI, the Web UI or a chat or forge adapter therefore see the same value. Bundled scripts append command arguments without shell parsing. An SDK host must supply its own argv array. A container execution does not receive the variable, because a host binary path is not assumed to exist in a container.
+The CLI sets `ARCHON_CLI_COMMAND` at startup to a JSON argv array for the install's CLI: the compiled CLI executable, or the Bun runtime and CLI source entry in a source checkout. A source server also publishes the source CLI command. A compiled server launched by `archon serve` requires and preserves the launching CLI's value instead of publishing its own executable. Runs launched from the CLI, the Web UI or a chat or forge adapter therefore see the same CLI command. Bundled scripts append command arguments without shell parsing. An SDK host must supply its own argv array. A container execution does not receive the variable, because a host binary path is not assumed to exist in a container.
 
-When `WORKFLOW_ID` is present, the CLI persists an `integration_operation` event through its database host. The forge payload retains operation correlation, qualified target, plugin identity/version, result and duration. Audit records keep identity and content digests only: the title and body a view operation returned are replaced by a digest and a byte count, so authored content never lands in the run's durable event log. The engine does not interpret the forge payload. The CLI reports persistence failure separately from the operation's observed outcome.
+When `WORKFLOW_ID` is present, the CLI persists an `integration_operation` event through its database host. The forge payload retains operation correlation, qualified target, plugin identity/version, result and duration. Audit records keep identity and content digests only: the title and body a view operation returned, and each review body, are replaced by a digest and a byte count, so authored content never lands in the run's durable event log. The engine does not interpret the forge payload. The CLI reports persistence failure separately from the operation's observed outcome.
+
+## Work-item writes
+
+Pass these request objects through `--data-file`. The host supplies `operationId` and `op`.
+
+- `workitem.create`: `{repo: {host, path}, title, body, marker}`. The one-line marker must be the body's exact first line. The plugin enumerates issues across all states, excluding PRs, and compares the exact first line. A failed lookup or multiple matches refuses before writing. One match is read directly and returned with `changed:false`, including when closed; recovery never edits or reopens it. Otherwise one create is followed by an independent read. Fresh creation proves open state and requested title/body digests; recovery proves issue identity and marker digest while returning existing content digests.
+- `workitem.labels.set`: `{ref: {repo: {host, path}, number}, labels: [name]}`. This replaces the complete label set; `[]` clears it. Every name must exist in the repository. It never creates labels. The result carries the independently observed exact set, and equal sets submit no write.
+- `repo.labels.list`: `{repo: {host, path}}`. Returns complete repository label names as `{repo, labels: [{name}]}`.
+- `repo.label.ensure`: `{repo: {host, path}, name, color, description}`. Explicitly ensure one repository label. Color is six hexadecimal digits. An existing name returns `changed:false` without changing operator metadata. Creation performs one write and verifies name, color and description digest by a separate read.
+
+Work-item mutation evidence contains `{ref, kind:'issue', url, state}`, never authored title/body. Label metadata evidence contains name, color and description digest. `workitem.view` may omit labels for older protocol-1 plugins; triage requires label facts and fails if absent.
+
+Marker recovery guarantees sequential reuse of a visible item, including after an unknown create outcome. It does not provide atomic uniqueness for concurrent creates: GitHub has no marker uniqueness constraint. Callers must reconcile unknown outcomes, never retry automatically inside a call. Whole-set label replacement preserves labels observed before writing, but cannot preserve concurrent edits between that read and the write.
+
+Delivery uses an exact-content SHA-256 marker derived from title, claim, evidence and relation. Run provenance does not affect identity. Semantic duplicate detection is separate work. Triage explicitly ensures only missing wanted pack labels, omits nonexistent area labels, then replaces labels while preserving observed unrelated names. The default `gh` source remains supported; its issue creation retains the existing URL sidecar behavior.

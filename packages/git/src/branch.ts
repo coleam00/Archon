@@ -1,3 +1,4 @@
+import { inspectRemoteBranches } from './remote-branches';
 import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
 import type { RepoPath, BranchName, WorktreePath } from './types';
@@ -10,61 +11,15 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/**
- * Get the default branch name for a repository
- * Uses git symbolic-ref to read refs/remotes/<remote>/HEAD, which is git's own
- * record of the remote's default branch.
- *
- * Throws if <remote>/HEAD is not a symbolic ref (fresh clone without
- * `git remote set-head`) — callers must resolve the base branch through
- * configuration instead:
- *   - the `--base` CLI flag
- *   - `worktree.baseBranch` in `.archon/config.yaml`
- *   - the `default_branch` field on the codebase record
- *
- * Never guesses a branch name. Treating "<remote>/main exists" as the default
- * is wrong for repos where `main` is a release branch and the actual default
- * is something else (e.g. `dev`); silently targeting the wrong base produces
- * misrouted PRs with no error.
- *
- * Only swallows expected git errors (ref not set). Throws for unexpected errors
- * (permission denied, git corruption, etc.).
- *
- * @param repoPath - Path to the git repository
- * @param remote - Remote name to check (default: 'origin')
- */
+/** Resolve the advertised remote default; never guess or use a stale cached HEAD. */
 export async function getDefaultBranch(repoPath: RepoPath, remote = 'origin'): Promise<BranchName> {
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', repoPath, 'symbolic-ref', `refs/remotes/${remote}/HEAD`, '--short'],
-      { timeout: 10000 }
-    );
-    // stdout is like "origin/main" - extract just the branch name
-    return toBranchName(stdout.trim().replace(`${remote}/`, ''));
-  } catch (error) {
-    const err = error as Error & { stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-    // Expected: symbolic-ref not set (fresh clone without `git remote set-head`).
-    // Cannot detect the default branch — surface a config-driven fix instead of
-    // guessing. See #2471.
-    if (errorText.includes('not a symbolic ref')) {
-      getLog().warn({ repoPath, remote }, 'default_branch_detection_failed');
-      throw new Error(
-        `Cannot detect default branch for ${repoPath}: ${remote}/HEAD is not set. ` +
-          'Pass --base, set worktree.baseBranch in .archon/config.yaml, ' +
-          'or set the codebase default_branch field.'
-      );
-    }
-
-    // Unexpected error (permission denied, git corruption, etc.) - surface it
-    getLog().error(
-      { repoPath, remote, err, stderr: err.stderr },
-      'default_branch_symbolic_ref_failed'
-    );
-    throw new Error(`Failed to get default branch for ${repoPath}: ${err.message}`);
-  }
+  const result = await inspectRemoteBranches({ kind: 'local', repoPath, remote });
+  if (result.status === 'available' && result.defaultBranch) return result.defaultBranch;
+  const reason = result.status === 'unavailable' ? result.evidence : `${remote}/HEAD is not known`;
+  throw new Error(
+    `Cannot detect default branch for ${repoPath}: ${reason}. ` +
+      'Pass --base, set worktree.baseBranch in .archon/config.yaml, or set the codebase default_branch field.'
+  );
 }
 
 /**

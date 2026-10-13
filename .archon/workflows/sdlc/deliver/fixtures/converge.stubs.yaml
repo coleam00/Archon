@@ -16,7 +16,8 @@ impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__coverage: { full: true }
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
@@ -45,7 +46,8 @@ fix__implement:
   summary: "stub: findings fixed, pushed"
 fix__assert-changed: "2 files changed"
 gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":""}'
-recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior"}'
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"recheck__mode","invocation":{"loopPath":[]}}}'
+recheck__coverage: { full: false }
 recheck__scope:
   # light mode; delta since cursor
   docs: false
@@ -67,13 +69,14 @@ recheck__publish:
 read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/1" }
 publish-pr-body: {}
 sync-pr-body: { intent: "/fixture/pr-body-intent.json" }
-validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
 gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
 ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/1" }
 outcome: { pr_url: "https://github.com/example/repo/pull/1", summary: "https://github.com/example/repo/pull/1" }
+review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
   errors: true

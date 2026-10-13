@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { removeTempTree } from '@archon/paths/test-utils';
+import { SessionManager } from '@earendil-works/pi-coding-agent';
 
 import type { MessageChunk } from '../../types';
 import { PiProvider } from './provider';
@@ -31,6 +32,7 @@ const savedEnv = {
 
 /** Authorization headers of the upstream requests, in order. */
 const authHeaders: (string | null)[] = [];
+let responseGate: { started: () => void; released: Promise<void> } | undefined;
 
 function sse(chunks: object[]): Response {
   const body = [...chunks.map(c => `data: ${JSON.stringify(c)}\n\n`), 'data: [DONE]\n\n'].join('');
@@ -48,8 +50,12 @@ function completion(delta: object, finishReason: string): object[] {
 // First request: one read tool call. Second: the final text.
 const server = Bun.serve({
   port: 0,
-  fetch(request) {
+  async fetch(request) {
     authHeaders.push(request.headers.get('authorization'));
+    if (responseGate) {
+      responseGate.started();
+      await responseGate.released;
+    }
     if (authHeaders.length === 1) {
       return sse(
         completion(
@@ -136,5 +142,57 @@ describe('PiProvider with a substituted custom provider and a provider-registeri
     expect(result && 'failure' in result ? result.failure : undefined).toBeUndefined();
     expect(authHeaders).toEqual(['Bearer sk-per-call', 'Bearer sk-per-call']);
     expect(readdirSync(join(perCallTmp, 'archon-pi-models'))).toEqual([]);
+    const sessions = await SessionManager.list(repoDir);
+    expect(sessions).toHaveLength(1);
+    expect(result).toMatchObject({ sessionId: sessions[0].id });
   }, 30_000);
+
+  test('an ephemeral title turn writes no session file', async () => {
+    const before = await SessionManager.list(repoDir);
+    const sessionDir = join(agentDir, 'sessions');
+    const filesBefore = readdirSync(sessionDir, { recursive: true });
+    const started = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    responseGate = { started: started.resolve, released: released.promise };
+    const chunks: MessageChunk[] = [];
+    const turn = (async () => {
+      for await (const chunk of new PiProvider().sendQuery(
+        'Generate a short title',
+        repoDir,
+        undefined,
+        {
+          model: 'mycustom/m1',
+          env: { MY_KEY: 'sk-per-call' },
+          purpose: 'title-generation',
+          nodeConfig: { allowed_tools: [] },
+        }
+      )) {
+        chunks.push(chunk);
+      }
+    })();
+    try {
+      await Promise.race([
+        started.promise,
+        turn.then(() => {
+          throw new Error('Title turn ended before reaching the local provider');
+        }),
+      ]);
+      expect(readdirSync(sessionDir, { recursive: true })).toEqual(filesBefore);
+      expect(await SessionManager.list(repoDir)).toEqual(before);
+    } finally {
+      released.resolve();
+      responseGate = undefined;
+      await turn;
+    }
+    expect(chunks.find(c => c.type === 'result')).toMatchObject({ stopReason: 'end_turn' });
+    expect(
+      chunks
+        .filter(c => c.type === 'agent_message_chunk')
+        .map(c => c.text)
+        .join('')
+    ).toBe('done');
+    expect(chunks.find(c => c.type === 'result' && c.failure !== undefined)).toBeUndefined();
+    expect(readdirSync(sessionDir, { recursive: true })).toEqual(filesBefore);
+    expect(await SessionManager.list(repoDir)).toEqual(before);
+  });
 });

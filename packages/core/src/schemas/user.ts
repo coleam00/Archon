@@ -2,16 +2,13 @@
  * Zod schemas for user and user identity row types.
  */
 import { z } from '@hono/zod-openapi';
+import { identityPlatformSchema } from '@archon/chat-contract';
 
 // ---------------------------------------------------------------------------
 // IdentityPlatform
 // ---------------------------------------------------------------------------
 
-export const identityPlatformSchema = z
-  .string()
-  .min(1)
-  .max(32)
-  .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
+export { identityPlatformSchema } from '@archon/chat-contract';
 
 export type IdentityPlatform = z.infer<typeof identityPlatformSchema>;
 
@@ -20,8 +17,8 @@ export type IdentityPlatform = z.infer<typeof identityPlatformSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * Identity role seam. Everyone defaults to 'admin' today (visibility stays
- * open); 'member' is reserved for future per-resource scoping.
+ * Roles prepare run-action authorization; enforcement ships separately.
+ * The database default stays 'admin' for older writers.
  */
 export const userRoleSchema = z.enum(['admin', 'member']);
 

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { mock, describe, test, expect, beforeEach, type Mock } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import type { MessageChunk, SendQueryOptions } from '@archon/providers/types';

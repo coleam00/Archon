@@ -116,7 +116,7 @@ mock.module('@archon/paths', () => ({ createLogger: noopLogger }));
 
 // @archon/providers is NOT mocked — register the providers exercised by the
 // tier/default commands so isRegisteredProvider() resolves them.
-import { registerBuiltinProviders, registerOpencodeProvider } from '@archon/providers';
+import { registerBuiltinProviders, registerOpencodeProvider } from '@archon/providers/in-process';
 registerBuiltinProviders();
 registerOpencodeProvider();
 

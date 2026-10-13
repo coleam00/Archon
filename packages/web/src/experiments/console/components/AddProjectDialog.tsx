@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactElement } from 'react';
 import * as skill from '../skills';
+import type { BaseBranchInspection } from '../skills/projects';
 import type { Project } from '../primitives/project';
 
 interface AddProjectDialogProps {
@@ -78,6 +79,44 @@ export function AddProjectDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [branch, setBranch] = useState('');
+  const [inspection, setInspection] = useState<{
+    source: string;
+    result: BaseBranchInspection;
+  } | null>(null);
+  const [inspectionError, setInspectionError] = useState<string | null>(null);
+  const source = `${mode}:${value.trim()}`;
+  const currentInspection = inspection?.source === source ? inspection.result : null;
+
+  useEffect(() => {
+    setBranch('');
+    setInspection(null);
+    setInspectionError(null);
+    if (!open || !value.trim()) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void skill
+        .inspectProjectBaseBranch(mode === 'url' ? { url: value.trim() } : { path: value.trim() })
+        .then(
+          result => {
+            if (!active) return;
+            setInspection({ source, result });
+            setBranch(result.kind === 'repo' ? (result.defaultBranch ?? '') : '');
+          },
+          (err: unknown) => {
+            if (active)
+              setInspectionError(
+                err instanceof Error ? err.message : 'Could not inspect the project.'
+              );
+          }
+        );
+    }, 300);
+    return (): void => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [open, mode, value, source]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent): void => {
@@ -96,12 +135,19 @@ export function AddProjectDialog({
 
   const onSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
+    if (!currentInspection || inspectionError) return;
+    const baseBranch =
+      currentInspection.kind === 'repo' &&
+      branch.trim() &&
+      branch.trim() !== currentInspection.defaultBranch
+        ? branch.trim()
+        : null;
     setError(null);
     setSubmitting(true);
     try {
       const project = isGit
-        ? await skill.addProjectByUrl(value.trim())
-        : await skill.addProjectByPath(value.trim());
+        ? await skill.addProjectByUrl(value.trim(), baseBranch)
+        : await skill.addProjectByPath(value.trim(), baseBranch);
       onAdded(project);
       setValue('');
       onClose();
@@ -236,6 +282,30 @@ export function AddProjectDialog({
           )}
         </p>
 
+        {currentInspection?.kind === 'repo' ? (
+          <label className="mt-4 block text-[13px] text-text-secondary">
+            Base branch
+            <input
+              aria-label="Base branch"
+              value={branch}
+              onChange={e => {
+                setBranch(e.target.value);
+              }}
+              disabled={submitting}
+              className="mt-2 block w-full rounded border bg-surface px-3 py-2 font-mono text-text-primary"
+            />
+            <span className="mt-1 block text-[12px] text-text-tertiary">
+              {currentInspection.defaultBranch
+                ? 'Keep this value to follow the remote default, or choose another branch.'
+                : 'Remote default unavailable. Leave empty to resolve it when a run starts.'}
+            </span>
+          </label>
+        ) : null}
+        {value.trim() && !currentInspection && !inspectionError ? (
+          <p className="mt-3 text-[12px] text-text-tertiary">Checking remote default…</p>
+        ) : null}
+        {inspectionError ? <p className="mt-3 text-[12px] text-error">{inspectionError}</p> : null}
+
         {error !== null ? (
           <p className="mt-3 rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-[11px] text-error">
             {error}
@@ -255,7 +325,12 @@ export function AddProjectDialog({
           </button>
           <button
             type="submit"
-            disabled={submitting || value.trim().length === 0}
+            disabled={
+              submitting ||
+              value.trim().length === 0 ||
+              !currentInspection ||
+              inspectionError !== null
+            }
             className="brand-bar inline-flex items-center gap-[7px] rounded-[10px] px-[18px] py-2.5 text-[13px] font-bold text-white shadow-[0_8px_22px_-10px_color-mix(in_oklch,var(--brand-magenta),transparent_20%)] transition-all hover:-translate-y-px hover:brightness-110 disabled:translate-y-0 disabled:opacity-45 disabled:shadow-none"
           >
             <span aria-hidden className="text-[14px] leading-none">

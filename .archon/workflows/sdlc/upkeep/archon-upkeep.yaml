@@ -26,8 +26,7 @@ inputs:
 
 # `delivered:false` is a valid completion: an assessment that finds the locked
 # version already current is a successful run that shipped nothing, and lifecycle
-# status and work outcome are separate facts. Both were reported as
-# `outcome: null` before the terminal script could certify its own result.
+# status and work outcome are separate facts.
 returns: outcome
 outcome_field: delivered
 
@@ -55,7 +54,7 @@ nodes:
           # The evidence contract, enforced by the engine at this node: a pointer at a
           # file this run's artifacts do not hold is refused before the node completes,
           # so a verdict cannot arrive without its report. The bar is an existing, non-empty
-          # file, the bar the node this replaced enforced by hand.
+          # file.
           type: object
           properties:
             type: { type: string, enum: [archon_artifact] }
@@ -66,9 +65,7 @@ nodes:
 
   # Spend gate and work order in one node. A no_action assessment skips everything
   # paid or public below, and an expected negative is a completed run with the
-  # assessment as its result. The condition used to live on a marker node that
-  # computed nothing, kept so a skip stayed distinguishable from a stop — a
-  # distinction the engine's skip causes carry on their own.
+  # assessment as its result.
   #
   # The order authorizes exactly the lockfile change implement's default forbids:
   # implement.md's "never update a lockfile" exists to stop incidental churn, and
@@ -105,11 +102,8 @@ nodes:
   # flip's certified URL the deliver branch returned (if_skipped binding, so a
   # skipped flip arrives as null).
   #
-  # The spend gate's output used to be bound here to tell "delivery started and
-  # died mid-flight" apart from an assessment that stopped. A failed delivery now
-  # cascades an `upstream_failed` skip that blocks this join outright, so that case
-  # never reaches this node and the run's terminal record names the node that
-  # actually failed.
+  # A failed delivery cascades an `upstream_failed` skip that blocks this join,
+  # so the run's terminal record names the node that failed.
   - id: outcome
     script: outcome
     runtime: bun

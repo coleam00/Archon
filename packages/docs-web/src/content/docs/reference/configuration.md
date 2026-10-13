@@ -53,6 +53,12 @@ Settings are loaded in this order (later overrides earlier):
 6. **Run config** - Sparse content selected for one fresh run
 7. **Explicit run model bindings** - Repeatable `--model` or HTTP `tiers`/`aliases`, per named binding
 
+New runs record their resolved Archon AI configuration at launch preparation: assistant, provider defaults, tiers, aliases, and model bindings. Resume and continuation reuse that record. New child runs inherit the parent's recorded AI base; existing children keep their own record. Editing configuration or user AI preferences affects new independent runs, not an existing run. The repo config in that record comes from the checkout the run was launched from, not from its worktree; see [Where a run reads `.archon/config.yaml`](#where-a-run-reads-archonconfigyaml). Detached launches record the same values before handing the run to a child process; queued resource starts record them before admission.
+
+Adoption inherits the recorded AI configuration while the selected workflow still owns its graph and scripts. New model bindings or AI-bearing run config are rejected for this adoption. Supersession prepares fresh AI configuration. Older runs without a recorded configuration keep resolving from current configuration and their existing sparse run overrides.
+
+Credentials are checked and delivered freshly. The AI record excludes credential material and provider-native settings and guidance: Claude setting sources, provider binary paths, Codex search and additional directories, and Copilot config directory, discovery, login selection, and logging remain live. Process-owned Pi environment and concurrency settings are also excluded. Non-AI runtime settings continue to load through the normal configuration path.
+
 The last three layers exist only where their setting has a run-time consumer. Archon-managed GitHub and provider credentials remain protected and are injected after user-authored run environment values.
 
 ## Global Configuration
@@ -75,7 +81,9 @@ assistants:
     # Accepts the native binary (~/.local/bin/claude from the curl installer),
     # the npm-installed cli.js, or the npm platform-package directory
     # (e.g. @anthropic-ai/claude-code-win32-x64 — auto-expanded to claude/claude.exe).
-    # Source/dev mode auto-resolves.
+    # In all modes: CLAUDE_BIN_PATH wins, then claudeBinaryPath.
+    # Source/dev mode uses SDK resolution only when neither pin is set.
+    # Invalid explicit pins fail instead of falling back.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.6-terra
@@ -101,12 +109,13 @@ paths:
 concurrency:
   maxConversations: 10
   # Optional install-wide cap on simultaneous provider attempts, by provider ID.
-  # Unlisted providers are unlimited. See "Provider concurrency caps" below.
+  # Pi also honors assistants.pi.maxConcurrent. See "Provider concurrency caps" below.
   # providers:
   #   pi: 1
 
-# Optional continuation for provider quota-window exhaustion. Off by default.
+# Live tool attention is enabled by default; quota continuation is opt-in.
 workflows:
+  toolCallAttentionMs: 1800000  # 30 minutes; 0 disables tool-call advisories
   autoResumeOnQuotaReset: false
   # quotaFallbackDelayMs: 3600000
   quotaMaxAttempts: 1
@@ -142,7 +151,7 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
 
 ## Provider concurrency caps
 
-`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap, so many runs across Claude, Codex, and Pi can start in parallel. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
+`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap unless Pi has `assistants.pi.maxConcurrent` configured. For Pi, the stricter of these two caps applies across plugin processes. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
 
 - **Attempts, not runs.** One attempt holds one slot from the moment the provider starts until its stream has closed. Retry backoff between attempts holds no slot. A rate limit is retried with backoff as before; it never lowers the cap.
 - **Waiting.** An attempt that finds the cap full waits and checks again about once a second. Cancelling the run stops the wait without starting the attempt. Until queue visibility lands, a waiting node looks idle, and a wait longer than the node's `idle_timeout` ends the node like any other idle node.
@@ -178,11 +187,11 @@ Run config accepts settings whose consumers still execute after the run is dispa
 - `worktree` and `container` already affected isolation.
 - `botName`, `streaming`, `paths`, and `concurrency` are process-scoped or have no per-run consumer.
 - `recommendedWorkflows` is listing-only.
-- `assistants.pi.env` and `assistants.pi.maxConcurrent` mutate process-lifetime Pi state rather than one request.
+- `assistants.pi.env` and `assistants.pi.maxConcurrent` are install settings rather than per-run settings. Pi concurrency is enforced at host admission for process providers; bundled Pi also retains its in-process semaphore.
 
 Unknown keys, unregistered providers, invalid effort values, and alias names without `@` also fail instead of being ignored. CLI accepts a local path; the HTTP run API accepts inline validated content and never a caller-selected server path.
 
-Fresh runs seal the normalized layer before recording it. Run metadata exposes its source label and configured key paths, not plaintext `env` or provider-default values. A continuation restores that sealed layer without rereading the original file, and child workflows inherit it. Detached CLI launches also transfer the already-validated sealed layer to the child instead of rereading the caller's file. This is why `--config` cannot be supplied with `--resume`.
+Fresh runs seal the normalized layer before recording it. The sealed layer exposes its source label and configured key paths, not plaintext `env` or raw provider-default values. The separate launch AI record stores resolved profiles and credential-free provider defaults. A continuation restores that sealed layer without rereading the original file, and child workflows inherit it. Detached CLI launches also transfer the already-validated sealed layer to the child instead of rereading the caller's file. This is why `--config` cannot be supplied with `--resume`.
 
 ## Repository Configuration
 
@@ -295,6 +304,28 @@ assistants:
 
 Set in `~/.archon/config.yaml` (global) or `.archon/config.yaml` (repo-specific).
 
+### Where a run reads `.archon/config.yaml`
+
+A new run reads `.archon/config.yaml` from the checkout it was launched from, live, including uncommitted and gitignored edits. The run still gets its own worktree for code; only the source of its config differs. The launch checkout is:
+
+- **Foreground CLI:** the directory you run the command in, or `--cwd` when given. That can be the main checkout or a linked worktree. A `--branch` run that reuses an existing worktree still reads the launch checkout, not that worktree.
+- **`archon workflow run --detach`:** the same directory. The launching process records the config before it hands the run to the background process.
+- **Web, chat, and background dispatch:** the project's registered checkout path, even when the conversation already sits in a worktree from an earlier run. Adopting a run's worktree reads that worktree instead.
+- **Queued resource starts** (triggers and forge sources): the launch path recorded when the start was queued. The config is recorded at that point, before admission.
+
+The run records the resolved AI configuration (assistant, provider defaults, tiers, aliases, and model bindings) at launch. Resume, approve, reject, child runs, and adoption reuse that record, so later edits to `.archon/config.yaml`, in your checkout or in the run's worktree, do not change a run already started. An adopted run whose prior run has no record reads the adopted worktree or branch instead.
+
+Some repo settings are read at launch from fixed places rather than the launch checkout:
+
+- **`worktree.*`** (`baseBranch`, `remote`, `path`, `copyFiles`, `initSubmodules`) is read from the project's registered checkout when Archon creates the worktree.
+- **Workflow-source settings** (`defaults.loadDefaultWorkflows`, `defaults.loadDefaultCommands`, `commands.folder`) are read from the source directory when the run captures its source (`--workflow-source` on the CLI), and are recorded with that capture.
+
+To change the configuration a run uses:
+
+- **Edit `.archon/config.yaml` before launching.** Committing is not needed; the launch reads your working tree.
+- **A running run keeps its launch config.** To use new config, start a new run, or use `archon workflow run --supersedes <run-id>` to replace a finished one with fresh config.
+- **Use `--config <file>`** for a one-off layer on a fresh run. It covers the settings listed in [Run-scoped configuration](#run-scoped-configuration).
+
 ### Worktree file copying (`worktree.copyFiles`)
 
 `git worktree add` only copies **tracked** files into a new worktree. Anything gitignored — secrets, local planning docs, agent reports, IDE settings, data fixtures — is absent by default. Archon's `worktree.copyFiles` closes that gap: after the worktree is created, each listed path is copied from the canonical repo into the worktree via raw filesystem copy (not git), so gitignored content comes along for the ride.
@@ -307,15 +338,17 @@ Copy the **real** gitignored file, never a tracked template. Listing `.env.examp
 
 **Nothing is copied unless you list it.** Archon used to copy `.archon/` into every worktree automatically, because that was the only way a workflow's own commands and scripts could be found from inside the worktree it was running against. Runs now carry their own source (see below), so the implicit copy is gone.
 
-If you relied on it — most often for a gitignored `.archon/config.yaml` holding local settings — add it explicitly:
+If you relied on it for a gitignored `.archon/config.yaml` holding local settings, list that file explicitly:
 
 ```yaml
 worktree:
   copyFiles:
-    - .archon
+    - .archon/config.yaml
 ```
 
-You do **not** need this for workflows, commands, or scripts. Those are captured by the run itself, including uncommitted ones.
+Copy only gitignored files this way. Copying a **tracked** file overwrites the version the worktree checked out, so if the two differ the worktree starts with an uncommitted change in its `git status`, and an agent that commits everything commits it too. Listing all of `.archon` has the same effect on its tracked workflows, commands, and scripts.
+
+You do **not** need this for workflows, commands, or scripts. Those are captured by the run itself, including uncommitted ones. `.archon/config.yaml` is not part of that capture, but a new run's AI configuration is read from the checkout it was launched from, not from the worktree, so uncommitted and gitignored config applies without copying. See [Where a run reads `.archon/config.yaml`](#where-a-run-reads-archonconfigyaml).
 
 **Workflow source no longer travels through the worktree.** When a run starts, Archon freezes the workflow's own `.archon/workflows`, `.archon/commands`, and `.archon/scripts` — plus your home-scoped `~/.archon/` source, so a statically included global workflow is frozen too — into that run's artifacts directory, and resolves them from there for the run's whole life. Three consequences:
 
@@ -348,7 +381,7 @@ worktree:
 
 **Defaults behavior:** The app's bundled default commands and workflows are loaded at runtime and merged with repo-specific ones. Repo commands/workflows override app defaults by name. Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` to disable runtime loading.
 
-**Submodule behavior:** When a repo contains `.gitmodules`, submodules are initialized in new worktrees by default (git's `worktree add` does not do this). The check is a cheap filesystem probe — repos without submodules pay zero cost. Submodule init failure throws a classified error (credentials, network, timeout) rather than silently producing a worktree with empty submodule directories, and the worktree whose setup did not finish is removed so a retry starts from a fresh checkout instead of adopting it. If that removal cannot finish, the error names the leftover path, and later runs refuse to adopt it until you delete it. Set `worktree.initSubmodules: false` to opt out.
+**Submodule behavior:** When a repo contains `.gitmodules`, submodules are initialized in new worktrees by default (git's `worktree add` does not do this). Repos without submodules skip this step. Submodule init failure throws a classified error (credentials, network, timeout). The incomplete checkout stays locked for manual inspection because parent-repository status cannot prove that submodules contain no changes. The error names the leftover path. Inspect it and preserve any changes, then finish any needed setup and run `git worktree unlock <path>` for reuse, or remove the checkout. Checkouts with index flags that can hide changes are also preserved when setup fails. Set `worktree.initSubmodules: false` to opt out.
 
 **Remote behavior:** By default, all git operations (fetch, push, branch tracking) use the `origin` remote. If your repo uses a different remote name, configure `worktree.remote`. Resolution order:
 1. If `worktree.remote` is set: Uses the configured remote name for all operations.
@@ -357,7 +390,7 @@ worktree:
 
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on the resolved remote (no silent fallback).
-2. If omitted: Auto-detects the default branch via `git symbolic-ref` on the resolved remote. Works without any config for standard repos.
+2. If omitted: Uses the project's stored explicit branch, if present; otherwise resolves the default from the remote's live HEAD advertisement. Renames are followed even when local remote HEAD is stale. A reachable remote with a known symbolic HEAD is required; no branch name is guessed.
 3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
@@ -452,7 +485,7 @@ Environment variables override all other configuration. They are organized by ca
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
-| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `pi`, or `copilot`. | `claude` |
+| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id. | Only registered provider, otherwise unset |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
@@ -528,7 +561,7 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 
 ### Per-user GitHub identity (App mode, optional)
 
-An opt-in layer on top of [GitHub App mode](/adapters/github-app-setup/) that lets each teammate connect their own GitHub identity so commits, PR comments, and pushes attribute to the human rather than the bot. The feature gate turns on when `GITHUB_APP_ID` **and** `TOKEN_ENCRYPTION_KEY` are both set; `GITHUB_APP_CLIENT_ID` is additionally required for the connect (device) flow — set all three. Solo `GITHUB_TOKEN` installs and App-for-bot-only installs are unaffected.
+An opt-in layer on top of [GitHub App mode](/adapters/github-app-setup/) that lets each teammate connect their own GitHub identity so workflow commits name the human as author while keeping the ambient Git identity as committer. PR comments and pushes use the connected user's identity. The feature gate turns on when `GITHUB_APP_ID` **and** `TOKEN_ENCRYPTION_KEY` are both set; `GITHUB_APP_CLIENT_ID` is additionally required for the connect (device) flow — set all three. Solo `GITHUB_TOKEN` installs and App-for-bot-only installs are unaffected.
 
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -543,7 +576,7 @@ To connect once the vars are set: `archon auth github` (CLI), `/archon connect g
 
 Real per-user email/password login for the Web UI, mounted at `/api/auth/*` by [Better Auth](https://better-auth.com). **Opt-in and Postgres-only**: enabled only when **both** `DATABASE_URL` (Postgres) and `BETTER_AUTH_SECRET` are set. SQLite/solo installs can never enable it and behave exactly as before (no login UI). It supersedes the single-user `auth-service` sidecar; the `ARCHON_WEB_AUTH_HEADER` trust above remains a fallback for reverse-proxy deploys.
 
-A Better Auth session resolves to the **canonical** `remote_agent_users` row via the `web` platform identity, so chat/CLI/forge identities and the `role` column live on the one Archon user — Better Auth is only the login mechanism. Better Auth owns four tables prefixed `remote_agent_auth_*` (`user`/`session`/`account`/`verification`), applied automatically on startup. Every web request resolves a `{ userId, role }` auth context (session first, then the trusted header); `role` defaults to `admin` and visibility stays open. `GET /api/workflows/runs?mine=true` and `GET /api/conversations?mine=true` are non-enforcing "my" filters that prove the scoping seam — they are not a security boundary.
+A Better Auth session resolves to the **canonical** `remote_agent_users` row via the `web` platform identity, so chat/CLI/forge identities and the `role` column live on the one Archon user — Better Auth is only the login mechanism. Better Auth owns four tables prefixed `remote_agent_auth_*` (`user`/`session`/`account`/`verification`), applied automatically on startup. Every web request resolves a `{ userId, role }` auth context (session first, then the trusted header); `role` is explicitly written as `member` for new users, while existing roles are preserved and visibility stays open. The operator designates admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); only a run's starter or an admin can act on it, while the local operator always remains allowed. See [Who can act on a run](/reference/security/#who-can-act-on-a-run). `GET /api/workflows/runs?mine=true` and `GET /api/conversations?mine=true` are non-enforcing "my" filters that prove the scoping seam — they are not a security boundary.
 
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -629,6 +662,8 @@ Archon keys env loading on **directory ownership, not filename**. `.archon/` (at
 2. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars).
 3. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
 
+Inside a workflow, a `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN` the CLI inherited, including an empty one, wins over both files. See [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
+
 A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`. If it does, Archon refuses to start and names the file and the key. Those keys decide which Archon home and which executables Archon uses, so a repository could otherwise choose which plugins run. Set them in your shell, your scheduler or `~/.archon/.env` instead.
 
 **Operator log lines** (stderr, emitted only when there is something to report):
@@ -694,11 +729,13 @@ commands:
 
 ### Minimal Setup (Using Defaults)
 
-No configuration needed. Archon works out of the box with:
+Archon uses these defaults without configuration:
 
 - `~/.archon/` for all managed files
-- Claude as default AI assistant
+- The only registered provider as default AI assistant, otherwise no default
 - Platform-appropriate streaming modes
+
+With multiple providers, select a default with `archon setup`, `defaultAssistant` in global config, `assistant` in project config, or `DEFAULT_AI_ASSISTANT`. A run that needs an unset default fails before creating a worktree; workflows can select providers explicitly.
 
 ### Custom AI Preference
 
@@ -782,16 +819,23 @@ DISCORD_STREAMING_MODE=batch
 
 ---
 
-## Workflow continuation settings
+## Workflow attention and continuation settings
 
 `workflows:` can be set globally or per repository; repo fields override matching global fields.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
+| `toolCallAttentionMs` | `1800000` | Milliseconds without reported progress before an open provider tool call or reported background subtask raises advisory run attention. `0` disables publication; positive safe integers override the default |
 | `autoResumeOnQuotaReset` | `false` | Schedule a failed workflow for continuation when a node's provider reported a `quota_exhausted` failure |
 | `quotaFallbackDelayMs` | unset | Explicit delay to use when the provider's quota failure reports no reset time, or a reset time that has already passed, capped at 1000 years. When unset, Archon records that automatic continuation was skipped instead of guessing |
 | `quotaMaxAttempts` | `1` | Maximum number of scheduled continuation attempts for one run |
 | `quotaDeadlineMs` | `86400000` | Maximum window from the first quota failure in which a continuation may be scheduled, capped at 1000 years |
+
+Tool-call attention leaves the run and node running. It never kills, fails, cancels, pauses, retries, or resumes work. `workflow wait`, `workflow status`, and the console show the affected node, provider, tool, provider title or command, and duration. Providers that declare reported background work also receive advisories for subtasks with no open parent tool, using their task type and description. Subtasks retain their timing when their parent tool completes. A subtask's running update renews its progress; its terminal status clears its advisory. A tool's terminal update clears its advisory; a correlated subtask update renews only its parent tool and clears its advisory until the threshold passes again. Unrelated text or tool events do not count as that tool's progress. Leaving running state hides the advisory, and resume clears old descriptors.
+
+The threshold follows the same global, repository, and run-scoped `workflows` layering. It is an operator policy, not a workflow YAML field. Even with publication disabled, typed open tools suspend the silence watchdog; streams with no open tools or reported live subtasks retain their existing idle timeout.
+
+Attention stores only ids, timestamps, and bounded display fields. It never copies raw tool inputs, outputs, assistant messages, or reasoning from provider transcripts. Commands are redacted against known credentials from the effective environment and protected credential values, including file-delivered credentials. Arbitrary secrets unknown to Archon cannot be discovered by that redaction.
 
 This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt because retrying in the same provider window only repeats the failure. When enabled, Archon leaves the run `failed`, records the scheduled time in run metadata, and the server claims and resumes it when due. The claim is durable and bounded, so two server scans cannot launch the same attempt and an early resume failure does not create a rapid retry loop.
 

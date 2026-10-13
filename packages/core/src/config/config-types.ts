@@ -1,3 +1,4 @@
+import type { ResolvedWorkflowPolicy } from '@archon/workflows/schemas/run-config';
 /**
  * Configuration types for Archon YAML config files
  *
@@ -179,7 +180,7 @@ export interface GlobalConfig {
     maxConversations?: number;
     /**
      * Opt-in install-wide cap on simultaneous provider attempts, keyed by provider
-     * registration ID (e.g. `claude: 4`). A provider without an entry is unlimited.
+     * registration ID (e.g. `claude: 4`). Pi also honors `assistants.pi.maxConcurrent`.
      * Read fresh and strictly at every attempt by `loadProviderConcurrencyCaps`.
      */
     providers?: Record<string, number>;
@@ -191,7 +192,7 @@ export interface GlobalConfig {
    */
   container?: ContainerConfig;
 
-  /** Default-off policy for continuing terminal quota failures after time passes. */
+  /** Operator policy for live tool attention and quota continuation. */
   workflows?: WorkflowContinuationConfig;
 }
 
@@ -222,7 +223,7 @@ export interface RepoConfig {
   /** Repo-level model tier presets — override global tiers with same name. */
   tiers?: RawTiersConfig;
 
-  /** Project override for quota-failure continuation. */
+  /** Project override for live tool attention and quota continuation. */
   workflows?: WorkflowContinuationConfig;
 
   /**
@@ -375,7 +376,7 @@ export interface RepoConfig {
  */
 export interface MergedConfig {
   botName: string;
-  assistant: string;
+  assistant: string | undefined;
   assistants: AssistantDefaults;
   /**
    * Merged aliases (repo > global). Used by buildAiProfile at execution time.
@@ -395,12 +396,7 @@ export interface MergedConfig {
   concurrency: {
     maxConversations: number;
   };
-  workflows: {
-    autoResumeOnQuotaReset: boolean;
-    quotaFallbackDelayMs?: number;
-    quotaMaxAttempts: number;
-    quotaDeadlineMs: number;
-  };
+  workflows: ResolvedWorkflowPolicy;
   commands: {
     /**
      * Additional command folder to search (relative to repo root)
@@ -452,7 +448,7 @@ export interface MergedConfig {
  */
 export interface SafeConfig {
   botName: string;
-  assistant: string;
+  assistant: string | undefined;
   assistants: ProviderDefaultsMap;
   streaming: PlatformStreaming;
   concurrency: {

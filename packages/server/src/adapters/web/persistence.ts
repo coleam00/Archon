@@ -16,7 +16,7 @@ interface BufferedToolCall {
   /** The provider's id for the call; its result is matched on it. Not persisted. */
   toolCallId: string;
   name: string;
-  input: Record<string, unknown>;
+  input: Extract<PlatformStructuredEvent, { type: 'tool_call' }>['rawInput'];
   startedAt: number;
   duration?: number;
   output?: string;
@@ -107,7 +107,11 @@ export class MessagePersistence {
    */
   appendToolCall(
     conversationId: string,
-    tool: { toolCallId: string; name: string; input: Record<string, unknown> }
+    tool: {
+      toolCallId: string;
+      name: string;
+      input: Extract<PlatformStructuredEvent, { type: 'tool_call' }>['rawInput'];
+    }
   ): void {
     const buf = this.assistantBuffer.get(conversationId) ?? { segments: [] };
     if (buf.segments.length === 0) {

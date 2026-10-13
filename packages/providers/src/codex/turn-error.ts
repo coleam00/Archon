@@ -25,7 +25,7 @@ const CLASS_BY_VARIANT: Record<StringVariant, ProviderFailureClass> = {
   unauthorized: 'auth',
   usageLimitExceeded: 'quota_exhausted',
   rateLimitExceeded: 'rate_limited',
-  serverOverloaded: 'transient',
+  serverOverloaded: 'overloaded',
   internalServerError: 'transient',
   flexUnavailable: 'transient',
   // Codex's own per-session spend limit stopped the turn.

@@ -2,4 +2,4 @@
 
 AUTO-GENERATED from `@openai/codex` 0.160.0 by `scripts/generate-codex-protocol.ts`. Do not edit.
 
-Regenerate with `bun run generate:codex-protocol`; verify with `bun run check:codex-protocol`.
+Regenerate with `bun run generate:codex-protocol`; the version stamp is checked by `scripts/codex-protocol-version.test.ts`.

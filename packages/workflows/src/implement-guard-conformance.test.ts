@@ -220,11 +220,11 @@ describe('implement assert-changed guard over engine checkout observations', () 
     expect((await guard(s, baseline)).passed).toBe(false);
   });
 
-  test('uncommitted .archon changes never count', async () => {
+  test('new uncommitted workflow files count as work', async () => {
     const s = scratch();
     const baseline = await s.observe();
     s.write('.archon/workflows/new.yaml', 'name: x\n');
-    expect((await guard(s, baseline)).passed).toBe(false);
+    expect((await guard(s, baseline)).passed).toBe(true);
   });
 
   test('an unrelated empty commit does not make a pre-existing .archon file count', async () => {

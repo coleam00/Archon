@@ -152,15 +152,25 @@ nodes:
   # judges whether errors and docs warrant their conditional lenses; resolve-scope
   # then merges the operator's declared error override over that judgment. Its
   # output feeds the errors gate, while the classifier feeds the docs gate. Round
-  # 1 decides once,
+  # 1 completes full coverage when focused review detects an engaged risk,
   # and correction reviews preserve those concerns while one continuation
   # reviewer judges the prior report and correction delta.
+  - id: review-policy
+    script: review-policy
+    runtime: bun
+    depends_on: [pr]
+    output_format:
+      type: object
+      properties:
+        risks: { type: string, minLength: 1 }
+      required: [risks]
+
   - id: classify
     command: classify-review-scope
     # This workflow declares no top-level model, so every AI node here names its
     # own tier. Choosing between two booleans off a diff is small-tier work.
     model: small
-    depends_on: [pr]
+    depends_on: [review-policy]
     mutates_checkout: false
     output_type: review-scope
     output_format:
@@ -311,9 +321,10 @@ nodes:
               Accepted work order:
               $INPUTS.work
 
-              When the correction is green, push its commits to the branch this
-              run is on. Push it explicitly by name; do not let git select an
-              upstream. Do not change the PR's draft state or edit the canonical
+              Commit the correction and push its commits to the branch this run
+              is on, whatever its green state: the following review reads the
+              pull request's remote head. Push it explicitly by name; do not let
+              git select an upstream. Do not change the PR's draft state or edit the canonical
               review comment; the following review owns that public verdict.
               Record the exact push target and a read-back of the remote ref in
               implementation.md; never record credentials.

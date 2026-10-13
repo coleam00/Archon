@@ -1,3 +1,10 @@
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
+import * as sqlWorkflow from '@archon/core/db/workflows';
+import { providerRegistry } from '@archon/providers';
+import { createSqlWorkflowOperations } from '../workflows/sql-host';
+import { RunActionForbiddenError, type RunActor } from '../operations/run-authorization';
+import { withBranchLaunchSource } from '../workflows/branch-launch-source';
+import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
 /**
  * Orchestrator Agent - Main entry point for AI-powered message routing
  *
@@ -8,6 +15,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'fs';
+import { isAbsolute } from 'node:path';
 import { createLogger, captureChatTurn, canonicalizeProjectPath } from '@archon/paths';
 import type {
   IPlatformAdapter,
@@ -35,7 +43,6 @@ import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import {
-  execFileAsync,
   findRepoRoot,
   getDefaultRemote,
   syncWorkspace,
@@ -141,7 +148,7 @@ function applyPresetToRequestOptions(
   // is shared with `applyPresetOptions` in the DAG executor rather than
   // restated, so the same tier cannot mean different depths in chat and in a
   // workflow.
-  const decision = resolvePresetEffort(provider, preset.effort);
+  const decision = resolvePresetEffort(providerRegistry, provider, preset.effort);
   if (!decision.ok) {
     // `unsupported` = the provider has no reasoning control at all. Warn instead
     // of silently dropping.
@@ -242,8 +249,8 @@ export interface TitleRequest {
 /**
  * Resolve provider + request options for conversation-title generation (#1855).
  *
- * Server entry points that fire title generation outside a full chat turn
- * (create-with-message, web workflow run) resolve the `small` tier here —
+ * Entry points that fire title generation outside a full chat turn
+ * (create-with-message, web workflow run, CLI workflow run) resolve the `small` tier here —
  * config tiers plus per-user prefs when a userId is available — instead of
  * letting the provider fall through to its raw config-default model, which
  * the active account may not support (e.g. `gpt-5.3-codex` on ChatGPT-plan
@@ -256,10 +263,11 @@ export interface TitleRequest {
  */
 export async function resolveTitleRequest(
   fallbackProvider: string,
-  userId?: string
+  userId?: string,
+  repoPath?: string
 ): Promise<TitleRequest> {
   try {
-    const config = await loadConfig();
+    const config = await loadConfig(repoPath);
     const userAiPrefs = userId ? await resolveUserAiPrefsForChat(userId) : {};
     let configuredProviderKey = userAiPrefs.defaultProvider ?? fallbackProvider;
     let aiProfile: ReturnType<typeof buildAiProfile>;
@@ -734,8 +742,8 @@ async function dispatchOrchestratorWorkflowOwned(
   conversation: Conversation,
   codebase: Codebase,
   request: WorkflowRequest,
+  actor: RunActor,
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string,
   /**
    * Discovery source of the workflow — telemetry only (bundled workflows
    * report their real name, custom ones report "custom"). Optional: callers
@@ -744,6 +752,7 @@ async function dispatchOrchestratorWorkflowOwned(
   source?: WorkflowSource,
   options?: WorkflowDispatchOptions
 ): Promise<void> {
+  const userId = actor.kind === 'user' ? actor.userId : undefined;
   const userMessage = request.kind === 'resume' ? request.run.user_message : request.args;
   const parseWarnings = request.kind === 'start' ? request.parseWarnings : undefined;
   const runCwd = conversation.cwd ?? codebase.default_cwd;
@@ -757,7 +766,7 @@ async function dispatchOrchestratorWorkflowOwned(
       );
       return;
     }
-    const resolved = await resolveRunWorkflow(request.run, runCwd, platform);
+    const resolved = await resolveRunWorkflow(createWorkflowDeps(), request.run, runCwd, platform);
     if (!resolved.ok) {
       await platform.sendMessage(
         conversationId,
@@ -779,16 +788,20 @@ async function dispatchOrchestratorWorkflowOwned(
   // whatever surface declared it — CLI, API, or chat. A non-terminal target, a
   // cross-codebase id, or a missing estate refuses here, before any worktree is
   // cut; the resolved lane then drives where the run actually executes.
-  const adoptionLane = options?.adoptRunId
-    ? (
-        await resolveWorkflowAdoption({
-          adoptedRunId: options.adoptRunId,
-          codebaseId: codebase.id,
-          codebasePath: codebase.default_cwd,
-          codebaseKind: codebase.kind,
-        })
-      ).lane
+  const adoption = options?.adoptRunId
+    ? await resolveWorkflowAdoption({
+        deps: {
+          getRun: sqlWorkflow.getWorkflowRun,
+          getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+          findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
+        },
+        adoptedRunId: options.adoptRunId,
+        codebaseId: codebase.id,
+        codebasePath: codebase.default_cwd,
+        codebaseKind: codebase.kind,
+      })
     : undefined;
+  const adoptionLane = adoption?.lane;
 
   // A lane other than in-place inherits a worktree or branch estate; a workflow
   // that opted out of worktrees runs in the parent checkout and has nothing to
@@ -807,11 +820,15 @@ async function dispatchOrchestratorWorkflowOwned(
   }
 
   // Shared across every dispatch below.
-  const resolveChildIsolation = createCodebaseChildResolver(codebase, {
-    baseBranch: codebaseBaseBranch,
-    createdByPlatform: platform.getPlatformType(),
-    createdByUserId: userId,
-  });
+  const resolveChildIsolation = createCodebaseChildResolver(
+    sqlIsolation.createIsolationStore(),
+    codebase,
+    {
+      baseBranch: codebaseBaseBranch,
+      createdByPlatform: platform.getPlatformType(),
+      createdByUserId: userId,
+    }
+  );
 
   // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
   //
@@ -859,6 +876,16 @@ async function dispatchOrchestratorWorkflowOwned(
     Boolean(resumableRun?.working_path) &&
     (resumableRun?.status === 'paused' || explicitResumeRequested);
 
+  if (willContinueExistingRun && resumableRun) {
+    try {
+      await createSqlWorkflowOperations().resumeWorkflow(resumableRun.id, actor);
+    } catch (error) {
+      if (!(error instanceof RunActionForbiddenError)) throw error;
+      await platform.sendMessage(conversationId, error.message);
+      return;
+    }
+  }
+
   // Adoption and continuation are mutually exclusive: both decide where the run
   // executes and which estate it inherits, and every continuation path below forwards
   // only the resume context — an adopted id would be validated above and then silently
@@ -886,7 +913,7 @@ async function dispatchOrchestratorWorkflowOwned(
     | undefined;
 
   if (request.kind === 'start' && willContinueExistingRun && resumableRun) {
-    const resolved = await resolveRunWorkflow(resumableRun, runCwd, platform);
+    const resolved = await resolveRunWorkflow(createWorkflowDeps(), resumableRun, runCwd, platform);
     if (!resolved.ok) {
       await platform.sendMessage(
         conversationId,
@@ -901,9 +928,9 @@ async function dispatchOrchestratorWorkflowOwned(
   // A reuse-worktree lane inherits the adopted run's worktree; its `.archon` belongs to
   // whatever branch that worktree carries, so the frozen source must come from THERE —
   // capturing from the parent checkout would mix vintages exactly as #2660 describes.
-  // A checkout-branch lane has the same constraint, but its worktree only exists after
-  // isolation resolution below — so its capture is deferred until `cwd` is known.
+  // A checkout-branch lane captures a read-only snapshot before isolation exists.
   const captureCwd = adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : runCwd;
+  let branchPrepared: Awaited<ReturnType<typeof prepareRunAiConfiguration>> | undefined;
   if (!willContinueExistingRun && adoptionLane?.kind !== 'checkout-branch') {
     freshCaptured = await captureFreshSource(
       owner,
@@ -915,6 +942,41 @@ async function dispatchOrchestratorWorkflowOwned(
     );
     if (!freshCaptured) return; // capture failed, message already sent
     workflow = freshCaptured.workflow;
+  }
+
+  if (!willContinueExistingRun && adoptionLane?.kind === 'checkout-branch') {
+    await withBranchLaunchSource(
+      codebase.default_cwd,
+      adoptionLane.taskBranch.branch,
+      async snapshot => {
+        freshCaptured = await captureFreshSource(
+          owner,
+          snapshot,
+          workflow,
+          conversationId,
+          platform,
+          snapshot
+        );
+        if (freshCaptured) {
+          workflow = freshCaptured.workflow;
+          branchPrepared = await prepareRunAiConfiguration(
+            createWorkflowDeps(),
+            workflow,
+            snapshot,
+            {
+              codebaseId: codebase.id,
+              userId,
+              aiConfigurationRun: adoption?.adoptedRun,
+              runConfig: options?.runConfig,
+              ...(options?.modelOverrides
+                ? { modelOverrideLayer: { kind: 'raw', overrides: options.modelOverrides } }
+                : {}),
+            }
+          );
+        }
+      }
+    );
+    if (!freshCaptured) return;
   }
 
   let resolvedInputs: Record<string, string> | undefined;
@@ -981,9 +1043,7 @@ async function dispatchOrchestratorWorkflowOwned(
     return true;
   };
 
-  const gatesWaitForBranchVintage =
-    adoptionLane?.kind === 'checkout-branch' && !willContinueExistingRun;
-  if (!gatesWaitForBranchVintage && !(await runSignatureGates(workflow))) return;
+  if (!(await runSignatureGates(workflow))) return;
 
   // Keys the engine dropped from this workflow's YAML (#2213). Every chat and
   // console run funnels through here, so this is the one place that covers all
@@ -1022,6 +1082,27 @@ async function dispatchOrchestratorWorkflowOwned(
     }
   }
 
+  // A fresh run reads repo config from the project's registered checkout, never from a
+  // worktree an earlier run left on this conversation, so uncommitted and gitignored
+  // config apply. An adopted worktree stays the estate. The run records the result, and
+  // every continuation reuses that record.
+  const launchConfigCwd =
+    adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : codebase.default_cwd;
+  const prepareLaunchAiConfiguration = (): ReturnType<typeof prepareRunAiConfiguration> =>
+    prepareRunAiConfiguration(createWorkflowDeps(), workflow, launchConfigCwd, {
+      codebaseId: codebase.id,
+      userId,
+      aiConfigurationRun: adoption?.adoptedRun,
+      runConfig: options?.runConfig,
+      ...(options?.modelOverrides
+        ? { modelOverrideLayer: { kind: 'raw', overrides: options.modelOverrides } }
+        : {}),
+    });
+  const preparedAiConfiguration =
+    branchPrepared ?? (!willContinueExistingRun ? await prepareLaunchAiConfiguration() : undefined);
+  if (preparedAiConfiguration)
+    await assertRunCredentials(createWorkflowDeps(), preparedAiConfiguration);
+
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
     codebase_id: codebase.id,
@@ -1034,6 +1115,7 @@ async function dispatchOrchestratorWorkflowOwned(
   // run live (e.g. read-only triage, docs generation on the main checkout).
   let cwd: string;
   let cutFromCommit: string | undefined;
+  let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
   if (adoptionLane?.kind === 'reuse-worktree') {
     // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
     // instead of cutting a fresh one (same shape as the background dispatch in
@@ -1086,7 +1168,10 @@ async function dispatchOrchestratorWorkflowOwned(
         userId
       );
       cwd = result.cwd;
-      if (result.status === 'new') cutFromCommit = result.cutFromCommit;
+      if (result.status === 'new') {
+        cutFromCommit = result.cutFromCommit;
+        ownedWorktree = result.ownedWorktree;
+      }
     } catch (error) {
       if (error instanceof IsolationBlockedError) {
         getLog().warn(
@@ -1104,16 +1189,11 @@ async function dispatchOrchestratorWorkflowOwned(
     }
   }
 
-  // Deferred capture for the checkout-branch lane: the resolver materialized the
-  // adopted branch, so its `.archon` is the branch's vintage — freeze it instead of
-  // the parent checkout's, for the same reason the reuse-worktree lane captures above.
-  if (adoptionLane?.kind === 'checkout-branch' && !willContinueExistingRun) {
-    freshCaptured = await captureFreshSource(owner, cwd, workflow, conversationId, platform, cwd);
-    if (!freshCaptured) return; // capture failed, message already sent
-    workflow = freshCaptured.workflow;
-    // The executed graph just changed vintages; judge the invocation against the
-    // branch's definition, not the parent checkout's it was provisionally read from.
-    if (!(await runSignatureGates(workflow))) return;
+  if (adoptionLane?.kind === 'checkout-branch' && freshCaptured) {
+    freshCaptured = {
+      ...freshCaptured,
+      preparedSource: { ...freshCaptured.preparedSource, origin: cwd },
+    };
   }
 
   // Dispatch workflow.
@@ -1226,12 +1306,14 @@ async function dispatchOrchestratorWorkflowOwned(
             cwd: resumableWorkingPath,
             legacyWorkflow: workflow,
             userMessage,
-            conversationDbId: conversation.id,
+            origin: {
+              conversationId: conversation.id,
+              userId,
+              parentConversationId: conversation.id,
+            },
             run: resumableRun,
             options: {
               codebaseId: codebase.id,
-              parentConversationId: conversation.id,
-              userId,
               source,
               parseWarnings,
               baseBranch: codebaseBaseBranch,
@@ -1291,6 +1373,8 @@ async function dispatchOrchestratorWorkflowOwned(
         );
         if (!captured) return; // capture failed, message already sent
         workflow = captured.workflow;
+        const freshAiConfiguration = await prepareLaunchAiConfiguration();
+        await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration);
         await platform.sendMessage(
           conversationId,
           `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
@@ -1306,13 +1390,16 @@ async function dispatchOrchestratorWorkflowOwned(
             cwd: resumableWorkingPath,
             workflow,
             userMessage,
-            conversationDbId: conversation.id,
+            origin: {
+              conversationId: conversation.id,
+              userId,
+              parentConversationId: conversation.id,
+            },
             options: {
               codebaseId: codebase.id,
-              parentConversationId: conversation.id,
-              userId,
               source,
               preparedSource: captured.preparedSource,
+              preparedAiConfiguration: freshAiConfiguration,
               parseWarnings,
               baseBranch: codebaseBaseBranch,
               resolveChildIsolation,
@@ -1400,26 +1487,31 @@ async function dispatchOrchestratorWorkflowOwned(
     // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
     // executor adopts for us there (see #2690). `freshCaptured` proves the prior
     // `captureFreshSource` call already ran `owner.hold`.
-    await withRunLiveOwner(freshCaptured.preparedSource.runId, {}, async () => {
+    const captured = freshCaptured;
+    await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
       await freshEngine.submit({
         platform,
         conversationId,
         cwd,
         workflow,
         userMessage,
-        conversationDbId: conversation.id,
-        options: {
-          codebaseId: codebase.id,
+        origin: {
+          conversationId: conversation.id,
           parentConversationId: conversation.id,
           userId,
+        },
+        options: {
+          codebaseId: codebase.id,
           source,
-          preparedSource: freshCaptured.preparedSource,
+          preparedSource: captured.preparedSource,
+          preparedAiConfiguration,
           parseWarnings,
           baseBranch: codebaseBaseBranch,
           resolveChildIsolation,
           capturedSourceOwner: owner,
           inputs: resolvedInputs,
           ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+          ownedWorktree,
           ...(options?.adoptRunId
             ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
             : options?.supersedesRunId
@@ -1480,6 +1572,7 @@ async function captureFreshSource(
       const { workflows: capturedWorkflows } = await discoverWorkflowsWithConfig(
         runCwd,
         loadConfig,
+        providerRegistry,
         preparedSource.roots
       );
       const reResolved = resolveWorkflowName(
@@ -1525,8 +1618,8 @@ async function dispatchOrchestratorWorkflow(
   conversation: Conversation,
   codebase: Codebase,
   request: WorkflowRequest,
+  actor: RunActor,
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string,
   source?: WorkflowSource,
   options?: WorkflowDispatchOptions
 ): Promise<void> {
@@ -1538,8 +1631,8 @@ async function dispatchOrchestratorWorkflow(
       conversation,
       codebase,
       request,
+      actor,
       isolationHints,
-      userId,
       source,
       options
     )
@@ -1577,8 +1670,8 @@ export async function continueResolvedGateRun(
   codebase: Codebase | null,
   run: WorkflowRun,
   action: 'approve' | 'reject' | 'respond',
-  isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string
+  actor: RunActor,
+  isolationHints?: HandleMessageContext['isolationHints']
 ): Promise<void> {
   const decision =
     action === 'approve' ? 'Approved' : action === 'reject' ? 'Rejected' : 'Responded';
@@ -1616,8 +1709,8 @@ export async function continueResolvedGateRun(
         conversation,
         codebase,
         { kind: 'resume', run },
-        isolationHints,
-        userId
+        actor,
+        isolationHints
       );
       getLog().info(
         { conversationId, workflowRunId: run.id, workflowName: run.workflow_name, action },
@@ -1738,7 +1831,11 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
   try {
     // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically
     // by discoverWorkflowsWithConfig — no option needed.
-    const result = await discoverWorkflowsWithConfig(getArchonWorkspacesPath(), loadConfig);
+    const result = await discoverWorkflowsWithConfig(
+      getArchonWorkspacesPath(),
+      loadConfig,
+      providerRegistry
+    );
     workflows = [...result.workflows];
     allErrors.push(...result.errors);
   } catch (error) {
@@ -1798,6 +1895,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
         const repoResult = await discoverWorkflowsWithConfig(
           workflowCwd,
           () => Promise.resolve(loadedConfig),
+          providerRegistry,
           workflowSourceRoot === undefined ? undefined : liveSourceRoots(workflowSourceRoot)
         );
         const workflowMap = new Map(workflows.map(w => [w.workflow.name, w]));
@@ -1874,7 +1972,7 @@ export async function handleMessage(
   platform: IPlatformAdapter,
   conversationId: string,
   message: string,
-  context?: HandleMessageContext
+  context: HandleMessageContext
 ): Promise<void> {
   const {
     issueContext,
@@ -1882,8 +1980,9 @@ export async function handleMessage(
     parentConversationId,
     isolationHints,
     attachedFiles,
-    userId,
-  } = context ?? {};
+    actor,
+  } = context;
+  const userId = actor.kind === 'user' ? actor.userId : undefined;
   // Anchor "is this a slash command" at the true start of the message —
   // leading whitespace (e.g. from a platform that doesn't pre-trim after
   // stripping a bot mention) must not let a command masquerade as a plain
@@ -1891,6 +1990,20 @@ export async function handleMessage(
   const trimmedMessage = message.trim();
   try {
     getLog().debug({ conversationId, userId }, 'orchestrator_message_received');
+
+    const parsed = trimmedMessage.startsWith('/')
+      ? commandHandler.parseCommand(message)
+      : undefined;
+    if (parsed?.command === 'detach-project') {
+      const reply = await handleDetachProject(
+        platform,
+        conversationId,
+        parsed.args,
+        parentConversationId
+      );
+      await platform.sendMessage(conversationId, reply);
+      return;
+    }
 
     // 1. Get/create conversation and inherit thread context.
     // userId is recorded on the conversation row only on first creation —
@@ -1913,8 +2026,8 @@ export async function handleMessage(
     );
 
     // 2. Check for deterministic commands
-    if (trimmedMessage.startsWith('/')) {
-      const { command } = commandHandler.parseCommand(message);
+    if (parsed) {
+      const { command } = parsed;
       const deterministicCommands = [
         'help',
         'status',
@@ -1962,7 +2075,7 @@ export async function handleMessage(
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message, platform);
+        const result = await commandHandler.handleCommand(conversation, message, actor, platform);
         await platform.sendMessage(conversationId, result.message);
 
         if (result.workflow) {
@@ -1971,8 +2084,8 @@ export async function handleMessage(
             conversationId,
             conversation,
             result.workflow,
+            actor,
             isolationHints,
-            userId,
             {
               // Declared inputs (#2554) arrive on the request context, not in the
               // command text — the run route is the only caller that sets them.
@@ -2397,7 +2510,7 @@ export async function handleMessage(
 
     // Claude supports the preset object for prompt caching; other providers
     // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
-    let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    let systemAppend = await buildOrchestratorSystemAppend(conversation, codebases, workflows);
     // Capabilities are only consulted for project-scoped chats (both the native tool
     // and the CLI pointer are scoped features), so look them up lazily — this also
     // avoids a registry lookup (and a throw for an unregistered provider) on the
@@ -2475,6 +2588,8 @@ export async function handleMessage(
       const scopedCodebaseId = conversation.codebase_id;
       requestOptions.nativeTools = [
         buildManageRunTool({
+          actor,
+          operations: createSqlWorkflowOperations(),
           codebaseId: scopedCodebaseId,
           surface: platform,
           // One continuation per turn: the resume runs in this conversation and
@@ -2560,9 +2675,9 @@ export async function handleMessage(
           session,
           isolationHints,
           conversation,
+          actor,
           issueContext,
-          requestOptions,
-          userId
+          requestOptions
         );
       } else {
         await handleBatchMode(
@@ -2578,9 +2693,9 @@ export async function handleMessage(
           session,
           isolationHints,
           conversation,
+          actor,
           issueContext,
-          requestOptions,
-          userId
+          requestOptions
         );
       }
     } catch (error) {
@@ -2605,8 +2720,8 @@ export async function handleMessage(
           discoveredCodebase ?? null,
           gateResolution.resolved.run,
           gateResolution.resolved.action,
-          isolationHints,
-          userId
+          actor,
+          isolationHints
         );
       }
     }
@@ -2695,9 +2810,9 @@ async function handleStreamMode(
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
+  actor: RunActor,
   issueContext?: string,
-  requestOptions?: SendQueryOptions,
-  userId?: string
+  requestOptions?: SendQueryOptions
 ): Promise<void> {
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
@@ -2854,8 +2969,8 @@ async function handleStreamMode(
       commands.workflowInvocation,
       originalMessage,
       isolationHints,
-      issueContext,
-      userId
+      actor,
+      issueContext
     );
     return;
   }
@@ -2923,9 +3038,9 @@ async function handleBatchMode(
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
+  actor: RunActor,
   issueContext?: string,
-  requestOptions?: SendQueryOptions,
-  userId?: string
+  requestOptions?: SendQueryOptions
 ): Promise<void> {
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];
@@ -3114,8 +3229,8 @@ async function handleBatchMode(
       commands.workflowInvocation,
       originalMessage,
       isolationHints,
-      issueContext,
-      userId
+      actor,
+      issueContext
     );
     return;
   }
@@ -3199,8 +3314,8 @@ async function handleWorkflowInvocationResult(
   invocation: WorkflowInvocation,
   originalMessage: string,
   isolationHints: HandleMessageContext['isolationHints'],
-  issueContext?: string,
-  userId?: string
+  actor: RunActor,
+  issueContext?: string
 ): Promise<void> {
   const { workflowName, projectName, remainingMessage } = invocation;
 
@@ -3242,8 +3357,8 @@ async function handleWorkflowInvocationResult(
         args: workflowPrompt,
         parseWarnings: workflowEntry?.parseWarnings,
       },
+      actor,
       isolationHints,
-      userId,
       workflowEntry?.source
     );
     return;
@@ -3337,15 +3452,17 @@ async function handleRegisterProject(
   }
 
   // Check if codebase already exists with this name
-  const existing = await codebaseDb.listCodebases();
+  const existing = await codebaseDb.listCodebaseRegistrations();
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
-  if (alreadyExists) {
-    return `Project "${projectName}" is already registered (path: ${alreadyExists.default_cwd}).`;
+  if (alreadyExists && !isAbsolute(alreadyExists.stored_default_cwd)) {
+    await codebaseDb.updateCodebase(alreadyExists, { default_cwd: canonicalPath });
+    return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
   }
 
-  // Use config default provider instead of hardcoding 'claude'
-  const config = await loadConfig();
+  if (alreadyExists) {
+    return `Project "${projectName}" is already registered (path: ${alreadyExists.stored_default_cwd}).`;
+  }
 
   // Detect whether the path is a git repository. Non-git paths (multi-repo roots
   // or plain ops folders) register as folder projects — run-in-place, no branch.
@@ -3366,12 +3483,10 @@ async function handleRegisterProject(
     );
   }
   const kind: 'repo' | 'folder' = repoRoot ? 'repo' : 'folder';
-  const detectedBranch = kind === 'repo' ? await detectCurrentGitBranch(canonicalPath) : null;
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: canonicalPath,
-    default_branch: detectedBranch,
-    ai_assistant_type: config.assistant,
+    default_branch: null,
     kind,
   });
 
@@ -3386,20 +3501,6 @@ async function handleRegisterProject(
       'If this should be a git repo, resolve the error and re-register.';
   }
   return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
-}
-
-async function detectCurrentGitBranch(projectPath: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', projectPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
-      { timeout: 5000 }
-    );
-    const branch = stdout.trim();
-    return branch && branch !== 'HEAD' ? branch : null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -3427,7 +3528,7 @@ async function handleUpdateProject(message: string): Promise<string> {
   }
 
   // Find existing codebase by name
-  const existing = await codebaseDb.listCodebases();
+  const existing = await codebaseDb.listCodebaseRegistrations();
   const codebase = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (!codebase) {
@@ -3435,7 +3536,7 @@ async function handleUpdateProject(message: string): Promise<string> {
   }
 
   try {
-    await codebaseDb.updateCodebase(codebase.id, { default_cwd: newPath });
+    await codebaseDb.updateCodebase(codebase, { default_cwd: newPath });
   } catch (err) {
     getLog().warn({ err: err as Error, codebaseId: codebase.id, newPath }, 'project.update_failed');
     // Row gone (deleted between the fetch above and the UPDATE) is the only
@@ -3447,10 +3548,10 @@ async function handleUpdateProject(message: string): Promise<string> {
     return `Project "${projectName}" could not be updated — database error. Please try again.`;
   }
   getLog().info(
-    { name: projectName, oldPath: codebase.default_cwd, newPath, id: codebase.id },
+    { name: projectName, oldPath: codebase.stored_default_cwd, newPath, id: codebase.id },
     'project.update_completed'
   );
-  return `Project "${projectName}" updated.\nOld path: ${codebase.default_cwd}\nNew path: ${newPath}`;
+  return `Project "${projectName}" updated.\nOld path: ${codebase.stored_default_cwd}\nNew path: ${newPath}`;
 }
 
 /**
@@ -3466,7 +3567,7 @@ async function handleRemoveProject(message: string): Promise<string> {
   const projectName = args[0];
 
   // Find existing codebase by name
-  const existing = await codebaseDb.listCodebases();
+  const existing = await codebaseDb.listCodebaseRegistrations();
   const codebase = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (!codebase) {
@@ -3475,7 +3576,7 @@ async function handleRemoveProject(message: string): Promise<string> {
 
   await codebaseDb.deleteCodebase(codebase.id);
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
-  return `Project "${projectName}" removed.\nPath was: ${codebase.default_cwd}`;
+  return `Project "${projectName}" removed.\nPath was: ${codebase.stored_default_cwd}`;
 }
 
 /**
@@ -3567,8 +3668,8 @@ async function handleWorkflowRunCommand(
   conversationId: string,
   conversation: Conversation,
   request: WorkflowRequest,
+  actor: RunActor,
   isolationHints?: HandleMessageContext['isolationHints'],
-  userId?: string,
   options?: WorkflowDispatchOptions
 ): Promise<void> {
   // Check if conversation has a project
@@ -3588,8 +3689,8 @@ async function handleWorkflowRunCommand(
       conversation,
       codebase,
       request,
+      actor,
       isolationHints,
-      userId,
       undefined,
       options
     );
@@ -3614,4 +3715,47 @@ async function handleWorkflowRunCommand(
       ? `Choose a project for this conversation, then retry \`${spellWorkflowCommand(platform, `resume ${request.run.id}`)}\`.\n\n${projectList}`
       : `Which project should this workflow run on?\n\n${projectList}\n\nReply with the project name, or use: ${spellWorkflowCommand(platform, `run ${request.definition.name} --project <name> "${request.args}"`)}`
   );
+}
+
+async function handleDetachProject(
+  platform: IPlatformAdapter,
+  platformId: string,
+  args: string[],
+  parentPlatformId?: string
+): Promise<string> {
+  if (args.length !== 1 || !args[0].trim()) {
+    return 'Usage: /detach-project "<current-project-name>". Supply the exact project name; quote names containing spaces.';
+  }
+  if (!platform.capabilities.canDetachProject) {
+    return 'Project detachment is not supported on this conversation surface.';
+  }
+  const conversation = await db.getConversationByPlatformId(platform.getPlatformType(), platformId);
+  if (!conversation) return 'Cannot detach: this conversation does not exist.';
+  const result = await db.detachConversationProject({
+    conversationId: conversation.id,
+    projectName: args[0],
+    platformType: platform.getPlatformType(),
+    parentPlatformId,
+  });
+  switch (result.status) {
+    case 'detached':
+      return `This conversation is now neutral. Project "${result.projectName}" remains registered and available to other conversations.`;
+    case 'blocked': {
+      const blockers = result.runs.map(run => `- Run ${run.id}: ${run.status}`);
+      if (result.environmentId !== null)
+        blockers.push(`- Attached environment: ${result.environmentId}`);
+      return `Cannot detach while this conversation owns work or an environment:\n${blockers.join('\n')}\nResolve runs through manage_run, CLI or Web run controls, and clean the environment through the existing isolation controls before retrying. Nothing was cancelled or removed.`;
+    }
+    case 'refused':
+      switch (result.reason) {
+        case 'parent-bound':
+          return 'Cannot detach this child conversation: it would inherit its bound parent project on the next message.';
+        case 'parent-changed':
+          return 'Cannot detach: the parent conversation changed during validation. Retry the command.';
+        case 'neutral':
+          return 'This conversation is already neutral.';
+        case 'name':
+          return 'Cannot detach: supply the exact, unambiguous name of the project currently bound to this conversation.';
+      }
+  }
 }

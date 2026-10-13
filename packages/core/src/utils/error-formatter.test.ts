@@ -444,6 +444,7 @@ describe('formatProviderFailure', () => {
       'The AI provider is not set up correctly: Invalid API key. Fix its configuration',
     ],
     ['rate_limited', 'The AI provider is rate limiting requests.'],
+    ['overloaded', 'The AI provider is at capacity'],
     ['transient', 'The AI provider failed temporarily: Invalid API key. Try again.'],
     ['unknown', 'AI error: Invalid API key. Try /reset if issue persists.'],
   ] as const)('%s failures get their own advice', (failureClass, expected) => {

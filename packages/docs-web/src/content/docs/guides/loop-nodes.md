@@ -665,6 +665,14 @@ nodes:
           depends_on: [test]
 ```
 
+The legacy prose `until:` channel cannot detect a signal when the body's sole
+terminal node produces non-string structured output. The loader rejects that
+combination when `until:` is the only completion channel. Use `until_bash` to read
+the terminal node's structured field instead. A terminal node without
+`output_format`, or with a string schema, keeps loading. Declaring `until_bash`
+alongside `until:` also keeps loading, with the existing prose-channel deprecation
+warning.
+
 ### How it works
 
 - From the **outer DAG's** perspective, `fix-loop` is one node. The cycle is
@@ -776,9 +784,56 @@ applied to every iteration), `model` and `provider` set on a `loop_group` node
 **are honored**: they become the default for every body AI node, overridable per
 body node.
 
+### Named owner sessions
+
+A command or prompt in the body can continue a statically named pre-loop session:
+
+```yaml
+name: review-and-correct
+description: Keep one implementation owner while independent reviews repeat
+nodes:
+  - id: implement
+    prompt: Implement the requested change.
+  - id: corrections
+    depends_on: [implement]
+    loop_group:
+      max_iterations: 3
+      fresh_context: true
+      until_bash: 'test $review.output.done = true'
+      nodes:
+        - id: owner
+          context: { resume: implement }
+          prompt: Correct any remaining problems in the implementation.
+        - id: review
+          depends_on: [owner]
+          context: fresh
+          prompt: Review the change and report whether it is ready.
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+            required: [done]
+            additionalProperties: false
+```
+
+The owner's first executed turn immutably forks `implement`, preserving the source.
+Subsequent iterations continue that private branch with the same session ID. Reviewers
+start fresh and cannot replace the owner's cursor. Explicit named ownership also wins
+over `fresh_context` and parallel-layer resets. Multiple owners fork separate branches;
+a skipped owner keeps its cursor, or waits to fork until its first executed turn.
+
+The source must be a command, prompt, or plain `loop:` node in an enclosing scope with
+a dependency path proving it completes before the group starts. Same-body, unordered,
+non-session, and loop-group sources are rejected. Nested groups get separate owner
+cursors for each enclosing invocation. Nested approval pauses retain every enclosing
+owner cursor and resume within the paused enclosing iteration before advancing.
+The resolved provider must match the source and
+support session resume and immutable forks. Missing context or a replacement owner
+session ID fails the node rather than starting a new conversation.
+
 ### Resume
 
-Two distinct cases:
+Suspension and failure have different recovery rules:
 
 - **Interactive-gate resume** (`/workflow approve <id>`): the loop continues
   with the **next** iteration's whole body. With `fresh_context: false`, the
@@ -787,6 +842,11 @@ Two distinct cases:
   iteration resolve to the prior iteration's real body outputs, restored from
   the persisted run history — the same as an un-paused next iteration would
   have seen.
+- **Named owners after suspension**: interactive gates, terminal body approvals,
+  and terminal durable waits persist private owner cursors independently of the ambient
+  cursor. The next iteration continues each owner even with `fresh_context: true`.
+  Missing or invalid owner state fails restoration. A wait that suspends again retains
+  the same snapshot.
 - **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
   no persisted iteration cursor — the loop_group node restarts from
   **iteration 1**. Per-body-node resume granularity is not supported in v1.
@@ -798,8 +858,8 @@ Two distinct cases:
   declares `output_format` plus `until_bash` reading `$node.output.field` — see
   [`until_field`](#until_field).
 - `retry` (the loop manages its own iteration) — rejected at parse time.
-- `persist_session` for body AI nodes across iterations — body sessions reset
-  per iteration (governed by `fresh_context`).
+- Cross-run `persist_session` for body AI nodes. In-run iterations use the ambient
+  cursor governed by `fresh_context`, or explicit named owner cursors described above.
 - Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
 - `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
   iteration is reachable.

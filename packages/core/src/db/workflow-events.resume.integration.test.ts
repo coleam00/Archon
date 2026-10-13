@@ -1,3 +1,5 @@
+// @archon-test-isolated
+import { providerRegistry } from '@archon/providers';
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -5,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { z } from '@hono/zod-openapi';
 import * as paths from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { registerBuiltinProviders } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { WorkflowDeps, WorkflowConfig } from '@archon/workflows/deps';
 import { WORKFLOW_EVENT_TYPES, type IWorkflowStore } from '@archon/workflows/store';
 import { RUN_GRAPH_METADATA_KEY } from '@archon/workflows/schemas/terminal-record';
@@ -63,6 +65,7 @@ test('a second resume recomputes output invalidated before a rejected node start
     throw new Error(`Unexpected test query: ${sql}`);
   });
   const run: WorkflowRun = {
+    origin: { conversationId: 'test' },
     id: 'resume-invalidation',
     workflow_name: 'resume-invalidation',
     conversation_id: 'test',
@@ -102,6 +105,7 @@ test('a second resume recomputes output invalidated before a rejected node start
     defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
   };
   const deps: WorkflowDeps = {
+    providers: providerRegistry,
     store,
     loadConfig: async () => config,
     getAgentProvider: () => {

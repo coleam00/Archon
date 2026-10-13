@@ -42,6 +42,23 @@ const ADAPTER_REPO_PATH = 'packages/core/src/db/adapters/sqlite.ts';
 const FIXTURES_DIR = join(REPO_ROOT, 'packages/core/src/db/fixtures/sqlite-vintages');
 const CHECK_ONLY = process.argv.includes('--check');
 const SCHEMA_SIGNATURE = 'private createSchema(): void {';
+const RELEASE_TAG = /^v[\w.-]+$/;
+
+/**
+ * The release tags in `git tag` output (`v` followed by word characters, dots or
+ * dashes), in the given order; tags of any other shape are ignored. Throws when
+ * none is left: an empty tag set would make write mode delete every checked-in
+ * fixture while exiting 0, so no release history means this script cannot run.
+ */
+export function releaseTags(gitTagOutput: string): string[] {
+  const tags = gitTagOutput.split('\n').filter(tag => RELEASE_TAG.test(tag));
+  if (tags.length === 0) {
+    throw new Error(
+      'git tag listed no release tags — cannot regenerate vintage fixtures (shallow or broken checkout?)'
+    );
+  }
+  return tags;
+}
 
 /**
  * Deliberately `spawnSync` rather than `@archon/git`: this script must run in the
@@ -128,14 +145,7 @@ function vintages(): Map<string, string> {
   if (!tagResult.ok) {
     throw new Error(`git tag failed: ${tagResult.stderr.trim() || '(no stderr)'}`);
   }
-  const tags = tagResult.stdout.split('\n').filter(Boolean);
-  if (tags.length === 0) {
-    // An empty tag set would make write mode delete every checked-in fixture
-    // while exiting 0; no release history means this script cannot run.
-    throw new Error(
-      'git tag listed no tags — cannot regenerate vintage fixtures (shallow or broken checkout?)'
-    );
-  }
+  const tags = releaseTags(tagResult.stdout);
   const oldestTagPerSchema = new Map<string, string>();
   let withoutAdapter = 0;
 
@@ -173,12 +183,12 @@ function vintages(): Map<string, string> {
   return oldestTagPerSchema;
 }
 
-/** Fixture filename for a tag. Tags are `vX.Y.Z`, so the name is injection-safe. */
+/** Fixture filename for a tag. Tags come from `releaseTags`, so the name is injection-safe. */
 function fixtureName(tag: string): string {
-  if (!/^v[\w.-]+$/.test(tag)) throw new Error(`unexpected tag shape: ${tag}`);
   return `${tag}.sql`;
 }
 
+/** Regenerates the vintage fixtures, or with `--check` verifies they are current. */
 function main(): void {
   const expected = new Map<string, string>();
   for (const [sql, tag] of vintages()) expected.set(fixtureName(tag), sql);
