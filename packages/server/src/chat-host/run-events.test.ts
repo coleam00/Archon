@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { chatRunEventSchema, type ConnectedChat, type ChatRunEvent } from '@archon/chat-contract';
+import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { terminalWorkflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
 import { createWorkflowRun } from '@archon/core/db/workflows';
@@ -279,4 +280,17 @@ test('suspended and prior-success nodes retain the Slack rendering states', () =
       nodeName: 'Node',
     })
   ).toMatchObject({ type: 'node_state', state: 'completed' });
+});
+
+test('approval projections resolve choices through the workflow owner', () => {
+  for (const decisions of [undefined, [{ id: 'ship', label: 'Ship it' }, { id: 'hold' }]]) {
+    const projected = projectRunEvent({
+      type: 'approval_pending',
+      runId: 'run',
+      nodeId: 'gate',
+      message: 'Choose',
+      decisions,
+    });
+    expect(projected).toMatchObject({ decisions: getApprovalDecisions({ decisions }) });
+  }
 });

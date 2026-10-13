@@ -1,3 +1,4 @@
+import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import type { ChatRunEvent } from '@archon/chat-contract';
 import {
   getWorkflowEventEmitter,
@@ -68,7 +69,7 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
         runId,
         nodeId: event.nodeId,
         message: event.message,
-        decisions: event.decisions,
+        decisions: getApprovalDecisions(event),
         pauseId: event.pauseId,
       };
     case 'workflow_completed':

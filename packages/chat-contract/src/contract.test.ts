@@ -469,7 +469,16 @@ test('approval projections preserve the persisted authored outcome without engin
     runId: 'run',
     nodeId: 'gate',
     message: 'Choose',
+    decisions: [{ id: 'ship' }],
     authoredOutcome: 'succeeded',
   } satisfies ChatRunEvent;
   expect(chatRunEventSchema.parse(event)).toEqual(event);
+});
+
+test('approval wire events require resolved decisions', () => {
+  const event = { type: 'approval_pending', runId: 'run', nodeId: 'gate', message: 'Choose' };
+  expect(chatRunEventSchema.safeParse(event).success).toBe(false);
+  expect(chatRunEventSchema.safeParse({ ...event, decisions: [{ id: 'ship' }] }).success).toBe(
+    true
+  );
 });

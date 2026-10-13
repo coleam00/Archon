@@ -30,6 +30,7 @@ export interface RunSnapshot {
   authoredOutcome?: TerminalEvent['authoredOutcome'];
   totalCostUsd?: number;
   failureReason?: string;
+  approvalDeliveryFailed?: boolean;
 }
 
 const NODE_GLYPH: Record<NodeState, string> = {
@@ -118,13 +119,13 @@ export function buildApprovalBlocks(input: {
   runId: string;
   nodeId: string;
   message: string;
-  decisions?: ApprovalEvent['decisions'];
+  decisions: ApprovalEvent['decisions'];
   pauseId?: string;
 }): {
   blocks: KnownBlock[];
   fallbackText: string;
 } {
-  const decisions = input.decisions ?? [{ id: 'approve' }, { id: 'reject' }];
+  const decisions = input.decisions;
   const blocks: KnownBlock[] = [
     {
       type: 'section',
@@ -269,6 +270,16 @@ export function buildStatusBlocks(
   };
 
   const blocks: KnownBlock[] = [headerSection];
+  const approvalRecovery =
+    snapshot.status === 'paused' && snapshot.approvalDeliveryFailed
+      ? `Approval card could not be delivered. Run \`${snapshot.runId}\` is awaiting approval. Open the run in the Web UI to respond, or check \`/archon-workflow status ${snapshot.runId}\` for the gate and respond with \`/archon-workflow respond\`.`
+      : undefined;
+  if (approvalRecovery) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `:warning: ${approvalRecovery}` },
+    });
+  }
 
   if (snapshot.nodes.length > 0) {
     const lines = snapshot.nodes.map(n => {
@@ -327,7 +338,7 @@ export function buildStatusBlocks(
       snapshot.authoredOutcome
         ? ` · authored outcome: ${snapshot.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : snapshot.authoredOutcome}`
         : ''
-    }`,
+    }${approvalRecovery ? ` · ${approvalRecovery}` : ''}`,
   };
 }
 

@@ -24,7 +24,7 @@ export const chatRunEventSchema = z.discriminatedUnion('type', [
     runId: id,
     nodeId: id,
     message: z.string(),
-    decisions: z.array(chatApprovalDecisionSchema).optional(),
+    decisions: z.array(chatApprovalDecisionSchema),
     pauseId: id.optional(),
     authoredOutcome: authoredOutcome.optional(),
   }),

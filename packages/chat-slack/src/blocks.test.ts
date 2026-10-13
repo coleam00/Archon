@@ -147,6 +147,7 @@ describe('buildApprovalBlocks', () => {
       runId: 'a1b2c3d4-deadbeef',
       nodeId: 'review-step',
       message: 'Approve the migration?',
+      decisions: [{ id: 'approve' }, { id: 'reject' }],
     });
 
     expect(fallbackText).toContain('Approval needed for run a1b2c3d4');

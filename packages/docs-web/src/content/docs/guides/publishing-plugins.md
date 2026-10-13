@@ -121,8 +121,8 @@ archon plugin install coleam00/Archon/plugins/chat-slack
 Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in the server environment, then restart
 with `archon serve`. The plugin connects through Socket Mode; no webhook ingress is
 needed. Configure the Slack app with `/archon` and `/archon-workflow`, `app_mentions:read`,
-`chat:write`, `commands`, `im:history`, and `users:read`, plus the history scopes for the conversations
-you use. Subscribe to `app_mention` and `message.im`. The app token needs
+`chat:write`, `reactions:write`, `commands`, `im:history`, and `users:read`, plus the
+history scopes for the conversations you use. Subscribe to `app_mention` and `message.im`. The app token needs
 `connections:write`. Missing either token fails startup non-retryably.
 
 The host reads `SLACK_ALLOWED_USER_IDS` and `SLACK_STREAMING_MODE` from the descriptor.

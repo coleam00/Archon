@@ -589,7 +589,8 @@
             "type",
             "runId",
             "nodeId",
-            "message"
+            "message",
+            "decisions"
           ]
         },
         {

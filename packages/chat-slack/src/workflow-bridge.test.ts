@@ -281,6 +281,7 @@ test('paused approvals retain their authored outcome during a pending node edit'
     runId: 'run',
     nodeId: 'review',
     message: 'Choose',
+    decisions: [{ id: 'ship' }],
     authoredOutcome: 'succeeded',
   });
   await new Promise(resolve => setTimeout(resolve, 550));
@@ -371,4 +372,107 @@ test('a terminal event closes an approval whose Slack post was still pending on 
   const closed = slack.updates.find(update => update.ts === 'msg-2');
   expect(closed).toMatchObject({ text: expect.stringContaining('Approval closed') });
   expect(JSON.stringify(closed)).not.toContain('respond:0');
+});
+
+for (const status of ['completed', 'failed', 'cancelled', 'paused'] as const) {
+  test(`a delayed running edit completes before the ${status} edit`, async () => {
+    await started();
+    let release = (): void => {};
+    let began = (): void => {};
+    const barrier = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const updating = new Promise<void>(resolve => {
+      began = resolve;
+    });
+    const original = slack.client.chat.update;
+    spyOn(slack.client.chat, 'update').mockImplementationOnce(async args => {
+      began();
+      await barrier;
+      return original(args);
+    });
+    await plugin.onRunEvent({
+      type: 'node_state',
+      runId: 'run',
+      nodeId: 'work',
+      nodeName: 'Work',
+      state: 'running',
+    });
+    await updating;
+    const final =
+      status === 'paused'
+        ? approval()
+        : plugin.onRunEvent({
+            type: 'terminal',
+            runId: 'run',
+            status,
+            totalCostUsd: 0.25,
+            error: 'reason',
+          });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(slack.updates).toHaveLength(0);
+    } finally {
+      release();
+      await final;
+    }
+    const last = slack.updates.at(-1);
+    expect(last && 'text' in last ? last.text : undefined).toContain(status);
+    if (status !== 'paused') {
+      expect(JSON.stringify(slack.updates.at(-1))).not.toContain('cancel:run');
+      expect(JSON.stringify(slack.updates.at(-1))).toContain('0.2500');
+    }
+  });
+}
+
+test('stop drains a timer-triggered Slack edit before stopping the client', async () => {
+  await started();
+  let release = (): void => {};
+  let began = (): void => {};
+  const barrier = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const updating = new Promise<void>(resolve => {
+    began = resolve;
+  });
+  const original = slack.client.chat.update;
+  spyOn(slack.client.chat, 'update').mockImplementationOnce(async args => {
+    began();
+    await barrier;
+    return original(args);
+  });
+  await plugin.onRunEvent({
+    type: 'node_state',
+    runId: 'run',
+    nodeId: 'work',
+    nodeName: 'Work',
+    state: 'running',
+  });
+  await updating;
+  const stopping = plugin.stop();
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(slack.stopped).toBe(false);
+  } finally {
+    release();
+    await stopping;
+  }
+  expect(slack.updates).toHaveLength(1);
+  expect(slack.stopped).toBe(true);
+});
+
+test('failed approval delivery shows recovery instructions on the existing status', async () => {
+  await started();
+  slack.failPost = new Error('private SDK details');
+  await approval();
+  expect(slack.updates).toHaveLength(2);
+  expect(JSON.stringify(slack.updates[0])).toContain('Workflow paused');
+  const update = slack.updates.at(-1);
+  expect(update?.ts).toBe('msg-1');
+  const text = update && 'text' in update ? update.text : undefined;
+  expect(text).toContain('Approval card could not be delivered');
+  expect(text).toContain('/archon-workflow status run');
+  expect(text).toContain('Web UI');
+  expect(JSON.stringify(update)).toContain('Approval card could not be delivered');
+  expect(JSON.stringify(update)).not.toContain('private SDK details');
 });

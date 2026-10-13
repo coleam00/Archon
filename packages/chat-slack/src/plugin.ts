@@ -12,7 +12,6 @@ import { SlackWorkflowBridge } from './workflow-bridge';
 export class SlackPlugin implements ChatPlugin {
   readonly descriptor = descriptor;
   private bridge?: SlackWorkflowBridge;
-  private events = Promise.resolve();
 
   constructor(private readonly adapter = new SlackAdapter()) {}
 
@@ -31,15 +30,11 @@ export class SlackPlugin implements ChatPlugin {
   }
 
   onRunEvent(event: ChatRunEvent): Promise<void> {
-    // Notifications are dispatched concurrently by the peer; Slack edits need emission order.
-    const rendering = this.events.then(() => this.bridge?.handleEvent(event));
-    this.events = rendering.catch(() => undefined);
-    return rendering;
+    return this.bridge?.handleEvent(event) ?? Promise.resolve();
   }
 
   async stop(): Promise<void> {
-    await this.events;
-    this.bridge?.detach();
+    await this.bridge?.detach();
     await this.adapter.stop();
   }
 }

@@ -32,6 +32,7 @@ interface RunState {
   statusMessageTs?: string;
   startedAt: number;
   status: 'running' | 'paused';
+  approvalDeliveryFailed?: boolean;
   authoredOutcome?: RunSnapshot['authoredOutcome'];
   nodes: Map<string, NodeSnapshot>;
   pendingEdit?: ReturnType<typeof setTimeout>;
@@ -44,6 +45,8 @@ const RESUME_NOT_ACCEPTED_NOTE =
 
 export class SlackWorkflowBridge {
   private readonly runs = new Map<string, RunState>();
+  private rendering = Promise.resolve();
+  private stopping = false;
   constructor(
     private readonly adapter: SlackAdapter,
     private readonly ctx: ChatContext
@@ -53,12 +56,24 @@ export class SlackWorkflowBridge {
     this.registerActionHandlers();
   }
 
-  detach(): void {
+  async detach(): Promise<void> {
+    this.stopping = true;
     for (const state of this.runs.values()) clearTimeout(state.pendingEdit);
+    await this.rendering;
     this.runs.clear();
   }
 
-  async handleEvent(event: ChatRunEvent): Promise<void> {
+  private enqueue(render: () => Promise<void>): Promise<void> {
+    const rendering = this.rendering.then(render);
+    this.rendering = rendering.catch(() => undefined);
+    return rendering;
+  }
+
+  handleEvent(event: ChatRunEvent): Promise<void> {
+    return this.enqueue(() => this.renderEvent(event));
+  }
+
+  private async renderEvent(event: ChatRunEvent): Promise<void> {
     switch (event.type) {
       case 'workflow_started': {
         const [channel, threadTs] = splitConversationId(event.conversationId);
@@ -89,7 +104,10 @@ export class SlackWorkflowBridge {
       case 'node_state':
         if (event.state === 'running') {
           const state = this.runs.get(event.runId);
-          if (state) state.status = 'running';
+          if (state) {
+            state.status = 'running';
+            state.approvalDeliveryFailed = false;
+          }
         }
         this.upsertNode(event.runId, event.nodeId, event.nodeName, event.state, event);
         this.scheduleStatusUpdate(event.runId);
@@ -164,6 +182,8 @@ export class SlackWorkflowBridge {
       approval.ts = result.ts;
     } catch (err) {
       logFailure('slack.bridge_approval_post_failed', err);
+      state.approvalDeliveryFailed = true;
+      await this.updateStatusMessage(state);
     }
     if (!approval.ts && state.approvals.get(event.nodeId) === approval)
       state.approvals.delete(event.nodeId);
@@ -219,10 +239,15 @@ export class SlackWorkflowBridge {
   private scheduleStatusUpdate(runId: string): void {
     const state = this.runs.get(runId);
     if (!state) return;
-    if (state.pendingEdit) return;
+    if (this.stopping || state.pendingEdit) return;
     state.pendingEdit = setTimeout(() => {
       state.pendingEdit = undefined;
-      void this.updateStatusMessage(state);
+      // Timer writes share event ordering so an in-flight edit cannot overwrite a newer state.
+      void this.enqueue(async () => {
+        if (this.runs.get(runId) === state) await this.updateStatusMessage(state);
+      }).catch(err => {
+        logFailure('slack.bridge_status_update_failed', err);
+      });
     }, STATUS_UPDATE_DEBOUNCE_MS);
   }
 
@@ -254,6 +279,7 @@ export class SlackWorkflowBridge {
       startedAt: state.startedAt,
       status: state.status,
       authoredOutcome: state.authoredOutcome,
+      approvalDeliveryFailed: state.approvalDeliveryFailed,
       nodes: [...state.nodes.values()],
     };
   }
