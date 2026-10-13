@@ -13,6 +13,7 @@ import {
 } from '@archon/core/workflows/resource-start-host';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
+import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine } from '../utils/stdout';
 import {
@@ -112,6 +113,7 @@ export async function triggerCommand(
     if (!cliId)
       throw new Error('Could not determine your CLI identity. Set ARCHON_USER_ID or $USER.');
     const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+    if (!user) throw new FileStoreUnsupportedError('trigger identities');
     await writeJsonLine({ runAsUserId: user.id, cliIdentity: cliId });
     return;
   }
