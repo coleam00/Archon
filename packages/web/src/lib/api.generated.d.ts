@@ -1612,6 +1612,51 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/runs/attention': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List every run needing a human response or action */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['RunsNeedingAttentionResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/dashboard/runs': {
     parameters: {
       query?: never;
@@ -3811,6 +3856,80 @@ export interface components {
           kind: 'upstream_skipped';
           origin: string;
         };
+    RunAttention:
+      | {
+          /** @enum {string} */
+          kind: 'stalled_tool_calls';
+          runId: string;
+          /** @enum {string} */
+          status: 'running';
+          calls: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
+        }
+      | {
+          /** @enum {string} */
+          kind: 'awaiting_response';
+          runId: string;
+          respondTo: {
+            runId: string;
+            nodeId: string;
+          };
+          message: string;
+          occurrence: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'action_required';
+          runId: string;
+          nodeId: string;
+          message: string;
+          occurrence: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'blocked_on_child';
+          runId: string;
+          childRunId: string;
+          nodeId: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'unreadable';
+          runId: string;
+          /** @enum {string} */
+          reason:
+            | 'malformed_tool_call_attention'
+            | 'malformed_gate'
+            | 'unrecognized_gate_type'
+            | 'child_pointer_missing'
+            | 'child_run_missing'
+            | 'child_chain_too_deep';
+          detail: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'terminal';
+          runId: string;
+          /** @enum {string} */
+          status: 'completed' | 'failed' | 'cancelled';
+          /** Format: date-time */
+          at: string | null;
+        };
     AuthStatusResponse: {
       enabled: boolean;
       /** @enum {string} */
@@ -4476,18 +4595,8 @@ export interface components {
       /** @enum {string} */
       errorType: 'read_error' | 'parse_error' | 'validation_error';
     };
-    DashboardRunsResponse: {
+    RunsNeedingAttentionResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
-      total: number;
-      counts: {
-        all: number;
-        running: number;
-        completed: number;
-        failed: number;
-        cancelled: number;
-        pending: number;
-        paused: number;
-      };
     };
     DashboardWorkflowRun: {
       origin: {
@@ -4575,6 +4684,7 @@ export interface components {
       agents_completed: number | null;
       agents_failed: number | null;
       agents_total: number | null;
+      attention: components['schemas']['RunAttention'] | (never | null);
     };
     WorkflowRunMetadata: {
       tool_call_attention?: {
@@ -5161,6 +5271,19 @@ export interface components {
       /** @enum {string} */
       signal?: 'SIGINT' | 'SIGTERM';
     };
+    DashboardRunsResponse: {
+      runs: components['schemas']['DashboardWorkflowRun'][];
+      total: number;
+      counts: {
+        all: number;
+        running: number;
+        completed: number;
+        failed: number;
+        cancelled: number;
+        pending: number;
+        paused: number;
+      };
+    };
     CancelWorkflowRunResponse: {
       success: boolean;
       message: string;
@@ -5266,6 +5389,7 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
+      attention: components['schemas']['RunAttention'] | (never | null);
     };
     /** @enum {string|null} */
     WorkflowRunOutcome: 'succeeded' | 'failed' | null;

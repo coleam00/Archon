@@ -44,6 +44,12 @@ export async function listRuns(
   };
 }
 
+export async function listRunsNeedingAttention(): Promise<Run[]> {
+  const res =
+    await requestJson<components['schemas']['RunsNeedingAttentionResponse']>('/api/runs/attention');
+  return res.runs.map(toRun);
+}
+
 export async function listGlobalCounts(): Promise<RunCounts> {
   // Counts without any codebase filter — used by top chrome pill.
   const res = await requestJson<DashboardRunsResponse>('/api/dashboard/runs?limit=1');
