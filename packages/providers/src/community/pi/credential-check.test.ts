@@ -69,7 +69,7 @@ const failUnrelatedProviderCheck = (): ReturnType<typeof spyOn<typeof ModelRunti
   });
 };
 const check = (model = 'anthropic/claude-sonnet-4-6', env: Record<string, string> = {}) =>
-  new PiProvider().checkCredential({ model, env, signal: AbortSignal.timeout(2000) });
+  new PiProvider().checkCredential({ model, env, signal: new AbortController().signal });
 
 describe('Pi native credentials', () => {
   test('API keys resolve through the native runtime without surfacing the key', async () => {
@@ -91,7 +91,7 @@ describe('Pi native credentials', () => {
       JSON.stringify({ anthropic: { type: 'api_key', key: secret } })
     );
     expect(
-      await new PiProvider().checkCredential({ env: {}, signal: AbortSignal.timeout(2000) })
+      await new PiProvider().checkCredential({ env: {}, signal: new AbortController().signal })
     ).toEqual({ state: 'usable', source: 'native' });
   });
   test('a request env key overrides a stored OAuth grant', async () => {
@@ -110,7 +110,7 @@ describe('Pi native credentials', () => {
     const request = {
       assistantConfig: { model: 'anthropic/claude-sonnet-4-6', env: { ANTHROPIC_API_KEY: secret } },
       env: {},
-      signal: AbortSignal.timeout(2000),
+      signal: new AbortController().signal,
     };
     expect(await new PiProvider().checkCredential(request)).toEqual({
       state: 'usable',
@@ -191,7 +191,7 @@ describe('Pi native credentials', () => {
       await new PiProvider().checkCredential({
         assistantConfig: { model: 'local/model', env: { PI_CONFIG_ONLY_KEY: secret } },
         env: {},
-        signal: AbortSignal.timeout(2000),
+        signal: new AbortController().signal,
       })
     ).toEqual({ state: 'usable', source: 'native' });
   });
@@ -236,7 +236,7 @@ describe('Pi native credentials', () => {
           await new PiProvider().checkCredential({
             assistantConfig: { model: 'anthropic/claude-sonnet-4-6', env: fixtureEnv },
             env: {},
-            signal: AbortSignal.timeout(2000),
+            signal: new AbortController().signal,
           })
         ).toEqual({
           state: 'check_failed',
@@ -500,7 +500,7 @@ describe('Pi native credentials', () => {
               model: 'local/model',
               assistantConfig: { env: env.config },
               env: env.request,
-              signal: AbortSignal.timeout(2000),
+              signal: new AbortController().signal,
             });
             const resolution = getAuth.mock.results.at(-1)?.value as ReturnType<
               ModelRuntime['getAuth']

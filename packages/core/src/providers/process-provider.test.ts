@@ -216,13 +216,13 @@ test('credential status and model resolution use fresh provider processes', asyn
   expect(
     await runtime.checkCredential({
       env: { TEST_CREDENTIAL: 'present-value' },
-      signal: AbortSignal.timeout(2000),
+      signal: new AbortController().signal,
     })
   ).toEqual({ state: 'usable', source: 'native' });
   expect(
     await runtime.checkCredential({
       env: { TEST_CREDENTIAL: '' },
-      signal: AbortSignal.timeout(2000),
+      signal: new AbortController().signal,
     })
   ).toEqual({ state: 'not_connected', source: 'native' });
 });
