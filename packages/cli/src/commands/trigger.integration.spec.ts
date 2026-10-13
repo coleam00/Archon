@@ -14,6 +14,11 @@ import type { JsonValue } from '@archon/workflows/output-ref';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { timerTriggerConfigSchema } from './trigger';
+import { standardWebhooksSourceConfigSchema } from '@archon/adapters/sources/standard-webhooks/source-plugin';
+import {
+  isTerminalRunStatus,
+  type WorkflowRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
 const tempRoots: string[] = [];
@@ -90,7 +95,7 @@ interface RequestRow {
 
 interface RunRow {
   id: string;
-  status: string;
+  status: WorkflowRunStatus;
   metadata: string;
   output_root: string | null;
 }
@@ -170,6 +175,23 @@ describe('trigger CLI durable execution', () => {
       const config = timerTriggerConfigSchema.parse(JSON.parse(configJson));
       config.binding.runAsUserId = identity.runAsUserId;
       config.binding.launch.cwd = projectRoot;
+      // The server recipe defers to the guide's Standard Webhooks source; only
+      // installation-local values are replaced.
+      const webhookJson = guide
+        .split('## Start workflows from any signed webhook')[1]
+        ?.split('### Sign a delivery')[0]
+        ?.match(/```json\n([\s\S]*?)```/)?.[1];
+      if (!webhookJson) throw new Error('Webhook source config missing');
+      const webhookSource = (
+        JSON.parse(webhookJson) as {
+          sources: [{ sourceInstanceId: string; config: unknown }];
+        }
+      ).sources[0];
+      const webhookConfig = standardWebhooksSourceConfigSchema.parse(webhookSource.config);
+      for (const binding of webhookConfig.bindings) {
+        binding.runAsUserId = identity.runAsUserId;
+        binding.launch.cwd = projectRoot;
+      }
       const configPath = join(root, 'trigger.json');
       writeFileSync(configPath, JSON.stringify(config));
       const shellQuote = (value: string): string => "'" + value.replaceAll("'", "'\\''") + "'";
@@ -202,11 +224,7 @@ describe('trigger CLI durable execution', () => {
         import createSource from ${JSON.stringify(join(packagesRoot, 'adapters/src/sources/standard-webhooks/source-plugin.ts'))};
         import { SourceReceiptDigestConflictError } from ${JSON.stringify(join(packagesRoot, 'workflows/src/resource-start-store.ts'))};
         const host = createSqlWorkflowHost();
-        const { bindingRevision, ...binding } = ${JSON.stringify(config.binding)};
-        const source = await createSource({ sourceInstanceId: 'recipe-server', config: {
-          version: 1, signingSecretEnv: 'ORDER_SIGNING_SECRET',
-          bindings: [{ ...binding, inputMapping: { order_id: '/order/id' } }]
-        }});
+        const source = await createSource({ sourceInstanceId: ${JSON.stringify(webhookSource.sourceInstanceId)}, config: ${JSON.stringify(webhookConfig)} });
         const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
           if (new URL(request.url).pathname === '/items') return Response.json(${JSON.stringify(items)});
           const result = await source.receive({ body: await request.text(), headers: Object.fromEntries(request.headers), receivedAt: new Date().toISOString() });
@@ -229,7 +247,8 @@ describe('trigger CLI durable execution', () => {
         GITHUB_TOKEN: '',
         GH_TOKEN: '',
         GITHUB_APP_ID: '',
-        ORDER_SIGNING_SECRET: 'whsec_' + Buffer.from('recipe-test-key').toString('base64'),
+        [webhookConfig.signingSecretEnv]:
+          'whsec_' + Buffer.from('recipe-test-key').toString('base64'),
       };
       const server = Bun.spawn([process.execPath, fixturePath], {
         cwd: projectRoot,
@@ -300,20 +319,22 @@ describe('trigger CLI durable execution', () => {
         expect(first).toHaveLength(items.length);
         expect(replay).toEqual(first.map(result => ({ ...result, replay: true })));
         expect(first.every(result => result.replay === false)).toBe(true);
-        for (const source of ['polled-orders', 'recipe-server']) {
-          const keys = readRows<{ delivery_id: string }>(
+        for (const source of [config.sourceInstanceId, webhookSource.sourceInstanceId]) {
+          const receipts = readRows<{ delivery_id: string; outcome: string }>(
             databasePath,
-            `SELECT delivery_id FROM remote_agent_start_receipts WHERE source_instance_id='${source}'`
-          ).map(row => row.delivery_id);
-          expect(keys).toHaveLength(items.length);
+            `SELECT delivery_id,outcome FROM remote_agent_start_receipts WHERE source_instance_id='${source}'`
+          );
+          // A guide mapping that no longer resolves against the recipe body records unmatched receipts.
+          expect(receipts.map(row => row.outcome)).toEqual(items.map(() => 'matched'));
+          const keys = receipts.map(row => row.delivery_id);
           expect(new Set(keys).size).toBe(items.length);
         }
       } finally {
         for (const run of readRows<RunRow>(
           join(archonHome, 'archon.db'),
-          "SELECT id,status FROM remote_agent_workflow_runs WHERE status NOT IN ('completed','failed','cancelled')"
+          'SELECT id,status FROM remote_agent_workflow_runs'
         ))
-          activeRuns.add(run.id);
+          if (!isTerminalRunStatus(run.status)) activeRuns.add(run.id);
         server.kill();
         await server.exited;
         const stderr = await serverOutput;
