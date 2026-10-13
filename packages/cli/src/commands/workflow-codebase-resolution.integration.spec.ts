@@ -95,10 +95,36 @@ test('nested repo registers independently and its worktree retains the child own
     const parentRow = codebases.get();
     if (!parentRow) throw new Error('Parent repository was not registered');
     expect(parentRow.default_cwd).toBe(await canonicalizeProjectPath(parent));
-    const invocation = await run(join(child, 'subdir'), {
-      branchName: 'child-probe',
-      fromBranch: 'main',
-    });
+    const invocation = crypto.randomUUID();
+    const launched = spawnSync(
+      process.execPath,
+      [
+        join(import.meta.dir, '..', 'cli.ts'),
+        'workflow',
+        'run',
+        'probe',
+        invocation,
+        '--conversation-id',
+        invocation,
+        '--branch',
+        'child-probe',
+        '--from',
+        'main',
+      ],
+      {
+        cwd: join(child, 'subdir'),
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      }
+    );
+    if (launched.error) throw launched.error;
+    expect(launched.status, launched.stdout + launched.stderr).toBe(0);
     const childPath = await canonicalizeProjectPath(child);
     const childRow = codebases.all().find(row => row.default_cwd === childPath);
     expect(childRow).toBeDefined();

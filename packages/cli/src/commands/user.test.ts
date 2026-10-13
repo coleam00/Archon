@@ -96,7 +96,7 @@ test('link creates and moves identities without changing roles or deleting the p
   expect(conflict.stderr).toContain('unlinked');
   expect(conflict.stderr).toContain('Pass --move');
   expect((await list()).stdout).toContain('slack:U123');
-  expect((await link('unlinked', 'slack:U123', true)).code).toBe(0);
+  expect((await runCli('link', 'unlinked', 'slack:U123', '--move')).code).toBe(0);
   const users = (await list()).stdout;
   expect(users).toContain('unlinked\tmember\t-\tmatrix-chat:user:123, slack:U123');
   expect(users).toContain('operator-user\tadmin\tAlice\tweb:web-login');

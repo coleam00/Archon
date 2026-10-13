@@ -207,7 +207,7 @@ describe('migrate-state-dir', () => {
     withSandbox(async ctx => {
       await seedLegacy(ctx, { 'triage-state.json': '{"a":1}', 'pr-state.json': '{"b":2}' });
 
-      const result = await runMigration(ctx, '--apply');
+      const result = await runRaw(ctx, '--cwd', ctx.repo, '--apply');
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Migrated 2 entries');
