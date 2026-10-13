@@ -128,7 +128,7 @@ nodes:
 }
 
 describe('trigger CLI durable execution', () => {
-  test('cold-drains typed queued work from its frozen source after every launcher exits', async () => {
+  test('keyed replay without inputs drains the frozen host and queued source after binding edits', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-integration-')));
     tempRoots.push(root);
     const archonHome = join(root, 'home');
@@ -200,7 +200,9 @@ describe('trigger CLI durable execution', () => {
     }, 'first trigger run to claim execution');
     activeRuns.add(firstRun.id);
 
-    await runCli(cliPath, projectRoot, archonHome, ['trigger', 'fire', '--config', configPath]);
+    const keyedFire = ['trigger', 'fire', '--config', configPath, '--delivery-id', 'queued-item'];
+    const accepted = await runCli(cliPath, projectRoot, archonHome, keyedFire);
+    const originalReceipt = JSON.parse(accepted.stdout) as { id: string };
     const queued = await waitFor(() => {
       const rows = readRows<RequestRow>(
         databasePath,
@@ -222,6 +224,9 @@ describe('trigger CLI durable execution', () => {
       runConfigPath,
       JSON.stringify({ env: { TRIGGER_CONFIG_PROOF: 'edited-config' } })
     );
+    config.binding.hostId = 'edited-host';
+    config.binding.launch.inputs.count = 999;
+    writeFileSync(configPath, JSON.stringify(config));
     writeFileSync(release, '');
     await waitFor(() => {
       const row = readRows<RunRow>(
@@ -232,12 +237,24 @@ describe('trigger CLI durable execution', () => {
     }, 'first trigger run to complete');
     activeRuns.delete(firstRun.id);
 
-    await runCli(cliPath, projectRoot, archonHome, [
-      'trigger',
-      'drain',
-      '--host',
-      'integration-host',
-    ]);
+    const replay = await runCli(cliPath, projectRoot, archonHome, keyedFire);
+    expect(JSON.parse(replay.stdout)).toMatchObject({
+      id: originalReceipt.id,
+      deliveryId: 'queued-item',
+      bindings: [
+        expect.objectContaining({
+          hostId: 'integration-host',
+          requestStatus: 'admitted',
+          intent: expect.objectContaining({
+            launch: expect.objectContaining({ inputs: { count: 7 } }),
+          }),
+        }),
+      ],
+    });
+    expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(2);
+    expect(
+      readRows(databasePath, 'SELECT id FROM remote_agent_resource_start_requests')
+    ).toHaveLength(2);
     const runs = await waitFor(() => {
       const rows = readRows<RunRow>(
         databasePath,
@@ -271,6 +288,7 @@ describe('trigger CLI durable execution', () => {
       ).map(row => row.status)
     ).toEqual(['admitted', 'admitted']);
 
+    config.binding.hostId = 'integration-host';
     const forgeConfigPath = join(root, 'forge.json');
     const { bindingRevision, ...bindingWithoutRevision } = config.binding;
     void bindingRevision;

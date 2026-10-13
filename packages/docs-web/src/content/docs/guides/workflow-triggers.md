@@ -323,7 +323,7 @@ Operator configuration owns the workflow, cwd, isolation, execution host, resour
 
 ## Poll a system that cannot send webhooks
 
-The host scheduler (cron, a systemd timer, launchd, or Task Scheduler) runs an operator-owned poll script. The script lists recent items and reports each with a stable delivery key made from its ID and version, such as `order-123@2026-10-12T08:00:00Z`. Archon deduplicates within the configured source instance and admits the work. It keeps no poll cursor, runs no resident poller, and promises no catch-up. Choose the API's lookback window to cover scheduler downtime; items outside that window are the script's responsibility.
+The host scheduler (cron, a systemd timer, launchd, or Task Scheduler) runs an operator-owned poll script. The script lists recent items and reports each with a stable delivery key made from its ID and version, encoded as a base64 JSON pair `[id, version]` in these recipes. Archon deduplicates within the configured source instance and admits the work. It keeps no poll cursor, runs no resident poller, and promises no catch-up. Choose the API's lookback window to cover scheduler downtime; items outside that window are the script's responsibility.
 
 These POSIX shell recipes require `curl` and `jq`. The example API at `$ORDERS_URL` returns a JSON array of objects with string `id` and `version` fields. Each version must identify immutable content. Report a new version when an item changes, and keep the same key and input content across retries.
 
@@ -378,7 +378,7 @@ trap 'rm -rf "$poll_dir"' EXIT HUP INT TERM
 curl --fail --silent --show-error "$ORDERS_URL" > "$poll_dir/response.json"
 jq -c '.[]' "$poll_dir/response.json" > "$poll_dir/items.jsonl"
 while IFS= read -r item; do
-  delivery_id=$(printf '%s' "$item" | jq -er '.id + "@" + .version')
+  delivery_id=$(printf '%s' "$item" | jq -er '[.id, .version] | @base64')
   printf '%s' "$item" | jq -cS '{order_id: .id}' > "$poll_dir/inputs.json"
   /opt/archon/bin/archon trigger fire --config /srv/archon/polled-orders.json \
     --delivery-id "$delivery_id" --inputs "$poll_dir/inputs.json"
@@ -390,7 +390,7 @@ The final drain also advances queued work on ticks with no items. On CLI-only ho
 
 `--inputs` reads a JSON object, including from `/dev/stdin` on Unix, and treats its values as event inputs. Each name must be declared by the workflow. Event inputs override `launch.inputs` literals; literals still pass through to workflows without `inputs:`. The local operator's access to the Archon installation is the trust boundary, so `fire` needs no signature.
 
-An identical key and inputs reuse the original receipt and still drain the host. Editing the binding does not start that delivery again. The digest covers `JSON.stringify` of the parsed event inputs, or `{}` when omitted, excluding binding literals. Whitespace differences in the JSON file do not matter; object key order does, so produce stable JSON (the recipe uses `jq -S`). Reusing a key with different inputs exits non-zero with a delivery conflict. Without `--delivery-id`, every fire records a new receipt, including when `--inputs` is supplied.
+An identical key and inputs reuse the original receipt and still drain the retained receipt's host. Editing the binding does not start that delivery again. The digest covers `JSON.stringify` of the parsed event inputs, or `{}` when omitted, excluding binding literals. Whitespace differences in the JSON file do not matter; object key order does, so produce stable JSON (the recipe uses `jq -S`). Reusing a key with different inputs exits non-zero with a delivery conflict. Without `--delivery-id`, every fire records a new receipt, including when `--inputs` is supplied.
 
 ### Server host
 
@@ -404,7 +404,7 @@ trap 'rm -rf "$poll_dir"' EXIT HUP INT TERM
 curl --fail --silent --show-error "$ORDERS_URL" > "$poll_dir/response.json"
 jq -c '.[]' "$poll_dir/response.json" > "$poll_dir/items.jsonl"
 while IFS= read -r item; do
-  delivery_id=$(printf '%s' "$item" | jq -er '.id + "@" + .version')
+  delivery_id=$(printf '%s' "$item" | jq -er '[.id, .version] | @base64')
   body=$(printf '%s' "$item" | jq -cS '{order: {id: .id}}')
   timestamp=$(date +%s)
   key_hex=$(printf '%s' "${ORDER_SIGNING_SECRET#whsec_}" | openssl base64 -d -A | od -An -v -tx1 | tr -d ' \n')

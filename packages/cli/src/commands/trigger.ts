@@ -184,7 +184,14 @@ export async function triggerCommand(
         throw error;
       });
     try {
-      await drainHost(host, binding.hostId, dispatch);
+      const retained = await host.deps.store.getStartReceipt(receipt.receiptId);
+      if (!retained || retained.bindings.length === 0)
+        throw new Error('The retained receipt has no binding host.');
+      const hostIds = retained.bindings.map(binding => {
+        if (!binding.hostId) throw new Error('The retained binding has no execution host.');
+        return binding.hostId;
+      });
+      for (const hostId of new Set(hostIds)) await drainHost(host, hostId, dispatch);
     } catch (error) {
       throw new Error(
         `Receipt ${receipt.receiptId} is retained, but its host drain failed. Inspect that receipt before recovery.`,
