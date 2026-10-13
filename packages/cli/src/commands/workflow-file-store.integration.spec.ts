@@ -126,6 +126,9 @@ test('pause, approve in another process, and resume without any SQL connection',
   expect(JSON.parse(get.output)).toMatchObject({ id, status: 'completed' });
   const final = await cli(f, ['workflow', 'runs', '--json']);
   expect(JSON.parse(final.output).runs).toMatchObject([{ id, status: 'completed' }]);
+  // Cleanup also prunes state revisions; the file store holds none, so it must not fail.
+  const cleanup = await cli(f, ['workflow', 'cleanup']);
+  expect(cleanup, cleanup.output + cleanup.error).toMatchObject({ code: 0 });
   expect(readFileSync(join(f.project, 'before-count'), 'utf8')).toBe('executed\n');
   expect(readFileSync(join(f.project, 'result.txt'), 'utf8')).toBe('finished\n');
   const log = readFileSync(join(f.home, 'store/runs', id, 'log.jsonl'), 'utf8')
@@ -171,6 +174,7 @@ test('trigger admission and SQL-only commands fail explicitly under files', asyn
   for (const args of [
     ['trigger', 'list'],
     ['ai', 'show'],
+    ['state', 'get', 'notes'],
   ]) {
     const result = await cli(f, args);
     expect(result.code).toBe(1);

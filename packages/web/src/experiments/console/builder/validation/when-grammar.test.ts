@@ -51,6 +51,14 @@ describe('when-grammar parse', () => {
     }
   });
 
+  test('rejects a numeric operator against a non-numeric literal', () => {
+    for (const expr of ["$n.output > 'high'", "$n.output > ''", '$n.output <= true']) {
+      expect(parse(expr).ok).toBe(false);
+    }
+    expect(parse("$n.output > '80'").ok).toBe(true);
+    expect(parse('$n.output > 80').ok).toBe(true);
+  });
+
   test('parses && (inner) and || (outer) into DNF', () => {
     const r = parse("$a.output == 'X' && $b.output == 'Y' || $c.output == 'Z'");
     expect(r.ok).toBe(true);

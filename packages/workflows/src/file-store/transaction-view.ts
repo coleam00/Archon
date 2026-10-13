@@ -33,6 +33,7 @@ import type { DashboardWorkflowRun } from '../schemas/workflow-run-listing';
 export type TransactionView = Omit<
   IWorkflowStore,
   | keyof import('../resource-start-store').IResourceStartStore
+  | keyof import('../state-document-store').IStateDocumentStore
   | 'listWorkflowNodeSessions'
   | 'listWorkflowRunNodeSessions'
   | 'upsertWorkflowRunNodeSession'

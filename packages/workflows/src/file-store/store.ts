@@ -33,6 +33,9 @@ const log = createLogger('file-store');
 const unsupportedTriggerAdmission = async (): Promise<never> => {
   throw new FileStoreUnsupportedError('trigger admission');
 };
+const unsupportedStateDocuments = async (): Promise<never> => {
+  throw new FileStoreUnsupportedError('state documents');
+};
 export interface FileWorkflowStoreOptions {
   root: string;
   getCodebase?: IWorkflowStore['getCodebase'];
@@ -388,6 +391,13 @@ export async function createFileWorkflowStore(
     completeStartBindingPreparation: unsupportedTriggerAdmission,
     failStartBindingPreparation: unsupportedTriggerAdmission,
     resetStartBindingPreparation: unsupportedTriggerAdmission,
+    getStateDocument: unsupportedStateDocuments,
+    putStateDocument: unsupportedStateDocuments,
+    patchStateDocument: unsupportedStateDocuments,
+    deleteStateDocument: unsupportedStateDocuments,
+    listStateRevisions: unsupportedStateDocuments,
+    // The file store can never hold a state revision, so `workflow cleanup` has none to prune.
+    pruneStateRevisions: async () => ({ count: 0 }),
   };
   return store;
 }

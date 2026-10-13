@@ -27,6 +27,7 @@
 import pino from 'pino';
 import type { DestinationStream, Logger } from 'pino';
 import pretty from 'pino-pretty';
+import { serializeLoggedError } from './log-error-serializer';
 
 export type { Logger } from 'pino';
 
@@ -111,7 +112,7 @@ function buildStream(target: LogDestination): DestinationStream {
  */
 function buildLogger(): Logger {
   return pino(
-    { level: getInitialLevel() },
+    { level: getInitialLevel(), serializers: { err: serializeLoggedError } },
     {
       write(line: string): void {
         if (logSink) {

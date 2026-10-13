@@ -40,6 +40,11 @@ const DEPENDENCY_INSTALL = 'bun install';
  */
 const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
   {
+    command: 'bun test packages/core/src/db/state-documents.postgres.integration.test.ts',
+    reason:
+      'Exercises state-document CAS in scratch PostgreSQL databases with database creation permission.',
+  },
+  {
     command: 'bun run --cwd packages/workflows test src/file-store',
     reason:
       'Its compiled-binary probe runs only under GitHub Actions, because local compilation can stall macOS syspolicyd; the remaining file-store tests also run under validate.',

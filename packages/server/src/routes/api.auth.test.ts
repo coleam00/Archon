@@ -18,7 +18,7 @@ import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workf
 // the X-Archon-User header, threaded into the DB query as a userId filter).
 // ---------------------------------------------------------------------------
 
-const noopLogger = () => ({
+const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
   warn: mock(() => undefined),
@@ -31,7 +31,7 @@ const noopLogger = () => ({
   bindings: mock(() => ({ module: 'test' })),
   isLevelEnabled: mock(() => true),
   level: 'info',
-});
+};
 
 // --- Controllable web-auth module (../auth) ---
 let authEnabled = false;
@@ -91,12 +91,12 @@ mock.module('@archon/core', () => ({
   resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   isPerUserGitHubEnabled: () => false,
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
-  createLogger: noopLogger,
+  createLogger: () => mockLogger,
 }));
 
 mock.module('@archon/paths', () => ({
   canonicalizeProjectPath: async (path: string) => path,
-  createLogger: noopLogger,
+  createLogger: () => mockLogger,
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
   getBundledWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows'),
@@ -480,6 +480,8 @@ describe('per-request auth helpers', () => {
   const originalHeader = process.env.ARCHON_WEB_AUTH_HEADER;
 
   beforeEach(() => {
+    mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
     authEnabled = false;
     authInstance = null;
     delete process.env.ARCHON_WEB_AUTH_HEADER;
@@ -574,10 +576,11 @@ describe('per-request auth helpers', () => {
   });
 
   test('session outage permits soft proxy attribution but strict identity returns 503', async () => {
+    const sessionOutage = new Error('session store unavailable');
     authInstance = {
       api: {
         getSession: async () => {
-          throw new Error('session unavailable');
+          throw sessionOutage;
         },
       },
     };
@@ -587,6 +590,14 @@ describe('per-request auth helpers', () => {
     mockFindOrCreateUser.mockClear();
     const result = await requireWebUser(c);
     if (!('error' in result)) throw new Error('Expected backend refusal');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { err: sessionOutage, path: c.req.path },
+      'web.session_resolve_failed'
+    );
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      { err: sessionOutage },
+      'web.session_resolve_failed'
+    );
     expect(result.error.status).toBe(503);
     expect(await result.error.json()).toEqual({
       error: 'Could not verify session — backend unavailable',
@@ -601,13 +612,28 @@ describe('per-request auth helpers', () => {
       if (source === 'session')
         authInstance = { api: { getSession: async () => ({ user: { id: 'session-user' } }) } };
       const c = await request(source === 'header' ? { 'X-Archon-User': 'proxy-user' } : undefined);
-      mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+      mockLogger.warn.mockClear();
+      mockLogger.error.mockClear();
+      const storageOutage = new Error('identity store unavailable');
+      mockFindOrCreateUser.mockRejectedValueOnce(storageOutage);
       expect(await resolveAuthContext(c)).toBeUndefined();
-      mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+      mockFindOrCreateUser.mockRejectedValueOnce(storageOutage);
       expect(await resolveWebUserId(c)).toBeUndefined();
-      mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+      mockFindOrCreateUser.mockRejectedValueOnce(storageOutage);
       const result = await requireWebUser(c);
       if (!('error' in result)) throw new Error('Expected backend refusal');
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        {
+          err: storageOutage,
+          ...(source === 'header' ? { headerPresent: true } : {}),
+          path: c.req.path,
+        },
+        source === 'header' ? 'web.user_resolve_failed' : 'web.session_resolve_failed'
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { err: storageOutage, ...(source === 'header' ? { headerPresent: true } : {}) },
+        'web.user_resolve_failed'
+      );
       expect(result.error.status).toBe(503);
       expect(await result.error.json()).toEqual({
         error: 'Could not verify web identity — backend unavailable',

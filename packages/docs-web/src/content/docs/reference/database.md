@@ -61,8 +61,9 @@ refused until file-backed admission is implemented. Provider concurrency caps
 (`concurrency.providers`) require `store: database` and fail at startup.
 Enabling per-user credential modes does not prevent selecting file storage. Stored per-user provider credentials are refused during run preflight,
 before creating a worktree. Environment credentials and the provider's own login work
-normally. Other SQL-only CLI commands, including user and stored credential management,
-require database storage.
+normally. State documents (`archon state`) are not stored in files; the command requires
+database storage, and `workflow cleanup` has no state revisions to prune. Other SQL-only
+CLI commands, including user and stored credential management, require database storage.
 
 ## SQLite (Default - No Setup Required)
 
@@ -222,6 +223,11 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_schema_version`** - Diagnostic schema vintage
   - Records the Archon build that created the database and the build that last applied its schema
   - A single row (`id = 1`); databases predating this table retain an unknown creation version
+
+- **`remote_agent_state_revisions`** - Durable project JSON documents and their audit history
+  - Primary key: `(project_key, name, revision)`; optimistic writes append a revision
+  - Full JSON value (up to 64 KiB), operation, writer identity or run/node, and creation time
+  - SQL `NULL` value is a tombstone; run IDs have no foreign key so run cleanup preserves state
 
 - **`remote_agent_start_receipts`** - Source delivery receipts
   - Records source instance, delivery ID, content digest, timestamps, and matching outcome
