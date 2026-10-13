@@ -15,6 +15,7 @@ import {
   executionSpendSchema,
   nodeExecutionMetadataSchema,
   nodeFailureKindSchema,
+  mcpUnavailableSchema,
   type NodeCostScope,
   type NodeDescriptor,
   type NodeExecutionRecord,
@@ -83,6 +84,7 @@ export const serializedNodeDataSchema = z.object({
   identity: z.string().optional(),
   ordinal: z.number().optional(),
   approval_decision: z.string().optional(),
+  mcp_unavailable: mcpUnavailableSchema.optional(),
   /** The full provider session id; only this durable row carries it. */
   session_id: z.string().optional(),
 });
@@ -322,6 +324,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
       ...(d?.ordinal !== undefined ? { ordinal: d.ordinal } : {}),
       ...(d?.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),
       ...(d?.expr !== undefined ? { expr: d.expr } : {}),
+      ...(d?.mcpUnavailable !== undefined ? { mcp_unavailable: d.mcpUnavailable } : {}),
       ...(record.sessionId !== undefined ? { session_id: record.sessionId } : {}),
     },
   };

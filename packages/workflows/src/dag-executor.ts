@@ -27,6 +27,7 @@ import {
   type NodeExecutionRecord,
   type NodeFailureKind,
   type NodeInvocation,
+  type McpUnavailable,
 } from './schemas/node-execution';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { observeCheckout } from './checkout-observation';
@@ -114,6 +115,7 @@ import type {
   WorkflowRunStatus,
   WorkflowWaitContext,
   ScheduledWorkflowResume,
+  NodeMcp,
 } from './schemas';
 import {
   bodySessionCursorsSchema,
@@ -142,6 +144,7 @@ import {
   isApprovalContext,
   inputEnvKey,
   isNodeContextResume,
+  mcpDeclaration,
   isBindingDirective,
   SUBRUN_METADATA_KEYS,
   WAIT_NODE_OUTPUT_FORMAT,
@@ -599,35 +602,80 @@ function applyPresetOptions(
 }
 
 /**
- * Load the set of MCP server names that a node's `mcp:` config file declares.
+ * The server names an MCP config file declares, unwrapping the `{ "mcpServers": … }`
+ * form the same way the providers' `loadMcpConfig` does (a conformance test holds the
+ * two together; `@archon/providers` is not a runtime dependency of this package).
  *
- * Returns an empty set when no `mcp:` is configured or when the file can't be
- * read/parsed. Used to distinguish workflow-configured failures (surface to
- * user) from user-plugin failures (silent debug log). We intentionally do not
- * validate or env-expand here — the provider owns full loading and will
- * surface its own parse errors via the warning channel if the file is broken.
- *
- * Read failures are debug-logged so a transient I/O error (EMFILE/EBUSY) that
- * leaves us with an empty set — and silently reclassifies a real workflow-MCP
- * failure as plugin noise — is at least observable.
+ * `missing` is set only for ENOENT. Any other read or parse failure leaves `servers`
+ * undefined and is debug-logged: the provider owns full loading and reports a broken
+ * file itself.
  */
-export async function loadConfiguredMcpServerNames(
-  nodeMcpPath: string | undefined,
-  cwd: string
-): Promise<Set<string>> {
-  if (!nodeMcpPath) return new Set();
-  const fullPath = isAbsolute(nodeMcpPath) ? nodeMcpPath : resolvePath(cwd, nodeMcpPath);
+async function readMcpServerNames(
+  fullPath: string
+): Promise<{ missing: boolean; servers?: string[] }> {
+  let raw: string;
   try {
-    const raw = await readFile(fullPath, 'utf-8');
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      return new Set();
-    }
-    return new Set(Object.keys(parsed as Record<string, unknown>));
+    raw = await readFile(fullPath, 'utf-8');
   } catch (err) {
-    getLog().debug({ err, nodeMcpPath, fullPath }, 'dag.mcp_filter_config_read_failed');
-    return new Set();
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { missing: true };
+    getLog().debug({ err, fullPath }, 'dag.mcp_config_read_failed');
+    return { missing: false };
   }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainRecord(parsed)) return { missing: false };
+    const keys = Object.keys(parsed);
+    if (keys.length === 1 && keys[0] === 'mcpServers') {
+      return isPlainRecord(parsed.mcpServers)
+        ? { missing: false, servers: Object.keys(parsed.mcpServers) }
+        : { missing: false };
+    }
+    return { missing: false, servers: keys };
+  } catch (err) {
+    getLog().debug({ err, fullPath }, 'dag.mcp_config_read_failed');
+    return { missing: false };
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** What a node's `mcp:` declaration hands its provider for one attempt. */
+export type NodeMcpResolution =
+  | { kind: 'none' }
+  /** The provider loads `path`; `servers` are the names the file declares, if readable. */
+  | { kind: 'load'; path: string; servers: Set<string> }
+  /** An optional declaration the node runs without. */
+  | { kind: 'unavailable'; fullPath: string; record: McpUnavailable };
+
+/**
+ * Decide whether a node's MCP servers reach its provider. A required declaration
+ * always does: a missing file or an incapable provider fails the node exactly as it
+ * did before optional declarations existed. An optional one is withheld when the
+ * provider cannot load MCP servers, or when its config file does not exist.
+ */
+export async function resolveNodeMcp(
+  mcp: NodeMcp | undefined,
+  capabilities: ProviderCapabilities,
+  cwd: string
+): Promise<NodeMcpResolution> {
+  const declaration = mcpDeclaration(mcp);
+  if (declaration === undefined) return { kind: 'none' };
+  const { path, optional } = declaration;
+  const fullPath = isAbsolute(path) ? path : resolvePath(cwd, path);
+  const { missing, servers } = await readMcpServerNames(fullPath);
+  if (optional && !capabilities.mcp) {
+    return {
+      kind: 'unavailable',
+      fullPath,
+      record: { path, reason: 'provider_unsupported', ...(servers ? { servers } : {}) },
+    };
+  }
+  if (optional && missing) {
+    return { kind: 'unavailable', fullPath, record: { path, reason: 'config_missing' } };
+  }
+  return { kind: 'load', path, servers: new Set(servers) };
 }
 
 /** Workflow-level provider options. The provider options have node-level
@@ -1818,7 +1866,8 @@ async function resolveNodeProviderAndModel(
   // Build raw nodeConfig — provider translates internally
   const nodeConfig: NodeConfig = {
     nodeId: node.id,
-    mcp: node.mcp,
+    // `mcp` is set per attempt by `executeNodeInternal`, which decides whether an
+    // optional declaration reaches the provider.
     hooks: node.hooks,
     skills: node.skills,
     plugins: node.plugins,
@@ -2146,8 +2195,12 @@ async function executeNodeInternal(
   const namedResumeSourceNodeId = isNodeContextResume(node.context)
     ? node.context.resume
     : undefined;
-  const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
   const aiClient = deps.getAgentProvider(provider);
+  const nodeMcp = await resolveNodeMcp(
+    node.mcp,
+    requireProvider(deps.providers, provider).capabilities,
+    cwd
+  );
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, {
       provider,
@@ -2166,10 +2219,28 @@ async function executeNodeInternal(
             sessionForkRequested: resumeIntent !== 'owner-continuation',
           }
         : {}),
+      ...(nodeMcp.kind === 'unavailable' ? { mcpUnavailable: nodeMcp.record } : {}),
     },
   };
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
   await recordNodeState({ store: deps.store, logDir }, execution);
+  if (nodeMcp.kind === 'unavailable') {
+    const { record, fullPath } = nodeMcp;
+    getLog().warn(
+      { nodeId: node.id, path: record.path, fullPath, reason: record.reason },
+      'dag.mcp_optional_unavailable'
+    );
+    const why =
+      record.reason === 'provider_unsupported'
+        ? `provider '${provider}' cannot load MCP servers`
+        : `config file not found at ${fullPath}`;
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `Node '${node.id}' runs without its optional MCP servers (${record.path}): ${why}.`,
+      nodeContext
+    );
+  }
   // Every stream pass of this attempt (a structured-output reask is a second pass)
   // numbers its provider events from one sequence.
   const attemptEvents = createAttemptEventSequence(execution.attempt.id);
@@ -2312,6 +2383,9 @@ async function executeNodeInternal(
   const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
+    ...(nodeMcp.kind === 'load'
+      ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
+      : {}),
     abortSignal: nodeAbortController.signal,
     ...(resumeIntent === 'owner-continuation'
       ? { forkSession: false }
@@ -2384,7 +2458,7 @@ async function executeNodeInternal(
       nodeId: node.id,
       stepName,
       attempt: attemptEvents,
-      configuredMcpServers: configuredMcpNames,
+      configuredMcpServers: nodeMcp.kind === 'load' ? nodeMcp.servers : new Set(),
       onMessageText: async text => {
         nodeOutputText += text; // ALWAYS capture for $node_id.output
         if (streamingMode === 'stream') {
@@ -10641,15 +10715,17 @@ export function collectContainerIncompatibleProviders(
  * Node fields that name a capability for the node to load. Each is also the key of
  * the provider capability that honours it. Running the node without what it named
  * would produce output from a setup its author did not intend, so a mismatch fails
- * the run instead of warning like the other capability axes.
+ * the run instead of warning like the other capability axes. An `mcp:` declared
+ * `optional: true` names no requirement; `resolveNodeMcp` records its absence.
  */
 const SCOPED_CAPABILITIES = ['mcp', 'skills', 'plugins'] as const;
 type ScopedCapability = (typeof SCOPED_CAPABILITIES)[number];
 
 function namesScopedCapability(node: DagNode, capability: ScopedCapability): boolean {
   switch (capability) {
+    // An optional declaration is not a requirement: the node runs without it.
     case 'mcp':
-      return 'mcp' in node && node.mcp !== undefined;
+      return 'mcp' in node && mcpDeclaration(node.mcp)?.optional === false;
     // `skills: []` and `plugins: []` name nothing, so they need no capability.
     case 'skills':
       return 'skills' in node && (node.skills?.length ?? 0) > 0;

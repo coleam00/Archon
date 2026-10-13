@@ -47,6 +47,7 @@ const STRING_FIELD_CLASSIFICATIONS = {
   'retry.on_error': { kind: 'literal', reason: 'Retry error class is an engine policy enum' },
   ...HOOK_FIELD_CLASSIFICATIONS,
   mcp: { kind: 'literal', reason: 'MCP value is a configuration path' },
+  'mcp.path': { kind: 'literal', reason: 'MCP value is a configuration path' },
   'skills.*': { kind: 'literal', reason: 'Skill entries are capability identifiers' },
   'plugins.*': { kind: 'literal', reason: 'Plugin entries are capability identifiers' },
   'agents.*.description': { kind: 'template', slots: ['agents.*.description'] },
