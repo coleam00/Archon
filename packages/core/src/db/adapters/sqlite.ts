@@ -762,6 +762,23 @@ export class SqliteAdapter implements IDatabase {
       allApplied = false;
     }
 
+    // The archive trigger copies an event row by position, and CREATE TABLE AS ran
+    // only once. Give the archive every column a later ADD COLUMN gave the events
+    // table, in the same order, so deleting an event never fails on a shape mismatch.
+    const archived = new Set(
+      this.prepareAll<{ name: string }>(
+        "PRAGMA table_info('remote_agent_workflow_event_archive')"
+      ).map(column => column.name)
+    );
+    for (const column of this.prepareAll<{ name: string; type: string }>(
+      "PRAGMA table_info('remote_agent_workflow_events')"
+    )) {
+      if (!archived.has(column.name))
+        this.db.run(
+          `ALTER TABLE remote_agent_workflow_event_archive ADD COLUMN "${column.name}" ${column.type}`
+        );
+    }
+
     return allApplied;
   }
 

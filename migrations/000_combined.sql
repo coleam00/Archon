@@ -891,3 +891,26 @@ CREATE INDEX IF NOT EXISTS idx_workflow_events_order
   ON remote_agent_workflow_events(event_order);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_event_archive_order
   ON remote_agent_workflow_event_archive(event_order);
+
+-- The archive trigger copies an event row by position, and CREATE TABLE AS ran
+-- only once. Give the archive every column a later ADD COLUMN gave the events
+-- table, in the same order, so deleting an event never fails on a shape mismatch.
+DO $$
+DECLARE
+  missing record;
+BEGIN
+  FOR missing IN
+    SELECT a.attname, format_type(a.atttypid, a.atttypmod) AS type
+      FROM pg_attribute a
+     WHERE a.attrelid = 'remote_agent_workflow_events'::regclass
+       AND a.attnum > 0 AND NOT a.attisdropped
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_attribute b
+          WHERE b.attrelid = 'remote_agent_workflow_event_archive'::regclass
+            AND b.attname = a.attname AND NOT b.attisdropped)
+     ORDER BY a.attnum
+  LOOP
+    EXECUTE format('ALTER TABLE remote_agent_workflow_event_archive ADD COLUMN %I %s',
+      missing.attname, missing.type);
+  END LOOP;
+END $$;

@@ -235,6 +235,41 @@ describe('SqliteAdapter upgrade path', () => {
   // exec block — so createSchema() threw and migrateColumns(), which adds the
   // column, never ran. Every existing SQLite install was bricked on upgrade,
   // and the migration that would fix it could never execute.
+  // The archive trigger copies by position; an events column added after the archive
+  // existed made every event delete fail until the archive gained it too.
+  test('archives deleted events after the events table gains a column', async () => {
+    const path = await upgradeFixturePath();
+    await new SqliteAdapter(path).close();
+    const raw = new Database(path);
+    try {
+      raw.run('ALTER TABLE remote_agent_workflow_events ADD COLUMN later_column TEXT');
+    } finally {
+      raw.close();
+    }
+    const db = new SqliteAdapter(path);
+    try {
+      await db.query(
+        "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('c', 'test', 'c')"
+      );
+      await db.query(
+        "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ('r', 'c', 'w', '')"
+      );
+      await db.query(
+        "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, later_column) VALUES ('e', 'r', 'workflow_started', 'kept')"
+      );
+      await db.query('DELETE FROM remote_agent_workflow_events');
+      expect(
+        (
+          await db.query<{ id: string; later_column: string }>(
+            'SELECT id, later_column FROM remote_agent_workflow_event_archive'
+          )
+        ).rows
+      ).toEqual([{ id: 'e', later_column: 'kept' }]);
+    } finally {
+      await db.close();
+    }
+  });
+
   test('converges a database that predates event_order', async () => {
     const path = await makeDbWithoutEventOrder();
     expect(columnsOf(path, 'remote_agent_workflow_events')).not.toContain('event_order');

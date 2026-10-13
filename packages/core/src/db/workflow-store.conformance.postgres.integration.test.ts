@@ -9,6 +9,7 @@ import {
 } from '@archon/workflows/store-conformance';
 import { makeSqlConformanceHarness } from './workflow-store.conformance-harness';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
+import { getSchemaSQL } from './bundled-schema';
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
 describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
@@ -85,6 +86,34 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       expect(
         (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event.id)
       ).toEqual([id]);
+    } finally {
+      await harness.close();
+    }
+  });
+  test('archives deleted events after the events table gains a column', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      await db.query('ALTER TABLE remote_agent_workflow_events ADD COLUMN later_column TEXT');
+      await db.query(getSchemaSQL());
+      const run = await store.createWorkflowRun({
+        workflow_name: 'later-column',
+        user_message: '',
+      });
+      const id = randomUUID();
+      await db.query(
+        "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, later_column) VALUES ($1, $2, 'workflow_started', 'kept')",
+        [id, run.id]
+      );
+      await db.query('DELETE FROM remote_agent_workflow_events WHERE id = $1', [id]);
+      expect(
+        (
+          await db.query(
+            'SELECT later_column FROM remote_agent_workflow_event_archive WHERE id = $1',
+            [id]
+          )
+        ).rows
+      ).toEqual([{ later_column: 'kept' }]);
     } finally {
       await harness.close();
     }
