@@ -335,7 +335,7 @@ describe('workflow fixture selection', () => {
     'packages/web/src/app.ts',
     'packages/core/src/index.ts',
     'packages/providers/src/index.ts',
-    'scripts/lint.ts',
+    'scripts/validate.ts',
     '.archon/workflows/sdlc-extra/workflow.yaml',
     'packages/workflows/src-extra/index.ts',
     'packages/cli/src/commands/workflow.test.ts',

@@ -24,14 +24,16 @@ share one process. Run package test scripts to preserve isolation; requested sel
 are forwarded to Bun verbatim and bypass default grouping.
 
 CI is the full validation gate. While working, choose checks for the files and packages
-you changed: package `type-check` and `test` scripts, `bun run lint --max-warnings 0`,
+you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
 `generated-files`, `type-check`, `lint`, `installer` (POSIX only), and `tests`.
 The generated group checks bundled defaults, the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
-platform. Lint runs two separate typed ESLint processes at a time with their default heaps.
+platform. Lint runs Biome (`biome.json`) after two TypeScript-API checks Biome cannot
+express: test-cleanup drift and the workflow persistence boundary. Install the Biome
+extension for in-editor diagnostics; ESLint extensions no longer find a config.
 
 ```bash
 bun run validate                            # optional local checks

@@ -27,19 +27,19 @@ Runs `tsc --noEmit` across all 8 packages via `bun --filter '*' type-check`.
 
 ---
 
-## Level 2: ESLint Linting
+## Level 2: Linting
 
 ```bash
 bun run lint
 ```
 
-Zero-tolerance policy: `--max-warnings 0`. Any warning is a failure.
+Biome runs with warnings as errors, after the test-cleanup drift and workflow
+persistence checks. Any diagnostic is a failure.
 
 **What to look for:**
-- `no-explicit-any` violations — fix the type, don't suppress
-- Missing explicit return types
-- Unused variables or imports
-- Import order issues
+- `noExplicitAny` violations — fix the type, don't suppress
+- Non-null assertions or empty blocks in source files
+- Restricted imports (provider admission, the console's store)
 
 To auto-fix safe lint issues:
 ```bash

@@ -1,4 +1,7 @@
 {
-  "*.{ts,tsx}": ["eslint --fix --max-warnings 0 --no-warn-ignored", "prettier --write"],
+  "*.{ts,tsx}": [
+    "biome lint --write --no-errors-on-unmatched --files-ignore-unknown=true",
+    "prettier --write"
+  ],
   "*.{json,md,yaml,yml}": ["prettier --write"]
 }

@@ -1,0 +1,152 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "maxSize": 2097152,
+    "includes": [
+      "**",
+      "!packages/docs-web",
+      "!packages/providers/src/codex/protocol",
+      "!packages/provider-contract/schema",
+      "!packages/chat-contract/schema",
+      "!**/*.generated.ts",
+      "!.archon/commands",
+      "!.archon/maintainer-standup",
+      "!.archon/workflows/**/commands",
+      "!.archon/workflows/**/fixtures",
+      "!.archon/scripts/__tests__/fixtures/malicious",
+      "!.agents",
+      "!.claude",
+      "!.github",
+      "!docs",
+      "!workspace"
+    ]
+  },
+  "formatter": {
+    "enabled": false
+  },
+  "assist": {
+    "enabled": false
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "none",
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noTsIgnore": "error",
+        "noAsyncPromiseExecutor": "error",
+        "noCompareNegZero": "error",
+        "noConstantBinaryExpressions": "error",
+        "noDuplicateElseIf": "error",
+        "noDuplicateCase": "error",
+        "noCatchAssign": "error",
+        "noSparseArray": "error",
+        "noDebugger": "error",
+        "noMisleadingCharacterClass": "error",
+        "noIrregularWhitespace": "error",
+        "noGlobalAssign": "error"
+      },
+      "correctness": {
+        "noUnsafeFinally": "error",
+        "useValidForDirection": "error",
+        "noConstantCondition": "error",
+        "noEmptyCharacterClassInRegex": "error",
+        "noEmptyPattern": "error",
+        "noPrecisionLoss": "error",
+        "noSelfAssign": "error",
+        "noSwitchDeclarations": "error"
+      },
+      "style": {
+        "useThrowOnlyError": "error"
+      },
+      "nursery": {
+        "usePromiseRejectErrors": "error"
+      },
+      "complexity": {
+        "noBannedTypes": "error"
+      }
+    },
+    "includes": [
+      "packages/*/src/**/*.ts",
+      "packages/*/src/**/*.tsx",
+      "scripts/**/*.ts",
+      ".archon/scripts/**/*.ts",
+      ".archon/workflows/**/*.ts"
+    ]
+  },
+  "overrides": [
+    {
+      "includes": [
+        "packages/*/src/**",
+        "scripts/**",
+        ".archon/**",
+        "!**/*.test.ts",
+        "!**/*.test.tsx",
+        "!**/*.spec.ts",
+        "!**/*.spec.tsx",
+        "!**/src/test/**",
+        "!**/__tests__/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "error"
+          },
+          "suspicious": {
+            "noEmptyBlockStatements": "error"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "packages/*/src/**",
+        "!packages/providers/src/**",
+        "!packages/core/src/services/provider-admission.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@archon/providers": {
+                    "importNames": ["getAgentProvider"],
+                    "message": "Use getAgentProvider from '@archon/core/services/provider-admission' so provider concurrency caps apply."
+                  },
+                  "@archon/providers/registry": {
+                    "importNames": ["getAgentProvider"],
+                    "message": "Use getAgentProvider from '@archon/core/services/provider-admission' so provider concurrency caps apply."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/web/src/experiments/console/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@tanstack/react-query": "The console uses its own reactive store (store/cache.ts)."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

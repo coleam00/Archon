@@ -7257,7 +7257,6 @@ nodes:
             containerExec: false,
             requiresAllPropertiesRequired: false,
           }),
-          // eslint-disable-next-line require-yield
           async *sendQuery() {
             return;
           },
@@ -7358,7 +7357,6 @@ nodes:
             containerExec: false,
             requiresAllPropertiesRequired: false,
           }),
-          // eslint-disable-next-line require-yield
           async *sendQuery() {
             return;
           },

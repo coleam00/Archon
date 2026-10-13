@@ -11165,7 +11165,7 @@ async function suspendContainerForPause(
  * its content. Truncated to keep one entry from dominating the message.
  */
 function sanitizeGateText(value: string): string {
-  // eslint-disable-next-line no-control-regex -- deliberately matching control chars to neutralize them
+  // Matches control characters on purpose, to neutralize them.
   const noControl = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
   const capped = noControl.length > 300 ? `${noControl.slice(0, 300)}…` : noControl;
   return `\`${capped.replace(/`/g, "'")}\``;
