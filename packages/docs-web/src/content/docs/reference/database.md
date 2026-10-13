@@ -46,6 +46,9 @@ Every write uses one store-wide lock and a recoverable intent. The next writer o
 reader that sees an intent redoes the committed operation exactly once. A torn final
 log line is ignored by readers and truncated only under the lock by the next writer.
 Committed lines are never rewritten; cancellation recovery appends event retractions.
+File-store run IDs are unique for the store's lifetime: creating a run with an ID
+already held by a live or archived run fails, including caller-reserved IDs.
+
 Run cleanup transfers a terminal run's log to `archived-runs` before removing its
 current-state directory. The event feed reads its derived index to find changed
 runs, then reads their live or archived logs. Writers update the index

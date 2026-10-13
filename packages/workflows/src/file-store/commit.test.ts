@@ -240,6 +240,54 @@ test('explicit deletion retains feed payloads across reopen and index rebuild', 
   ).toEqual(committed);
 });
 
+test.each(['explicit', 'cleanup'] as const)(
+  '%s deletion reserves the run ID for the store lifetime',
+  async deletion => {
+    const { root, store } = await fixture();
+    const input = { id: 'reserved-run', workflow_name: 'reserved', user_message: '' };
+    const run = await store.createWorkflowRun(input);
+    const head = await store.getWorkflowEventHead();
+    await store.persistWorkflowEvent({ workflow_run_id: run.id, event_type: 'workflow_started' });
+    await store.cancelWorkflowRun(run.id);
+    const committed = await store.listWorkflowEvents(run.id);
+    const remove = async (target: typeof store) => {
+      if (deletion === 'explicit') await target.deleteWorkflowRun(run.id);
+      else {
+        await Bun.sleep(2);
+        await target.deleteOldWorkflowRuns(0);
+      }
+    };
+    await remove(store);
+    const archivePath = join(root, 'archived-runs', run.id, 'log.jsonl');
+    const archive = await readFile(archivePath);
+    const deletedHead = await store.getWorkflowEventHead();
+    await expect(store.createWorkflowRun(input)).rejects.toThrow('Duplicate run');
+    expect(await store.getWorkflowEventHead()).toBe(deletedHead);
+    expect(await store.getWorkflowRun(run.id)).toBeNull();
+    expect(
+      (await store.readWorkflowEventsAfter(head, { limit: 10 })).events.map(row => row.event)
+    ).toEqual(committed);
+
+    await unlink(join(root, 'feed-index.json'));
+    const reopened = await createFileWorkflowStore({ root });
+    await expect(reopened.createWorkflowRun(input)).rejects.toThrow('Duplicate run');
+    await expect(
+      reopened.persistWorkflowEvent({ workflow_run_id: run.id, event_type: 'workflow_started' })
+    ).rejects.toThrow('Run missing');
+    await remove(reopened);
+    expect(await readFile(archivePath)).toEqual(archive);
+    let cursor = head;
+    for (const event of committed) {
+      const page = await reopened.readWorkflowEventsAfter(cursor, { limit: 1 });
+      expect(page.events.map(row => row.event)).toEqual([event]);
+      cursor = page.next;
+    }
+    expect((await reopened.readWorkflowEventsAfter(cursor, { limit: 1 })).events).toEqual([]);
+    const fresh = await reopened.createWorkflowRun({ ...input, id: 'fresh-reserved-run' });
+    expect(fresh.id).toBe('fresh-reserved-run');
+  }
+);
+
 const deletionCrashSteps = ['intent', 'archive', 'delete', 'index', 'head'] as const;
 test.each([...deletionCrashSteps])(
   'deletion redo retains feed payloads after crash at %s',
