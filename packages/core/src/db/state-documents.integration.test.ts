@@ -14,7 +14,7 @@ describeStateDocumentConformance('SQLite', async () => {
   const root = track(await mkdtemp(join(tmpdir(), 'state-documents-')));
   const db = new SqliteAdapter(join(root, 'state.db'));
   return {
-    store: createSqlStateDocumentStore(db),
+    store: createSqlStateDocumentStore(() => db),
     backdate: async (project, name) => {
       await db.query(
         'UPDATE remote_agent_state_revisions SET created_at = $3 WHERE project_key = $1 AND name = $2',

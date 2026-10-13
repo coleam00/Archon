@@ -87,9 +87,7 @@ function collectOAuthCredentialValues(
 
 export function createWorkflowStore(): IWorkflowStore {
   return {
-    ...createSqlStateDocumentStore({
-      query: (sql, params) => getDatabase().query(sql, params),
-    }),
+    ...createSqlStateDocumentStore(getDatabase),
     setToolCallAttention: workflowDb.setToolCallAttention,
     admitResourceStart: resourceStarts.admitResourceStart,
     drainResourceStarts: resourceStarts.drainResourceStarts,

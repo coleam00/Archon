@@ -25,7 +25,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL state documents', () => {
     return {
       db,
       url: url.toString(),
-      store: createSqlStateDocumentStore(db),
+      store: createSqlStateDocumentStore(() => db),
       backdate: async (project: string, document: string): Promise<void> => {
         await db.query(
           'UPDATE remote_agent_state_revisions SET created_at = $3 WHERE project_key = $1 AND name = $2',

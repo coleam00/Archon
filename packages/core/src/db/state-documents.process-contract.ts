@@ -14,7 +14,7 @@ export async function assertStateProcessRaces(
     import { StateRevisionConflictError } from '@archon/workflows/state-document-store';
     const [kind, address, op, value] = Bun.argv.slice(1);
     const db = kind === 'sqlite' ? new SqliteAdapter(address) : new PostgresAdapter(address);
-    const store = createSqlStateDocumentStore(db);
+    const store = createSqlStateDocumentStore(() => db);
     let code = 0;
     try {
       const input = { project: 'process', name: op, writer: { kind: 'operator', identity: value } };
@@ -49,7 +49,7 @@ export async function assertStateProcessRaces(
     for (const result of results) expect([0, 3], result.stderr).toContain(result.code);
     return results.map(result => result.code);
   };
-  const store = createSqlStateDocumentStore(db);
+  const store = createSqlStateDocumentStore(() => db);
   expect(await race('patch')).toEqual(Array(8).fill(0));
   const rows = await store.listStateRevisions('process', 'patch');
   expect(rows.map(row => row.revision)).toEqual([8, 7, 6, 5, 4, 3, 2, 1]);
