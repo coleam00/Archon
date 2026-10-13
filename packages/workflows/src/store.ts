@@ -161,6 +161,8 @@ export const WORKFLOW_EVENT_TYPES = [
   // Between-run continuation (#2747) — written on the ADOPTING run's log when it
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
+  // Fan-out siblings that shared one checkout (#2777); one row per sibling.
+  'workflow.checkout_shared',
   ...DURABLE_WORKFLOW_EVENT_TYPES,
   'node_retry_scheduled',
   'loop_iteration_started',
@@ -296,6 +298,7 @@ export const FAN_OUT_CANCEL_REASONS = [
   'fan_out_gate',
   'fan_out_sibling',
   'fan_out_orphan',
+  'fan_out_checkout_check',
 ] as const;
 export type FanOutCancelReason = (typeof FAN_OUT_CANCEL_REASONS)[number];
 

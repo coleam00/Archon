@@ -1179,12 +1179,15 @@ its worktrees; use the full ID elsewhere.
 | `--type` | Yes | Event type (e.g., `ralph_story_started`, `node_completed`) |
 | `--data` | No | JSON string attached to the event. Invalid JSON prints a warning and is ignored. |
 
-Node-state events, including completion, failure, skip, and resume-cache changes, print
-`Event persisted` only after the database write succeeds. Storage failures exit with code 1.
+Node-state events, including completion, failure, skip, and resume-cache changes, and
+`workflow.checkout_shared` events print `Event persisted` only after the database write
+succeeds. Storage failures exit with code 1. Checkout-sharing data must contain
+`parent_run_id`, `parent_node_id`, `working_path`, and `sibling_run_id` as nonempty strings.
 Other events print `Event submitted (best-effort)`; check server logs if they appear missing.
 
 Exit code: 0 after persistence or best-effort submission, 1 when a required argument is
-missing, the event type is invalid, run-ID prefix resolution fails, or a node-state write fails.
+missing, the event type is invalid, run-ID prefix resolution fails, required event data is
+invalid, or a required event write fails.
 
 ### `isolation list`
 

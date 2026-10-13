@@ -7,10 +7,8 @@ description: |
   Runs standalone too: archon workflow run t3-probe-issue "<issue-number>"
 model: '@mini'
 
-# Required for the fan-out in t3-triage-fanout. Concurrent children on one shared
-# checkout take a path-exclusive lock, so without this the engine refuses to spawn
-# them at all (correctly — a lock-cancelled child is not recoverable by resume,
-# #2180). This workflow only reads the issue, the code and direction.md.
+# This workflow only reads the issue, the code and direction.md, so it skips the
+# path-exclusive checkout lock and can run beside any other run on the checkout.
 mutates_checkout: false
 
 nodes:
