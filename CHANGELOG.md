@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Any service that signs webhooks with the [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md) `v1` HMAC scheme can now start a workflow run, through a bundled source plugin you configure with a signing-secret environment variable and trigger bindings. Archon checks the signature over the exact received bytes and a timestamp within 300 seconds before it records anything; an unsigned, tampered or stale delivery gets HTTP 401 and leaves no record. A retried delivery with the same `webhook-id` and body starts nothing new, and reusing a `webhook-id` with different content gets HTTP 409. The delivery body can only fill the inputs a binding maps from it with JSON Pointers, and only inputs the workflow declares; the binding alone chooses the workflow, checkout, isolation, host, resource and run-as user. See [Start workflows from any signed webhook](https://archon.diy/guides/workflow-triggers/#start-workflows-from-any-signed-webhook). (#3975, #3980)
+
 ### Changed
 
 - The CLI no longer bundles the server or chat adapters. `archon serve` downloads the version-matched server and web UI on first use, verifies embedded checksums, and runs the server as a child. `--download-only` caches both. (#3644)
@@ -42,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The old workflow marketplace is retired. `archon workflow search` and `archon workflow install` are removed, archon.diy no longer serves the registry or `workflows.json` (older binaries report `Marketplace fetch failed: HTTP 404`), and `archon.diy/workflows/` redirects to the installed workflow packs guide. Install someone else's workflows with `archon plugin install owner/repo[/path][@tag]`; a workflow pack is published by adding `archon-plugin.json` to its own repository. Workflows the old installer copied into `.archon/workflows/` are ordinary project files and keep loading. The CI job that auto-reviewed, merged or closed registry pull requests is gone with it. (#2376)
 - Codex workflow nodes no longer load the user's Codex plugins, ChatGPT apps, or the MCP servers in the user's or project's Codex config. A node gets exactly the MCP servers its `mcp:` file declares; Archon checks the servers Codex loaded before the turn starts and fails the node as `misconfigured` if an undeclared one is live. A node that needs a plugin names it with `plugins: [name@marketplace]` and gets that plugin's skills and hooks; its MCP servers come only through `mcp:`, under the plugin's own server name. A named plugin that is not installed fails the node before its turn, and so does an `mcp:` server whose name your Codex `config.toml` already uses: rename it in the `mcp:` file. Your `config.toml` settings, hooks and `AGENTS.md` keep loading, and Archon never writes to your Codex home. A workflow that relied on an ambient Codex plugin or server adds it to `plugins:` or `mcp:`. (#1118, #2843)
+- A GitHub trigger binding whose `inputMapping` copies an event `field` into a workflow that has no `inputs:` block is now rejected at preparation: the receipt's binding is recorded as `rejected` (`launch_preparation_failed`), and the drain reports `Workflow '<name>' declares no inputs; a trigger cannot pass event-mapped input '<input>'`. Event content is untrusted, so it reaches only inputs a workflow declares. To fix it, declare each mapped input under the workflow's `inputs:`. `literal` mappings and the literal `launch.inputs` of a binding or timer still pass through to a workflow without `inputs:`. (#3980)
 
 ### Changed
 

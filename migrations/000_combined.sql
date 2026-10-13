@@ -595,6 +595,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
   binding_revision TEXT,
   host_id TEXT,
   intent TEXT,
+  event_input_names TEXT,
   preparation_status VARCHAR(20) NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
   preparation_owner TEXT,
   preparation_error TEXT,
@@ -714,6 +715,10 @@ CREATE TABLE IF NOT EXISTS remote_agent_auth_verification (
 
 -- Optional provenance leaves shipped conversation columns valid for older writers.
 ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS origin JSONB;
+
+-- Names of a binding's event-derived inputs, kept beside the intent: older binaries
+-- parse `intent` strictly and would refuse an extra key.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS event_input_names TEXT;
 
 -- ============================================================================
 -- Indexes and column comments
