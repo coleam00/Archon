@@ -35,6 +35,7 @@ intent.json              pending commit, present during writes or crash recovery
 feed-index.json          derived latest event commit per run, rebuilt from logs when missing
 runs/<id>/log.jsonl       append-only run records, events and event retractions
 runs/<id>/run.json        derived snapshot, rebuilt when missing or behind the log
+archived-runs/<id>/log.jsonl  retained feed log after run deletion
 runs/<id>/node-sessions.json
 node-sessions/<hash>.json
 host/codebases.json       project records with per-project envVars
@@ -45,8 +46,9 @@ Every write uses one store-wide lock and a recoverable intent. The next writer o
 reader that sees an intent redoes the committed operation exactly once. A torn final
 log line is ignored by readers and truncated only under the lock by the next writer.
 Committed lines are never rewritten; cancellation recovery appends event retractions.
-Run cleanup can delete a terminal run's entire directory. The event feed reads its
-derived index to find changed runs, then reads their logs. Writers update the index
+Run cleanup transfers a terminal run's log to `archived-runs` before removing its
+current-state directory. The event feed reads its derived index to find changed
+runs, then reads their live or archived logs. Writers update the index
 under the same lock before publishing the head; a missing or stale index is rebuilt
 from the logs.
 
@@ -319,4 +321,4 @@ when reading an origin-free run.
 
 Every workflow store exposes `getWorkflowEventHead()` and `readWorkflowEventsAfter(cursor, { limit, eventTypes? })`. The feed covers all runs in commit order. A page carries each event with its opaque cursor and a `next` cursor that also advances past rows excluded by the type filter. Pass cursors back unchanged; only the issuing store interprets them. A malformed cursor or one from a different store kind throws `WorkflowEventCursorError`.
 
-Start at the head to follow new commits, or resume from a cursor saved by an earlier read. This feed observes committed events; it does not report retractions or undo deliveries when fan-out recovery or cleanup removes events. `getWorkflowRun` and `listWorkflowEvents` remain the current state of record. File-store reads at the head are cheap; reads with new commits use the derived feed index to select run logs.
+Start at the head to follow new commits, or resume from a cursor saved by an earlier read. This feed observes committed events; it does not report retractions or undo deliveries when fan-out recovery or cleanup removes events. Earlier cursors can still read those payloads: SQL deletion triggers retain them in a feed archive without run foreign keys, and the file store retains deleted run logs. Feed history has no expiry and is retained for the store's lifetime. `getWorkflowRun` and `listWorkflowEvents` remain the current state of record. File-store reads at the head are cheap; reads with new commits use the derived feed index to select run logs.

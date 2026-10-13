@@ -6,6 +6,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from './store';
 import * as commitModule from './commit';
 import { readRunState } from './commit';
+import { WorkflowEventCursorError, type WorkflowEventCursor } from '../store';
 const roots = trackTempRoots();
 async function fixture() {
   const root = roots(await mkdtemp(join(tmpdir(), 'file-commit-')));
@@ -216,3 +217,63 @@ test('missing and stale indexes are rebuilt before commits without losing earlie
     (await store.listWorkflowEvents(run.id))[1]!.id,
   ]);
 });
+
+test('feed rejects a syntactically valid cursor beyond the committed head', async () => {
+  const { store } = await fixture();
+  await expect(
+    store.readWorkflowEventsAfter('file:999.0' as WorkflowEventCursor, { limit: 1 })
+  ).rejects.toBeInstanceOf(WorkflowEventCursorError);
+});
+
+test('explicit deletion retains feed payloads across reopen and index rebuild', async () => {
+  const { root, store, run } = await fixture();
+  const head = await store.getWorkflowEventHead();
+  await store.cancelWorkflowRun(run.id);
+  const committed = await store.listWorkflowEvents(run.id);
+  await store.deleteWorkflowRun(run.id);
+  expect(await store.getWorkflowRun(run.id)).toBeNull();
+  expect(await store.listWorkflowEvents(run.id)).toEqual([]);
+  await unlink(join(root, 'feed-index.json'));
+  const reopened = await createFileWorkflowStore({ root });
+  expect(
+    (await reopened.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event)
+  ).toEqual(committed);
+});
+
+const deletionCrashSteps = ['intent', 'archive', 'delete', 'index', 'head'] as const;
+test.each([...deletionCrashSteps])(
+  'deletion redo retains feed payloads after crash at %s',
+  async step => {
+    const { root, store, run, dir } = await fixture();
+    const head = await store.getWorkflowEventHead();
+    await store.cancelWorkflowRun(run.id);
+    const committed = await store.listWorkflowEvents(run.id);
+    const seq = JSON.parse(await readFile(join(root, 'head.json'), 'utf8')).seq + 1;
+    await writeFile(
+      join(root, 'intent.json'),
+      JSON.stringify({ seq, lines: [], documents: {}, deleteRuns: [run.id] })
+    );
+    if (deletionCrashSteps.indexOf(step) >= 1) {
+      const { mkdir, rename } = await import('node:fs/promises');
+      const archived = join(root, 'archived-runs', run.id);
+      await mkdir(archived, { recursive: true });
+      await rename(join(dir, 'log.jsonl'), join(archived, 'log.jsonl'));
+    }
+    if (deletionCrashSteps.indexOf(step) >= 2) {
+      const { removeTempTree } = await import('@archon/paths/test-utils');
+      await removeTempTree(dir);
+    }
+    if (deletionCrashSteps.indexOf(step) >= 3) {
+      const index = JSON.parse(await readFile(join(root, 'feed-index.json'), 'utf8'));
+      index.seq = seq;
+      await writeFile(join(root, 'feed-index.json'), JSON.stringify(index));
+    }
+    if (deletionCrashSteps.indexOf(step) >= 4)
+      await writeFile(join(root, 'head.json'), JSON.stringify({ format: 1, seq }));
+    const reopened = await createFileWorkflowStore({ root });
+    expect(await reopened.getWorkflowRun(run.id)).toBeNull();
+    expect(
+      (await reopened.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event)
+    ).toEqual(committed);
+  }
+);

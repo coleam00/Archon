@@ -658,6 +658,16 @@ export class SqliteAdapter implements IDatabase {
         this.db.run(`INSERT INTO remote_agent_workflow_event_sequence (id, value)
       SELECT 1, COALESCE(MAX(event_order), 0) FROM remote_agent_workflow_events WHERE true
       ON CONFLICT(id) DO UPDATE SET value = MAX(value, excluded.value)`);
+        this.db.run(`CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_archive AS
+          SELECT * FROM remote_agent_workflow_events WHERE false`);
+        this.db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_event_archive_order
+          ON remote_agent_workflow_event_archive(event_order)`);
+        this.db.run(`CREATE TRIGGER IF NOT EXISTS remote_agent_workflow_events_archive
+          BEFORE DELETE ON remote_agent_workflow_events
+          BEGIN
+            INSERT INTO remote_agent_workflow_event_archive
+              SELECT * FROM remote_agent_workflow_events WHERE rowid = OLD.rowid;
+          END`);
         this.db.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
         this.db.run(
           `CREATE TRIGGER remote_agent_workflow_events_assign_order

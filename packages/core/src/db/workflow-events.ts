@@ -416,6 +416,8 @@ export async function getWorkflowEventHead(): Promise<string> {
        SELECT value AS head FROM remote_agent_workflow_event_sequence WHERE id = 1
        UNION ALL
        SELECT MAX(event_order) AS head FROM remote_agent_workflow_events
+       UNION ALL
+       SELECT MAX(event_order) AS head FROM remote_agent_workflow_event_archive
      ) committed`
   );
   const row = result.rows[0];
@@ -428,8 +430,11 @@ export async function readWorkflowEventsAfter(
   limit: number
 ): Promise<WorkflowEventRow[]> {
   const result = await pool.query<WorkflowEventRow>(
-    `SELECT * FROM remote_agent_workflow_events
-     WHERE event_order > $1 ORDER BY event_order LIMIT $2`,
+    `SELECT * FROM (
+       SELECT * FROM remote_agent_workflow_events WHERE event_order > $1
+       UNION ALL
+       SELECT * FROM remote_agent_workflow_event_archive WHERE event_order > $1
+     ) feed ORDER BY event_order LIMIT $2`,
     [after, limit]
   );
   return result.rows.map(parseEventRow);

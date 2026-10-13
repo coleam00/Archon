@@ -41,6 +41,54 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const run = await store.createWorkflowRun({ workflow_name: 'delete-feed', user_message: '' });
+      const head = await store.getWorkflowEventHead();
+      await store.cancelWorkflowRun(run.id);
+      const committed = await store.listWorkflowEvents(run.id);
+      const { deleteWorkflowRun } = await import('./workflows');
+      await deleteWorkflowRun(run.id);
+      expect(await store.getWorkflowRun(run.id)).toBeNull();
+      expect(await store.listWorkflowEvents(run.id)).toEqual([]);
+      expect(
+        (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event)
+      ).toEqual(committed);
+    } finally {
+      await harness.close();
+    }
+  });
+  test('an event removed before commit retains final commit order in the archive', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const run = await store.createWorkflowRun({
+        workflow_name: 'removed-before-commit',
+        user_message: '',
+      });
+      const id = randomUUID();
+      let head = await store.getWorkflowEventHead();
+      await db.withTransaction(async query => {
+        await query(
+          "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES ($1, $2, 'workflow_started')",
+          [id, run.id]
+        );
+        await query('DELETE FROM remote_agent_workflow_events WHERE id = $1', [id]);
+        await store.persistWorkflowEvent({
+          workflow_run_id: run.id,
+          event_type: 'workflow_started',
+        });
+        head = await store.getWorkflowEventHead();
+      });
+      expect(
+        (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event.id)
+      ).toEqual([id]);
+    } finally {
+      await harness.close();
+    }
+  });
   test("the head includes events ordered by the previous binary's trigger", async () => {
     const harness = await makeHarness();
     try {

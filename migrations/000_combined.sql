@@ -524,6 +524,23 @@ INSERT INTO remote_agent_workflow_event_sequence (id, value)
   ON CONFLICT (id) DO UPDATE
     SET value = GREATEST(remote_agent_workflow_event_sequence.value, EXCLUDED.value);
 
+-- Retain removed payloads independently of current-state recovery and run cleanup.
+-- Derive the row shape from its owner; no foreign key may cascade into the feed.
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_archive AS
+  SELECT * FROM remote_agent_workflow_events WHERE false;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_event_archive_order
+  ON remote_agent_workflow_event_archive(event_order);
+CREATE OR REPLACE FUNCTION archon_archive_workflow_event() RETURNS trigger AS $$
+BEGIN
+  INSERT INTO remote_agent_workflow_event_archive SELECT (OLD).*;
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS archon_workflow_event_archive ON remote_agent_workflow_events;
+CREATE TRIGGER archon_workflow_event_archive
+  BEFORE DELETE ON remote_agent_workflow_events
+  FOR EACH ROW EXECUTE FUNCTION archon_archive_workflow_event();
+
 -- Deferred on purpose: the global ordering lock is taken only after the writer
 -- has acquired its other locks, avoiding deadlocks with other event writers.
 -- Allocation and the high-water update commit atomically with the event rows.
@@ -539,6 +556,11 @@ BEGIN
   UPDATE remote_agent_workflow_events
      SET event_order = assigned_order
    WHERE id = NEW.id;
+  IF NOT FOUND THEN
+    UPDATE remote_agent_workflow_event_archive
+       SET event_order = assigned_order
+     WHERE event_order = NEW.event_order AND id = NEW.id;
+  END IF;
   RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;

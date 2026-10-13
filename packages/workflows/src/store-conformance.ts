@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
+  FAN_OUT_CANCEL_REASONS,
   WorkflowNotResumableError,
   WorkflowEventCursorError,
   type WorkflowEventCursor,
@@ -292,6 +293,35 @@ export function describeWorkflowStoreConformance(
       expect((await store.readWorkflowEventsAfter(b.next, { limit: 1 })).events).toEqual([]);
     });
 
+    test.each([...FAN_OUT_CANCEL_REASONS])(
+      'feed retains cancellations after recovery of %s',
+      async reason => {
+        const run = await running(store);
+        const head = await store.getWorkflowEventHead();
+        await store.cancelFanOutRun(run.id, reason);
+        const committed = await store.listWorkflowEvents(run.id);
+        await store.recoverCancelledFanOutRun(run.id);
+        expect(await store.listWorkflowEvents(run.id)).toEqual([]);
+        expect(
+          (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event)
+        ).toEqual(committed);
+      }
+    );
+    test('feed retains terminal events after cleanup from an earlier cursor', async () => {
+      const run = await running(store);
+      const head = await store.getWorkflowEventHead();
+      await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+      const committed = await store.listWorkflowEvents(run.id);
+      await harness.backdate(run.id, {
+        started_at: new Date('2000-01-01'),
+        last_activity_at: new Date('2000-01-01'),
+      });
+      await store.deleteOldWorkflowRuns(1);
+      expect(await store.getWorkflowRun(run.id)).toBeNull();
+      expect(
+        (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event)
+      ).toEqual(committed);
+    });
     test('feed never reuses a position after fan-out recovery deletes the newest event', async () => {
       const run = await running(store);
       await store.cancelFanOutRun(run.id, 'fan_out_gate');

@@ -294,7 +294,7 @@ export async function createFileWorkflowStore(
       write([id], view => view.deferWorkflowContinuation(id, retry, cursor)),
     signalWorkflowWait: (id, wait, payload) =>
       write([id], view => view.signalWorkflowWait(id, wait, payload)),
-    // A deleted run's directory goes away whole, so its events are never read.
+    // Cleanup archives logs without hydrating current-state events.
     deleteOldWorkflowRuns: days =>
       write('all', view => view.deleteOldWorkflowRuns(days), { events: false }),
     deleteWorkflowRun: id =>

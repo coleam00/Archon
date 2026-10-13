@@ -207,6 +207,13 @@ describe('SqliteAdapter upgrade path', () => {
       await db.query('DELETE FROM remote_agent_workflow_events');
       await db.close();
       db = new SqliteAdapter(path);
+      expect(
+        (
+          await db.query<{ id: string }>(
+            'SELECT id FROM remote_agent_workflow_event_archive ORDER BY event_order'
+          )
+        ).rows
+      ).toEqual([{ id: 'first' }, { id: 'second' }, { id: 'third' }]);
       await db.query(
         "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES ('fourth', 'feed-run', 'workflow_started')"
       );
@@ -777,6 +784,14 @@ describe('SqliteAdapter', () => {
         columnsByTable.set(table, columns);
       }
 
+      const derivedTableRe =
+        /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?\s+AS\s+SELECT\s+\*\s+FROM\s+"?([a-z0-9_]+)"?\s+WHERE\s+false/gi;
+      for (const match of sql.matchAll(derivedTableRe)) {
+        const owner = columnsByTable.get(match[2].toLowerCase());
+        if (!owner) throw new Error(`Missing schema owner: ${match[2]}`);
+        columnsByTable.set(match[1].toLowerCase(), new Set(owner));
+      }
+
       return columnsByTable;
     }
 
@@ -818,6 +833,12 @@ describe('SqliteAdapter', () => {
       // require editing the allowlist and nothing else.
       expect(postgresColumns.get('remote_agent_codebases')?.has('default_cwd')).toBe(true);
       expect(postgresColumns.get('remote_agent_users')?.has('role')).toBe(true);
+      expect(postgresColumns.get('remote_agent_workflow_event_archive')?.has('event_order')).toBe(
+        true
+      );
+      expect(postgresColumns.get('remote_agent_workflow_event_archive')).toEqual(
+        postgresColumns.get('remote_agent_workflow_events')
+      );
 
       const missing: string[] = [];
       let compared = 0;

@@ -45,17 +45,21 @@ const feedIndexSchema = headSchema.extend({
 });
 type FeedIndex = z.infer<typeof feedIndexSchema>;
 
-// Disposable acceleration only: event payloads and positions remain owned by run logs.
+// Cleanup transfers logs to the feed archive; the index remains disposable.
 async function rebuildFeedIndex(root: string, seq: number): Promise<FeedIndex> {
   const runs: FeedIndex['runs'] = {};
-  const dirs = await readdir(join(root, 'runs'), { withFileTypes: true });
+  await mkdir(join(root, 'archived-runs'), { recursive: true });
+  const dirs = [
+    ...(await readdir(join(root, 'runs'), { withFileTypes: true })),
+    ...(await readdir(join(root, 'archived-runs'), { withFileTypes: true })),
+  ];
   for (let start = 0; start < dirs.length; start += 64) {
     await Promise.all(
       dirs
         .slice(start, start + 64)
         .filter(dir => dir.isDirectory())
         .map(async dir => {
-          const last = (await readLog(root, dir.name)).lines
+          const last = (await readFeedLog(root, dir.name)).lines
             .reverse()
             .find(line => line.events.length > 0);
           if (last) runs[dir.name] = last.seq;
@@ -80,10 +84,6 @@ async function updateFeedIndex(root: string, intent: Intent): Promise<void> {
     return;
   }
   for (const line of intent.lines) if (line.events.length) index.runs[line.run.id] = line.seq;
-  if (intent.deleteRuns.length) {
-    const deleted = new Set(intent.deleteRuns);
-    index.runs = Object.fromEntries(Object.entries(index.runs).filter(([id]) => !deleted.has(id)));
-  }
   index.seq = intent.seq;
   await replaceJson(join(root, 'feed-index.json'), index);
 }
@@ -143,11 +143,13 @@ export async function replaceJson(path: string, value: unknown): Promise<void> {
 }
 async function readLog(
   root: string,
-  id: string
+  id: string,
+  archived = false
 ): Promise<{ lines: RunCommitLine[]; bytes: number; total: number }> {
   let contents: Buffer;
   try {
-    const path = join(runPath(root, id), 'log.jsonl');
+    const dir = runPath(root, id);
+    const path = join(archived ? join(root, 'archived-runs', id) : dir, 'log.jsonl');
     contents = (await retryFileStoreHandles('read', path, () => readFile(path))).value;
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
@@ -164,6 +166,29 @@ async function readLog(
     bytes,
     total: contents.length,
   };
+}
+async function readFeedLog(root: string, id: string): ReturnType<typeof readLog> {
+  const live = await readLog(root, id);
+  return live.lines.length ? live : readLog(root, id, true);
+}
+async function archiveRunLog(root: string, id: string): Promise<void> {
+  const source = runPath(root, id);
+  const target = join(root, 'archived-runs', id);
+  await mkdir(target, { recursive: true });
+  await syncDirectory(root);
+  await syncDirectory(dirname(target));
+  try {
+    await renameReplacing(join(source, 'log.jsonl'), join(target, 'log.jsonl'));
+  } catch (error) {
+    // Redo may find the log already transferred and the run directory removed.
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    if (!(await readLog(root, id, true)).lines.length)
+      throw new Error('Deleted run has no retained feed log', { cause: error });
+    await syncDirectory(target);
+    return;
+  }
+  await syncDirectory(target);
+  await syncDirectory(source);
 }
 async function lastLogLine(root: string, id: string): Promise<RunCommitLine | null> {
   return (
@@ -229,10 +254,12 @@ async function apply(root: string, intent: Intent): Promise<void> {
   }
   for (const [path, value] of Object.entries(intent.documents))
     await replaceJson(documentPath(root, path), value);
-  for (const id of intent.deleteRuns)
+  for (const id of intent.deleteRuns) {
+    await archiveRunLog(root, id);
     await retryFileStoreHandles('remove', runPath(root, id), () =>
       rm(runPath(root, id), { recursive: true, force: true })
     );
+  }
   if (intent.deleteRuns.length) await syncDirectory(join(root, 'runs'));
   await updateFeedIndex(root, intent);
   await replaceJson(join(root, 'head.json'), { format: 1, seq: intent.seq });
@@ -405,7 +432,7 @@ export function createFileEventFeed(root: string): IWorkflowEventFeed {
         for (let start = 0; start < ids.length; start += 64) {
           await Promise.all(
             ids.slice(start, start + 64).map(async id => {
-              for (const line of (await readLog(root, id)).lines) {
+              for (const line of (await readFeedLog(root, id)).lines) {
                 if (line.seq < position.seq || line.seq > head) continue;
                 for (const event of line.events) {
                   const index = event.event_order;
