@@ -24,20 +24,16 @@
  *   - The pre-flight decides the WHOLE migration before moving a byte, so any
  *     refusal (destination collision, nested directory) leaves the source
  *     untouched — a partial migration can never be reported as success.
- *   - `.initialized` is written ONLY after every entry moved, or when there was
- *     genuinely nothing to migrate. Marking a partial migration complete would
- *     tell the triage workflows' `state-preflight` gate that an incomplete state
- *     directory is authoritative — the exact reset the gate exists to prevent.
  *   - Idempotent: re-running after a successful migration finds nothing to do.
  *   - Copy-then-delete, so an interrupted run leaves the source intact.
  *
  * Exit codes:
  *   0  nothing to do, dry run completed, or migration fully succeeded
  *   1  unexpected error
- *   2  refused — destination collisions and/or nested directories; nothing was
- *      moved and `.initialized` was NOT written
+ *   2  refused — destination collisions, nested directories, or two candidate
+ *      sources; nothing was moved
  */
-import { readdir, mkdir, stat, copyFile, rm, writeFile } from 'fs/promises';
+import { readdir, mkdir, stat, copyFile, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import {
@@ -53,7 +49,7 @@ import * as codebaseDb from '@archon/core/db/codebases';
  * directory is the exact failure family this script exists to prevent, so a
  * malformed invocation exits non-zero rather than guessing: `--cwd --apply`
  * used to swallow the flag as a path, resolve to `<pwd>/--apply`, find no legacy
- * state, and report success while writing a junk `.initialized` marker.
+ * state, and report success.
  */
 function parseArgs(argv: readonly string[]): { apply: boolean; cwd: string } {
   let apply = false;
@@ -103,10 +99,9 @@ const { apply: APPLY, cwd: CWD } = parseArgs(process.argv.slice(2));
  * SUBDIRECTORY of a registered project, so the destination climbed to the
  * project while the source stayed at the literal cwd. Run from
  * `<project>/packages/foo` and the script looked for legacy state under the
- * subdirectory, found none, declared "nothing to migrate", and wrote
- * `.initialized` into the REAL project's state root — disarming the
- * `state-preflight` gate for a project whose state was never migrated. Deriving
- * both from `anchor` makes that disagreement unrepresentable.
+ * subdirectory, found none, and declared "nothing to migrate" for a project
+ * whose state was never migrated. Deriving both from `anchor` makes that
+ * disagreement unrepresentable.
  */
 interface MigrationTarget {
   key: ProjectStorageKey;
@@ -182,21 +177,6 @@ function plural(n: number): string {
   return `${String(n)} entr${n === 1 ? 'y' : 'ies'}`;
 }
 
-/**
- * Record that this project's `$STATE_DIR` is deliberately in its current shape —
- * either freshly migrated, or confirmed to have nothing to migrate. Stateful
- * workflows read this marker to tell "legitimately empty" from "state is still
- * sitting unmigrated somewhere else".
- *
- * Written ONLY on a fully successful `--apply`: a partial migration must never
- * be marked complete, or the marker waves through exactly the reset it exists
- * to prevent.
- */
-async function markInitialized(stateRoot: string): Promise<void> {
-  await mkdir(stateRoot, { recursive: true });
-  await writeFile(join(stateRoot, '.initialized'), '');
-}
-
 /** True when `path` exists; narrowed to ENOENT so EACCES/EIO surface. */
 async function exists(path: string): Promise<boolean> {
   try {
@@ -209,25 +189,10 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-/**
- * Nothing to migrate. On `--apply` this is still a successful outcome, so the
- * destination is marked — otherwise an operator who correctly runs the migration
- * on a project with no legacy state would be left with an unmarked `$STATE_DIR`.
- */
-async function reportNoop(message: string, stateRoot: string): Promise<void> {
-  console.log(message);
-  if (!APPLY) {
-    console.log('Dry run — re-run with --apply to mark $STATE_DIR initialized.');
-    return;
-  }
-  await markInitialized(stateRoot);
-  console.log(`Marked ${join(stateRoot, '.initialized')}`);
-}
-
 async function main(): Promise<void> {
   // The cwd must exist before anything else: `--cwd /typo` otherwise resolves to
   // the _cwd fallback, finds no legacy state, and reports a confident success
-  // while marking a project directory nobody asked for.
+  // for a project directory nobody asked for.
   try {
     if (!(await stat(CWD)).isDirectory()) {
       console.error(`Not a directory: ${CWD}`);
@@ -252,9 +217,9 @@ async function main(): Promise<void> {
   console.log('');
 
   // Climbing means the invocation cwd is NOT where we read from. If that cwd has
-  // its own legacy state, migrating the project's and marking would leave the
-  // subdirectory's unmigrated behind a satisfied marker — C5 all over again, one
-  // level down. Ambiguous input gets a refusal, not a guess.
+  // its own legacy state, migrating the project's would report success while
+  // leaving the subdirectory's unmigrated — C5 all over again, one level down.
+  // Ambiguous input gets a refusal, not a guess.
   if (climbed && (await hasEntries(join(CWD, '.archon', 'state')))) {
     console.error('Refusing to migrate — two candidate sources, and only one would be moved:');
     console.error(`  ${join(CWD, '.archon', 'state')}   (the directory you invoked from)`);
@@ -269,13 +234,13 @@ async function main(): Promise<void> {
     entries = await readdir(legacyDir);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      await reportNoop('Nothing to migrate — no legacy .archon/state/ directory.', stateRoot);
+      console.log('Nothing to migrate — no legacy .archon/state/ directory.');
       return;
     }
     throw error;
   }
   if (entries.length === 0) {
-    await reportNoop('Nothing to migrate — legacy .archon/state/ is empty.', stateRoot);
+    console.log('Nothing to migrate — legacy .archon/state/ is empty.');
     return;
   }
 
@@ -306,7 +271,7 @@ async function main(): Promise<void> {
       for (const name of directories) console.error(`  ${join(legacyDir, name)}`);
     }
     console.error('');
-    console.error('$STATE_DIR was NOT marked initialized — re-run after resolving.');
+    console.error('Re-run after resolving.');
     process.exit(2);
   }
 
@@ -332,10 +297,6 @@ async function main(): Promise<void> {
     // already claimed entries it never got to.
     console.log(`moved  ${name}`);
   }
-
-  // Every entry moved (the pre-flight guarantees no skips), so the destination
-  // is now the complete state — safe to mark.
-  await markInitialized(stateRoot);
 
   console.log('');
   console.log(`Migrated ${plural(moved)} to ${stateRoot}`);
