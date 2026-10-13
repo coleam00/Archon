@@ -51,7 +51,12 @@ import * as codebaseDb from '@archon/core/db/codebases';
  * used to swallow the flag as a path, resolve to `<pwd>/--apply`, find no legacy
  * state, and report success.
  */
-function parseArgs(argv: readonly string[]): { apply: boolean; cwd: string } {
+function parseArgs(argv: readonly string[]): { apply: boolean; cwd: string } | undefined {
+  const invalid = (message: string): undefined => {
+    console.error(message);
+    console.error('Usage: bun run scripts/migrate-state-dir.ts [--cwd <path>] [--apply]');
+    return undefined;
+  };
   let apply = false;
   let cwd: string | undefined;
 
@@ -65,31 +70,23 @@ function parseArgs(argv: readonly string[]): { apply: boolean; cwd: string } {
       if (cwd !== undefined) {
         // Silently taking the last would let a copy-paste slip operate on a
         // different project than the one the operator is reading in their shell.
-        console.error('--cwd was given more than once; pass it exactly once.');
-        console.error('Usage: bun run scripts/migrate-state-dir.ts [--cwd <path>] [--apply]');
-        process.exit(1);
+        return invalid('--cwd was given more than once; pass it exactly once.');
       }
       const value = argv[i + 1];
       if (value === undefined || value.startsWith('-')) {
-        console.error(
+        return invalid(
           `--cwd requires a directory path${value === undefined ? '' : `, got '${value}'`}.`
         );
-        console.error('Usage: bun run scripts/migrate-state-dir.ts [--cwd <path>] [--apply]');
-        process.exit(1);
       }
       cwd = value;
       i++; // consume the value
       continue;
     }
-    console.error(`Unknown argument: '${arg}'.`);
-    console.error('Usage: bun run scripts/migrate-state-dir.ts [--cwd <path>] [--apply]');
-    process.exit(1);
+    return invalid(`Unknown argument: '${arg}'.`);
   }
 
   return { apply, cwd: resolve(cwd ?? '.') };
 }
-
-const { apply: APPLY, cwd: CWD } = parseArgs(process.argv.slice(2));
 
 /**
  * Where a migration reads from and writes to, resolved from ONE anchor.
@@ -157,8 +154,9 @@ async function resolveTarget(cwd: string): Promise<MigrationTarget> {
     console.log(`No registered project matches ${cwd} — using the _cwd fallback.`);
   } catch (error) {
     // A DB that is unreachable must not silently produce the wrong destination.
-    console.error(`Could not read the codebase registry: ${(error as Error).message}`);
-    process.exit(1);
+    throw new Error(`Could not read the codebase registry: ${(error as Error).message}`, {
+      cause: error,
+    });
   }
   return { key: { kind: 'cwd', cwd }, anchor: cwd, climbed: false };
 }
@@ -189,19 +187,22 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function main(): Promise<void> {
+async function migrate(argv: readonly string[]): Promise<number> {
+  const args = parseArgs(argv);
+  if (!args) return 1;
+  const { apply: APPLY, cwd: CWD } = args;
   // The cwd must exist before anything else: `--cwd /typo` otherwise resolves to
   // the _cwd fallback, finds no legacy state, and reports a confident success
   // for a project directory nobody asked for.
   try {
     if (!(await stat(CWD)).isDirectory()) {
       console.error(`Not a directory: ${CWD}`);
-      process.exit(1);
+      return 1;
     }
   } catch {
     console.error(`Directory does not exist: ${CWD}`);
     console.error('Pass an existing project directory with --cwd, or omit it to use the cwd.');
-    process.exit(1);
+    return 1;
   }
 
   const { key, anchor, climbed } = await resolveTarget(CWD);
@@ -226,7 +227,7 @@ async function main(): Promise<void> {
     console.error(`  ${legacyDir}   (the registered project root)`);
     console.error('');
     console.error('Re-run with --cwd pointing at exactly the one you mean.');
-    process.exit(2);
+    return 2;
   }
 
   let entries: string[];
@@ -235,13 +236,13 @@ async function main(): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       console.log('Nothing to migrate — no legacy .archon/state/ directory.');
-      return;
+      return 0;
     }
     throw error;
   }
   if (entries.length === 0) {
     console.log('Nothing to migrate — legacy .archon/state/ is empty.');
-    return;
+    return 0;
   }
 
   // Pre-flight: decide the ENTIRE migration before moving a single byte, so
@@ -272,7 +273,7 @@ async function main(): Promise<void> {
     }
     console.error('');
     console.error('Re-run after resolving.');
-    process.exit(2);
+    return 2;
   }
 
   if (!APPLY) {
@@ -283,7 +284,7 @@ async function main(): Promise<void> {
     console.log(
       `Dry run — nothing was moved. Re-run with --apply to migrate ${plural(entries.length)}.`
     );
-    return;
+    return 0;
   }
 
   await mkdir(stateRoot, { recursive: true });
@@ -302,9 +303,23 @@ async function main(): Promise<void> {
   console.log(`Migrated ${plural(moved)} to ${stateRoot}`);
   console.log('Remaining step: confirm the legacy directory is empty, then remove it:');
   console.log(`  rmdir "${legacyDir}"`);
+  return 0;
 }
 
-main().catch((error: unknown) => {
-  console.error(`Migration failed: ${(error as Error).message}`);
-  process.exit(1);
-});
+export async function main(argv: readonly string[]): Promise<number> {
+  try {
+    return await migrate(argv);
+  } catch (error) {
+    console.error(`Migration failed: ${(error as Error).message}`);
+    return 1;
+  }
+}
+
+if (import.meta.main) {
+  const { closeDatabase } = await import('@archon/core/db/connection');
+  try {
+    process.exitCode = await main(process.argv.slice(2));
+  } finally {
+    await closeDatabase();
+  }
+}

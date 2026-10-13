@@ -647,6 +647,9 @@ async function main(): Promise<number> {
             config: typeof values.config === 'string' ? values.config : undefined,
             host: typeof values.host === 'string' ? values.host : undefined,
             owner: typeof values.owner === 'string' ? values.owner : undefined,
+            deliveryId:
+              typeof values['delivery-id'] === 'string' ? values['delivery-id'] : undefined,
+            inputs: typeof values.inputs === 'string' ? values.inputs : undefined,
             limit: typeof values.limit === 'string' ? values.limit : undefined,
             yes: values.yes === true,
           },
