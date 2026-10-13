@@ -829,3 +829,12 @@ CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow
 -- Messages
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_id
   ON remote_agent_messages(conversation_id, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS remote_agent_web_push_subscriptions (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

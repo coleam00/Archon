@@ -21,6 +21,7 @@ function webUiApp(...parentSegments: string[]): Hono {
   writeFileSync(join(root, 'assets', 'index-a1b2c3.js'), 'console.log(1)');
   writeFileSync(join(root, 'index.html'), '<html>app</html>');
   writeFileSync(join(root, 'favicon.png'), 'png');
+  writeFileSync(join(root, 'attention-sw.js'), 'self.addEventListener("push", () => {});');
   const app = new Hono();
   serveWebUi(app, root);
   return app;
@@ -52,6 +53,13 @@ describe('serveWebUi cache headers', () => {
     const res = await app.request('/conversations/abc-123');
     expect(res.status).toBe(200);
     expect(res.headers.get('Cache-Control')).toBe(HTML_CACHE_CONTROL);
+  });
+
+  test('the attention service worker is served as JavaScript and revalidated', async () => {
+    const res = await app.request('/attention-sw.js');
+    expect(res.headers.get('Content-Type')).toContain('javascript');
+    expect(res.headers.get('Cache-Control')).toBe(HTML_CACHE_CONTROL);
+    expect(await res.text()).toContain('addEventListener');
   });
 
   test('the favicon carries no cache directive', async () => {
