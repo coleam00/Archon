@@ -1,0 +1,11 @@
+# Dry-run fixture: nothing is actionable. pick returns none and every other node
+# stays skipped; an unstubbed node that ran would fail the fixture.
+pick:
+  route: none
+  target: ""
+  pr: ""
+  confidence: high
+  reason: "stub: everything open waits on the owner's answer in the decisions issue"
+fixture:
+  expect: completed
+  reached: [pick]

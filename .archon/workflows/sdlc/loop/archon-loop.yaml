@@ -1,11 +1,14 @@
 name: archon-loop
 description: |
-  One unattended move on a repository, then an independent review. A builder
-  reads the whole board (open pull requests, CI, review comments, issues) and
-  makes the single most valuable move: finish an open pull request, or start the
-  next issue. A separate reviewer, in a fresh context, checks the result the way
-  a user would and either merges it or sends it back with findings. All state
-  lives in GitHub, so the next run picks up where this one left off.
+  One unattended move on a repository. A pick agent reads the whole board (open
+  pull requests, CI, review comments, issues) and chooses the single most
+  valuable move and its route: finish an open pull request or build a contained
+  change in the loop, or take complex work through archon-ship. Two independent
+  reviewers then check the result: one runs the app as a user would, against the
+  acceptance contract and any reviewer-only holdout scenarios, without reading
+  the diff first; the other reads the diff and decides to merge it head-pinned,
+  send it back with evidence, or return it to the owner. All state lives in
+  GitHub, so the next run picks up where this one left off.
 
   Use when: a scheduler should keep a backlog moving with nobody at the
   keyboard — "keep building", "run the loop".
@@ -19,7 +22,12 @@ inputs:
       running it (for example a harness or end-to-end document), if anything.
     description: >-
       How to run the app and what to look at: a path to the project's runtime
-      instructions or scenario file, or plain text. Both agents read it.
+      instructions or scenario file, or plain text. Every agent reads it.
+  holdout:
+    default: ""
+    description: >-
+      Optional path to reviewer-only acceptance scenarios kept outside the
+      repository. Only the app check reads it; builders never see it.
   merge:
     default: auto
     description: >-
@@ -28,24 +36,117 @@ inputs:
   attempts:
     default: "3"
     description: >-
-      How many times the loop works the same issue or pull request without
-      progress before it labels it needs-owner and moves on.
+      How many times the loop works the same item without progress before it
+      labels it needs-owner and moves on.
+  rejections:
+    default: "2"
+    description: >-
+      How many review send-backs one item may collect before the loop stops
+      retrying and returns it to the owner.
+  deploy:
+    default: ""
+    description: >-
+      Optional trusted deployment command, forwarded to archon-deploy after a
+      merge. Empty skips deployment.
+  health:
+    default: ""
+    description: Trusted health command for archon-deploy; required with deploy.
 
 nodes:
-  - id: work
-    command: loop-work
+  # Choose one move and how to build it. `none` is a real route, so every later
+  # `when:` can read this node's fields: it always runs.
+  - id: pick
+    command: loop-pick
     context: fresh
     idle_timeout: 2700000
     with:
       runtime: "$INPUTS.runtime"
       attempts: "$INPUTS.attempts"
+      rejections: "$INPUTS.rejections"
+    output_format:
+      type: object
+      properties:
+        route: { type: string, enum: [continue, simple, complex, none] }
+        target: { type: string }
+        pr: { type: string }
+        confidence: { type: string, enum: [high, medium, low] }
+        reason: { type: string }
+      required: [route, target, pr, confidence, reason]
 
+  # Contained work and finishing an open pull request: the in-loop builder.
+  - id: build
+    command: loop-work
+    context: fresh
+    idle_timeout: 2700000
+    depends_on: [pick]
+    when: "$pick.output.route == 'continue' || $pick.output.route == 'simple'"
+    with:
+      route: "$pick.output.route"
+      target: "$pick.output.target"
+      pr: "$pick.output.pr"
+      reason: "$pick.output.reason"
+      runtime: "$INPUTS.runtime"
+
+  # Complex work: the full shipping pipeline (triage, investigate or plan,
+  # implement, multi-lens review, CI) up to a ready pull request. Ordered after
+  # build only so the two never run together; pick makes them exclusive.
+  - id: ship
+    include: archon-ship
+    depends_on: [pick, build]
+    trigger_rule: none_failed_min_one_success
+    when: "$pick.output.route == 'complex'"
+    with:
+      target: "$pick.output.target"
+      publish: "false"
+
+  # Black-box check: runs the app against the contract and the holdout before it
+  # reads any diff. all_done, so a build or ship that failed still gets an agent
+  # to look at what is there and record what happened.
+  - id: check-app
+    command: loop-check-app
+    context: fresh
+    idle_timeout: 2700000
+    depends_on: [pick, build, ship]
+    trigger_rule: all_done
+    when: "$pick.output.route != 'none'"
+    with:
+      route: "$pick.output.route"
+      target: "$pick.output.target"
+      pr: "$pick.output.pr"
+      builder: { from: "$build.output", if_skipped: "" }
+      runtime: "$INPUTS.runtime"
+      holdout: "$INPUTS.holdout"
+
+  # White-box review and the merge decision.
   - id: review
     command: loop-review
     context: fresh
-    depends_on: [work]
     idle_timeout: 2700000
+    depends_on: [check-app]
     with:
-      builder: "$work.output"
+      route: "$pick.output.route"
+      target: "$pick.output.target"
+      pr: "$pick.output.pr"
+      builder: { from: "$build.output", if_skipped: "" }
+      app_check: "$check-app.output"
       runtime: "$INPUTS.runtime"
       merge: "$INPUTS.merge"
+      rejections: "$INPUTS.rejections"
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [merged, sent-back, needs-owner, approved, nothing] }
+        pr: { type: string }
+        reason: { type: string }
+      required: [outcome, pr, reason]
+
+  # Merging is not shipping: with a deploy command set, roll the merge out and
+  # read the revision back.
+  - id: deploy
+    include: archon-deploy
+    depends_on: [review]
+    when: "$review.output.outcome == 'merged' && $INPUTS.deploy != ''"
+    with:
+      deploy: "$INPUTS.deploy"
+      health: "$INPUTS.health"
+      identity: ""

@@ -1,0 +1,41 @@
+# Dry-run fixture: a merge with a deploy command set rolls out through archon-deploy.
+pick:
+  route: simple
+  target: https://github.com/example/app/issues/5
+  pr: ''
+  confidence: high
+  reason: 'stub: tags need a migration and search across modules'
+build: 'Built it.
+
+  PR: https://github.com/example/app/pull/9'
+check-app: 'APP CHECK https://github.com/example/app/pull/9 at abc1234
+
+  Overall: PASS'
+review:
+  outcome: merged
+  pr: https://github.com/example/app/pull/9
+  reason: stub
+deploy__resolve:
+  revision: 0123456789abcdef0123456789abcdef01234567
+  branch: main
+  deploy: 'true'
+  health: 'true'
+  identity: ''
+deploy__deploy: '{"ok":true}'
+deploy__health: '{"ok":true}'
+deploy__verify:
+  deployed: true
+  revision: 0123456789abcdef0123456789abcdef01234567
+  observed: 0123456789abcdef0123456789abcdef01234567
+  summary: stub
+fixture:
+  expect: completed
+  reached:
+  - pick
+  - build
+  - check-app
+  - review
+  - deploy__verify
+  inputs:
+    deploy: 'true'
+    health: 'true'
