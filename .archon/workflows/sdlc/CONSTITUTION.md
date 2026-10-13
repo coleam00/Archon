@@ -8,7 +8,7 @@ A new step starts as an agent node: a prompt plus a small typed output. Most of 
 
 ## 2. Determinism after a failure, not before
 
-A script node, a guard, a wait or a retry is added only after a real run failed in a way an agent node can't handle. The node names that failure. An invariant someone can imagine is not a reason to add a node; say the invariant in the prompt.
+A script node, a guard, a wait or a retry is added only after a real run failed in a way an agent node can't handle. The node names that failure. The exception is a guard in front of an irreversible action, the kind [`README.md`](README.md#guards) keeps. An invariant someone can imagine is not a reason to add a node; say the invariant in the prompt.
 
 ## 3. One check at the boundary, not one per step
 
