@@ -11,7 +11,7 @@ let adapter: SlackAdapter;
 let plugin: SlackPlugin;
 let runAction: ReturnType<typeof mock<ChatContext['runAction']>>;
 const saved = { bot: process.env.SLACK_BOT_TOKEN, app: process.env.SLACK_APP_TOKEN };
-spyOn(console, 'error').mockImplementation(() => {});
+const consoleError = spyOn(console, 'error').mockImplementation(() => {});
 beforeEach(async () => {
   process.env.SLACK_BOT_TOKEN = 'bot';
   process.env.SLACK_APP_TOKEN = 'app';
@@ -515,3 +515,30 @@ test('approval delivery recovery survives paused edits and clears after resume',
   expect(nextApproval).toContain('Workflow paused');
   expect(nextApproval).not.toContain('Approval card could not be delivered');
 });
+
+for (const [cause, setup] of [
+  ['the recovery status edit fails', async () => started()],
+  [
+    'no status message exists',
+    async () => {
+      slack.failPost = new Error('private SDK details');
+      await started().catch(() => undefined);
+    },
+  ],
+] as const) {
+  test(`an undeliverable approval names its run for the operator when ${cause}`, async () => {
+    await setup();
+    slack.failPost = new Error('private SDK details');
+    slack.failUpdate = new Error('private SDK details');
+    consoleError.mockClear();
+    await approval();
+    const logs = consoleError.mock.calls.map(([line]) => String(line));
+    expect(logs.map(line => JSON.parse(line))).toContainEqual({
+      err: { name: 'Error' },
+      platform: 'slack',
+      operation: 'slack.bridge_approval_undelivered',
+      runId: 'run',
+    });
+    expect(logs.join('\n')).not.toMatch(/private SDK details|U1|C1|Alice/);
+  });
+}

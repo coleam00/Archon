@@ -183,7 +183,10 @@ export class SlackWorkflowBridge {
     } catch (err) {
       logFailure('slack.bridge_approval_post_failed', err);
       state.approvalDeliveryFailed = true;
-      await this.updateStatusMessage(state);
+      // With neither a card nor recovery text in Slack, only the operator can act on the
+      // pause, so the log names the run for the Web UI or `archon workflow approve`.
+      if (!(await this.updateStatusMessage(state)))
+        logFailure('slack.bridge_approval_undelivered', err, event.runId);
     }
     if (!approval.ts && state.approvals.get(event.nodeId) === approval)
       state.approvals.delete(event.nodeId);
@@ -256,8 +259,8 @@ export class SlackWorkflowBridge {
     overlay: Partial<
       Pick<RunSnapshot, 'status' | 'authoredOutcome' | 'totalCostUsd' | 'failureReason'>
     > = {}
-  ): Promise<void> {
-    if (!state.statusMessageTs) return;
+  ): Promise<boolean> {
+    if (!state.statusMessageTs) return false;
     const snapshot: RunSnapshot = { ...this.snapshot(state), ...overlay };
     const { blocks, fallbackText } = buildStatusBlocks(snapshot);
     try {
@@ -267,8 +270,10 @@ export class SlackWorkflowBridge {
         text: fallbackText,
         blocks,
       });
+      return true;
     } catch (error) {
       logFailure('slack.bridge_status_update_failed', error);
+      return false;
     }
   }
 
