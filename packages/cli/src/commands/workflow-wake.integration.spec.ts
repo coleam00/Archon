@@ -77,6 +77,9 @@ async function seed(wait: string, secondWait = ''): Promise<Fixture> {
   const project = join(root, 'project');
   const home = join(root, 'home');
   mkdirSync(join(project, '.archon/workflows'), { recursive: true });
+  // Conversations need a configured default provider.
+  mkdirSync(home);
+  writeFileSync(join(home, 'config.yaml'), 'defaultAssistant: claude\n');
   const workflowPath = join(project, '.archon/workflows/cold.yaml');
   writeFileSync(
     workflowPath,

@@ -50,13 +50,12 @@ async function latest(query: Query, project: string, name: string): Promise<Stat
   );
   return result.rows[0] ? hydrate(result.rows[0]) : null;
 }
-async function insert(query: Query, project: string, revision: StateRevision): Promise<boolean> {
+async function insert(query: Query, project: string, revision: StateRevision): Promise<void> {
   const writer = revision.writer;
-  const result = await query(
+  await query(
     `INSERT INTO remote_agent_state_revisions
     (project_key, name, revision, value, operation, writer_kind, writer_run_id, writer_node_path, writer_identity, created_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-    ON CONFLICT (project_key, name, revision) DO NOTHING`,
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [
       project,
       revision.name,
@@ -70,18 +69,29 @@ async function insert(query: Query, project: string, revision: StateRevision): P
       revision.createdAt,
     ]
   );
-  return result.rowCount === 1;
 }
 
-export function createSqlStateDocumentStore(db: Pick<IDatabase, 'query'>): IStateDocumentStore {
-  const query = db.query.bind(db);
+export function createSqlStateDocumentStore(
+  database: () => Pick<IDatabase, 'query' | 'withTransaction' | 'dialect'>
+): IStateDocumentStore {
+  const query: Query = <T>(sql: string, params?: unknown[]) => database().query<T>(sql, params);
   const write = async (
     input: Parameters<IStateDocumentStore['deleteStateDocument']>[0],
     operation: StateRevision['operation'],
     compute: (prior: StateRevision | null) => StateRevision['value']
   ): Promise<StateRevision> => {
-    for (let attempt = 0; attempt <= 5; attempt++) {
-      const prior = await latest(query, input.project, input.name);
+    const db = database();
+    // Writers to one document serialize, so a write never loses a race for its revision
+    // and only an explicit ifRevision mismatch fails. SQLite has one writer: a commit that
+    // read a stale snapshot fails with SQLITE_BUSY_SNAPSHOT and the adapter reruns this
+    // block. PostgreSQL READ COMMITTED needs a lock that also covers the first revision,
+    // before any row exists to lock.
+    return db.withTransaction(async txQuery => {
+      if (db.dialect === 'postgres')
+        await txQuery('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          JSON.stringify(['state-document', input.project, input.name]),
+        ]);
+      const prior = await latest(txQuery, input.project, input.name);
       const actual = prior?.revision ?? 0;
       if (input.ifRevision !== undefined && input.ifRevision !== actual)
         throw new StateRevisionConflictError(input.name, input.ifRevision, actual);
@@ -93,20 +103,9 @@ export function createSqlStateDocumentStore(db: Pick<IDatabase, 'query'>): IStat
         writer: input.writer,
         createdAt: new Date().toISOString(),
       };
-      const written = await insert(query, input.project, next);
-      if (written) return next;
-      if (input.ifRevision !== undefined || attempt === 5) {
-        const current = await latest(query, input.project, input.name);
-        throw new StateRevisionConflictError(
-          input.name,
-          input.ifRevision ?? actual,
-          current?.revision ?? 0
-        );
-      }
-      // Spread competing patch retries so eight writers need not collide in every round.
-      await new Promise(resolve => setTimeout(resolve, Math.random() * 10 * (attempt + 1)));
-    }
-    throw new Error('Unreachable state write');
+      await insert(txQuery, input.project, next);
+      return next;
+    });
   };
   return {
     getStateDocument: async (

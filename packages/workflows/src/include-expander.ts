@@ -70,7 +70,7 @@ import {
 } from './loader';
 import { resolveDeclaredInputs } from './workflow-inputs';
 import { resolveWorkflowName } from './router';
-import { parseWhenAtom, whenAtoms } from './when-atom';
+import { parseWhenExpression } from './when-atom';
 import { mapNodeTemplateSlots, mapNodeTemplateValueSlots } from './template-walker';
 import { resolveWorkflow, resolvedBodyNodes } from './graph-plan';
 import {
@@ -601,8 +601,8 @@ function applyInputsMacro(
 
   const substituteWhen = (when: string): string => {
     const expanded = substitute(when);
-    const wasParseable = whenAtoms(when).every(atom => parseWhenAtom(atom) !== null);
-    const isParseable = whenAtoms(expanded).every(atom => parseWhenAtom(atom) !== null);
+    const wasParseable = parseWhenExpression(when) !== null;
+    const isParseable = parseWhenExpression(expanded) !== null;
     if (expanded !== when && wasParseable && !isParseable) {
       throw new IncludeExpansionError(
         `Node '${includeNode.id}': input substitution made included node '${node.id}' field 'when' unparseable: "${when}" became "${expanded}". Put '$INPUTS.<name>' on the right-hand side of a comparison whose left-hand side is a node-output reference.`

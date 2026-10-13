@@ -39,7 +39,7 @@
       "src/commands/inspect-chat-plugin.test.ts"
     ],
     [
-      "src/commands/publish-chat-plugin.test.ts"
+      "src/commands/publish-plugin.test.ts"
     ],
     [
       "src/commands/workflow-provider-plugin.integration.spec.ts"
@@ -75,6 +75,9 @@
     ],
     [
       "src/commands/ai.test.ts"
+    ],
+    [
+      "src/commands/provider.test.ts"
     ],
     [
       "src/commands/validate.test.ts"

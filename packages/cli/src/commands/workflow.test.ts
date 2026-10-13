@@ -8003,12 +8003,14 @@ describe('workflowRunsCommand', () => {
         kind: 'awaiting_response',
         runId: 'run-gate',
         respondTo: { runId: 'run-gate', nodeId: 'approve' },
+        occurrence: 'legacy:approve',
         message: 'Ship it?',
       });
       expect(parsed.runs[1]?.attention).toEqual({
         kind: 'action_required',
         runId: 'run-wait',
         nodeId: 'plan',
+        occurrence: 'wait:2026-09-27T09:00:01.000Z',
         message: 'Check the plan',
       });
     });
@@ -14523,6 +14525,7 @@ describe('workflowWaitCommand', () => {
         kind: 'awaiting_response',
         runId: 'child-9',
         respondTo: { runId: 'child-9', nodeId: 'review' },
+        occurrence: 'legacy:review',
         message: 'Approve?',
       },
     });
@@ -14542,6 +14545,7 @@ describe('workflowWaitCommand', () => {
         kind: 'action_required',
         runId: FULL_ID,
         nodeId: 'rerun-ci',
+        occurrence: 'wait:2026-08-28T10:00:00.000Z',
         message: 'Re-run CI, then resume.',
       },
     });
@@ -14713,6 +14717,7 @@ describe('workflowWaitCommand', () => {
         kind: 'awaiting_response',
         runId: FULL_ID,
         respondTo: { runId: FULL_ID, nodeId: 'review' },
+        occurrence: 'legacy:review',
         message: 'Approve?',
       },
     });
@@ -14729,6 +14734,7 @@ describe('workflowWaitCommand', () => {
         kind: 'awaiting_response',
         runId: FULL_ID,
         respondTo: { runId: FULL_ID, nodeId: 'review' },
+        occurrence: 'legacy:review',
         message: 'Approve?',
       },
     });

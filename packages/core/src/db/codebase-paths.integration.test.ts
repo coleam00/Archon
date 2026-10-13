@@ -1,10 +1,20 @@
 // @archon-test-isolated
 import { test, mock, expect } from 'bun:test';
+import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { createMockPlatform } from '../test/mocks/platform';
 import { quoteCommandArg } from '../utils/command-args';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 import { verifyCodebasePathContract } from '../test/codebase-path-contract';
+
+// Conversations need a configured default provider; isolate the home that supplies it.
+const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-codebase-paths-')));
+process.env.ARCHON_HOME = join(root, 'home');
+await mkdir(process.env.ARCHON_HOME);
+await writeFile(join(process.env.ARCHON_HOME, 'config.yaml'), 'defaultAssistant: claude\n');
 
 const db = new SqliteAdapter(':memory:');
 mock.module('./connection', () => ({
@@ -48,5 +58,6 @@ test('SQLite rejects legacy paths and preserves registration identity on explici
     ).toBe(project.id);
   } finally {
     await db.close();
+    await removeTempTree(root);
   }
 });

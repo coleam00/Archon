@@ -16,6 +16,7 @@ import {
   workflowSourceSchema as engineWorkflowSourceSchema,
 } from '@archon/workflows/schemas/workflow';
 import {
+  createRunAttentionSchema,
   approvalContextSchema,
   workflowRunSchema as engineWorkflowRunSchema,
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
@@ -158,11 +159,24 @@ export const workflowRunMetadataSchema = z
   .catchall(z.unknown())
   .openapi('WorkflowRunMetadata');
 
+export const RUN_ATTENTION_SCHEMA_NAME = 'RunAttention';
+export const runAttentionSchema = createRunAttentionSchema(z.string().datetime()).openapi(
+  RUN_ATTENTION_SCHEMA_NAME
+);
+// OpenAPI 3.0's union null arm needs an explicit type or generated clients erase the entire union.
+const nullableRunAttentionSchema = z.union([runAttentionSchema, z.literal(null)]).openapi({
+  anyOf: [
+    { $ref: `#/components/schemas/${RUN_ATTENTION_SCHEMA_NAME}` },
+    { type: 'object', nullable: true, enum: [null] },
+  ],
+});
+
 /** A workflow run record (wire shape with ISO string dates). */
 export const workflowRunSchema = engineWorkflowRunSchema
   .extend({
     outcome: workflowRunOutcomeSchema,
     metadata: workflowRunMetadataSchema,
+    attention: nullableRunAttentionSchema,
     started_at: z.string(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
@@ -306,11 +320,18 @@ export const resetWorkflowNodeSessionsResponseSchema = z
 export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   .extend({
     metadata: workflowRunMetadataSchema,
+    attention: nullableRunAttentionSchema,
     started_at: z.string(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
   })
   .openapi('DashboardWorkflowRun');
+
+export const runsNeedingAttentionResponseSchema = z
+  .object({
+    runs: z.array(dashboardWorkflowRunSchema),
+  })
+  .openapi('RunsNeedingAttentionResponse');
 
 /** GET /api/dashboard/runs response. */
 export const dashboardRunsResponseSchema = z
