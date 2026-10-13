@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { DEFAULT_TEST_TIMEOUT_MS, removeTempTree } from '@archon/paths/test-utils';
 import { chatRunEventSchema, type ConnectedChat, type ChatRunEvent } from '@archon/chat-contract';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { terminalWorkflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
@@ -118,7 +118,7 @@ test.each([false, true])(
           duration: 10,
         });
       }
-      const deadline = Date.now() + 2000;
+      const deadline = Date.now() + DEFAULT_TEST_TIMEOUT_MS;
       while (first.length < 4 || second.length < 4) {
         if (Date.now() > deadline) throw new Error('Events were not forwarded');
         await new Promise(resolve => setTimeout(resolve, 5));
@@ -201,7 +201,7 @@ test('a stalled plugin does not delay run events for another plugin', async () =
         nodeName: 'Node',
       });
     }
-    const deadline = Date.now() + 2000;
+    const deadline = Date.now() + DEFAULT_TEST_TIMEOUT_MS;
     while (delivered.length < 1) {
       if (Date.now() > deadline) throw new Error('Healthy plugin was blocked');
       await new Promise(resolve => setTimeout(resolve, 5));
@@ -231,7 +231,7 @@ test('a cancelled run carries its cancellation reason to the plugin', async () =
       nodeId: 'node',
       reason: 'Cancelled by the run owner',
     });
-    const deadline = Date.now() + 2000;
+    const deadline = Date.now() + DEFAULT_TEST_TIMEOUT_MS;
     while (delivered.length < 1) {
       if (Date.now() > deadline) throw new Error('Event was not forwarded');
       await new Promise(resolve => setTimeout(resolve, 5));
