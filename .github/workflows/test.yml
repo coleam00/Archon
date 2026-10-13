@@ -169,6 +169,10 @@ jobs:
       # proves that; they cost seconds. The installer check is POSIX-only (validate skips
       # it on Windows). The test check uses the shared 20 s per-test budget in
       # scripts/bun-test-command.ts; see coleam00/Archon#3294.
+      - name: TEMP diag (Windows)
+        if: runner.os == 'Windows'
+        run: bun scripts/diag-win.ts
+
       - name: Validate (Windows)
         if: runner.os == 'Windows'
         run: bun run validate --only cli-import-boundary,package-edges,generated-files,tests
