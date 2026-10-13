@@ -8550,6 +8550,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     it.each([
       ['zero', { max_attempts: 1, delay_ms: 0 }, [0], true, 'transient'],
       ['default', undefined, [3000, 6000], false, 'transient'],
+      ['declared default delay', { max_attempts: 3 }, [3000, 6000, 12000], false, 'transient'],
       ['configured', { max_attempts: 3, delay_ms: 17 }, [17, 34, 68], false, 'transient'],
       [
         'capacity',
