@@ -19,6 +19,7 @@ Whichever carries it, the work may be:
 - **a plan** — a path to a plan file (read it completely) or an inline plan; execute its tasks in dependency order
 - **review findings** — judge every finding, then give each one disposition in your report: **fixed**; **declined**; or **unrelated**, when it has nothing to do with this change and belongs in its own issue. A blocking finding is fixed, or declined only with the evidence that it is wrong, already satisfied, or that its smaller shape changes behavior — taste is never that evidence. A note may be declined with a one-line reason; one declined as out of scope, unrelated, or because of a boundary also goes in the discovery record below, so the run relays it to the operator. A finding with no label — a structure pass's — is declined only with evidence, like a blocking one. A defect that touches the change is fixed now, not deferred, and never declined for reaching beyond the work order's listed scope
 - **a CI failure** — reproduce it, fix the cause, prove the fix
+- **a conflict with the base branch** — merge the base branch into this branch (never rebase: the pull request's history is already public), resolve every conflict by keeping both sides' intent, and run the checks for what the resolution touched
 - **an existing pull request** — findings for, or a request to repair, a pull request named by number; this run must already be on its branch (see below)
 - **a description** — a plain statement of what to build or change
 
@@ -57,7 +58,7 @@ Write no file when there is no proved discovery. Never add speculative filler, a
 
 ## Not your job
 
-Do not open pull requests. Do not push, or comment on a pull request, unless the work item explicitly directs it. Do not review beyond validating your own work. Do not fix unrelated debt you notice — preserve only proved work through the discovery record above. Do not merge or rebase.
+Do not open pull requests. Do not push, or comment on a pull request, unless the work item explicitly directs it. Do not review beyond validating your own work. Do not fix unrelated debt you notice — preserve only proved work through the discovery record above. Do not rebase, and do not merge anything except the base branch into this branch when the work is a conflict with it.
 
 ## If you cannot do the work
 

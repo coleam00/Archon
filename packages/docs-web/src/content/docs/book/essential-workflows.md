@@ -68,7 +68,7 @@ An experimental alternative to `archon-ship`, built beside it for comparison. Tr
 archon workflow run archon-prp --branch fix/login-crash "#142"
 ```
 
-**What it produces**: A PR marked ready for review, or a not-ready ending with its reason. It never merges and never syncs the base.
+**What it produces**: A PR marked ready for review, or a not-ready ending with its reason. It never merges the PR. When the PR conflicts with its base, GitHub runs no CI, so the CI agent sends the work back and the implementer merges the base into the branch.
 ---
 
 ### One stage at a time

@@ -7,8 +7,9 @@ description: |
   delivers on a proven cause. Delivery runs capped rounds of implement (which
   checks only what it changed; CI is the validation), draft PR, and review; after
   the review passes, simplify runs once, then one CI agent marks the PR ready on
-  green. Every other ending is not ready, with its
-  reason. Never merges and never syncs the base.
+  green. A conflict with the base sends the work back to implement, which merges
+  the base into the branch. Every other ending is not ready, with its reason.
+  Never merges the PR.
 
   Use when: comparing this shape with archon-ship on real work — "deliver this
   issue with archon-prp".
@@ -264,9 +265,9 @@ nodes:
               every blocking finding, or decline it only with the evidence that it
               is not a finding; fix a note or decline it with a one-line reason),
               and read $ARTIFACTS_DIR/ci.md when the round ended on a CI failure
-              this pull request caused. Record every disposition in
-              implementation.md. Do not cross an explicit boundary to make a
-              finding disappear.
+              this pull request caused or on a conflict with its base. Record
+              every disposition in implementation.md. Do not cross an explicit
+              boundary to make a finding disappear.
 
         - id: pr
           include: archon-pr
