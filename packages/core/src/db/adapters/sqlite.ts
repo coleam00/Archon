@@ -379,7 +379,9 @@ export class SqliteAdapter implements IDatabase {
         this.createSchema();
         this.db.run('COMMIT');
       } catch (error) {
-        this.db.run('ROLLBACK');
+        // SQLite may already have rolled back (SQLITE_FULL, SQLITE_IOERR); a ROLLBACK
+        // then would throw and hide the error that explains the failure.
+        if (this.db.inTransaction) this.db.run('ROLLBACK');
         throw error;
       }
     }
