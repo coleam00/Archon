@@ -1,6 +1,6 @@
 # Outcome: delivered. One round: the review passes, simplify finds a smaller shape,
-# the implementer adopts it and pushes, and the CI agent sees green and marks the
-# pull request ready. round and outcome run for real.
+# the implementer adopts it and pushes, a light review of that delta (the code lens
+# alone) passes, and the CI agent sees green and marks the pull request ready. round and outcome run for real.
 implement__implement:
   done: true
   green: true
@@ -38,9 +38,27 @@ reshape__implement:
   red_cause: ""
   summary: "stub: adopted one smaller shape, declined none; pushed"
 reshape__assert-changed: "1 file changed"
+rereview__mode: '{"continuation":true,"head":"fixturehead2","cursor":"fixturehead","risks":"fixture-owned-policy","execution":{"path":"rereview__mode","invocation":{"loopPath":[]}},"seams":false,"code":true,"tests":false,"errors":false,"docs":false}'
+rereview__scope:
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
+rereview__code: "0 findings in the reshape delta"
+rereview__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+rereview__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: the reshape delta is clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+rereview__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: the reshape delta is clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 ci: { state: green, summary: "stub: every check passed; marked ready" }
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   expect: completed
-  reached: [reshape__implement, ci, round, update-pr-body, outcome]
+  reached: [reshape__implement, rereview__code, rereview__synthesize, ci, round, update-pr-body, outcome]
 exec-code: true

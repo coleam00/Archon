@@ -416,6 +416,7 @@ describe('bundled-defaults', () => {
         'review',
         'simplify',
         'reshape',
+        'rereview',
         'ci',
         'round',
       ]);

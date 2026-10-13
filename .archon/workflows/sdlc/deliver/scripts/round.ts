@@ -13,6 +13,8 @@
  * - INPUTS_GREEN / INPUTS_RED_CAUSE: the implementer's verdict on the checks it ran.
  * - INPUTS_PR_URL: this round's pull request.
  * - INPUTS_REVIEW_READY / INPUTS_REVIEW_ACTION: the review verdict.
+ * - INPUTS_REREVIEW_*: the light review of reshape's delta, which decides in the
+ *   review's place when it ran.
  * - INPUTS_CI: the CI agent's state.
  * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.
  */
@@ -35,8 +37,10 @@ const previous = Number.parseInt(text(process.env.INPUTS_PREVIOUS), 10);
 const round = (Number.isNaN(previous) ? 0 : previous) + 1;
 const green = text(process.env.INPUTS_GREEN);
 const redCause = text(process.env.INPUTS_RED_CAUSE);
-const reviewReady = text(process.env.INPUTS_REVIEW_READY);
-const reviewAction = text(process.env.INPUTS_REVIEW_ACTION);
+const rereviewed = ['true', 'false'].includes(text(process.env.INPUTS_REREVIEW_READY));
+const review = rereviewed ? 'REREVIEW' : 'REVIEW';
+const reviewReady = text(process.env[`INPUTS_${review}_READY`]);
+const reviewAction = text(process.env[`INPUTS_${review}_ACTION`]);
 const ci = text(process.env.INPUTS_CI);
 const prUrl = text(process.env.INPUTS_PR_URL);
 
@@ -58,9 +62,9 @@ function decide(): { reason: Ended; again: boolean } {
 const SUMMARY_OF: Record<Ended, string> = {
   delivered: 'CI_SUMMARY',
   implement_blocked: 'IMPLEMENT_SUMMARY',
-  review_open: 'REVIEW_SUMMARY',
-  replan: 'REVIEW_SUMMARY',
-  needs_human: 'REVIEW_SUMMARY',
+  review_open: `${review}_SUMMARY`,
+  replan: `${review}_SUMMARY`,
+  needs_human: `${review}_SUMMARY`,
   ci_pr_caused: 'CI_SUMMARY',
   ci_other: 'CI_SUMMARY',
 };

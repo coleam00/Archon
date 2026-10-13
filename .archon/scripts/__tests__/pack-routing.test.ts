@@ -154,7 +154,7 @@ describe("deliver's terminal outcome", () => {
 });
 
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; summary: string }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -211,6 +211,14 @@ describe("deliver's round", () => {
       ready: false,
       reason: 'needs_human',
     });
+  });
+
+  it('lets the light review of the reshape delta decide the round', () => {
+    const rereview = { INPUTS_REREVIEW_ACTION: 'correct', INPUTS_REREVIEW_SUMMARY: 'reshape broke it', INPUTS_CI: 'null' };
+    const open = round({ ...rereview, INPUTS_REREVIEW_READY: 'false' });
+    expect(open).toMatchObject({ done: false, ready: false, reason: 'review_open' });
+    expect(open.summary).toContain('reshape broke it');
+    expect(round({ INPUTS_REREVIEW_READY: 'true', INPUTS_REREVIEW_ACTION: 'none' })).toMatchObject({ reason: 'delivered' });
   });
 
   it('ends typed at the round cap instead of exhausting the loop', () => {
