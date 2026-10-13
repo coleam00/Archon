@@ -75,7 +75,7 @@ export async function findOrCreateUserByPlatformIdentity(
   displayName?: string
 ): Promise<User> {
   identityPlatformSchema.parse(platform);
-  getLog().debug({ platform, platformUserId }, 'user.create_started');
+  getLog().debug({ platform }, 'user.create_started');
 
   const existing = await selectIdentity(platform, platformUserId);
 
@@ -87,11 +87,8 @@ export async function findOrCreateUserByPlatformIdentity(
       }
       return user;
     }
-    getLog().warn(
-      { identityId: existing.id, platform, platformUserId },
-      'user.identity_orphan_repair_started'
-    );
-    return await repairOrphanedIdentity(existing.id, platform, platformUserId, displayName);
+    getLog().warn({ identityId: existing.id, platform }, 'user.identity_orphan_repair_started');
+    return await repairOrphanedIdentity(existing.id, platform, displayName);
   }
 
   const db = getDatabase();
@@ -110,10 +107,7 @@ export async function findOrCreateUserByPlatformIdentity(
          VALUES ($1, $2, $3, $4)`,
         [user.id, platform, platformUserId, displayName ?? null]
       );
-      getLog().info(
-        { userId: user.id, platform, platformUserId, displayName },
-        'user.create_completed'
-      );
+      getLog().info({ userId: user.id, platform }, 'user.create_completed');
       return user;
     });
   } catch (err) {
@@ -122,7 +116,7 @@ export async function findOrCreateUserByPlatformIdentity(
     // the original error and rethrow — silently swallowing it would mask real
     // DB failures behind a misleading "race recovery" path.
     if (!isUniqueViolation(err)) {
-      getLog().error({ err, platform, platformUserId }, 'user.create_failed');
+      getLog().error({ err, platform }, 'user.create_failed');
       throw err;
     }
 
@@ -130,14 +124,14 @@ export async function findOrCreateUserByPlatformIdentity(
     if (recovered) {
       const user = await getUserById(recovered.user_id);
       if (user) {
-        getLog().info({ platform, platformUserId, userId: user.id }, 'user.create_race_recovered');
+        getLog().info({ platform, userId: user.id }, 'user.create_race_recovered');
         return user;
       }
     }
     // UNIQUE fired but recovery turned up empty (very unusual — possibly the
     // winner was deleted between the failure and our re-SELECT). Surface the
     // original error rather than silently returning undefined.
-    getLog().error({ err, platform, platformUserId }, 'user.create_failed_race_recovery_empty');
+    getLog().error({ err, platform }, 'user.create_failed_race_recovery_empty');
     throw err;
   }
 }
@@ -165,7 +159,7 @@ async function backfillDisplayName(
     }
   } catch (err) {
     getLog().warn(
-      { err: err as Error, userId: user.id, identityId: identity.id },
+      { err, userId: user.id, identityId: identity.id },
       'user.display_name_backfill_failed'
     );
   }
@@ -174,7 +168,6 @@ async function backfillDisplayName(
 async function repairOrphanedIdentity(
   identityId: string,
   platform: IdentityPlatform,
-  platformUserId: string,
   displayName: string | undefined
 ): Promise<User> {
   const db = getDatabase();
@@ -193,16 +186,13 @@ async function repairOrphanedIdentity(
         [user.id, displayName ?? null, identityId]
       );
       getLog().info(
-        { userId: user.id, identityId, platform, platformUserId },
+        { userId: user.id, identityId, platform },
         'user.identity_orphan_repair_completed'
       );
       return user;
     });
   } catch (err) {
-    getLog().error(
-      { err, identityId, platform, platformUserId },
-      'user.identity_orphan_repair_failed'
-    );
+    getLog().error({ err, identityId, platform }, 'user.identity_orphan_repair_failed');
     throw err;
   }
 }
@@ -218,10 +208,12 @@ export async function updateUserDisplayName(userId: string, displayName: string)
 /**
  * Raised when a GitHub account is already linked to a different Archon user.
  * Connecting must never silently reassign an identity from one user to another.
+ * The message reaches users and logs, so it names neither the login nor the
+ * other user; the caller already knows which account it just authorized.
  */
 export class GithubIdentityConflictError extends Error {
-  constructor(public readonly login: string) {
-    super(`GitHub account @${login} is already linked to a different Archon user.`);
+  constructor() {
+    super('This GitHub account is already linked to a different Archon user.');
     this.name = 'GithubIdentityConflictError';
   }
 }
@@ -259,13 +251,13 @@ export async function linkGithubIdentity(userId: string, login: string): Promise
   const existing = await selectIdentity(platform, login);
   if (existing) {
     if (existing.user_id !== userId) {
-      throw new GithubIdentityConflictError(login);
+      throw new GithubIdentityConflictError();
     }
     await pool.query(
       'UPDATE remote_agent_user_identities SET platform_display_name = $1 WHERE id = $2',
       [login, existing.id]
     );
-    getLog().info({ userId, login }, 'user.github_identity_relinked');
+    getLog().info({ userId, platform }, 'user.github_identity_relinked');
     return;
   }
   try {
@@ -274,7 +266,7 @@ export async function linkGithubIdentity(userId: string, login: string): Promise
        VALUES ($1, $2, $3, $4)`,
       [userId, platform, login, login]
     );
-    getLog().info({ userId, login }, 'user.github_identity_linked');
+    getLog().info({ userId, platform }, 'user.github_identity_linked');
   } catch (err) {
     // Concurrent connect of the same ('github', login) raced us past the SELECT
     // and inserted first. UNIQUE(platform, platform_user_id) rejects the loser —
@@ -283,9 +275,9 @@ export async function linkGithubIdentity(userId: string, login: string): Promise
     if (!isUniqueViolation(err)) throw err;
     const winner = await selectIdentity(platform, login);
     if (winner && winner.user_id !== userId) {
-      throw new GithubIdentityConflictError(login);
+      throw new GithubIdentityConflictError();
     }
-    getLog().info({ userId, login }, 'user.github_identity_link_race_recovered');
+    getLog().info({ userId, platform }, 'user.github_identity_link_race_recovered');
   }
 }
 

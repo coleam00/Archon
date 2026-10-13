@@ -330,12 +330,19 @@ describe('GitHubAdapter', () => {
   let adapter: GitHubAdapter;
 
   beforeEach(() => {
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.warn.mockClear();
     mockExecFile.mockClear();
     adapter = new GitHubAdapter(
       { kind: 'pat', token: 'fake-token-for-testing' },
       'fake-webhook-secret',
       mockLockManager
     );
+  });
+
+  test('initialization logs only operational configuration', () => {
+    expect(mockLogger.info).toHaveBeenCalledWith({ authMode: 'pat' }, 'github.adapter_initialized');
   });
 
   describe('streaming mode', () => {
@@ -430,7 +437,7 @@ describe('GitHubAdapter', () => {
     test('rejects unauthorized senders before the repository check', async () => {
       await receive('installation', { sender: { login: 'outsider' } });
       expect(mockLogger.info).toHaveBeenCalledWith(
-        { maskedUser: 'out***' },
+        { platform: 'github' },
         'github.unauthorized_webhook'
       );
       expect(mockLogger.debug).not.toHaveBeenCalled();
@@ -907,6 +914,7 @@ describe('GitHubAdapter', () => {
 
       await adapter.handleWebhook(payload, 'mock-signature');
 
+      expect(mockLogger.debug).toHaveBeenCalledWith('github.ignoring_own_comment');
       // Bot's own comments should be silently dropped - no lock acquired, no processing
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });
@@ -921,16 +929,21 @@ describe('GitHubAdapter', () => {
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });
 
-    test('should NOT filter comments from real users', async () => {
-      const adapter = createSelfFilterAdapter();
-      const payload = createCommentPayload('@archon please help', 'user123');
+    test.each(['please help', '/workflow run @alice'])(
+      'dispatches %s without logging command content',
+      async message => {
+        const adapter = createSelfFilterAdapter();
+        const payload = createCommentPayload(`@archon ${message}`, 'user123');
 
-      // handleWebhook progresses past self-filtering into DB/Octokit operations
-      await adapter.handleWebhook(payload, 'mock-signature');
+        // handleWebhook progresses past self-filtering into DB/Octokit operations
+        await adapter.handleWebhook(payload, 'mock-signature');
 
-      // Real user comments proceed to conversation creation (not self-filtered)
-      expect(mockGetOrCreateConversation).toHaveBeenCalled();
-    });
+        if (message.startsWith('/'))
+          expect(mockLogger.debug).toHaveBeenCalledWith('github.slash_command_processing');
+        // Real user comments proceed to conversation creation (not self-filtered)
+        expect(mockGetOrCreateConversation).toHaveBeenCalled();
+      }
+    );
 
     test('should ignore comments containing bot marker (works with user PAT)', async () => {
       const adapter = createSelfFilterAdapter();
@@ -942,6 +955,7 @@ describe('GitHubAdapter', () => {
 
       await adapter.handleWebhook(payload, 'mock-signature');
 
+      expect(mockLogger.debug).toHaveBeenCalledWith('github.ignoring_marked_comment');
       // Marked comments should be silently dropped
       expect(mockAcquireLock).not.toHaveBeenCalled();
     });

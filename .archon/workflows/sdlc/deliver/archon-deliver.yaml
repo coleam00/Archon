@@ -311,10 +311,13 @@ nodes:
 
               Run the focused checks on what you changed, then commit the
               correction and push it to the pull request's head branch,
-              $pr.output.head, naming the branch explicitly: never let git pick an
-              upstream, and never force-push. Do not change the PR's draft state or
-              edit the canonical review comment; the following review owns that
-              public verdict.
+              $pr.output.head, whatever its green state: the following review
+              reads the pull request's remote head. Name the branch explicitly:
+              never let git pick an upstream, and never force-push. Do not change
+              the PR's draft state or edit the canonical review comment; the
+              following review owns that public verdict. Record the exact push
+              target and a read-back of the remote ref in implementation.md;
+              never record credentials.
 
         # The same gate as after the implementation: a fixer's blocker or
         # introduced red stops the run instead of reaching another review.

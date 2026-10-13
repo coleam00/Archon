@@ -2000,7 +2000,10 @@ export function registerApiRoutes(
       if (err instanceof DeviceFlowError) {
         return c.json({ status: 'error' as const, detail: err.code });
       }
-      getLog().error({ err: err as Error }, 'auth.github_device_poll_failed');
+      getLog().error(
+        { err, userId: web.userId, platform: 'github' },
+        'auth.github_device_poll_failed'
+      );
       return apiError(c, 500, 'Failed to poll GitHub device flow');
     }
   });

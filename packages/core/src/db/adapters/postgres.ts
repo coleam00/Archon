@@ -9,6 +9,8 @@ import { createLogger } from '@archon/paths';
 import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION } from '../schema-version';
 
+const SCHEMA_LOCK_SQL = 'SELECT pg_advisory_xact_lock(1796)';
+
 /**
  * Postgres-only: NOTIFY `archon_dashboard_event` on every workflow_events insert, so
  * the server's PgNotifyListener can wake the dashboard poller to stream events from
@@ -75,7 +77,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       // (e.g. two app containers starting at once against a fresh DB).
       // Key 1796 is arbitrary — just needs to be stable across processes.
       await client.query('BEGIN');
-      await client.query('SELECT pg_advisory_xact_lock(1796)');
+      await client.query(SCHEMA_LOCK_SQL);
       // Probe before applying: afterwards every table exists, and a database that
       // predates schema-version tracking is indistinguishable from a fresh one.
       const probe = await client.query<{ exists: boolean }>(
@@ -151,14 +153,15 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
   /**
    * Install the Postgres-only `pg_notify` trigger on workflow_events (real-time
    * dashboard push). Idempotent and non-fatal — its own advisory-locked txn so
-   * concurrent boots don't race on DROP/CREATE TRIGGER.
+   * concurrent boots don't race on DROP/CREATE TRIGGER. Shares the schema lock:
+   * both transactions mutate workflow_events, so separate locks can deadlock.
    */
   private async installNotifyTrigger(): Promise<void> {
     let client: PoolClient | undefined;
     try {
       client = await this.pool.connect();
       await client.query('BEGIN');
-      await client.query('SELECT pg_advisory_xact_lock(1797)');
+      await client.query(SCHEMA_LOCK_SQL);
       await client.query(WORKFLOW_EVENT_NOTIFY_SQL);
       await client.query('COMMIT');
       getLog().info('db.postgres_notify_trigger_installed');
