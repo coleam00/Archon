@@ -185,6 +185,9 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Enables workflow run detail views and debugging
   - On PostgreSQL, `event_order` follows commit order: a row committed later always has a higher value. A deferred constraint trigger (`archon_workflow_event_order`) assigns it at commit while holding an advisory lock, so committing event writers draw values one at a time. Both SQL dialects retain the committed head in `remote_agent_workflow_event_sequence`, so event or run deletion never moves it backwards. PostgreSQL draws from its non-reusing sequence; SQLite increments the high-water row under its single writer
   - Indexed on `created_at` (`idx_workflow_events_created_at`) for the dashboard event poller's cross-run tail. On PostgreSQL an `AFTER INSERT` trigger (`archon_workflow_event_notify`) calls `pg_notify('archon_dashboard_event', …)` so runs started out of process (the `archon` CLI / `--detach`) stream live to the console; on SQLite the poller picks them up within its interval. The trigger is Postgres-only and best-effort (a role without `CREATE TRIGGER` degrades to poll-only, not a boot failure).
+  - A `BEFORE DELETE` trigger copies each deleted row into `remote_agent_workflow_event_archive`, which has the same columns and no run foreign keys, so cursors saved before a deletion can still read the payload. Schema apply adds any column the events table gains to the archive as well
+
+- **`remote_agent_workflow_event_sequence`** - Single-row high-water mark of committed `event_order` values; it never moves backwards when events or runs are deleted
 
 - **`remote_agent_messages`** - Conversation message history
   - Persists user and assistant messages with timestamps
