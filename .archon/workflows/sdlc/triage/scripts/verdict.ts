@@ -25,13 +25,22 @@ import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 
 type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
 type Complexity = 'small' | 'risky' | 'large';
+type Route = 'investigate' | 'plan' | 'deliver' | 'continue';
 
-// Exactly one state label per item.
-const STATE_LABEL: Record<Contract, string> = {
-  READY: 'archon-ready',
+// Exactly one state label per item. A READY item's label names the route the run
+// takes on it: archon-ready delivers (a new pull request, or the open one it
+// continues), archon-plan plans then delivers, and archon-issue investigates then
+// delivers.
+const STATE_LABEL: Record<Exclude<Contract, 'READY'>, string> = {
   NEEDS_CONTRACT_WORK: 'archon-needs-contract',
   BLOCKED: 'archon-blocked',
   NO_ACTION: 'archon-close',
+};
+const ROUTE_LABEL: Record<Route, string> = {
+  deliver: 'archon-ready',
+  continue: 'archon-ready',
+  plan: 'archon-plan',
+  investigate: 'archon-issue',
 };
 const COMPLEXITY_LABEL: Record<Complexity, string> = {
   small: 'archon-small',
@@ -39,7 +48,12 @@ const COMPLEXITY_LABEL: Record<Complexity, string> = {
   large: 'archon-large',
 };
 const PACK_LABELS: Record<string, { color: string; description: string }> = {
-  'archon-ready': { color: '0E8A16', description: 'Triage: the contract is ready for a run' },
+  'archon-ready': { color: '0E8A16', description: 'Triage: ready to deliver' },
+  'archon-plan': { color: '1D76DB', description: 'Triage: ready; a plan comes before delivery' },
+  'archon-issue': {
+    color: 'C5DEF5',
+    description: 'Triage: ready; an investigation comes before delivery',
+  },
   'archon-needs-contract': {
     color: 'D93F0B',
     description: "Triage: one of the contract's six elements is missing",
@@ -189,7 +203,7 @@ function apply(item: Item, wanted: string[], area: string[]): string[] {
 
 /** One branch of the triage decision, as the node's schema admits it. */
 type Decision =
-  | { contract: 'READY'; route: 'investigate' | 'plan' | 'deliver' }
+  | { contract: 'READY'; route: Exclude<Route, 'continue'> }
   | { contract: 'READY'; route: 'continue'; pull_request: number }
   | { contract: 'NEEDS_CONTRACT_WORK'; proposed_edits: Edits }
   | { contract: 'BLOCKED'; blocked_reason: string; blocked_by: string[] }
@@ -253,7 +267,9 @@ function main(): void {
     return;
   }
 
-  let labels = [STATE_LABEL[contract]];
+  let labels = [
+    decision.contract === 'READY' ? ROUTE_LABEL[decision.route] : STATE_LABEL[decision.contract],
+  ];
   // Size only matters on an item that can still be worked; a close verdict carries none.
   if (contract !== 'NO_ACTION') labels.push(COMPLEXITY_LABEL[complexity]);
 

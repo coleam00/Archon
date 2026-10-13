@@ -71,6 +71,20 @@ test('unpublished and non-tracker triage never invoke either transport', () => {
   }
 });
 
+test('a ready item is labelled with the route the run takes on it', () => {
+  for (const [decision, label] of [
+    [{ contract: 'READY', route: 'plan' }, 'archon-plan'],
+    [{ contract: 'READY', route: 'investigate' }, 'archon-issue'],
+    [{ contract: 'READY', route: 'continue', pull_request: 3 }, 'archon-ready'],
+  ] as const) {
+    const run = runPackScript('triage/scripts/verdict', {
+      inputs: { ...inputs, INPUTS_PUBLISH: 'false', INPUTS_DECISION: JSON.stringify(decision) },
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout).labels).toEqual([label, 'archon-small', 'area', 'nonexistent'].sort());
+  }
+});
+
 test('malformed qualified triage identity refuses before invoking a transport', () => {
   for (const item of [
     { repo: { host: '', path: 'repo' }, number: 1 },
