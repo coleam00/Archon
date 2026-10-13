@@ -84,6 +84,19 @@ describe("ship's terminal outcome", () => {
     expect(result.summary).toContain('needs a product call\n- keep the field?\n- which default?');
   });
 
+  it('relays questions the planner judged non-blocking with a delivery', () => {
+    const result = outcome({
+      INPUTS_ROUTE: 'plan',
+      INPUTS_CONTRACT: 'READY',
+      INPUTS_OPEN_QUESTIONS: JSON.stringify(['rename the flag later?']),
+      INPUTS_DELIVERED: 'true',
+      INPUTS_DELIVERY: 'https://x/pull/1',
+      INPUTS_DELIVERY_REASON: 'delivered',
+    });
+    expect(result).toMatchObject({ delivered: true, reason: 'delivered' });
+    expect(result.summary).toContain('non-blocking:\n- rename the flag later?');
+  });
+
   it('names a blocked item as requested work not done', () => {
     const result = outcome({ INPUTS_CONTRACT: 'BLOCKED', INPUTS_BLOCKED_REASON: 'waits on a release' });
     expect(result.delivered).toBe(false);

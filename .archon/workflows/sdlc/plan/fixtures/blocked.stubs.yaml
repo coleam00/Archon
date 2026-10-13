@@ -1,12 +1,11 @@
 # Dry-run fixture: the planner names a call only a person can make. Not ready is a
-# VALID outcome: the run must COMPLETE (consumers gate on the derived field), never
-# fail on honesty.
+# VALID outcome: the run must COMPLETE (consumers gate on the field), never fail
+# on honesty.
 plan:
+  ready: false
   open_questions:
     - "stub: no project document rules on the new persisted field; keep it or derive it?"
   summary: "stub: stopped on one open question — the plan names it"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 fixture:
   expect: completed
-  reached: [verdict]
-exec-code: true

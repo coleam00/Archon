@@ -10,11 +10,12 @@ triage__triage:
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 intel: "stub: no usage-data source is connected; the open call turns on how often operators edit the field"
 planned__plan:
+  ready: false
   open_questions:
     - "stub: keep the new persisted field or derive it? No project document rules on it."
   summary: "stub: owner decision required before implementation"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 fixture:
   expect: completed
-  reached: [intel, planned__verdict, outcome]
+  reached: [intel, outcome]
 exec-code: true

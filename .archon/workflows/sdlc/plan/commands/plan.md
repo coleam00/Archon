@@ -68,7 +68,8 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
 
 ## Declare the verdict
 
-- `open_questions` — one entry per call that belongs to a person, empty when there is none. An empty list is how you say the plan is complete enough to execute without asking anyone; any entry stops the run before delivery and relays your questions to the operator. Each entry states the decision, the options and what each one costs, which of the three conditions above makes it a person's call, and one line the project's direction document could carry so that a later run settles the same call without asking.
+- `ready` — your judgment that the plan can be executed without asking anyone. When it is false, `open_questions` names at least one call that blocks it. It may be true while questions remain only when you judge that none of them blocks delivery; the run then delivers and relays those questions to the operator.
+- `open_questions` — one entry per call that belongs to a person, empty when there is none. Each entry states the decision, the options and what each one costs, which of the three conditions above makes it a person's call, and one line the project's direction document could carry so that a later run settles the same call without asking.
 - `summary` — a few sentences: the chosen approach (or the open questions), and that the full plan is at `$ARTIFACTS_DIR/plan.md`.
 - `report` — a pointer to the report you just wrote, copied exactly:
 

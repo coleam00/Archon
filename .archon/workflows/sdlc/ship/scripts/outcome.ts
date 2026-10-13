@@ -51,6 +51,14 @@ const delivery = text(process.env.INPUTS_DELIVERY);
 /** Why no delivery ran. */
 type Stop = 'no_action' | 'blocked' | 'needs_contract' | 'refuted' | 'not_rooted' | 'needs_human';
 
+/**
+ * The planner's open questions as a list. Each carries the direction line that would
+ * settle it next time; the operator decides whether to record it.
+ */
+function questions(): string {
+  return (openQuestions ?? []).map(question => `- ${question}`).join('\n');
+}
+
 function stopped(): { readonly reason: Stop; readonly text: string; readonly report: string } {
   if (route === 'no_action') {
     if (contract === 'NO_ACTION') {
@@ -79,12 +87,9 @@ function stopped(): { readonly reason: Stop; readonly text: string; readonly rep
       report: 'investigation.md',
     };
   }
-  // Each question carries the direction line that would settle it next time; the
-  // operator decides whether to record it.
-  const questions = (openQuestions ?? []).map(question => `- ${question}`).join('\n');
   return {
     reason: 'needs_human',
-    text: `Not done: planning stopped on calls only a person can make. ${planSummary ?? ''}\n${questions}`,
+    text: `Not done: planning stopped on calls only a person can make. ${planSummary ?? ''}\n${questions() || '- The planner named no question; read the plan.'}`,
     report: 'plan.md',
   };
 }
@@ -98,9 +103,11 @@ if (delivered === 'null') {
   });
 } else {
   // Deliver ran, so its outcome is the report; its summary already carries the caveats.
+  // Questions the planner judged non-blocking still reach the operator.
+  const open = questions();
   emit({
     delivered: delivered === 'true',
     reason: text(process.env.INPUTS_DELIVERY_REASON),
-    summary: delivery,
+    summary: open === '' ? delivery : `${delivery}\n\nOpen questions the planner judged non-blocking:\n${open}`,
   });
 }
