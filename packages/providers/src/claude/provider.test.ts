@@ -4241,7 +4241,10 @@ test('Claude diagnostic hook uses configured binary resolution over streams', as
     source: 'config',
   });
   try {
-    const request = { assistantConfig: { claudeBinaryPath: process.execPath } };
+    const request = {
+      signal: new AbortController().signal,
+      assistantConfig: { claudeBinaryPath: process.execPath },
+    };
     const direct = await createProvider().diagnose(request);
     expect(await overStreams(createProvider, descriptor).diagnose!(request)).toEqual(direct);
     expect(direct.checks[0].status).toBe('ok');

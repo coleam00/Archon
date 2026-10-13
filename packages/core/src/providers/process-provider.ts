@@ -270,10 +270,11 @@ export class ProcessAgentProvider implements IAgentProvider {
   async diagnose(
     request: Parameters<NonNullable<IAgentProvider['diagnose']>>[0]
   ): ReturnType<NonNullable<IAgentProvider['diagnose']>> {
-    const process = startProcess(this.descriptor, this.argv, {});
+    const process = startProcess(this.descriptor, this.argv, {}, request.signal);
     try {
       return await (await process.connect()).diagnose(request);
     } catch (error) {
+      request.signal.throwIfAborted();
       throw await process.failure(error);
     } finally {
       await process.dispose(true);

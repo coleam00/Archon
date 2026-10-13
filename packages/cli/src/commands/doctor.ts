@@ -1,4 +1,13 @@
-import { noDefaultProviderMessage } from '@archon/provider-contract';
+import {
+  noDefaultProviderMessage,
+  MAINTAINED_PROVIDER_IDS,
+  isMaintainedProvider,
+  type ProviderRegistry,
+} from '@archon/provider-contract';
+import { providerRegistry } from '@archon/providers';
+import { getAgentProvider } from '@archon/core/services/provider-admission';
+import { isProviderReceipt } from '@archon/plugin-manifest';
+import { readReceipts } from '@archon/plugin-manifest/store';
 /**
  * Doctor command - Verifies the local Archon setup.
  *
@@ -14,24 +23,13 @@ import {
   createLogger,
   getTelemetryStatus,
   canonicalizeProjectPath,
+  getPluginsPath,
+  BUNDLED_VERSION,
+  BUNDLED_IS_BINARY,
 } from '@archon/paths';
-import {
-  resolveCodexBinaryWithSource,
-  type CodexBinarySource,
-} from '@archon/providers/codex/binary-resolver';
-import {
-  resolveClaudeBinaryWithSource,
-  type ClaudeBinaryResolution,
-} from '@archon/providers/claude/binary-resolver';
-import type { probeOpencodeRuntime } from '@archon/providers/community/opencode/runtime';
 import type { IAgentProvider } from '@archon/providers';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
 import type { CredentialStatus } from '@archon/provider-contract';
-
-// Vendor-canonical credential id for Codex (since #1955 credentials are keyed
-// by vendor, not agent). A connected `openai` key signals Codex intent even
-// when it isn't the configured default assistant.
-const CODEX_CREDENTIAL_VENDOR = 'openai';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -52,10 +50,6 @@ export interface CheckResult {
 
 /**
  * Report whether the global and repository `.archon/config.yaml` actually load.
- *
- * Its own check rather than a signal folded into the binary checks: those two
- * degrade to env/autodetect when config load throws (#2263), which protects
- * binary resolution but would hide a config the rest of the CLI cannot read.
  */
 export async function checkConfigFiles(
   cwd: string = process.cwd(),
@@ -98,292 +92,77 @@ export async function checkProviderDeprecation(
 
 async function defaultLoadMergedConfig(cwd: string): Promise<MergedConfig> {
   // Lazy import so doctor doesn't pull the full @archon/core graph for an
-  // unrelated check (matches defaultLoadClaudeBinaryDeps).
+  // unrelated check.
   const { loadConfig } = await import('@archon/core');
   return loadConfig(cwd);
 }
 
-export interface ClaudeBinaryDeps {
-  /** `assistants.claude.claudeBinaryPath` from the merged config, if configured. */
-  configBinaryPath?: string;
-}
-
-/**
- * Verify the Claude Code binary resolves and spawns.
- *
- * Delegates to the SAME resolver the runtime uses
- * (`resolveClaudeBinaryWithSource`) instead of reading `CLAUDE_BIN_PATH`
- * directly, and reports which tier produced the path (env / config /
- * autodetect). Reading only the env var made doctor report a hard FAIL on
- * setups that run fine, because `assistants.claude.claudeBinaryPath` is the
- * documented way to configure compiled builds — training users to ignore the
- * one tool meant to catch real environment breakage (#2263).
- */
-export async function checkClaudeBinary(
-  loadDeps: () => Promise<ClaudeBinaryDeps> = defaultLoadClaudeBinaryDeps,
-  resolve: (
-    configPath?: string
-  ) => Promise<ClaudeBinaryResolution | undefined> = resolveClaudeBinaryWithSource
+export async function checkInstalledProviders(
+  registry: ProviderRegistry = providerRegistry,
+  loadVersions: () => Promise<ReadonlyMap<string, string>> = async () =>
+    new Map(
+      (await readReceipts(getPluginsPath()))
+        .filter(isProviderReceipt)
+        .map(receipt => [receipt.descriptor.id, receipt.descriptor.version])
+    )
 ): Promise<CheckResult> {
-  const label = 'Claude binary';
-  let deps: ClaudeBinaryDeps;
+  const label = 'Installed providers';
   try {
-    deps = await loadDeps();
-  } catch (err) {
-    // Config load can throw (e.g. malformed YAML) — degrade to env/autodetect
-    // rather than failing the whole check. Mirrors checkCodexBinary.
-    getLog().debug({ err }, 'doctor.claude_deps_load_failed');
-    deps = {};
-  }
-
-  let resolved: ClaudeBinaryResolution | undefined;
-  try {
-    resolved = await resolve(deps.configBinaryPath);
-  } catch (err) {
-    // Binary mode + whole chain empty → the resolver throws with install
-    // instructions. That message is the actionable one, so surface it verbatim.
-    return { label, status: 'fail', message: (err as Error).message };
-  }
-
-  if (!resolved) {
-    return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
-  }
-
-  try {
-    await execFileAsync(resolved.path, ['--version'], { timeout: 5000 });
+    const versions = await loadVersions();
+    const installed = registry.list();
+    const unavailable = [...new Set([...MAINTAINED_PROVIDER_IDS, ...versions.keys()])]
+      .map(id => registry.unavailable?.(id))
+      .filter((reason): reason is string => reason !== undefined);
+    const lines = installed.map(provider => {
+      const version =
+        !BUNDLED_IS_BINARY && isMaintainedProvider(provider.id)
+          ? BUNDLED_VERSION
+          : (versions.get(provider.id) ??
+            (provider.builtIn || provider.deprecationNotice
+              ? BUNDLED_VERSION
+              : 'version not reported'));
+      return `${provider.id} (${version})`;
+    });
     return {
       label,
-      status: 'pass',
-      message: `${resolved.path} (via ${resolved.source}, spawns OK)`,
+      status: installed.length === 0 || unavailable.length > 0 ? 'fail' : 'pass',
+      message: [
+        installed.length === 0 ? noDefaultProviderMessage(registry) : lines.join(', '),
+        ...unavailable,
+      ].join('\n    '),
     };
-  } catch (err) {
+  } catch (error) {
     return {
       label,
       status: 'fail',
-      message: `${resolved.path} did not spawn: ${(err as Error).message}`,
+      message: error instanceof Error ? error.message : String(error),
     };
   }
 }
 
-export async function defaultLoadClaudeBinaryDeps(
-  // Injected so the config-key mapping — the tier #2263 was actually about —
-  // can be asserted without mock.module(), which is process-global and would
-  // leak into every other test in this file's batch. Defaults to the real
-  // lazy import so the production path is the zero-argument call.
-  loadMergedConfig: (
-    cwd: string
-  ) => Promise<Pick<MergedConfig, 'assistants'>> = defaultLoadMergedConfig
-): Promise<ClaudeBinaryDeps> {
-  const config = await loadMergedConfig(process.cwd());
-  return { configBinaryPath: config.assistants.claude.claudeBinaryPath };
-}
-
-export interface CodexBinaryDeps {
-  /** `assistants.codex.codexBinaryPath` from the merged config, if configured. */
-  configBinaryPath?: string;
-  /** True when the merged default assistant resolves to codex. */
-  isDefaultAssistant: boolean;
-  /** True when the CLI user has connected an OpenAI (Codex) credential. */
-  credentialConnected: boolean;
-}
-
-/**
- * Verify the Codex CLI binary resolves and spawns. Mirrors `checkClaudeBinary`,
- * but uses Codex's richer four-tier resolution (env → config → vendor →
- * autodetect) and reports which tier resolved it. Skips (never fails) when
- * Codex isn't the configured assistant anywhere and no OpenAI (Codex)
- * credential is connected, so Claude-only users aren't nagged about a binary
- * they will never use.
- */
-export async function checkCodexBinary(
-  env: NodeJS.ProcessEnv,
-  // Injected so tests can drive every branch without the dynamic @archon/core
-  // import or a real binary on disk.
-  loadDeps: (env: NodeJS.ProcessEnv) => Promise<CodexBinaryDeps> = defaultLoadCodexBinaryDeps,
-  resolve: (
-    configPath?: string
-  ) => Promise<
-    { path: string; source: CodexBinarySource } | undefined
-  > = resolveCodexBinaryWithSource
-): Promise<CheckResult> {
-  const label = 'Codex binary';
-
-  let deps: CodexBinaryDeps;
+export async function checkProviderDiagnostics(
+  id: string,
+  provider?: Pick<IAgentProvider, 'diagnose'>,
+  load: () => Promise<Pick<MergedConfig, 'assistants'>> = () =>
+    defaultLoadMergedConfig(process.cwd()),
+  signal: AbortSignal = AbortSignal.timeout(20_000)
+): Promise<CheckResult[]> {
+  const label = `${id} diagnostics`;
   try {
-    deps = await loadDeps(env);
-  } catch (err) {
-    // Config load can throw (e.g. a typo'd DEFAULT_AI_ASSISTANT) — degrade to
-    // env-only signals rather than failing the whole check.
-    getLog().debug({ err }, 'doctor.codex_deps_load_failed');
-    deps = { isDefaultAssistant: false, credentialConnected: false };
+    provider ??= getAgentProvider(id);
+    if (!provider.diagnose) return [{ label, status: 'skip', message: 'no diagnostics hook' }];
+    const config = await load();
+    const diagnostics = await provider.diagnose({ assistantConfig: config.assistants[id], signal });
+    return diagnostics.checks.map(check => ({
+      label: `${id}: ${check.label}`,
+      status: check.status === 'ok' ? 'pass' : check.status,
+      message: `${check.message}${check.remedy ? ` Remedy: ${check.remedy}` : ''}`,
+    }));
+  } catch (error) {
+    return [
+      { label, status: 'fail', message: error instanceof Error ? error.message : String(error) },
+    ];
   }
-
-  const configured =
-    env.DEFAULT_AI_ASSISTANT === 'codex' ||
-    Boolean(env.CODEX_BIN_PATH) ||
-    deps.isDefaultAssistant ||
-    Boolean(deps.configBinaryPath) ||
-    deps.credentialConnected;
-
-  if (!configured) {
-    return {
-      label,
-      status: 'skip',
-      message: 'Codex not configured (not the default assistant, no OpenAI credential connected)',
-    };
-  }
-
-  let resolved: { path: string; source: CodexBinarySource } | undefined;
-  try {
-    resolved = await resolve(deps.configBinaryPath);
-  } catch (err) {
-    // Binary mode + unresolved → the resolver throws with install instructions.
-    return { label, status: 'fail', message: (err as Error).message };
-  }
-
-  // Dev mode: the resolver returns undefined and the SDK resolves via node_modules.
-  if (!resolved) {
-    return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
-  }
-
-  try {
-    await execFileAsync(resolved.path, ['--version'], { timeout: 5000 });
-    return {
-      label,
-      status: 'pass',
-      message: `${resolved.path} (via ${resolved.source}, spawns OK)`,
-    };
-  } catch (err) {
-    return {
-      label,
-      status: 'fail',
-      message: `${resolved.path} did not spawn: ${(err as Error).message}`,
-    };
-  }
-}
-
-async function defaultLoadCodexBinaryDeps(env: NodeJS.ProcessEnv): Promise<CodexBinaryDeps> {
-  // Lazy imports so doctor doesn't pull the full @archon/core graph for an
-  // unrelated check (matches defaultLoadDatabaseDeps / defaultLoadProviderDeps).
-  const { loadConfig, listUserProviderKeys } = await import('@archon/core');
-  const userDb = await import('@archon/core/db/users');
-  const config = await loadConfig(process.cwd());
-
-  let credentialConnected = false;
-  const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
-  if (cliId) {
-    try {
-      const user = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
-      const rows = await listUserProviderKeys(user.id);
-      credentialConnected = rows.some(r => r.provider === CODEX_CREDENTIAL_VENDOR);
-    } catch (err) {
-      // Credential lookup is best-effort — a DB hiccup shouldn't force the
-      // binary check to run or skip; treat as "no credential connected".
-      getLog().debug({ err }, 'doctor.codex_credential_lookup_failed');
-    }
-  }
-
-  return {
-    configBinaryPath: config.assistants.codex.codexBinaryPath,
-    isDefaultAssistant: config.assistant === 'codex',
-    credentialConnected,
-  };
-}
-
-export interface OpenCodeDeps {
-  /** True when the merged default assistant is opencode. */
-  isDefaultAssistant: boolean;
-  probeRuntime: typeof probeOpencodeRuntime;
-}
-
-/**
- * OpenCode startup spawns a child process and binds a port. Doctor checks its
- * dependencies without booting it, only when configured or requested with --full.
- */
-export async function checkOpenCode(
-  env: NodeJS.ProcessEnv,
-  full: boolean,
-  loadDeps: () => Promise<OpenCodeDeps> = defaultLoadOpenCodeDeps
-): Promise<CheckResult> {
-  const label = 'OpenCode runtime';
-
-  let deps: OpenCodeDeps | undefined;
-  let loadError: Error | undefined;
-  try {
-    deps = await loadDeps();
-  } catch (err) {
-    // Keep the load error — if the check turns out to be in scope we must
-    // report *this* failure, not a fabricated "entrypoint missing" verdict.
-    loadError = err as Error;
-    getLog().debug({ err }, 'doctor.opencode_deps_load_failed');
-  }
-
-  const configured = env.DEFAULT_AI_ASSISTANT === 'opencode' || (deps?.isDefaultAssistant ?? false);
-  if (!configured && !full) {
-    return {
-      label,
-      status: 'skip',
-      message: 'OpenCode not configured (pass --full to probe the runtime dependencies)',
-    };
-  }
-
-  // In scope (configured or --full) but the probe deps never loaded — surface
-  // the real load failure instead of falsely blaming the SDK entrypoint below.
-  if (!deps) {
-    return {
-      label,
-      status: 'fail',
-      message: `runtime probe unavailable: ${loadError?.message ?? 'unknown error'}. Reinstall dependencies (bun install).`,
-    };
-  }
-
-  let availability: Awaited<ReturnType<OpenCodeDeps['probeRuntime']>>;
-  try {
-    availability = await deps.probeRuntime();
-  } catch (err) {
-    return {
-      label,
-      status: 'fail',
-      message: `runtime SDK not resolvable: ${(err as Error).message}. Reinstall dependencies (bun install).`,
-    };
-  }
-
-  switch (availability) {
-    case 'ready':
-      return {
-        label,
-        status: 'pass',
-        message: 'embedded runtime SDK and opencode executable present (server not started)',
-      };
-    case 'executable-missing':
-      return {
-        label,
-        status: 'fail',
-        message:
-          'opencode executable not found on PATH. Install the OpenCode CLI and add it to PATH.',
-      };
-    case 'sdk-entrypoint-missing':
-      return {
-        label,
-        status: 'fail',
-        message:
-          '@opencode-ai/sdk resolved but the createOpencode entrypoint is missing — reinstall dependencies (bun install).',
-      };
-    default: {
-      const unhandled: never = availability;
-      throw new Error(`unhandled OpenCode availability: ${String(unhandled)}`);
-    }
-  }
-}
-
-async function defaultLoadOpenCodeDeps(): Promise<OpenCodeDeps> {
-  const { loadConfig } = await import('@archon/core');
-  const { probeOpencodeRuntime } = await import('@archon/providers/community/opencode/runtime');
-  const config = await loadConfig(process.cwd());
-  return {
-    isDefaultAssistant: config.assistant === 'opencode',
-    probeRuntime: probeOpencodeRuntime,
-  };
 }
 
 export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> {
@@ -1005,10 +784,7 @@ function renderResult(r: CheckResult): string {
 export async function doctorCommand(
   // Injected so tests can drive the exit-code contract and the
   // Promise.allSettled rejection branch with synthetic checks.
-  checks?: (() => Promise<CheckResult>)[],
-  // `--full` opts the OpenCode runtime probe in even when OpenCode isn't the
-  // configured assistant. Does not boot the runtime — only widens the gate.
-  full = false
+  checks?: (() => Promise<CheckResult | CheckResult[]>)[]
 ): Promise<number> {
   console.log('archon doctor — verifying your setup\n');
   getLog().info('doctor.run_started');
@@ -1018,12 +794,11 @@ export async function doctorCommand(
     ? checks.map(fn => fn())
     : [
         checkConfigFiles(),
-        checkClaudeBinary(),
-        checkCodexBinary(env),
+        checkInstalledProviders(),
+        ...providerRegistry.list().map(provider => checkProviderDiagnostics(provider.id)),
         checkGhAuth(env),
         checkAssistantLogin(env),
         checkProviderDeprecation(),
-        checkOpenCode(env, full),
         checkDatabase(),
         checkFolderProject(),
         checkConnectedProviders(env),
@@ -1047,8 +822,10 @@ export async function doctorCommand(
       getLog().error({ reason: s.reason }, 'doctor.check_threw_unexpectedly');
       continue;
     }
-    if (s.value.status === 'fail') failures++;
-    console.log(renderResult(s.value));
+    for (const result of Array.isArray(s.value) ? s.value : [s.value]) {
+      if (result.status === 'fail') failures++;
+      console.log(renderResult(result));
+    }
   }
 
   console.log('');

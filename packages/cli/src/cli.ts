@@ -691,6 +691,14 @@ async function main(): Promise<number> {
           repoPath,
           scope,
           force: forceFlag,
+          ...(values.providers !== undefined
+            ? {
+                providers: (values.providers as string)
+                  .split(',')
+                  .map(id => id.trim())
+                  .filter(Boolean),
+              }
+            : {}),
         });
         if (setupExitCode !== 0) return setupExitCode;
         break;
@@ -1322,7 +1330,7 @@ async function main(): Promise<number> {
         const { doctorCommand } = await loadRoute(() => import('./commands/doctor'), {
           database: true,
         });
-        return await doctorCommand(undefined, Boolean(values.full));
+        return await doctorCommand();
       }
 
       case 'auth': {

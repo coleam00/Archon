@@ -17,7 +17,7 @@ const descriptor =
     ? (await import('@archon/providers/pi/descriptor')).descriptor
     : fixtureDescriptor;
 if (mode === 'mismatch') descriptor.version = '2';
-if (mode === 'record-pid' || mode === 'hung-models')
+if (mode === 'record-pid' || mode === 'hung-models' || mode === 'hung-diagnose')
   writeFileSync(process.argv[3], String(process.pid));
 async function closeOutput(): Promise<never> {
   writeFileSync(process.argv[3], String(process.pid));
@@ -42,6 +42,10 @@ await serveProvider(
       getType: (): string => descriptor.id,
       getCapabilities: (): typeof descriptor.capabilities => descriptor.capabilities,
       async diagnose({ assistantConfig }): Promise<ProviderDiagnostics> {
+        if (mode === 'hung-diagnose') {
+          setInterval(() => undefined, 1000);
+          return await new Promise<never>(() => undefined);
+        }
         if (mode === 'live-eof') return await closeOutput();
         if (mode === 'information-crash') {
           process.stderr.write('private message and token');

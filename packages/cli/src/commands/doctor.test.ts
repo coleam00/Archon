@@ -15,11 +15,10 @@ import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { copyArchonSkill } from './skill';
 import {
-  checkClaudeBinary,
-  checkCodexBinary,
   checkConfigFiles,
+  checkInstalledProviders,
+  checkProviderDiagnostics,
   checkProviderDeprecation,
-  checkOpenCode,
   checkDatabase,
   checkConnectedProviders,
   checkGhAuth,
@@ -32,13 +31,9 @@ import {
   checkTelemetry,
   checkFolderProject,
   checkArchonSkill,
-  defaultLoadClaudeBinaryDeps,
   doctorCommand,
-  type ClaudeBinaryDeps,
-  type CodexBinaryDeps,
   type DatabaseDeps,
   type FolderProjectDeps,
-  type OpenCodeDeps,
   type ProviderDeps,
 } from './doctor';
 import type { MergedConfig } from '@archon/core';
@@ -51,413 +46,6 @@ const realCreateLogger = paths.createLogger;
 spyOn(paths, 'createLogger').mockImplementation(module =>
   module === 'cli.doctor' ? doctorLog : realCreateLogger(module)
 );
-
-describe('checkClaudeBinary', () => {
-  let savedPin: string | undefined;
-  let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
-
-  beforeEach(() => {
-    savedPin = process.env.CLAUDE_BIN_PATH;
-    delete process.env.CLAUDE_BIN_PATH;
-    execSpy = spyOn(git, 'execFileAsync');
-  });
-
-  afterEach(() => {
-    execSpy.mockRestore();
-    if (savedPin === undefined) delete process.env.CLAUDE_BIN_PATH;
-    else process.env.CLAUDE_BIN_PATH = savedPin;
-  });
-
-  const noDeps = async (): Promise<ClaudeBinaryDeps> => ({});
-
-  it('returns skip when the resolver delegates to the SDK', async () => {
-    const result = await checkClaudeBinary(noDeps);
-    expect(result.status).toBe('skip');
-    expect(result.label).toBe('Claude binary');
-    expect(result.message).toBe('dev mode (SDK resolves via node_modules)');
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('checks a config pin in dev mode through the runtime resolver', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(async () => ({ configBinaryPath: process.execPath }));
-    expect(result.status).toBe('pass');
-    expect(result.message).toBe(`${process.execPath} (via config, spawns OK)`);
-    expect(execSpy).toHaveBeenCalledWith(process.execPath, ['--version'], { timeout: 5000 });
-  });
-
-  it('checks an env pin before an invalid config pin in dev mode', async () => {
-    process.env.CLAUDE_BIN_PATH = process.execPath;
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(async () => ({
-      configBinaryPath: '/missing/config/claude',
-    }));
-    expect(result.status).toBe('pass');
-    expect(result.message).toBe(`${process.execPath} (via env, spawns OK)`);
-    expect(execSpy).toHaveBeenCalledWith(process.execPath, ['--version'], { timeout: 5000 });
-  });
-
-  it('reports an invalid config pin in dev mode rather than skipping', async () => {
-    const result = await checkClaudeBinary(async () => ({
-      configBinaryPath: '/missing/config/claude',
-    }));
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('assistants.claude.claudeBinaryPath');
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('returns fail in binary mode when the whole resolution chain is empty', async () => {
-    const result = await checkClaudeBinary(noDeps, async () => {
-      throw new Error('Claude Code not found. Archon requires the Claude Code executable');
-    });
-    expect(result.status).toBe('fail');
-    // The resolver's install instructions are surfaced verbatim — they are the
-    // actionable message, unlike the old "CLAUDE_BIN_PATH is not set".
-    expect(result.message).toContain('Claude Code not found');
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('returns pass in binary mode when binary spawns successfully', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(noDeps, async () => ({
-      path: '/opt/claude',
-      source: 'env',
-    }));
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('/opt/claude');
-    expect(execSpy).toHaveBeenCalledWith('/opt/claude', ['--version'], expect.any(Object));
-  });
-
-  it('returns fail in binary mode when spawn throws', async () => {
-    execSpy.mockRejectedValue(new Error('ENOENT'));
-    const result = await checkClaudeBinary(noDeps, async () => ({
-      path: '/opt/claude',
-      source: 'env',
-    }));
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('did not spawn');
-    expect(result.message).toContain('ENOENT');
-  });
-
-  // #2263: doctor previously read only CLAUDE_BIN_PATH and hard-FAILed setups
-  // configured via assistants.claude.claudeBinaryPath — the documented fix for
-  // compiled builds — even though those setups run workflows fine.
-  it('passes when the binary comes from config rather than CLAUDE_BIN_PATH (#2263)', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    let sawConfigPath: string | undefined;
-    const result = await checkClaudeBinary(
-      async () => ({ configBinaryPath: '/Users/me/bin/claude' }),
-      async configPath => {
-        sawConfigPath = configPath;
-        return { path: configPath as string, source: 'config' };
-      }
-    );
-
-    // The config path must actually reach the resolver, not be ignored.
-    expect(sawConfigPath).toBe('/Users/me/bin/claude');
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('/Users/me/bin/claude');
-    // Which tier resolved it is surfaced so users can see what the runtime does.
-    expect(result.message).toContain('via config');
-    expect(result.message).not.toContain('CLAUDE_BIN_PATH is not set');
-  });
-
-  it('reports the autodetect tier when the native installer path resolves', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(noDeps, async () => ({
-      path: '/home/me/.local/bin/claude',
-      source: 'autodetect',
-    }));
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('via autodetect');
-  });
-
-  it('degrades to env/autodetect when config loading throws', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(
-      async () => {
-        throw new Error('malformed config.yaml');
-      },
-      async configPath => {
-        expect(configPath).toBeUndefined();
-        return { path: '/opt/claude', source: 'env' };
-      }
-    );
-    // A broken config must not fail the binary check outright.
-    expect(result.status).toBe('pass');
-  });
-
-  // The real defaultLoadClaudeBinaryDeps is where #2263 actually lived: reading
-  // the wrong config key type-checks and would otherwise ship green.
-  // The stub config deliberately carries a DIFFERENT value under
-  // assistants.codex.codexBinaryPath so a key mix-up fails loudly rather than
-  // resolving to the same string by accident.
-  const stubConfig = async (): Promise<Pick<MergedConfig, 'assistants'>> => ({
-    assistants: {
-      claude: { claudeBinaryPath: '/from/claude/config' },
-      codex: { codexBinaryPath: '/from/codex/config' },
-    },
-  });
-
-  it('reads assistants.claude.claudeBinaryPath, not another assistant key (#2263)', async () => {
-    const deps = await defaultLoadClaudeBinaryDeps(stubConfig);
-    expect(deps.configBinaryPath).toBe('/from/claude/config');
-  });
-
-  it('routes the real deps loader through to the resolver (#2263 wiring guard)', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    let sawConfigPath: string | undefined;
-
-    const result = await checkClaudeBinary(
-      // The real loader, not a fake — this is the link the bug broke.
-      () => defaultLoadClaudeBinaryDeps(stubConfig),
-      async configPath => {
-        sawConfigPath = configPath;
-        return { path: configPath as string, source: 'config' };
-      }
-    );
-
-    expect(sawConfigPath).toBe('/from/claude/config');
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('via config');
-  });
-});
-
-describe('checkCodexBinary', () => {
-  let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
-
-  const notConfigured: CodexBinaryDeps = {
-    isDefaultAssistant: false,
-    credentialConnected: false,
-  };
-  const loadDeps = (deps: CodexBinaryDeps) => async () => deps;
-  const resolvesTo =
-    (path: string, source: 'env' | 'config' | 'vendor' | 'autodetect') => async () => ({
-      path,
-      source,
-    });
-
-  beforeEach(() => {
-    execSpy = spyOn(git, 'execFileAsync');
-  });
-
-  afterEach(() => {
-    execSpy.mockRestore();
-  });
-
-  it('skips when Codex is not configured and no credential is connected', async () => {
-    const result = await checkCodexBinary({}, loadDeps(notConfigured), async () => undefined);
-    expect(result.status).toBe('skip');
-    expect(result.label).toBe('Codex binary');
-    expect(result.message).toContain('not configured');
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('runs (dev-mode skip) when DEFAULT_AI_ASSISTANT=codex even if config load fails', async () => {
-    // loadDeps throwing must not suppress the check — env signal still counts.
-    const result = await checkCodexBinary(
-      { DEFAULT_AI_ASSISTANT: 'codex' },
-      async () => {
-        throw new Error('config blew up');
-      },
-      async () => undefined // resolver returns undefined → dev mode
-    );
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('dev mode');
-  });
-
-  it('runs when a config codexBinaryPath is set (configured signal)', async () => {
-    const result = await checkCodexBinary(
-      {},
-      loadDeps({ ...notConfigured, configBinaryPath: '/cfg/codex' }),
-      async () => undefined
-    );
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('dev mode');
-  });
-
-  it('runs when an OpenAI (Codex) credential is connected', async () => {
-    const result = await checkCodexBinary(
-      {},
-      loadDeps({ ...notConfigured, credentialConnected: true }),
-      async () => undefined
-    );
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('dev mode');
-  });
-
-  it('passes and reports the resolved source when the binary spawns', async () => {
-    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkCodexBinary(
-      { DEFAULT_AI_ASSISTANT: 'codex' },
-      loadDeps(notConfigured),
-      resolvesTo('/opt/codex', 'autodetect')
-    );
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('/opt/codex');
-    expect(result.message).toContain('via autodetect');
-    expect(execSpy).toHaveBeenCalledWith('/opt/codex', ['--version'], expect.any(Object));
-  });
-
-  it('fails with install instructions when the resolver throws', async () => {
-    const result = await checkCodexBinary(
-      { DEFAULT_AI_ASSISTANT: 'codex' },
-      loadDeps(notConfigured),
-      async () => {
-        throw new Error(
-          'Codex CLI binary not found. Install globally: npm install -g @openai/codex'
-        );
-      }
-    );
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('Codex CLI binary not found');
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('surfaces a stale-pin candidate hint verbatim', async () => {
-    const diagnostic =
-      'assistants.codex.codexBinaryPath is set to "/stale/codex" but the file does not exist.\n\n' +
-      'A Codex binary was found at /opt/codex.\n' +
-      'Update assistants.codex.codexBinaryPath to that path, or remove codexBinaryPath to let Archon detect it.';
-    const result = await checkCodexBinary(
-      { DEFAULT_AI_ASSISTANT: 'codex' },
-      loadDeps(notConfigured),
-      async () => {
-        throw new Error(diagnostic);
-      }
-    );
-
-    expect(result).toEqual({ label: 'Codex binary', status: 'fail', message: diagnostic });
-    expect(execSpy).not.toHaveBeenCalled();
-  });
-
-  it('fails when the resolved binary does not spawn', async () => {
-    execSpy.mockRejectedValue(new Error('ENOENT'));
-    const result = await checkCodexBinary(
-      { CODEX_BIN_PATH: '/opt/codex' },
-      loadDeps(notConfigured),
-      resolvesTo('/opt/codex', 'env')
-    );
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('did not spawn');
-    expect(result.message).toContain('ENOENT');
-  });
-});
-
-describe('checkOpenCode', () => {
-  const makeDeps = (over: Partial<OpenCodeDeps> = {}): OpenCodeDeps => ({
-    isDefaultAssistant: false,
-    probeRuntime: async () => 'ready',
-    ...over,
-  });
-
-  it('skips when OpenCode is not configured and --full is absent', async () => {
-    const probe = mock(async () => 'ready' as const);
-    const result = await checkOpenCode({}, false, async () => makeDeps({ probeRuntime: probe }));
-    expect(probe).not.toHaveBeenCalled();
-    expect(result.status).toBe('skip');
-    expect(result.label).toBe('OpenCode runtime');
-    expect(result.message).toContain('pass --full');
-  });
-
-  it('passes when OpenCode is the configured assistant and both dependencies are present', async () => {
-    const result = await checkOpenCode({}, false, async () =>
-      makeDeps({ isDefaultAssistant: true })
-    );
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('server not started');
-  });
-
-  it('fails when the SDK is present but the executable is missing', async () => {
-    const result = await checkOpenCode({}, true, async () =>
-      makeDeps({ probeRuntime: async () => 'executable-missing' })
-    );
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('opencode');
-    expect(result.message).toContain('PATH');
-  });
-
-  it('fails for a configured assistant when the executable is missing', async () => {
-    const result = await checkOpenCode({}, false, async () =>
-      makeDeps({ isDefaultAssistant: true, probeRuntime: async () => 'executable-missing' })
-    );
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('Install the OpenCode CLI');
-  });
-
-  it('passes under --full even when OpenCode is not configured', async () => {
-    const result = await checkOpenCode({}, true, async () => makeDeps());
-    expect(result.status).toBe('pass');
-  });
-
-  it('runs when DEFAULT_AI_ASSISTANT=opencode', async () => {
-    const result = await checkOpenCode({ DEFAULT_AI_ASSISTANT: 'opencode' }, false, async () =>
-      makeDeps()
-    );
-    expect(result.status).toBe('pass');
-  });
-
-  it('calls the cheap dependency probe once', async () => {
-    let probeCalls = 0;
-    await checkOpenCode({}, true, async () =>
-      makeDeps({
-        probeRuntime: async () => {
-          probeCalls += 1;
-          return 'ready';
-        },
-      })
-    );
-    expect(probeCalls).toBe(1);
-  });
-
-  it('fails when the runtime SDK cannot be resolved', async () => {
-    const result = await checkOpenCode({}, true, async () =>
-      makeDeps({
-        probeRuntime: async () => {
-          throw new Error('Cannot find module @opencode-ai/sdk');
-        },
-      })
-    );
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('not resolvable');
-    expect(result.message).toContain('bun install');
-  });
-
-  it('fails when the SDK resolves but the entrypoint is missing', async () => {
-    const result = await checkOpenCode({}, true, async () =>
-      makeDeps({ probeRuntime: async () => 'sdk-entrypoint-missing' })
-    );
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('createOpencode');
-  });
-
-  it('skips gracefully when deps load fails and --full is absent', async () => {
-    const result = await checkOpenCode({}, false, async () => {
-      throw new Error('config load failed');
-    });
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('not configured');
-  });
-
-  it('surfaces the load error (not "entrypoint missing") when deps fail under --full', async () => {
-    const result = await checkOpenCode({}, true, async () => {
-      throw new Error('config load failed');
-    });
-    expect(result.status).toBe('fail');
-    // Must report the real load failure, not a fabricated SDK-entrypoint verdict.
-    expect(result.message).toContain('config load failed');
-    expect(result.message).not.toContain('createOpencode');
-  });
-
-  it('surfaces the load error when deps fail and OpenCode is the configured assistant', async () => {
-    const result = await checkOpenCode({ DEFAULT_AI_ASSISTANT: 'opencode' }, false, async () => {
-      throw new Error('module import failed');
-    });
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('module import failed');
-    expect(result.message).not.toContain('createOpencode');
-  });
-});
 
 describe('checkGhAuth', () => {
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
@@ -1493,4 +1081,83 @@ describe('checkConnectedProviders', () => {
     expect(result.status).toBe('skip');
     expect(result.message).toContain('db down');
   });
+});
+
+describe('provider diagnostics', () => {
+  it('no registered providers fails and names the install command', async () => {
+    const check = await checkInstalledProviders(
+      { get: () => undefined, list: () => [] },
+      async () => new Map()
+    );
+    expect(check.status).toBe('fail');
+    expect(check.message).toContain(
+      'No providers installed. Run: archon provider install <claude|codex|pi>'
+    );
+    expect(await doctorCommand([async () => check])).toBe(1);
+  });
+
+  it('maps provider statuses, preserves remedies, and forwards its configured defaults', async () => {
+    const diagnose = mock(async (_request: unknown) => ({
+      checks: [
+        { id: 'one', label: 'One', status: 'ok' as const, message: 'healthy' },
+        { id: 'two', label: 'Two', status: 'fail' as const, message: 'broken', remedy: 'repair' },
+        { id: 'three', label: 'Three', status: 'warn' as const, message: 'warning' },
+        { id: 'four', label: 'Four', status: 'skip' as const, message: 'skipped' },
+      ],
+    }));
+    const config = { assistants: { claude: {}, codex: {}, custom: { model: 'chosen' } } };
+    const checks = await checkProviderDiagnostics('custom', { diagnose }, async () => config);
+    expect(diagnose).toHaveBeenCalledWith({
+      assistantConfig: { model: 'chosen' },
+      signal: expect.any(AbortSignal),
+    });
+    expect(checks.map(check => check.status)).toEqual(['pass', 'fail', 'warn', 'skip']);
+    expect(checks[1].message).toBe('broken Remedy: repair');
+    const output = spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      expect(await doctorCommand([async () => checks])).toBe(1);
+      const rendered = output.mock.calls.flat().join('\n');
+      expect(rendered).toContain('✓ custom: One: healthy');
+      expect(rendered).toContain('✗ custom: Two: broken Remedy: repair');
+      expect(rendered).toContain('! custom: Three: warning');
+      expect(rendered).toContain('○ custom: Four: skipped');
+    } finally {
+      output.mockRestore();
+    }
+  });
+
+  it('an unavailable diagnostic hook skips, while a hook failure fails with its evidence', async () => {
+    expect((await checkProviderDiagnostics('custom', {}))[0].status).toBe('skip');
+    const checks = await checkProviderDiagnostics(
+      'custom',
+      {
+        diagnose: async () => {
+          throw new Error('plugin failed');
+        },
+      },
+      async () => ({ assistants: { claude: {}, codex: {} } })
+    );
+    expect(checks).toEqual([
+      { label: 'custom diagnostics', status: 'fail', message: 'plugin failed' },
+    ]);
+  });
+});
+
+it('a diagnostic deadline fails with the caller evidence', async () => {
+  const abort = new AbortController();
+  abort.abort(new Error('diagnostic deadline'));
+  const checks = await checkProviderDiagnostics(
+    'custom',
+    {
+      diagnose: async ({ signal }) => {
+        signal.throwIfAborted();
+        return { checks: [] };
+      },
+    },
+    async () => ({ assistants: { claude: {}, codex: {} } }),
+    abort.signal
+  );
+  expect(checks).toEqual([
+    { label: 'custom diagnostics', status: 'fail', message: 'diagnostic deadline' },
+  ]);
 });

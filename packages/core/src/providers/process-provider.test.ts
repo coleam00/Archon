@@ -281,7 +281,7 @@ test.each(['turn', 'credential', 'model', 'diagnose', 'models'] as const)(
             : operation === 'model'
               ? runtime.resolveCredentialModel?.({ cwd: tmpdir() })
               : operation === 'diagnose'
-                ? runtime.diagnose?.({})
+                ? runtime.diagnose?.({ signal: new AbortController().signal })
                 : runtime.listModels?.({ signal: new AbortController().signal });
       await expect(request).rejects.toBeInstanceOf(ProviderPluginExitedError);
       expect(watchdogFired).toBe(false);
@@ -385,7 +385,10 @@ test('information hooks round-trip through fresh processes and close them', asyn
     const file = join(directory, 'pid');
     const runtime = provider('record-pid', file);
     expect(
-      await runtime.diagnose?.({ assistantConfig: { model: 'fixture/model', omitted: undefined } })
+      await runtime.diagnose?.({
+        signal: new AbortController().signal,
+        assistantConfig: { model: 'fixture/model', omitted: undefined },
+      })
     ).toEqual({
       checks: [
         {
@@ -413,24 +416,27 @@ test('information hooks round-trip through fresh processes and close them', asyn
 test('diagnostic hook errors withhold plugin prose and stderr', async () => {
   const debug = spyOn(processLog, 'debug').mockImplementation(() => {});
   try {
-    await expect(provider('information-crash').diagnose?.({})).rejects.toThrow(
-      'request failed (RPC -32603)'
-    );
+    await expect(
+      provider('information-crash').diagnose?.({ signal: new AbortController().signal })
+    ).rejects.toThrow('request failed (RPC -32603)');
     expect(JSON.stringify(debug.mock.calls)).not.toContain('private message and token');
   } finally {
     debug.mockRestore();
   }
 });
 
-test(
-  'a caller cancellation stops a stalled model-list process by its recorded PID',
-  async () => {
+test.each(['models', 'diagnose'] as const)(
+  'a caller cancellation stops a stalled %s process by its recorded PID',
+  async operation => {
     const directory = mkdtempSync(join(tmpdir(), 'archon-models-cancel-'));
     const file = join(directory, 'pid');
     const abort = new AbortController();
-    const runtime = provider('hung-models', file);
+    const runtime = provider(operation === 'models' ? 'hung-models' : 'hung-diagnose', file);
     try {
-      const pending = runtime.listModels?.({ signal: abort.signal });
+      const pending =
+        operation === 'models'
+          ? runtime.listModels?.({ signal: abort.signal })
+          : runtime.diagnose?.({ signal: abort.signal });
       for (let attempt = 0; attempt < 200 && !existsSync(file); attempt++) await Bun.sleep(10);
       expect(existsSync(file)).toBe(true);
       abort.abort(new Error('model list cancelled'));
