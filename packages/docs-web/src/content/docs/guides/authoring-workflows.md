@@ -1574,7 +1574,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `inputs`, `returns` | **Consumed** by composition — `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
 | `interactive`, `worktree`, `container`, `evidence_policy` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
-| `mutates_checkout` | **Run-owned for ordinary `include:` composition.** It is dropped with the same warning. The one exception is `include:` + `fan_out:`, where the engine consumes the target block's `mutates_checkout: false` declaration to allow concurrent instances in the shared checkout. |
+| `mutates_checkout` | **Run-owned.** It is dropped with the same warning, including under `include:` + `fan_out:`, whose instances run inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow — where it then applies to every node in the run. |
 
 Two consequences worth knowing:
@@ -2589,9 +2589,9 @@ Two hard limits, both enforced at load time before any upstream node can spend:
   interactive fan-out instances are a possible future extension tracked in
   [#2810](https://github.com/coleam00/Archon/issues/2810), not a promise of the current shape.
 - **No `isolation:`** — a composed block runs inside this run and has no checkout of its own
-  to isolate. Instances share the parent's checkout, so as with a `workflow:` fan-out,
-  concurrent instances over a mutating body fail closed unless the block declares
-  `mutates_checkout: false`; `fan_out.max_parallel: 1` remains the serial escape.
+  to isolate. Instances share the parent's checkout and run concurrently up to
+  `max_parallel`, as `workflow:` fan-out children do; instances that write must coordinate
+  their edits. `fan_out.max_parallel: 1` runs them one at a time.
 
 Cancellation stops the pool from claiming new items. An in-flight item may still reach its
 own terminal event; under `all_done`, a cancelled slot is represented by the same reserved

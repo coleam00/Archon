@@ -8841,26 +8841,6 @@ async function executeComposeFanOutNode(
   }
   const snapshots = persistedSnapshots ?? computedSnapshots;
 
-  // Concurrent instances share the parent checkout. Use the authoritative persisted
-  // width on resume so a changed producer cannot bypass the original safety preflight.
-  const plannedConcurrency = Math.min(fanOut.max_parallel, snapshots.length);
-  if (plannedConcurrency > 1 && resolved.definition.mutates_checkout !== false) {
-    const msg =
-      `composed fan-out node '${node.id}': up to ${String(plannedConcurrency)} instances of ` +
-      `'${node.include}' would run at once in this run's checkout, and that block does not ` +
-      'declare `mutates_checkout: false`. Concurrent runs on one checkout take a ' +
-      'path-exclusive lock, so all but the first would cancel themselves — and a ' +
-      'lock-cancelled instance is not recoverable by resume (#2180). Choose one: add ' +
-      `\`mutates_checkout: false\` to '${node.include}' if it only reads the repo; or set ` +
-      `\`fan_out.max_parallel: 1\` on '${node.id}' to run the instances one at a time.`;
-    getLog().warn(
-      { parentRunId: parentRun.id, nodeId: node.id, include: node.include, plannedConcurrency },
-      'workflow.compose_fan_out_shared_checkout_collision'
-    );
-    await notify(`❌ **Composed fan-out blocked** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'config');
-  }
-
   if (persistedSnapshots === undefined) {
     try {
       await deps.store.persistWorkflowEvent({
