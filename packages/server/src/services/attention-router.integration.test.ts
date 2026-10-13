@@ -353,7 +353,10 @@ test('subscription routes require identity, validate shared schemas and create/d
 test('VAPID keys are stable and owner-only', () => {
   const first = loadVapidKeys();
   expect(loadVapidKeys()).toEqual(first);
-  expect(statSync(join(root, 'web-push-vapid.json')).mode & 0o777).toBe(0o600);
+  // POSIX-only: Windows does not honor 0600 file modes (statSync reports 0666).
+  if (process.platform !== 'win32') {
+    expect(statSync(join(root, 'web-push-vapid.json')).mode & 0o777).toBe(0o600);
+  }
 });
 
 test('if every subscription expired, no delivery is recorded', async () => {
