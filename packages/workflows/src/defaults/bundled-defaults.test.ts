@@ -430,11 +430,13 @@ describe('bundled-defaults', () => {
         if (parsed.workflow === null) throw new Error(parsed.error.error);
         return parsed.workflow;
       };
-      const reasons = (node: { output_format?: Record<string, unknown> } | undefined) =>
-        (
-          (node?.output_format?.properties as Record<string, { enum?: string[] }> | undefined)
-            ?.reason?.enum ?? []
-        ).slice();
+      const reasons = (node: object | undefined): string[] => {
+        const format =
+          node !== undefined && 'output_format' in node
+            ? (node.output_format as { properties?: { reason?: { enum?: string[] } } } | undefined)
+            : undefined;
+        return [...(format?.properties?.reason?.enum ?? [])];
+      };
       const deliver = parse('archon-deliver');
       const rounds = deliver.nodes.find(node => node.id === 'rounds');
       if (rounds?.kind !== 'loop_group') throw new Error('rounds is not a loop group');
