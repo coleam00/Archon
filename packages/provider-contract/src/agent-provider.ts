@@ -1,5 +1,4 @@
 import type { ProviderDiagnostics, ProviderModelList } from './information';
-import type { ProviderResult } from './result';
 import { z } from 'zod';
 import type { CredentialStatus } from './credential-status';
 import type { ProviderCapabilities } from './capabilities';
@@ -264,8 +263,6 @@ export interface ProviderAdmissionEvent {
  * The workflow path additionally passes nodeConfig and assistantConfig.
  */
 export interface SendQueryOptions extends AgentRequestOptions {
-  /** Provider-owned JSON returned by an earlier result for the session being resumed or forked. */
-  sessionState?: ProviderResult['sessionState'];
   /**
    * Codex titles use empty capability declarations and a read-only sandbox.
    * Pi titles without a resume id use in-memory sessions. Other providers may ignore it.

@@ -459,50 +459,53 @@ test.each(['models', 'diagnose'] as const)(
 
 test('Claude resume and fork retain per-query cost and model across fresh processes and factory lookups', async () => {
   const { descriptor: claude } = await import('@archon/providers/claude/descriptor');
-  const registration = processProviderRegistration(claude, [
-    process.execPath,
-    join(import.meta.dir, '../../../providers/src/claude/fixtures/process-spend.ts'),
-  ]);
+  const directory = mkdtempSync(join(tmpdir(), 'claude-process-spend-'));
+  const registration = () =>
+    processProviderRegistration(claude, [
+      process.execPath,
+      join(import.meta.dir, '../../../providers/src/claude/fixtures/process-spend.ts'),
+    ]);
   async function resultOf(resume?: string, forkSession = false) {
     const output = await collect(
-      registration.factory().sendQuery('turn', tmpdir(), resume, {
-        forkSession,
-        assistantConfig: { claudeBinaryPath: process.execPath },
-      })
+      registration()
+        .factory()
+        .sendQuery('turn', directory, resume, {
+          forkSession,
+          env: { CLAUDE_CONFIG_DIR: directory },
+          assistantConfig: { claudeBinaryPath: process.execPath },
+        })
     );
     const result = output.find(chunk => chunk.type === 'result');
     if (!result || result.type !== 'result') throw new Error('missing Claude result');
     expect(result.isError).not.toBe(true);
     return result;
   }
-  const fresh = await resultOf();
-  expect(fresh.cost).toBe(0.13);
-  const fork = await resultOf(fresh.sessionId, true);
-  expect(fork.sessionId).toBe('source-fork');
-  expect(fork.cost).toBeCloseTo(0.22, 10);
-  expect(fork.resolvedModel).toEqual({ id: 'claude-sonnet-4-6' });
-  const resumed = await resultOf(fresh.sessionId);
-  expect(resumed.cost).toBeCloseTo(0.22, 10);
-  expect(resumed.resolvedModel).toEqual({ id: 'claude-sonnet-4-6' });
-  expect(new Set([fresh.text, fork.text, resumed.text]).size).toBe(3);
-  const child = await resultOf(fork.sessionId);
-  expect(child.cost).toBe(0);
-  expect(child.resolvedModel).toBeUndefined();
-  const unseen = await resultOf('unseen');
-  expect(unseen.cost).toBeUndefined();
-  expect(unseen.resolvedModel).toBeUndefined();
-});
-
-test('plugins that return no state never receive the new request field', async () => {
-  const registration = processProviderRegistration(descriptor, [
-    process.execPath,
-    fixture,
-    'legacy-resume',
-  ]);
-  for (let turn = 0; turn < 2; turn++) {
-    expect(await collect(registration.factory().sendQuery('turn', tmpdir(), 'legacy'))).toEqual([
-      { type: 'result', sessionId: 'legacy' },
-      { type: 'settled' },
-    ]);
+  try {
+    const fresh = await resultOf();
+    expect(fresh.cost).toBe(0.13);
+    const fork = await resultOf(fresh.sessionId, true);
+    expect(fork.sessionId).not.toBe(fresh.sessionId);
+    expect(fork.cost).toBeCloseTo(0.22, 10);
+    expect(fork.resolvedModel).toEqual({ id: 'claude-sonnet-4-6' });
+    const resumed = await resultOf(fresh.sessionId);
+    expect(resumed.cost).toBeCloseTo(0.22, 10);
+    expect(resumed.resolvedModel).toEqual({ id: 'claude-sonnet-4-6' });
+    expect(new Set([fresh.text, fork.text, resumed.text]).size).toBe(3);
+    const child = await resultOf(fork.sessionId);
+    expect(child.cost).toBe(0);
+    expect(child.resolvedModel).toBeUndefined();
+    const unseen = await resultOf('20000000-0000-4000-8000-000000000001');
+    expect(unseen.cost).toBeUndefined();
+    expect(unseen.resolvedModel).toBeUndefined();
+    const invalidId = '20000000-0000-4000-8000-000000000002';
+    writeFileSync(
+      join(directory, 'projects', 'custom-project-slug', invalidId + '.jsonl'),
+      JSON.stringify({ type: 'cost-state', sessionId: invalidId, totalCostUSD: 0.13 })
+    );
+    const invalid = await resultOf(invalidId);
+    expect(invalid.cost).toBeUndefined();
+    expect(invalid.resolvedModel).toBeUndefined();
+  } finally {
+    await removeTempTree(directory);
   }
 });

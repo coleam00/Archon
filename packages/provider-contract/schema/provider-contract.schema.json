@@ -83,9 +83,6 @@
     "ProviderResult": {
       "type": "object",
       "properties": {
-        "sessionState": {
-          "$ref": "#/$defs/schema0"
-        },
         "sessionId": {
           "type": "string"
         },
@@ -346,7 +343,7 @@
                 "null"
               ],
               "additionalProperties": true,
-              "$ref": "#/$defs/schema1"
+              "$ref": "#/$defs/schema0"
             }
           },
           "required": [
@@ -606,9 +603,6 @@
         {
           "type": "object",
           "properties": {
-            "sessionState": {
-              "$ref": "#/$defs/schema0"
-            },
             "sessionId": {
               "type": "string"
             },
@@ -843,7 +837,7 @@
               "minLength": 1
             },
             "params": {
-              "$ref": "#/$defs/schema2"
+              "$ref": "#/$defs/schema1"
             }
           },
           "required": [
@@ -865,7 +859,7 @@
               "minLength": 1
             },
             "params": {
-              "$ref": "#/$defs/schema3"
+              "$ref": "#/$defs/schema2"
             }
           },
           "required": [
@@ -894,7 +888,7 @@
               ]
             },
             "result": {
-              "$ref": "#/$defs/schema4"
+              "$ref": "#/$defs/schema3"
             }
           },
           "required": [
@@ -942,7 +936,7 @@
                   "type": "string"
                 },
                 "data": {
-                  "$ref": "#/$defs/schema5"
+                  "$ref": "#/$defs/schema4"
                 }
               },
               "required": [
@@ -1007,7 +1001,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema6"
+            "$ref": "#/$defs/schema5"
           }
         },
         "config": {
@@ -1019,7 +1013,7 @@
                 "type": "string"
               },
               "additionalProperties": {
-                "$ref": "#/$defs/schema7"
+                "$ref": "#/$defs/schema6"
               }
             },
             "run": {
@@ -1028,7 +1022,7 @@
                 "type": "string"
               },
               "additionalProperties": {
-                "$ref": "#/$defs/schema8"
+                "$ref": "#/$defs/schema7"
               }
             },
             "snapshot": {
@@ -1037,7 +1031,7 @@
                 "type": "string"
               },
               "additionalProperties": {
-                "$ref": "#/$defs/schema9"
+                "$ref": "#/$defs/schema8"
               }
             },
             "stripUnknownKeys": {
@@ -1078,9 +1072,6 @@
         },
         "resumeSessionId": {
           "type": "string"
-        },
-        "sessionState": {
-          "$ref": "#/$defs/schema0"
         },
         "model": {
           "type": "string"
@@ -1134,7 +1125,7 @@
                 "type": "string"
               },
               "additionalProperties": {
-                "$ref": "#/$defs/schema10"
+                "$ref": "#/$defs/schema9"
               }
             }
           },
@@ -1169,7 +1160,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema10"
+            "$ref": "#/$defs/schema9"
           }
         },
         "assistantConfig": {
@@ -1178,7 +1169,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema10"
+            "$ref": "#/$defs/schema9"
           }
         },
         "execContext": {
@@ -1583,7 +1574,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema11"
+            "$ref": "#/$defs/schema10"
           }
         }
       },
@@ -1627,7 +1618,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema12"
+            "$ref": "#/$defs/schema11"
           }
         }
       },
@@ -1649,7 +1640,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema10"
+            "$ref": "#/$defs/schema9"
           }
         }
       }
@@ -1780,7 +1771,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema10"
+            "$ref": "#/$defs/schema9"
           }
         },
         "cwd": {
@@ -1809,7 +1800,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema10"
+            "$ref": "#/$defs/schema9"
           }
         }
       }
@@ -2293,37 +2284,6 @@
           },
           "additionalProperties": {
             "$ref": "#/$defs/schema11"
-          }
-        }
-      ]
-    },
-    "schema12": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "null"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/schema12"
-          }
-        },
-        {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/schema12"
           }
         }
       ]

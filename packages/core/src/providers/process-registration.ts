@@ -40,7 +40,6 @@ export function processProviderRegistration(
       }
     : { install: legacySchema, run: legacySchema, snapshot: legacySchema };
   const specs = descriptor.credentials.specs;
-  const runtime = new ProcessAgentProvider(descriptor, argv);
   return {
     id: descriptor.id,
     displayName: descriptor.displayName,
@@ -73,6 +72,6 @@ export function processProviderRegistration(
       }
       return z.record(z.string(), z.unknown()).parse(parsed.data);
     },
-    factory: () => runtime,
+    factory: () => new ProcessAgentProvider(descriptor, argv),
   };
 }

@@ -76,12 +76,8 @@ import {
   pathKind,
 } from './binary-resolver';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
-import {
-  SessionSpendLedger,
-  spendSince,
-  type QuerySpend,
-  type SpendBaseline,
-} from './session-spend';
+import { readSessionSpendBaseline } from './session-spend-reader';
+import { spendSince, type QuerySpend, type SpendBaseline } from './session-spend';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
@@ -108,9 +104,6 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.claude');
   return cachedLog;
 }
-
-/** Process-wide: a resume must find the totals of a session another provider instance ran. */
-const sessionSpend = new SessionSpendLedger();
 
 /** The reasoning-depth rungs `Options['effort']` accepts. Typed against the SDK
  *  so a vocabulary change upstream fails type-check here. */
@@ -1396,16 +1389,13 @@ async function* streamClaudeMessages(
     } else if (event.type === 'result') {
       const resultMsg = msg as SDKResultMessage;
       // The SDK's cost and per-model totals are cumulative for the session; report
-      // this result's share (see session-spend.ts). Record even on an error result
-      // so a later resume of this session differences against current totals.
+      // this result's share, advancing the baseline for any later result in this query.
       // Typed as required, but it crosses an IPC boundary (see selectResolvedModelId).
       const modelUsage = (resultMsg.modelUsage as Record<string, ModelUsage> | undefined) ?? {};
       let spend: QuerySpend = { costUsd: undefined, modelUsage };
-      let sessionState: ResultChunk['sessionState'];
       if (typeof resultMsg.total_cost_usd === 'number') {
         const cumulative = { costUsd: resultMsg.total_cost_usd, modelUsage };
         spend = spendSince(spendBaseline, cumulative);
-        sessionState = sessionSpend.record(resultMsg.session_id, cumulative);
         if (spend.costUsd === undefined) {
           getLog().warn(
             {
@@ -1532,7 +1522,6 @@ async function* streamClaudeMessages(
         if (isRealError) result.errorSubtype = resultMsg.subtype;
         result.errors = isRealError && sdkErrors?.length ? sdkErrors : [failure.evidence];
       }
-      if (sessionState !== undefined) result.sessionState = sessionState;
       if (spend.costUsd !== undefined) result.cost = spend.costUsd;
       const stopReason = claudeStopReason(resultMsg);
       if (stopReason !== undefined) result.stopReason = stopReason;
@@ -1753,6 +1742,13 @@ export class ClaudeProvider implements IAgentProvider {
         };
         await inputClosed;
       }
+      const spendBaseline = await readSessionSpendBaseline(resumeSessionId, {
+        cwd,
+        env,
+        execContext: requestOptions?.execContext,
+        signal: controller.signal,
+      });
+      controller.signal.throwIfAborted();
       const rawEvents = query({ prompt: input(), options });
       const diagnostics = buildFirstEventHangDiagnostics(
         options.env as Record<string, string>,
@@ -1773,12 +1769,7 @@ export class ClaudeProvider implements IAgentProvider {
       // whenever a resume was requested.
       for await (const chunk of withResumedOutcome(
         closeOpenToolCalls(
-          streamClaudeMessages(
-            events,
-            toolResultQueue,
-            sessionSpend.baselineFor(resumeSessionId, requestOptions?.sessionState),
-            closeInput
-          ),
+          streamClaudeMessages(events, toolResultQueue, spendBaseline, closeInput),
           // A result can arrive while background agents still run their tools.
           { resultEndsTurn: false }
         ),

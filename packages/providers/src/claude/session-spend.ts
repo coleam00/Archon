@@ -1,13 +1,4 @@
 import type { ModelUsage } from '@anthropic-ai/claude-agent-sdk';
-import { z } from 'zod';
-import type { SendQueryOptions } from '@archon/provider-contract';
-
-const spendStateSchema = z.object({
-  costUsd: z.number().nonnegative(),
-  modelUsage: z.record(z.string(), z.object({ outputTokens: z.number().nonnegative().optional() })),
-});
-type SpendState = z.infer<typeof spendStateSchema>;
-
 /**
  * Per-query spend for a session whose SDK totals are cumulative.
  *
@@ -17,12 +8,9 @@ type SpendState = z.infer<typeof spendStateSchema>;
  * callers add those figures up, so each query must report only what it spent:
  * its result's totals minus the session's totals when the query started.
  *
- * The baseline is the last result recorded for the session being resumed, either
- * in this process or in provider-owned state echoed by the process host. A session
- * absent from both (for example after a host restart or eviction) has no known
- * baseline; its cost is reported as unknown rather than a cumulative figure that
- * would over-count. Token counts are unaffected: the result's `usage` already
- * covers only the current query.
+ * Resumes and forks use the SDK's persisted cost-state as their baseline.
+ * Missing or invalid state leaves cost unknown rather than over-counting earlier
+ * turns. The result's usage already covers only the current query.
  */
 
 /** A session's cumulative totals, as its latest result reported them. */
@@ -35,9 +23,12 @@ export interface SessionSpend {
 export type SpendBaseline =
   /** A new session: the SDK's totals start at zero. */
   | { kind: 'fresh' }
-  /** A resume or fork with recorded or host-supplied totals. */
-  | { kind: 'known'; spend: SpendState }
-  /** A resume or fork with no recorded or host-supplied totals. */
+  /** A resume or fork with persisted totals. */
+  | {
+      kind: 'known';
+      spend: { costUsd: number; modelUsage: Record<string, Pick<ModelUsage, 'outputTokens'>> };
+    }
+  /** A resume or fork with no persisted totals. */
   | { kind: 'unknown' };
 
 /** The query's own share of a result's cumulative totals. */
@@ -49,45 +40,6 @@ export interface QuerySpend {
    * omitted). With an unknown baseline, the cumulative record if it names one model, else empty.
    */
   modelUsage: Record<string, ModelUsage>;
-}
-
-/** Sessions the ledger remembers; a resume of an evicted session reports cost as unknown. */
-const LEDGER_CAPACITY = 1000;
-
-/**
- * Latest cumulative totals per session id. Bounded so a long-lived server does not grow it forever.
- *
- * A baseline is only right if nothing else advances the session between the result that
- * recorded it and the resume that reads it. Archon holds that today: chat turns on one
- * conversation are serialized by its lock, and a workflow node resuming another node's
- * session always forks it. A caller that resumes one session id concurrently breaks it.
- */
-export class SessionSpendLedger {
-  private readonly latest = new Map<string, SpendState>();
-
-  baselineFor(
-    resumeSessionId: string | undefined,
-    sessionState?: SendQueryOptions['sessionState']
-  ): SpendBaseline {
-    if (resumeSessionId === undefined) return { kind: 'fresh' };
-    const spend =
-      sessionState === undefined
-        ? this.latest.get(resumeSessionId)
-        : spendStateSchema.parse(sessionState);
-    return spend ? { kind: 'known', spend } : { kind: 'unknown' };
-  }
-
-  record(sessionId: string, spend: SessionSpend): SpendState {
-    const state = spendStateSchema.parse(spend);
-    // Re-insert so the Map's insertion order tracks recency, then evict the oldest.
-    this.latest.delete(sessionId);
-    this.latest.set(sessionId, state);
-    if (this.latest.size > LEDGER_CAPACITY) {
-      const oldest = this.latest.keys().next().value;
-      if (oldest !== undefined) this.latest.delete(oldest);
-    }
-    return state;
-  }
 }
 
 export function spendSince(baseline: SpendBaseline, cumulative: SessionSpend): QuerySpend {

@@ -397,17 +397,40 @@ describe('ClaudeProvider', () => {
     describe('cost of a resumed or forked session is the query’s own spend', () => {
       // Totals recorded from real haiku runs on SDK 0.3.282, whose resumed and forked
       // sessions report total_cost_usd and modelUsage cumulatively.
+      let configRoot: string;
+      beforeEach(() => {
+        configRoot = backgroundTempRoots(mkdtempSync(join(tmpdir(), 'claude-spend-')));
+        mkdirSync(join(configRoot, 'projects', 'arbitrary-slug'), { recursive: true });
+      });
+      function persist<
+        T extends {
+          session_id: string;
+          total_cost_usd: number;
+          modelUsage: Record<string, unknown>;
+        },
+      >(result: T): T {
+        writeFileSync(
+          join(configRoot, 'projects', 'arbitrary-slug', result.session_id + '.jsonl'),
+          JSON.stringify({
+            type: 'cost-state',
+            sessionId: result.session_id,
+            totalCostUSD: result.total_cost_usd,
+            modelUsage: result.modelUsage,
+          }) + '\n'
+        );
+        return result;
+      }
       const haiku = (costUSD: number, outputTokens: number): Record<string, unknown> => ({
         'claude-haiku-4-5-20251001': { inputTokens: 900, outputTokens, costUSD },
       });
       function resultFor(sessionId: string, total: number, outputTokens: number): void {
         mockQuery.mockImplementationOnce(async function* () {
-          yield {
+          yield persist({
             type: 'result',
             session_id: sessionId,
             total_cost_usd: total,
             modelUsage: haiku(total, outputTokens),
-          };
+          });
         });
       }
       async function costOf(
@@ -415,71 +438,100 @@ describe('ClaudeProvider', () => {
         options?: { forkSession: boolean }
       ): Promise<number | undefined> {
         let cost: number | undefined;
-        for await (const chunk of client.sendQuery(
-          'test',
-          '/workspace',
-          resumeSessionId,
-          options
-        )) {
+        for await (const chunk of client.sendQuery('test', '/workspace', resumeSessionId, {
+          ...options,
+          env: { CLAUDE_CONFIG_DIR: configRoot },
+        })) {
           if (chunk.type === 'result') cost = chunk.cost;
         }
         return cost;
       }
 
+      test('snapshots request-scoped state before eager SDK startup changes it', async () => {
+        const sessionId = '10000000-0000-4000-8000-000000000099';
+        persist({ session_id: sessionId, total_cost_usd: 0.1, modelUsage: haiku(0.1, 10) });
+        const previous = process.env.CLAUDE_CONFIG_DIR;
+        process.env.CLAUDE_CONFIG_DIR = join(configRoot, 'ambient-canary');
+        mockQuery.mockImplementationOnce(() => {
+          const result = persist({
+            type: 'result',
+            session_id: sessionId,
+            total_cost_usd: 0.3,
+            modelUsage: haiku(0.3, 30),
+          });
+          return (async function* () {
+            yield result;
+          })();
+        });
+        try {
+          expect(await costOf(sessionId)).toBeCloseTo(0.2, 10);
+        } finally {
+          if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+          else process.env.CLAUDE_CONFIG_DIR = previous;
+        }
+      });
+
       test('a resumed turn reports what it spent, not the session total', async () => {
-        resultFor('spend-resume', 0.030896, 55);
+        resultFor('10000000-0000-4000-8000-000000000001', 0.030896, 55);
         expect(await costOf()).toBe(0.030896);
 
-        resultFor('spend-resume', 0.0356233, 103);
-        expect(await costOf('spend-resume')).toBeCloseTo(0.0047273, 10);
+        resultFor('10000000-0000-4000-8000-000000000001', 0.0356233, 103);
+        expect(await costOf('10000000-0000-4000-8000-000000000001')).toBeCloseTo(0.0047273, 10);
       });
 
       test('a fork reports its own spend, differenced against the source session', async () => {
-        resultFor('spend-fork-source', 0.0356233, 103);
+        resultFor('10000000-0000-4000-8000-000000000002', 0.0356233, 103);
         await costOf();
 
-        resultFor('spend-fork-child', 0.0421297, 151);
-        expect(await costOf('spend-fork-source', { forkSession: true })).toBeCloseTo(0.0065064, 10);
+        resultFor('10000000-0000-4000-8000-000000000003', 0.0421297, 151);
+        expect(
+          await costOf('10000000-0000-4000-8000-000000000002', { forkSession: true })
+        ).toBeCloseTo(0.0065064, 10);
 
         // The fork's own totals become the baseline for resuming it.
-        resultFor('spend-fork-child', 0.05, 180);
-        expect(await costOf('spend-fork-child')).toBeCloseTo(0.0078703, 10);
+        resultFor('10000000-0000-4000-8000-000000000003', 0.05, 180);
+        expect(await costOf('10000000-0000-4000-8000-000000000003')).toBeCloseTo(0.0078703, 10);
       });
 
-      test('resuming a session this process never saw reports cost as unknown', async () => {
+      test('resuming without a persisted baseline reports cost as unknown', async () => {
         // Created by an earlier process: its total includes turns this node did not run.
-        resultFor('spend-unseen', 0.0356233, 103);
-        expect(await costOf('spend-unseen')).toBeUndefined();
+        resultFor('20000000-0000-4000-8000-000000000001', 0.0356233, 103);
+        expect(await costOf('20000000-0000-4000-8000-000000000001')).toBeUndefined();
         expect(mockLogger.warn).toHaveBeenCalledWith(
-          { sessionIdPreview: 'spend-un', baseline: 'unknown' },
+          { sessionIdPreview: '20000000', baseline: 'unknown' },
           'claude.query_cost_unknown'
         );
       });
 
       test('the resolved model is the one this query used, not the session’s busiest', async () => {
         mockQuery.mockImplementationOnce(async function* () {
-          yield {
+          yield persist({
             type: 'result',
-            session_id: 'spend-model',
+            session_id: '10000000-0000-4000-8000-000000000004',
             total_cost_usd: 0.5,
             modelUsage: { 'claude-opus-5-5': { outputTokens: 4000, costUSD: 0.5 } },
-          };
+          });
         });
         await costOf();
         mockQuery.mockImplementationOnce(async function* () {
-          yield {
+          yield persist({
             type: 'result',
-            session_id: 'spend-model',
+            session_id: '10000000-0000-4000-8000-000000000004',
             total_cost_usd: 0.51,
             modelUsage: {
               'claude-opus-5-5': { outputTokens: 4000, costUSD: 0.5 },
               'claude-haiku-4-5-20251001': { outputTokens: 60, costUSD: 0.01 },
             },
-          };
+          });
         });
 
         let resolved: string | undefined;
-        for await (const chunk of client.sendQuery('test', '/workspace', 'spend-model')) {
+        for await (const chunk of client.sendQuery(
+          'test',
+          '/workspace',
+          '10000000-0000-4000-8000-000000000004',
+          { env: { CLAUDE_CONFIG_DIR: configRoot } }
+        )) {
           if (chunk.type === 'result') resolved = chunk.resolvedModel?.id;
         }
         expect(resolved).toBe('claude-haiku-4-5-20251001');
@@ -489,7 +541,7 @@ describe('ClaudeProvider', () => {
         // A crash or startup-error result can carry the session's totals unchanged.
         const totals = {
           type: 'result',
-          session_id: 'spend-zero-delta',
+          session_id: '10000000-0000-4000-8000-000000000005',
           total_cost_usd: 0.6,
           modelUsage: {
             'claude-opus-5-5': { outputTokens: 5000, costUSD: 0.5 },
@@ -497,15 +549,20 @@ describe('ClaudeProvider', () => {
           },
         };
         mockQuery.mockImplementationOnce(async function* () {
-          yield totals;
+          yield persist(totals);
         });
         await costOf();
         mockQuery.mockImplementationOnce(async function* () {
-          yield totals;
+          yield persist(totals);
         });
 
         const results: MessageChunk[] = [];
-        for await (const chunk of client.sendQuery('test', '/workspace', 'spend-zero-delta')) {
+        for await (const chunk of client.sendQuery(
+          'test',
+          '/workspace',
+          '10000000-0000-4000-8000-000000000005',
+          { env: { CLAUDE_CONFIG_DIR: configRoot } }
+        )) {
           if (chunk.type === 'result') results.push(chunk);
         }
         expect(results).toHaveLength(1);
@@ -515,19 +572,24 @@ describe('ClaudeProvider', () => {
 
       test('without a baseline, a multi-model session names no model', async () => {
         mockQuery.mockImplementationOnce(async function* () {
-          yield {
+          yield persist({
             type: 'result',
-            session_id: 'spend-unseen-multi',
+            session_id: '20000000-0000-4000-8000-000000000002',
             total_cost_usd: 0.6,
             modelUsage: {
               'claude-opus-5-5': { outputTokens: 5000, costUSD: 0.5 },
               'claude-haiku-4-5-20251001': { outputTokens: 100, costUSD: 0.1 },
             },
-          };
+          });
         });
 
         const results: MessageChunk[] = [];
-        for await (const chunk of client.sendQuery('test', '/workspace', 'spend-unseen-multi')) {
+        for await (const chunk of client.sendQuery(
+          'test',
+          '/workspace',
+          '20000000-0000-4000-8000-000000000002',
+          { env: { CLAUDE_CONFIG_DIR: configRoot } }
+        )) {
           if (chunk.type === 'result') results.push(chunk);
         }
         expect(results[0]).not.toHaveProperty('resolvedModel');
@@ -535,11 +597,11 @@ describe('ClaudeProvider', () => {
       });
 
       test('a total below the baseline reports cost as unknown', async () => {
-        resultFor('spend-reset', 0.03, 50);
+        resultFor('10000000-0000-4000-8000-000000000006', 0.03, 50);
         await costOf();
 
-        resultFor('spend-reset', 0.004, 20);
-        expect(await costOf('spend-reset')).toBeUndefined();
+        resultFor('10000000-0000-4000-8000-000000000006', 0.004, 20);
+        expect(await costOf('10000000-0000-4000-8000-000000000006')).toBeUndefined();
       });
     });
 

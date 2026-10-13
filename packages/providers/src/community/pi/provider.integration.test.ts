@@ -8,7 +8,7 @@
  * mocks the Pi SDK process-wide.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -195,4 +195,82 @@ describe('PiProvider with a substituted custom provider and a provider-registeri
     expect(readdirSync(sessionDir, { recursive: true })).toEqual(filesBefore);
     expect(await SessionManager.list(repoDir)).toEqual(before);
   });
+});
+
+test('persisted Pi resume and fork report only the current prompt usage', async () => {
+  const contexts: number[] = [];
+  const stub = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const body = (await request.json()) as { messages: unknown[] };
+      contexts.push(body.messages.length);
+      const input = contexts.length === 1 ? 100 : 200;
+      const output = contexts.length === 1 ? 10 : 20;
+      const frames = completion({ role: 'assistant', content: 'done' }, 'stop');
+      return sse([
+        ...frames,
+        {
+          id: 'usage',
+          object: 'chat.completion.chunk',
+          created: 0,
+          model: 'spend',
+          choices: [],
+          usage: { prompt_tokens: input, completion_tokens: output, total_tokens: input + output },
+        },
+      ]);
+    },
+  });
+  const modelsPath = join(agentDir, 'models.json');
+  const savedModels = readFileSync(modelsPath, 'utf8');
+  writeFileSync(
+    modelsPath,
+    JSON.stringify({
+      providers: {
+        spend: {
+          baseUrl: `http://127.0.0.1:${stub.port}/v1`,
+          api: 'openai-completions',
+          apiKey: 'stub',
+          models: [
+            {
+              id: 'spend',
+              name: 'spend',
+              reasoning: false,
+              input: ['text'],
+              contextWindow: 10000,
+              maxTokens: 100,
+              cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      },
+    })
+  );
+  try {
+    async function turn(resume?: string, forkSession = false) {
+      for await (const chunk of new PiProvider().sendQuery('reply done', repoDir, resume, {
+        model: 'spend/spend',
+        forkSession,
+        nodeConfig: { allowed_tools: [] },
+      })) {
+        if (chunk.type === 'result') return chunk;
+      }
+      throw new Error('missing Pi result');
+    }
+    const fresh = await turn();
+    expect(fresh.failure).toBeUndefined();
+    expect(fresh.tokens).toMatchObject({ input: 100, output: 10 });
+    expect(fresh.cost).toBeCloseTo(0.00012, 10);
+    expect(fresh.sessionId).toBeDefined();
+    for (const forkSession of [false, true]) {
+      const result = await turn(fresh.sessionId, forkSession);
+      expect(result.failure).toBeUndefined();
+      expect(result.resumed).toBe(true);
+      expect(result.tokens).toMatchObject({ input: 200, output: 20 });
+      expect(result.cost).toBeCloseTo(0.00024, 10);
+    }
+    expect(contexts).toEqual([2, 4, 6]);
+  } finally {
+    void stub.stop(true);
+    writeFileSync(modelsPath, savedModels);
+  }
 });
