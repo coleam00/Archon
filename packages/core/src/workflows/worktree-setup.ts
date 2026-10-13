@@ -77,10 +77,7 @@ function createSetupExecutor(
         result = await runSubprocess({ kind: 'host' }, resolveBashPath(), ['-c', command], {
           cwd: input.workingPath,
           timeout: input.timeout,
-          // SIGKILL so a command that traps SIGTERM cannot outlive its bound. It reaches
-          // only the `bash -c` process: the step the shell was running (an installer, a
-          // `sleep`, a script's child) and any background job keep running after it.
-          killSignal: 'SIGKILL',
+          ownProcessGroup: true,
           env: environment.envVars ?? {},
           protectedEnvKeys: environment.protectedEnvKeys,
           protectedCredentialValues: environment.protectedCredentialValues,
@@ -89,32 +86,18 @@ function createSetupExecutor(
               ? retention
               : { ...retention, nodeId: `setup-${attemptId}-${commandIndex}` },
         });
-        // A shell that exits 0 while a background job holds its output resolves only
-        // when the timeout destroys the streams; classify it below as a timeout.
-        if (Date.now() - started >= input.timeout) {
-          throw Object.assign(new Error(`Command timed out after ${input.timeout} ms`), {
-            killed: true,
-            code: null,
-            signal: null,
-            stdout: result.stdout,
-            stderr: result.stderr,
-          });
-        }
       } catch (error) {
         const rejection = redactSubprocessError(
           error instanceof Error ? error : new Error(String(error)),
           credentials
         );
-        // Reaching the bound is a timeout whatever the shell reported: a shell that
-        // exits while a background job holds its output settles only at the timeout.
-        const failureKind =
-          isSubprocessTimeout(rejection) || Date.now() - started >= input.timeout
-            ? 'timeout'
-            : rejection.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
-              ? 'output_limit'
-              : typeof rejection.code === 'number' || rejection.signal
-                ? 'exit'
-                : 'spawn';
+        const failureKind = isSubprocessTimeout(rejection)
+          ? 'timeout'
+          : rejection.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+            ? 'output_limit'
+            : typeof rejection.code === 'number' || rejection.signal
+              ? 'exit'
+              : 'spawn';
         const exitCode = typeof rejection.code === 'number' ? rejection.code : undefined;
         const errno = typeof rejection.code === 'string' ? rejection.code : undefined;
         const signal = rejection.signal ?? undefined;

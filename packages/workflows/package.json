@@ -108,7 +108,8 @@
       "src/event-emitter.test.ts"
     ],
     [
-      "src/executor-shared.test.ts"
+      "src/executor-shared.test.ts",
+      "src/subprocess.test.ts"
     ],
     [
       "src/provider-events.test.ts"

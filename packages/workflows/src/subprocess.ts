@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import { terminateTree } from '@archon/paths/plugin-process';
 import { retainStreamTail } from './executor-shared';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { CONTAINER_ENV_DENYLIST } from '@archon/provider-contract';
@@ -59,12 +61,14 @@ export type RawSubprocessRejection = Error & {
   code?: number | string | null;
   /** True when Node killed the child after the configured `execFile` timeout elapsed. */
   killed?: boolean;
+  /** The owned group deadline expired, independent of the eventual exit code. */
+  timedOut?: boolean;
   /** Terminal signal, also present when a command terminates itself. */
   signal?: string | null;
 };
 
 export function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
-  return error.killed === true && error.code === null;
+  return error.timedOut === true || (error.killed === true && error.code === null);
 }
 
 /**
@@ -74,7 +78,7 @@ export function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
  * removed even when the failed process echoes them without their env key.
  *
  * Mutates in place rather than returning a fresh Error: callers classify the
- * rejection by reading `killed` and `code` (ENOENT/EACCES) off
+ * rejection by reading `timedOut`/`killed` and `code` (ENOENT/EACCES) off
  * the original object, and a replacement would silently drop those and turn every
  * timeout into a generic failure.
  *
@@ -140,14 +144,17 @@ export async function runSubprocess(
   options: {
     cwd: string;
     timeout: number;
-    /** Host-only signal sent at `timeout`; execFile's default SIGTERM can be ignored. */
-    killSignal?: NodeJS.Signals;
+    /** Host setup only: end the group on deadline, command exit, or owner death. */
+    ownProcessGroup?: true;
     env: NodeJS.ProcessEnv;
     protectedEnvKeys?: readonly string[];
     protectedCredentialValues?: readonly string[];
     retention: SubprocessRetention | { standalone: true };
   }
 ): Promise<{ stdout: string; stderr: string; credentialValues: readonly string[] }> {
+  if (options.ownProcessGroup && execContext.kind === 'container') {
+    throw new Error('Owned subprocess groups require host execution');
+  }
   const subprocessEnv =
     execContext.kind === 'container' ? options.env : { ...process.env, ...options.env };
   // Both outcomes redact against the same values, so the credential set is resolved
@@ -174,12 +181,17 @@ export async function runSubprocess(
             }),
             { timeout: options.timeout }
           )
-        : await execFileAsync(cmd, args, {
-            cwd: options.cwd,
-            timeout: options.timeout,
-            ...(options.killSignal ? { killSignal: options.killSignal } : {}),
-            env: subprocessEnv,
-          });
+        : options.ownProcessGroup
+          ? await execOwnedProcessGroup(cmd, args, {
+              cwd: options.cwd,
+              timeout: options.timeout,
+              env: subprocessEnv,
+            })
+          : await execFileAsync(cmd, args, {
+              cwd: options.cwd,
+              timeout: options.timeout,
+              env: subprocessEnv,
+            });
 
     result.stderr = redactCredentialValues(result.stderr, credentialValues);
     // Retention is the EVIDENCE copy, taken from a redacted-then-capped copy of the
@@ -223,4 +235,122 @@ export async function runSubprocess(
       );
     throw rejection;
   }
+}
+
+// Explicit <&0 keeps bash from replacing the background watcher's stdin with /dev/null.
+// Only the owner holds the write end; EOF covers even SIGKILL, without signal handlers.
+const SETUP_LIFELINE = '{ cat >/dev/null; kill -KILL 0; } <&0 >/dev/null 2>&1 &\n"$@" </dev/null';
+const TERMINATION_CONFIRM_MS = 1000;
+
+async function confirmGroupGone(pid: number): Promise<void> {
+  const deadline = Date.now() + TERMINATION_CONFIRM_MS;
+  while (true) {
+    try {
+      process.kill(-pid, 0);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') return;
+      if (code !== 'EPERM') throw error;
+    }
+    if (Date.now() >= deadline) throw new Error(`Setup process group ${pid} is still running`);
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+  }
+}
+
+async function execOwnedProcessGroup(
+  cmd: string,
+  args: string[],
+  options: { cwd: string; timeout: number; env: NodeJS.ProcessEnv }
+): Promise<{ stdout: string; stderr: string }> {
+  const posix = process.platform !== 'win32';
+  const child = spawn(cmd, posix ? ['-c', SETUP_LIFELINE, 'archon-setup', cmd, ...args] : args, {
+    cwd: options.cwd,
+    env: options.env,
+    windowsHide: true,
+    detached: posix,
+    stdio: [posix ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+  });
+  const maxBuffer = 1024 * 1024;
+  let stdout = Buffer.alloc(0);
+  let stderr = Buffer.alloc(0);
+  let failure: RawSubprocessRejection | undefined;
+  let timedOut = false;
+  let exited = false;
+  let termination: Promise<void> | undefined;
+  let terminationError: Error | undefined;
+  const stop = (): void => {
+    // Never signal a group after its leader exited: that PID may already be reused.
+    if (termination || exited || child.pid === undefined) return;
+    termination = terminateTree(child.pid).catch((error: unknown) => {
+      terminationError = error instanceof Error ? error : new Error(String(error));
+    });
+  };
+  const timer = setTimeout(() => {
+    timedOut = true;
+    stop();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+  }, options.timeout);
+  const collect = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
+    const previous = stream === 'stdout' ? stdout : stderr;
+    const buffer = Buffer.concat([previous, chunk.subarray(0, maxBuffer - previous.length)]);
+    if (stream === 'stdout') stdout = buffer;
+    else stderr = buffer;
+    if (previous.length + chunk.length > maxBuffer && !failure) {
+      failure = Object.assign(new Error(`${stream} maxBuffer length exceeded`), {
+        code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+      });
+      clearTimeout(timer);
+      stop();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }
+  };
+  child.stdout?.on('data', (chunk: Buffer) => collect('stdout', chunk));
+  child.stderr?.on('data', (chunk: Buffer) => collect('stderr', chunk));
+  child.once('error', error => {
+    failure = error;
+  });
+  child.once('exit', () => {
+    exited = true;
+    // The watcher ends leftovers from inside its group, without a stale-PID signal.
+    child.stdin?.destroy();
+  });
+  const closed = await new Promise<{ code: number | null; signal: string | null }>(resolve => {
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  clearTimeout(timer);
+  child.stdin?.destroy();
+  await termination;
+  if (posix && child.pid !== undefined) {
+    try {
+      await confirmGroupGone(child.pid);
+    } catch (error) {
+      terminationError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  if (terminationError) {
+    failure ??= new Error('Setup process group termination failed');
+    failure.message += `; could not terminate subprocess tree: ${terminationError.message}`;
+  }
+  const output = { stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8') };
+  if (timedOut || failure || closed.code !== 0) {
+    throw Object.assign(
+      failure ??
+        new Error(
+          timedOut
+            ? `Command timed out after ${options.timeout} ms`
+            : `Command failed: ${cmd} ${args.join(' ')}\n${output.stderr}`
+        ),
+      {
+        ...output,
+        ...(!failure ? { code: closed.code } : {}),
+        signal: closed.signal,
+        timedOut,
+        cmd: `${cmd} ${args.join(' ')}`,
+        spawnargs: args,
+      }
+    );
+  }
+  return output;
 }
