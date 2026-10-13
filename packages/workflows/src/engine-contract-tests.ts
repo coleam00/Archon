@@ -91,6 +91,18 @@ function makeWorkflow(overrides: Partial<WorkflowDefinition> = {}): ResolvedWork
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   const noop = async (): Promise<void> => undefined;
   return {
+    getStateDocument: async () => null,
+    listStateRevisions: async () => [],
+    putStateDocument: async () => {
+      throw new Error('Unsupported state documents');
+    },
+    patchStateDocument: async () => {
+      throw new Error('Unsupported state documents');
+    },
+    deleteStateDocument: async () => {
+      throw new Error('Unsupported state documents');
+    },
+    pruneStateRevisions: async () => ({ count: 0 }),
     getActiveWorkflowRunByPath: async () => null,
     findChildRuns: async () => [],
     getRunAncestry: async () => [],

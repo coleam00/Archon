@@ -39,7 +39,7 @@
       "src/commands/inspect-chat-plugin.test.ts"
     ],
     [
-      "src/commands/publish-chat-plugin.test.ts"
+      "src/commands/publish-plugin.test.ts"
     ],
     [
       "src/commands/workflow-provider-plugin.integration.spec.ts"
@@ -75,6 +75,9 @@
     ],
     [
       "src/commands/ai.test.ts"
+    ],
+    [
+      "src/commands/provider.test.ts"
     ],
     [
       "src/commands/validate.test.ts"
@@ -153,6 +156,9 @@
       "src/commands/user.test.ts"
     ],
     [
+      "src/commands/auth.test.ts"
+    ],
+    [
       "src/commands/trigger-store.integration.spec.ts"
     ],
     [
@@ -163,6 +169,13 @@
     ],
     [
       "src/commands/workflow-launch-config.integration.spec.ts"
+    ],
+    [
+      "src/commands/state.test.ts",
+      "src/test-support/state-document-store.conformance.test.ts"
+    ],
+    [
+      "src/commands/state.integration.spec.ts"
     ]
   ]
 }

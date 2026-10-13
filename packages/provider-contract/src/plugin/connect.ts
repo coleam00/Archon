@@ -149,36 +149,26 @@ export async function connectProvider(
         )
       );
     },
-    async listModels(): Promise<ProviderModelList> {
+    async listModels(request): Promise<ProviderModelList> {
+      request.signal.throwIfAborted();
       return rpc.parse(
         providerModelListSchema,
-        await rpc.request('_archon/list_models', listModelsRequestSchema.parse({}))
+        await abortable(
+          rpc.request('_archon/list_models', listModelsRequestSchema.parse({})),
+          request.signal
+        )
       );
     },
     async checkCredential(request): Promise<CredentialStatus> {
       request.signal.throwIfAborted();
-      // The connection is shared with running turns, so an abort fails only this call.
-      // A late reply settles the pending request and is dropped.
-      let abort: (() => void) | undefined;
-      const aborted = new Promise<never>((_, reject) => {
-        abort = (): void => {
-          const reason: unknown = request.signal.reason;
-          reject(reason instanceof Error ? reason : new Error(String(reason)));
-        };
-        request.signal.addEventListener('abort', abort, { once: true });
-      });
-      try {
-        const response = rpc.request(
-          '_archon/check_credential',
-          checkCredentialRequestSchema.parse({
-            model: request.model,
-            assistantConfig: request.assistantConfig,
-          })
-        );
-        return rpc.parse(credentialStatusSchema, await Promise.race([response, aborted]));
-      } finally {
-        if (abort) request.signal.removeEventListener('abort', abort);
-      }
+      const response = rpc.request(
+        '_archon/check_credential',
+        checkCredentialRequestSchema.parse({
+          model: request.model,
+          assistantConfig: request.assistantConfig,
+        })
+      );
+      return rpc.parse(credentialStatusSchema, await abortable(response, request.signal));
     },
     async resolveCredentialModel(request): Promise<string | undefined> {
       return rpc.parse(
@@ -290,4 +280,21 @@ export async function connectProvider(
       }
     },
   };
+}
+
+async function abortable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let abort: (() => void) | undefined;
+  const cancelled = new Promise<never>((_, reject) => {
+    abort = (): void => {
+      const reason: unknown = signal.reason;
+      reject(reason instanceof Error ? reason : new Error(String(reason)));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  try {
+    return await Promise.race([pending, cancelled]);
+  } finally {
+    if (abort) signal.removeEventListener('abort', abort);
+  }
 }

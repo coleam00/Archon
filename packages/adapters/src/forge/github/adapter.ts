@@ -216,10 +216,7 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     this.retryDelayFn = options?.retryDelayMs ?? ((attempt: number): number => 1000 * attempt);
 
-    getLog().info(
-      { botMention: this.botMention, authMode: auth.kind },
-      'github.adapter_initialized'
-    );
+    getLog().info({ authMode: auth.kind }, 'github.adapter_initialized');
   }
 
   /**
@@ -1100,9 +1097,7 @@ ${userComment}`;
     // 2b. Authorization check - verify sender is in whitelist
     const senderUsername = event.sender?.login;
     if (!isGitHubUserAuthorized(senderUsername, this.allowedUsers)) {
-      // Log unauthorized attempt (mask username for privacy)
-      const maskedUser = senderUsername ? `${senderUsername.slice(0, 3)}***` : 'unknown';
-      getLog().info({ maskedUser }, 'github.unauthorized_webhook');
+      getLog().info({ platform: githubPolicy.id }, 'github.unauthorized_webhook');
       return; // Silent rejection - no error response
     }
 
@@ -1132,10 +1127,7 @@ ${userComment}`;
     // Primary: Check for hidden marker in comment body (works with user's PAT)
     const commentBody = event.comment?.body ?? '';
     if (commentBody.includes(BOT_RESPONSE_MARKER)) {
-      getLog().debug(
-        { commentAuthor: event.comment?.user?.login },
-        'github.ignoring_marked_comment'
-      );
+      getLog().debug('github.ignoring_marked_comment');
       return;
     }
     // Secondary: Check comment author. In App mode the bot account is
@@ -1145,7 +1137,7 @@ ${userComment}`;
     // user-to-server token would otherwise be misfiltered.
     const commentAuthor = event.comment?.user?.login;
     if (commentAuthor?.toLowerCase() === this.botLogin.toLowerCase()) {
-      getLog().debug({ commentAuthor }, 'github.ignoring_own_comment');
+      getLog().debug('github.ignoring_own_comment');
       return;
     }
 
@@ -1194,7 +1186,7 @@ ${userComment}`;
         archonUserId = user.id;
       } catch (err) {
         getLog().warn(
-          { err: toError(err), githubLogin: attributedLogin },
+          { err: toError(err), platform: githubPolicy.id },
           'github.user_resolve_failed'
         );
       }
@@ -1353,7 +1345,7 @@ ${userComment}`;
     if (isSlashCommand) {
       // For slash commands, use only the first line
       finalMessage = strippedComment.split('\n')[0].trim();
-      getLog().debug({ command: finalMessage }, 'github.slash_command_processing');
+      getLog().debug('github.slash_command_processing');
 
       // Add issue/PR reference context
       if (eventType === 'issue' && issue) {

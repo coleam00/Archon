@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { copyFile, lstat, rename, rm } from 'node:fs/promises';
+import { removeUnlocked, renameUnlocked } from './unlocked-file';
 
 interface Publication {
   stagedReceipt: string;
@@ -9,7 +10,12 @@ interface Publication {
   previousFiles: readonly string[];
 }
 
-export async function publishChatPlugin(publication: Publication): Promise<void> {
+/**
+ * Moves a staged plugin binary and its receipt into place, then removes the files the
+ * previous receipt owned. Any failure restores the previous install from backups taken
+ * up front, so the receipt never names a binary that is not there.
+ */
+export async function publishPlugin(publication: Publication): Promise<void> {
   const { stagedReceipt, receiptFile, stagedBinary, target, previousFiles } = publication;
   const backups = new Map<string, string>();
   const published: string[] = [];
@@ -18,7 +24,7 @@ export async function publishChatPlugin(publication: Publication): Promise<void>
       try {
         await rm(backup, { force: true });
       } catch {
-        console.warn(`Chat plugin backup cleanup failed: ${backup}`);
+        console.warn(`Plugin backup cleanup failed: ${backup}`);
       }
     }
   };
@@ -36,40 +42,48 @@ export async function publishChatPlugin(publication: Publication): Promise<void>
     }
   } catch {
     await discardBackups();
-    throw new Error(`Chat plugin could not back up installed files: ${receiptFile}`);
+    throw new Error(`Plugin could not back up installed files: ${receiptFile}`);
   }
 
   try {
-    // Receipt first keeps ownership visible throughout the publication window.
+    // Receipt first: the other order could strand a binary no receipt owns, which
+    // every later install would refuse to replace.
     await rename(stagedReceipt, receiptFile);
     published.push(receiptFile);
-    await rename(stagedBinary, target);
+    await renameUnlocked(stagedBinary, target);
     published.push(target);
     for (const path of previousFiles) {
-      if (path !== target) await rm(path, { force: true });
+      if (path !== target) await removeUnlocked(path);
     }
-  } catch {
+  } catch (error) {
     const recovery: string[] = [];
     for (const path of published) {
       if (backups.has(path)) continue;
       try {
-        await rm(path, { force: true });
+        await removeUnlocked(path);
       } catch {
         recovery.push(path);
       }
     }
     for (const [path, backup] of backups) {
       try {
-        await rename(backup, path);
+        await renameUnlocked(backup, path);
       } catch {
         recovery.push(`${path} (backup: ${backup})`);
       }
     }
+    const reason = (error as Error).message;
     if (recovery.length) {
-      throw new Error(`Chat plugin rollback failed; recovery required: ${recovery.join(', ')}`);
+      throw new Error(
+        `Plugin publication failed and rollback failed; recovery required: ${recovery.join(', ')}. ${reason}`,
+        { cause: error }
+      );
     }
     await discardBackups();
-    throw new Error(`Chat plugin publication failed; previous install restored: ${receiptFile}`);
+    throw new Error(
+      `Plugin publication failed; previous install restored: ${receiptFile}. ${reason}`,
+      { cause: error }
+    );
   }
   // Publication has committed; leftover backups must not turn success into refusal.
   await discardBackups();

@@ -17,6 +17,7 @@ export { CREDENTIAL_KINDS } from './types';
 export {
   assertProviderRegistrationAllowed,
   registerProvider,
+  markProviderUnavailable,
   getAgentProvider,
   getRegistration,
   getProviderCapabilities,

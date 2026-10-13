@@ -1,3 +1,4 @@
+import type { IStateDocumentStore } from './state-document-store';
 import type { IResourceStartStore } from './resource-start-store';
 import type { CheckoutSharedEventData, WorkflowEventRow } from './schemas/workflow-event';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
@@ -346,7 +347,7 @@ export class WorkflowRunPauseConflictError extends Error {
 }
 
 export interface IWorkflowStore
-  extends IRunTreeStore, IWorkflowRunNodeSessionStore, IResourceStartStore {
+  extends IRunTreeStore, IWorkflowRunNodeSessionStore, IResourceStartStore, IStateDocumentStore {
   setToolCallAttention(
     runId: string,
     streamId: string,

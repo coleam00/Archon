@@ -53,7 +53,7 @@ export async function connectGithubForUser(
     });
     return await persistGithubConnection(userId, token);
   } catch (err) {
-    getLog().error({ err: err as Error, userId }, 'github_connect.failed');
+    getLog().error({ err, userId, platform: 'github' }, 'github_connect.failed');
     throw err;
   }
 }
@@ -92,6 +92,6 @@ export async function persistGithubConnection(
     email: profile.email,
   });
 
-  getLog().info({ userId, githubLogin: profile.login }, 'github_connect.completed');
+  getLog().info({ userId, platform: 'github' }, 'github_connect.completed');
   return { githubLogin: profile.login };
 }

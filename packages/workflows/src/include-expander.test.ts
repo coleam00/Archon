@@ -464,13 +464,13 @@ describe('expandWorkflowIncludes — namespacing', () => {
         id: 'review',
         include: 'blk',
         depends_on: ['gate'],
-        when: 'true',
+        when: "$gate.output == 'gate'",
         trigger_rule: 'all_success',
       },
     ]);
     const { workflows } = expandWorkflowIncludes(mapOf(blockWorkflow(), parent));
     const entry = nodeById(workflows.get('parent')!, 'review__verify');
-    expect(entry?.when).toBe('true');
+    expect(entry?.when).toBe("$gate.output == 'gate'");
     expect(entry?.trigger_rule).toBe('all_success');
   });
 
@@ -815,15 +815,15 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     expect(error).toContain('right-hand side');
   });
 
-  test('does not broaden the load error to an unchanged malformed when expression', () => {
+  test('rejects an unchanged malformed when expression', () => {
     const block = wf('parameterized', [{ id: 'use', prompt: 'work', when: 'not an atom' }]);
     block.inputs = { mode: { default: 'fast' } };
     const parent = wf('parent', [{ id: 'review', include: 'parameterized' }]);
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
 
-    expect(errors).toHaveLength(0);
-    expect(nodeById(workflows.get('parent')!, 'review__use')?.when).toBe('not an atom');
+    expect(workflows.has('parent')).toBe(false);
+    expect(errors.some(error => error.error.includes('unsupported condition syntax'))).toBe(true);
   });
 
   test('substitutes inputs across every other supported inline node surface', () => {
