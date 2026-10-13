@@ -323,6 +323,10 @@ test('subscription routes require identity, validate shared schemas and create/d
       )
     ).status
   ).toBe(400);
+  expect(
+    (await request('POST', true, JSON.stringify({ ...subscription('api'), endpoint: 'not-a-url' })))
+      .status
+  ).toBe(400);
   for (let i = 0; i < 2; i++) expect((await request('POST')).status).toBe(200);
   expect((await listWebPushSubscriptions()).length).toBe(1);
   for (let i = 0; i < 2; i++) expect((await request('DELETE')).status).toBe(200);

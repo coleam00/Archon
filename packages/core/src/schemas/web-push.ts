@@ -1,8 +1,9 @@
 import { attentionNoticeKindSchema } from '@archon/workflows/schemas/attention-notice';
 import { z } from '@hono/zod-openapi';
 
-export const webPushEndpointSchema = z.url().refine(value => new URL(value).protocol === 'https:', {
-  message: 'A push endpoint must use HTTPS',
+export const webPushEndpointSchema = z.url({
+  protocol: /^https$/,
+  error: 'A push endpoint must be a valid HTTPS URL',
 });
 export const webPushSubscriptionSchema = z
   .object({
