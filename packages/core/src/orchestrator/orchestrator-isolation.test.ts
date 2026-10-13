@@ -168,6 +168,7 @@ mock.module('../workflows/store-adapter', () => ({
     store: {
       createWorkflowRun: mockCreateWorkflowRun,
       failWorkflowRun: mockFailWorkflowRun,
+      updateWorkflowRun: mock(async () => {}),
       getCodebaseEnvVars: async () => ({}),
     },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
@@ -313,6 +314,19 @@ const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+  finalizeWorkflowSource: mock(
+    async (_deps: unknown, source: WorkflowExecutor.PreparedWorkflowSource) => source
+  ),
+  preparedWorkflowSourceRecord: (source: WorkflowExecutor.PreparedWorkflowSource) => ({
+    version: 1,
+    root: source.anchor.root,
+    origin: source.origin,
+    captured_at: source.manifest.captured_at,
+    digest: source.manifest.digest,
+    source_config: source.anchor.config,
+    file_count: source.manifest.file_count,
+    byte_count: source.manifest.byte_count,
+  }),
   // Source capture runs before dispatch and does real filesystem work; stub it so these
   // tests stay about routing. `mock.module` MERGES, so an export omitted here keeps its
   // REAL implementation — which is exactly how a stub silently starts doing disk I/O.
@@ -738,7 +752,8 @@ describe('dispatchBackgroundWorkflow', () => {
     // The run executes in the parent conversation's cwd (live checkout).
     expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
     const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0];
-    expect(runRow?.working_path).toBe('/parent/cwd');
+    expect(runRow?.working_path).toBeUndefined();
+    expect(mockExecuteWorkflow.mock.calls.at(-1)?.[3]).toBe('/parent/cwd');
     // Operators can distinguish live-checkout runs from worktree runs in logs.
     expect(mockLogger.info).toHaveBeenCalledWith(
       { workflowName: 'bg-workflow', conversationId: 'parent-conv', codebaseId: 'cb-1' },
@@ -748,29 +763,21 @@ describe('dispatchBackgroundWorkflow', () => {
     await flushBackgroundExecution();
   });
 
-  test('transfers capture ownership before returning while executor adoption is deferred', async () => {
-    // Production awaits setup before its rename/adopt site. Hold that boundary open: the
-    // dispatch must return without either ownership scope reclaiming the staged source.
+  test('retains the prepared run source before detached execution starts', async () => {
+    // The run already owns its source when deferred engine submission starts.
     const workflow = makeWorkflow({ worktree: { enabled: false } });
     deferExecuteWorkflowAdoption = true;
 
     try {
       await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
 
-      // Outer dispatch owner holds, detached owner synchronously takes over, then the
-      // outer owner adopts. The detached owner remains live across the unresolved await.
       expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'hold:/capture', 'adopt']);
       expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create']);
       expect(mockCloseRunLiveOwner).not.toHaveBeenCalled();
 
       releaseExecuteWorkflowAdoption?.();
       await flushBackgroundExecution();
-      expect(capturedSourceOwnerCalls).toEqual([
-        'hold:/capture',
-        'hold:/capture',
-        'adopt',
-        'adopt',
-      ]);
+      expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'hold:/capture', 'adopt']);
       expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create', 'close']);
     } finally {
       deferExecuteWorkflowAdoption = false;
@@ -950,7 +957,8 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(mockResolve).toHaveBeenCalledTimes(1);
     expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
     const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0];
-    expect(runRow?.working_path).toBe('/worktrees/bg-1');
+    expect(runRow?.working_path).toBeUndefined();
+    expect(mockExecuteWorkflow.mock.calls.at(-1)?.[3]).toBe('/worktrees/bg-1');
     expect(mockLogger.info).not.toHaveBeenCalledWith(
       expect.anything(),
       'workflow.worktree_disabled_by_policy'
@@ -1025,7 +1033,8 @@ describe('dispatchBackgroundWorkflow', () => {
       taskBranch: { kind: 'existing', branch: 'feature/adopted' },
     });
     const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0];
-    expect(runRow?.working_path).toBe('/worktrees/feature-adopted');
+    expect(runRow?.working_path).toBeUndefined();
+    expect(mockExecuteWorkflow.mock.calls.at(-1)?.[3]).toBe('/worktrees/feature-adopted');
     const captureArgs = mockPrepareWorkflowSource.mock.calls.at(-1);
     expect(captureArgs?.[1].sourceRoot).toBe('/adopted/snapshot');
     expect(mockResolveWorkflowSourceRoot).not.toHaveBeenCalledWith('/worktrees/feature-adopted');

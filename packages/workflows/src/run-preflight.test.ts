@@ -475,6 +475,37 @@ test('AI-only inheritance uses the new actor and refuses conflicting adoption in
   ).rejects.toThrow('Cannot override AI configuration');
 });
 
+test('preflight protects only effective database values after run overrides', async () => {
+  const { deps } = fixture();
+  const workflow = makeTestResolvedWorkflow({
+    name: 'setup',
+    nodes: [{ id: 'shell', bash: 'true' }],
+  });
+  const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { codebaseId: 'cb' });
+  expect(prepared.config.protectedCredentialValues).toEqual(['db']);
+  const overridden = await prepareRunAiConfiguration(
+    {
+      ...deps,
+      sealRunConfig: () => ({
+        version: 1,
+        source: { kind: 'cli', label: 'test' },
+        ciphertext: 'test',
+        keys: ['envVars'],
+      }),
+    },
+    workflow,
+    '/p',
+    {
+      codebaseId: 'cb',
+      runConfig: {
+        layer: { envVars: { DB_SETTING: 'override' } },
+        source: { kind: 'cli', label: 'test' },
+      },
+    }
+  );
+  expect(overridden.config.protectedCredentialValues).not.toContain('db');
+});
+
 test('files reject stored per-user credential reads, while native credentials and script-only runs work', async () => {
   const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
   const files = { ...deps, credentialStore: 'files' as const };

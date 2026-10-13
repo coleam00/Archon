@@ -2212,6 +2212,41 @@ describe('WorktreeProvider', () => {
         expect((error as { cleanupFailure?: string }).cleanupFailure).toBeUndefined();
       });
 
+      test('post-create runs after submodules and copies, before refreshing and unlocking', async () => {
+        makeGitmodulesPresent();
+        const steps: string[] = [];
+        const copy = spyOn(worktreeCopy, 'copyWorktreeFiles').mockImplementation(async () => {
+          steps.push('copy');
+          return [worktreeCopy.parseCopyFileEntry('.seed')];
+        });
+        execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+          if (args.includes('add')) steps.push('add');
+          if (args.includes('submodule')) steps.push('submodule');
+          return { stdout: '', stderr: '' };
+        });
+        refreshWorktreeIndexSpy.mockImplementation(async () => {
+          steps.push('refresh');
+        });
+        unlockWorktreeSpy.mockImplementation(async () => {
+          steps.push('unlock');
+        });
+        const setup = mock(async (input: import('../types').WorktreeSetupInput) => {
+          steps.push('commands');
+          expect(input.workingPath).toBe(provider.getWorktreePath(baseRequest, 'archon/issue-42'));
+          expect(input.timeout).toBe(1234);
+        });
+        provider = new WorktreeProvider(
+          async () => ({ copyFiles: ['.seed'], postCreate: ['true'], postCreateTimeout: 1234 }),
+          setup
+        );
+        try {
+          await provider.create(baseRequest);
+          expect(steps).toEqual(['add', 'submodule', 'copy', 'commands', 'refresh', 'unlock']);
+        } finally {
+          copy.mockRestore();
+        }
+      });
+
       test('the checkout is born locked, so setup never runs on an adoptable one', async () => {
         const worktreePath = provider.getWorktreePath(baseRequest, 'archon/issue-42');
         makeGitmodulesPresent();

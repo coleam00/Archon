@@ -335,6 +335,25 @@ describe('toRunEvent — error & workflow lifecycle', () => {
 });
 
 describe('toRunEvent — fallback', () => {
+  test.each(['started', 'completed', 'failed'])(
+    'worktree setup %s shows its message without creating node transitions',
+    phase => {
+      const message =
+        phase === 'failed'
+          ? 'Worktree setup 1 failed with exit code 7'
+          : `Worktree setup 1 ${phase}: ./setup.sh`;
+      const event = toRunEvent(
+        raw({
+          event_type: `worktree_setup_${phase}`,
+          step_name: null,
+          data: { attemptId: 'setup-attempt', message, stderrTail: 'evidence' },
+        })
+      );
+      expect(event).toMatchObject({ kind: 'text', nodeId: null, content: message });
+      expect(foldNodeRuns([event], [])).toEqual([]);
+    }
+  );
+
   test('unknown event types fall through to a text event with a payload summary', () => {
     const e = toRunEvent(raw({ event_type: 'mystery_event', data: { foo: 'bar' } }));
     expect(e.kind).toBe('text');

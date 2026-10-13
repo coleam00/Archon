@@ -44,6 +44,7 @@
     "./node-execution": "./src/node-execution.ts",
     "./node-record-serialization": "./src/node-record-serialization.ts",
     "./node-event-write": "./src/node-event-write.ts",
+    "./subprocess": "./src/subprocess.ts",
     "./logger": "./src/logger.ts",
     "./container-context": "./src/container-context.ts",
     "./structured-output": "./src/structured-output.ts",
