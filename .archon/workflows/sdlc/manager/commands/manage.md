@@ -39,7 +39,7 @@ Keep exactly one open issue titled `Owner decisions needed`. List each open ques
 
 ## Metrics
 
-Every pass, append one line to the body of a single open issue titled `Factory metrics` (create it on the first pass), in this form:
+Every pass, append one line to the body of a single open issue titled `Loop metrics` (create it on the first pass), in this form:
 
 `<UTC date-time> | merged since last pass: N (simple S, complex C, continue K) | open PRs: N | send-backs since last pass: N | needs-owner open: N | owner questions open: N | default branch CI: green|red`
 
