@@ -32,8 +32,10 @@ and isolation records without creating `archon.db`. It stores records under
 ```text
 head.json                format version and commit sequence
 intent.json              pending commit, present during writes or crash recovery
+feed-index.json          derived latest event commit per run, rebuilt from logs when missing
 runs/<id>/log.jsonl       append-only run records, events and event retractions
 runs/<id>/run.json        derived snapshot, rebuilt when missing or behind the log
+archived-runs/<id>/log.jsonl  retained feed log after run deletion
 runs/<id>/node-sessions.json
 node-sessions/<hash>.json
 host/codebases.json       project records with per-project envVars
@@ -49,7 +51,14 @@ Every write uses one store-wide lock and a recoverable intent. The next writer o
 reader that sees an intent redoes the committed operation exactly once. A torn final
 log line is ignored by readers and truncated only under the lock by the next writer.
 Committed lines are never rewritten; cancellation recovery appends event retractions.
-Run cleanup can delete a terminal run's entire directory.
+File-store run IDs are unique for the store's lifetime: creating a run with an ID
+already held by a live or archived run fails, including caller-reserved IDs.
+
+Run cleanup transfers a terminal run's log to `archived-runs` before removing its
+current-state directory. The event feed reads its derived index to find changed
+runs, then reads their live or archived logs. Writers update the index
+under the same lock before publishing the head; a missing or stale index is rebuilt
+from the logs.
 
 Use a local filesystem that supports hard links. Network filesystems are unsupported.
 The lock records its host, PID and process instance. Archon breaks it only when its owner
@@ -183,8 +192,11 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Records step transitions, artifacts, and errors per workflow run
   - Every provider event a workflow node streams, as `provider_event` rows: the engine envelope (`attemptId`, `seq`, `observedAt`, `event`) in `data`, the node in `step_name`. The same envelope is a `provider_event` line in the run's JSONL log. `GET /api/workflows/runs/{runId}/provider-events` serves them; the run-detail route leaves them out
   - Enables workflow run detail views and debugging
-  - On PostgreSQL, `event_order` follows commit order: a row committed later always has a higher value. A deferred constraint trigger (`archon_workflow_event_order`) assigns it at commit while holding an advisory lock, so committing event writers draw values one at a time. On SQLite the value is `MAX(event_order) + 1` under the single writer. It increases with commit order, but deleting the newest event lets the next insert reuse its value
+  - On PostgreSQL, `event_order` follows commit order: a row committed later always has a higher value. A deferred constraint trigger (`archon_workflow_event_order`) assigns it at commit while holding an advisory lock, so committing event writers draw values one at a time. Both SQL dialects retain the committed head in `remote_agent_workflow_event_sequence`, so event or run deletion never moves it backwards. PostgreSQL draws from its non-reusing sequence; SQLite increments the high-water row under its single writer
   - Indexed on `created_at` (`idx_workflow_events_created_at`) for the dashboard event poller's cross-run tail. On PostgreSQL an `AFTER INSERT` trigger (`archon_workflow_event_notify`) calls `pg_notify('archon_dashboard_event', …)` so runs started out of process (the `archon` CLI / `--detach`) stream live to the console; on SQLite the poller picks them up within its interval. The trigger is Postgres-only and best-effort (a role without `CREATE TRIGGER` degrades to poll-only, not a boot failure).
+  - A `BEFORE DELETE` trigger copies each deleted row into `remote_agent_workflow_event_archive`, which has the same columns and no run foreign keys, so cursors saved before a deletion can still read the payload. Schema apply adds any column the events table gains to the archive as well
+
+- **`remote_agent_workflow_event_sequence`** - Single-row high-water mark of committed `event_order` values; it never moves backwards when events or runs are deleted
 
 - **`remote_agent_messages`** - Conversation message history
   - Persists user and assistant messages with timestamps
@@ -320,3 +332,9 @@ from the CLI or the server, runs it headless and records no conversation history
 Schema upgrades preserve shipped columns and older writers. Older binaries can
 open and write the upgraded database, but may display the compatibility anchor
 when reading an origin-free run.
+
+## Store event feed
+
+Every workflow store exposes `getWorkflowEventHead()` and `readWorkflowEventsAfter(cursor, { limit, eventTypes? })`. The feed covers all runs in commit order. A page carries each event with its opaque cursor and a `next` cursor that also advances past rows excluded by the type filter. Pass cursors back unchanged; only the issuing store interprets them. A malformed cursor or one from a different store kind throws `WorkflowEventCursorError`.
+
+Start at the head to follow new commits, or resume from a cursor saved by an earlier read. This feed observes committed events; it does not report retractions or undo deliveries when fan-out recovery or cleanup removes events. Earlier cursors can still read those payloads: SQL deletion triggers retain them in a feed archive without run foreign keys, and the file store retains deleted run logs. Feed history has no expiry and is retained for the store's lifetime. `getWorkflowRun` and `listWorkflowEvents` remain the current state of record. File-store reads at the head are cheap; reads with new commits use the derived feed index to select run logs.

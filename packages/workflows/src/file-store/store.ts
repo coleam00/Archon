@@ -25,6 +25,8 @@ import {
 } from './transaction-view';
 import {
   commit,
+  createFileEventFeed,
+  isRunArchived,
   openFileStore,
   readJson,
   readRun,
@@ -170,11 +172,15 @@ export async function createFileWorkflowStore(
     return documents;
   }
   const store: IWorkflowStore & { deleteWorkflowRun(id: string): Promise<void> } = {
+    ...createFileEventFeed(root),
     getCodebase,
     getCodebaseEnvVars,
     createWorkflowRun: data => {
       const input = { ...data, id: data.id ?? crypto.randomUUID() };
-      return write([input.id], view => view.createWorkflowRun(input));
+      return write([input.id], async view => {
+        if (await isRunArchived(root, input.id)) throw new Error('Duplicate run');
+        return view.createWorkflowRun(input);
+      });
     },
     getWorkflowRun: id => readRun(root, id),
     getWorkflowRunStatus: async id => (await readRun(root, id))?.status ?? null,
@@ -308,7 +314,7 @@ export async function createFileWorkflowStore(
       write([id], view => view.deferWorkflowContinuation(id, retry, cursor)),
     signalWorkflowWait: (id, wait, payload) =>
       write([id], view => view.signalWorkflowWait(id, wait, payload)),
-    // A deleted run's directory goes away whole, so its events are never read.
+    // Cleanup archives logs without hydrating current-state events.
     deleteOldWorkflowRuns: days =>
       write('all', view => view.deleteOldWorkflowRuns(days), { events: false }),
     deleteWorkflowRun: id =>

@@ -1,11 +1,18 @@
 import { expect, test } from 'bun:test';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
-import type { IWorkflowStore } from './store';
-import { assertWorkflowClaimRace, assertWorkflowGateRace } from './store-conformance';
+import type { IWorkflowStore, WorkflowEventCursor } from './store';
+import {
+  assertWorkflowClaimRace,
+  assertWorkflowGateRace,
+  assertWorkflowEventFeedRace,
+} from './store-conformance';
 
 type RaceStore = Pick<
   IWorkflowStore,
+  | 'getWorkflowEventHead'
+  | 'readWorkflowEventsAfter'
+  | 'createWorkflowEvent'
   | 'createWorkflowRun'
   | 'getWorkflowRun'
   | 'claimPendingWorkflowRun'
@@ -19,7 +26,18 @@ type RaceStore = Pick<
 function makeRaceStore(): RaceStore {
   let run: WorkflowRun;
   const events: WorkflowEventRow[] = [];
+  const cursor = (index: number): WorkflowEventCursor => `test:${index}` as WorkflowEventCursor;
   const store: RaceStore = {
+    getWorkflowEventHead: async () => cursor(events.length),
+    readWorkflowEventsAfter: async (after, { limit }) => {
+      const start = Number(after.slice(5));
+      const rows = events.slice(start, start + limit);
+      return {
+        events: rows.map((event, index) => ({ event, cursor: cursor(start + index + 1) })),
+        next: cursor(start + rows.length),
+      };
+    },
+    createWorkflowEvent: input => store.persistWorkflowEvent(input),
     createWorkflowRun: async input => {
       run = {
         id: crypto.randomUUID(),
@@ -120,4 +138,18 @@ test('claim probe passes atomic CAS and rejects read-then-write through the publ
 test('gate probe passes atomic CAS and rejects read-then-write through the public port', async () => {
   await assertWorkflowGateRace(makeRaceStore());
   await expect(assertWorkflowGateRace(breakCas(makeRaceStore()))).rejects.toThrow();
+});
+
+test('feed probe catches skipped rows during concurrent commits', async () => {
+  await assertWorkflowEventFeedRace(makeRaceStore());
+  const store = makeRaceStore();
+  await expect(
+    assertWorkflowEventFeedRace({
+      ...store,
+      readWorkflowEventsAfter: async (after, options) => {
+        const page = await store.readWorkflowEventsAfter(after, options);
+        return { ...page, events: page.events.slice(1) };
+      },
+    })
+  ).rejects.toThrow();
 });

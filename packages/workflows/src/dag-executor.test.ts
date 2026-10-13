@@ -230,6 +230,12 @@ function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
 function createMockStore(): MockWorkflowStore {
   const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(async _data => {});
   return {
+    getWorkflowEventHead: mock<IWorkflowStore['getWorkflowEventHead']>(() => {
+      throw new Error('Unexpected event feed read');
+    }),
+    readWorkflowEventsAfter: mock<IWorkflowStore['readWorkflowEventsAfter']>(() => {
+      throw new Error('Unexpected event feed read');
+    }),
     getStateDocument: mock<IWorkflowStore['getStateDocument']>(() => {
       throw new Error('Unexpected getStateDocument');
     }),

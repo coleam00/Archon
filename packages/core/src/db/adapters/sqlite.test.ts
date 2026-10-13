@@ -65,6 +65,8 @@ async function makeDbWithoutEventOrder(): Promise<string> {
   try {
     raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
     raw.run('DROP INDEX IF EXISTS idx_workflow_events_run_order');
+    raw.run('DROP INDEX IF EXISTS idx_workflow_events_order');
+    raw.run('DROP TABLE IF EXISTS remote_agent_workflow_event_sequence');
     raw.run('ALTER TABLE remote_agent_workflow_events DROP COLUMN event_order');
   } finally {
     raw.close();
@@ -171,12 +173,109 @@ describe('SqliteAdapter failure logging', () => {
 });
 
 describe('SqliteAdapter upgrade path', () => {
+  test('upgrades the shipped MAX allocator and keeps its head after deletes and reopen', async () => {
+    const path = await upgradeFixturePath();
+    await new SqliteAdapter(path).close();
+    const raw = new Database(path);
+    try {
+      raw.run('DROP TRIGGER remote_agent_workflow_events_assign_order');
+      raw.run('DROP TABLE remote_agent_workflow_event_sequence');
+      raw.run(`CREATE TRIGGER remote_agent_workflow_events_assign_order AFTER INSERT ON remote_agent_workflow_events
+        WHEN NEW.event_order IS NULL BEGIN
+        UPDATE remote_agent_workflow_events SET event_order = (SELECT COALESCE(MAX(event_order), 0) + 1 FROM remote_agent_workflow_events) WHERE rowid = NEW.rowid; END`);
+      raw.run(
+        "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('feed-conversation', 'test', 'feed')"
+      );
+      raw.run(
+        "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ('feed-run', 'feed-conversation', 'feed', '')"
+      );
+      for (const id of ['first', 'second'])
+        raw.run(
+          "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES (?, 'feed-run', 'workflow_started')",
+          [id]
+        );
+    } finally {
+      raw.close();
+    }
+    let db = new SqliteAdapter(path);
+    try {
+      await db.query("DELETE FROM remote_agent_workflow_events WHERE id = 'second'");
+      await db.query(
+        "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES ('third', 'feed-run', 'workflow_started')"
+      );
+      expect(
+        (
+          await db.query<{ event_order: number }>(
+            "SELECT event_order FROM remote_agent_workflow_events WHERE id = 'third'"
+          )
+        ).rows
+      ).toEqual([{ event_order: 3 }]);
+      await db.query('DELETE FROM remote_agent_workflow_events');
+      await db.close();
+      db = new SqliteAdapter(path);
+      expect(
+        (
+          await db.query<{ id: string }>(
+            'SELECT id FROM remote_agent_workflow_event_archive ORDER BY event_order'
+          )
+        ).rows
+      ).toEqual([{ id: 'first' }, { id: 'second' }, { id: 'third' }]);
+      await db.query(
+        "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type) VALUES ('fourth', 'feed-run', 'workflow_started')"
+      );
+      expect(
+        (
+          await db.query<{ event_order: number }>(
+            "SELECT event_order FROM remote_agent_workflow_events WHERE id = 'fourth'"
+          )
+        ).rows
+      ).toEqual([{ event_order: 4 }]);
+    } finally {
+      await db.close();
+    }
+  });
+
   // Regression: the event_order index and trigger were briefly created inside
   // createSchema(). Both reference a column absent from any database predating
   // it, and CREATE INDEX on a missing column aborts the entire createSchema()
   // exec block — so createSchema() threw and migrateColumns(), which adds the
   // column, never ran. Every existing SQLite install was bricked on upgrade,
   // and the migration that would fix it could never execute.
+  // The archive trigger copies by position; an events column added after the archive
+  // existed made every event delete fail until the archive gained it too.
+  test('archives deleted events after the events table gains a column', async () => {
+    const path = await upgradeFixturePath();
+    await new SqliteAdapter(path).close();
+    const raw = new Database(path);
+    try {
+      raw.run('ALTER TABLE remote_agent_workflow_events ADD COLUMN later_column TEXT');
+    } finally {
+      raw.close();
+    }
+    const db = new SqliteAdapter(path);
+    try {
+      await db.query(
+        "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('c', 'test', 'c')"
+      );
+      await db.query(
+        "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ('r', 'c', 'w', '')"
+      );
+      await db.query(
+        "INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, later_column) VALUES ('e', 'r', 'workflow_started', 'kept')"
+      );
+      await db.query('DELETE FROM remote_agent_workflow_events');
+      expect(
+        (
+          await db.query<{ id: string; later_column: string }>(
+            'SELECT id, later_column FROM remote_agent_workflow_event_archive'
+          )
+        ).rows
+      ).toEqual([{ id: 'e', later_column: 'kept' }]);
+    } finally {
+      await db.close();
+    }
+  });
+
   test('converges a database that predates event_order', async () => {
     const path = await makeDbWithoutEventOrder();
     expect(columnsOf(path, 'remote_agent_workflow_events')).not.toContain('event_order');
@@ -726,6 +825,14 @@ describe('SqliteAdapter', () => {
         columnsByTable.set(table, columns);
       }
 
+      const derivedTableRe =
+        /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?\s+AS\s+SELECT\s+\*\s+FROM\s+"?([a-z0-9_]+)"?\s+WHERE\s+false/gi;
+      for (const match of sql.matchAll(derivedTableRe)) {
+        const owner = columnsByTable.get(match[2].toLowerCase());
+        if (!owner) throw new Error(`Missing schema owner: ${match[2]}`);
+        columnsByTable.set(match[1].toLowerCase(), new Set(owner));
+      }
+
       return columnsByTable;
     }
 
@@ -767,6 +874,12 @@ describe('SqliteAdapter', () => {
       // require editing the allowlist and nothing else.
       expect(postgresColumns.get('remote_agent_codebases')?.has('default_cwd')).toBe(true);
       expect(postgresColumns.get('remote_agent_users')?.has('role')).toBe(true);
+      expect(postgresColumns.get('remote_agent_workflow_event_archive')?.has('event_order')).toBe(
+        true
+      );
+      expect(postgresColumns.get('remote_agent_workflow_event_archive')).toEqual(
+        postgresColumns.get('remote_agent_workflow_events')
+      );
 
       const missing: string[] = [];
       let compared = 0;
