@@ -182,6 +182,7 @@ jobs:
           Get-CimInstance Win32_ComputerSystem | Select-Object NumberOfLogicalProcessors,TotalPhysicalMemory | Format-List
           Start-Process -WindowStyle Hidden typeperf -ArgumentList '"\PhysicalDisk(*)\Current Disk Queue Length" "\PhysicalDisk(*)\Disk Read Bytes/sec" "\PhysicalDisk(*)\Disk Write Bytes/sec" "\PhysicalDisk(*)\Disk Transfers/sec" "\Processor(_Total)\% Processor Time" "\Memory\Available MBytes" "\Memory\Pages Input/sec" "\System\Processes" -si 1 -f CSV -o', "$env:RUNNER_TEMP\perf.csv"
           "start $(Get-Date -Format o)" | Out-File "$env:RUNNER_TEMP\marks.txt"
+          bun scripts/diag-io.ts 2>&1 | Select-String -NotMatch '"level"'
 
       - name: Validate (Windows)
         if: runner.os == 'Windows'
@@ -192,6 +193,7 @@ jobs:
         shell: pwsh
         run: |
           "end $(Get-Date -Format o)" | Out-File -Append "$env:RUNNER_TEMP\marks.txt"
+          bun scripts/diag-io.ts 2>&1 | Select-String -NotMatch '"level"'
           Stop-Process -Name typeperf -ErrorAction SilentlyContinue
           $out = "$env:RUNNER_TEMP\diag"; New-Item -ItemType Directory $out | Out-Null
           Copy-Item "$env:RUNNER_TEMP\perf.csv","$env:RUNNER_TEMP\marks.txt" $out
