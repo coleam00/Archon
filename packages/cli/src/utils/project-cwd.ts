@@ -9,10 +9,8 @@ export async function resolveDiscoveryCwd(cwd: string): Promise<string> {
     const host = await createCliWorkflowHost();
     const { codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases);
     return codebase?.kind === 'folder' ? codebase.default_cwd : (repoRoot ?? cwd);
-  } catch (error) {
-    // File-only discovery can still inspect a proven Git root without a registry.
-    const repoRoot = await findRepoRoot(cwd);
-    if (repoRoot) return repoRoot;
-    throw error;
+  } catch {
+    // Local file operations remain available when registration storage cannot be read.
+    return (await findRepoRoot(cwd)) ?? cwd;
   }
 }

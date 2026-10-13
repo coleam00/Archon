@@ -419,3 +419,52 @@ test('first detached git-root folder registration completes in place without Git
     db.close();
   }
 }, 60_000);
+
+test('list and fixture testing discover only a registered inner folder from its descendant', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-folder-discovery-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const repo = join(root, 'repo');
+  const folder = join(repo, 'ops');
+  const descendant = join(folder, 'deep');
+  mkdirSync(descendant, { recursive: true });
+  git(repo, ['init', '-q']);
+  for (const [directory, name] of [
+    [repo, 'outer-only'],
+    [folder, 'inner-only'],
+  ] as const) {
+    const workflows = join(directory, '.archon', 'workflows', name);
+    mkdirSync(join(workflows, 'fixtures'), { recursive: true });
+    writeFileSync(
+      join(directory, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
+    );
+    writeFileSync(
+      join(workflows, 'workflow.yaml'),
+      `name: ${name}\ndescription: Discovery proof\nnodes:\n  - id: probe\n    bash: echo probe\n`
+    );
+    writeFileSync(
+      join(workflows, 'fixtures', 'probe.stubs.yaml'),
+      'fixture:\n  expect: completed\nprobe: stub\n'
+    );
+  }
+  const registered = await captureWorkflowCommand(home, async host => {
+    const { registerFolder } = await import('@archon/core/handlers/clone');
+    await registerFolder(host.records.codebases, folder);
+  });
+  expect(registered.status, registered.output).toBe(0);
+  for (const args of [
+    ['workflow', 'list'],
+    ['workflow', 'test', 'inner-only'],
+  ]) {
+    const result = spawnSync(process.execPath, [join(import.meta.dir, '..', 'cli.ts'), ...args], {
+      cwd: descendant,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, ARCHON_HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain('inner-only');
+    expect(result.stdout).not.toContain('outer-only');
+  }
+}, 30_000);

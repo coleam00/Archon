@@ -626,7 +626,7 @@ export function parseOrchestratorCommands(
     }
   }
 
-  const registerMatch = /^\/register-project\s+[^\r\n]+/m.exec(normalizedResponse);
+  const registerMatch = /^\/register-project[^\S\r\n]+[^\r\n]+/m.exec(normalizedResponse);
   if (registerMatch) result.projectRegistration = parseProjectRegistration(registerMatch[0]);
 
   return result;
