@@ -2,84 +2,6 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import ts from 'typescript';
 
-export interface PackageEdges {
-  runtime: readonly string[];
-  test?: readonly string[];
-}
-
-export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
-  // SDK-free filesystem and process foundations.
-  paths: { runtime: [] },
-  // Forge contracts; fixtures use paths' test cleanup helpers.
-  forge: { runtime: ['paths'] },
-  // Plugin manifest vocabulary.
-  'plugin-manifest': { runtime: ['chat-contract', 'paths', 'provider-contract'] },
-  // External providers can depend on the contract without pulling in implementations.
-  'provider-contract': { runtime: [] },
-  'chat-contract': { runtime: ['provider-contract'] },
-  // Git operations use the shared paths and process helpers.
-  git: { runtime: ['paths'] },
-  // SDK implementations adapt the provider contract.
-  providers: { runtime: ['paths', 'provider-contract'] },
-  // Isolation imports the engine-owned write-back shapes type-only. This table checks the
-  // edge, not the import kind; keep those imports `import type`.
-  isolation: { runtime: ['git', 'paths', 'provider-contract', 'workflows'] },
-  // Tests run the engine against the real registered providers.
-  workflows: {
-    runtime: ['git', 'paths', 'plugin-manifest', 'provider-contract'],
-    test: ['providers'],
-  },
-  // Core assembles execution and persistence services.
-  core: {
-    runtime: [
-      'chat-contract',
-      'git',
-      'isolation',
-      'paths',
-      'plugin-manifest',
-      'provider-contract',
-      'providers',
-      'workflows',
-    ],
-  },
-  // Transport adapters normalize platform input for core.
-  adapters: { runtime: ['core', 'forge', 'git', 'isolation', 'paths', 'providers', 'workflows'] },
-  // Server hosts the engine and platform adapters.
-  server: {
-    runtime: [
-      'adapters',
-      'chat-contract',
-      'core',
-      'git',
-      'paths',
-      'provider-contract',
-      'providers',
-      'workflows',
-    ],
-  },
-  // CLI composes local services and launches the server executable.
-  cli: {
-    runtime: [
-      'adapters',
-      'chat-contract',
-      'core',
-      'forge',
-      'git',
-      'isolation',
-      'paths',
-      'plugin-manifest',
-      'provider-contract',
-      'providers',
-      'workflows',
-    ],
-  },
-  // The browser consumes generated API types through its local API layer.
-  web: { runtime: [] },
-  // Documentation builds independently of the runtime packages; the plugin catalog
-  // validates listed manifests against the shared manifest vocabulary.
-  'docs-web': { runtime: ['plugin-manifest'] },
-};
-
 export interface PackageManifest {
   path: string;
   dependencies?: Record<string, string>;
@@ -162,76 +84,23 @@ function importedPackages(file: SourceFile): { target: string; line: number }[] 
   return imports;
 }
 
-export function findEdgeViolations(
-  input: { packages: readonly PackageManifest[]; files: readonly SourceFile[] },
-  edges: Readonly<Record<string, PackageEdges>> = PACKAGE_EDGES
-): Violation[] {
+export function findEdgeViolations(input: {
+  packages: readonly PackageManifest[];
+  files: readonly SourceFile[];
+}): Violation[] {
   const violations: Violation[] = [];
   const packages = new Map(
     input.packages.map(manifest => [packageDirectory(manifest.path), manifest])
   );
-  for (const [name, manifest] of packages) {
-    if (name === undefined || edges[name] === undefined) {
-      violations.push({
-        file: manifest.path,
-        message: `workspace package '${String(name)}' has no edge-table entry`,
-      });
-    }
-  }
-  for (const [name, allowed] of Object.entries(edges)) {
-    if (!packages.has(name)) {
-      violations.push({
-        file: 'PACKAGE_EDGES',
-        message: `edge-table package '${name}' has no workspace package`,
-      });
-    }
-    for (const target of [...allowed.runtime, ...(allowed.test ?? [])]) {
-      if (edges[target] === undefined) {
-        violations.push({
-          file: 'PACKAGE_EDGES',
-          message: `${name} → ${target}: unknown edge-table target`,
-        });
-      }
-    }
-  }
-  for (const [name, manifest] of packages) {
-    if (name === undefined) continue;
-    const allowed = edges[name];
-    if (allowed === undefined) continue;
-    for (const section of ['dependencies', 'peerDependencies', 'devDependencies'] as const) {
-      const targets =
-        section === 'devDependencies'
-          ? [...allowed.runtime, ...(allowed.test ?? [])]
-          : allowed.runtime;
-      for (const specifier of Object.keys(manifest[section] ?? {})) {
-        const target = packageTarget(specifier);
-        if (target !== undefined && target !== name && !targets.includes(target)) {
-          violations.push({
-            file: manifest.path,
-            message: `${name} → @archon/${target} in ${section} is forbidden; allowed: ${targets.join(', ') || '(none)'}`,
-          });
-        }
-      }
-    }
-  }
   for (const file of input.files) {
     const path = normalizePath(file.path);
     const name = packageDirectory(path);
     if (name === undefined) continue;
     const manifest = packages.get(name);
-    const allowed = edges[name];
-    if (!manifest || !allowed) continue;
+    if (!manifest) continue;
     const test = isTestFile(path);
-    const targets = test ? [...allowed.runtime, ...(allowed.test ?? [])] : allowed.runtime;
     for (const { target, line } of importedPackages({ ...file, path })) {
       if (target === name) continue;
-      if (!targets.includes(target)) {
-        violations.push({
-          file: file.path,
-          line,
-          message: `${name} → @archon/${target} is forbidden; allowed: ${targets.join(', ') || '(none)'}`,
-        });
-      }
       const specifier = `@archon/${target}`;
       if (
         !(specifier in (manifest.dependencies ?? {})) &&

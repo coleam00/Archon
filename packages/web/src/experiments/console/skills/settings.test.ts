@@ -20,6 +20,12 @@ function form(over: Partial<AssistantConfigForm> = {}): AssistantConfigForm {
 }
 
 describe('buildAssistantUpdate', () => {
+  test('omits an unselected default while saving provider model settings', () => {
+    expect(buildAssistantUpdate(form({ assistant: '', models: { codex: 'gpt' } }))).toEqual({
+      assistants: { codex: { model: 'gpt' } },
+    });
+  });
+
   test('passes the default assistant through', () => {
     expect(buildAssistantUpdate(form({ assistant: 'codex' })).assistant).toBe('codex');
   });

@@ -40,13 +40,17 @@ Use `archon forge resolve --data <json>` for an explicit remote, `archon forge c
 
 ## Users and roles
 
-`archon user` manages persisted roles as the local operator. It requires no git repository and uses the install's configured database (`DATABASE_URL` for PostgreSQL, otherwise `ARCHON_HOME/archon.db`).
+`archon user` manages identities and persisted roles as the local operator. It requires no git repository and uses the install's configured database (`DATABASE_URL` for PostgreSQL, otherwise `ARCHON_HOME/archon.db`).
 
 ```bash
 archon user list                    # Full ids, roles, display names and platform identities
 archon user role <id> admin         # Designate an admin using a full Archon user id
 archon user role <id> member        # Demote a user
+archon user link <id> slack:U123    # Link a platform identity to an existing user
+archon user link <id> slack:U123 --move # Reassign an identity from another user
 ```
+
+Linking requires an existing full user id and a valid platform id. The first colon separates the platform from its opaque user id. A conflicting link fails and names both Archon users unless `--move` is supplied. Moving changes only the identity mapping; both users, their roles and their other data remain unchanged. Linking to the run starter lets chat actions use that user’s existing permissions and record that user as the actor.
 
 Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non-zero exit code. New users are members, while upgrades preserve existing roles. There is no last-admin restriction because the CLI is the operator. Only a run's starter or an admin can act on it; the local operator can always act through the CLI. See [Who can act on a run](/reference/security/#who-can-act-on-a-run) for the action policy and [Users and roles](/reference/security/#users-and-roles) for the upgrade policy and Docker commands.
 
@@ -133,6 +137,20 @@ The Codex check skips (never fails) when Codex isn't the configured assistant an
 Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
 
 Also runs automatically at the end of `archon setup` (optional).
+
+### `provider install`
+
+Install or replace maintained providers from the matching Archon release:
+
+```bash
+archon provider install claude codex pi
+```
+
+The command accepts only `claude`, `codex`, and `pi`, pins the first-party repository tag to the CLI version, and uses the plugin installer's checksum verification. Maintained ids cannot be installed from another repository. Remove a receipt with `archon plugin remove coleam00/Archon/plugins/provider-<id>`.
+
+Source checkouts and Docker run these providers from source over the process transport and refuse this install command. Release binaries retain their bundled providers until the separate provider release rollout is complete.
+
+The default provider comes from explicit configuration (`assistant` in project config or `defaultAssistant` in global config), then `DEFAULT_AI_ASSISTANT`, then the only registered provider. With multiple providers and no configured default, a run needing one fails before creating a worktree. A workflow can select its provider explicitly.
 
 ### `plugin`
 
@@ -1503,7 +1521,9 @@ tombstones, operation, writer and timestamp.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
-stdin to the latest value, initially `{}`, retrying up to five times on contention.
+stdin to the latest value, initially `{}`. Writes to one document are serialized, so a
+patch never loses a revision race; it applies to whatever an earlier write left, which
+can make it invalid (for example, removing a member another patch already removed).
 Operations are `set`, `remove`, and `append`, using RFC 6901 JSON Pointer paths. `set`
 replaces a value, `remove` deletes an existing member (or array element), and `append`
 adds one value to an array, creating it when missing. Missing intermediate objects are

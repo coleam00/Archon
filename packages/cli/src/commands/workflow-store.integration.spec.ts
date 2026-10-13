@@ -4,13 +4,22 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { providerRegistry } from '@archon/providers';
+import {
+  clearRegistry,
+  codexDescriptor,
+  getRegisteredProviders,
+  registerProvider,
+  providerRegistry,
+} from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { isWorkflowWaitContext, runAttention } from '@archon/workflows/schemas/workflow-run';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
-import { loadConfig } from '@archon/core/config/config-loader';
+import { processProviderRegistration } from '@archon/core/providers/process-registration';
+import { getSourceProviderEntry, setLogSink } from '@archon/paths';
+import { readdirSync } from 'node:fs';
+import { loadConfig, clearConfigCache } from '@archon/core/config/config-loader';
 import * as connection from '@archon/core/db/connection';
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { PostgresAdapter } from '@archon/core/db/adapters/postgres';
@@ -343,5 +352,53 @@ nodes:
     stdout.mockRestore();
     log.mockRestore();
     for (const trap of traps) trap.mockRestore();
+  }
+});
+
+test('a source host with only Codex refuses a Claude workflow before any worktree event or directory', async () => {
+  const root = tempRoots(mkdtempSync(join(tmpdir(), 'archon-provider-missing-')));
+  const project = join(root, 'project');
+  const worktrees = join(root, 'worktrees');
+  mkdirSync(worktrees);
+  mkdirSync(join(project, '.archon', 'workflows'), { recursive: true });
+  process.env.ARCHON_HOME = join(root, 'home');
+  process.env.WORKTREE_BASE = worktrees;
+  process.env.DEFAULT_AI_ASSISTANT = '';
+  const registrations = getRegisteredProviders();
+  clearRegistry();
+  clearConfigCache();
+  registerProvider(
+    processProviderRegistration(codexDescriptor, [
+      process.execPath,
+      '--no-env-file',
+      getSourceProviderEntry('codex'),
+    ])
+  );
+  writeFileSync(
+    join(project, '.archon', 'workflows', 'missing.yaml'),
+    'name: missing\ndescription: Missing provider proof\nprovider: claude\nisolation: worktree\nnodes:\n  - id: ai\n    prompt: never spend\n'
+  );
+  const host = createTestHost();
+  const logs: string[] = [];
+  setLogSink(line => logs.push(line));
+  try {
+    const { workflowRunCommand } = await import('./workflow');
+    const failure: unknown = await workflowRunCommand(host, project, 'missing', 'run').catch(
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toHaveProperty(
+      'message',
+      expect.stringContaining('archon provider install claude')
+    );
+    expect(logs.length).toBeGreaterThan(0);
+    expect(logs.some(line => line.includes('worktree_creating'))).toBe(false);
+    expect((await host.deps.store.listWorkflowRuns()).runs).toEqual([]);
+    expect(readdirSync(worktrees)).toEqual([]);
+  } finally {
+    setLogSink(undefined);
+    clearRegistry();
+    for (const registration of registrations) registerProvider(registration);
+    clearConfigCache();
   }
 });

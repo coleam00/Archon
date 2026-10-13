@@ -29,8 +29,10 @@ import {
   getUserById,
   updateUserDisplayName,
   linkGithubIdentity,
+  linkPlatformIdentity,
   updateUserGithubProfile,
   GithubIdentityConflictError,
+  PlatformIdentityConflictError,
 } from './users';
 import type { User, UserIdentity } from '../types';
 
@@ -347,14 +349,35 @@ describe('users', () => {
     });
   });
 
-  describe('linkGithubIdentity', () => {
-    const githubIdentity = (overrides: Partial<UserIdentity> = {}): UserIdentity =>
-      identityRow({ id: 'id-gh', platform: 'github', platform_user_id: 'alice', ...overrides });
+  describe('linkPlatformIdentity', () => {
+    test('invalid platform fails before database access', async () => {
+      await expect(linkPlatformIdentity('user-1', 'invalid_platform', 'id')).rejects.toThrow();
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
 
-    test('throws GithubIdentityConflictError when login maps to a different user', async () => {
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([githubIdentity({ user_id: 'user-other' })])
+    test('unknown users cannot acquire identities', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      await expect(linkPlatformIdentity('missing', 'matrix', 'id')).rejects.toThrow(
+        'Unknown user id: missing'
       );
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test('a rejected ownership write reports both users', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'other' })]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'other' })]));
+      await expect(linkPlatformIdentity('user-1', 'slack', 'U123')).rejects.toEqual(
+        new PlatformIdentityConflictError('slack', 'U123', 'other', 'user-1')
+      );
+    });
+
+    test('a GitHub conflict does not carry the login', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'other' })]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'other' })]));
       const conflict: unknown = await linkGithubIdentity('user-1', 'alice').catch(
         (err: unknown) => err
       );
@@ -363,75 +386,41 @@ describe('users', () => {
       expect(
         JSON.stringify({ ...(conflict as object), message: (conflict as Error).message })
       ).not.toContain('alice');
-      // Only the SELECT ran — a conflict must not touch the identity row.
-      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
 
-    test('updates platform_display_name (no throw) when login already belongs to the same user', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([githubIdentity({ user_id: 'user-1' })]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      await expect(linkGithubIdentity('user-1', 'alice')).resolves.toBeUndefined();
-      expect(logger.info).toHaveBeenCalledWith(
-        { userId: 'user-1', platform: 'github' },
-        'user.github_identity_relinked'
-      );
-      expect(mockQuery).toHaveBeenNthCalledWith(
-        2,
-        'UPDATE remote_agent_user_identities SET platform_display_name = $1 WHERE id = $2',
-        ['alice', 'id-gh']
-      );
-    });
-
-    test('inserts a new identity row when the login is unseen', async () => {
+    test('database failures propagate without recovery', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      await linkGithubIdentity('user-1', 'alice');
-      expect(logger.info).toHaveBeenCalledWith(
-        { userId: 'user-1', platform: 'github' },
-        'user.github_identity_linked'
-      );
-      expect(mockQuery).toHaveBeenNthCalledWith(
-        2,
-        expect.stringContaining('INSERT INTO remote_agent_user_identities'),
-        ['user-1', 'github', 'alice', 'alice']
-      );
-    });
-
-    test('recovers from a concurrent-insert race when the winner is the same user', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([])); // SELECT: not found yet
-      mockQuery.mockRejectedValueOnce(
-        Object.assign(new Error('duplicate key value violates unique constraint'), {
-          code: '23505',
-        })
-      );
-      // Re-SELECT after the UNIQUE violation: the winner is us → no conflict.
-      mockQuery.mockResolvedValueOnce(createQueryResult([githubIdentity({ user_id: 'user-1' })]));
-      await expect(linkGithubIdentity('user-1', 'alice')).resolves.toBeUndefined();
-      expect(logger.info).toHaveBeenCalledWith(
-        { userId: 'user-1', platform: 'github' },
-        'user.github_identity_link_race_recovered'
+      mockQuery.mockRejectedValueOnce(new Error('connection reset'));
+      await expect(linkPlatformIdentity('user-1', 'matrix', 'id')).rejects.toThrow(
+        'connection reset'
       );
       expect(mockQuery).toHaveBeenCalledTimes(3);
     });
 
-    test('race recovery surfaces a conflict when the winner is a different user', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([])); // SELECT: not found yet
-      mockQuery.mockRejectedValueOnce(
-        Object.assign(new Error('UNIQUE constraint failed'), { code: '23505' })
-      );
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([githubIdentity({ user_id: 'user-other' })])
-      );
-      await expect(linkGithubIdentity('user-1', 'alice')).rejects.toBeInstanceOf(
-        GithubIdentityConflictError
+    test('a disappeared conflict is a failure rather than success', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'other' })]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      await expect(linkPlatformIdentity('user-1', 'matrix', 'id')).rejects.toThrow(
+        'Identity disappeared while linking'
       );
     });
 
-    test('rethrows a non-UNIQUE insert error without a recovery SELECT', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([])); // SELECT
-      mockQuery.mockRejectedValueOnce(new Error('connection reset')); // INSERT
-      await expect(linkGithubIdentity('user-1', 'alice')).rejects.toThrow('connection reset');
-      expect(mockQuery).toHaveBeenCalledTimes(2); // no third (recovery) query
+    test('the log names the previous owner only when ownership moved', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ user_id: 'other' })]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      await linkPlatformIdentity('user-1', 'slack', 'U123', undefined, true);
+      mockQuery.mockResolvedValueOnce(createQueryResult([userRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
+      await linkPlatformIdentity('user-1', 'slack', 'U123', undefined, true);
+      expect(logger.info.mock.calls).toEqual([
+        [{ userId: 'user-1', platform: 'slack', previousUserId: 'other' }, 'user.identity_linked'],
+        [{ userId: 'user-1', platform: 'slack' }, 'user.identity_linked'],
+      ]);
     });
   });
 
