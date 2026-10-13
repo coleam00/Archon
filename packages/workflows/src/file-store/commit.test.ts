@@ -15,7 +15,7 @@ async function fixture() {
   return { root, store, run, dir };
 }
 const crashSteps = ['intent', 'log', 'snapshot', 'document', 'index', 'head'] as const;
-test.each(crashSteps)('redo after crash at %s applies exactly once', async step => {
+test.each([...crashSteps])('redo after crash at %s applies exactly once', async step => {
   const { root, store, run, dir } = await fixture();
   const head = await store.getWorkflowEventHead();
   const old = await readFile(join(dir, 'log.jsonl'), 'utf8');
