@@ -1,10 +1,9 @@
 /**
- * Run event stream primitives. Six variants of events that render in the Run
- * detail page: text, tool_call, artifact, node_transition, approval, error.
+ * Run event stream primitives rendered in the run detail page.
  *
  * These are the client-side model — normalized from server workflow_events
  * rows AND from SSE events. The shape is deliberately flatter than the raw
- * event schema so EventStream rendering can switch on `kind` only.
+ * event schema so RunStream rendering can switch on `kind` only.
  */
 
 import type { components } from '@/lib/api.generated';
@@ -276,6 +275,15 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       kind: 'approval',
       prompt: '',
       resolution,
+    };
+  }
+
+  if (et === 'attention_notice_sent') {
+    return {
+      ...base,
+      kind: 'system',
+      label: data.baseline === true ? 'Attention baseline recorded' : 'Attention notice sent',
+      detail: readString(data, 'destination'),
     };
   }
 
