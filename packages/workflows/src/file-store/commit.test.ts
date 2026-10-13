@@ -1,9 +1,10 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { appendFile, mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from './store';
+import * as commitModule from './commit';
 import { readRunState } from './commit';
 const roots = trackTempRoots();
 async function fixture() {
@@ -118,4 +119,17 @@ test('a snapshot behind its log is rebuilt before a read or write', async () => 
   await writeFile(join(dir, 'run.json'), old);
   expect(await store.claimPendingWorkflowRun(run.id)).toBeNull();
   expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
+});
+
+test('cleanup deletes old runs without reading any run event log under the lock', async () => {
+  const { store, run } = await fixture();
+  await store.cancelWorkflowRun(run.id);
+  await Bun.sleep(2);
+  const reads = spyOn(commitModule, 'readRunState');
+  try {
+    expect(await store.deleteOldWorkflowRuns(0)).toEqual({ count: 1 });
+    expect(reads).not.toHaveBeenCalled();
+  } finally {
+    reads.mockRestore();
+  }
 });

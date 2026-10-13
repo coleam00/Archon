@@ -590,14 +590,14 @@ export function createTransactionView(
             run.started_at.getTime() < Date.now() - days * 86_400_000
         )
         .map(run => run.id);
-      for (const id of ids) {
-        runs.delete(id);
-        for (let i = events.length - 1; i >= 0; i--)
-          if (events[i]?.workflow_run_id === id) events.splice(i, 1);
-        for (const run of runs.values()) {
-          if (run.parent_run_id === id) run.parent_run_id = null;
-          if (run.adopted_from_run_id === id) run.adopted_from_run_id = null;
-        }
+      const deleted = new Set(ids);
+      for (const id of deleted) runs.delete(id);
+      const kept = events.filter(event => !deleted.has(event.workflow_run_id));
+      events.splice(0, events.length, ...kept);
+      for (const run of runs.values()) {
+        if (run.parent_run_id !== null && deleted.has(run.parent_run_id)) run.parent_run_id = null;
+        if (run.adopted_from_run_id !== null && deleted.has(run.adopted_from_run_id))
+          run.adopted_from_run_id = null;
       }
       return { count: ids.length };
     },

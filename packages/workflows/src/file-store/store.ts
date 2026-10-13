@@ -67,25 +67,40 @@ export async function createFileWorkflowStore(
       createTransactionView(runs, events ? await eventsFor([...runs.keys()]) : [], getCodebase)
     );
   }
+  function byRun(events: readonly WorkflowEventRow[]): Map<string, WorkflowEventRow[]> {
+    const grouped = new Map<string, WorkflowEventRow[]>();
+    for (const event of events) {
+      const rows = grouped.get(event.workflow_run_id);
+      if (rows) rows.push(event);
+      else grouped.set(event.workflow_run_id, [event]);
+    }
+    return grouped;
+  }
+  /**
+   * Run `call` against the locked runs and commit what it changed. Writes over every run
+   * hold the store lock for the whole call, so the diff indexes events by run once, and
+   * `events: false` skips reading the logs when the operation never looks at them.
+   */
   async function write<T>(
     ids: readonly string[] | 'all',
-    call: (view: TransactionView) => Promise<T>
+    call: (view: TransactionView) => Promise<T>,
+    { events: loadEvents = true }: { events?: boolean } = {}
   ): Promise<T> {
     const reports: { run: WorkflowRun; events: WorkflowEventRow[] }[] = [];
     const result = await commit(root, ids, async runs => {
       const before = structuredClone(runs);
-      const events = await eventsFor([...runs.keys()]);
-      const priorEvents = structuredClone(events);
+      const events = loadEvents ? await eventsFor([...runs.keys()]) : [];
+      const prior = byRun(events);
+      const priorIds = new Set(events.map(event => event.id));
       const result = await call(createTransactionView(runs, events, getCodebase));
-      const priorIds = new Set(priorEvents.map(event => event.id));
+      const next = byRun(events);
       const nextIds = new Set(events.map(event => event.id));
       const changes = [];
       for (const [id, run] of runs) {
-        const added = events.filter(
-          event => event.workflow_run_id === id && !priorIds.has(event.id)
-        );
-        const retract = priorEvents
-          .filter(event => event.workflow_run_id === id && !nextIds.has(event.id))
+        const runEvents = next.get(id) ?? [];
+        const added = runEvents.filter(event => !priorIds.has(event.id));
+        const retract = (prior.get(id) ?? [])
+          .filter(event => !nextIds.has(event.id))
           .map(event => event.id);
         if (!isDeepStrictEqual(before.get(id), run) || added.length || retract.length)
           changes.push({ run, events: added, retract });
@@ -98,7 +113,7 @@ export async function createFileWorkflowStore(
         )
           reports.push({
             run: structuredClone(run),
-            events: structuredClone(events.filter(event => event.workflow_run_id === id)),
+            events: structuredClone(runEvents),
           });
       }
       const deleted = [...before.keys()].filter(id => !runs.has(id));
@@ -279,7 +294,9 @@ export async function createFileWorkflowStore(
       write([id], view => view.deferWorkflowContinuation(id, retry, cursor)),
     signalWorkflowWait: (id, wait, payload) =>
       write([id], view => view.signalWorkflowWait(id, wait, payload)),
-    deleteOldWorkflowRuns: days => write('all', view => view.deleteOldWorkflowRuns(days)),
+    // A deleted run's directory goes away whole, so its events are never read.
+    deleteOldWorkflowRuns: days =>
+      write('all', view => view.deleteOldWorkflowRuns(days), { events: false }),
     deleteWorkflowRun: id =>
       commit(root, 'all', async runs => {
         const run = runs.get(id);
