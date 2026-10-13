@@ -9,8 +9,9 @@
  *
  * A report goes public only about the commit its round fixed at the start
  * (review-round): the checkout must still be at it, the pull request's remote
- * head must be it, and the report must name it. Any mismatch refuses, so a
- * verdict about one commit can never stand as the verdict on another. Once
+ * head must be it. Any mismatch refuses, so a verdict about one commit can
+ * never stand as the verdict on another. A report that does not repeat the SHA
+ * is stamped with it, not refused: the round, not the prose, fixes the commit. Once
  * published, the commit is recorded beside the report as the next round's cursor.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
@@ -93,8 +94,19 @@ try {
   if (checkout !== head) {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
-  if (!report.includes(head)) {
-    throw new Error(`the review report does not name ${head}, the commit this round reviewed`);
+  // The round fixed the head, so the report is about it whether or not the
+  // reviewer's prose repeats the SHA (a short SHA, or none at all). Stamp it rather
+  // than refuse a sound review. Only a report that declares another commit refuses.
+  const declaredHead = /Reviewed head SHA:\**\s*`?([^\s`*]+)/i.exec(report)?.[1];
+  if (!report.includes(head) && declaredHead && !head.startsWith(declaredHead)) {
+    throw new Error(
+      `the review report says it reviewed ${declaredHead}, but this round reviewed ${head}`
+    );
+  }
+  const stamped = report.includes(head) ? report : `**Reviewed head SHA:** ${head}\n\n${report}`;
+  if (stamped !== report) {
+    writeFileSync(reportPath, stamped);
+    note(`publish-review: the report did not name ${head}; stamped it.`);
   }
   if (!pr) {
     note('publish-review: the review scope is a working diff, so no comment was published.');
@@ -108,7 +120,7 @@ try {
     const directory = mkdtempSync(join(tmpdir(), 'archon-review-'));
     try {
       const marked = join(directory, 'comment.md');
-      writeFileSync(marked, `${MARKER}\n${report}`);
+      writeFileSync(marked, `${MARKER}\n${stamped}`);
       const comment = upsertComment(pr, MARKER, marked, source);
       note(`publish-review: canonical review comment at ${comment.url}`);
     } finally {

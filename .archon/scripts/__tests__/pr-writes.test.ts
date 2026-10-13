@@ -547,8 +547,22 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
       artifacts: { 'review-report.md': `Reviewed head SHA: ${STALE}` },
     });
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain(`does not name ${REVIEWED}`);
+    expect(result.stderr).toContain(`says it reviewed ${STALE}, but this round reviewed ${REVIEWED}`);
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+  });
+
+  // A sound review must not fail on prose: the round already fixed the commit.
+  it.each([
+    ['omits the SHA', 'All findings resolved.'],
+    ['names a short SHA', `Reviewed head SHA: ${REVIEWED.slice(0, 7)}`],
+  ])('stamps the reviewed commit when the report %s', (_label, body) => {
+    const result = publishReview({ inputs: report, artifacts: { 'review-report.md': body } });
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain('stamped it');
+    const written = readFileSync(join(result.artifacts, 'review-report.md'), 'utf8');
+    expect(written.startsWith(`**Reviewed head SHA:** ${REVIEWED}`)).toBe(true);
+    expect(written).toContain(body);
+    expect(readFileSync(join(result.artifacts, 'reviewed-head'), 'utf8').trim()).toBe(REVIEWED);
   });
 
   it('refuses when the checkout moved after the round fixed its commit', () => {
