@@ -31,17 +31,17 @@ const sourceConfigSchema = z
   })
   .strict();
 
+export type WebhookSourceOutcome = 'accepted' | 'malformed' | 'unauthenticated' | 'conflict';
+
 export interface WebhookSourcePluginHost {
   hasSource(sourceInstanceId: string): boolean;
-  receive(
-    sourceInstanceId: string,
-    request: WebhookSourceRequest
-  ): Promise<'accepted' | 'malformed' | 'unauthenticated' | 'conflict'>;
+  receive(sourceInstanceId: string, request: WebhookSourceRequest): Promise<WebhookSourceOutcome>;
 }
 
 export interface WebhookSourceHostDependencies {
   acceptReceipt: IWorkflowStore['acceptStartReceipt'];
   isKnownUser: (id: string) => Promise<boolean>;
+  hasDeliveryReceipt: (sourceInstanceId: string, deliveryId: string) => Promise<boolean>;
 }
 
 const log = createLogger('server.webhook-sources');
@@ -118,7 +118,7 @@ export async function loadWebhookSourcePlugins(
 
   return {
     hasSource: sourceInstanceId => plugins.has(sourceInstanceId),
-    async receive(sourceInstanceId, request): ReturnType<WebhookSourcePluginHost['receive']> {
+    async receive(sourceInstanceId, request): Promise<WebhookSourceOutcome> {
       const plugin = plugins.get(sourceInstanceId);
       if (!plugin) throw new Error(`Unknown webhook source instance '${sourceInstanceId}'`);
 
@@ -152,7 +152,14 @@ export async function loadWebhookSourcePlugins(
           `Webhook source '${sourceInstanceId}' returned a receipt for another source`
         );
       }
-      for (const binding of result.acceptance.bindings) {
+      // A redelivery keeps the binding snapshot of its first acceptance, so today's users
+      // must not turn a recorded delivery into a failure. The store still answers replay
+      // or conflict for it; a race past this lookup only repeats the check below.
+      const { deliveryId } = result.acceptance.receipt;
+      const recorded =
+        deliveryId !== null &&
+        (await dependencies.hasDeliveryReceipt(sourceInstanceId, deliveryId));
+      for (const binding of recorded ? [] : result.acceptance.bindings) {
         if (!(await dependencies.isKnownUser(binding.runAsUserId))) {
           log.error({ sourceInstanceId, stage: 'run_as' }, 'webhook_source_failed');
           throw new Error(`Webhook source '${sourceInstanceId}' resolved an unknown run-as user`);

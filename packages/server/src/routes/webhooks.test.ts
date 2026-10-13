@@ -185,6 +185,16 @@ describe('POST /webhooks/github', () => {
     expect((await response).status).toBe(200);
   });
 
+  test('verifies the received bytes without dropping a leading BOM', async () => {
+    const response = await createWebhookApp().request('/webhooks/github', {
+      method: 'POST',
+      headers: { 'x-hub-signature-256': 'signed' },
+      body: new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('{}')]),
+    });
+    expect(response.status).toBe(200);
+    expect(mockReceiveWebhook.mock.calls[0]?.[0]).toBe('\uFEFF{}');
+  });
+
   test.each([
     ['invalid_signature', 401],
     ['malformed', 400],
@@ -224,6 +234,32 @@ describe('POST /webhooks/sources/:sourceInstanceId', () => {
     });
     // Only a committed receipt asks the host to drain.
     expect(onReceiptAccepted).toHaveBeenCalledTimes(result === 'accepted' ? 1 : 0);
+  });
+
+  test('passes the received bytes through without dropping a leading BOM', async () => {
+    const app = new OpenAPIHono();
+    const receive = mock(
+      async (_sourceInstanceId: string, _request: { body: string }) => 'accepted' as const
+    );
+    registerWebhookSourceRoutes(app, { hasSource: () => true, receive });
+    const response = await app.request('/webhooks/sources/configured', {
+      method: 'POST',
+      body: new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('{}')]),
+    });
+    expect(response.status).toBe(200);
+    expect(receive.mock.calls[0]?.[1].body).toBe('\uFEFF{}');
+  });
+
+  test('refuses a body that is not UTF-8 before the source reads it', async () => {
+    const app = new OpenAPIHono();
+    const receive = mock(async () => 'accepted' as const);
+    registerWebhookSourceRoutes(app, { hasSource: () => true, receive });
+    const response = await app.request('/webhooks/sources/configured', {
+      method: 'POST',
+      body: new Uint8Array([0x7b, 0xff, 0x7d]),
+    });
+    expect(response.status).toBe(400);
+    expect(receive).not.toHaveBeenCalled();
   });
 
   test('does not expose an unconfigured source or read its receiver', async () => {

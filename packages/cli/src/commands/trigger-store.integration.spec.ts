@@ -396,6 +396,64 @@ test('receipt inspection rejects invalid limits through the in-memory store', as
   expect(await store.listStartReceipts(1000)).toEqual([]);
 });
 
+test('preparation refuses trigger inputs for a workflow that declares none', async () => {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-store-')));
+  const project = join(root, 'project');
+  await mkdir(join(project, '.archon/workflows'), { recursive: true });
+  await writeFile(
+    join(project, '.archon/workflows/portable.yaml'),
+    'name: portable\ndescription: No inputs\nnodes:\n  - id: result\n    bash: echo done\n'
+  );
+  const previousHome = process.env.ARCHON_HOME;
+  process.env.ARCHON_HOME = join(root, 'home');
+  registerBuiltinProviders();
+  setPlatformPolicies([]);
+  const host = hostForTest();
+  const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+  const receipt = acceptance(
+    {
+      bindingId: 'mapped',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: user.id,
+      resource: 'portable',
+      capacity: 1,
+      overlap: 'queue',
+      launch: {
+        cwd: project,
+        workflowName: 'portable',
+        inputs: { order_id: 'from-the-event' },
+        isolation: { kind: 'in-place' },
+      },
+    },
+    'mapped'
+  );
+  await host.deps.store.acceptStartReceipt(receipt);
+  let caught: unknown;
+  try {
+    await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async () => {
+        throw new Error('unexpected start');
+      },
+    });
+  } catch (error) {
+    caught = error;
+  } finally {
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
+  }
+  expect(caught).toBeInstanceOf(AggregateError);
+  expect((caught as AggregateError).errors[0]).toMatchObject({
+    message: expect.stringContaining("Workflow 'portable' declares no inputs"),
+  });
+  expect((await host.deps.store.getStartReceipt(receipt.receipt.id))?.bindings[0]).toMatchObject({
+    status: 'rejected',
+    error: 'launch_preparation_failed',
+  });
+});
+
 test('preparation preserves both failures when rejection cannot be persisted', async () => {
   const host = hostForTest();
   const statusError = new Error('status write unavailable');

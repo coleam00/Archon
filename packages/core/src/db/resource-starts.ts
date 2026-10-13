@@ -170,6 +170,21 @@ export async function drainResourceStarts(options: {
   });
 }
 
+/**
+ * Whether this source already holds a receipt for the delivery. Only a gate for checks that
+ * belong to a first acceptance; `acceptStartReceipt` still decides replay versus conflict.
+ */
+export async function hasStartReceiptForDelivery(
+  sourceInstanceId: string,
+  deliveryId: string
+): Promise<boolean> {
+  const found = await getDatabase().query(
+    'SELECT 1 FROM remote_agent_start_receipts WHERE source_instance_id = $1 AND delivery_id = $2',
+    [sourceInstanceId, deliveryId]
+  );
+  return found.rows.length > 0;
+}
+
 export async function acceptStartReceipt(
   input: SourceReceiptAcceptance
 ): Promise<{ receiptId: string; replay: boolean }> {

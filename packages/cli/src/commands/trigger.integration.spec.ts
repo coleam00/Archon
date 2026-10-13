@@ -319,10 +319,12 @@ describe('trigger CLI durable execution', () => {
       import { registerWebhookSourceRoutes } from ${JSON.stringify(join(packagesRoot, 'server/src/routes/webhooks.ts'))};
       import { closeDatabase } from ${JSON.stringify(join(packagesRoot, 'core/src/db/connection.ts'))};
       import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
+      import { hasStartReceiptForDelivery } from ${JSON.stringify(join(packagesRoot, 'core/src/db/resource-starts.ts'))};
       const workflowHost = createSqlWorkflowHost();
       const host = await loadWebhookSourcePlugins(${JSON.stringify(forgeConfigPath)}, {
         acceptReceipt: workflowHost.deps.store.acceptStartReceipt,
         isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
+        hasDeliveryReceipt: hasStartReceiptForDelivery,
       });
       const app = new OpenAPIHono();
       registerWebhookSourceRoutes(app, host);
@@ -423,6 +425,17 @@ nodes:
     bash: echo "$INPUTS_COUNT" > "$ARTIFACTS_DIR/result.txt"
 `
     );
+    // No `inputs:` declaration: a source must not pass event values to it.
+    writeFileSync(
+      join(workflowsDir, 'plain.yaml'),
+      `name: plain
+description: Declares no inputs.
+mutates_checkout: false
+nodes:
+  - id: record
+    bash: echo plain
+`
+    );
     const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
     expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
     const identity = await runCli(cliPath, projectRoot, archonHome, ['trigger', 'whoami']);
@@ -473,6 +486,13 @@ nodes:
                   bindingId: 'undeclared',
                   inputMapping: { undeclared: '/order/count' },
                 },
+                {
+                  ...bindingWithoutRevision,
+                  bindingId: 'undeclared-workflow',
+                  resource: 'integration:plain',
+                  launch: { ...bindingWithoutRevision.launch, workflowName: 'plain', inputs: {} },
+                  inputMapping: { count: '/order/count' },
+                },
               ],
             },
           },
@@ -489,31 +509,43 @@ nodes:
       import { registerWebhookSourceRoutes } from ${JSON.stringify(join(packagesRoot, 'server/src/routes/webhooks.ts'))};
       import { closeDatabase } from ${JSON.stringify(join(packagesRoot, 'core/src/db/connection.ts'))};
       import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
+      import { hasStartReceiptForDelivery } from ${JSON.stringify(join(packagesRoot, 'core/src/db/resource-starts.ts'))};
       const workflowHost = createSqlWorkflowHost();
       process.env.ARCHON_STANDARD_WEBHOOKS_TEST_SECRET = 'whsec_' + Buffer.from('test-secret').toString('base64');
+      let runAsUserRemoved = false;
       const host = await loadWebhookSourcePlugins(${JSON.stringify(standardConfigPath)}, {
         acceptReceipt: workflowHost.deps.store.acceptStartReceipt,
-        isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
+        isKnownUser: async id => !runAsUserRemoved && (await workflowHost.records.users.getUserById(id)) !== null,
+        hasDeliveryReceipt: hasStartReceiptForDelivery,
       });
       const app = new OpenAPIHono();
       registerWebhookSourceRoutes(app, host);
       const payload = JSON.stringify({order:{count:12},workflowName:'evil',cwd:'/evil',runAsUserId:'evil',hostId:'evil',resource:'evil',isolation:{kind:'worktree'}});
       const id = 'order-one';
       const timestamp = String(Math.floor(Date.now()/1000));
-      const headers = (body, ts = timestamp) => ({
-        'webhook-id': id, 'webhook-timestamp': ts,
-        'webhook-signature': 'v1,'+createHmac('sha256','test-secret').update(id+'.'+ts+'.'+body).digest('base64'),
+      const headers = (body, ts = timestamp, deliveryId = id) => ({
+        'webhook-id': deliveryId, 'webhook-timestamp': ts,
+        'webhook-signature': 'v1,'+createHmac('sha256','test-secret').update(deliveryId+'.'+ts+'.'+body).digest('base64'),
       });
       const post = async (body, hdrs, expected) => {
-        const response = await app.request('/webhooks/sources/integration-orders', {method:'POST',body,headers:hdrs});
-        if(response.status !== expected) throw Error('Expected '+expected+', got '+response.status);
+        // Bytes, as on the wire: Bun keeps a string body's BOM in text() where HTTP bytes lose it.
+        const response = await app.request('/webhooks/sources/integration-orders', {method:'POST',body:new TextEncoder().encode(body),headers:hdrs});
+        if(response.status !== expected) throw Error('Expected '+expected+', got '+response.status+' for '+hdrs['webhook-id']+' '+JSON.stringify(body.slice(0,12)));
       };
       await post(payload, {}, 401);
       await post(payload+' ', headers(payload), 401);
       await post(payload, headers(payload, String(Number(timestamp)-301)), 401);
+      // A UTF-8 BOM is part of the received bytes: prefixing one changes the signed content.
+      await post('\\uFEFF'+payload, headers(payload), 401);
       if ((await workflowHost.deps.store.listStartReceipts()).some(r => r.sourceInstanceId === 'integration-orders')) throw Error('Unauthenticated receipt persisted');
       await post(payload, headers(payload), 200);
+      // A replay keeps its first acceptance even when today's run-as check would fail.
+      runAsUserRemoved = true;
       await post(payload, headers(payload), 200);
+      runAsUserRemoved = false;
+      // Signed with its BOM, the delivery authenticates; JSON forbids a BOM, so it is malformed.
+      const bomBody = '\\uFEFF'+JSON.stringify({order:{count:1}});
+      await post(bomBody, headers(bomBody, timestamp, 'bom-one'), 400);
       const changed = JSON.stringify({order:{count:13}});
       await post(changed, headers(changed), 409);
       await closeDatabase();
@@ -521,11 +553,14 @@ nodes:
     );
     await runCli(standardScript, projectRoot, archonHome, []);
     expect(
-      readRows<{ delivery_id: string }>(
+      readRows<{ delivery_id: string; outcome: string }>(
         databasePath,
-        "SELECT delivery_id FROM remote_agent_start_receipts WHERE source_instance_id='integration-orders'"
+        "SELECT delivery_id, outcome FROM remote_agent_start_receipts WHERE source_instance_id='integration-orders' ORDER BY delivery_id"
       )
-    ).toEqual([{ delivery_id: 'order-one' }]);
+    ).toEqual([
+      { delivery_id: 'bom-one', outcome: 'malformed' },
+      { delivery_id: 'order-one', outcome: 'matched' },
+    ]);
     const drained = await runCli(
       cliPath,
       projectRoot,
@@ -542,6 +577,7 @@ nodes:
     ).toEqual([
       { binding_id: 'order', preparation_status: 'complete' },
       { binding_id: 'undeclared', preparation_status: 'rejected' },
+      { binding_id: 'undeclared-workflow', preparation_status: 'rejected' },
     ]);
 
     const standardRun = await waitFor(() => {
