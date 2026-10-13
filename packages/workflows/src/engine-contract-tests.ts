@@ -89,6 +89,12 @@ function makeWorkflow(overrides: Partial<WorkflowDefinition> = {}): ResolvedWork
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   const noop = async (): Promise<void> => undefined;
   return {
+    getWorkflowEventHead: async () => {
+      throw new Error('Unexpected event feed read');
+    },
+    readWorkflowEventsAfter: async () => {
+      throw new Error('Unexpected event feed read');
+    },
     getStateDocument: async () => null,
     listStateRevisions: async () => [],
     putStateDocument: async () => {

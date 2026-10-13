@@ -1716,7 +1716,7 @@ const addWebPushRoute = createRoute({
   },
   responses: {
     200: {
-      content: { 'application/json': { schema: webPushSuccessSchema, webPushPayloadSchema } },
+      content: { 'application/json': { schema: webPushSuccessSchema } },
       description: 'Subscribed',
     },
   },
@@ -1731,7 +1731,7 @@ const deleteWebPushRoute = createRoute({
   },
   responses: {
     200: {
-      content: { 'application/json': { schema: webPushSuccessSchema, webPushPayloadSchema } },
+      content: { 'application/json': { schema: webPushSuccessSchema } },
       description: 'Unsubscribed',
     },
   },
