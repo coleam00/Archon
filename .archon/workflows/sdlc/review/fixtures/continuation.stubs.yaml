@@ -6,6 +6,7 @@ mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks"
 scope:
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 seams: "0 findings; prior finding S1 resolved by the delta"
 code: "0 findings; prior finding C1 validly declined"
 review-complete: "settled"

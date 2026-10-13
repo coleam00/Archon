@@ -510,10 +510,23 @@ describe('bundled-defaults', () => {
             },
             required: ['repo', 'number'],
           },
+          report: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['archon_artifact'] },
+              run_id: { type: 'string' },
+              path: { type: 'string', enum: ['review/scope.md'] },
+            },
+            required: ['type', 'run_id', 'path'],
+          },
         },
-        required: ['pr'],
+        required: ['pr', 'report'],
       });
-      expect(validateStructuredOutput({ pr: null }, scopeSchema).valid).toBe(true);
+      const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
+      expect(validateStructuredOutput({ pr: null, report: scopeReport }, scopeSchema).valid).toBe(
+        true
+      );
+      expect(validateStructuredOutput({ pr: null }, scopeSchema).valid).toBe(false);
       expect(
         validateStructuredOutput(
           {
@@ -521,11 +534,14 @@ describe('bundled-defaults', () => {
               repo: { host: 'github.com', path: 'coleam00/Archon' },
               number: 3557,
             },
+            report: scopeReport,
           },
           scopeSchema
         ).valid
       ).toBe(true);
-      expect(validateStructuredOutput({ pr: {} }, scopeSchema).valid).toBe(false);
+      expect(validateStructuredOutput({ pr: {}, report: scopeReport }, scopeSchema).valid).toBe(
+        false
+      );
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
       expect(parsed.workflow.inputs?.errors?.default).toBe('auto');
       expect(parsed.workflow.inputs?.tier).toBeUndefined();

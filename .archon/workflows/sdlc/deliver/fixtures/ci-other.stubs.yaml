@@ -12,6 +12,7 @@ review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"f
 review__route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
 review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"
 review__code: "0 findings"
 review__tests: "0 findings"
