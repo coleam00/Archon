@@ -403,7 +403,14 @@ async function main(): Promise<number> {
   if (showUpdateNotice) void checkForUpdate(BUNDLED_VERSION);
 
   try {
-    if ((command === 'workflow' || command === 'trigger') && !(await usesDatabaseStore())) {
+    // `workflow wake schedule` installs an OS timer and never opens the store or a provider.
+    const wakeSchedule =
+      command === 'workflow' && subcommand === 'wake' && positionals[2] === 'schedule';
+    if (
+      (command === 'workflow' || command === 'trigger') &&
+      !wakeSchedule &&
+      !(await usesDatabaseStore())
+    ) {
       // Provider concurrency caps are validated against registered providers.
       await registerProviders();
       const { assertFileStoreConfiguration } = await import('@archon/core/config/store-selection');
@@ -436,12 +443,11 @@ async function main(): Promise<number> {
     }
 
     if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
-      const schedule = subcommand === 'wake' && positionals[2] === 'schedule';
       const { workflowContinuationCommand, workflowWakeScheduleCommand } = await loadRoute(
         () => import('./commands/workflow-continuations'),
-        schedule ? { providers: false } : { database: await usesDatabaseStore() }
+        wakeSchedule ? { providers: false } : { database: await usesDatabaseStore() }
       );
-      if (schedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
+      if (wakeSchedule) return await workflowWakeScheduleCommand(positionals.slice(2), values);
       const { createCliWorkflowHost } = await import('./utils/workflow-host');
       return await workflowContinuationCommand(
         await createCliWorkflowHost(true),

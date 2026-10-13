@@ -184,6 +184,15 @@ test.each([
   },
   30000
 );
+test('wake schedule skips provider and file-store startup checks, as it does on SQL', async () => {
+  // The schedule installs an OS timer and never opens the store; a bogus operation proves the
+  // command was reached without installing anything.
+  const f = fixture('store: files\nconcurrency:\n  providers:\n    claude: 1\n');
+  const result = await cli(f, ['workflow', 'wake', 'schedule', 'bogus']);
+  expect(result.code).toBe(1);
+  expect(result.output + result.error).toContain('Usage: archon workflow wake schedule');
+  expect(result.output + result.error).not.toContain('concurrency.providers');
+}, 30000);
 test('trigger admission and SQL-only commands fail explicitly under files', async () => {
   const f = fixture();
   for (const args of [
