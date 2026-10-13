@@ -119,9 +119,10 @@ Set `action` from that verdict and the accepted contract:
 
 - `none` exactly when `ready: true`;
 - `correct` when every open blocker can be corrected inside the accepted contract;
-- `replan` when a proved blocker is necessary to the requested outcome but its correction would cross an explicit boundary or materially redefine the work.
+- `replan` when a proved blocker is necessary to the requested outcome but its correction would cross an explicit boundary or materially redefine the work;
+- `needs_human` when the only open blockers are evidence no agent in this run can obtain, such as a manual check a person must perform. Another correction round cannot produce it, so name each check and who must perform it in the verdict.
 
-Never emit `ready:true` with `correct` or `replan`, or `ready:false` with `none`.
+Never emit `ready:true` with `correct`, `replan` or `needs_human`, or `ready:false` with `none`.
 
 ## Write the report
 
@@ -131,7 +132,7 @@ Then write `$ARTIFACTS_DIR/review/findings.json`, the same findings as machine-r
 
 The report contains:
 
-1. **Verdict:** ready or not, the action (`none`, `correct`, or `replan`), and the one-sentence reason.
+1. **Verdict:** ready or not, the action (`none`, `correct`, `replan`, or `needs_human`), and the one-sentence reason.
 2. **Accepted contract:** required outcome, acceptance, invariant, and steering items, and explicit boundaries carried from scope.md.
 3. **Reviewed head SHA:** the full SHA scope.md records as under review, stated exactly. Publication stamps the same commit on the public comment and records it as the next round's cursor.
 4. **Contract coverage:** one row for the required outcome and one per acceptance, invariant, and steering item: the item, its verdict (`met`, `unmet`, or `deferred`), and the evidence, the finding ID, or the later step that owns it, and one line saying so when the contract states no other item.
@@ -149,7 +150,7 @@ The node after this one publishes the complete report to the recorded pull reque
 Confirm both report files, this round's lens copies and `findings.json` exist, that `findings.json` parses and holds one record per finding in the report with the same IDs and `sources`, every accepted finding has `sources` and evidence you checked, every prior finding is accounted for in continuation mode, and every contract item in scope.md has a coverage row and every unmet one names its finding. Then declare:
 
 - `ready`: the verdict above.
-- `action`: exactly `none`, `correct`, or `replan`.
+- `action`: exactly `none`, `correct`, `replan`, or `needs_human`.
 - `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/report.md"}`. The engine refuses the verdict if that file is missing or empty.
 - `discoveries`: the accepted discovery records, or an empty list.
 - `findings_summary`: start with `Review report: $ARTIFACTS_DIR/review/report.md.` Then give 2-4 sentences with blocking and note counts, the dominant causal theme if one exists, and what blocks readiness or that nothing does.

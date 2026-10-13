@@ -152,6 +152,7 @@ nodes:
             - needs_contract
             - refuted
             - not_rooted
+            # a planning stop, or a review that needs a check only a person can make
             - needs_human
         summary: { type: string }
       required: [delivered, reason, summary]

@@ -206,6 +206,11 @@ describe("deliver's round", () => {
       done: true,
       reason: 'replan',
     });
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'needs_human', INPUTS_CI: 'null' })).toMatchObject({
+      done: true,
+      ready: false,
+      reason: 'needs_human',
+    });
   });
 
   it('ends typed at the round cap instead of exhausting the loop', () => {

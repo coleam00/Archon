@@ -191,7 +191,7 @@ nodes:
               ready: { type: boolean }
               reason:
                 type: string
-                enum: [delivered, implement_blocked, review_open, replan, ci_pr_caused, ci_other, round_cap]
+                enum: [delivered, implement_blocked, review_open, replan, needs_human, ci_pr_caused, ci_other, round_cap]
               pr_url: { type: string }
               prior_report: { type: string }
               # A correction for CI gets a light review: the code lens alone.
@@ -232,7 +232,7 @@ nodes:
         ready: { type: boolean }
         reason:
           type: string
-          enum: [delivered, implement_blocked, review_open, replan, ci_pr_caused, ci_other, round_cap]
+          enum: [delivered, implement_blocked, review_open, replan, needs_human, ci_pr_caused, ci_other, round_cap]
         pr_url: { type: string }
         summary: { type: string }
       required: [ready, reason, pr_url, summary]

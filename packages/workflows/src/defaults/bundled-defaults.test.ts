@@ -562,7 +562,7 @@ describe('bundled-defaults', () => {
       expect(synthesize.trigger_rule).toBeUndefined();
       expect(synthesize.output_format).toMatchObject({
         properties: {
-          action: { type: 'string', enum: ['none', 'correct', 'replan'] },
+          action: { type: 'string', enum: ['none', 'correct', 'replan', 'needs_human'] },
         },
         required: expect.arrayContaining(['action']),
       });

@@ -226,7 +226,7 @@ nodes:
           type: boolean
         action:
           type: string
-          enum: [none, correct, replan]
+          enum: [none, correct, replan, needs_human]
         findings_summary:
           type: string
         # The report the verdict rests on, as a certified artifact pointer: the

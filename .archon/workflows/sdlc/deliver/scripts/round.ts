@@ -27,6 +27,7 @@ type Ended =
   | 'implement_blocked'
   | 'review_open'
   | 'replan'
+  | 'needs_human'
   | 'ci_pr_caused'
   | 'ci_other';
 
@@ -45,9 +46,9 @@ function decide(): { reason: Ended; again: boolean } {
   const handedOff = green === 'true' || redCause === 'inherited' || redCause === 'environment';
   if (!handedOff) return { reason: 'implement_blocked', again: false };
   if (reviewReady !== 'true') {
-    return reviewAction === 'replan'
-      ? { reason: 'replan', again: false }
-      : { reason: 'review_open', again: true };
+    // Neither a new plan nor evidence only a person can produce comes from another round.
+    if (reviewAction === 'replan' || reviewAction === 'needs_human') return { reason: reviewAction, again: false };
+    return { reason: 'review_open', again: true };
   }
   if (ci === 'green') return { reason: 'delivered', again: false };
   if (ci === 'pr_caused') return { reason: 'ci_pr_caused', again: true };
@@ -59,6 +60,7 @@ const SUMMARY_OF: Record<Ended, string> = {
   implement_blocked: 'IMPLEMENT_SUMMARY',
   review_open: 'REVIEW_SUMMARY',
   replan: 'REVIEW_SUMMARY',
+  needs_human: 'REVIEW_SUMMARY',
   ci_pr_caused: 'CI_SUMMARY',
   ci_other: 'CI_SUMMARY',
 };
