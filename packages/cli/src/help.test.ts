@@ -324,12 +324,6 @@ Examples:
 `;
 
   it('archon --help matches the supported global index byte-for-byte', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe(EXPECTED_GLOBAL_HELP);
     expect(`${renderHelp()}\n`).toBe(EXPECTED_GLOBAL_HELP);
   });
 

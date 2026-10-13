@@ -5,9 +5,10 @@
  * process, so this file gets its own `testGroups` entry. Real Git is needed to
  * prove failed-add ownership, cleanup, and preservation of hidden changes.
  */
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
 import { existsSync } from 'node:fs';
 import {
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -22,7 +23,7 @@ import { join, resolve } from 'node:path';
 
 import { toBranchName, toRepoPath } from '@archon/git';
 import { setLogLevel } from '@archon/paths';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 
 import { WorktreeProvider } from './worktree';
 import type { IsolationRequest } from '../types';
@@ -167,6 +168,24 @@ describe('WorktreeProvider against real git', () => {
     }
   };
 
+  let templateRepo: string;
+
+  beforeAll(async () => {
+    templateRepo = await mkdtemp(join(tmpdir(), 'archon-worktree-template-'));
+    await git(templateRepo, 'init', '-q', '-b', 'main');
+    await git(templateRepo, 'config', 'user.email', 'test@example.com');
+    await git(templateRepo, 'config', 'user.name', 'Archon Test');
+    await git(templateRepo, 'config', 'commit.gpgsign', 'false');
+    await writeFile(join(templateRepo, 'README.md'), '# fixture\n');
+    await git(templateRepo, 'add', 'README.md');
+    await git(templateRepo, 'commit', '-qm', 'initial commit');
+    await git(templateRepo, 'branch', TASK_BRANCH);
+  });
+
+  afterAll(async () => {
+    if (templateRepo) await removeTempTree(templateRepo);
+  });
+
   beforeEach(async () => {
     // realpath so the paths this test asserts on match the ones git reports:
     // macOS resolves /var to /private/var, and Windows expands the 8.3 short
@@ -177,15 +196,7 @@ describe('WorktreeProvider against real git', () => {
     process.env.ARCHON_HOME = join(root, 'archon-home');
 
     repoPath = join(root, 'repo');
-    await mkdir(repoPath, { recursive: true });
-    await git(repoPath, 'init', '-q', '-b', 'main');
-    await git(repoPath, 'config', 'user.email', 'test@example.com');
-    await git(repoPath, 'config', 'user.name', 'Archon Test');
-    await git(repoPath, 'config', 'commit.gpgsign', 'false');
-    await writeFile(join(repoPath, 'README.md'), '# fixture\n');
-    await git(repoPath, 'add', 'README.md');
-    await git(repoPath, 'commit', '-qm', 'initial commit');
-    await git(repoPath, 'branch', TASK_BRANCH);
+    await cp(templateRepo, repoPath, { recursive: true });
 
     provider = new WorktreeProvider();
     request = {

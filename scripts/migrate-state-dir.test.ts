@@ -1,82 +1,16 @@
 /**
- * Tests for `scripts/migrate-state-dir.ts` (#2200).
- *
- * Driven as a SUBPROCESS rather than by importing internals, because the
- * contract that matters here is the CLI one: exit codes and what ends up on
- * disk — above all, that a refusal moves nothing and a partial migration is never
- * reported as success.
- *
- * `ARCHON_HOME` is redirected to a temp dir, so an unregistered repo resolves to
- * the `_cwd/<basename>` pseudo-project and the destination is predictable
- * without touching a real project.
- *
- * Every test owns its sandbox through `withSandbox` instead of sharing
- * module-level bindings via `beforeEach` (#2306). Those bindings used to be
- * reassigned between tests, so when a test timed out its still-running
- * assertions read the NEXT test's paths and reported a mutation that never
- * happened — on PR #2513 that surfaced as a dry run appearing to move a file.
- * Locals make an orphaned assertion able to describe only its own sandbox, so a
- * timeout reads as a timeout. What that rules out is REASSIGNMENT, not sharing:
- * the C5 group below shares one read-only registry built in `beforeAll`, and
- * keeps the property by giving each case its own paths, derived from its name.
- *
- * BUDGET: these tests set no explicit budget. Since #3311 that means Bun's 5000 ms
- * default off Windows and the 20 s runner floor on Windows, so the 5000 ms alarm this
- * history describes is no longer armed on windows-latest. The history: these tests
- * timed out there at ~5015 ms when Windows still ran the 5000 ms default (#2306).
- * Raising the budget was considered and
- * rejected: every spawn that got as far as resolving a destination used to create
- * a 704 KB SQLite database — including a `PRAGMA busy_timeout = 5000` carrier, the
- * exact bound that turned out to be #2473's real cause — and that creation is now
- * gone. (The five argument-parsing cases never did: four exit from `parseArgs` at
- * module load, and the nonexistent-`--cwd` one exits from `main()` — all of them
- * before `resolveTarget` is reached.) Whether it was also the cause here is
- * testable only by leaving the alarm armed and seeing whether the timeouts stop.
- * A larger budget would answer the question by silencing it.
- * If it does recur, find the specific colliding bound the way #2473 did; do not
- * reach for the timeout.
- *
- * It did recur, for the two C5 cases only (#2575). Coverage instrumentation was
- * measured on windows-latest and ruled out. What was left was accidental cost:
- * their fixture spawned a SECOND cold `bun` process purely to write one registry
- * row, which is now an in-process write. The budget still has not moved.
- *
- * It recurred a third time (#2882), and the reading recorded here then — that the
- * pair sit ~15% above a one-spawn floor, so a contended runner is the whole story
- * and there is nothing left to spend less of — was WRONG. #2982 falsified it and
- * #2575 carries the correction. Two facts kill it. Ten of ten Windows failures
- * are Bun's body-timeout message, out to 12296 ms; a test finishing 2.5x past its
- * budget is not a 15% margin. And in those same runs, on the same runner, the
- * other 17 tests in this file — which spawn the same script — never left
- * 171-515 ms. A contended runner cannot slow one test in a file 30x and leave the
- * next one untouched. The subprocess was never the cost.
- *
- * The registry fixture was. It read as 8-11% of the body because it was measured
- * on the wrong platform: on macOS the whole fixture is ~6 ms of a ~60 ms body, on
- * windows-latest it is ~230 ms of a ~400 ms floor, and it carries the file's only
- * tail. `new SqliteAdapter` on a fresh path applies the entire product schema —
- * 20 tables, 28 indexes, ~300 KB through a WAL and checkpointed back on close —
- * synchronously, so it blocks the test's own event loop, which is why Bun's 5 s
- * timer reported as late as 12296 ms. Building it once for the group instead of
- * once per case is what this file can spend less of, and now does. Ubuntu, for
- * scale, runs these at 120-130 ms and has never failed them.
- *
- * The Windows primitive behind the tail is NOT proven — do not write it down as
- * though it were. Three candidates are already ruled out and should not be
- * re-run: Defender (the runner image excludes C:\ and D:\ recursively, PR #2943),
- * fsync-per-commit (bun:sqlite opens WAL at synchronous=NORMAL, so commits do not
- * fsync — 19 us per autocommit write, measured), and a parent handle outliving
- * `close()` (lsof shows every handle released before the child starts). If this
- * recurs, the failure now discriminates on its own: a HOOK timeout means creating
- * the database is itself the pathological operation, while a BODY timeout means a
- * body that does exactly what every other test does has stopped fitting, which is the
- * whole file's floor and not a C5 question. Still do not reach for the timeout.
+ * The migration uses real files and a scratch SQLite registry. Refusals must move
+ * nothing; successful migrations must leave state at the engine's resolved path.
+ * Each case owns its paths so a timed-out assertion cannot read another case's tree.
  */
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { getLogLevel, setLogLevel } from '@archon/paths';
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
+import { main } from './migrate-state-dir';
+import { closeDatabase } from '@archon/core/db/connection';
+import { format } from 'node:util';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 
@@ -196,13 +130,42 @@ async function runWithEnv(
   cwd: string,
   ...args: string[]
 ): Promise<RunResult> {
-  return collect(
-    Bun.spawn(['bun', 'run', SCRIPT, '--cwd', cwd, ...args], {
-      env: childEnv(ctx, extraEnv),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-  );
+  return captureMigration(ctx, extraEnv, ['--cwd', cwd, ...args]);
+}
+
+async function captureMigration(
+  ctx: Sandbox,
+  extraEnv: Record<string, string>,
+  argv: string[]
+): Promise<RunResult> {
+  const saved = { ...process.env };
+  const level = getLogLevel();
+  let stdout = '';
+  let stderr = '';
+  const log = spyOn(console, 'log').mockImplementation((...values: unknown[]) => {
+    stdout += `${format(...values)}\n`;
+  });
+  const error = spyOn(console, 'error').mockImplementation((...values: unknown[]) => {
+    stderr += `${format(...values)}\n`;
+  });
+  Object.assign(process.env, childEnv(ctx, extraEnv));
+  setLogLevel('silent');
+  try {
+    const exitCode = await main(argv);
+    return { exitCode, stdout, stderr };
+  } finally {
+    try {
+      await closeDatabase();
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+      setLogLevel(level);
+      for (const key of Object.keys(process.env)) {
+        if (!(key in saved)) delete process.env[key];
+      }
+      Object.assign(process.env, saved);
+    }
+  }
 }
 
 async function seedLegacy(ctx: Sandbox, files: Record<string, string>): Promise<void> {
@@ -400,7 +363,7 @@ describe('migrate-state-dir', () => {
 
     test('--cwd with no value at all exits 1 and writes nothing', async () =>
       withSandbox(async ctx => {
-        const result = await runRaw(ctx, '--cwd');
+        const result = await captureMigration(ctx, {}, ['--cwd']);
 
         expect(result.exitCode).toBe(1);
         expect(result.stderr).toContain('--cwd requires a directory path');
@@ -420,7 +383,13 @@ describe('migrate-state-dir', () => {
 
     test('a repeated --cwd exits 1 rather than silently using the last', async () =>
       withSandbox(async ctx => {
-        const result = await runRaw(ctx, '--cwd', ctx.repo, '--cwd', '/somewhere/else', '--apply');
+        const result = await captureMigration(ctx, {}, [
+          '--cwd',
+          ctx.repo,
+          '--cwd',
+          '/somewhere/else',
+          '--apply',
+        ]);
 
         expect(result.exitCode).toBe(1);
         expect(result.stderr).toContain('--cwd was given more than once');
@@ -431,7 +400,11 @@ describe('migrate-state-dir', () => {
       withSandbox(async ctx => {
         // Previously this resolved to the _cwd fallback, found no legacy state,
         // and reported success for a directory nobody asked for.
-        const result = await runRaw(ctx, '--cwd', join(ctx.root, 'no-such-dir'), '--apply');
+        const result = await captureMigration(ctx, {}, [
+          '--cwd',
+          join(ctx.root, 'no-such-dir'),
+          '--apply',
+        ]);
 
         expect(result.exitCode).toBe(1);
         expect(result.stderr).toContain('Directory does not exist');
@@ -484,39 +457,7 @@ describe('migrate-state-dir', () => {
       };
     }
 
-    /**
-     * Build the registry ONCE for the whole group.
-     *
-     * Registering also CREATES the registry, which is what makes these cases the
-     * guard that #2306's "skip the lookup when there is no database" cannot
-     * silently disable project resolution: here a database exists, so the lookup
-     * must still run and still climb.
-     *
-     * Creating it is also the entire reason these two tests were the file's only
-     * Windows flake (#2575, re-attributed in #2982). `new SqliteAdapter` on a fresh
-     * path applies the whole product schema — 20 tables and 28 indexes, ~300 KB,
-     * written to a WAL and checkpointed back on close — and bun:sqlite is
-     * synchronous, so all of it blocks the test's own event loop. The other 17
-     * tests in this file spawn the same script and never reach 515 ms on the same
-     * runner in the same run; only these two carried a tail, out to 12296 ms. The
-     * subprocess is not the cost and never was. Building the registry per test was.
-     *
-     * So it is built once, in a hook, and the test bodies now do exactly what the
-     * other tests do: seed files, spawn the script, assert. One creation for the group
-     * instead of one per case is also the smallest possible amount of this work —
-     * a per-case template copy still creates a database per case.
-     *
-     * The rows go in through the SAME adapter the script's lookup opens, so the
-     * fixture cannot drift from the real schema — but through a dedicated instance
-     * rather than `@archon/core/db/codebases`, whose `pool` resolves the
-     * module-level connection singleton from `ARCHON_HOME`. That singleton would
-     * pin this temp home and then fail with SQLITE_IOERR_VNODE once the directory
-     * is torn down; an instance takes an explicit path and is closed before the
-     * tests run. `name` and `default_cwd` are the only columns the destination
-     * resolution reads (`resolveRepoProjectIdentity`).
-     *
-     * Nothing writes this database again, so the cases share it read-only.
-     */
+    // The two cases share a read-only registry, with separate source and destination trees.
     beforeAll(async () => {
       registryRoot = await mkdtemp(join(tmpdir(), 'archon-migrate-c5-'));
       await mkdir(join(registryRoot, 'home'), { recursive: true });

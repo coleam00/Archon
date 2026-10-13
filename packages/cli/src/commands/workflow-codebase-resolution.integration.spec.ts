@@ -1,14 +1,19 @@
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, test, mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { z } from '@hono/zod-openapi';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { workflowRunCommand, type WorkflowRunOptions } from './workflow';
+import { captureWorkflowCommand } from '../test-support/command';
+import { findRepoRoot } from '@archon/git';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 
-const CLI_ENTRY = join(import.meta.dir, 'fixtures', 'workflow-cli-without-title.ts');
+mock.module('@archon/core/services/title-generator', () => ({
+  generateAndSetTitle: async (): Promise<void> => undefined,
+}));
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -69,29 +74,19 @@ test('nested repo registers independently and its worktree retains the child own
   initRepo(parent, join(root, 'parent.git'), 'parent-only.txt');
   initRepo(child, join(root, 'child.git'), 'child-only.txt');
 
-  function run(cwd: string, args: string[]): string {
+  async function run(cwd: string, options: WorkflowRunOptions): Promise<string> {
     const invocation = crypto.randomUUID();
-    const result = spawnSync(
-      process.execPath,
-      [CLI_ENTRY, 'workflow', 'run', 'probe', invocation, '--conversation-id', invocation, ...args],
-      {
-        cwd,
-        encoding: 'utf8',
-        timeout: 30_000,
-        env: {
-          ...process.env,
-          ARCHON_HOME: home,
-          DATABASE_URL: '',
-          ARCHON_TELEMETRY_DISABLED: '1',
-        },
-      }
+    const result = await captureWorkflowCommand(home, async host =>
+      workflowRunCommand(host, (await findRepoRoot(cwd)) ?? cwd, 'probe', invocation, {
+        ...options,
+        conversationId: invocation,
+      })
     );
-    if (result.error) throw result.error;
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(result.status, result.output).toBe(0);
     return invocation;
   }
 
-  run(parent, ['--no-worktree']);
+  await run(parent, { noWorktree: true });
   const db = new Database(join(home, 'archon.db'), { readonly: true });
   try {
     const codebases = db.query<CodebaseRow, []>(
@@ -100,7 +95,10 @@ test('nested repo registers independently and its worktree retains the child own
     const parentRow = codebases.get();
     if (!parentRow) throw new Error('Parent repository was not registered');
     expect(parentRow.default_cwd).toBe(await canonicalizeProjectPath(parent));
-    const invocation = run(join(child, 'subdir'), ['--branch', 'child-probe', '--from', 'main']);
+    const invocation = await run(join(child, 'subdir'), {
+      branchName: 'child-probe',
+      fromBranch: 'main',
+    });
     const childPath = await canonicalizeProjectPath(child);
     const childRow = codebases.all().find(row => row.default_cwd === childPath);
     expect(childRow).toBeDefined();
@@ -112,14 +110,18 @@ test('nested repo registers independently and its worktree retains the child own
     expect(isolated?.codebase_id).toBe(childRow.id);
     expect(isolated?.status).toBe('completed');
     if (!isolated) throw new Error('Missing child run');
+    expect(isolated.working_path).not.toBe(childPath);
+    expect(git(isolated.working_path, ['branch', '--show-current'])).toBe('child-probe');
     expect(readFileSync(join(isolated.working_path, 'child-only.txt'), 'utf8')).toBe('committed\n');
     expect(
       git(isolated.working_path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
     ).toBe(git(child, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
     mkdirSync(join(isolated.working_path, 'subdir'));
-    const worktreeInvocation = run(join(isolated.working_path, 'subdir'), ['--no-worktree']);
+    const worktreeInvocation = await run(join(isolated.working_path, 'subdir'), {
+      noWorktree: true,
+    });
     expect(runs.get(worktreeInvocation)?.codebase_id).toBe(childRow.id);
-    const subdirInvocation = run(join(child, 'subdir'), ['--no-worktree']);
+    const subdirInvocation = await run(join(child, 'subdir'), { noWorktree: true });
     expect(runs.get(subdirInvocation)?.codebase_id).toBe(childRow.id);
     expect(codebases.all()).toHaveLength(2);
     expect(codebases.all().find(row => row.id === parentRow.id)).toEqual(parentRow);
