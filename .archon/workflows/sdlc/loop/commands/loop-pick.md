@@ -20,6 +20,8 @@ GitHub is the only state. Read it fresh:
 2. Otherwise **start** the next open issue whose dependencies are closed, lowest number first unless the product document's build order says otherwise. Never start an issue that already has an open pull request (search `gh pr list --search "<issue number>"` and the issue's linked pull requests): continue that pull request instead, or skip it if it is not this loop's.
 3. Skip anything labeled `needs-owner`.
 
+**Bookkeeping is not an owner decision.** `needs-owner` is for what only the owner can decide: product direction, scope, look and feel, contradictory requirements, or an item that hit the caps below. Resolve bookkeeping yourself instead: close an open issue that a merged pull request already delivered (link the pull request and the review that confirmed its criteria; if part is missing, say what and leave it open), and close an exact duplicate pointing at the original. If an open `needs-owner` item is really bookkeeping like this and other work waits on it, resolve it the same way and remove the label, saying why.
+
 **Caps.** Count this loop's attempts on the item you would pick: builder reports and attempt notes that did not move it closer, and runs that produced no pull request. Count review send-backs (`Loop review: sent back`). At $INPUTS.attempts attempts or $INPUTS.rejections send-backs, stop retrying it: label it `needs-owner`, comment one short paragraph on what blocks it and the decision that would unblock it, and choose the next move instead.
 
 ## Route
@@ -38,7 +40,7 @@ Before new work starts on an issue (routes `simple` and `complex`), make sure it
 
 ## Never
 
-- Write or change code, branches or pull requests. Your only writes are labels, `Contract` comments and short `needs-owner` comments.
+- Write or change code, branches or pull requests. Your only writes are labels, `Contract` comments, short `needs-owner` comments, and closing issues as bookkeeping (above).
 - Edit the harness and its scenarios, the CI workflows, the mission or the product document.
 - Kill processes by name, or move the mouse, type into, focus or show windows on the owner's desktop.
 
