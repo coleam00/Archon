@@ -6,21 +6,24 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 const real = { ...fs };
 let fail: (operation: string, path: string) => boolean = () => false;
-/** Fails a rename by its target with an EBUSY code, as Windows does for a held file. */
-let busy: (target: string) => boolean = () => false;
+/** Fails a rename (by its target) or a remove with EBUSY, as Windows does for a held file. */
+let busy: (operation: string, path: string) => boolean = () => false;
+const ebusy = () => Object.assign(new Error('injected EBUSY'), { code: 'EBUSY' });
 mock.module('node:fs/promises', () => ({
   ...real,
   async rename(source: string, target: string) {
     if (fail('rename', source)) throw new Error('injected rename failure');
-    if (busy(target)) throw Object.assign(new Error('injected EBUSY'), { code: 'EBUSY' });
+    if (busy('rename', target)) throw ebusy();
     return real.rename(source, target);
   },
   async rm(path: string, options: Parameters<typeof fs.rm>[1]) {
     if (fail('rm', path)) throw new Error('injected remove failure');
+    if (busy('rm', path)) throw ebusy();
     return real.rm(path, options);
   },
 }));
 const { publishPlugin } = await import('./publish-plugin');
+const isBackup = (path: string): boolean => /[a-f0-9]{12}\.partial$/.test(path);
 const trackRoot = trackTempRoots();
 afterEach(() => {
   fail = () => false;
@@ -78,9 +81,7 @@ for (const update of [false, true]) {
         expect(await Bun.file(receiptFile).text()).toBe('old receipt');
         expect(await Bun.file(oldBinary).text()).toBe('old binary');
       } else expect(await Bun.file(receiptFile).exists()).toBe(false);
-      expect(
-        (await real.readdir(root)).filter(name => /[a-f0-9]{12}\.partial$/.test(name))
-      ).toEqual([]);
+      expect((await real.readdir(root)).filter(isBackup)).toEqual([]);
     });
   }
 }
@@ -121,7 +122,7 @@ test('rollback failure reports recovery paths and preserves the usable backup', 
 
 test('backup cleanup after commit warns and preserves installed success', async () => {
   const data = await fixture(true, true);
-  fail = (op, path) => op === 'rm' && /[a-f0-9]{12}\.partial$/.test(path);
+  fail = (op, path) => op === 'rm' && isBackup(path);
   const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
   await publishPlugin(data);
   expect(await Bun.file(data.receiptFile).text()).toBe('new receipt');
@@ -139,8 +140,9 @@ test('rollback waits out a briefly locked receipt', async () => {
     if (op === 'rename' && path === data.stagedBinary) binaryFailed = true;
     return binaryFailed && path === data.stagedBinary;
   };
-  busy = target => {
-    if (!binaryFailed || target !== data.receiptFile || receiptFailures >= 3) return false;
+  busy = (op, target) => {
+    if (op !== 'rename' || !binaryFailed || target !== data.receiptFile || receiptFailures >= 3)
+      return false;
     receiptFailures++;
     return true;
   };
@@ -149,4 +151,52 @@ test('rollback waits out a briefly locked receipt', async () => {
   expect(sleep).toHaveBeenCalledTimes(3);
   expect(await Bun.file(data.receiptFile).text()).toBe('old receipt');
   expect(await Bun.file(data.target).text()).toBe('old binary');
+});
+
+test('backup cleanup after commit waits out a briefly locked backup', async () => {
+  const data = await fixture(true, true);
+  const sleep = spyOn(Bun, 'sleep').mockResolvedValue(undefined);
+  let failures = 0;
+  busy = (op, path) => {
+    if (op !== 'rm' || !isBackup(path) || failures >= 3) return false;
+    failures++;
+    return true;
+  };
+  const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
+  await publishPlugin(data);
+  expect(failures).toBe(3);
+  expect(sleep).toHaveBeenCalledTimes(3);
+  expect(warn).not.toHaveBeenCalled();
+  expect((await real.readdir(data.root)).sort()).toEqual(['binary', 'receipt.json']);
+});
+
+test('a failed update discards the backup of an executable it never replaced, even while that executable is held', async () => {
+  const data = await fixture(true, false);
+  spyOn(Bun, 'sleep').mockResolvedValue(undefined);
+  fail = (op, path) => op === 'rename' && path === data.stagedBinary;
+  // Renaming the backup back over the untouched executable would never get through.
+  busy = (op, target) => op === 'rename' && target === data.target;
+  await expect(publishPlugin(data)).rejects.toThrow('previous install restored');
+  expect(await Bun.file(data.target).text()).toBe('old binary');
+  expect(await Bun.file(data.receiptFile).text()).toBe('old receipt');
+  expect((await real.readdir(data.root)).filter(isBackup)).toEqual([]);
+});
+
+test('a failed update names a backup that stays locked instead of leaving it silently', async () => {
+  const data = await fixture(true, false);
+  spyOn(Bun, 'sleep').mockResolvedValue(undefined);
+  fail = (op, path) => op === 'rename' && path === data.stagedBinary;
+  busy = (op, path) => op === 'rm' && isBackup(path);
+  const error = await publishPlugin(data).then(
+    () => undefined,
+    (error: unknown) => error
+  );
+  expect(String(error)).toContain('previous install restored');
+  const leftovers = (await real.readdir(data.root)).filter(isBackup);
+  expect(leftovers).toHaveLength(1);
+  expect(String(error)).toContain(
+    `Remove leftover backups: ${join(data.root, leftovers[0] ?? '')}`
+  );
+  expect(await Bun.file(data.target).text()).toBe('old binary');
+  expect(await Bun.file(data.receiptFile).text()).toBe('old receipt');
 });
