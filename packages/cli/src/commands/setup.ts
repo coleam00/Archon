@@ -43,14 +43,7 @@ import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
 import { execFileAsync } from '@archon/git';
-import {
-  getRegisteredProviders,
-  registerProvider,
-  providerRegistry,
-  claudeDescriptor,
-  codexDescriptor,
-  piDescriptor,
-} from '@archon/providers';
+import { getRegisteredProviders, registerProvider, providerRegistry } from '@archon/providers';
 import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
 import { providerCommand } from './provider';
 import { checkProviderDiagnostics, type CheckResult } from './doctor';
@@ -982,8 +975,7 @@ export async function selectSetupProviders(
       message: 'Which AI provider(s) should Archon install?',
       options: MAINTAINED_PROVIDER_IDS.map(id => ({
         value: id,
-        label: { claude: claudeDescriptor, codex: codexDescriptor, pi: piDescriptor }[id]
-          .displayName,
+        label: providerRegistry.get(id)?.displayName ?? id,
       })),
       required: false,
     })
