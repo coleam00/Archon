@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
-import { forgeResponse, runDeliverScript } from './deliver-checks-harness';
+import { forgeResponse, packScriptRunner } from './deliver-checks-harness';
+
+const { runDeliverScript } = packScriptRunner();
 
 const note = runDeliverScript.bind(null, 'ci-note');
 
