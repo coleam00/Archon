@@ -13,6 +13,7 @@ import { join, resolve } from 'node:path';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { timerTriggerConfigSchema } from './trigger';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
 const tempRoots: string[] = [];
@@ -128,6 +129,200 @@ nodes:
 }
 
 describe('trigger CLI durable execution', () => {
+  test.skipIf(process.platform === 'win32')(
+    'published polling recipes distinguish delimiter collisions and replay on both hosts',
+    async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-poll-recipes-')));
+      tempRoots.push(root);
+      const archonHome = join(root, 'home');
+      const projectRoot = join(root, 'project');
+      const workflowsDir = join(projectRoot, '.archon', 'workflows');
+      mkdirSync(workflowsDir, { recursive: true });
+      expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
+      const packagesRoot = resolve(import.meta.dir, '../../..');
+      const guide = readFileSync(
+        join(packagesRoot, 'docs-web/src/content/docs/guides/workflow-triggers.md'),
+        'utf8'
+      );
+      const section = guide
+        .split('## Poll a system that cannot send webhooks')[1]
+        ?.split('## Preparation')[0];
+      if (!section) throw new Error('Polling guide section missing');
+      const yaml = section.match(/```yaml\n([\s\S]*?)```/)?.[1];
+      const configJson = section.match(/```json\n([\s\S]*?)```/)?.[1];
+      const scripts = [...section.matchAll(/```bash\n(#!\/bin\/sh[\s\S]*?)```/g)].map(
+        match => match[1]
+      );
+      expect(scripts).toHaveLength(2);
+      if (!yaml || !configJson) throw new Error('Polling workflow or config missing');
+      writeFileSync(join(workflowsDir, 'process-order.yaml'), yaml);
+      const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
+      await runCli(cliPath, projectRoot, archonHome, [
+        'validate',
+        'workflows',
+        'process-order',
+        '--cwd',
+        projectRoot,
+      ]);
+      const identity = JSON.parse(
+        (await runCli(cliPath, projectRoot, archonHome, ['trigger', 'whoami'])).stdout
+      ) as { runAsUserId: string };
+      const config = timerTriggerConfigSchema.parse(JSON.parse(configJson));
+      config.binding.runAsUserId = identity.runAsUserId;
+      config.binding.launch.cwd = projectRoot;
+      const configPath = join(root, 'trigger.json');
+      writeFileSync(configPath, JSON.stringify(config));
+      const shellQuote = (value: string): string => "'" + value.replaceAll("'", "'\\''") + "'";
+      const wrapper = join(root, 'archon');
+      writeFileSync(
+        wrapper,
+        `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(cliPath)} "$@"\n`,
+        { mode: 0o700 }
+      );
+      const cliScript = join(root, 'cli-poll.sh');
+      const serverScript = join(root, 'server-poll.sh');
+      writeFileSync(
+        cliScript,
+        scripts[0]
+          .replaceAll('/opt/archon/bin/archon', shellQuote(wrapper))
+          .replaceAll('/srv/archon/polled-orders.json', shellQuote(configPath))
+      );
+      writeFileSync(serverScript, scripts[1]);
+      const items = [
+        { id: 'order-123', version: '1' },
+        { id: 'a@b', version: 'c' },
+        { id: 'a', version: 'b@c' },
+      ];
+      const portPath = join(root, 'port');
+      const fixturePath = join(root, 'server.ts');
+      writeFileSync(
+        fixturePath,
+        `
+        import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
+        import createSource from ${JSON.stringify(join(packagesRoot, 'adapters/src/sources/standard-webhooks/source-plugin.ts'))};
+        import { SourceReceiptDigestConflictError } from ${JSON.stringify(join(packagesRoot, 'workflows/src/resource-start-store.ts'))};
+        const host = createSqlWorkflowHost();
+        const { bindingRevision, ...binding } = ${JSON.stringify(config.binding)};
+        const source = await createSource({ sourceInstanceId: 'recipe-server', config: {
+          version: 1, signingSecretEnv: 'ORDER_SIGNING_SECRET',
+          bindings: [{ ...binding, inputMapping: { order_id: '/order/id' } }]
+        }});
+        const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+          if (new URL(request.url).pathname === '/items') return Response.json(${JSON.stringify(items)});
+          const result = await source.receive({ body: await request.text(), headers: Object.fromEntries(request.headers), receivedAt: new Date().toISOString() });
+          if (result.status === 'rejected') return new Response('Invalid signature', { status: 401 });
+          try {
+            return new Response(JSON.stringify(await host.deps.store.acceptStartReceipt(result.acceptance)) + '\\n');
+          } catch (error) {
+            if (error instanceof SourceReceiptDigestConflictError) return new Response('Delivery conflict', { status: 409 });
+            throw error;
+          }
+        }});
+        await Bun.write(${JSON.stringify(portPath)}, String(server.port));
+      `
+      );
+      const env = {
+        ...process.env,
+        ARCHON_HOME: archonHome,
+        DATABASE_URL: '',
+        TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32),
+        GITHUB_TOKEN: '',
+        GH_TOKEN: '',
+        GITHUB_APP_ID: '',
+        ORDER_SIGNING_SECRET: 'whsec_' + Buffer.from('recipe-test-key').toString('base64'),
+      };
+      const server = Bun.spawn([process.execPath, fixturePath], {
+        cwd: projectRoot,
+        env,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const serverOutput = new Response(server.stderr).text();
+      try {
+        const port = await waitFor(
+          () => (existsSync(portPath) ? readFileSync(portPath, 'utf8') : undefined),
+          'recipe fixture port'
+        );
+        const runScript = async (path: string, syntaxOnly = false): Promise<string> => {
+          const child = Bun.spawn(['sh', ...(syntaxOnly ? ['-n'] : []), path], {
+            cwd: projectRoot,
+            env: {
+              ...env,
+              ORDERS_URL: `http://127.0.0.1:${port}/items`,
+              ARCHON_WEBHOOK_URL: `http://127.0.0.1:${port}/webhook`,
+            },
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+          const [code, stdout, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+          ]);
+          expect(code, stderr || stdout).toBe(0);
+          return stdout;
+        };
+        await runScript(cliScript, true);
+        await runScript(serverScript, true);
+        await runScript(cliScript);
+        await runScript(cliScript);
+        const databasePath = join(archonHome, 'archon.db');
+        const runs = await waitFor(() => {
+          const rows = readRows<RunRow>(
+            databasePath,
+            'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs'
+          );
+          for (const row of rows) if (row.status !== 'completed') activeRuns.add(row.id);
+          return rows.length === items.length && rows.every(row => row.status === 'completed')
+            ? rows
+            : undefined;
+        }, 'polled runs to complete');
+        expect(
+          runs
+            .map(row => {
+              if (!row.output_root) throw new Error('Polled run has no output root');
+              return readFileSync(
+                join(getRunArtifactsDirForRoot(row.output_root, row.id), 'order.txt'),
+                'utf8'
+              ).trim();
+            })
+            .sort()
+        ).toEqual(items.map(item => item.id).sort());
+        for (const run of runs) activeRuns.delete(run.id);
+        const first = (await runScript(serverScript))
+          .trim()
+          .split('\n')
+          .map(line => JSON.parse(line) as { receiptId: string; replay: boolean });
+        const replay = (await runScript(serverScript))
+          .trim()
+          .split('\n')
+          .map(line => JSON.parse(line) as { receiptId: string; replay: boolean });
+        expect(first).toHaveLength(items.length);
+        expect(replay).toEqual(first.map(result => ({ ...result, replay: true })));
+        expect(first.every(result => result.replay === false)).toBe(true);
+        for (const source of ['polled-orders', 'recipe-server']) {
+          const keys = readRows<{ delivery_id: string }>(
+            databasePath,
+            `SELECT delivery_id FROM remote_agent_start_receipts WHERE source_instance_id='${source}'`
+          ).map(row => row.delivery_id);
+          expect(keys).toHaveLength(items.length);
+          expect(new Set(keys).size).toBe(items.length);
+        }
+      } finally {
+        for (const run of readRows<RunRow>(
+          join(archonHome, 'archon.db'),
+          "SELECT id,status FROM remote_agent_workflow_runs WHERE status NOT IN ('completed','failed','cancelled')"
+        ))
+          activeRuns.add(run.id);
+        server.kill();
+        await server.exited;
+        const stderr = await serverOutput;
+        if (stderr) console.error(stderr);
+      }
+    },
+    30_000
+  );
+
   test('keyed replay without inputs drains the frozen host and queued source after binding edits', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-integration-')));
     tempRoots.push(root);
