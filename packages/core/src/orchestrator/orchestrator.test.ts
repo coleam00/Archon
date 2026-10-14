@@ -1921,6 +1921,7 @@ describe('orchestrator-agent handleMessage', () => {
     }
 
     test('/register-project refuses a path that disappears during detection', async () => {
+      const canonicalPath = await canonicalizeForTest('/vanished/path');
       const repoSpy = spyOn(git, 'findRepoRoot').mockImplementation(async () => {
         mockExistsSync.mockReturnValue(false);
         throw new Error('git: cannot change directory');
@@ -1933,7 +1934,7 @@ describe('orchestrator-agent handleMessage', () => {
         });
         expect(platform.sendMessage).toHaveBeenCalledWith(
           'chat-456',
-          'Path does not exist: /vanished/path'
+          `Path does not exist: ${canonicalPath}`
         );
         expect(mockCreateCodebase).not.toHaveBeenCalled();
         expect(mockUpdateCodebase).not.toHaveBeenCalled();
@@ -1946,8 +1947,9 @@ describe('orchestrator-agent handleMessage', () => {
 
     for (const kind of ['repo', 'folder'] as const) {
       test(`/register-project reports a persistence refusal when repairing to ${kind}`, async () => {
+        const canonicalPath = await canonicalizeForTest('/new/path');
         const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(
-          kind === 'repo' ? git.toRepoPath('/new/path') : null
+          kind === 'repo' ? git.toRepoPath(canonicalPath) : null
         );
         try {
           mockRepairCodebaseRegistration.mockRejectedValueOnce(
@@ -1966,7 +1968,7 @@ describe('orchestrator-agent handleMessage', () => {
             actor: operator,
           });
           expect(mockRepairCodebaseRegistration).toHaveBeenCalledWith(mockCodebase.id, {
-            default_cwd: '/new/path',
+            default_cwd: canonicalPath,
             kind,
           });
           expect(mockUpdateCodebase).not.toHaveBeenCalled();
