@@ -77,18 +77,30 @@ async function resolveRepoGitContext(repoPath: RepoPath, cwd: string): Promise<R
   return { remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
 }
 
-function readPositiveIntegerEnv(name: string, defaultValue: number): number {
+function readPositiveIntegerEnv(
+  name: string,
+  defaultValue: number,
+  maximum = Number.MAX_SAFE_INTEGER
+): number {
   const value = process.env[name];
   if (value === undefined) return defaultValue;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer; received ${JSON.stringify(value)}`);
+  const parsed = /^\d+$/.test(value.trim()) ? Number(value) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > maximum) {
+    const limit = maximum === Number.MAX_SAFE_INTEGER ? '' : `; maximum is ${String(maximum)}`;
+    throw new Error(
+      `${name} must be a positive integer; received ${JSON.stringify(value)}${limit}`
+    );
   }
   return parsed;
 }
 
 const STALE_THRESHOLD_DAYS = readPositiveIntegerEnv('STALE_THRESHOLD_DAYS', 14);
-const CLEANUP_INTERVAL_HOURS = readPositiveIntegerEnv('CLEANUP_INTERVAL_HOURS', 6);
+// Runtime timers clamp delays above the signed 32-bit millisecond limit to 1 ms.
+const CLEANUP_INTERVAL_HOURS = readPositiveIntegerEnv(
+  'CLEANUP_INTERVAL_HOURS',
+  6,
+  Math.floor(2_147_483_647 / (60 * 60 * 1000))
+);
 const SESSION_RETENTION_DAYS = readPositiveIntegerEnv('SESSION_RETENTION_DAYS', 30);
 
 // Export configuration for use by other modules

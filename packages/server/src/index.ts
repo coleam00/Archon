@@ -8,38 +8,16 @@
 // when `bun run dev:server` is run from inside a target repo those keys leak
 // into the server process. stripCwdEnv() removes them before ~/.archon/.env loads.
 import '@archon/paths/strip-cwd-env-boot';
+// ESM dependencies evaluate before this module's body reads configuration.
+import { envPath } from './boot/load-env';
+import { existsSync } from 'fs';
+import { BUNDLED_IS_BINARY, getArchonEnvPath } from '@archon/paths';
 // Pure env→bool boot helper (zero deps) — safe to import before the heavier
 // application imports below. Decides the Claude global-auth sentinel posture.
 import {
   shouldDefaultClaudeGlobalAuth,
   hasClaudeBootAuthPosture,
 } from './boot/claude-auth-posture';
-
-// Load environment variables — after CWD stripping, before application imports.
-import { config } from 'dotenv';
-import { resolve } from 'path';
-import { existsSync } from 'fs';
-import { BUNDLED_IS_BINARY, getArchonEnvPath } from '@archon/paths';
-
-// In dev/source mode, load the repo root .env (platform tokens, API keys, etc.)
-// import.meta.dir is frozen at build time, so skip in compiled binaries.
-const envPath = BUNDLED_IS_BINARY ? undefined : resolve(import.meta.dir, '..', '..', '..', '.env');
-
-if (envPath) {
-  const dotenvResult = config({ path: envPath });
-  if (dotenvResult.error) {
-    // Use console.error since logger depends on env vars (LOG_LEVEL)
-    console.error(`Failed to load .env from ${envPath}: ${dotenvResult.error.message}`);
-    console.error('Hint: Copy .env.example to .env and configure your credentials.');
-  }
-}
-
-// Load archon-owned env from ~/.archon/.env (user scope) and <cwd>/.archon/.env
-// (repo scope, wins over user) with override: true. Keeps the server in sync
-// with the CLI — see packages/paths/src/env-loader.ts and the three-path model
-// (#1302 / #1303).
-import { loadArchonEnv } from '@archon/paths/env-loader';
-loadArchonEnv(process.cwd());
 
 // Workflow scripts started by this server call back into the CLI through the
 // same host command the CLI publishes for its own runs.

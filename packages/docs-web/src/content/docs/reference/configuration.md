@@ -646,7 +646,7 @@ Signup uses email + password (no email verification by default). **Signup postur
 | --- | --- | --- |
 | `STALE_THRESHOLD_DAYS` | Days before an inactive worktree is considered stale. Must be a positive integer; invalid values stop startup. | `14` |
 | `MAX_WORKTREES_PER_CODEBASE` | Max worktrees per codebase before auto-cleanup | `25` |
-| `CLEANUP_INTERVAL_HOURS` | How often the background cleanup service runs. Must be a positive integer; invalid values stop startup. | `6` |
+| `CLEANUP_INTERVAL_HOURS` | How often the background cleanup service runs. Must be a positive integer from 1 to 596 (the runtime timer limit); invalid values stop startup. | `6` |
 
 ### Docker / Deployment
 
