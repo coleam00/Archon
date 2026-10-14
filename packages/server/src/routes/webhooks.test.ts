@@ -132,9 +132,9 @@ describe('POST /webhooks/github', () => {
     expect(mockReceiveWebhook).not.toHaveBeenCalled();
   });
 
-  test('returns 500 and logs the cause when durable receipt acceptance fails', async () => {
+  test('returns 500 and logs the cause when webhook reception fails', async () => {
     const app = createWebhookApp();
-    const cause = new Error('receipt persistence failed');
+    const cause = new Error('webhook reception failed');
     mockReceiveWebhook.mockImplementation(async () => {
       throw cause;
     });
@@ -169,7 +169,7 @@ describe('POST /webhooks/github', () => {
     expect(res.status).toBe(500);
     expect(mockReceiveWebhook).toHaveBeenCalledTimes(1);
   });
-  test('does not acknowledge before durable intake completes', async () => {
+  test('does not acknowledge before receiveWebhook completes', async () => {
     let complete: (() => void) | undefined;
     const pending = new Promise<void>(resolve => {
       complete = resolve;

@@ -272,8 +272,8 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
       if (payload.kind === 'read_failed') throw payload.error;
       if (payload.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
 
-      // Receipt acceptance is durable; it does not mean the workflow completed.
-      // GitHub requires explicit redelivery/reconciliation after a failed delivery.
+      // Conversation handling runs asynchronously without a durable receipt;
+      // HTTP 200 does not guarantee that processing will succeed or survive a restart.
       const result = await github.receiveWebhook(payload.body, signature, deliveryId, eventType);
       if (result === 'invalid_signature') return c.json({ error: 'Invalid signature' }, 401);
       if (result === 'malformed') return c.json({ error: 'Malformed payload' }, 400);
@@ -290,7 +290,7 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
 `packages/server/src/index.ts` imports and calls the route-registration function when the GitHub adapter is enabled:
 
 ```typescript
-import { registerGithubWebhookRoute } from './routes/webhooks';
+import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
 
 if (github) {
   registerGithubWebhookRoute(app, github);

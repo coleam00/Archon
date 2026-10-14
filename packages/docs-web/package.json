@@ -24,6 +24,9 @@
     ],
     [
       "src/reverse-proxy.test.ts"
+    ],
+    [
+      "src/architecture.test.ts"
     ]
   ]
 }
