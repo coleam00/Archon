@@ -1,4 +1,4 @@
-import { WorkflowSourceIntegrityError } from '@archon/workflows/executor';
+import { resolveRunSourceCapture, WorkflowSourceIntegrityError } from '@archon/workflows/executor';
 import type { WorkflowHost } from './host-store';
 import {
   WorkflowNotResumableError,
@@ -40,6 +40,12 @@ export async function resumeWorkflowContinuation(
   const run = await host.deps.store.getWorkflowRun(runId);
   if (!run) return { kind: 'unavailable', reason: 'run no longer exists' };
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) return { kind: 'not-accepted' };
+  try {
+    await resolveRunSourceCapture(run.metadata);
+  } catch (error) {
+    if (!(error instanceof WorkflowSourceIntegrityError)) throw error;
+    return { kind: 'unavailable', reason: error.message, sourceError: error };
+  }
   if (!run.working_path) return { kind: 'unavailable', reason: 'run has no recorded working path' };
   if (run.metadata.isolation === 'container') {
     return { kind: 'unavailable', reason: 'container isolation requires manual workflow resume' };

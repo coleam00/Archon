@@ -14,7 +14,6 @@ import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
-import { resolveRunSourceCapture } from '@archon/workflows/workflow-source';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { writeStdout } from '../utils/stdout';
@@ -80,8 +79,6 @@ async function admit(
         workingPathError = `recorded working path is unavailable: ${errorMessage(error)}`;
       }
       if (workingPathError) {
-        // A foreign working directory must not mask the host's unreadable frozen source.
-        await resolveRunSourceCapture(freshRun.metadata);
         return { kind: 'unavailable', reason: workingPathError };
       }
       return {

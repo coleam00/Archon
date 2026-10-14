@@ -24,14 +24,23 @@ const { workflowContinuationCommand, workflowWakeScheduleConfig } =
   await import('./workflow-continuations');
 const trackTempRoot = trackTempRoots();
 
-for (const source of ['missing', 'valid', 'scheduled'] as const) {
+for (const source of [
+  'missing',
+  'valid',
+  'scheduled',
+  'missing-origin',
+  'foreign-origin',
+  'valid-missing-origin',
+  'valid-foreign-origin',
+] as const) {
   test(`CLI wake refuses a foreign working directory with ${source} source`, async () => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'cli-foreign-source-')));
     const sourcePath = join(root, 'source');
     const content = 'frozen';
     const hash = createHash('sha256').update(content).digest('hex');
     const digest = createHash('sha256').update(`source.txt\0${hash}\n`).digest('hex');
-    if (source === 'valid') {
+    const validSource = source.startsWith('valid');
+    if (validSource) {
       await mkdir(sourcePath);
       await writeFile(join(sourcePath, 'source.txt'), content);
       await writeFile(
@@ -56,8 +65,8 @@ for (const source of ['missing', 'valid', 'scheduled'] as const) {
       status: 'paused',
       outcome: null,
       origin: null,
-      conversation_id: null,
-      parent_conversation_id: null,
+      conversation_id: source.endsWith('-origin') ? 'origin' : null,
+      parent_conversation_id: source.endsWith('-origin') ? 'origin' : null,
       codebase_id: null,
       user_message: '',
       started_at: new Date(),
@@ -102,6 +111,12 @@ for (const source of ['missing', 'valid', 'scheduled'] as const) {
           deferWorkflowContinuation: defer,
         },
       },
+      records: {
+        conversations: {
+          getConversationById: async () =>
+            source.endsWith('foreign-origin') ? { platform_type: 'slack' } : null,
+        },
+      },
       engine: { resume: execute },
     } as unknown as WorkflowHost;
     warn.mockClear();
@@ -132,10 +147,10 @@ for (const source of ['missing', 'valid', 'scheduled'] as const) {
       for (let i = 0; i < 8; i++)
         await workflowContinuationCommand(host, 'wake', [], { json: true });
     }
-    expect(getRun).toHaveBeenCalledTimes(source === 'valid' ? 8 : 3);
-    expect(defer).toHaveBeenCalledTimes(source === 'valid' ? 8 : 2);
+    expect(getRun).toHaveBeenCalledTimes(validSource ? 8 : 3);
+    expect(defer).toHaveBeenCalledTimes(validSource ? 8 : 2);
     expect(execute).not.toHaveBeenCalled();
-    if (source === 'valid') {
+    if (validSource) {
       expect(warn).not.toHaveBeenCalled();
       expect(stdout).toHaveBeenCalledTimes(8);
       for (const [output] of stdout.mock.calls) {
@@ -146,7 +161,13 @@ for (const source of ['missing', 'valid', 'scheduled'] as const) {
             {
               runId: run.id,
               kind: 'unavailable',
-              reason: expect.stringContaining('recorded working path is unavailable:'),
+              reason: expect.stringContaining(
+                source.endsWith('foreign-origin')
+                  ? 'CLI cannot deliver results'
+                  : source.endsWith('missing-origin')
+                    ? 'origin conversation no longer exists'
+                    : 'recorded working path is unavailable:'
+              ),
             },
           ],
         });
