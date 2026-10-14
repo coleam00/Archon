@@ -31,9 +31,12 @@ outcome_field: ready
 
 nodes:
 
-  # Blocked is a valid outcome, not a failure: ready:false naming exactly what
-  # is missing beats a plan built on guesses. Consumers gate on
-  # $plan.output.ready before building.
+  # Open questions are a valid outcome, not a failure: the calls only a person can
+  # make, named, beat a plan built on guesses. Whether the plan is ready is the
+  # planner's judgment; consumers gate on $plan.output.ready and relay
+  # $plan.output.open_questions either way. A schema cannot tie the two without a
+  # root union, which the providers' structured output rejects, so the prompt
+  # holds the rule: not ready always names at least one question.
   - id: plan
     command: plan
     # Advisory on both counts, and the engine holds both: it fails this node with
@@ -46,6 +49,9 @@ nodes:
       properties:
         ready:
           type: boolean
+        open_questions:
+          type: array
+          items: { type: string, pattern: '\S' }
         summary:
           type: string
         report:
@@ -59,4 +65,4 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [plan.md] }
           required: [type, run_id, path]
-      required: [ready, summary, report]
+      required: [ready, open_questions, summary, report]

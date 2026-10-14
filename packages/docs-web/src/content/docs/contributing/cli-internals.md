@@ -61,9 +61,9 @@ packages/cli/
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ cli.ts  Git repository check                                    │
-│                 Skip for version/help, validate and resolve to  │
-│                 repo root for workflow/isolation commands       │
+│ cli.ts  Project resolution                                      │
+│                 Honor folder selection and registered folders;  │
+│                 otherwise resolve the nearest Git checkout      │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
@@ -80,11 +80,14 @@ packages/cli/
 
 **Code:** `packages/cli/src/cli.ts`
 
-**Git repository check:**
-- Commands `workflow`, `isolation`, and `complete` require running from a git repository
-- Commands `version`, `help`, `setup`, and `chat` bypass this check
-- When in a subdirectory, automatically resolves to repository root
-- Exit code 1 if not in a git repository
+**Project resolution:**
+
+- `workflow run --folder` uses the supplied canonical directory, even inside Git, and explicitly registers it as a folder project.
+- A registered folder and its ordinary descendants resolve to the folder directory. Archon runs folder workflows in place without managing a worktree, branch or PR.
+- A Git repository nested inside a registered folder retains its own repository identity. Other Git paths resolve to the nearest repository root, preserving linked-checkout ownership.
+- Unregistered non-Git execution requires folder registration; first-use CLI execution uses `workflow run --folder`. Without registration or that flag, execution exits with code 1.
+- File-only dry runs and fixture tests can inspect local files without registration. On a readable registry they honor folder ownership; if lookup fails they use the proven Git root or supplied directory. `workflow list` and `validate` retain their Git-root fallback when the registry cannot open.
+- `version`, `help`, `setup`, and `chat` bypass project resolution.
 
 ---
 

@@ -49,7 +49,7 @@ What do you want to do?
 
 #### `archon-ship`
 
-Grounds an issue or request against the current repository before spending on it, then takes the least speculative path: investigate an unknown cause, plan an undecided shape, deliver an implementation-ready work order, or stop when no work remains. Every actionable path ends in the same reviewed delivery tail as `archon-deliver`.
+Grounds an issue or request against the current repository before spending on it, then takes the least speculative path: investigate an unknown cause, plan an undecided shape, deliver an implementation-ready work order, continue an open PR that already carries the outcome, or stop when no work remains. Every actionable path ends in the same reviewed delivery tail as `archon-deliver`.
 
 **When to use it**: A GitHub issue or request should go from a current-truth check to a reviewed PR. This is your default for bugs, features, and enhancements.
 
@@ -57,7 +57,7 @@ Grounds an issue or request against the current repository before spending on it
 archon workflow run archon-ship --branch fix/login-crash "#142"
 ```
 
-**What it produces**: A PR flipped ready for review once review findings are closed and checks pass, or an explained stop when triage finds no work is owed. The workflow never merges; merging stays with you.
+**What it produces**: A PR marked ready for review once review findings are closed and CI is green, or an explained stop with the PR left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The workflow never merges; merging stays with you.
 
 ---
 
@@ -87,7 +87,7 @@ Establishes the proven causal chain for a bug, unexplained behavior, or open que
 archon workflow run archon-investigate "Why does the workflow list spin forever when no workflows exist?"
 ```
 
-**What it produces**: An evidence-backed report a fixer or planner can act on. The repository is left as it was found.
+**What it produces**: An evidence-backed report a fixer or planner can act on, with a verdict: `rooted` (a change is owed here and the fix is decided), `refuted` (no change is owed in this repository), or `inconclusive` (the cause is not established yet). The repository is left as it was found.
 
 ---
 
@@ -121,7 +121,7 @@ archon workflow run archon-implement --branch feat/export-csv "Implement the pla
 
 #### `archon-pr`
 
-Opens a pull request for the committed work on the current branch. It uses the repository's PR template when one exists and reads the created PR back to verify it.
+Opens a pull request for the committed work on the current branch. It first merges the latest base branch into the branch, resolving conflicts it can resolve with confidence and stopping with the paths named when it cannot. It runs no checks. It uses the repository's PR template when one exists, pushes the branch, and reads the created PR back to verify it.
 
 **When to use it**: A branch has committed work and needs a PR. Run it with `--no-worktree` from the checkout that holds the branch.
 
@@ -129,13 +129,13 @@ Opens a pull request for the committed work on the current branch. It uses the r
 archon workflow run archon-pr --no-worktree --input draft=false
 ```
 
-**What it produces**: A pull request, draft unless you pass `--input draft=false`. It never sweeps in unrelated changes and never force-pushes.
+**What it produces**: A pull request, draft unless you pass `--input draft=false`. It never sweeps in unrelated changes, never rebases, and never force-pushes.
 
 ---
 
 #### `archon-deliver`
 
-The delivery tail: implement the work, gate on green checks, open a draft PR, review it, correct and close the findings, validate, wait for CI, then flip the PR ready for review. There is no approval gate inside the run; your gate is PR review and merge.
+The delivery tail, in capped rounds: implement the work with focused checks on what it changes, push and open (or update) a draft PR, and review it. Once a round's review passes, a structure pass looks for a smaller shape once and the implementer adopts or declines its findings; then an agent marks the PR ready, waits for CI (the full validation) however long it takes, and puts it back in draft if CI is red. Review findings, CI red the change caused, and a conflict with the base go back to the implementer for another round (it merges the base on a conflict, never rebasing), up to three rounds. Each correction is reviewed on its delta: by the same lenses after review findings, by one general code reviewer after a CI fix. Any other ending is not ready, with its reason; a red PR never stays ready. Finally it updates the PR description and relays any discoveries. `--input pull_request=<number>` continues that open PR instead of opening one. There is no approval gate inside the run; your gate is PR review and merge.
 
 **When to use it**: The work is decided, for example an approved plan, and should become a reviewed, ready-to-merge PR.
 
@@ -151,7 +151,7 @@ archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in
 
 #### `archon-review`
 
-Reviews a change through specialist lenses and produces one evidence-based verdict. A full first round runs code, seams, simplification, and tests; code uses the configured `large` model tier. A focused first round (`--input tier=focused`) runs seams and a general reviewer first. If that reviewer finds a full-review risk, code, simplification, and tests run against the same head before the verdict. Docs runs when shipped documentation changes; `--input errors=true` enables failure visibility and containment review. A continuation (`--input prior_report=<path>`) verifies prior findings and reviews the correction delta in synthesis without rerunning specialist lenses. The review also holds the change to its stated contract, taken from the PR description or a work order you pass: each stated acceptance item and invariant is met with cited evidence or raised as a blocking finding.
+Reviews a change through specialist lenses and produces one evidence-based verdict. On a first round a quick route agent picks the lenses the change earns: seams (on unless the change touches no type, contract, state or boundary), code (which uses the configured `large` model tier), tests, errors, and docs. `--input errors=true` or `false` overrides its errors call. A continuation (`--input prior_report=<path>`) reruns the lenses the first round selected on the correction delta only, judging whether each prior finding was resolved or validly declined; `--input light=true` runs the general code reviewer alone. The review also holds the change to its stated contract, taken from the PR description or a work order you pass: each stated acceptance item and invariant is met with cited evidence or raised as a blocking finding.
 
 **When to use it**: A PR or your working diff needs judging. It is read-only and never edits code.
 

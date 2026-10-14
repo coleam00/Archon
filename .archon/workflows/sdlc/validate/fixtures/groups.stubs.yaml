@@ -1,0 +1,16 @@
+# Two independent gates: the first check of group "api" fails, and group "web" still
+# runs. The real runner reports red naming both groups' results, and the classifier
+# judges every failure validation.md records.
+discover:
+  checks:
+    - { name: "api lint", argv: ["bun", "-e", "console.error('lint failed'); process.exitCode = 1"], group: "api" }
+    - { name: "api tests", argv: ["bun", "-e", "console.log('never runs')"], group: "api" }
+    - { name: "web tests", argv: ["bun", "-e", "console.log('web passed')"], group: "web" }
+  notes: "stub: two independently built parts, one gate each"
+classify:
+  red_cause: introduced
+  summary: "stub: the api lint failure is in code this change added; the web gate passed"
+fixture:
+  expect: completed
+  reached: [mode, discover, run, classify, result]
+exec-code: true

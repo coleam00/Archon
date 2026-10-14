@@ -1,3 +1,5 @@
+import { captureCommand, captureWorkflowCommand } from '../test-support/command';
+import { registerFolder } from '@archon/core/handlers/clone';
 import { createPluginRepo } from '../test-support/plugin-fixture';
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
@@ -369,6 +371,46 @@ describe('archon plugin: workflow packs', () => {
       Object.keys(await snapshot(join(project, '.archon', 'workflows', 'review-kit')))
     ).toEqual(TREE_FILES);
     expect(await snapshot(join(project, 'src'))).toEqual({});
+  });
+
+  test('copy from a registered folder descendant inside Git writes only to that folder', async () => {
+    const env = await environment();
+    expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    const project = env.projectDir;
+    const folder = join(project, 'ops');
+    const descendant = join(folder, 'deep');
+    await mkdir(descendant, { recursive: true });
+    expect(Bun.spawnSync(['git', 'init', '-q', project]).exitCode).toBe(0);
+    const result = await captureWorkflowCommand(join(project, '..', 'home'), async host => {
+      await registerFolder(host.records.codebases, folder);
+      expect(await pluginCommand('copy', [ID], { ...env, projectDir: descendant })).toBe(0);
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(Object.keys(await snapshot(join(folder, '.archon', 'workflows', 'review-kit')))).toEqual(
+      TREE_FILES
+    );
+    expect(await snapshot(join(project, '.archon'))).toEqual({});
+    expect(await snapshot(descendant)).toEqual({});
+  });
+
+  test.each([true, false])('copy works without registration storage (Git: %s)', async initGit => {
+    const env = await environment();
+    expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    await mkdir(env.projectDir, { recursive: true });
+    if (initGit) expect(Bun.spawnSync(['git', 'init', '-q', env.projectDir]).exitCode).toBe(0);
+    const home = join(env.projectDir, '..', 'unreadable-home');
+    await mkdir(join(home, 'archon.db'), { recursive: true });
+    // Inside Git, copy from a child directory: the destination must fall back to the Git root.
+    const cwd = initGit ? join(env.projectDir, 'deep') : env.projectDir;
+    await mkdir(cwd, { recursive: true });
+    const copied = await captureCommand({ ARCHON_HOME: home }, async () => {
+      expect(await pluginCommand('copy', [ID], { ...env, projectDir: cwd })).toBe(0);
+    });
+    expect(copied.status, copied.output).toBe(0);
+    expect(
+      Object.keys(await snapshot(join(env.projectDir, '.archon', 'workflows', 'review-kit')))
+    ).toEqual(TREE_FILES);
+    if (initGit) expect(await snapshot(cwd)).toEqual({});
   });
 
   // Workflow discovery reads the same receipts on every call, so "nothing installed"

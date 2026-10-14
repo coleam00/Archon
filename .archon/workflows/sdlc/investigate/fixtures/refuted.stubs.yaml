@@ -1,0 +1,12 @@
+# Dry-run fixture: the investigation establishes that no change is owed in this
+# repository — the cause is owned upstream. The real verdict node derives the
+# boolean outcome (rooted: false) from the typed verdict, so the workflow
+# completes with a negative authored outcome and its report.
+investigate:
+  verdict: refuted
+  summary: "stub: the cause is owned by an upstream dependency; no change is owed here — full report at investigation.md"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "investigation.md" }
+fixture:
+  expect: completed
+  reached: [investigate, verdict]
+exec-code: true

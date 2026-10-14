@@ -367,10 +367,9 @@ async function resolveUserProviderEnvForWorkflow(
 }
 
 /**
- * Whether the run's codebase is a folder project (non-git). Folder projects run
- * in place on a non-git root, so git base-branch auto-detection can only fail
- * (`fatal: not a git repository`) — skip it to avoid the ERROR/WARN log-spam
- * pair on every folder run (#2159). `$BASE_BRANCH` keeps its
+ * Whether the run's codebase is a folder project (no Archon-managed git). Folder projects run
+ * in place and leave git to the user and agent, even when the directory has git.
+ * Skip git base-branch inference for these projects. `$BASE_BRANCH` keeps its
  * referenced-but-unresolvable failure semantics (empty string when skipped).
  *
  * Contract: NEVER THROWS. A lookup failure returns `false` so the normal
@@ -2033,9 +2032,8 @@ export async function executeWorkflow(
   } else if (fallbackBaseBranch) {
     baseBranch = fallbackBaseBranch;
   } else if (await isFolderCodebase(deps, codebaseId)) {
-    // Folder projects run on a non-git root — auto-detection can only fail and
-    // emit ERROR/WARN noise on every run (#2159). Leave empty; $BASE_BRANCH
-    // stays unresolved and throws only if a prompt actually references it.
+    // Folder projects leave git to the user and agent. $BASE_BRANCH stays
+    // unresolved and throws only if a prompt actually references it.
     baseBranch = '';
   } else {
     try {

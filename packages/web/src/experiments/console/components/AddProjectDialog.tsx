@@ -79,6 +79,7 @@ export function AddProjectDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [folder, setFolder] = useState(false);
   const [branch, setBranch] = useState('');
   const [inspection, setInspection] = useState<{
     source: string;
@@ -86,13 +87,19 @@ export function AddProjectDialog({
   } | null>(null);
   const [inspectionError, setInspectionError] = useState<string | null>(null);
   const source = `${mode}:${value.trim()}`;
-  const currentInspection = inspection?.source === source ? inspection.result : null;
+  const explicitFolder = mode === 'path' && folder;
+  const currentInspection =
+    !explicitFolder && inspection?.source === source ? inspection.result : null;
+
+  useEffect(() => {
+    if (!open) setFolder(false);
+  }, [open]);
 
   useEffect(() => {
     setBranch('');
     setInspection(null);
     setInspectionError(null);
-    if (!open || !value.trim()) return;
+    if (!open || !value.trim() || explicitFolder) return;
     let active = true;
     const timer = window.setTimeout(() => {
       void skill
@@ -115,7 +122,7 @@ export function AddProjectDialog({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [open, mode, value, source]);
+  }, [open, mode, value, source, explicitFolder]);
 
   useEffect(() => {
     if (!open) return;
@@ -135,9 +142,9 @@ export function AddProjectDialog({
 
   const onSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
-    if (!currentInspection || inspectionError) return;
+    if (!value.trim() || (!explicitFolder && (!currentInspection || inspectionError))) return;
     const baseBranch =
-      currentInspection.kind === 'repo' &&
+      currentInspection?.kind === 'repo' &&
       branch.trim() &&
       branch.trim() !== currentInspection.defaultBranch
         ? branch.trim()
@@ -147,7 +154,7 @@ export function AddProjectDialog({
     try {
       const project = isGit
         ? await skill.addProjectByUrl(value.trim(), baseBranch)
-        : await skill.addProjectByPath(value.trim(), baseBranch);
+        : await skill.addProjectByPath(value.trim(), baseBranch, explicitFolder);
       onAdded(project);
       setValue('');
       onClose();
@@ -222,6 +229,7 @@ export function AddProjectDialog({
               type="button"
               onClick={() => {
                 setMode(m);
+                setFolder(false);
               }}
               aria-pressed={mode === m}
               className={`relative z-[1] flex items-center justify-center gap-2 rounded-lg px-3 py-[9px] text-[13px] font-semibold transition-colors ${
@@ -282,6 +290,25 @@ export function AddProjectDialog({
           )}
         </p>
 
+        {!isGit ? (
+          <label className="mt-4 block text-[13px] text-text-secondary">
+            <input
+              type="checkbox"
+              checked={folder}
+              onChange={e => {
+                setFolder(e.target.checked);
+                setBranch('');
+              }}
+              disabled={submitting}
+            />{' '}
+            Register as a folder project
+            <span className="mt-1 block text-[12px] text-text-tertiary">
+              Run in place with no Archon-managed worktree, branch or PR, even if this is a git
+              repository.
+            </span>
+          </label>
+        ) : null}
+
         {currentInspection?.kind === 'repo' ? (
           <label className="mt-4 block text-[13px] text-text-secondary">
             Base branch
@@ -301,10 +328,12 @@ export function AddProjectDialog({
             </span>
           </label>
         ) : null}
-        {value.trim() && !currentInspection && !inspectionError ? (
+        {!explicitFolder && value.trim() && !currentInspection && !inspectionError ? (
           <p className="mt-3 text-[12px] text-text-tertiary">Checking remote default…</p>
         ) : null}
-        {inspectionError ? <p className="mt-3 text-[12px] text-error">{inspectionError}</p> : null}
+        {!explicitFolder && inspectionError ? (
+          <p className="mt-3 text-[12px] text-error">{inspectionError}</p>
+        ) : null}
 
         {error !== null ? (
           <p className="mt-3 rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-[11px] text-error">
@@ -328,8 +357,7 @@ export function AddProjectDialog({
             disabled={
               submitting ||
               value.trim().length === 0 ||
-              !currentInspection ||
-              inspectionError !== null
+              (!explicitFolder && (!currentInspection || inspectionError !== null))
             }
             className="brand-bar inline-flex items-center gap-[7px] rounded-[10px] px-[18px] py-2.5 text-[13px] font-bold text-white shadow-[0_8px_22px_-10px_color-mix(in_oklch,var(--brand-magenta),transparent_20%)] transition-all hover:-translate-y-px hover:brightness-110 disabled:translate-y-0 disabled:opacity-45 disabled:shadow-none"
           >

@@ -2335,8 +2335,15 @@ async function executeNodeInternal(
         : undefined;
     const promptInputs =
       nodeBindings !== undefined ? { ...(runInputs ?? {}), ...nodeBindings } : runInputs;
+    // The loop group substituted this node's own slots before it ran; a command file is
+    // loaded only now, so it takes the enclosing loops' passes here. An inline prompt
+    // already has, and a second pass would reprocess the user input it spliced.
+    const loopResolvedPrompt =
+      commandName !== undefined
+        ? ctx.loopBodyScopes.reduce((text, scope) => substituteLoopBodyText(text, scope), rawPrompt)
+        : rawPrompt;
     substitutedPrompt = buildPromptWithContext(
-      rawPrompt,
+      loopResolvedPrompt,
       workflowRun.id,
       workflowRun.user_message,
       artifactsDir,
@@ -4098,16 +4105,40 @@ async function executeLoopGroupNode(
       lifecycle: { status: 'started' },
     }
   );
-  const result = await executeLoopGroupBody(
-    ctx,
-    node,
-    execution,
-    workflowProvider,
-    workflowModel,
-    workflowTier,
-    workflowPreset,
-    stepNamePrefix
-  );
+  const usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens'> = {};
+  let result: LoopGroupBodyResult;
+  try {
+    result = await executeLoopGroupBody(
+      ctx,
+      node,
+      execution,
+      usage,
+      workflowProvider,
+      workflowModel,
+      workflowTier,
+      workflowPreset,
+      stepNamePrefix
+    );
+  } catch (error) {
+    // Durable-write rejection belongs to run recovery, not a failed node outcome.
+    if (error instanceof TerminalStatusWriteError || error instanceof NodeEventWriteError)
+      throw error;
+    const err = error instanceof Error ? error : new Error(String(error));
+    getLog().error({ err, nodeId: node.id }, 'loop_group_node.execution_failed');
+    result = {
+      state: 'failed',
+      output: '',
+      error: err.message,
+      failureKind: 'unknown',
+      ...usage,
+    };
+    await safeSendMessage(
+      ctx.platform,
+      ctx.conversationId,
+      `Loop-group node '${node.id}' failed: ${err.message}`,
+      { workflowId: ctx.workflowRun.id, nodeName: node.id }
+    );
+  }
   if (result.execution?.lifecycle.status === 'suspended') return result;
   let lifecycle: NodeExecutionRecord['lifecycle'];
   if (result.state === 'failed') {
@@ -4153,6 +4184,7 @@ async function executeLoopGroupBody(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   execution: NodeExecutionRecord,
+  usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens'>,
   workflowProvider: string | undefined,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
@@ -4535,8 +4567,6 @@ async function executeLoopGroupBody(
   // beside the text so the group's completed NodeOutput carries the logical value
   // (sibling `loop:` has done this since #2563; the group used to discard it).
   let lastIterationStructuredOutput: unknown;
-  let loopTotalCostUsd: number | undefined;
-  let loopTotalTokens: TokenUsage | undefined;
   // Loop-level session cursor: threaded across iterations when fresh_context is false
   // (so a body AI node resumes the prior iteration's session), reset to undefined when
   // fresh_context is true or on iteration 1. runLayers mutates this in place each call.
@@ -4584,6 +4614,7 @@ async function executeLoopGroupBody(
         output: '',
         error: `Workflow ${effectiveStatus}`,
         failureKind: 'cancelled',
+        ...usage,
       };
     }
 
@@ -4614,12 +4645,8 @@ async function executeLoopGroupBody(
     // iteration of an interactive loop.
     const prevSnapshot = loopPrevOutputs;
     const userInputForIter = isLoopResume && i === startIteration ? loopUserInput : '';
-    const iterBodyNodes = applyLoopPrevToBody(
-      bodyNodes,
-      prevSnapshot,
-      userInputForIter,
-      artifactsDir
-    );
+    const iterScope = loopBodyScope(bodyNodes, prevSnapshot, userInputForIter, artifactsDir);
+    const iterBodyNodes = applyLoopPrevToBody(bodyNodes, iterScope);
     // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
     // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
     const iterBodyLayers = planGraph(iterBodyNodes).layers;
@@ -4710,8 +4737,20 @@ async function executeLoopGroupBody(
       // (${LOOP_USER_INPUT}, printenv, env) that splice can't reach.
       bodyLoopUserInput: userInputForIter,
       loopPrevOutputs: prevSnapshot ?? new Map(),
+      loopBodyScopes: [...ctx.loopBodyScopes, iterScope],
     };
     await runLayers(iterCtx);
+
+    // Accumulate usage across iterations (charged on the failure path below too).
+    if (iterCtx.totalCostUsd !== undefined) {
+      usage.costUsd = (usage.costUsd ?? 0) + iterCtx.totalCostUsd;
+    }
+    if (iterCtx.totalTokens !== undefined) {
+      usage.tokens = sumTokenUsage(
+        [...(usage.tokens !== undefined ? [usage.tokens] : []), iterCtx.totalTokens],
+        { nodeId: node.id, iteration: i }
+      );
+    }
 
     // A body approval/cancel node may have paused or cancelled the run mid-iteration.
     // `paused` is tolerated (a sibling gate in the same iteration layer) — mirror
@@ -4731,19 +4770,9 @@ async function executeLoopGroupBody(
         output: lastIterationOutput,
         error: `Workflow ${effectiveStatus}`,
         failureKind: 'cancelled',
+        ...usage,
       };
     }
-    // Accumulate usage across iterations (charged on the failure path below too).
-    if (iterCtx.totalCostUsd !== undefined) {
-      loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
-    }
-    if (iterCtx.totalTokens !== undefined) {
-      loopTotalTokens = sumTokenUsage(
-        [...(loopTotalTokens !== undefined ? [loopTotalTokens] : []), iterCtx.totalTokens],
-        { nodeId: node.id, iteration: i }
-      );
-    }
-
     // Carry the body's final sequential session into the next iteration (unless
     // fresh_context forces a reset, handled above by seeding undefined). Taken
     // before handling the terminal gate below: its pause persists this
@@ -4778,8 +4807,7 @@ async function executeLoopGroupBody(
         error: errorMsg,
         failureKind: 'child_failed',
         ...(providerFailure !== undefined ? { providerFailure } : {}),
-        costUsd: loopTotalCostUsd,
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        ...usage,
         loopIterations: i,
       };
     }
@@ -4811,8 +4839,7 @@ async function executeLoopGroupBody(
         return {
           state: 'running',
           output: lastIterationOutput,
-          costUsd: loopTotalCostUsd,
-          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          ...usage,
           loopIterations: i,
           ...(suspensionPoint !== undefined ? { suspensionPoint } : {}),
         };
@@ -4829,8 +4856,7 @@ async function executeLoopGroupBody(
       return {
         state: 'running',
         output: lastIterationOutput,
-        costUsd: loopTotalCostUsd,
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        ...usage,
         loopIterations: i,
       };
     }
@@ -5031,8 +5057,7 @@ async function executeLoopGroupBody(
       return {
         state: 'completed',
         output: lastIterationOutput,
-        costUsd: loopTotalCostUsd,
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        ...usage,
         loopIterations: i,
         // The final iteration's sink payload, so downstream `$group.output.field`
         // resolves from the logical value (#2637). No declaredOutputPaths: a group's
@@ -5057,8 +5082,7 @@ async function executeLoopGroupBody(
         { status: 'suspended', point: 'interactive_loop' },
         {
           output: { text: lastIterationOutput, structured: lastIterationStructuredOutput },
-          costUsd: loopTotalCostUsd,
-          tokens: loopTotalTokens,
+          ...usage,
           diagnostics: { loopIterations: i },
         }
       );
@@ -5100,8 +5124,7 @@ async function executeLoopGroupBody(
         return {
           state: 'running',
           output: lastIterationOutput,
-          costUsd: loopTotalCostUsd,
-          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          ...usage,
           loopIterations: i,
         };
       await recordDerivedExecution({ logDir }, suspended);
@@ -5127,8 +5150,7 @@ async function executeLoopGroupBody(
           return {
             state: 'running',
             output: lastIterationOutput,
-            costUsd: loopTotalCostUsd,
-            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...usage,
             loopIterations: i,
           };
         getLog().error(
@@ -5140,6 +5162,7 @@ async function executeLoopGroupBody(
           output: lastIterationOutput,
           failureKind: 'unknown',
           error: undeliveredGatePromptError('Loop-group gate', node.id),
+          ...usage,
         };
       }
       deps.store
@@ -5169,10 +5192,80 @@ async function executeLoopGroupBody(
     output: lastIterationOutput,
     error: errorMsg,
     failureKind: 'max_iterations',
-    costUsd: loopTotalCostUsd,
-    ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+    ...usage,
     loopIterations: iterationLimit,
   };
+}
+
+/**
+ * What one loop_group iteration substitutes into its body's text: the prior-iteration
+ * outputs `$LOOP_PREV.*` reads, the `$LOOP_USER_INPUT` free-text, and the static id sets
+ * {@link substituteLoopPrevRefs} classifies absent refs with. Built once per iteration by
+ * {@link loopBodyScope}; a body inside nested groups sees one scope per enclosing group.
+ */
+export interface LoopBodyScope {
+  loopPrevOutputs: Map<string, NodeOutput> | undefined;
+  loopUserInput: string;
+  outputFileDir?: string;
+  knownBodyIds?: ReadonlySet<string>;
+  directBodyIds?: ReadonlySet<string>;
+}
+
+/**
+ * `knownBodyIds` is TRANSITIVE (this group's body + every nested descendant) — an id absent
+ * from it is a typo (`.field` ref → loud failure). `directBodyIds` is only THIS group's
+ * immediate ids — an id in knownBodyIds but not directBodyIds belongs to a nested group and
+ * its token is preserved for that inner group's own pass (#2142).
+ */
+export function loopBodyScope(
+  bodyNodes: readonly DagNode[],
+  loopPrevOutputs: Map<string, NodeOutput> | undefined,
+  loopUserInput: string,
+  outputFileDir: string
+): LoopBodyScope {
+  return {
+    loopPrevOutputs,
+    loopUserInput,
+    outputFileDir,
+    knownBodyIds: collectLoopBodyNodeIds(bodyNodes),
+    directBodyIds: new Set(bodyNodes.map(n => n.id)),
+  };
+}
+
+/**
+ * Substitute `$LOOP_PREV.*` refs and `$LOOP_USER_INPUT` into one piece of loop-body text.
+ * The single owner of loop-body text substitution: {@link applyLoopPrevToBodyNode} runs it
+ * over a body node's template slots, and the agent-node path runs it over a body command
+ * node's file body once loaded, so a command behaves exactly like the same text inline.
+ *
+ * Resolve $LOOP_PREV FIRST, then splice $LOOP_USER_INPUT — so user input containing a
+ * literal "$LOOP_PREV." is not itself reprocessed as a workflow-ref. A `shell` surface
+ * (bash/until_bash) shell-quotes $LOOP_PREV values (spilling to a file over the size
+ * threshold, same as substituteNodeOutputRefs) and $LOOP_USER_INPUT before splicing (user
+ * input is free-text; unquoted it could break or inject into the bash command). A `prompt`
+ * surface (prompts, command bodies, display text) uses the raw values. A `script` surface
+ * leaves $LOOP_USER_INPUT as a literal token: free-text cannot be safely quoted into
+ * TS/Python source, so it is delivered to the script as a subprocess env var instead
+ * (#2115) — matching how executeScriptNode delivers every other user-controlled variable.
+ * $LOOP_PREV.* refs stay raw-spliced there (bounded producer contract).
+ */
+export function substituteLoopBodyText(
+  text: string,
+  scope: LoopBodyScope,
+  surface: 'prompt' | 'shell' | 'script' = 'prompt'
+): string {
+  const escapedForBash = surface === 'shell';
+  const prevResolved = substituteLoopPrevRefs(
+    text,
+    scope.loopPrevOutputs,
+    escapedForBash,
+    scope.outputFileDir,
+    scope.knownBodyIds,
+    scope.directBodyIds
+  );
+  if (surface === 'script') return prevResolved;
+  const userInput = escapedForBash ? shellQuote(scope.loopUserInput) : scope.loopUserInput;
+  return prevResolved.replace(/\$LOOP_USER_INPUT/g, userInput);
 }
 
 /**
@@ -5181,55 +5274,23 @@ async function executeLoopGroupBody(
  * {@link executeLoopGroupNode} so the sealed body sub-DAG's executors stay unaware of the
  * enclosing loop iteration (the body's own executors call substituteWorkflowVariables, but
  * that uses the run's user_message — not the loop's per-iteration user input — so
- * $LOOP_USER_INPUT must be resolved here, at the loop-group level).
+ * $LOOP_USER_INPUT must be resolved here, at the loop-group level). A command node's file
+ * body is not a slot here: it is loaded at execution time and substituted there against
+ * the same scopes ({@link RunLayersContext.loopBodyScopes}).
  *
  * Prompt-bearing fields include node prompts, AI configuration, and load-time compiled loop
  * command prompts. `when:` conditions remain expressions: runLayers resolves their
  * `$LOOP_PREV` references against this iteration's prior-output snapshot.
  *
- * `knownBodyIds` (transitive body-id set) and `directBodyIds` (this group's immediate body
- * ids) are threaded UNCHANGED into every substituteLoopPrevRefs call AND into the
+ * The scope's `knownBodyIds` (transitive body-id set) and `directBodyIds` (this group's
+ * immediate body ids) are threaded UNCHANGED into every substitution AND into the
  * nested-loop_group recursion — deliberately not recomputed for the inner group. This keeps
  * `$LOOP_PREV.*` refs validated against the OUTER loop's snapshot (whose body they resolve
  * against): a ref to an outer-direct id resolves now, a ref owned by a nested group is left
  * intact for that inner group's own pass, and a ref to nothing is a typo. Both omitted by
  * raw callers, which then skip the typo/nested classification entirely (fully lenient).
  */
-export function applyLoopPrevToBodyNode(
-  node: DagNode,
-  loopPrevOutputs: Map<string, NodeOutput> | undefined,
-  loopUserInput: string,
-  outputFileDir?: string,
-  knownBodyIds?: ReadonlySet<string>,
-  directBodyIds?: ReadonlySet<string>
-): DagNode {
-  // Substitute $LOOP_USER_INPUT (user free-text) and $LOOP_PREV.* refs.
-  // Resolve $LOOP_PREV FIRST, then splice $LOOP_USER_INPUT — so user input containing a
-  // literal "$LOOP_PREV." is not itself reprocessed as a workflow-ref. `escapedForBash`
-  // is true for shell-bound fields (bash/until_bash): $LOOP_PREV values are shell-quoted
-  // (spilling to a file over the size threshold, same as substituteNodeOutputRefs), and
-  // $LOOP_USER_INPUT is shell-quoted before splicing (user input is free-text; unquoted
-  // it could break or inject into the bash command). Non-shell display/prompt fields
-  // (prompt/approval.message/command, and cancel reasons) use the raw values.
-  // `skipUserInput` is set ONLY for `script:` bodies: $LOOP_USER_INPUT is free-text that
-  // cannot be safely quoted into TS/Python source, so it is left as a literal token here
-  // and delivered to the script as a subprocess env var instead (#2115) — matching how
-  // executeScriptNode delivers every other user-controlled variable. $LOOP_PREV.* refs
-  // stay raw-spliced (bounded producer contract), routed through the knownBodyIds/
-  // directBodyIds typo-vs-nested-vs-absent decision table (#2165).
-  const sub = (s: string, escapedForBash = false, skipUserInput = false): string => {
-    const prevResolved = substituteLoopPrevRefs(
-      s,
-      loopPrevOutputs,
-      escapedForBash,
-      outputFileDir,
-      knownBodyIds,
-      directBodyIds
-    );
-    if (skipUserInput) return prevResolved;
-    const userInputForField = escapedForBash ? shellQuote(loopUserInput) : loopUserInput;
-    return prevResolved.replace(/\$LOOP_USER_INPUT/g, userInputForField);
-  };
+export function applyLoopPrevToBodyNode(node: DagNode, scope: LoopBodyScope): DagNode {
   // Node-local `with:` bindings (#2637) are per-iteration surfaces like every other
   // body field: string values (whole refs and templates alike) get the same raw
   // `$LOOP_PREV` splice — raw because binding values never touch shell source, the
@@ -5241,12 +5302,12 @@ export function applyLoopPrevToBodyNode(
   // a string `if_skipped` default carries the splice, mirroring the include macro.
   const substitutedNode = mapNodeTemplateSlots(node, slot => {
     if (slot.surface === 'binding_from' || slot.surface === 'condition') return slot.value;
-    if (slot.surface === 'shell') return sub(slot.value, true);
-    if (slot.surface === 'script') return sub(slot.value, false, true);
-    return sub(slot.value);
+    if (slot.surface === 'shell') return substituteLoopBodyText(slot.value, scope, 'shell');
+    if (slot.surface === 'script') return substituteLoopBodyText(slot.value, scope, 'script');
+    return substituteLoopBodyText(slot.value, scope);
   });
   if (isAgentNode(substitutedNode) && substitutedNode.source.kind === 'command') {
-    substitutedNode.source.name = sub(substitutedNode.source.name);
+    substitutedNode.source.name = substituteLoopBodyText(substitutedNode.source.name, scope);
   }
   return substitutedNode;
 }
@@ -5255,30 +5316,12 @@ export function applyLoopPrevToBodyNode(
  * Apply {@link applyLoopPrevToBodyNode} to every node of one loop_group iteration's body.
  * The single per-iteration resolution path shared by {@link executeLoopGroupNode} and the
  * dry-run simulator, so a dry run binds `$LOOP_PREV.*` exactly as a real run does.
- *
- * `knownBodyIds` is TRANSITIVE (this group's body + every nested descendant) — an id absent
- * from it is a typo (`.field` ref → loud failure). `directBodyIds` is only THIS group's
- * immediate ids — an id in knownBodyIds but not directBodyIds belongs to a nested group and
- * its token is preserved for that inner group's own pass (#2142).
  */
 export function applyLoopPrevToBody(
   bodyNodes: readonly DagNode[],
-  loopPrevOutputs: Map<string, NodeOutput> | undefined,
-  loopUserInput: string,
-  outputFileDir: string
+  scope: LoopBodyScope
 ): DagNode[] {
-  const knownBodyIds = collectLoopBodyNodeIds(bodyNodes);
-  const directBodyIds = new Set(bodyNodes.map(n => n.id));
-  return bodyNodes.map(n =>
-    applyLoopPrevToBodyNode(
-      n,
-      loopPrevOutputs,
-      loopUserInput,
-      outputFileDir,
-      knownBodyIds,
-      directBodyIds
-    )
-  );
+  return bodyNodes.map(n => applyLoopPrevToBodyNode(n, scope));
 }
 
 /**
@@ -5320,6 +5363,7 @@ async function executeLoopNode(
     workflowSourceRoots,
   } = ctx;
   const loop = node.loop;
+  const retryConfig = getEffectiveNodeRetryConfig(node);
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name when this loop node runs inside a loop_group body
   // ('' → node.id at top level, #2090). The loop's own per-iteration number lives in
@@ -5684,12 +5728,12 @@ async function executeLoopNode(
         return false;
       const message = failure.error;
       const maxRetries = effectiveRetryMaxRetries(
-        DEFAULT_NODE_MAX_RETRIES,
+        retryConfig.maxRetries,
         retryClass,
         iterSawRateLimit
       );
       if (attempt >= maxRetries) return false;
-      const delayMs = getRetryDelayMs(retryClass, attempt, DEFAULT_NODE_RETRY_DELAY_MS);
+      const delayMs = getRetryDelayMs(retryClass, attempt, retryConfig.delayMs);
       getLog().warn(
         {
           nodeId: node.id,
@@ -8900,6 +8944,9 @@ async function executeComposeFanOutNode(
         totalTokens: undefined,
         stepNamePrefix: instanceStepNamePrefix,
         loopGroupPath: ctx.loopGroupPath,
+        // A composed instance is its own workflow: its prompts never took the enclosing
+        // loop's substitution pass, so its command bodies don't either.
+        loopBodyScopes: [],
       };
       await runLayers(instanceCtx);
       const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
@@ -9267,6 +9314,13 @@ interface RunLayersContext extends RunInputs, RunDerived {
   stepNamePrefix: string;
   /** Complete runtime loop_group lineage for typed body artifacts; empty at top level. */
   loopGroupPath: NodeArtifactLoopFrame[];
+  /**
+   * One {@link LoopBodyScope} per enclosing loop_group iteration, outermost first; empty
+   * outside a loop_group body. A body command node's file body is loaded at execution time,
+   * after {@link applyLoopPrevToBodyNode} substituted the node's own slots, so it is run
+   * through every scope in order — the same passes an inline prompt in that position got.
+   */
+  loopBodyScopes: readonly LoopBodyScope[];
   /**
    * Per-iteration `$LOOP_USER_INPUT` free-text for loop_group body `exec:` nodes, delivered
    * into the subprocess as an env var (#2115, #2725). `script:` nodes never splice this into
@@ -11574,6 +11628,7 @@ export async function executeDagWorkflow(
     totalTokens: priorUsage?.tokens,
     stepNamePrefix: '',
     loopGroupPath: [],
+    loopBodyScopes: [],
   };
 
   /**

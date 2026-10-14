@@ -50,21 +50,36 @@ function history(): { cwd: string; older: string; newer: string } {
   return { cwd, older, newer };
 }
 
-function round(cwd: string, head: string, cursor?: string): ScriptRun {
+/** The engine identity review-round passes through for synthesis to count lenses by. */
+function execution(head: string): object {
+  return {
+    path: 'review__mode',
+    invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
+    attempt: { checkoutStart: { kind: 'git', commit: head } },
+  };
+}
+
+function round(
+  cwd: string,
+  head: string,
+  cursor?: string,
+  extra: { light?: boolean; lenses?: object } = {}
+): ScriptRun {
   return runPackScript('review/scripts/review-round', {
     cwd,
     inputs: {
       INPUTS_PRIOR_REPORT: cursor === undefined ? '' : '{ARTIFACTS}/review/report.md',
-      ARCHON_NODE_EXECUTION: JSON.stringify({
-        path: 'review__mode',
-        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
-        attempt: { checkoutStart: { kind: 'git', commit: head } },
-      }),
+      INPUTS_LIGHT: extra.light ? 'true' : 'false',
+      ARCHON_NODE_EXECUTION: JSON.stringify(execution(head)),
     },
     artifacts:
       cursor === undefined
         ? {}
-        : { 'review/report.md': 'Round 1', 'review/reviewed-head': `${cursor}\n` },
+        : {
+            'review/report.md': 'Round 1',
+            'review/reviewed-head': `${cursor}\n`,
+            ...(extra.lenses ? { 'review/reviewed-lenses.json': JSON.stringify(extra.lenses) } : {}),
+          },
   });
 }
 
@@ -78,29 +93,43 @@ describe('review-round', () => {
       head: newer,
       cursor: '',
       risks: FULL_REVIEW_RISKS,
-      execution: {
-        path: 'review__mode',
-        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
-        attempt: { checkoutStart: { kind: 'git', commit: newer } },
-      },
+      execution: execution(newer),
+      seams: false, code: false, tests: false, errors: false, docs: false,
     });
   });
 
-  it("continues from the previous round's reviewed commit to a head that descends from it", () => {
+  it("continues from the previous round's reviewed commit with the lenses it ran", () => {
     const { cwd, older, newer } = history();
-    const run = round(cwd, newer, older);
+    const recorded = { seams: true, code: true, tests: false, errors: true, docs: false };
+    const run = round(cwd, newer, older, { lenses: recorded });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       continuation: true,
       head: newer,
       cursor: older,
       risks: FULL_REVIEW_RISKS,
-      execution: {
-        path: 'review__mode',
-        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
-        attempt: { checkoutStart: { kind: 'git', commit: newer } },
-      },
+      execution: execution(newer),
+      ...recorded,
     });
+  });
+
+  it('runs the code lens alone on a light continuation', () => {
+    const { cwd, older, newer } = history();
+    const recorded = { seams: true, code: false, tests: true, errors: true, docs: true };
+    expect(JSON.parse(round(cwd, newer, older, { lenses: recorded, light: true }).stdout)).toMatchObject({
+      seams: false,
+      code: true,
+      tests: false,
+      errors: false,
+      docs: false,
+    });
+  });
+
+  it('refuses a continuation whose report recorded no lenses', () => {
+    const { cwd, older, newer } = history();
+    const run = round(cwd, newer, older);
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('records no lenses');
   });
 
   it('refuses a head that is an ancestor of the commit the previous round reviewed', () => {

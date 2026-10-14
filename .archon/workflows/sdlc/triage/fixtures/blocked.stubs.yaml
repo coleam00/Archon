@@ -2,15 +2,10 @@
 # is no_action by the pack's invariant, the blocker is named with a verified
 # URL, and the real verdict script derives archon-blocked plus the size label.
 triage:
-  contract: BLOCKED
-  route: no_action
-  design_first: false
+  decision: { contract: BLOCKED, blocked_reason: "stub: waits on the forge contract's merge operation", blocked_by: ["https://github.com/example/repo/issues/1"] }
   complexity: large
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
-  proposed_edits: { title: "", body: "" }
-  blocked_reason: "stub: waits on the forge contract's merge operation"
-  blocked_by: ["https://github.com/example/repo/issues/1"]
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
   summary: "stub: blocked on an owned prerequisite; see triage.md"
 fixture:

@@ -711,7 +711,8 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--folder',
-    description: 'Register the current non-git directory as a folder project and run in place',
+    description:
+      'Register the current directory (with or without git) as a folder project and run in place',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {

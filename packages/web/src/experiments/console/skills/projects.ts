@@ -30,12 +30,14 @@ export async function addProjectByUrl(
 
 export async function addProjectByPath(
   path: string,
-  baseBranch: string | null = null
+  baseBranch: string | null = null,
+  folder = false
 ): Promise<Project> {
   const raw = await requestJson<Parameters<typeof toProject>[0]>('/api/codebases', {
     method: 'POST',
     body: JSON.stringify({
       path,
+      ...(folder ? { folder: true } : {}),
       base_branch: baseBranch,
     } satisfies components['schemas']['AddCodebaseBody']),
   });

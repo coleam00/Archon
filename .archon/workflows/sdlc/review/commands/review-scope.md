@@ -32,7 +32,7 @@ $ARGUMENTS
 
 ## Resolve the target
 
-- When the requested scope is a recorded pull request — delivery passes its verified record as JSON, carrying `repo`, `number`, `head` and `base` — review exactly that pull request. The record names the pull request and its base, so read nothing from a forge to establish them. It does not name the commit: its `head_revision` was captured when the pull request opened and is stale after any later push, so ignore it. The review object is the diff of the commit under review against that base. Fetch the base first (`git fetch origin <base>`) and diff against the fetched ref (`git diff origin/<base>...<commit under review>`): a local `<base>` branch can lag the forge's base during a long run, and a stale base reviews a diff the pull request does not have. Do not resolve a PR from the current branch, and do not accept a different target.
+- When the requested scope is a recorded pull request — delivery passes its verified record as JSON, carrying `repo`, `number`, `head` and `base` — review exactly that pull request. The record names the pull request and its base, so read nothing from a forge to establish them. It does not name the commit: its `head_revision` was captured when the pull request opened and is stale after any later push, so ignore it. The review object is the diff of the commit under review against that base. Fetch the base first, from the remote whose URL is the record's `repo` (`git remote -v`; it need not be named `origin`), and diff against the fetched ref (`git diff <that remote>/<base>...<commit under review>`): a local `<base>` branch can lag the forge's base during a long run, and a stale base reviews a diff the pull request does not have. Do not resolve a PR from the current branch, and do not accept a different target.
 - A PR number, URL, or branch → resolve it with `gh pr view` (title, body, base, head, state, files) and `gh pr diff`. The PR's head must be the commit under review; when it is not, stop and say so rather than reviewing either one. **In PR mode the review object is the PR's diff, exactly — uncommitted or untracked local state is out of scope and must not appear in the scope file.**
 - Empty scope → first check whether the current branch has an open PR (`gh pr view`); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). The head is the commit under review.
 
@@ -47,14 +47,6 @@ The review judges the change against what the contract says completion looks lik
 From the originating contract, list every **acceptance** item (how completed behavior will be recognized), every stated **invariant**, and every **steering** constraint on how the work is done, each as its own numbered item, quoted as the contract words it. A document that counts, mentions, or paraphrases acceptance without stating each item has not given you the items; go to its source. When you cannot reach a source the contract depends on, say which items could not be read rather than standing in other text for them. Finding these items is your reading of the contract, not a parse: never extract them with scripts, regexes, or heading matches, and never invent an item the contract does not state.
 
 An explicit narrowing in the operator's trigger, or a plan the trigger explicitly names as this delivery, is an accepted boundary. Preserve all originating items and their sources; mark items explicitly assigned to future parts deferred with their authorization and owning part. Do not infer an assignment from a plan merely used to explain a broad request. Unassigned or unexplained omissions remain current requirements. A derived document without that authorization cannot drop originating acceptance: record its narrowing as a conflict. Correctness, truth, documentation and proof inside the delivered slice remain required.
-
-## Select docs review
-
-Set `docs` true when the reviewed diff changes shipped documentation, unless the
-diff is small, mechanical, and likely-correct — a version bump, a one-line fix, a
-rename, a test-only tweak — in which case a doc-adjacent touch alone does not
-earn the lens. Otherwise set it false. This selection applies only when the
-workflow's `docs` input is `auto`; an explicit input overrides it.
 
 ## Light mode (a prior report exists)
 
@@ -75,5 +67,5 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 
 Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract's source, has all three of its Acceptance, Invariants, and Steering subsections, names the head SHA, and that the diff commands in it actually produce output in this checkout. Then declare:
 
-- `docs`: the boolean selected above.
 - `pr`: the qualified pull request this round reviews, as `{"repo": {"host": ..., "path": "owner/repo"}, "number": N}` — the same identity scope.md records. For a working-diff target, `null`. The node that publishes the review report writes to this record and to nothing else, so a wrong or guessed identity would put the report on the wrong pull request.
+- `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/scope.md"}`. The engine refuses this node if that file is missing or empty, so write it before you declare.
