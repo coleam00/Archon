@@ -1,6 +1,10 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
-import type { WorkflowEventCursor, WorkflowEventPage } from '@archon/workflows/store';
+import {
+  WORKFLOW_EVENT_TYPES,
+  type WorkflowEventCursor,
+  type WorkflowEventPage,
+} from '@archon/workflows/store';
 
 const mockLog = {
   error: mock((_obj: object, _msg: string) => undefined),
@@ -89,6 +93,12 @@ const emittedIds = (t: FakeTransport): string[] =>
   t.emitted.map(({ event }) => (JSON.parse(event) as { runId: string }).runId);
 
 describe('mapWorkflowEventRow', () => {
+  test.each(WORKFLOW_EVENT_TYPES)('source membership matches row mapping for %s', eventType => {
+    expect(DASHBOARD_SOURCE_EVENT_TYPES.includes(eventType)).toBe(
+      mapWorkflowEventRow(row({ event_type: eventType })) !== null
+    );
+  });
+
   test('workflow_started → workflow_status running', () => {
     const out = mapWorkflowEventRow(
       row({ event_type: 'workflow_started', data: { workflow_name: 'wf' } })
