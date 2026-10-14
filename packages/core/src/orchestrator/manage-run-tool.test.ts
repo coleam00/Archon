@@ -716,6 +716,29 @@ describe('manage_run — destructive confirmation gate', () => {
     });
   });
 
+  test('an empty occurrence is passed through and refused, not treated as absent', async () => {
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({
+        status: 'paused',
+        metadata: { approval: { nodeId: 'review', pauseId: 'pause-two', message: 'Choose' } },
+      }),
+    ]);
+    mockRespond.mockResolvedValue(approvalResult('approval_gate'));
+    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+    await tool.handler({
+      action: 'respond',
+      runId: 'r1abcdef',
+      decision: 'revise',
+      confirm: true,
+      occurrence: '  ',
+    });
+    // An expected gate no pause can match, so the operation refuses it as stale, as the CLI does.
+    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'revise', undefined, operator, {
+      via: 'manage_run',
+      expectedGate: { nodeId: 'review', pauseId: '' },
+    });
+  });
+
   test('respond with decision=reject still cancels — sugar produces the same outcome shape as action=reject', async () => {
     // respondToWorkflow('reject', ...) delegates internally to rejectWorkflow — from
     // the tool's perspective this is just the RejectionOperationResult shape coming

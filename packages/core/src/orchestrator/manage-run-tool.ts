@@ -384,10 +384,13 @@ async function handleWrite(
   }
 
   const message = typeof input.message === 'string' ? input.message.trim() : '';
-  const occurrence = typeof input.occurrence === 'string' ? input.occurrence.trim() : '';
+  // A supplied occurrence is always checked, even when empty: an empty one matches no pause
+  // and is refused as stale, as the CLI refuses `--occurrence ''`. Only an absent one skips it.
   const origin: GateAnswerOrigin = {
     via: 'manage_run',
-    ...(occurrence !== '' ? { expectedGate: expectedGateForOccurrence(run, occurrence) } : {}),
+    ...(typeof input.occurrence === 'string'
+      ? { expectedGate: expectedGateForOccurrence(run, input.occurrence.trim()) }
+      : {}),
   };
   // Single finalize-vs-iterate predicate for approve (#2074): accept=true or an
   // empty message means no feedback reaches the gate — used by both the confirm

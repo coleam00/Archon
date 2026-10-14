@@ -327,7 +327,6 @@ export class ChildRunRedirectError extends Error {
   }
 }
 
-/** Render an operation failure, including a surface-specific child-run redirect. */
 /**
  * Where an answer came from, recorded with it for audit. `via` names the surface the
  * answer arrived through: `cli`, `api`, `manage_run`, or a chat platform's id. Nothing
@@ -419,6 +418,7 @@ export function expectedGateForOccurrence(
   return { nodeId: isApprovalContext(approval) ? approval.nodeId : '', pauseId: occurrence };
 }
 
+/** Render an operation failure, including a surface-specific child-run redirect. */
 export function workflowOperationErrorMessage(
   error: unknown,
   surface: WorkflowCommandSurface
