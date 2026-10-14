@@ -195,6 +195,8 @@ import {
   assertApprovable,
   assertRejectable,
   assertRespondable,
+  expectedGateForOccurrence,
+  type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
 import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
 import * as git from '@archon/git';
@@ -5977,6 +5979,21 @@ export async function workflowCancelCommand(
 }
 
 /**
+ * The origin a CLI answer records. `--occurrence` refuses the answer unless the run is
+ * still paused at that occurrence, read the way run-attention reports it.
+ */
+async function cliAnswerOrigin(
+  host: WorkflowHost,
+  runId: string,
+  occurrence: string | undefined
+): Promise<GateAnswerOrigin> {
+  if (occurrence === undefined) return { via: 'cli' };
+  const run = await host.deps.store.getWorkflowRun(runId);
+  if (!run) throw new Error(`Workflow run not found: ${runId}`);
+  return { via: 'cli', expectedGate: expectedGateForOccurrence(run, occurrence) };
+}
+
+/**
  * Approve a paused workflow run by ID.
  *
  * Human mode records the approval on the still-'paused' run (the resolution
@@ -5994,7 +6011,8 @@ export async function workflowApproveCommand(
   comment?: string,
   json?: boolean,
   cwd?: string,
-  detach?: boolean
+  detach?: boolean,
+  occurrence?: string
 ): Promise<void> {
   const { approveWorkflow } = host.operations;
 
@@ -6033,7 +6051,12 @@ export async function workflowApproveCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
-      const result = await approveWorkflow(resolvedId, comment, { kind: 'operator' });
+      const result = await approveWorkflow(
+        resolvedId,
+        comment,
+        { kind: 'operator' },
+        await cliAnswerOrigin(host, resolvedId, occurrence)
+      );
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6049,8 +6072,13 @@ export async function workflowApproveCommand(
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
-  const result = await spelledForCli(() =>
-    approveWorkflow(resolvedId, comment, { kind: 'operator' })
+  const result = await spelledForCli(async () =>
+    approveWorkflow(
+      resolvedId,
+      comment,
+      { kind: 'operator' },
+      await cliAnswerOrigin(host, resolvedId, occurrence)
+    )
   );
 
   // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
@@ -6136,7 +6164,8 @@ export async function workflowRejectCommand(
   reason?: string,
   json?: boolean,
   cwd?: string,
-  detach?: boolean
+  detach?: boolean,
+  occurrence?: string
 ): Promise<void> {
   const { rejectWorkflow } = host.operations;
 
@@ -6171,7 +6200,12 @@ export async function workflowRejectCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
-      const result = await rejectWorkflow(resolvedId, rejectText, { kind: 'operator' });
+      const result = await rejectWorkflow(
+        resolvedId,
+        rejectText,
+        { kind: 'operator' },
+        await cliAnswerOrigin(host, resolvedId, occurrence)
+      );
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6188,8 +6222,13 @@ export async function workflowRejectCommand(
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
-  const result = await spelledForCli(() =>
-    rejectWorkflow(resolvedId, rejectText, { kind: 'operator' })
+  const result = await spelledForCli(async () =>
+    rejectWorkflow(
+      resolvedId,
+      rejectText,
+      { kind: 'operator' },
+      await cliAnswerOrigin(host, resolvedId, occurrence)
+    )
   );
 
   if (result.cancelled) {
@@ -6290,12 +6329,15 @@ export async function workflowRespondCommand(
   text?: string,
   json?: boolean,
   cwd?: string,
-  detach?: boolean
+  detach?: boolean,
+  occurrence?: string
 ): Promise<void> {
   const { respondToWorkflow } = host.operations;
 
-  if (decision === 'approve') return workflowApproveCommand(host, runId, text, json, cwd, detach);
-  if (decision === 'reject') return workflowRejectCommand(host, runId, text, json, cwd, detach);
+  if (decision === 'approve')
+    return workflowApproveCommand(host, runId, text, json, cwd, detach, occurrence);
+  if (decision === 'reject')
+    return workflowRejectCommand(host, runId, text, json, cwd, detach, occurrence);
 
   // --detach: same shape as approve/reject — the parent validates read-only via the
   // SAME gate respondToWorkflow enforces, then hands the whole command to a detached
@@ -6325,7 +6367,13 @@ export async function workflowRespondCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
-      const result = await respondToWorkflow(resolvedId, decision, text, { kind: 'operator' });
+      const result = await respondToWorkflow(
+        resolvedId,
+        decision,
+        text,
+        { kind: 'operator' },
+        await cliAnswerOrigin(host, resolvedId, occurrence)
+      );
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6341,8 +6389,14 @@ export async function workflowRespondCommand(
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
-  const result = await spelledForCli(() =>
-    respondToWorkflow(resolvedId, decision, text, { kind: 'operator' })
+  const result = await spelledForCli(async () =>
+    respondToWorkflow(
+      resolvedId,
+      decision,
+      text,
+      { kind: 'operator' },
+      await cliAnswerOrigin(host, resolvedId, occurrence)
+    )
   );
 
   if (!result.workingPath) {

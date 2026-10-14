@@ -1060,7 +1060,8 @@ async function main(): Promise<number> {
               approveComment,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
             );
             break;
           }
@@ -1079,7 +1080,8 @@ async function main(): Promise<number> {
               rejectReason,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
             );
             break;
           }
@@ -1105,7 +1107,8 @@ async function main(): Promise<number> {
               respondText,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
             );
             break;
           }

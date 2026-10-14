@@ -811,6 +811,13 @@ export const approvalContextSchema = z.object({
    */
   resolved: z.enum(['approved', 'rejected']).nullable().optional(),
   /**
+   * Audit facts of the answer that set `resolved`: the surface it arrived through
+   * (`cli`, `api`, `manage_run`, or a chat platform id) and when it was committed. Never
+   * who answered. Replaced with the rest of the context by the next pause.
+   */
+  answeredVia: z.string().optional(),
+  answeredAt: z.string().optional(),
+  /**
    * Interactive-loop only. True when the iteration this gate paused on emitted the
    * completion signal (detectCompletionSignal / until_bash exit 0). Read at resume by
    * executeLoopNode/executeLoopGroupNode: a signal-bearing gate approved WITHOUT feedback

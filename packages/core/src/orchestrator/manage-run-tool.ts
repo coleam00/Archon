@@ -13,8 +13,9 @@ import {
   CancelRefusedError,
   workflowOperationErrorMessage,
   describeAbandonOwner,
+  expectedGateForOccurrence,
 } from '../operations/workflow-operations';
-import type { WorkflowOperations } from '../operations/workflow-operations';
+import type { GateAnswerOrigin, WorkflowOperations } from '../operations/workflow-operations';
 
 const log = createLogger('orchestrator.manage_run');
 
@@ -133,6 +134,11 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
       kind: 'boolean',
       description:
         'Required (true) to actually perform a destructive action (cancel/abandon/approve/reject/respond). Omit first to get a preview.',
+    },
+    occurrence: {
+      kind: 'string',
+      description:
+        "For approve/reject/respond: the gate occurrence your answer is for, as action=get reports it ('occurrence: ...'). When given, the answer is refused if the run has since moved to a different pause.",
     },
     // accept deliberately WINS over a simultaneous message (the message is
     // discarded, not recorded): an agent that reflexively attaches a comment to
@@ -298,6 +304,7 @@ function formatRunDetail(run: WorkflowRun): string {
   // AI approver can decide finalize-vs-iterate without parsing prose.
   const rawApproval = run.metadata.approval;
   const attention = runAttention(run);
+  if (attention?.kind === 'awaiting_response') parts.push(`occurrence: ${attention.occurrence}`);
   if (attention?.kind === 'stalled_tool_calls') {
     parts.push('tool calls need attention; work remains running');
     for (const call of attention.calls)
@@ -377,6 +384,11 @@ async function handleWrite(
   }
 
   const message = typeof input.message === 'string' ? input.message.trim() : '';
+  const occurrence = typeof input.occurrence === 'string' ? input.occurrence.trim() : '';
+  const origin: GateAnswerOrigin = {
+    via: 'manage_run',
+    ...(occurrence !== '' ? { expectedGate: expectedGateForOccurrence(run, occurrence) } : {}),
+  };
   // Single finalize-vs-iterate predicate for approve (#2074): accept=true or an
   // empty message means no feedback reaches the gate — used by both the confirm
   // preview and the write path so they can never disagree.
@@ -469,7 +481,7 @@ async function handleWrite(
       // accept=true forces the finalize path (#2074): no feedback reaches the gate,
       // so a loop with a completed condition finalizes from its persisted output on resume.
       const feedback = willFinalize ? undefined : message;
-      const result = await ctx.operations.approveWorkflow(id, feedback, ctx.actor);
+      const result = await ctx.operations.approveWorkflow(id, feedback, ctx.actor, origin);
       const continues = await signalGateResolved(ctx, run, 'approve');
       if (result.type !== 'interactive_loop') {
         return `Approved ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
@@ -480,7 +492,7 @@ async function handleWrite(
     }
     case 'reject': {
       const rejectText = message.length > 0 ? message : 'Rejected';
-      const result = await ctx.operations.rejectWorkflow(id, rejectText, ctx.actor);
+      const result = await ctx.operations.rejectWorkflow(id, rejectText, ctx.actor, origin);
       if (result.cancelled) {
         const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
         return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
@@ -498,7 +510,13 @@ async function handleWrite(
       // gate's structured output as ''.
       const respondText =
         message.length > 0 ? message : decision === 'reject' ? 'Rejected' : undefined;
-      const result = await ctx.operations.respondToWorkflow(id, decision, respondText, ctx.actor);
+      const result = await ctx.operations.respondToWorkflow(
+        id,
+        decision,
+        respondText,
+        ctx.actor,
+        origin
+      );
       if ('cancelled' in result) {
         // decision === 'reject' resolved through the legacy cancel/rework path.
         if (result.cancelled) {

@@ -956,7 +956,9 @@ async function handleWorkflowCommand(
       const comment = rawComment.length > 0 ? rawComment : undefined;
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await operations.approveWorkflow(runId, comment, actor);
+        const result = await operations.approveWorkflow(runId, comment, actor, {
+          via: conversation.platform_type,
+        });
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
         const headline =
           result.type === 'interactive_loop'
@@ -984,7 +986,9 @@ async function handleWorkflowCommand(
       const reason = args.slice(2).join(' ') || 'Rejected';
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await operations.rejectWorkflow(runId, reason, actor);
+        const result = await operations.rejectWorkflow(runId, reason, actor, {
+          via: conversation.platform_type,
+        });
         if (result.cancelled) {
           const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
           return {
@@ -1038,7 +1042,9 @@ async function handleWorkflowCommand(
       const text = rawText.length > 0 ? rawText : decision === 'reject' ? 'Rejected' : undefined;
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await operations.respondToWorkflow(runId, decision, text, actor);
+        const result = await operations.respondToWorkflow(runId, decision, text, actor, {
+          via: conversation.platform_type,
+        });
         if ('cancelled' in result) {
           if (result.cancelled) {
             const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';

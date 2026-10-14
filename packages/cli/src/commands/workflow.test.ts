@@ -11618,7 +11618,7 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { decision: 'rejected', reason: 'not good' },
+          data: { via: 'cli', decision: 'rejected', reason: 'not good' },
         },
       ],
       { step_name: 'gate', reason: 'approval_rejected' },
@@ -11671,6 +11671,8 @@ describe('workflowRejectCommand', () => {
           decisions: [{ id: 'approve' }, { id: 'reject' }],
           decisionsAuthored: true,
           resolved: 'rejected',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
       },
       [
@@ -11686,7 +11688,7 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { decision: 'rejected', reason: 'Rejected' },
+          data: { via: 'cli', decision: 'rejected', reason: 'Rejected' },
         },
       ],
       undefined
@@ -11779,6 +11781,8 @@ describe('workflowRejectCommand', () => {
           onRejectPrompt: 'Fix: $REJECTION_REASON',
           onRejectMaxAttempts: 3,
           resolved: 'rejected',
+          answeredVia: 'cli',
+          answeredAt: expect.any(String),
         },
         rejection_reason: 'needs work',
         rejection_count: 1,
@@ -11787,7 +11791,7 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { decision: 'rejected', reason: 'needs work' },
+          data: { via: 'cli', decision: 'rejected', reason: 'needs work' },
         },
       ],
       undefined
@@ -11887,7 +11891,7 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { decision: 'rejected', reason: 'still bad' },
+          data: { via: 'cli', decision: 'rejected', reason: 'still bad' },
         },
       ],
       { step_name: 'gate', reason: 'approval_rejected' },

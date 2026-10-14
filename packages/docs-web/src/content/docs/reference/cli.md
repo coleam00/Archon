@@ -616,6 +616,11 @@ For a paused gate, human-readable output lists its declared decision IDs and opt
 labels, with an exact `archon workflow respond <run-id> <decision> [text]` command
 for each choice. JSON exposes these choices in `metadata.approval.decisions`.
 
+Once answered, `metadata.approval` also records the surface the answer came through as
+`answeredVia` (`cli`, `api`, `manage_run`, or a chat platform id such as `slack`) and the
+time as `answeredAt`. The `approval_received` event carries the same surface as `via`.
+These are audit facts. They never name who answered, and nothing routes on them.
+
 `workflow status`, `workflow runs`, and `workflow get` report two independent facts:
 
 - **Execution status** (`pending`, `running`, `paused`, `completed`, `failed`, or `cancelled`)
@@ -791,6 +796,9 @@ instead of polling `workflow get` in a loop.
 The response a gate is waiting for does not have to come from a person. An
 orchestrating agent can supply it with `workflow respond` just as a reviewer can; the
 engine only reports that one is owed, and who answers is the waiting host's business.
+Pass the reported `attention.occurrence` back with `--occurrence` on `approve`, `reject`
+or `respond`. The answer is then refused, naming the current occurrence, if the run has
+moved to a different pause in the meantime.
 For an action-required wait, the output carries `attention.kind: "action_required"`,
 the authored message, and the paused node id. Complete the action, then run
 `archon workflow resume <run-id>`; use `archon workflow abandon <run-id>` if the run
@@ -1059,6 +1067,7 @@ Approve a paused workflow run at an interactive approval gate. Optionally provid
 archon workflow approve <run-id>
 archon workflow approve <run-id> "Looks good, proceed"
 archon workflow approve <run-id> --comment "Looks good, proceed"
+archon workflow approve <run-id> --occurrence <occurrence> --json   # refused if the run moved on
 archon workflow approve <run-id> --json   # record approval + ack; does NOT auto-resume inline
 ```
 

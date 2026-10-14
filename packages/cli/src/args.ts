@@ -38,6 +38,7 @@ export const cliArgOptions: CliArgOptions = {
   comment: { type: 'string' },
   reason: { type: 'string' },
   text: { type: 'string' },
+  occurrence: { type: 'string' },
   port: { type: 'string' },
   'download-only': { type: 'boolean' },
   scope: { type: 'string' },

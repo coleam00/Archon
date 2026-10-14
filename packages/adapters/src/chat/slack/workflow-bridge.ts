@@ -577,7 +577,7 @@ export class SlackWorkflowBridge {
           decision,
           undefined,
           await this.resolveRunActor(actorId),
-          pauseId ? { nodeId, pauseId } : nodeId
+          { via: 'slack', expectedGate: pauseId ? { nodeId, pauseId } : nodeId }
         );
         if (!('cancelled' in result)) {
           const resumed = await this.tryResumeWorkflow(runId, actorId);

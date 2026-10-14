@@ -4219,7 +4219,7 @@ export function registerApiRoutes(
       // defaults the recorded comment internally, but "no feedback" must survive
       // so a signal-bearing interactive-loop gate finalizes instead of re-running
       // (#2074, loop_feedback_given).
-      await approveWorkflow(runId, body.comment, actor);
+      await approveWorkflow(runId, body.comment, actor, { via: 'api' });
 
       // Auto-resume: dispatch to the orchestrator so the workflow continues
       // without requiring the user to re-run the workflow command. Mirrors
@@ -4283,7 +4283,7 @@ export function registerApiRoutes(
       // Shared gate logic (events, telemetry, staging/cancel decision). When an
       // on_reject rework is staged the run stays 'paused' with
       // metadata.approval.resolved = 'rejected' (#2075).
-      const result = await rejectWorkflow(runId, reason, actor);
+      const result = await rejectWorkflow(runId, reason, actor, { via: 'api' });
 
       if (result.cancelled) {
         return c.json({
@@ -4365,7 +4365,10 @@ export function registerApiRoutes(
       // Only for decision === 'reject' — every other decision (including 'approve',
       // which stays optional/undefined) is unaffected.
       const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const result = await respondToWorkflow(runId, decision, text, actor, body.expectedGate);
+      const result = await respondToWorkflow(runId, decision, text, actor, {
+        via: 'api',
+        ...(body.expectedGate !== undefined ? { expectedGate: body.expectedGate } : {}),
+      });
 
       if ('cancelled' in result && result.cancelled) {
         return c.json({

@@ -816,6 +816,16 @@ const orderedFlags: FlagHelp[] = [
     ],
   },
   {
+    spec: '--occurrence <id>',
+    description:
+      "For 'workflow approve/reject/respond': refuse the answer unless the run is still paused at\nthis occurrence (the 'occurrence' that 'workflow wait --json' reports)",
+    owners: [
+      { command: 'workflow', subcommand: 'approve' },
+      { command: 'workflow', subcommand: 'reject' },
+      { command: 'workflow', subcommand: 'respond' },
+    ],
+  },
+  {
     spec: '--detach',
     description:
       "Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)",

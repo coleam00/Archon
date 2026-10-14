@@ -71,6 +71,11 @@ the JSON). To record AND continue:
 archon workflow approve <run-id> "ship it"   # no --json: records + auto-resumes; background task!
 ```
 
+When you answer from a run you saw paused earlier, pass the occurrence that
+`workflow wait --json` reported (`attention.occurrence`) as `--occurrence <id>`. If the
+run has since moved to a different pause, the answer is refused and the error names
+the current occurrence, instead of landing on a question you never read.
+
 Or deliberately in two steps:
 
 ```bash
