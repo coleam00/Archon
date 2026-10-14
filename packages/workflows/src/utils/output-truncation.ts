@@ -16,7 +16,8 @@
  * prefers that spill over the clipped preview when folding the store's resume snapshot (#2726) —
  * so a resumed run ordinarily sees the same full text a fresh run would have.
  * This marker is now the fallback: it only surfaces when the spill itself is
- * missing or unreadable (e.g. artifacts were removed out-of-band). Without it,
+ * missing, unreadable (e.g. artifacts were removed out-of-band), or stale (its
+ * byte length differs from the recorded output). Without it,
  * that failure would read "output is not a JSON object — emit JSON containing
  * 'x'", which sends the author to fix a producer that was already correct.
  */
