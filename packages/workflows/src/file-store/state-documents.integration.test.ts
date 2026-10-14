@@ -1,10 +1,44 @@
-import { expect, test } from 'bun:test';
+import { expect, setSystemTime, test } from 'bun:test';
 import { mkdtemp, readFile, readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from './store';
 const roots = trackTempRoots();
+test('prune removes only old non-latest revisions within a mixed-age document', async () => {
+  const root = roots(await mkdtemp(join(tmpdir(), 'file-state-mixed-age-')));
+  const store = await createFileWorkflowStore({ root });
+  const input = {
+    scope: { kind: 'install' } as const,
+    name: 'ledger',
+    writer: { kind: 'surface', via: 'cli' } as const,
+  };
+  setSystemTime(new Date('2000-01-01T00:00:00Z'));
+  try {
+    await store.putStateDocument({ ...input, value: 1, ifRevision: 0 });
+  } finally {
+    setSystemTime();
+  }
+  await store.putStateDocument({ ...input, value: 2, ifRevision: 1 });
+  await store.putStateDocument({ ...input, value: 3, ifRevision: 2 });
+  expect(await store.pruneStateRevisions(30)).toEqual({ count: 1 });
+  const reopened = await createFileWorkflowStore({ root });
+  expect(
+    (await reopened.listStateRevisions(input.scope, input.name)).map(row => [
+      row.revision,
+      row.value,
+    ])
+  ).toEqual([
+    [3, 3],
+    [2, 2],
+  ]);
+  const dir = (await readdir(join(root, 'state')))[0]!;
+  expect((await readdir(join(root, 'state', dir))).sort()).toEqual([
+    '2.json',
+    '3.json',
+    'name.json',
+  ]);
+});
 test.each(['append', 'cas'] as const)(
   'independent processes serialize state %s',
   async mode => {

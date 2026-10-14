@@ -170,6 +170,13 @@ async function removeDocument(path: string): Promise<void> {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
   }
 }
+async function discardPublishedScratch(path: string): Promise<void> {
+  try {
+    await removeDocument(path);
+  } catch (error) {
+    log.warn({ path, err: error }, 'file_store.cleanup_failed');
+  }
+}
 async function publishJson(path: string, value: unknown): Promise<void> {
   const contents = JSON.stringify(value);
   const scratch = `${path}.publish.tmp`;
@@ -181,11 +188,11 @@ async function publishJson(path: string, value: unknown): Promise<void> {
   }
   if (existing !== undefined) {
     if (existing !== contents) throw new Error(`Immutable store document differs: ${path}`);
-    // A crash can leave scratch hard-linked to the published inode. Never truncate it.
-    await removeDocument(scratch);
   } else {
     await mkdir(dirname(path), { recursive: true });
-    const file = await open(scratch, 'w', 0o600);
+    // A leftover scratch can still link to an immutable inode, even after pruning its name.
+    await removeDocument(scratch);
+    const file = await open(scratch, 'wx', 0o600);
     try {
       await file.writeFile(contents);
       await file.sync();
@@ -193,8 +200,8 @@ async function publishJson(path: string, value: unknown): Promise<void> {
       await file.close();
     }
     await retryFileStoreHandles('link', path, () => link(scratch, path));
-    await removeDocument(scratch);
   }
+  await discardPublishedScratch(scratch);
   await syncDirectory(dirname(path));
 }
 async function readLog(
