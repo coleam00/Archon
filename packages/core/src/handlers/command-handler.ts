@@ -951,13 +951,9 @@ async function handleWorkflowCommand(
           message: `Usage: ${cmd('approve <id> [comment]')}\n\nApproves a paused workflow run.`,
         };
       }
-      // Pass the RAW comment through (undefined when the user typed none) —
-      // approveWorkflow defaults the recorded comment internally, but "no
-      // feedback" must survive so a signal-bearing interactive-loop gate
-      // finalizes instead of re-running (#2074, loop_feedback_given). Mirrors
-      // the HTTP route and CLI.
-      const rawComment = args.slice(2).join(' ');
-      const comment = rawComment.length > 0 ? rawComment : undefined;
+      // approveWorkflow owns the empty-comment default and the "no feedback"
+      // reading an interactive-loop gate finalizes on (#2074).
+      const comment = args.slice(2).join(' ');
       try {
         runId = await resolveChatRunId(runId, conversation);
         const result = await operations.approveWorkflow(runId, comment, actor, {
@@ -987,7 +983,7 @@ async function handleWorkflowCommand(
           message: `Usage: ${cmd('reject <id> [reason]')}\n\nRejects a paused workflow run.`,
         };
       }
-      const reason = args.slice(2).join(' ') || 'Rejected';
+      const reason = args.slice(2).join(' ');
       try {
         runId = await resolveChatRunId(runId, conversation);
         const result = await operations.rejectWorkflow(runId, reason, actor, {
@@ -1038,12 +1034,7 @@ async function handleWorkflowCommand(
             `are sugar for the dedicated ${cmd('approve|reject')} commands).`,
         };
       }
-      const rawText = args.slice(3).join(' ');
-      // Mirrors the dedicated /workflow reject command's default: an empty reason
-      // becomes 'Rejected' rather than reaching a new-mode gate's structured
-      // output as ''. Only for decision === 'reject' — respond's other decisions
-      // (including 'approve', which stays optional/undefined) are unaffected.
-      const text = rawText.length > 0 ? rawText : decision === 'reject' ? 'Rejected' : undefined;
+      const text = args.slice(3).join(' ');
       try {
         runId = await resolveChatRunId(runId, conversation);
         const result = await operations.respondToWorkflow(runId, decision, text, actor, {

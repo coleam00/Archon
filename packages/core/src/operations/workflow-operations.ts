@@ -607,6 +607,14 @@ export function attentionAnswerFor(
 }
 
 /**
+ * The text an approve, reject or respond answer carries, or undefined when it carries
+ * none. Whitespace-only text is absent on every verb; explicit text is kept verbatim.
+ */
+function answerText(text: string | undefined): string | undefined {
+  return text !== undefined && text.trim().length > 0 ? text : undefined;
+}
+
+/**
  * The answer `approve`, `reject` or `respond <decision>` stands for at an attention wait,
  * or undefined when the run is not paused at one. `approve` answers a message with its
  * text; otherwise the verb chooses the option of the same id, which the form validates.
@@ -1827,10 +1835,11 @@ export function createWorkflowOperations({
    */
   async function approveWorkflow(
     runId: string,
-    comment: string | undefined,
+    rawComment: string | undefined,
     actor: RunActor,
     origin: GateAnswerOrigin
   ): Promise<ApprovalOperationResult> {
+    const comment = answerText(rawComment);
     const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
     const sugar = attentionSugarRequest(run, 'approve', comment);
     if (sugar !== undefined) return answerRun(run, sugar, actor, origin, 'approve');
@@ -1838,11 +1847,7 @@ export function createWorkflowOperations({
     assertAnswerAdmissible(run, origin);
     const approval = assertApprovable(run);
 
-    // Whitespace-only comments count as absent (mirrors feedbackProvided below):
-    // HTTP/CLI/chat pass the raw comment through since #2074, so '   ' would
-    // otherwise be recorded verbatim where the documented default is 'Approved'.
-    const approvalComment =
-      comment !== undefined && comment.trim().length > 0 ? comment : 'Approved';
+    const approvalComment = comment ?? 'Approved';
     const isInteractiveLoop = approval.type === 'interactive_loop';
 
     // Build the resolution metadata AND the audit events for this gate type.
@@ -1885,10 +1890,10 @@ export function createWorkflowOperations({
         break;
       }
       case 'interactive_loop': {
-        // Finalize-vs-iterate discriminator (#2074): derived from the RAW comment,
+        // Finalize-vs-iterate discriminator (#2074): derived from the given comment,
         // not approvalComment (which defaults to 'Approved') — a bare approve on a
         // signal-bearing gate finalizes at resume; real feedback runs another iteration.
-        const feedbackProvided = comment !== undefined && comment.trim().length > 0;
+        const feedbackProvided = comment !== undefined;
         // loop_user_input keeps the 'Approved' default so the iterate path (non-signaled
         // gates) still feeds the AI an approval token via $LOOP_USER_INPUT. Typed via
         // LoopGateRunMetadata so the key spellings match the executor's resume-time
@@ -1935,8 +1940,8 @@ export function createWorkflowOperations({
         // on_reject" — gets structured output. No workflow authored before
         // #2707 step 1 can have written `decisions:`, so every already-authored
         // gate (bare, or `capture_response`-only) keeps its exact pre-PR plain-
-        // text/empty output regardless of on_reject. `text` is the raw comment
-        // (possibly empty), not `approvalComment`'s display default.
+        // text/empty output regardless of on_reject. `text` is the given comment
+        // (empty when none), not `approvalComment`'s display default.
         const isNewMode = approval.onRejectPrompt == null && approval.decisionsAuthored === true;
         const nodeOutput = isNewMode
           ? JSON.stringify({ decision: 'approve', text: comment ?? '' })
@@ -2022,10 +2027,11 @@ export function createWorkflowOperations({
    */
   async function rejectWorkflow(
     runId: string,
-    reason: string | undefined,
+    rawReason: string | undefined,
     actor: RunActor,
     origin: GateAnswerOrigin
   ): Promise<RejectionOperationResult> {
+    const reason = answerText(rawReason);
     const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
     const sugar = attentionSugarRequest(run, 'reject', reason);
     if (sugar !== undefined) {
@@ -2111,7 +2117,7 @@ export function createWorkflowOperations({
       }
     }
 
-    const rejectReason = reason && reason.length > 0 ? reason : 'Rejected';
+    const rejectReason = reason ?? 'Rejected';
     const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
     const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
     // `!= null` (not `!== undefined`): "no on_reject" reaches this read in two stored
@@ -2250,9 +2256,10 @@ export function createWorkflowOperations({
     runId: string,
     decision: string,
     actor: RunActor,
-    text: string | undefined,
+    rawText: string | undefined,
     origin: GateAnswerOrigin
   ): Promise<ApprovalOperationResult> {
+    const text = answerText(rawText);
     const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
     const sugar = attentionSugarRequest(run, decision, text);
     if (sugar !== undefined) return answerRun(run, sugar, actor, origin, 'respond');
@@ -2277,7 +2284,7 @@ export function createWorkflowOperations({
           via: origin.via,
           ...answerOccurrence(approval),
           decision,
-          comment: text !== undefined && text.trim().length > 0 ? text : decision,
+          comment: text ?? decision,
         },
       },
     ];
