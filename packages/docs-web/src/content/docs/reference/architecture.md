@@ -261,14 +261,13 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
     const deliveryId = c.req.header('x-github-delivery');
 
     try {
-      const payload = await readSignedBody(c.req.raw);
-      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
-
       const signature = c.req.header('x-hub-signature-256');
       if (!signature) {
         return c.json({ error: 'Missing signature header' }, 400);
       }
 
+      const payload = await readSignedBody(c.req.raw);
+      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
       if (payload.kind === 'read_failed') throw payload.error;
       if (payload.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
 
@@ -295,6 +294,27 @@ import { registerGithubWebhookRoute } from './routes/webhooks';
 if (github) {
   registerGithubWebhookRoute(app, github);
   getLog().info('github_webhook_registered');
+}
+```
+
+The route only requires a signature header and bounds and decodes the body. The adapter owns the platform half: verify the signature, parse the event, resolve the sender, and dispatch to the orchestrator. A minimal adapter for your platform follows the same shape as `GitHubAdapter.handleWebhook`:
+
+```typescript
+async handleWebhook(payload: string, signature: string): Promise<void> {
+  if (!this.verifySignature(payload, signature)) return;
+
+  const { conversationId, message, platformUserId } = this.parseEvent(JSON.parse(payload));
+  let userId: string | undefined;
+  try {
+    const user = await findOrCreateUserByPlatformIdentity(this.getPlatformType(), platformUserId);
+    userId = user.id;
+  } catch (err) {
+    getLog().warn({ err }, 'your_platform.user_resolve_failed');
+  }
+
+  await handleMessage(this, conversationId, message, {
+    actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
+  });
 }
 ```
 
