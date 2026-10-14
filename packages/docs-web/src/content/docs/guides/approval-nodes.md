@@ -272,8 +272,9 @@ the gate's rejection rules can instead cancel the run.
 **Reject with feedback**: the required, trimmed text is passed to the workflow as
 `$REJECTION_REASON`, available in the `on_reject.prompt`.
 
-**Container runs**: a container run does not continue on its own after a Web UI
-decision. Run `archon workflow resume <run-id>` in the same project.
+**Container runs and gates paused before an upgrade**: a container run, or a gate
+that was already paused when you upgraded to this version, does not continue on its
+own after a Web UI decision. Run `archon workflow resume <run-id>` in the same project.
 
 ### REST API
 

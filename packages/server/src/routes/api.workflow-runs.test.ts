@@ -2898,6 +2898,10 @@ describe('POST /api/workflows/runs/:runId/answer', () => {
       text: 'dev is ahead',
     });
     expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toBe(
+      `Workflow answered: ${MOCK_PAUSED_RUN.workflow_name}. The run continues on its own.`
+    );
     expect(mockAnswerAttentionWait).toHaveBeenCalledTimes(1);
     expect(mockAnswerAttentionWait.mock.calls[0]?.[1]).toMatchObject({
       pauseId: 'pause-1',

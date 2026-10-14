@@ -3421,7 +3421,7 @@ When the workflow reaches `review-gate`, it pauses and notifies you. Approve or 
 - **Web UI**: Open the paused run in the console. Use **Continue** with an optional comment, or **Reject** and enter the required feedback that flows to `$REJECTION_REASON`. The server continues the run on its own, on the platform that started it; the gate's rejection rules can instead cancel the run.
 - **API**: `POST /api/workflows/runs/<run-id>/approve` or `/reject`
 
-Every path applies the gate's approval or rejection rules. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Container runs are the exception: they do not continue on their own, so run `archon workflow resume <run-id>` in the same project.
+Every path applies the gate's approval or rejection rules. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Container runs, and gates that were already paused when you upgraded to this version, are the exception: they do not continue on their own, so run `archon workflow resume <run-id>` in the same project.
 
 For gates without authored decisions, rejecting cancels the workflow unless
 `on_reject` is configured, which triggers an AI rework prompt and re-pauses for
