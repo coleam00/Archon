@@ -1122,20 +1122,15 @@ export async function loadWorkflowSource(
   } catch (error) {
     throw sourceReadError(captureRoot, error);
   }
-  if (entries.length < manifest.file_count) {
+  const digest = foldDigest(entries);
+  if (digest !== manifest.digest) {
     throw new WorkflowSourceUnavailableError(
       captureRoot,
       new Error(
-        `Captured source is incomplete: expected ${manifest.file_count} files, found ${entries.length}`
+        `Workflow source capture at ${captureRoot} does not match its recorded digest ` +
+          `(expected ${manifest.digest.slice(0, 12)}…, found ${digest.slice(0, 12)}…). ` +
+          'The captured source has changed since the run started.'
       )
-    );
-  }
-  const digest = foldDigest(entries);
-  if (digest !== manifest.digest) {
-    throw new WorkflowSourceIntegrityError(
-      `Workflow source capture at ${captureRoot} does not match its recorded digest ` +
-        `(expected ${manifest.digest.slice(0, 12)}…, found ${digest.slice(0, 12)}…). ` +
-        'The captured source has changed since the run started.'
     );
   }
   if (manifest.engine_version !== BUNDLED_VERSION) {

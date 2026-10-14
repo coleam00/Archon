@@ -416,33 +416,36 @@ for (const read of ['manifest', 'directory', 'file'] as const) {
   });
 }
 
-test('a missing captured file reaches the bound and warns once', async () => {
-  const root = await sourceFixture();
-  await fs.unlink(join(root, 'source.txt'));
-  const candidate = run('missing-entry', 'paused', {
-    wait: {
-      owner: 'node',
-      kind: 'time',
-      nodeId: 'delay',
-      waitingSince: '2026-08-24T10:00:00Z',
-      resumeAt: '2026-08-24T11:00:00Z',
-    },
+for (const replacement of [false, true]) {
+  test(`a missing captured file${replacement ? ' with an equal-count replacement' : ''} reaches the bound and warns once`, async () => {
+    const root = await sourceFixture();
+    await fs.unlink(join(root, 'source.txt'));
+    if (replacement) await fs.writeFile(join(root, 'other.txt'), 'frozen');
+    const candidate = run(`missing-entry-${replacement}`, 'paused', {
+      wait: {
+        owner: 'node',
+        kind: 'time',
+        nodeId: 'delay',
+        waitingSince: '2026-08-24T10:00:00Z',
+        resumeAt: '2026-08-24T11:00:00Z',
+      },
+    });
+    mockListDueWorkflowContinuations.mockResolvedValue([candidate]);
+    mockDeferWorkflowContinuation.mockClear();
+    mockWarn.mockClear();
+    const resume = mock(async () => {
+      await loadWorkflowSource(root);
+      return { kind: 'not-accepted' as const };
+    });
+    for (let i = 0; i < 8; i++)
+      await wakeDueWorkflowContinuations(store, new Date('2026-08-24T12:00:00Z'), resume);
+    expect(resume).toHaveBeenCalledTimes(3);
+    expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(2);
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(mockWarn.mock.calls[0]?.[0]).toMatchObject({ path: root, runId: candidate.id });
+    expect(candidate.status).toBe('paused');
   });
-  mockListDueWorkflowContinuations.mockResolvedValue([candidate]);
-  mockDeferWorkflowContinuation.mockClear();
-  mockWarn.mockClear();
-  const resume = mock(async () => {
-    await loadWorkflowSource(root);
-    return { kind: 'not-accepted' as const };
-  });
-  for (let i = 0; i < 8; i++)
-    await wakeDueWorkflowContinuations(store, new Date('2026-08-24T12:00:00Z'), resume);
-  expect(resume).toHaveBeenCalledTimes(3);
-  expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(2);
-  expect(mockWarn).toHaveBeenCalledTimes(1);
-  expect(mockWarn.mock.calls[0]?.[0]).toMatchObject({ path: root, runId: candidate.id });
-  expect(candidate.status).toBe('paused');
-});
+}
 
 test('blocked rows do not starve later continuations in the same database', async () => {
   const candidates = Array.from({ length: 26 }, (_, i) =>
