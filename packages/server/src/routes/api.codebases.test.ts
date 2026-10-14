@@ -1,3 +1,9 @@
+import { mkdtemp, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { removeTempTree } from '@archon/paths/test-utils';
+import { findRepoRoot as realFindRepoRoot } from '@archon/git';
+import { ProjectRegistrationError } from '@archon/core/handlers/clone';
 import type { ProjectBaseBranchInspection } from '@archon/core';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -10,6 +16,9 @@ import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workf
 // ---------------------------------------------------------------------------
 // Mock setup — must be declared before any dynamic imports of mocked modules
 // ---------------------------------------------------------------------------
+
+// Capture before Bun replaces the shared export with the route mock.
+const detectRealRepoRoot = realFindRepoRoot;
 
 const mockGetCodebase = mock(
   async (_id: string) =>
@@ -66,7 +75,7 @@ mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'sqlite',
   loadConfig: mock(async () => ({})),
-  ProjectRegistrationError: class ProjectRegistrationError extends Error {},
+  ProjectRegistrationError,
   inspectProjectBaseBranch: mockInspectBaseBranch,
   cloneRepository: mockCloneRepository,
   registerRepository: mockRegisterRepository,
@@ -632,36 +641,53 @@ describe('POST /api/codebases', () => {
     expect(mockRegisterRepository).not.toHaveBeenCalled();
   });
 
-  test('when findRepoRoot throws for a NONEXISTENT path, falls through to registerFolder for its clean error', async () => {
-    // findRepoRoot throws for nonexistent paths. That case is benign: fall
-    // through so registerFolder's own existence check produces the clean error.
-    mockFindRepoRoot.mockRejectedValueOnce(new Error('git: command timed out'));
-    mockRegisterFolder.mockImplementationOnce(async () => ({
-      codebaseId: 'folder-uuid-2',
-      alreadyExisted: false,
-    }));
-    mockGetCodebase.mockImplementationOnce(async () => ({
-      ...MOCK_CODEBASE,
-      id: 'folder-uuid-2',
-      repository_url: null,
-      kind: 'folder',
-    }));
-
-    const app = makeApp();
-    // Path must NOT exist on the test host (real existsSync decides the branch).
+  test('when findRepoRoot throws for a missing path, returns 400 without registration', async () => {
     const missingPath = '/nonexistent-archon-test/ambiguous';
-    const response = await app.request('/api/codebases', {
+    mockFindRepoRoot.mockRejectedValueOnce(new Error('git: cannot change directory'));
+    const response = await makeApp().request('/api/codebases', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: missingPath }),
     });
-
-    expect(response.status).toBe(201);
-    expect(mockRegisterFolder).toHaveBeenCalledWith(missingPath, undefined, {
-      baseBranch: undefined,
-    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: `Path does not exist: ${missingPath}` });
+    expect(mockRegisterFolder).not.toHaveBeenCalled();
     expect(mockRegisterRepository).not.toHaveBeenCalled();
+    expect(mockGetCodebase).not.toHaveBeenCalled();
   });
+
+  for (const failure of ['not a git repository-bad-config', 'missing gitdir']) {
+    test(`real Git ${failure} returns 500 without registration`, async () => {
+      const projectPath = await mkdtemp(join(tmpdir(), `archon-${failure}-`));
+      try {
+        if (failure.endsWith('bad-config')) {
+          const init = Bun.spawn(['git', '-C', projectPath, 'init'], {
+            stdout: 'ignore',
+            stderr: 'pipe',
+          });
+          expect(await init.exited).toBe(0);
+          await writeFile(join(projectPath, '.git', 'config'), 'invalid config line\n');
+        } else {
+          await writeFile(join(projectPath, '.git'), `gitdir: ${join(projectPath, 'missing')}\n`);
+        }
+        mockFindRepoRoot.mockImplementationOnce(detectRealRepoRoot);
+        const response = await makeApp().request('/api/codebases', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: projectPath }),
+        });
+        expect(response.status).toBe(500);
+        expect(await response.json()).toEqual({
+          error: expect.stringContaining('Nothing was registered'),
+        });
+        expect(mockRegisterFolder).not.toHaveBeenCalled();
+        expect(mockRegisterRepository).not.toHaveBeenCalled();
+        expect(mockGetCodebase).not.toHaveBeenCalled();
+      } finally {
+        await removeTempTree(projectPath);
+      }
+    });
+  }
 
   test('when findRepoRoot throws for an EXISTING path, returns 500 and registers NOTHING', async () => {
     // A genuine git failure (git missing, timeout, permission) on a path that

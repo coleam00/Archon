@@ -2729,9 +2729,59 @@ incomplete observations. Cancellation can record pending or running nodes and fi
 that are still changing; terminalization does not make the filesystem snapshot atomic.
 You do not need a new YAML field or collector node to obtain these facts.
 
-Workflow-pack adoption remains separate: [#3127](https://github.com/coleam00/Archon/issues/3127)
-owns typed discovery and failure-cause consumption and completion-only outcome formatting.
-A consumer must still depend on the producers whose artifacts it needs.
+#### Reporting on a failed run
+
+A `returns:` node on the success path is skipped when an upstream node fails, leaving
+`terminal_record.returns` unavailable with reason `node_not_completed`. Keep that success
+composer and add a reporter as `returns:`. With `trigger_rule: all_done`, it runs after the
+composer completes or is skipped; `{ from: "$result.output", if_skipped: null }` lets it
+pass the composer's value through or author a not-done report when the binding is `null`.
+`always_run: true` re-executes the reporter on resume, so a report that reads artifacts
+reflects the current pass instead of replaying a cached completion.
+
+```yaml
+name: failure-report
+description: Preserve an authored report after a node failure
+returns: report
+outcome_field: ok
+nodes:
+  - id: fail
+    bash: exit 1
+  - id: result
+    depends_on: [fail]
+    bash: 'printf ''{"ok":true,"summary":"Done"}'''
+  - id: report
+    depends_on: [result]
+    trigger_rule: all_done
+    always_run: true
+    with:
+      result: { from: "$result.output", if_skipped: null }
+    script: |
+      const result = process.env.INPUTS_RESULT;
+      console.log(result === 'null'
+        ? JSON.stringify({ ok: false, summary: 'Not done: a node failed before the result.' })
+        : result);
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        ok: { type: boolean }
+        summary: { type: string }
+      required: [ok, summary]
+```
+
+The run's status stays `failed`; the authored outcome follows the reporter's
+[`outcome_field:`](#workflow-signature-inputs-returns-and-inputs) (`ok: false` here).
+The reporter owns the result schema and validates the value it passes through. Bind only
+the composer: a [failed producer always fails a binding](#reading-across-a-skipped-branch),
+so if the composer itself fails, this reporter fails too. Cancellation runs no further
+nodes, and an executor crash can prevent reporting; this pattern covers ordinary node
+failures that skip the composer, not every terminal path.
+
+An `include:` caller waits on the block's sinks. When this reporter is its only sink and
+completes, nodes depending on the block can run even after a node inside it failed. Gate
+success-only work on the returned verdict, for example `when: "$block.output.ok == true"`.
+The enclosing run still fails and its terminal record still names the failed node.
 
 ### A deterministic producer owns the same contract
 

@@ -446,6 +446,11 @@ In Archon chat, supply the project's actual absolute path:
 /register-project "my-project" /absolute/path/to/project
 ```
 
-For a legacy relative path, this updates the existing registration and preserves its
-ID, kind, settings, and history. Archon does not guess a replacement or rewrite
-legacy rows automatically.
+For a legacy relative path, automatic repair detects the kind from the replacement
+path and preserves the registration's ID, settings, and history. Repair refuses a
+path or kind change that would move Archon storage or worktrees, including
+cross-run state and repo-local worktrees configured with `worktree.path`. Use a
+replacement path and kind that keep those locations unchanged.
+Use `/register-project --folder "my-project" /absolute/path/to/project` to keep a
+folder project as a folder even when the path contains a Git repository.
+Archon does not guess a replacement or rewrite legacy rows automatically.
