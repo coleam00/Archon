@@ -476,6 +476,12 @@ describe('server conversation admission configuration', () => {
     { name: 'default', yaml: '', env: undefined, limit: 10 },
     { name: 'environment only', yaml: '', env: '4', limit: 4 },
     { name: 'invalid environment preserves default', yaml: '', env: 'abc', limit: 10 },
+    ...['-1', '1.5', 'abc', 'true', '{}', '[]', '.inf', '0', 'null', '.nan'].map(value => ({
+      name: `invalid global YAML ${value} preserves default`,
+      yaml: `concurrency:\n  maxConversations: ${value}\n`,
+      env: undefined,
+      limit: 10,
+    })),
   ])('$name admits $limit conversations', async ({ yaml, env, limit }) => {
     const configPath = join(pluginsDir, 'config.yaml');
     await writeFile(configPath, yaml);

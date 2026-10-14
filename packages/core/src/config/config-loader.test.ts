@@ -131,6 +131,24 @@ describe('config-loader', () => {
     expect(mockFsWriteFile).not.toHaveBeenCalled();
   });
 
+  test('invalid conversation limits degrade with diagnostics and cannot be persisted', async () => {
+    mockFsReadFile.mockResolvedValue('concurrency:\n  maxConversations: -1\n');
+    mockLogger.error.mockClear();
+    expect((await loadConfig()).concurrency.maxConversations).toBe(10);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(InvalidConfigError) }),
+      'config_load_error'
+    );
+    await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+      /Invalid concurrency config.*maxConversations/
+    );
+    expect(mockFsWriteFile).not.toHaveBeenCalled();
+    await updateGlobalConfig({ concurrency: { maxConversations: 3 } });
+    expect(Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string)).toEqual({
+      concurrency: { maxConversations: 3 },
+    });
+  });
+
   test('registered streaming default and validated environment override apply', async () => {
     setPlatformPolicies([streamtestPolicy, matrixPolicy]);
     mockFsReadFile.mockResolvedValue('');

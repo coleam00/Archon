@@ -380,11 +380,31 @@ function validateStreamingConfig(parsed: unknown, configPath: string): void {
   parsed.streaming = result.data;
 }
 
+function validateConversationConcurrencyConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.concurrency === undefined) return;
+  if (!isConfigRecord(parsed.concurrency)) {
+    throw new InvalidConfigError(
+      'Invalid concurrency config',
+      configPath,
+      "'concurrency' must be an object."
+    );
+  }
+  const limit = parsed.concurrency.maxConversations;
+  if (limit === undefined) return;
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit <= 0) {
+    throw new InvalidConfigError(
+      'Invalid concurrency config',
+      configPath,
+      "'concurrency.maxConversations' must be a finite positive integer."
+    );
+  }
+}
+
 /**
  * Read ~/.archon/config.yaml, degrading to an empty config when it is missing
  * or unreadable. A missing file is created from the documented template; any
  * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases`,
- * `streaming` or `workflows` block — is logged and the install falls back to defaults.
+ * `streaming`, `concurrency` or `workflows` block — is logged and the install falls back to defaults.
  */
 async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConfig> {
   try {
@@ -393,6 +413,7 @@ async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConf
     validateWorkflowContinuationConfig(parsed, configPath);
     validateModelBindingConfig(parsed, configPath);
     validateStreamingConfig(parsed, configPath);
+    validateConversationConcurrencyConfig(parsed, configPath);
     return (parsed as GlobalConfig | null) ?? {};
   } catch (error) {
     const err = error as { code?: string };
@@ -919,6 +940,7 @@ export async function updateGlobalConfig(
     validateWorkflowContinuationConfig(merged, configPath);
     validateModelBindingConfig(merged, configPath);
     validateStreamingConfig(merged, configPath);
+    validateConversationConcurrencyConfig(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 
     // Serialize to YAML and write
