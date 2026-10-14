@@ -31,6 +31,7 @@ export type {
   ResolveRequest,
   ResolutionMethod,
   IsolationResolution,
+  ResolvedIsolation,
   ExecutionContext,
   WriteBackFinalizeResult,
   WriteBackApplySummary,
