@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { gitOutput } from './check-test-cleanup-drift';
 import { checkRepository, checkSources, installedSdkTypes } from './check-sdk-type-drift';
-import type { SdkTypeException } from './sdk-type-exceptions';
+import { CONFORMANCE, type SdkTypeException } from './sdk-type-exceptions';
 
 const sdkTypes = installedSdkTypes();
 const file = 'packages/example/src/copy.ts';
@@ -52,7 +52,13 @@ test('ledger entries cover exactly one named declaration', () => {
 test('boundary exceptions need an existing conformance test and every entry needs a reason', () => {
   expect(
     checkSources(sources, sdkTypes, [
-      { ...entry, kind: 'boundary', conformanceTest: 'scripts/missing.test.ts' },
+      {
+        ...entry,
+        kind: 'boundary',
+        conformanceTest: CONFORMANCE,
+        sdkModule: '@earendil-works/pi-ai/oauth',
+        comparison: 'fields',
+      },
     ])
   ).toEqual([expect.stringContaining('conformance test does not exist')]);
   expect(checkSources(sources, sdkTypes, [{ ...entry, reason: '' }])).toEqual([
@@ -93,27 +99,28 @@ test('checks nested interfaces, aliases, TSX and declarations but allows imports
 
 const trackTempRoot = trackTempRoots();
 
-test("boundary entries cannot use an unrelated existing test or another copy's proof", () => {
-  const proof = 'scripts/existing.type-test.ts';
-  const boundary = { ...entry, kind: 'boundary' as const, conformanceTest: proof };
-  for (const text of [
-    "test('unrelated', () => {});",
-    "export type BoundaryConformance = { 'another/file.ts:OAuthAuthInfo': never };",
-  ]) {
-    expect(checkSources(new Map([...sources, [proof, text]]), sdkTypes, [boundary])).toEqual([
-      expect.stringContaining('missing conformance proof for'),
-    ]);
+test('boundary comparisons require their SDK owner and the generating test', () => {
+  const boundary: SdkTypeException = {
+    ...entry,
+    kind: 'boundary',
+    sdkModule: '@earendil-works/pi-ai/oauth',
+    comparison: 'fields',
+    conformanceTest: CONFORMANCE,
+  };
+  const withTest = new Map([...sources, [CONFORMANCE, '']]);
+  expect(checkSources(withTest, sdkTypes, [boundary])).toEqual([]);
+  expect(checkSources(withTest, sdkTypes, [{ ...boundary, sdkModule: 'local/tautology' }])).toEqual(
+    [expect.stringContaining('installed SDK owner')]
+  );
+  for (const extension of ['.ts', '.d.ts', '.d.mts', '.d.cts']) {
+    const invalid = { ...boundary, conformanceTest: `scripts/vacuous${extension}` };
+    expect(
+      checkSources(withTest, sdkTypes, [
+        // @ts-expect-error Arbitrary proof paths cannot satisfy the boundary contract.
+        invalid,
+      ])
+    ).toEqual([expect.stringContaining('boundary comparisons must use')]);
   }
-  expect(
-    checkSources(
-      new Map([
-        ...sources,
-        [proof, `export type BoundaryConformance = { '${file}:OAuthAuthInfo': never };`],
-      ]),
-      sdkTypes,
-      [boundary]
-    )
-  ).toEqual([]);
 });
 
 test('repository scan detects an untracked collision before staging', () => {

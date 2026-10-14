@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import ts from 'typescript';
 import { gitOutput } from './check-test-cleanup-drift';
-import { SDK_TYPE_EXCEPTIONS, type SdkTypeException } from './sdk-type-exceptions';
+import { CONFORMANCE, SDK_TYPE_EXCEPTIONS, type SdkTypeException } from './sdk-type-exceptions';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const SDK_PACKAGES = [
@@ -76,25 +76,6 @@ export function isCheckedSource(file: string): boolean {
   return /\.(?:[cm]?ts|tsx)$/.test(file) && !file.startsWith('packages/providers/');
 }
 
-function conformanceKeys(file: string, text: string): Set<string> {
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  const keys = new Set<string>();
-  for (const node of source.statements) {
-    if (
-      ts.isTypeAliasDeclaration(node) &&
-      node.name.text === 'BoundaryConformance' &&
-      node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword) &&
-      ts.isTypeLiteralNode(node.type)
-    ) {
-      for (const member of node.type.members) {
-        if (ts.isPropertySignature(member) && ts.isStringLiteral(member.name))
-          keys.add(member.name.text);
-      }
-    }
-  }
-  return keys;
-}
-
 export function checkSources(
   sources: ReadonlyMap<string, string>,
   sdkTypes: SdkTypeNames,
@@ -134,13 +115,17 @@ export function checkSources(
     if ((collisions.get(key) ?? 0) > 1)
       failures.push(`${key}: multiple declarations cannot share one ledger entry`);
     if (entry.kind === 'boundary') {
-      const proof = sources.get(entry.conformanceTest);
-      if (proof === undefined) {
-        failures.push(`${key}: conformance test does not exist: ${entry.conformanceTest}`);
-      } else if (!conformanceKeys(entry.conformanceTest, proof).has(key)) {
-        failures.push(
-          `${key}: missing conformance proof for this copy in ${entry.conformanceTest}`
-        );
+      if (entry.conformanceTest !== CONFORMANCE) {
+        failures.push(`${key}: boundary comparisons must use ${CONFORMANCE}`);
+      } else if (!sources.has(CONFORMANCE)) {
+        failures.push(`${key}: conformance test does not exist: ${CONFORMANCE}`);
+      }
+      if (
+        !sdkTypes
+          .get(entry.name)
+          ?.some(sdk => entry.sdkModule === sdk || entry.sdkModule.startsWith(`${sdk}/`))
+      ) {
+        failures.push(`${key}: comparison must import this type from its installed SDK owner`);
       }
     }
   }
@@ -153,11 +138,8 @@ export function checkRepository(root = REPO_ROOT): string[] {
     root
   ).split('\0');
   const sources = new Map<string, string>();
-  const proofs = new Set(
-    SDK_TYPE_EXCEPTIONS.flatMap(entry => (entry.kind === 'boundary' ? [entry.conformanceTest] : []))
-  );
   for (const file of files) {
-    if ((isCheckedSource(file) || proofs.has(file)) && existsSync(join(root, file)))
+    if (isCheckedSource(file) && existsSync(join(root, file)))
       sources.set(file, readFileSync(join(root, file), 'utf8'));
   }
   return checkSources(sources, installedSdkTypes(root));

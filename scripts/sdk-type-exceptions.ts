@@ -2,9 +2,17 @@ export type SdkTypeException = {
   file: string;
   name: string;
   reason: string;
-} & ({ kind: 'independent' } | { kind: 'boundary'; conformanceTest: string });
+} & (
+  | { kind: 'independent' }
+  | {
+      kind: 'boundary';
+      sdkModule: string;
+      comparison: 'fields' | 'sdk-subset' | 'local-subset';
+      conformanceTest: typeof CONFORMANCE;
+    }
+);
 
-export const CONFORMANCE = 'packages/providers/src/sdk-type-conformance.type-test.ts';
+export const CONFORMANCE = 'scripts/sdk-type-conformance.test.ts';
 
 export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
   {
@@ -31,6 +39,8 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     kind: 'boundary',
     reason:
       'Unvalidated encrypted vendor blobs must accept legacy and vendor-specific data; Pi token credentials are a narrower supported subset. Core stays SDK-free.',
+    sdkModule: '@earendil-works/pi-ai/oauth',
+    comparison: 'sdk-subset',
     conformanceTest: CONFORMANCE,
   },
   {
@@ -38,6 +48,8 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     name: 'OAuthAuthInfo',
     kind: 'boundary',
     reason: 'Core-owned subscription authorization callback stays SDK-free.',
+    sdkModule: '@earendil-works/pi-ai/oauth',
+    comparison: 'fields',
     conformanceTest: CONFORMANCE,
   },
   {
@@ -46,6 +58,8 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     kind: 'boundary',
     reason:
       'Core subscription flow uses the device-code fields shared with Pi, without its optional timing hints.',
+    sdkModule: '@earendil-works/pi-ai/oauth',
+    comparison: 'fields',
     conformanceTest: CONFORMANCE,
   },
   {
@@ -54,6 +68,8 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     kind: 'boundary',
     reason:
       'Core callbacks accept Pi prompts but require manual code input and allow unlabeled selection options. Core stays SDK-free.',
+    sdkModule: '@earendil-works/pi-ai/oauth',
+    comparison: 'local-subset',
     conformanceTest: CONFORMANCE,
   },
   {
@@ -97,6 +113,8 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     name: 'AgentDefinition',
     kind: 'boundary',
     reason: 'SDK-free inline-agent schema exposes a supported subset of Claude agent settings.',
+    sdkModule: '@anthropic-ai/claude-agent-sdk',
+    comparison: 'fields',
     conformanceTest: CONFORMANCE,
   },
   {
@@ -180,6 +198,8 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     kind: 'boundary',
     reason:
       'SDK-free workflow schema validates known Claude sandbox fields and passes through additional settings.',
+    sdkModule: '@anthropic-ai/claude-agent-sdk',
+    comparison: 'fields',
     conformanceTest: CONFORMANCE,
   },
   {
@@ -194,6 +214,8 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     kind: 'boundary',
     reason:
       'Derived portable Archon effort ladder includes every Claude effort value and additional provider rungs; workflows stay SDK-free.',
+    sdkModule: '@anthropic-ai/claude-agent-sdk',
+    comparison: 'sdk-subset',
     conformanceTest: CONFORMANCE,
   },
   {
