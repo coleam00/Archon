@@ -174,7 +174,12 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
               deleted.push(`${directory(scope, name)}/${number}.json`);
           }
         }
-        return { result: { count: deleted.length }, changes: { deleteDocuments: deleted } };
+        return {
+          result: { count: deleted.length },
+          changes: {
+            deleteDocuments: deleted.flatMap(path => [`${path}.publish.tmp`, path]),
+          },
+        };
       });
     },
   };
