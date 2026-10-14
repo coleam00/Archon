@@ -138,6 +138,49 @@ function compareCapacityWaiters(a: CapacityWaiter, b: CapacityWaiter): number {
   return compareCodeUnits(a.since, b.since) || compareCodeUnits(a.id, b.id);
 }
 
+const checkoutPath = (path: string): string => JSON.stringify(['path', path]);
+
+/**
+ * The checkout a launch locks, when admission can know it before execution starts: the
+ * in-place path, or the reusable worktree an explicit branch names in its codebase. A
+ * worktree lane without a branch gets a checkout of its own, so it never shares one.
+ */
+function launchCheckout(launch: PreparedWorkflowLaunch): string | undefined {
+  const { cwd, isolation } = launch.execution;
+  if (isolation.kind === 'in-place') return checkoutPath(cwd);
+  return isolation.branch === undefined
+    ? undefined
+    : JSON.stringify(['branch', launch.run.codebase_id, isolation.branch]);
+}
+
+/**
+ * The checkouts held by paused runs admitted on a resource, each naming one such run. A
+ * paused run keeps its path lock whether or not it kept its slot, so a start on the same
+ * checkout would fail the lock. A store passes each paused run with its own launch.
+ */
+export function pausedCheckouts(
+  paused: Iterable<{
+    id: string;
+    working_path?: string | null;
+    launch: PreparedWorkflowLaunch;
+  }>
+): Map<string, string> {
+  const held = new Map<string, string>();
+  for (const run of paused) {
+    const own = launchCheckout(run.launch);
+    for (const key of [own, run.working_path ? checkoutPath(run.working_path) : undefined])
+      if (key !== undefined && !held.has(key)) held.set(key, run.id);
+  }
+  return held;
+}
+
+/** A queued start request with what admission needs to decide it. */
+export interface QueuedStart {
+  id: string;
+  hostId: string;
+  launch: PreparedWorkflowLaunch;
+}
+
 /**
  * What one resource slot holds, read inside the store's slot lock. Every store decides
  * admission, drain and resume from this through the functions below, so the rules agree.
@@ -147,23 +190,59 @@ export interface ResourceSlotOccupancy {
   /** Live holders, oldest first. */
   holders: readonly { id: string }[];
   waiters: readonly CapacityWaiter[];
-  /** The oldest queued start request. */
-  queued: string | undefined;
+  /** Queued start requests, oldest first. */
+  queue: readonly QueuedStart[];
+  /** `pausedCheckouts` of the paused runs admitted on the resource. */
+  pausedCheckouts: ReadonlyMap<string, string>;
 }
 
-/** What keeps a new start request from being admitted now. */
-export function resourceStartBlocker(slot: ResourceSlotOccupancy): ResourceBlocker | null {
-  // An older queued request keeps FIFO even when a slot is free.
-  if (slot.queued !== undefined) return { kind: 'request', id: slot.queued };
+/** The paused run whose checkout `launch` would fail to lock. */
+function pausedCheckoutHolder(
+  slot: ResourceSlotOccupancy,
+  launch: PreparedWorkflowLaunch
+): string | undefined {
+  const checkout = launchCheckout(launch);
+  return checkout === undefined ? undefined : slot.pausedCheckouts.get(checkout);
+}
+
+/**
+ * The queued requests that could run now, oldest first. A request whose checkout a paused
+ * run holds keeps its place and is passed over until the checkout frees, so FIFO holds
+ * per checkout and the slot goes to the next request that can run.
+ */
+function runnableQueue(slot: ResourceSlotOccupancy): QueuedStart[] {
+  return slot.queue.filter(start => pausedCheckoutHolder(slot, start.launch) === undefined);
+}
+
+/** What keeps a new start request for `launch` from being admitted now. */
+export function resourceStartBlocker(
+  slot: ResourceSlotOccupancy,
+  launch: PreparedWorkflowLaunch
+): ResourceBlocker | null {
+  // An older request that could run keeps FIFO even when a slot is free.
+  const older = runnableQueue(slot)[0];
+  if (older) return { kind: 'request', id: older.id };
+  const paused = pausedCheckoutHolder(slot, launch);
+  if (paused !== undefined) return { kind: 'run', id: paused };
   const first = slot.holders[0] ?? slot.waiters[0];
   return first && slot.holders.length + slot.waiters.length >= slot.capacity
     ? { kind: 'run', id: first.id }
     : null;
 }
 
-/** How many queued requests a drain may admit now. */
-export function freeResourceSlots(slot: Omit<ResourceSlotOccupancy, 'queued'>): number {
-  return slot.capacity - slot.holders.length - slot.waiters.length;
+/**
+ * The queued requests a drain by `hostId` admits now, in order. It stops at the first
+ * request that could run but belongs to another host: FIFO order is per resource, not
+ * per host.
+ */
+export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): QueuedStart[] {
+  const free = slot.capacity - slot.holders.length - slot.waiters.length;
+  const admitted: QueuedStart[] = [];
+  for (const start of runnableQueue(slot)) {
+    if (admitted.length >= free || start.hostId !== hostId) break;
+    admitted.push(start);
+  }
+  return admitted;
 }
 
 /**
@@ -172,7 +251,8 @@ export function freeResourceSlots(slot: Omit<ResourceSlotOccupancy, 'queued'>): 
  * A paused run that still holds its slot keeps it. A paused run that gave its slot back
  * never lost its admission, so it waits only for holders and for waiters refused before
  * it, never for queued new starts. A failed run's claim ended, so its resume is a new
- * decision and must not pass any promised work: a waiter or a queued request.
+ * decision and must not pass any promised work: a waiter or a queued request that could
+ * run.
  */
 export function resourceResumeBlocker(
   slot: ResourceSlotOccupancy,
@@ -193,7 +273,8 @@ export function resourceResumeBlocker(
       : null;
   }
   if (slot.waiters[0]) return { kind: 'run', id: slot.waiters[0].id };
-  return slot.queued === undefined ? null : { kind: 'request', id: slot.queued };
+  const queued = runnableQueue(slot)[0];
+  return queued ? { kind: 'request', id: queued.id } : null;
 }
 
 /**

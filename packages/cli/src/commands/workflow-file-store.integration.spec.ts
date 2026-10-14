@@ -302,10 +302,7 @@ worktree:
   enabled: false
 nodes:
   - id: proof
-    bash: |
-      i=0
-      while [ ! -f go ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done
-      echo timer >> timer-count
+    bash: echo timer >> timer-count
   - id: hold
     depends_on: [proof]
     wait:
@@ -372,21 +369,20 @@ nodes:
     }
     throw new Error(`Timer run ${id} did not pause`);
   }
-  // A paused timer run gives back its slot, so the first run holds it while `proof` waits.
   const first = await fire(queueConfig);
   expect(first.status).toBe('admitted');
   if (first.status !== 'admitted') throw new Error('First timer was not admitted');
+  await paused(first.runId);
+  // The paused run gave back its slot but still holds the directory, so later fires for it
+  // wait in the queue instead of failing the path lock.
   const queued = await fire(queueConfig);
   expect(queued).toMatchObject({ status: 'queued', blocker: { kind: 'run', id: first.runId } });
   const skipped = await fire(skipConfig);
-  expect(skipped).toMatchObject({
-    status: 'skipped',
-    blocker: { kind: 'request', id: queued.requestId },
-  });
+  expect(skipped).toMatchObject({ status: 'skipped', blocker: { kind: 'run', id: first.runId } });
+  const held = await cli(f, ['trigger', 'drain', '--host', 'timer-host']);
+  expect(held, held.output + held.error).toMatchObject({ code: 0 });
   expect(existsSync(join(f.home, 'store/runs', queued.requestId))).toBe(false);
   expect(existsSync(join(f.home, 'store/runs', skipped.requestId))).toBe(false);
-  writeFileSync(join(f.project, 'go'), '');
-  await paused(first.runId);
   const cancelled = await cli(f, ['workflow', 'abandon', first.runId]);
   expect(cancelled, cancelled.output + cancelled.error).toMatchObject({ code: 0 });
   const drained = await cli(f, ['trigger', 'drain', '--host', 'timer-host']);

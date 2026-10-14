@@ -22,10 +22,11 @@ import {
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
   capacityWaiters,
-  freeResourceSlots,
+  drainableStarts,
+  pausedCheckouts,
   resourceResumeBlocker,
   resourceStartBlocker,
-  type CapacityWaiter,
+  type QueuedStart,
   type ResourceBlocker,
   type ResourceSlotOccupancy,
   validateStartReceiptLimit,
@@ -174,24 +175,31 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     row.holders = holders;
     return row;
   }
-  // Waiters live only on run rows, so finding them scans every run, as the due scan does.
-  async function waiters(resource: string, holders: Slot['holders']): Promise<CapacityWaiter[]> {
-    const candidates: WorkflowRun[] = [];
-    for (const run of await listRunSnapshots(root)) {
-      if (run.status !== 'paused' || holders.some(h => h.kind === 'run' && h.id === run.id))
-        continue;
-      const row = await request(run.id);
-      if (row?.status === 'admitted' && row.resource === resource) candidates.push(run);
-    }
-    return capacityWaiters(candidates);
-  }
+  // Paused runs, and so waiters, live only on run rows: finding them scans every run, as
+  // the due scan does.
   async function occupancy(resource: string): Promise<ResourceSlotOccupancy> {
     const row = await live(resource);
+    const paused: (WorkflowRun & { launch: Request['launch'] })[] = [];
+    for (const run of await listRunSnapshots(root)) {
+      if (run.status !== 'paused') continue;
+      const admitted = await request(run.id);
+      if (admitted?.status === 'admitted' && admitted.resource === resource)
+        paused.push({ ...run, launch: admitted.launch });
+    }
+    const queue: QueuedStart[] = [];
+    for (const id of row.queue) {
+      const queued = await request(id);
+      if (!queued) throw new Error('Queued resource request missing');
+      queue.push(queued);
+    }
     return {
       capacity: row.capacity,
       holders: row.holders,
-      waiters: await waiters(resource, row.holders),
-      queued: row.queue[0],
+      waiters: capacityWaiters(
+        paused.filter(run => !row.holders.some(h => h.kind === 'run' && h.id === run.id))
+      ),
+      queue,
+      pausedCheckouts: pausedCheckouts(paused),
     };
   }
   async function admitExisting(
@@ -221,7 +229,8 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     const resource = await slot(intent.resource, intent.capacity);
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
-    const blocker = resourceStartBlocker(await occupancy(intent.resource));
+    const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
+    const blocker = resourceStartBlocker(await occupancy(intent.resource), launch);
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
     const row: Request = {
       id: intent.launch.run.id,
@@ -230,7 +239,7 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
       overlap: intent.overlap,
       status: blocker && intent.overlap === 'skip' ? 'skipped' : 'queued',
       blocker,
-      launch: preparedWorkflowLaunchSchema.parse(intent.launch),
+      launch,
       position: head.seq + 1,
     };
     documents[pathFor('requests', row.id)] = row;
@@ -377,15 +386,11 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
     drainResourceStarts: options =>
       write(async (tx, runs) => {
-        let free = freeResourceSlots(await tx.occupancy(options.resource));
-        const resource = await tx.slot(options.resource);
         const admitted: ResourceStartDisposition[] = [];
-        while (free > 0 && resource.queue[0]) {
-          const row = await tx.request(resource.queue[0]);
+        for (const start of drainableStarts(await tx.occupancy(options.resource), options.hostId)) {
+          const row = await tx.request(start.id);
           if (!row) throw new Error('Queued resource request missing');
-          if (row.hostId !== options.hostId) break;
           admitted.push(await tx.admitExisting(row, runs));
-          free -= 1;
         }
         return admitted;
       }),

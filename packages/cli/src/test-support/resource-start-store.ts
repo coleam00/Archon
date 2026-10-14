@@ -2,7 +2,8 @@ import {
   validateStartReceiptLimit,
   compareStartReceipts,
   capacityWaiters,
-  freeResourceSlots,
+  drainableStarts,
+  pausedCheckouts,
   resourceResumeBlocker,
   resourceStartBlocker,
   ResourceSlotCapacityConflictError,
@@ -18,6 +19,7 @@ import { WorkflowNotResumableError, type IWorkflowStore } from '@archon/workflow
 import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
+  type PreparedWorkflowLaunch,
   type ResourceStartDisposition,
   type ResourceStartIntent,
 } from '@archon/workflows/schemas/resource-start';
@@ -54,10 +56,12 @@ export function createInMemoryResourceStartStore(
   const occupancy = async (resource: string): Promise<ResourceSlotOccupancy> => {
     const holders: { id: string }[] = [];
     const candidates: WorkflowRun[] = [];
+    const paused: (WorkflowRun & { launch: PreparedWorkflowLaunch })[] = [];
     for (const request of requests.values()) {
       if (request.resource !== resource || request.status !== 'admitted') continue;
       const run = await getRun(request.id);
       if (!run || isTerminalRunStatus(run.status)) continue;
+      if (run.status === 'paused') paused.push({ ...run, launch: request.launch });
       if (released.has(run.id)) candidates.push(run);
       else holders.push({ id: run.id });
     }
@@ -65,9 +69,10 @@ export function createInMemoryResourceStartStore(
       capacity: capacities.get(resource) ?? 1,
       holders,
       waiters: capacityWaiters(candidates),
-      queued: [...requests.values()].find(
+      queue: [...requests.values()].filter(
         request => request.resource === resource && request.status === 'queued'
-      )?.id,
+      ),
+      pausedCheckouts: pausedCheckouts(paused),
     };
   };
   const admit = async (intent: ResourceStartIntent): Promise<ResourceStartDisposition> => {
@@ -77,10 +82,10 @@ export function createInMemoryResourceStartStore(
     const previous = requests.get(intent.launch.run.id);
     if (previous) return decision(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const blocker = resourceStartBlocker({
-      ...(await occupancy(intent.resource)),
-      capacity: intent.capacity,
-    });
+    const blocker = resourceStartBlocker(
+      { ...(await occupancy(intent.resource)), capacity: intent.capacity },
+      launch
+    );
     const request: ResourceStartRequestInspection = {
       id: launch.run.id,
       resource: intent.resource,
@@ -146,16 +151,14 @@ export function createInMemoryResourceStartStore(
       resource,
       hostId,
     }): ReturnType<IResourceStartStore['drainResourceStarts']> => {
-      let free = freeResourceSlots(await occupancy(resource));
       const admitted: ResourceStartDisposition[] = [];
-      for (const request of requests.values()) {
-        if (request.resource !== resource || request.status !== 'queued') continue;
-        if (free <= 0 || request.hostId !== hostId) break;
+      for (const { id } of drainableStarts(await occupancy(resource), hostId)) {
+        const request = requests.get(id);
+        if (!request) throw new Error('Queued resource request missing');
         await createRun(request.launch.run);
         request.status = 'admitted';
         request.blocker = null;
         admitted.push(decision(request));
-        free--;
       }
       return admitted;
     },

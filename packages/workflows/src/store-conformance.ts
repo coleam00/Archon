@@ -237,7 +237,12 @@ export function describeWorkflowStoreConformance(
       await harness?.close();
     });
 
-    const launch = (id = crypto.randomUUID()): PreparedWorkflowLaunch => ({
+    type Lane = PreparedWorkflowLaunch['execution']['isolation'];
+    /** Each launch runs in a checkout of its own unless `checkout` names a shared one. */
+    const launch = (
+      id = crypto.randomUUID(),
+      checkout: { cwd?: string; isolation?: Lane } = {}
+    ): PreparedWorkflowLaunch => ({
       version: 2,
       run: {
         id,
@@ -247,21 +252,22 @@ export function describeWorkflowStoreConformance(
         metadata: {},
       },
       execution: {
-        cwd: '/conformance',
+        cwd: checkout.cwd ?? `/conformance/${id}`,
         conversationId: CONFORMANCE_CONVERSATION_ID,
-        isolation: { kind: 'in-place' },
+        isolation: checkout.isolation ?? { kind: 'in-place' },
       },
     });
     const start = (
       overlap: 'queue' | 'skip' = 'queue',
       hostId = 'host',
-      capacity = 1
+      capacity = 1,
+      checkout?: { cwd?: string; isolation?: Lane }
     ): ResourceStartIntent => ({
       resource: 'resource',
       capacity,
       hostId,
       overlap,
-      launch: launch(),
+      launch: launch(undefined, checkout),
     });
     const binding: ResourceStartBindingIntent = {
       bindingId: 'binding',
@@ -500,6 +506,49 @@ export function describeWorkflowStoreConformance(
       expect(await store.cancelWorkflowRun(a)).toEqual({ cancelled: true });
       expect(await store.admitResourceStart(start())).toMatchObject({ status: 'admitted' });
       expect(await drain()).toEqual([]);
+    });
+    test('a start on a checkout a paused run holds keeps its place while the slot goes on', async () => {
+      const shared = { cwd: '/conformance/shared' };
+      const paused = await admitPaused(start('queue', 'host', 1, shared));
+      const first = start('queue', 'host', 1, shared),
+        other = start(),
+        later = start('queue', 'host', 1, shared);
+      for (const intent of [first, other, later])
+        expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'queued' });
+      expect(await store.releasePausedRunSlot(paused, gateCursor)).toEqual({ released: true });
+      expect(await drain()).toEqual([
+        { status: 'admitted', requestId: other.launch.run.id, runId: other.launch.run.id },
+      ]);
+      expect(await store.getWorkflowRun(first.launch.run.id)).toBeNull();
+      await end(other.launch.run.id);
+      // A new start that would fail the path lock is skipped behind the paused run.
+      expect(await store.admitResourceStart(start('skip', 'host', 1, shared))).toMatchObject({
+        status: 'skipped',
+        blocker: { kind: 'run', id: paused },
+      });
+      // The free slot still passes over the held checkout.
+      expect(await drain()).toEqual([]);
+      expect(await store.cancelWorkflowRun(paused)).toEqual({ cancelled: true });
+      expect(await drain()).toEqual([
+        { status: 'admitted', requestId: first.launch.run.id, runId: first.launch.run.id },
+      ]);
+      expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+        { id: later.launch.run.id },
+      ]);
+    });
+    test('an explicit worktree branch is one checkout; a lane without one never shares', async () => {
+      const lane = { isolation: { kind: 'worktree' as const, branch: 'lane' } };
+      const paused = await admitPaused(start('queue', 'host', 1, lane));
+      expect(await store.releasePausedRunSlot(paused, gateCursor)).toEqual({ released: true });
+      expect(await store.admitResourceStart(start('queue', 'host', 1, lane))).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: paused },
+      });
+      expect(
+        await store.admitResourceStart(
+          start('queue', 'host', 1, { isolation: { kind: 'worktree' } })
+        )
+      ).toMatchObject({ status: 'admitted' });
     });
     test('capacity waiters keep their refusal order and block a failed run resume', async () => {
       const first = await admitPaused(start());

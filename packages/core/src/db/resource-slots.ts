@@ -1,8 +1,13 @@
 import {
   ResourceSlotCapacityConflictError,
   capacityWaiters,
+  pausedCheckouts,
   type ResourceSlotOccupancy,
 } from '@archon/workflows/resource-start-store';
+import {
+  preparedWorkflowLaunchSchema,
+  type PreparedWorkflowLaunch,
+} from '@archon/workflows/schemas/resource-start';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
  *
@@ -196,7 +201,8 @@ export async function removeResourceSlotHolder(
 
 /**
  * What a run-start slot holds, read under its lock (`lockResourceSlot`): live holders,
- * capacity waiters, and the oldest queued start request.
+ * capacity waiters, the checkouts paused runs hold, and the queued start requests. The
+ * queued rows are locked too, so a concurrent withdrawal cannot race their admission.
  */
 export async function resourceStartOccupancy(
   query: TransactionQuery,
@@ -205,30 +211,43 @@ export async function resourceStartOccupancy(
 ): Promise<ResourceSlotOccupancy> {
   const holders = await liveResourceSlotHolders(query, resource);
   const holding = new Set(holders.map(holder => holder.id));
-  const paused = await query<{ id: string; metadata: unknown }>(
-    `SELECT w.id, w.metadata FROM remote_agent_workflow_runs w
+  const paused = await query<{
+    id: string;
+    metadata: unknown;
+    working_path: string | null;
+    launch: unknown;
+  }>(
+    `SELECT w.id, w.metadata, w.working_path, q.launch FROM remote_agent_workflow_runs w
        JOIN remote_agent_resource_start_requests q ON q.id = w.id
       WHERE q.resource_key = $1 AND q.status = 'admitted' AND w.status = 'paused'`,
     [resource]
   );
-  const queued = await query<{ id: string }>(
-    `SELECT id FROM remote_agent_resource_start_requests
+  const queued = await query<{ id: string; host_id: string; launch: unknown }>(
+    `SELECT id, host_id, launch FROM remote_agent_resource_start_requests
       WHERE resource_key = $1 AND status = 'queued'
-      ORDER BY queue_position LIMIT 1`,
+      ORDER BY queue_position${getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : ''}`,
     [resource]
   );
+  const pausedRuns = paused.rows.map(row => ({
+    id: String(row.id),
+    status: 'paused' as const,
+    metadata: parseJsonObject(row.metadata) ?? {},
+    working_path: row.working_path,
+    launch: parseLaunch(row.launch),
+  }));
   return {
     capacity,
     holders,
-    waiters: capacityWaiters(
-      paused.rows
-        .map(row => ({
-          id: String(row.id),
-          status: 'paused' as const,
-          metadata: parseJsonObject(row.metadata) ?? {},
-        }))
-        .filter(run => !holding.has(run.id))
-    ),
-    queued: queued.rows[0]?.id,
+    waiters: capacityWaiters(pausedRuns.filter(run => !holding.has(run.id))),
+    queue: queued.rows.map(row => ({
+      id: String(row.id),
+      hostId: String(row.host_id),
+      launch: parseLaunch(row.launch),
+    })),
+    pausedCheckouts: pausedCheckouts(pausedRuns),
   };
+}
+
+function parseLaunch(value: unknown): PreparedWorkflowLaunch {
+  return preparedWorkflowLaunchSchema.parse(typeof value === 'string' ? JSON.parse(value) : value);
 }
