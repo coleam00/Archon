@@ -762,9 +762,10 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
         const pathExists = await worktreeExists(toWorktreePath(env.working_path));
         if (!pathExists) {
           // Even with the directory gone, marking the env destroyed invalidates
-          // the live run's resume handle — same lock as the merged/stale branches.
+          // the live run's resume handle. A failed run's lock is instead settled by
+          // the merged and stale checks below, which handle a missing worktree.
           const liveRun = await isolationEnvDb.getLiveRunOwningEnv(env.id);
-          if (liveRun) {
+          if (liveRun && !isolationEnvDb.isSettleableRunStatus(liveRun.status)) {
             report.skipped.push({
               id: env.id,
               reason: `path missing but run ${liveRun.id.slice(0, 8)} is ${liveRun.status}`,
@@ -775,14 +776,16 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
             );
             continue;
           }
-          // Path doesn't exist - call removeEnvironment to clean up branch and mark as destroyed
-          const removeResult = await removeEnvironment(env.id, { force: false });
-          if (removeResult.skippedReason) {
-            report.skipped.push({ id: env.id, reason: removeResult.skippedReason });
-          } else {
-            report.removed.push(`${env.id} (path missing)`);
+          if (!liveRun) {
+            // Path doesn't exist - call removeEnvironment to clean up branch and mark as destroyed
+            const removeResult = await removeEnvironment(env.id, { force: false });
+            if (removeResult.skippedReason) {
+              report.skipped.push({ id: env.id, reason: removeResult.skippedReason });
+            } else {
+              report.removed.push(`${env.id} (path missing)`);
+            }
+            continue;
           }
-          continue;
         }
 
         // Same merged decision the `--merged` sweep uses, PR state included: this

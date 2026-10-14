@@ -3403,6 +3403,70 @@ describe('failed-run lock release', () => {
     expect(mockDestroy).not.toHaveBeenCalled();
   });
 
+  // The count mock answers only for the revs that shape should ask about, so a sweep
+  // that skipped the worktree-gone or branch-gone shape would see 0 and remove the env.
+  test.each([
+    ['worktree is gone', false, true, '/workspace/repo', ['refs/heads/stale-failed']],
+    ['branch is gone', true, false, '/workspace/worktrees/task-1', ['HEAD']],
+  ] as const)(
+    'the stale sweep keeps unpushed commits when the %s',
+    async (_shape, worktreeLeft, branchLeft, countPath, countRevs) => {
+      mockListByCodebaseWithAge.mockResolvedValueOnce([
+        makeEnvironmentWithAge({ branch_name: 'stale-failed', days_since_activity: 30 }),
+      ]);
+      mockWorktreeExists.mockResolvedValue(worktreeLeft);
+      mockLocalBranchExists.mockResolvedValue(branchLeft);
+      releasedByTheSweep();
+      mockCountCommitsMissingFromRemotes.mockImplementation((path, revs) =>
+        Promise.resolve(path === countPath && Bun.deepEquals(revs, countRevs) ? 1 : 0)
+      );
+
+      const result = await cleanupStaleWorktrees('codebase-123', '/workspace/repo');
+
+      expect(result.skipped).toEqual([
+        { branchName: 'stale-failed', reason: 'failed run run-fail has 1 unpushed commit(s)' },
+      ]);
+      expect(result.removed).toEqual([]);
+      expect(mockDestroy).not.toHaveBeenCalled();
+    }
+  );
+
+  test('the scheduled sweep releases a failed run whose worktree is gone once it is stale', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    mockWorktreeExists.mockResolvedValue(false);
+    mockGetLiveRunOwningEnv
+      .mockResolvedValueOnce(FAILED_RUN)
+      .mockResolvedValueOnce(FAILED_RUN)
+      .mockResolvedValueOnce(null);
+
+    const report = await runScheduledCleanup();
+
+    expect(report.removed).toEqual(['env-stale-failed (stale)']);
+    expect(report.releasedFailedRuns).toEqual([
+      { id: 'env-stale-failed', runId: FAILED_RUN.id, reason: 'stale' },
+    ]);
+    expect(mockCountCommitsMissingFromRemotes).toHaveBeenCalledWith('/workspace/repo', [
+      'refs/heads/stale-failed',
+    ]);
+    expect(mockUpdateStatus).toHaveBeenCalledWith('env-stale-failed', 'destroyed');
+  });
+
+  test('the scheduled sweep keeps a failed run whose worktree is gone while inside the window', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+    mockWorktreeExists.mockResolvedValue(false);
+    mockGetLiveRunOwningEnv.mockResolvedValue(FAILED_RUN);
+
+    const report = await runScheduledCleanup();
+
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-failed',
+      reason: 'stale but run run-fail is failed',
+    });
+    expect(report.removed).toEqual([]);
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+  });
+
   test('the stale sweep keeps a failed run still inside the window', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
     mockGetLiveRunOwningEnv.mockResolvedValue(FAILED_RUN);
