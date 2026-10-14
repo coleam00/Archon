@@ -562,7 +562,7 @@ async function resolveCommandContentForScan(
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') return null;
-      return { path: commandPath, message: err.message, operation: 'read' };
+      return { path: commandPath, message: err.message, operation: 'read', cause: error };
     }
   }
 
@@ -584,7 +584,7 @@ async function resolveCommandContentForScan(
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') continue;
-      return { path: dir, message: err.message, operation: 'inspect' };
+      return { path: dir, message: err.message, operation: 'inspect', cause: error };
     }
     const match = entries.find(e => e.commandName === commandName);
     if (!match) continue;
@@ -593,7 +593,7 @@ async function resolveCommandContentForScan(
       return await readFile(commandPath, 'utf-8');
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      return { path: commandPath, message: err.message, operation: 'read' };
+      return { path: commandPath, message: err.message, operation: 'read', cause: error };
     }
   }
 
@@ -608,7 +608,7 @@ async function resolveCommandContentForScan(
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return null;
-    return { path: defaultsDir, message: err.message, operation: 'inspect' };
+    return { path: defaultsDir, message: err.message, operation: 'inspect', cause: error };
   }
   const match = entries.find(e => e.commandName === commandName);
   if (!match) return null;
@@ -617,7 +617,7 @@ async function resolveCommandContentForScan(
     return await readFile(commandPath, 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    return { path: commandPath, message: err.message, operation: 'read' };
+    return { path: commandPath, message: err.message, operation: 'read', cause: error };
   }
 }
 

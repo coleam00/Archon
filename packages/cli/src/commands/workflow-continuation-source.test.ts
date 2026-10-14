@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { expect, mock, test } from 'bun:test';
+import { expect, mock, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { BUNDLED_VERSION } from '@archon/paths/bundled-build';
 import {
@@ -20,10 +20,11 @@ mock.module('@archon/paths', () => ({
 }));
 const stdout = mock(async (_text: string) => undefined);
 mock.module('../utils/stdout', () => ({ writeStdout: stdout }));
-const { workflowContinuationCommand } = await import('./workflow-continuations');
+const { workflowContinuationCommand, workflowWakeScheduleConfig } =
+  await import('./workflow-continuations');
 const trackTempRoot = trackTempRoots();
 
-for (const source of ['missing', 'valid'] as const) {
+for (const source of ['missing', 'valid', 'scheduled'] as const) {
   test(`CLI wake refuses a foreign working directory with ${source} source`, async () => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'cli-foreign-source-')));
     const sourcePath = join(root, 'source');
@@ -105,7 +106,32 @@ for (const source of ['missing', 'valid'] as const) {
     } as unknown as WorkflowHost;
     warn.mockClear();
     stdout.mockClear();
-    for (let i = 0; i < 8; i++) await workflowContinuationCommand(host, 'wake', [], { json: true });
+    if (source === 'scheduled') {
+      const config = workflowWakeScheduleConfig();
+      expect(config.programArguments).toContain('--watch');
+      stdout.mockImplementation(async () => {
+        if (stdout.mock.calls.length === 8) process.emit('SIGTERM');
+      });
+      const originalTimeout = globalThis.setTimeout;
+      const timers: {
+        setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+      } = globalThis;
+      const timer = spyOn(timers, 'setTimeout').mockImplementation(callback =>
+        originalTimeout(callback, 0)
+      );
+      try {
+        await workflowContinuationCommand(host, 'wake', [], {
+          json: true,
+          watch: config.programArguments.includes('--watch'),
+        });
+      } finally {
+        timer.mockRestore();
+        stdout.mockImplementation(async () => undefined);
+      }
+    } else {
+      for (let i = 0; i < 8; i++)
+        await workflowContinuationCommand(host, 'wake', [], { json: true });
+    }
     expect(getRun).toHaveBeenCalledTimes(source === 'valid' ? 8 : 3);
     expect(defer).toHaveBeenCalledTimes(source === 'valid' ? 8 : 2);
     expect(execute).not.toHaveBeenCalled();

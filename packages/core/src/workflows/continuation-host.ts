@@ -1,6 +1,10 @@
 import { WorkflowSourceIntegrityError } from '@archon/workflows/executor';
 import type { WorkflowHost } from './host-store';
-import { WorkflowNotResumableError, type IWorkflowStore } from '@archon/workflows/store';
+import {
+  WorkflowNotResumableError,
+  resumeCursorMatches,
+  type IWorkflowStore,
+} from '@archon/workflows/store';
 import { startRunLiveOwner, RunLiveOwnerAlreadyOwnedError } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { resolveRunWorkflow } from './resolve-run-workflow';
@@ -134,7 +138,8 @@ type ContinuationStore = Pick<
   IWorkflowStore,
   'listDueWorkflowContinuations' | 'deferWorkflowContinuation'
 >;
-const structuralFailures = new Map<string, number>();
+const structuralFailures = new Map<string, { cursor: WorkflowResumeCursor; count: number }>();
+const warnedRuns = new Set<string>();
 const MAX_SOURCE_FAILURES = 3;
 
 export async function wakeDueWorkflowContinuations(
@@ -143,11 +148,18 @@ export async function wakeDueWorkflowContinuations(
   resume: (run: WorkflowRun, cursor: WorkflowResumeCursor) => Promise<ContinuationAdmission>
 ): Promise<ContinuationWakeOutcome[]> {
   const blockedCount = [...structuralFailures.values()].filter(
-    count => count >= MAX_SOURCE_FAILURES
+    state => state.count >= MAX_SOURCE_FAILURES
   ).length;
   // Blocked rows remain due for other hosts; fetch past them so they cannot starve this host.
   const due = (await store.listDueWorkflowContinuations(now, 25 + blockedCount))
-    .filter(run => (structuralFailures.get(run.id) ?? 0) < MAX_SOURCE_FAILURES)
+    .filter(run => {
+      const state = structuralFailures.get(run.id);
+      if (state && !resumeCursorMatches(run, state.cursor)) {
+        structuralFailures.delete(run.id);
+        return true;
+      }
+      return (state?.count ?? 0) < MAX_SOURCE_FAILURES;
+    })
     .slice(0, 25);
   return Promise.all(
     due.map(async (run): Promise<ContinuationWakeOutcome> => {
@@ -175,13 +187,16 @@ export async function wakeDueWorkflowContinuations(
             ? outcome.error
             : undefined;
       if (sourceError) {
-        const count = (structuralFailures.get(run.id) ?? 0) + 1;
-        structuralFailures.set(run.id, count);
+        const count = (structuralFailures.get(run.id)?.count ?? 0) + 1;
+        structuralFailures.set(run.id, { cursor, count });
         if (count >= MAX_SOURCE_FAILURES) {
-          log.warn(
-            { err: sourceError, runId: run.id, path: sourceError.path, attempts: count },
-            `This host stopped automatically resuming run ${run.id}: frozen workflow source cannot be verified (${sourceError.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${run.id}, or abandon with archon workflow abandon ${run.id}.`
-          );
+          if (!warnedRuns.has(run.id)) {
+            warnedRuns.add(run.id);
+            log.warn(
+              { err: sourceError, runId: run.id, path: sourceError.path, attempts: count },
+              `This host stopped automatically resuming run ${run.id}: frozen workflow source cannot be verified (${sourceError.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${run.id}, or abandon with archon workflow abandon ${run.id}.`
+            );
+          }
           return outcome;
         }
       } else if (outcome.kind === 'accepted') {

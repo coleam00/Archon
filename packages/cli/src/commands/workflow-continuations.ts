@@ -39,7 +39,7 @@ export function workflowWakeScheduleConfig(intervalSeconds = 5): NativeScheduleC
   const [executable, ...prefix] = cliProgramArguments();
   return {
     id: `workflow-wake-${createHash('sha256').update(archonHome).digest('hex')}`,
-    programArguments: [executable, ...prefix, 'workflow', 'wake', '--json'],
+    programArguments: [executable, ...prefix, 'workflow', 'wake', '--watch', '--json'],
     workingDirectory: archonHome,
     archonHome,
     schedule: { intervalSeconds, runAtLoad: true },

@@ -657,3 +657,275 @@ test('blocked rows do not starve later continuations in the same database', asyn
   expect(resume).toHaveBeenCalledTimes(1);
   expect(outcomes).toEqual([expect.objectContaining({ runId: 'queue-25', kind: 'accepted' })]);
 });
+
+test('a manually recovered run can wake at its next occurrence and warns only once per process', async () => {
+  const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
+  const root = trackTempRoot(await fs.mkdtemp(join(tmpdir(), 'continuation-recovery-')));
+  const persisted = await createFileWorkflowStore({ root });
+  const candidate = await persisted.createWorkflowRun({
+    workflow_name: 'deliver',
+    user_message: '',
+  });
+  await persisted.claimPendingWorkflowRun(candidate.id);
+  const wait = {
+    owner: 'node' as const,
+    kind: 'time' as const,
+    nodeId: 'delay',
+    waitingSince: '2026-08-24T10:00:00Z',
+    resumeAt: '2026-08-24T11:00:00Z',
+  };
+  await persisted.pauseWorkflowRunForWait(candidate.id, wait, {
+    kind: 'started',
+    stepName: 'delay',
+  });
+  mockWarn.mockClear();
+  const refuse = mock(async () => ({
+    kind: 'unavailable' as const,
+    reason: 'source unavailable',
+    sourceError: new WorkflowSourceUnavailableError('/foreign/source', new Error('missing')),
+  }));
+  for (let i = 0; i < 4; i++)
+    await wakeDueWorkflowContinuations(
+      persisted,
+      new Date(Date.parse('2026-08-24T12:00:00Z') + i * 60_000),
+      refuse
+    );
+  expect(refuse).toHaveBeenCalledTimes(3);
+  await persisted.resumeWorkflowRun(candidate.id);
+  await persisted.pauseWorkflowRunForWait(
+    candidate.id,
+    { ...wait, waitingSince: '2026-08-24T12:00:00Z', resumeAt: '2026-08-24T13:00:00Z' },
+    { kind: 'started', stepName: 'delay' }
+  );
+  const accept = mock(async (_run: WorkflowRun, cursor: WorkflowResumeCursor) => {
+    expect(cursor).toEqual({ kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T13:00:00Z' });
+    const resumed = await persisted.resumeWorkflowRun(candidate.id, cursor);
+    return {
+      kind: 'accepted' as const,
+      run: resumed,
+      settled: Promise.resolve({ success: true as const, workflowRunId: candidate.id }),
+    };
+  });
+  expect(
+    (await wakeDueWorkflowContinuations(persisted, new Date('2026-08-24T14:00:00Z'), accept))[0]
+      ?.kind
+  ).toBe('accepted');
+  expect(accept).toHaveBeenCalledTimes(1);
+  await persisted.pauseWorkflowRunForWait(
+    candidate.id,
+    {
+      ...wait,
+      nodeId: 'later',
+      waitingSince: '2026-08-24T14:00:00Z',
+      resumeAt: '2026-08-24T15:00:00Z',
+    },
+    { kind: 'started', stepName: 'later' }
+  );
+  for (let i = 0; i < 4; i++)
+    await wakeDueWorkflowContinuations(
+      persisted,
+      new Date(Date.parse('2026-08-24T16:00:00Z') + i * 60_000),
+      refuse
+    );
+  expect(refuse).toHaveBeenCalledTimes(6);
+  expect(
+    mockWarn.mock.calls.filter(([, message]) => message.includes('This host stopped'))
+  ).toHaveLength(1);
+  expect((await persisted.getWorkflowRun(candidate.id))?.status).toBe('paused');
+});
+
+async function discoveryRecoveryFixture(
+  id: string,
+  files: Record<string, string>,
+  config = DEFAULT_WORKFLOW_SOURCE_CONFIG,
+  workflowName = 'deliver'
+) {
+  const root = await sourceFixture();
+  const manifest = { ...(await loadWorkflowSource(root)).manifest };
+  await fs.unlink(join(root, 'source.txt'));
+  const digest = createHash('sha256');
+  for (const [relative, content] of Object.entries(files).sort(([a], [b]) => a.localeCompare(b))) {
+    await fs.mkdir(join(root, relative, '..'), { recursive: true });
+    await fs.writeFile(join(root, relative), content);
+    digest.update(`${relative}\0${createHash('sha256').update(content).digest('hex')}\n`);
+  }
+  manifest.digest = digest.digest('hex');
+  manifest.file_count = Object.keys(files).length;
+  manifest.byte_count = Object.values(files).reduce(
+    (total, content) => total + Buffer.byteLength(content),
+    0
+  );
+  manifest.source_config = config;
+  await fs.writeFile(join(root, 'manifest.json'), JSON.stringify(manifest));
+  const capture = await loadWorkflowSource(root);
+  const candidate = run(id, 'paused', {
+    workflow_source: { ...capture.manifest, root },
+    wait: {
+      owner: 'node',
+      kind: 'time',
+      nodeId: 'delay',
+      waitingSince: '2026-08-24T10:00:00Z',
+      resumeAt: '2026-08-24T11:00:00Z',
+    },
+  });
+  candidate.workflow_name = workflowName;
+  const { resolveRunWorkflow } = await import('./resolve-run-workflow');
+  const { createWorkflowDeps } = await import('./store-adapter');
+  const deps = createWorkflowDeps();
+  expect(await resolveRunWorkflow(deps, candidate, root, {})).toMatchObject({ ok: true });
+  const resume = mock(async () => {
+    const result = await resolveRunWorkflow(deps, candidate, root, {});
+    return result.ok
+      ? {
+          kind: 'accepted' as const,
+          run: candidate,
+          settled: Promise.resolve({ success: true as const, workflowRunId: candidate.id }),
+        }
+      : { kind: 'unavailable' as const, reason: result.message, sourceError: result.sourceError };
+  });
+  mockListDueWorkflowContinuations.mockResolvedValue([candidate]);
+  mockDeferWorkflowContinuation.mockClear();
+  mockWarn.mockClear();
+  return { root, candidate, resume };
+}
+
+async function expectDiscoveryRecovery(
+  { candidate, resume }: Awaited<ReturnType<typeof discoveryRecoveryFixture>>,
+  restore: () => void
+) {
+  try {
+    for (let i = 0; i < 5; i++) {
+      const now = new Date(Date.parse('2026-08-24T12:00:00Z') + i * 60_000);
+      expect((await wakeDueWorkflowContinuations(store, now, resume))[0]?.kind).toBe('unavailable');
+      expect(mockDeferWorkflowContinuation).toHaveBeenLastCalledWith(
+        candidate.id,
+        new Date(now.getTime() + 60_000).toISOString(),
+        { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00Z' }
+      );
+    }
+  } finally {
+    restore();
+  }
+  expect(
+    (await wakeDueWorkflowContinuations(store, new Date('2026-08-24T13:00:00Z'), resume))[0]?.kind
+  ).toBe('accepted');
+  expect(resume).toHaveBeenCalledTimes(6);
+  expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(5);
+  expect(
+    mockWarn.mock.calls.filter(([, message]) => message.includes('This host stopped'))
+  ).toHaveLength(0);
+}
+
+for (const scope of ['packaged', 'project', 'configured', 'global', 'legacy'] as const) {
+  const operations = scope === 'packaged' ? (['read'] as const) : (['read', 'inspect'] as const);
+  for (const operation of operations) {
+    test(`temporary ${scope} command ${operation} keeps retrying and recovers`, async () => {
+      const dir =
+        scope === 'packaged'
+          ? 'project/.archon/workflows/pack/block/commands'
+          : scope === 'project'
+            ? 'project/.archon/commands'
+            : scope === 'configured'
+              ? 'project/custom-commands'
+              : scope === 'global'
+                ? 'global/commands'
+                : 'bundled/commands/defaults';
+      const commandName =
+        scope === 'packaged' ? '__archon_pack__project:pack:block::review' : 'review';
+      const fixture = await discoveryRecoveryFixture(
+        `command-recovery-${scope}-${operation}`,
+        {
+          'project/.archon/workflows/deliver.yaml':
+            'name: deliver\ndescription: Test\nnodes:\n  - id: inc\n    include: nested\n',
+          'project/.archon/workflows/nested.yaml':
+            'name: nested\ndescription: Test\nnodes:\n  - id: inc\n    include: block\n',
+          'project/.archon/workflows/block.yaml': JSON.stringify({
+            name: 'block',
+            description: 'Test',
+            nodes:
+              scope === 'project' && operation === 'inspect'
+                ? [
+                    {
+                      id: 'group',
+                      loop_group: {
+                        until: 'DONE',
+                        max_iterations: 1,
+                        nodes: [{ id: 'act', command: commandName }],
+                      },
+                    },
+                  ]
+                : [{ id: 'act', command: commandName }],
+          }),
+          [`${dir}/review.md`]: 'Review the changes.',
+        },
+        {
+          ...DEFAULT_WORKFLOW_SOURCE_CONFIG,
+          ...(scope === 'configured' ? { command_folder: 'custom-commands' } : {}),
+        }
+      );
+      const cause = Object.assign(new Error('temporary I/O failure'), { code: 'EMFILE' });
+      const readFile = fs.readFile;
+      const findCommandFiles = paths.findCommandFiles;
+      const fault =
+        operation === 'read'
+          ? spyOn(fs, 'readFile').mockImplementation(
+              new Proxy(readFile, {
+                apply(target, receiver, args) {
+                  if (args[0] === join(fixture.root, dir, 'review.md') && args[1] === 'utf-8')
+                    return Promise.reject(cause);
+                  return Reflect.apply(target, receiver, args);
+                },
+              })
+            )
+          : spyOn(paths, 'findCommandFiles').mockImplementation(async directory => {
+              if (directory === join(fixture.root, dir)) throw cause;
+              return findCommandFiles(directory);
+            });
+      await expectDiscoveryRecovery(fixture, () => fault.mockRestore());
+    });
+  }
+}
+
+for (const scope of ['project', 'global', 'bundled', 'installed'] as const) {
+  test(`temporary ${scope} packaged script inspection keeps retrying and recovers`, async () => {
+    const base =
+      scope === 'project'
+        ? 'project/.archon/workflows/pack'
+        : scope === 'installed'
+          ? 'installed/acme.pack'
+          : `${scope}/workflows/pack`;
+    const fixture = await discoveryRecoveryFixture(
+      `script-recovery-${scope}`,
+      {
+        [`${base}/deliver/workflow.yaml`]:
+          'name: deliver\ndescription: Test\nnodes:\n  - id: act\n    script: task\n    runtime: bun\n',
+        [`${base}/deliver/scripts/task.ts`]: 'console.log("done");',
+        ...(scope === 'installed'
+          ? {
+              [`${base}/archon-plugin.json`]: JSON.stringify({
+                schemaVersion: 1,
+                kind: 'workflow-pack',
+                name: 'pack',
+                description: 'Test',
+                entrypoints: { deliver: 'deliver/workflow.yaml' },
+              }),
+            }
+          : {}),
+      },
+      DEFAULT_WORKFLOW_SOURCE_CONFIG,
+      scope === 'installed' ? 'acme/pack:deliver' : 'deliver'
+    );
+    const cause = Object.assign(new Error('temporary I/O failure'), { code: 'EIO' });
+    const stat = fs.stat;
+    const inspect = spyOn(fs, 'stat').mockImplementation(
+      new Proxy(stat, {
+        apply(target, receiver, args) {
+          if (args[0] === join(fixture.root, base, 'deliver/scripts/task.ts'))
+            return Promise.reject(cause);
+          return Reflect.apply(target, receiver, args);
+        },
+      })
+    );
+    await expectDiscoveryRecovery(fixture, () => inspect.mockRestore());
+  });
+}

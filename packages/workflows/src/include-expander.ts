@@ -274,7 +274,15 @@ function attachIncludeOutputAliases(node: DagNode, aliases: IncludeOutputAliases
 }
 
 /** Internal signal for a per-workflow expansion failure (resilient: drop one, keep the rest). */
-class IncludeExpansionError extends Error {}
+class IncludeExpansionError extends Error {
+  constructor(
+    message: string,
+    readonly errorType: WorkflowLoadError['errorType'] = 'validation_error',
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Composed-node metadata (#1764)
@@ -1018,7 +1026,14 @@ function materializeBlockCommandPrompts(
 
   if (isAgentNode(node) && node.source.kind === 'command') {
     const compiled = compile(node.source.name);
-    if (compiled.error !== undefined) throw new IncludeExpansionError(compiled.error);
+    if (compiled.error !== undefined) {
+      const content = commandContents.get(node.source.name);
+      throw new IncludeExpansionError(
+        compiled.error,
+        isIncludeCommandReadError(content) ? 'read_error' : 'validation_error',
+        { cause: isIncludeCommandReadError(content) ? content.cause : undefined }
+      );
+    }
     // The node's own `with:` map has no home on the inline variant, so it moves to the
     // engine-private payload the executor resolves for a materialized node (#2964).
     // It cannot be resolved here: a binding reads a sibling's output mid-run, which is
@@ -1130,7 +1145,9 @@ export function expandWorkflowIncludes(
           child = expandOne(node.include, [...stack, workflowName]);
         } catch (e) {
           if (e instanceof IncludeExpansionError) {
-            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`);
+            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`, e.errorType, {
+              cause: e,
+            });
           }
           throw e;
         }
@@ -1176,7 +1193,9 @@ export function expandWorkflowIncludes(
           child = expandOne(node.include, [...stack, workflowName]);
         } catch (e) {
           if (e instanceof IncludeExpansionError) {
-            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`);
+            throw new IncludeExpansionError(`Node '${node.id}': ${e.message}`, e.errorType, {
+              cause: e,
+            });
           }
           throw e;
         }
@@ -1324,7 +1343,7 @@ export function expandWorkflowIncludes(
     } catch (e) {
       if (e instanceof IncludeExpansionError) {
         failed.add(name);
-        errors.push({ filename: name, error: e.message, errorType: 'validation_error' });
+        errors.push({ filename: name, error: e.message, errorType: e.errorType });
       } else {
         throw e;
       }

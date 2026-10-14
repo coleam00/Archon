@@ -89,7 +89,7 @@ async function scanScriptDir(
       return;
     }
     getLog().warn({ err, dirPath }, 'script_directory_read_error');
-    throw new Error(`Directory read error: ${err.message} (${err.code ?? 'unknown'})`);
+    throw error;
   }
 
   for (const entry of entries) {
@@ -101,7 +101,7 @@ async function scanScriptDir(
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       getLog().warn({ err, entryPath }, 'script_file_stat_error');
-      continue;
+      throw error;
     }
 
     if (entryStat.isDirectory()) {
