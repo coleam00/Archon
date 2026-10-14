@@ -511,6 +511,24 @@ EOF
     *) fail "PowerShell install without a selection does not print the provider install command" ;;
   esac
 
+  # With a real console, -NonInteractive makes Read-Host throw; the installer must still
+  # install none and print the command. Needs util-linux `script` for the pty.
+  if script -qec true /dev/null >/dev/null 2>&1; then
+    rm -rf "$ps_calls" "$ps_download_marker" "$tmp_dir/ps-bin"
+    ps_tty_cmd=$(printf '%q ' pwsh -NoProfile -NonInteractive -File "$ps_driver" \
+      -Installer "$repo_root/scripts/install.ps1" -Stub "$ps_stub" -Marker "$ps_download_marker")
+    output=$(PROCESSOR_ARCHITECTURE=AMD64 INSTALL_DIR="$tmp_dir/ps-bin" SKIP_CHECKSUM=true \
+      script -qec "$ps_tty_cmd" /dev/null </dev/null 2>&1) \
+      || fail "-NonInteractive install with a console failed: $output"
+    assert_equals "" "$(ps_calls_made)" "-NonInteractive with a console installs no provider"
+    case "$output" in
+      *"archon provider install <claude|codex|pi>"*) ;;
+      *) fail "-NonInteractive install with a console does not print the provider install command" ;;
+    esac
+  else
+    echo "SKIP: util-linux script not found; install.ps1 -NonInteractive console case not exercised"
+  fi
+
   ps_status=0
   output=$(run_ps_install -Providers codex,claud) || ps_status=$?
   [ "$ps_status" -ne 0 ] || fail "install.ps1 accepted an unknown provider in -Providers"
