@@ -3910,6 +3910,169 @@ describe('executeDagWorkflow -- output_format structured output', () => {
     }
   }
 
+  for (const scope of ['retry', 'run', 'loop-group'] as const) {
+    for (const unknownFirst of [true, false]) {
+      it(`keeps ${scope} aggregate tokens unknown (unknown first: ${unknownFirst})`, async () => {
+        let calls = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          calls++;
+          yield {
+            type: 'result',
+            sessionId: 's',
+            text: 'Work completed.',
+            cost: calls === 1 ? 0.1 : 0.2,
+            ...((calls === 1) === unknownFirst
+              ? { tokensUnknown: true }
+              : { tokens: { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 } }),
+            ...(scope === 'retry' && calls === 1
+              ? { isError: true, failure: { class: 'unknown', evidence: 'failed attempt' } }
+              : {}),
+          };
+        });
+        const body: DagNode[] = ['first', 'second'].map((id, i) => ({
+          id,
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'Work.' },
+          ...(i === 1 ? { depends_on: ['first'] } : {}),
+        }));
+        const nodes: DagNode[] =
+          scope === 'retry'
+            ? [
+                {
+                  id: 'work',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'Work.' },
+                  retry: { max_attempts: 1, delay_ms: 1, on_error: 'all' },
+                },
+              ]
+            : scope === 'run'
+              ? body
+              : [
+                  {
+                    id: 'work',
+                    kind: 'loop_group',
+                    loop_group: {
+                      until_bash: 'exit 0',
+                      max_iterations: 1,
+                      fresh_context: false,
+                      nodes: body,
+                    },
+                  },
+                ];
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflow: { name: 'unknown-aggregate', nodes },
+            workflowRun: makeWorkflowRun('unknown-aggregate-run'),
+          })
+        );
+        expect(calls).toBe(2);
+        const usage = runUsageWrites(store).at(-1);
+        expect(usage?.total_cost_usd).toBeCloseTo(0.3);
+        expect(usage?.total_tokens_unknown).toBe(true);
+        expect(usage?.total_tokens_in).toBeNull();
+        if (scope === 'loop-group') {
+          const completed = persistedEvents(store).find(
+            event => event.event_type === 'node_completed' && event.step_name === 'work'
+          );
+          const record = completed && readNodeRecordEvent({ ...completed, data: completed.data });
+          expect(record?.metadata?.spend.tokens).toEqual({
+            source: 'unavailable',
+            reason: 'incomplete',
+          });
+        }
+        const snapshot = await foldDagResumeSnapshot(
+          persistedEvents(store),
+          'unknown-aggregate-run'
+        );
+        expect(snapshot.tokens).toBeUndefined();
+        expect(snapshot.tokensUnknown).toBe(true);
+        expect(snapshot.costUsd).toBeCloseTo(0.3);
+      });
+    }
+  }
+
+  for (const feedback of [true, false]) {
+    it(`keeps tokens unknown across interactive loop resume (feedback: ${feedback})`, async () => {
+      const workflow: WorkflowDefinition = {
+        name: 'unknown-gated',
+        description: 'Unknown token resume',
+        nodes: [
+          {
+            id: 'work',
+            kind: 'loop',
+            loop: {
+              prompt: 'Work.',
+              until: 'COMPLETE',
+              fresh_context: false,
+              max_iterations: 3,
+              interactive: true,
+              gate_message: 'Review.',
+            },
+          },
+        ],
+      };
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          sessionId: 's',
+          cost: 0.1,
+          tokensUnknown: true,
+          text: '<promise>COMPLETE</promise>',
+        };
+      });
+      const store = createMockStore();
+      const run = makeWorkflowRun('unknown-gated-run');
+      await executeDagWorkflow(
+        dagOptions({ deps: createMockDeps(store), cwd: testDir, workflow, workflowRun: run })
+      );
+      const approval = store.pauseWorkflowRun.mock.calls[0]?.[1];
+      expect(approval?.execution?.spend.tokens).toEqual({
+        source: 'unavailable',
+        reason: 'incomplete',
+      });
+      mockSendQueryDag.mockClear();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          sessionId: 's',
+          cost: 0.2,
+          tokens: { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 },
+          text: '<promise>COMPLETE</promise>',
+        };
+      });
+      const resumedStore = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(resumedStore),
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun(run.id, {
+            metadata: {
+              approval,
+              loop_feedback_given: feedback,
+              loop_user_input: feedback ? 'Continue.' : '',
+            },
+          }),
+        })
+      );
+      expect(mockSendQueryDag.mock.calls).toHaveLength(feedback ? 1 : 0);
+      const completed = persistedEvents(resumedStore).find(
+        event => event.event_type === 'node_completed' && event.step_name === 'work'
+      );
+      expect(completed?.data?.tokens).toBeUndefined();
+      const record = completed && readNodeRecordEvent({ ...completed, data: completed.data });
+      expect(record?.metadata?.spend.tokens).toEqual({
+        source: 'unavailable',
+        reason: 'incomplete',
+      });
+      expect(completed?.data?.cost_usd).toBeCloseTo(feedback ? 0.3 : 0.1);
+      expect(runUsageWrites(resumedStore).at(-1)?.total_tokens_unknown).toBe(true);
+    });
+  }
+
   it('uses structuredOutput from result when output_format is set', async () => {
     const structuredJson = { run_code_review: 'true', run_tests: 'false' };
 
@@ -35176,6 +35339,20 @@ describe('childOutcomeFromRun cache reporting', () => {
     });
   });
 
+  it('keeps an explicitly unknown child total unavailable despite older numeric metadata', () => {
+    const outcome = childOutcomeFromRun(
+      settledRun({
+        total_tokens_unknown: true,
+        total_tokens_in: 170,
+        total_tokens_out: 20,
+        total_cost_usd: 0.3,
+      })
+    );
+    expect(outcome.tokens).toBeUndefined();
+    expect(outcome.tokensUnknown).toBe(true);
+    expect(outcome.costUsd).toBe(0.3);
+  });
+
   it('leaves a complete child total unflagged', () => {
     const outcome = childOutcomeFromRun(
       settledRun({
@@ -38352,6 +38529,73 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       // ignore cleanup errors
     }
   });
+
+  for (const kind of ['child', 'compose'] as const) {
+    for (const unknownFirst of [true, false]) {
+      it(`keeps ${kind} fan-out aggregate tokens unknown (unknown first: ${unknownFirst})`, async () => {
+        await writeBlock(
+          'name: compose-blk\ndescription: Token accounting\nnodes:\n  - id: work\n    prompt: Work.'
+        );
+        let calls = 0;
+        const usage = { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 };
+        mockSendQueryDag.mockImplementation(async function* () {
+          calls++;
+          yield { type: 'agent_message_chunk', text: 'Done.' };
+          yield {
+            type: 'result',
+            sessionId: 's',
+            cost: 0.1,
+            ...((calls === 1) === unknownFirst ? { tokensUnknown: true } : { tokens: usage }),
+          };
+        });
+        const runChildWorkflow = mock<RunChildWorkflowFn>(async args => ({
+          childRunId: `child-${args.childIndex}`,
+          status: 'completed',
+          output: 'Done.',
+          costUsd: 0.1,
+          ...((args.childIndex === 0) === unknownFirst
+            ? { tokensUnknown: true }
+            : { tokens: usage }),
+        }));
+        const store = createMockStore();
+        const fanOut = {
+          items: '[1,2]',
+          as: 'item',
+          max_parallel: 1,
+          join: 'all_success' as const,
+        };
+        const node: DagNode =
+          kind === 'child'
+            ? { id: 'fan', kind: 'workflow', workflow: 'compose-blk', fan_out: fanOut }
+            : { id: 'fan', kind: 'compose_fan_out', include: 'compose-blk', fan_out: fanOut };
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            runChildWorkflow,
+            workflow: { name: 'unknown-fan-out', nodes: [node] },
+            workflowRun: makeWorkflowRun('unknown-fan-out-run'),
+          })
+        );
+        expect(kind === 'child' ? runChildWorkflow.mock.calls.length : calls).toBe(2);
+        const completed = persistedEvents(store).find(
+          event => event.event_type === 'node_completed' && event.step_name === 'fan'
+        );
+        expect(completed?.data?.tokens).toBeUndefined();
+        expect(completed?.data?.cost_usd).toBeCloseTo(0.2);
+        const record = completed && readNodeRecordEvent({ ...completed, data: completed.data });
+        expect(record?.metadata?.spend.tokens).toEqual({
+          source: 'unavailable',
+          reason: 'incomplete',
+        });
+        expect(runUsageWrites(store).at(-1)?.total_tokens_unknown).toBe(true);
+        const snapshot = await foldDagResumeSnapshot(persistedEvents(store), 'unknown-fan-out-run');
+        expect(snapshot.tokens).toBeUndefined();
+        expect(snapshot.tokensUnknown).toBe(true);
+        expect(snapshot.costUsd).toBeCloseTo(0.2);
+      });
+    }
+  }
 
   it('executes one instance per item inside the parent run and aggregates in input order', async () => {
     await writeBlock(

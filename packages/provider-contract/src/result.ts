@@ -59,7 +59,7 @@ export const providerResultSchema = z.object({
   sessionId: z.string().optional(),
   /** Complete reply for this result, when the runtime reports it. */
   text: z.string().optional(),
-  /** Usage of this result; consumers sum usage across results before settlement. */
+  /** Usage of this result; consumers sum it unless any result reports tokensUnknown. */
   tokens: tokenUsageSchema.optional(),
   /**
    * This result's token measurement is unavailable. Consumers must discard earlier

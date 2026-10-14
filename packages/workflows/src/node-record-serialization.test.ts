@@ -1,5 +1,5 @@
 import { finishNodeExecution, startNodeExecution, newNodeInvocation } from './node-execution';
-import { readNodeRecordEvent } from './node-record-reader';
+import { readNodeRecordEvent, readDeferredNodeUsageEvent } from './node-record-reader';
 import { describe, expect, it } from 'bun:test';
 import {
   nodeCostScope,
@@ -81,8 +81,36 @@ describe('node record serializers', () => {
         cost_usd: 0,
       },
     });
-    expect(Object.keys(event.data).sort()).toEqual(['accounting', 'tokens', 'cost_usd'].sort());
+    expect(Object.keys(event.data).sort()).toEqual(
+      ['accounting', 'spend', 'tokens', 'cost_usd'].sort()
+    );
     expect(readNodeRecordEvent(event)).toBeUndefined();
+  });
+
+  it('distinguishes incomplete token accounting from an ordinary unavailable measurement', () => {
+    for (const reason of ['unknown', 'not_reported', 'incomplete'] as const) {
+      const source = record();
+      source.spend.tokens = { source: 'unavailable', reason };
+      expect(serializeNodeOutput(source).tokens).toBeUndefined();
+      expect(serializeNodeOutput(source).tokensUnknown).toBe(
+        reason === 'incomplete' ? true : undefined
+      );
+      const event = serializeNodeStateRecord(source);
+      expect(readNodeRecordEvent(event)?.rawUsage.tokensUnknown).toBe(
+        reason === 'incomplete' ? true : undefined
+      );
+      const deferred = serializeDeferredNodeUsage(source);
+      expect(readDeferredNodeUsageEvent(deferred)?.rawUsage.tokensUnknown).toBe(
+        reason === 'incomplete'
+      );
+    }
+    const unavailable = finishNodeExecution(
+      record(),
+      { status: 'completed' },
+      { tokensUnknown: true }
+    );
+    expect(unavailable.spend.tokens).toEqual({ source: 'unavailable', reason: 'incomplete' });
+    expect(unavailable.spend.costUsd).toEqual(record().spend.costUsd);
   });
 
   it('capacity failure survives a persisted JSON round trip', () => {

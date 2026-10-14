@@ -140,6 +140,7 @@ export function startNodeExecution(input: {
 }
 
 export interface ExecutionObservations {
+  tokensUnknown?: boolean;
   tokens?: TokenUsage;
   costUsd?: number;
   stopReason?: string;
@@ -195,11 +196,13 @@ export function finishNodeExecution(
       durationMs: result.durationMs ?? Math.max(0, Date.now() - Date.parse(start.timing.startedAt)),
     },
     spend: {
-      tokens: observed(
-        result.tokens,
-        start.spend.tokens,
-        value => tokenUsageSchema.safeParse(value).success
-      ),
+      tokens: result.tokensUnknown
+        ? { source: 'unavailable', reason: 'incomplete' }
+        : observed(
+            result.tokens,
+            start.spend.tokens,
+            value => tokenUsageSchema.safeParse(value).success
+          ),
       costUsd: observed(result.costUsd, start.spend.costUsd, Number.isFinite),
       stopReason: observed(result.stopReason, start.spend.stopReason),
       numTurns: observed(result.numTurns, start.spend.numTurns, Number.isFinite),

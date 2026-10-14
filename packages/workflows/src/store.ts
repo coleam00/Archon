@@ -74,6 +74,7 @@ export interface DagResumeSnapshot {
   /** Node/instance starts with no later terminal event, in lifecycle order. */
   unresolvedNodeStarts: Set<string>;
   tokens?: TokenUsage;
+  tokensUnknown?: boolean;
   /** Cumulative USD cost persisted by completed/failed attempts and abandoned deferred segments. */
   costUsd: number;
 }
