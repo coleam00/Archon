@@ -391,7 +391,8 @@ export interface BridgeNotifier {
  *  - yield mapped events in order
  *  - complete on successful `session.prompt()` resolution
  *  - throw on `session.prompt()` rejection, listener errors, or attributed extension errors
- *  - forward `abortSignal` to `session.abort()` fire-and-forget
+ *  - forward `abortSignal` to `session.abort()` fire-and-forget, and throw on abort
+ *    even when the session never answers it
  *  - always `dispose()` the session to avoid listener accumulation
  */
 export async function* bridgeSession(
@@ -551,11 +552,18 @@ export async function* bridgeSession(
       getLog().debug({ err }, 'pi.event-bridge.abort_failed');
     });
   };
+  // A wedged session can ignore abort(): prompt() never settles and no event arrives.
+  // Waking the loop lets it throw and run the cleanup below, which releases the
+  // session, the extension turn, and the caller's concurrency slot before a retry.
+  const onAbortSignal = (): void => {
+    onAbort();
+    queue.push({ kind: 'error', error: new Error('Query aborted') });
+  };
   if (abortSignal) {
     if (abortSignal.aborted) {
       onAbort();
     } else {
-      abortSignal.addEventListener('abort', onAbort, { once: true });
+      abortSignal.addEventListener('abort', onAbortSignal, { once: true });
     }
   }
 
@@ -649,7 +657,7 @@ export async function* bridgeSession(
     uiBridge?.setEmitter(undefined);
     unsubscribe();
     if (abortSignal) {
-      abortSignal.removeEventListener('abort', onAbort);
+      abortSignal.removeEventListener('abort', onAbortSignal);
     }
     try {
       session.dispose();
