@@ -11,7 +11,7 @@ import {
   loadDryRunStubs,
   writeDryRunStubScaffold as writeResolvedDryRunStubScaffold,
 } from './dry-run';
-import type { DryRunResolution } from './dry-run';
+import type { DryRunResolution, DryRunStubValue } from './dry-run';
 import { resolveWorkflow } from './graph-plan';
 import { buildAiProfile } from './model-validation';
 import { resolveWorkflowModelScope } from './node-model-resolution';
@@ -1771,6 +1771,44 @@ describe('dryRunWorkflow', () => {
       state: 'paused',
       resolvedText: 'Rerun e2e-smoke (fail), then resume this run.',
     });
+  });
+
+  test('a stub answers an attention wait and routes on its decision', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'attention-answer',
+      nodes: [
+        { id: 'review', wait: { attention: 'Post it?', form: 'approval' } },
+        { id: 'post', bash: 'echo $review.output.text', depends_on: ['review'] },
+        {
+          id: 'stop',
+          cancel: 'rejected',
+          depends_on: ['review'],
+          when: "$review.output.decision == 'reject'",
+        },
+      ],
+    });
+    const run = (answer: DryRunStubValue) =>
+      dryRunWorkflow({
+        workflow,
+        userMessage: '',
+        cwd: process.cwd(),
+        stubs: { review: answer, post: 'posted' },
+      });
+
+    const approved = await run({ decision: 'approve', text: 'ship it' });
+    expect(approved.outcome).toBe('completed');
+    expect(approved.trace[0]).toMatchObject({
+      nodeId: 'review',
+      state: 'stubbed',
+      reason: 'answered by stub',
+      resolvedText: 'Post it?',
+    });
+
+    expect((await run({ decision: 'reject', text: '' })).outcome).toBe('cancelled');
+
+    // The answer owes the form's output contract, like any authored stub.
+    const invalid = await run({ decision: 'maybe', text: '' });
+    expect(invalid.outcome).toBe('failed');
   });
 
   test('simulates loop completion and max-iteration failure', async () => {

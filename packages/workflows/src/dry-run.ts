@@ -1205,6 +1205,26 @@ async function simulateNode(
       const condition = waitCondition(node.wait);
       const resolvedText =
         condition.kind === 'attention' ? resolveText(condition.message, ctx, outputs) : undefined;
+      // An authored stub answers an attention wait, as an answer completes it in a real
+      // run. Without one the simulation stops where the run would pause.
+      const answer =
+        condition.kind === 'attention' && Object.hasOwn(ctx.stubs, node.id)
+          ? stubFor(node, ctx)
+          : undefined;
+      if (answer !== undefined) {
+        const hydrated = completedOutput(node, answer);
+        outputs.set(node.id, hydrated);
+        ctx.trace.push({
+          nodeId: node.id,
+          nodeType: 'wait',
+          state: 'stubbed',
+          reason: 'answered by stub',
+          resolvedText,
+          output: hydrated.output,
+          ...(iteration ? { iteration } : {}),
+        });
+        return;
+      }
       outputs.set(node.id, { state: 'pending', output: '' });
       ctx.trace.push({
         nodeId: node.id,
