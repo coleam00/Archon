@@ -42,7 +42,8 @@ HOST_PID=""
 
 log() { echo "$*" | tee -a "$LOG"; }
 # A PID is stopped only while it still names the process recorded: its start time is
-# captured at record time, so a short-lived process whose PID was reused is never signalled.
+# captured at record time, so a PID recorded at launch is never signalled once reused.
+# reap_owner records at reap time, so there the guard relies on the PID still being the owner.
 record_pid() {
   echo "$1 $2" >>"$PIDS"
   ps -o lstart= -p "$1" >"$WORK/pidstart-$1" 2>/dev/null
