@@ -2854,7 +2854,9 @@ describe('loop_group structured completion after include expansion (#2998)', () 
         expect(workflows.has('parent')).toBe(true);
       } else {
         expect(errors).toHaveLength(1);
-        expect(errors[0].error).toContain("terminal node 'check__review'");
+        expect(errors[0].error).toContain(
+          "node 'check__review', which the group's output is read from"
+        );
         expect(errors[0].error).toContain('until_bash');
         expect(workflows.has('parent')).toBe(false);
       }

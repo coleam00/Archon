@@ -683,10 +683,10 @@ nodes:
           depends_on: [test]
 ```
 
-The legacy prose `until:` channel cannot detect a signal when the body's sole
-terminal node produces non-string structured output. The loader rejects that
-combination when `until:` is the only completion channel. Use `until_bash` to read
-the terminal node's structured field instead. A terminal node without
+The legacy prose `until:` channel cannot detect a signal when the node the
+group's output is read from (see below) produces non-string structured output. The
+loader rejects that combination when `until:` is the only completion channel. Use
+`until_bash` to read that node's structured field instead. A terminal node without
 `output_format`, or with a string schema, keeps loading. Declaring `until_bash`
 alongside `until:` also keeps loading, with the existing prose-channel deprecation
 warning.
@@ -707,7 +707,51 @@ warning.
   error (no further iterations run) — same semantics as a failed node in a
   top-level DAG.
 - `$fix-loop.output` (visible to the outer DAG) is the **final iteration's
-  terminal-node output**.
+  output**: the first completed, non-empty output among the body's terminal nodes,
+  in body order. A terminal pause is read past, as described next.
+
+### Pausing to ask inside the body
+
+An `approval:` gate or a `wait:` node pauses the group only as the body's **sole
+terminal sink**: nothing depends on it, and every other body node leads to it. Any
+other placement is a load error, because resuming in the middle of an iteration would
+replay or skip sibling work. The group resumes at the iteration boundary, so the next
+iteration starts with the answer available.
+
+A pause asks about the work; it is not the work. When the sink is an `approval:` gate
+or an `attention` wait, the iteration's output is read from the nodes the pause depends
+on, so `$group.output` is the same whether the pause was skipped by its `when:` or
+answered. The answer stays on the pause node: `until_bash` reads it as
+`$<pause>.output`, and the next iteration reads it as `$LOOP_PREV.<pause>.output`.
+A skipped pause has no output, so an `until_bash` that reads a pause its own `when:`
+can skip fails the group; decide completion from the work instead, as below.
+
+```yaml
+- id: plan
+  loop_group:
+    until_bash: test $draft.output.blocked = false
+    max_iterations: 5
+    nodes:
+      - id: draft
+        prompt: |
+          Draft the plan. Reviewer feedback, if any: $LOOP_PREV.plan-review.output.text
+          Set blocked to true only if you need a decision from a person.
+        output_format:
+          type: object
+          properties:
+            plan: { type: string }
+            blocked: { type: boolean }
+          required: [plan, blocked]
+      - id: plan-review
+        depends_on: [draft]
+        when: "$draft.output.blocked == 'true'"
+        approval:
+          message: "The draft needs a decision: $draft.output.plan"
+```
+
+When the draft is not blocked, the gate is skipped and the group completes. When it is
+blocked, the reviewer's answer reaches the next draft through `$LOOP_PREV`.
+`$plan.output` is the latest draft either way.
 
 ### Reusing a block in the body
 

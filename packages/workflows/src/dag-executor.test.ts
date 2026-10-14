@@ -38310,9 +38310,9 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       .map(call => call[0])
       .filter(data => data.event_type === 'node_completed' && data.step_name === 'grp');
     expect(completedEvents.length).toBe(1);
-    expect(completedEvents[0].data).toMatchObject({
-      structured_output: approvedDecision,
-    });
+    // until_bash read the answer; the group's output is still the work (#4043).
+    expect(completedEvents[0].data?.node_output).toBe('work output');
+    expect(completedEvents[0].data?.structured_output).toBeUndefined();
   });
 
   it('resuming after a non-completing decision advances to a fresh iteration, with the text available via $LOOP_PREV', async () => {
@@ -38544,6 +38544,147 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(probeRows[0].stdout_tail).toBe('resume probe ran');
     expect(probeRows[0].stderr_tail).toBe('recheck note');
     expect(probeRows[0].exit_code).toBe(0);
+  });
+});
+
+// A pause asks about the work; it is not the work. The group's output reads past it
+// to the nodes it depends on, while `until_bash` and `$LOOP_PREV.<pause>.output`
+// keep reading the answer (#4043).
+describe('executeDagWorkflow -- loop_group output with a pause sink (#4043)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-pause-output-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+
+  afterEach(async () => {
+    await removeTempTree(testDir);
+  });
+
+  function groupCompletion(store: MockWorkflowStore): Record<string, unknown> | undefined {
+    return store.createWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(event => event.event_type === 'node_completed' && event.step_name === 'grp')?.data;
+  }
+
+  function loopGroupWorkflow(nodes: unknown[], untilBash = 'true'): WorkflowDefinition {
+    return {
+      name: 'loop-group-output',
+      description: 'loop_group output selection',
+      interactive: true,
+      nodes: [
+        dagNodeSchema.parse({
+          id: 'grp',
+          loop_group: { until_bash: untilBash, max_iterations: 1, nodes },
+        }),
+      ],
+    };
+  }
+
+  it('a skipped approval gate leaves the work as the group output', async () => {
+    const store = createEscalationStore('run-skipped-gate');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: ready(
+          loopGroupWorkflow(
+            [
+              { id: 'work', bash: "printf 'the plan'" },
+              {
+                id: 'ask',
+                depends_on: ['work'],
+                when: "$work.output == 'blocked'",
+                approval: { message: 'Unblock?' },
+              },
+            ],
+            'test $work.output != blocked'
+          )
+        ),
+        workflowRun: makeWorkflowRun('run-skipped-gate'),
+      })
+    );
+
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(groupCompletion(store)?.node_output).toBe('the plan');
+  });
+
+  it('a skipped attention wait leaves the work as the group output', async () => {
+    const greenMarkerPath = join(testDir, 'green');
+    await writeFile(greenMarkerPath, 'green');
+    const store = createEscalationStore('run-skipped-attention');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: ready(
+          attentionTerminatedLoopGroupWorkflow(join(testDir, 'probe-count'), greenMarkerPath)
+        ),
+        workflowRun: makeWorkflowRun('run-skipped-attention'),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(groupCompletion(store)?.node_output).toBe('{"state":"concluded","detail":"green"}');
+  });
+
+  it('an answered attention wait leaves the work as the group output', async () => {
+    const store = createEscalationStore('run-answered-attention');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: ready(
+          attentionTerminatedLoopGroupWorkflow(join(testDir, 'probe-count'), join(testDir, 'green'))
+        ),
+        workflowRun: makeWorkflowRun('run-answered-attention', {
+          metadata: {
+            wait: {
+              owner: 'loop_group',
+              nodeId: 'grp',
+              bodyWaitId: 'pause',
+              iteration: 1,
+              sessionId: null,
+              sessionProvider: null,
+              kind: 'attention',
+              waitingSince: '2026-08-24T10:00:00.000Z',
+              message: 'Re-run the check, then resume.',
+            } satisfies WorkflowWaitContext,
+          },
+        }),
+        priorCompletedNodes: new Map([
+          ['grp.probe', { output: '{"state":"concluded","detail":"rerun"}' }],
+        ]),
+      })
+    );
+
+    // The restored probe satisfied until_bash on the resume recheck: no fresh iteration.
+    expect(await Bun.file(join(testDir, 'probe-count')).exists()).toBe(false);
+    expect(groupCompletion(store)?.node_output).toBe('{"state":"concluded","detail":"rerun"}');
+  });
+
+  it('a group without a pause sink still takes its output from its terminal sink', async () => {
+    const store = createEscalationStore('run-no-pause');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: ready(
+          loopGroupWorkflow([
+            { id: 'work', bash: "printf 'draft'" },
+            { id: 'polish', depends_on: ['work'], bash: "printf 'final'" },
+          ])
+        ),
+        workflowRun: makeWorkflowRun('run-no-pause'),
+      })
+    );
+
+    expect(groupCompletion(store)?.node_output).toBe('final');
   });
 });
 
