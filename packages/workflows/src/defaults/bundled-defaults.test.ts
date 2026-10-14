@@ -520,6 +520,7 @@ describe('bundled-defaults', () => {
       expect(scopeSchema).toEqual({
         type: 'object',
         properties: {
+          selector: { type: 'string' },
           pr: {
             type: ['object', 'null'],
             properties: {
@@ -545,16 +546,17 @@ describe('bundled-defaults', () => {
             required: ['type', 'run_id', 'path'],
           },
         },
-        required: ['pr', 'report'],
+        required: ['selector', 'pr', 'report'],
       });
       const scopeReport = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
-      expect(validateStructuredOutput({ pr: null, report: scopeReport }, scopeSchema).valid).toBe(
-        true
-      );
-      expect(validateStructuredOutput({ pr: null }, scopeSchema).valid).toBe(false);
+      expect(
+        validateStructuredOutput({ selector: '', pr: null, report: scopeReport }, scopeSchema).valid
+      ).toBe(true);
+      expect(validateStructuredOutput({ selector: '', pr: null }, scopeSchema).valid).toBe(false);
       expect(
         validateStructuredOutput(
           {
+            selector: 'https://github.com/coleam00/Archon/pull/3557',
             pr: {
               repo: { host: 'github.com', path: 'coleam00/Archon' },
               number: 3557,
@@ -564,7 +566,10 @@ describe('bundled-defaults', () => {
           scopeSchema
         ).valid
       ).toBe(true);
-      expect(validateStructuredOutput({ pr: {}, report: scopeReport }, scopeSchema).valid).toBe(
+      expect(
+        validateStructuredOutput({ selector: '', pr: {}, report: scopeReport }, scopeSchema).valid
+      ).toBe(false);
+      expect(validateStructuredOutput({ pr: null, report: scopeReport }, scopeSchema).valid).toBe(
         false
       );
       // One route agent picks the lenses; no tier, coverage script or lens-status node.
