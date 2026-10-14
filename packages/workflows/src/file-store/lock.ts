@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
+import { link, mkdir, open, readdir, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   currentProcessOwner,
   isOwnerProvablyGone,
+  parseProcessOwner,
+  ProcessOwnerRecordError,
   type ProcessOwner,
 } from '@archon/paths/process-owner';
 import { createLogger } from '@archon/paths/logger';
@@ -27,16 +29,6 @@ export class FileStoreLockHeldError extends Error {
       }. Check the owner before explicitly removing the lock; elapsed time does not prove death.`
     );
     this.name = 'FileStoreLockHeldError';
-  }
-}
-
-export class FileStoreLockRecordError extends Error {
-  constructor(
-    public readonly path: string,
-    cause?: unknown
-  ) {
-    super(`Invalid owner record in file store lock ${path}; inspect it manually.`, { cause });
-    this.name = 'FileStoreLockRecordError';
   }
 }
 
@@ -155,27 +147,13 @@ async function readOwner(path: string): Promise<ProcessOwner | null> {
     }
   });
   if (contents === null) return null;
-  let owner: unknown;
+  let record: unknown;
   try {
-    owner = JSON.parse(contents);
+    record = JSON.parse(contents);
   } catch (error) {
-    throw new FileStoreLockRecordError(path, error);
+    throw new ProcessOwnerRecordError(path, error);
   }
-  if (
-    typeof owner !== 'object' ||
-    owner === null ||
-    !('host' in owner) ||
-    typeof owner.host !== 'string' ||
-    !('pid' in owner) ||
-    typeof owner.pid !== 'number' ||
-    !Number.isSafeInteger(owner.pid) ||
-    owner.pid <= 0 ||
-    !('instance' in owner) ||
-    typeof owner.instance !== 'string'
-  ) {
-    throw new FileStoreLockRecordError(path);
-  }
-  return { host: owner.host, pid: owner.pid, instance: owner.instance };
+  return parseProcessOwner(record, path);
 }
 
 function sameOwner(a: ProcessOwner, b: ProcessOwner): boolean {
@@ -305,6 +283,25 @@ export async function probeFileStoreFilesystem(root: string): Promise<void> {
   }
 }
 
+/**
+ * Removes `.lock-*` and `.probe-*` scratch files a process left when it died
+ * between creating and removing them. Each holds its creator's owner record; a
+ * file whose owner is not provably gone, or whose record cannot be read (a live
+ * creator may not have written it yet), stays.
+ */
+async function sweepScratch(root: string): Promise<void> {
+  for (const name of await readdir(root)) {
+    if (!name.startsWith('.lock-') && !name.startsWith('.probe-')) continue;
+    const path = join(root, name);
+    try {
+      const owner = await readOwner(path);
+      if (owner && isOwnerProvablyGone(owner)) await discard(path);
+    } catch (error) {
+      log.warn({ path, err: error }, 'file_store.scratch_sweep_skipped');
+    }
+  }
+}
+
 export async function withFileStoreLock<T>(
   root: string,
   operation: () => Promise<T>,
@@ -320,6 +317,7 @@ export async function withFileStoreLock<T>(
     const release = await acquire(key, timeoutMs);
     let result: T;
     try {
+      await sweepScratch(key);
       result = await operation();
     } catch (error) {
       try {

@@ -14,10 +14,12 @@ import {
   liveResourceSlotHolders,
   lockConfiguredResourceSlot,
   removeResourceSlotHolder,
+  resourceSlotHolderSource,
 } from './resource-slots';
 import {
   currentProcessOwner,
   isOwnerProvablyGone,
+  parseProcessOwner,
   type ProcessOwner,
 } from '@archon/paths/process-owner';
 
@@ -72,9 +74,9 @@ export async function listProviderAttemptHolders(): Promise<ProviderAttemptHolde
   const result = await getDatabase().query<{
     resource_key: string;
     holder_id: string;
-    owner_host: string;
-    owner_pid: number | string;
-    owner_instance: string;
+    owner_host: string | null;
+    owner_pid: number | null;
+    owner_instance: string | null;
     acquired_at: string | Date;
   }>(
     `SELECT resource_key, holder_id, owner_host, owner_pid, owner_instance, acquired_at
@@ -83,11 +85,10 @@ export async function listProviderAttemptHolders(): Promise<ProviderAttemptHolde
       ORDER BY resource_key, acquired_at, holder_id`
   );
   return result.rows.map(row => {
-    const owner = {
-      host: row.owner_host,
-      pid: Number(row.owner_pid),
-      instance: row.owner_instance,
-    };
+    const owner = parseProcessOwner(
+      { host: row.owner_host, pid: row.owner_pid, instance: row.owner_instance },
+      resourceSlotHolderSource(row.resource_key, row.holder_id)
+    );
     return {
       provider: row.resource_key.slice(PROVIDER_RESOURCE_PREFIX.length),
       attemptId: row.holder_id,

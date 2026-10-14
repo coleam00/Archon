@@ -26,7 +26,7 @@ import {
   releaseProviderAttemptHolder,
   tryAdmitProviderAttempt,
 } from '../db/provider-attempts';
-import { currentProcessOwner } from '@archon/paths/process-owner';
+import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/process-owner';
 import { ProviderConcurrencyConfigError } from '../config/provider-concurrency';
 import { processProviderRegistration } from '../providers/process-registration';
 import { getAgentProvider, ProviderAdmissionAbortedError } from './provider-admission';
@@ -430,6 +430,26 @@ describe('attempt holder liveness', () => {
     expect(await releaseProviderAttemptHolder(remote)).toBe('released');
     expect(await releaseProviderAttemptHolder(remote)).toBe('not_found');
     expect((await listProviderAttemptHolders()).map(h => h.attemptId)).toEqual([local]);
+  });
+
+  test('a holder row with a non-positive pid fails every reader and stays held', async () => {
+    const corrupt = await insertAttempt({ ...currentProcessOwner, pid: -999999 });
+    const source = `resource slot '${providerResourceKey(PROVIDER)}' holder '${corrupt}'`;
+    for (const read of [
+      () =>
+        tryAdmitProviderAttempt({
+          provider: PROVIDER,
+          capacity: 1,
+          attemptId: crypto.randomUUID(),
+        }),
+      () => listProviderAttemptHolders(),
+      () => releaseProviderAttemptHolder(corrupt),
+    ]) {
+      const error = await read().catch((thrown: unknown) => thrown);
+      expect(error).toBeInstanceOf(ProcessOwnerRecordError);
+      expect((error as ProcessOwnerRecordError).source).toBe(source);
+    }
+    expect(await holderCount()).toBe(1);
   });
 });
 

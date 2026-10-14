@@ -16,7 +16,11 @@ import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-st
  */
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType } from './connection';
-import { isOwnerProvablyGone, type ProcessOwner } from '@archon/paths/process-owner';
+import {
+  isOwnerProvablyGone,
+  parseProcessOwner,
+  type ProcessOwner,
+} from '@archon/paths/process-owner';
 
 export type TransactionQuery = Parameters<
   Parameters<ReturnType<typeof getDatabase>['withTransaction']>[0]
@@ -109,7 +113,7 @@ export async function liveResourceSlotHolders(
   );
   const live: ResourceSlotHolder[] = [];
   for (const row of rows.rows) {
-    const holder = holderFromRow(row);
+    const holder = holderFromRow(resource, row);
     if (holder.kind === 'attempt' && isOwnerProvablyGone(holder.owner)) {
       await removeResourceSlotHolder(query, resource, holder);
       continue;
@@ -123,27 +127,28 @@ interface HolderRow {
   holder_kind: string;
   holder_id: string;
   owner_host: string | null;
-  owner_pid: number | string | null;
+  owner_pid: number | null;
   owner_instance: string | null;
 }
 
-function holderFromRow(row: HolderRow): ResourceSlotHolder {
+function holderFromRow(resource: string, row: HolderRow): ResourceSlotHolder {
   if (row.holder_kind === 'run') return { kind: 'run', id: row.holder_id };
-  if (
-    row.holder_kind === 'attempt' &&
-    row.owner_host !== null &&
-    row.owner_pid !== null &&
-    row.owner_instance !== null
-  ) {
+  if (row.holder_kind === 'attempt') {
     return {
       kind: 'attempt',
       id: row.holder_id,
-      owner: { host: row.owner_host, pid: Number(row.owner_pid), instance: row.owner_instance },
+      owner: parseProcessOwner(
+        { host: row.owner_host, pid: row.owner_pid, instance: row.owner_instance },
+        resourceSlotHolderSource(resource, row.holder_id)
+      ),
     };
   }
-  throw new Error(
-    `Resource slot holder '${row.holder_id}' has kind '${row.holder_kind}' without a complete owner`
-  );
+  throw new Error(`Resource slot holder '${row.holder_id}' has unknown kind '${row.holder_kind}'`);
+}
+
+/** Names a holder row in a `ProcessOwnerRecordError`. */
+export function resourceSlotHolderSource(resource: string, holderId: string): string {
+  return `resource slot '${resource}' holder '${holderId}'`;
 }
 
 export async function addResourceSlotHolder(
