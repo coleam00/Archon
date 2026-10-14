@@ -68,6 +68,9 @@ for (const choice of [null, '', ' release ']) {
         captured = input;
         return { accepted: false, reason: 'nothing-to-resume' };
       },
+      async subscribe() {
+        throw new Error('not invoked');
+      },
     };
     await resumeWorkflowContinuation(
       {
