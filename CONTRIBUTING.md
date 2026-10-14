@@ -181,7 +181,7 @@ See [AGENTS.md](./AGENTS.md) for detailed architecture documentation.
 
 ## Sharing workflows
 
-Publish a workflow pack from your own GitHub repository: add an `archon-plugin.json` with `"kind": "workflow-pack"` and users install it with `archon plugin install owner/repo[/path][@tag]`. The layout and manifest are described in the [installed workflow packs guide](https://archon.diy/guides/global-workflows/#installed-workflow-packs).
+Publish a workflow pack from your own GitHub repository: add an `archon-plugin.json` with `"kind": "workflow-pack"` and users install it with `archon plugin add owner/repo[/path][@tag]`. The layout and manifest are described in the [installed workflow packs guide](https://archon.diy/guides/global-workflows/#installed-workflow-packs).
 
 
 ## Questions?

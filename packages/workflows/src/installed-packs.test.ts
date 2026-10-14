@@ -3,7 +3,7 @@
  * `discoverWorkflowsWithConfig`, only manifest entrypoints are dispatchable, and a run
  * keeps the pack bytes it captured.
  *
- * Packs are written the way `archon plugin install` leaves them (a receipt under
+ * Packs are written the way `archon plugin add` leaves them (a receipt under
  * `plugins/installed/` and a tree under `plugins/packs/`) into a temp ARCHON_HOME.
  */
 import { providerRegistry } from '@archon/providers';
@@ -52,7 +52,7 @@ interface PackFixture {
   files: Record<string, string>;
 }
 
-/** Write a pack exactly where `archon plugin install` puts one. */
+/** Write a pack exactly where `archon plugin add` puts one. */
 async function install(pack: PackFixture): Promise<void> {
   const pluginsDir = join(home, 'plugins');
   const manifest = {

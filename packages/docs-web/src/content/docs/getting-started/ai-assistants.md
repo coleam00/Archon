@@ -18,7 +18,7 @@ For a canonical, at-a-glance comparison of which per-node features each provider
 Release binaries (quick install, Homebrew) ship without Claude, Codex and Pi. Install the ones you use:
 
 ```bash
-archon provider install claude codex pi   # any subset
+archon provider add claude codex pi   # any subset
 ```
 
 `archon setup` asks which to install and then configures their authentication. Each provider is a separate executable from the same Archon release; it must match the CLI version, so reinstall after upgrading Archon. Your native provider configuration and login (`~/.claude`, `~/.codex`, Pi's `auth.json`) are used as before. Source checkouts and Docker run all three from source with no install step. OpenCode and GitHub Copilot stay bundled (see below). See [Installation → Providers](/getting-started/installation/#providers).
@@ -27,7 +27,7 @@ archon provider install claude codex pi   # any subset
 
 OpenCode and GitHub Copilot are deprecated. No Archon maintainer owns them, and only Claude, Codex and Pi stay first-party. Both keep working as they do today and stay bundled until a community owner takes each one on. There is no removal date.
 
-The plan is for each to become a community plugin, published from its owner's repository and installed with [`archon plugin install`](/reference/cli/#plugin). [#3642](https://github.com/coleam00/Archon/issues/3642) builds the route that lets a provider load as a plugin. If you use OpenCode or Copilot and would maintain its plugin, or want to follow the plan, [open a discussion](https://github.com/coleam00/Archon/discussions).
+The plan is for each to become a community plugin, published from its owner's repository and installed with [`archon plugin add`](/reference/cli/#plugin). [#3642](https://github.com/coleam00/Archon/issues/3642) builds the route that lets a provider load as a plugin. If you use OpenCode or Copilot and would maintain its plugin, or want to follow the plan, [open a discussion](https://github.com/coleam00/Archon/discussions).
 
 Archon shows the notice once per command or process: `archon doctor` reports it when one of these is your default assistant, `archon ai default` prints it when you select one, and a process logs one warning the first time a run uses one.
 

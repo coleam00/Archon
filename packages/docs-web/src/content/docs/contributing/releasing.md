@@ -136,7 +136,7 @@ gh release view vX.Y.Z
 > `dist/binaries/`. That list has no Windows target.
 >
 > A manual release is therefore incomplete. It lacks the assets only the CI release
-> builds: the Windows binaries, the plugin executables (`archon plugin install`
+> builds: the Windows binaries, the plugin executables (`archon plugin add`
 > downloads these), and `archon-web.tar.gz` (`archon serve` downloads it). The `files:`
 > list of the release step in `.github/workflows/release.yml` is the full set CI publishes.
 

@@ -136,6 +136,11 @@ export async function checkInstalledProviders(
         ...(installed.length > 0 ? [lines.join(', ')] : []),
         ...(selected ? [] : [noDefaultProviderMessage(registry)]),
         ...unavailable,
+        ...(selected && unavailable.length === 0
+          ? []
+          : [
+              'Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.',
+            ]),
       ].join('\n    '),
     };
   } catch (error) {

@@ -226,9 +226,9 @@ Commands:
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (binary installs download server and UI on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
-  provider install <id...>   Install maintained providers matching this Archon release
-  plugin install <owner/repo[/path][@tag]>
-                             Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
+  provider add <id...>       Add maintained providers matching this Archon release (connects your agent CLI or SDK)
+  plugin add <owner/repo[/path][@tag]>
+                             Add a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
   plugin update <id>[@tag]   Reinstall an installed plugin at a tag, or its latest release or default branch
   plugin remove <id>         Delete the files an installed plugin wrote
   plugin copy <id>           Copy an installed workflow pack into this project's .archon/workflows/
@@ -277,7 +277,7 @@ Options:
   --default-stubs            Fill missing reached nodes with validated placeholders during --dry-run
   --exec-code                Execute trusted bash/script nodes during --dry-run (default: require stubs)
   --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
-  --providers <ids>          Install comma-separated maintained providers, skipping the setup provider question
+  --providers <ids>          Add comma-separated maintained providers, skipping the setup provider question
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
@@ -322,7 +322,7 @@ Examples:
   archon workflow run archon-review --adopt <run-id> "Review the changes"
   archon skill install
   archon skill install /path/to/project
-  archon plugin install coleam00/Archon/plugins/forge-github
+  archon plugin add coleam00/Archon/plugins/forge-github
 
 `;
 
@@ -391,4 +391,11 @@ it('forge work-item and repository-label help exposes file requests', () => {
     expect(text).toContain(operation);
     expect(text).toContain('--data-file <path>');
   }
+});
+
+it('provider and plugin add help exposes the supported commands and plugin example', () => {
+  expect(renderHelp('provider', 'add')).toContain('provider add <id...>');
+  const plugin = renderHelp('plugin', 'add');
+  expect(plugin).toContain('plugin add <owner/repo[/path][@tag]>');
+  expect(plugin).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
 });

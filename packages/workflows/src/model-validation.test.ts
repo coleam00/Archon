@@ -976,5 +976,5 @@ test('a missing maintained prefix cannot fall through to Pi vendor model ownersh
   const profile = buildAiProfile('codex');
   expect(() =>
     resolveRunModelOverrides(providers, profile, { tiers: { large: 'claude/sonnet' } })
-  ).toThrow('archon provider install claude');
+  ).toThrow('archon provider add claude');
 });

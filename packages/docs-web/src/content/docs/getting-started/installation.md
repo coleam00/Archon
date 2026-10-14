@@ -10,7 +10,7 @@ sidebar:
 ## Quick Install
 
 Release binaries ship without AI providers. The quick installers ask which of
-Claude, Codex and Pi to install and run `archon provider install` for your
+Claude, Codex and Pi to add and run `archon provider add` for your
 selection; Homebrew prints the command instead. See [Providers](#providers).
 
 ### macOS / Linux
@@ -39,7 +39,7 @@ irm https://archon.diy/install.ps1 | iex
 
 ```bash
 brew install coleam00/archon/archon
-archon setup        # or: archon provider install <claude|codex|pi>
+archon setup        # or: archon provider add <claude|codex|pi>
 ```
 
 ### Docker
@@ -50,13 +50,15 @@ docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow lis
 
 ## Providers
 
-A release binary runs only the providers you install. Each one is a separate
+Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.
+
+A release binary runs only the providers you add. Each one is a separate
 executable from the same release, verified against its `checksums.txt` and
 recorded under `~/.archon/plugins/`:
 
 ```bash
-archon provider install codex          # one provider
-archon provider install claude codex pi
+archon provider add codex          # one provider
+archon provider add claude codex pi
 ```
 
 `archon setup` asks the same question and then walks through each provider's
@@ -65,11 +67,11 @@ authentication. The installers take the selection as `--providers` (shell),
 comma-separated list; an empty value installs none. With no selection and no
 terminal to ask on, the installer installs none and prints the command.
 Archon never picks a provider for you: a workflow or chat message that needs a
-provider you have not installed fails before it starts and names the install
+provider you have not installed fails before it starts and names the add
 command.
 
 An installed provider must match the CLI version. After upgrading Archon, run
-`archon provider install` again for each provider you use; until then those
+`archon provider add` again for each provider you use; until then those
 runs fail with the command to run. Rerunning the quick installer asks again.
 
 Releases up to 0.11.1 predate `archon provider` and bundle their providers. To

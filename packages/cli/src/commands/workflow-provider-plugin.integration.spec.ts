@@ -194,7 +194,7 @@ async function snapshot(dir: string): Promise<Record<string, string>> {
 
 test('release install registers a provider, runs a workflow, and removal rejects before a run or worktree', async () => {
   const env = await environment();
-  expect(await pluginCommand('install', [ID], env)).toBe(0);
+  expect(await pluginCommand('add', [ID], env)).toBe(0);
   const receipts = await readReceipts(env.pluginsDir);
   expect(receipts[0]).toMatchObject({
     manifest: { kind: 'provider' },
@@ -287,7 +287,7 @@ test('release install registers a provider, runs a workflow, and removal rejects
 
 test('invalid provider initialize, ids, capabilities and vendors preserve the previous install', async () => {
   const env = await environment();
-  expect(await pluginCommand('install', [`${ID}@v1`], env)).toBe(0);
+  expect(await pluginCommand('add', [`${ID}@v1`], env)).toBe(0);
   const before = await snapshot(env.pluginsDir);
   const receipt = (await readReceipts(env.pluginsDir))[0];
   if (!('descriptor' in receipt)) throw new Error('missing descriptor');
@@ -350,7 +350,7 @@ test('invalid provider initialize, ids, capabilities and vendors preserve the pr
     expect(await snapshot(env.pluginsDir)).toEqual(before);
     if (scenario.descriptor.id === 'claude') {
       const fresh = await environment();
-      expect((await plugin(fresh, 'install', [`${ID}@invalid`])).code).toBe(1);
+      expect((await plugin(fresh, 'add', [`${ID}@invalid`])).code).toBe(1);
       expect(await readReceipts(fresh.pluginsDir)).toEqual([]);
       expect(await snapshot(fresh.pluginsDir)).toEqual({});
     }
@@ -359,7 +359,7 @@ test('invalid provider initialize, ids, capabilities and vendors preserve the pr
   expect(await pluginCommand('update', [`${ID}@invalid`], env)).toBe(1);
   expect(await snapshot(env.pluginsDir)).toEqual(before);
   const fresh = await environment();
-  expect((await plugin(fresh, 'install', [`${ID}@invalid`])).code).toBe(1);
+  expect((await plugin(fresh, 'add', [`${ID}@invalid`])).code).toBe(1);
   expect(await readReceipts(fresh.pluginsDir)).toEqual([]);
   expect(await snapshot(fresh.pluginsDir)).toEqual({});
 }, 120_000);
@@ -411,7 +411,7 @@ test('install waits out a staged executable that is briefly locked', async () =>
   const env = await environment();
   const release = lockStagedBinary(3);
   try {
-    expect((await plugin(env, 'install', [`${ID}@v1`])).code).toBe(0);
+    expect((await plugin(env, 'add', [`${ID}@v1`])).code).toBe(0);
   } finally {
     release();
   }
@@ -428,7 +428,7 @@ test('an executable that stays locked fails by name and leaves the previous rece
   const fresh = await environment();
   let release = lockStagedBinary(Number.POSITIVE_INFINITY);
   try {
-    const failed = await plugin(fresh, 'install', [`${ID}@v1`]);
+    const failed = await plugin(fresh, 'add', [`${ID}@v1`]);
     expect(failed.code).toBe(1);
     expect(failed.err).toMatch(
       /Could not rename .*\.archon-provider-test-provider.*partial.*still EBUSY/
@@ -440,7 +440,7 @@ test('an executable that stays locked fails by name and leaves the previous rece
   expect(await snapshot(fresh.pluginsDir)).toEqual({});
 
   const env = await environment();
-  expect(await pluginCommand('install', [`${ID}@v1`], env)).toBe(0);
+  expect(await pluginCommand('add', [`${ID}@v1`], env)).toBe(0);
   const before = await snapshot(env.pluginsDir);
   release = lockStagedBinary(Number.POSITIVE_INFINITY);
   try {
@@ -453,7 +453,7 @@ test('an executable that stays locked fails by name and leaves the previous rece
 
 test('a failed update restores the previous receipt even when the receipt is briefly locked', async () => {
   const env = await environment();
-  expect(await pluginCommand('install', [`${ID}@v1`], env)).toBe(0);
+  expect(await pluginCommand('add', [`${ID}@v1`], env)).toBe(0);
   const before = await snapshot(env.pluginsDir);
   // The staged executable stays locked. Once its rename has failed, the receipt is held
   // too, as a scanner holds a file just renamed into place, so restoring it fails.
@@ -525,11 +525,11 @@ test('a process holding the install lock excludes competing install, update and 
     reachedDownload();
     await release;
   };
-  const installing = spawnMutation('install', `${ID}@v1`);
+  const installing = spawnMutation('add', `${ID}@v1`);
   try {
     await downloading;
     for (const [command, id] of [
-      ['install', `${ID}/alternate@v1`],
+      ['add', `${ID}/alternate@v1`],
       ['update', `${ID}@v2`],
       ['remove', ID],
     ]) {
@@ -543,7 +543,7 @@ test('a process holding the install lock excludes competing install, update and 
     await installing;
   }
   expect((await installing)[0]).toBe(0);
-  const [code, , error] = await spawnMutation('install', `${ID}/alternate@v1`);
+  const [code, , error] = await spawnMutation('add', `${ID}/alternate@v1`);
   expect(code).toBe(1);
   expect(error).toContain(`belongs to ${ID}`);
   expect(await readReceipts(env.pluginsDir)).toHaveLength(1);
@@ -590,10 +590,7 @@ test('first-party install enforces version match and can replace an existing pro
     const ref = 'coleam00/Archon/plugins/provider-codex@invalid';
     const failure: unknown = await replacePlugin(ref, env).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
-    expect(failure).toHaveProperty(
-      'message',
-      expect.stringContaining('archon provider install codex')
-    );
+    expect(failure).toHaveProperty('message', expect.stringContaining('archon provider add codex'));
     expect(await readReceipts(env.pluginsDir)).toEqual([]);
     expect(await snapshot(env.pluginsDir)).toEqual({});
     await writeFile(

@@ -1084,15 +1084,16 @@ describe('checkConnectedProviders', () => {
 });
 
 describe('provider diagnostics', () => {
-  it('no registered providers fails and names the install command', async () => {
+  it('no registered providers fails and names the add command', async () => {
     const check = await checkInstalledProviders(
       { get: () => undefined, list: () => [] },
       async () => new Map()
     );
     expect(check.status).toBe('fail');
     expect(check.message).toContain(
-      'No providers installed. Run: archon provider install <claude|codex|pi>'
+      'No providers installed. Run: archon provider add <claude|codex|pi>'
     );
+    expect(check.message).toContain('it does not install that CLI.');
     expect(await doctorCommand([async () => check])).toBe(1);
   });
 
@@ -1109,7 +1110,7 @@ describe('provider diagnostics', () => {
     expect(check.status).toBe('warn');
     expect(check.message).toContain('opencode (');
     expect(check.message).toContain(
-      'No providers installed. Run: archon provider install <claude|codex|pi>'
+      'No providers installed. Run: archon provider add <claude|codex|pi>'
     );
   });
 

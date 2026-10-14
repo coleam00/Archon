@@ -16,7 +16,7 @@ GitHub is an optional, independently executable plugin. Its source is temporaril
 Each Archon release publishes the plugin as a native executable for every platform the CLI ships on. Install it with:
 
 ```sh
-archon plugin install coleam00/Archon/plugins/forge-github
+archon plugin add coleam00/Archon/plugins/forge-github
 ```
 
 This works the same for the release binary, a source checkout, and [Docker](/deployment/docker/#plugins). Without `@<tag>` it installs from the latest Archon release; `coleam00/Archon/plugins/forge-github@<tag>` pins one. The command:
@@ -38,7 +38,7 @@ archon plugin remove coleam00/Archon/plugins/forge-github          # deletes onl
 
 Nothing updates in the background. To build the plugin yourself instead, compile `packages/adapters/src/forge/github/plugin.ts` from a source checkout (`bun run --cwd packages/adapters build:github-plugin`, or `bun build --compile <entry> --outfile archon-forge-github.exe` on Windows) and copy the executable into `ARCHON_HOME/plugins/`, or configure its absolute path under `forge.plugins` below. `archon plugin` leaves such a file alone.
 
-Forge plugins, provider plugins, chat plugins, and workflow packs install the same way: `archon plugin install owner/repo[/path][@tag]` reads the repository's `archon-plugin.json`, and no central registry is involved. Other plugin kinds will use the same command when their install path exists. The Archon-maintained GitHub plugin may move to its own repository, which changes the reference you install from, not this runtime protocol. Setup does not install it for you. Other production forges are community-maintained; the existing bundled Gitea/GitLab transition is not settled by this contract.
+Forge plugins, provider plugins, chat plugins, and workflow packs install the same way: `archon plugin add owner/repo[/path][@tag]` reads the repository's `archon-plugin.json`, and no central registry is involved. Other plugin kinds will use the same command when their install path exists. The Archon-maintained GitHub plugin may move to its own repository, which changes the reference you install from, not this runtime protocol. Setup does not install it for you. Other production forges are community-maintained; the existing bundled Gitea/GitLab transition is not settled by this contract.
 
 ## Commands
 

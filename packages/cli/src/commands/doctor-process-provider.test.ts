@@ -112,7 +112,7 @@ test('doctor reports a stale receipt with its versions and reinstall command', a
     const check = await checkInstalledProviders();
     expect(check.status).toBe('fail');
     expect(check.message).toContain('installed at 0.12.0 but this CLI is 0.13.0');
-    expect(check.message).toContain('archon provider install claude');
+    expect(check.message).toContain('archon provider add claude');
   } finally {
     clearRegistry();
     if (savedHome === undefined) delete process.env.ARCHON_HOME;

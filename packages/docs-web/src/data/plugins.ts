@@ -138,7 +138,7 @@ export async function discoverPlugins({
         readmeUrl: readme
           ? `https://github.com/${repo}/blob/${commit}/${readme.path.split('/').map(encodeURIComponent).join('/')}`
           : `${sourceUrl}#readme`,
-        installCommand: `archon plugin install ${id}`,
+        installCommand: `archon plugin add ${id}`,
       });
     }
   }

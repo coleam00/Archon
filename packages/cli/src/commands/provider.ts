@@ -9,8 +9,8 @@ export async function providerCommand(
   env: PluginEnvironment
 ): Promise<number> {
   try {
-    if (subcommand !== 'install' || ids.length === 0) {
-      throw new Error('Usage: archon provider install <id...>');
+    if (subcommand !== 'add' || ids.length === 0) {
+      throw new Error('Usage: archon provider add <id...>');
     }
     const maintainedIds = ids.map(id => {
       if (!isMaintainedProvider(id))

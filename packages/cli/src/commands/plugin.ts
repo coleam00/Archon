@@ -1,5 +1,5 @@
 /**
- * `archon plugin install | update | remove | list | copy`.
+ * `archon plugin add | update | remove | list | copy`.
  *
  * GitHub is the registry: a plugin is `owner/repo[/path]` (where its
  * `archon-plugin.json` lives) and a version is a tag. Resolution uses
@@ -777,7 +777,7 @@ async function installPlugin(
     );
   }
   if (mode === 'update' && !previous && !brokenSelf) {
-    throw new Error(`${ref.id} is not installed. Use: archon plugin install ${ref.id}`);
+    throw new Error(`${ref.id} is not installed. Use: archon plugin add ${ref.id}`);
   }
   // A fresh install cannot know which files a broken receipt owns, so it could claim them.
   if (!previous && !brokenSelf && broken.length > 0) {
@@ -877,7 +877,7 @@ async function listPlugins(env: PluginEnvironment): Promise<void> {
 }
 
 const USAGE =
-  'Usage: archon plugin install <owner/repo[/path][@tag]> | update <id>[@tag] | remove <id> | copy <id> | list';
+  'Usage: archon plugin add <owner/repo[/path][@tag]> | update <id>[@tag] | remove <id> | copy <id> | list';
 
 export async function pluginCommand(
   subcommand: string | undefined,
@@ -895,10 +895,13 @@ export async function pluginCommand(
     if (
       !target ||
       args.length !== 1 ||
-      !['install', 'update', 'remove', 'copy'].includes(subcommand ?? '')
+      !['add', 'install', 'update', 'remove', 'copy'].includes(subcommand ?? '')
     ) {
       console.error(USAGE);
       return 1;
+    }
+    if (subcommand === 'install') {
+      console.warn('Warning: archon plugin install is deprecated. Use archon plugin add instead.');
     }
     const ref = parsePluginRef(target);
     if (subcommand === 'remove' || subcommand === 'copy') {
@@ -908,7 +911,7 @@ export async function pluginCommand(
       );
     } else {
       await withPluginMutationLock(env.pluginsDir, () =>
-        installPlugin(ref, subcommand === 'install' ? 'install' : 'update', env)
+        installPlugin(ref, subcommand === 'update' ? 'update' : 'install', env)
       );
     }
     return 0;

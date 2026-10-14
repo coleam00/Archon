@@ -310,16 +310,17 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'provider',
-    subcommand: 'install',
-    spec: 'provider install <id...>',
-    description: 'Install maintained providers matching this Archon release',
+    subcommand: 'add',
+    spec: 'provider add <id...>',
+    description:
+      'Add maintained providers matching this Archon release (connects your agent CLI or SDK)',
   },
   {
     command: 'plugin',
-    subcommand: 'install',
-    spec: 'plugin install <owner/repo[/path][@tag]>',
+    subcommand: 'add',
+    spec: 'plugin add <owner/repo[/path][@tag]>',
     description:
-      'Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)',
+      'Add a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)',
   },
   {
     command: 'plugin',
@@ -800,8 +801,7 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--providers <ids>',
-    description:
-      'Install comma-separated maintained providers, skipping the setup provider question',
+    description: 'Add comma-separated maintained providers, skipping the setup provider question',
     owners: [{ command: 'setup' }],
   },
   {
@@ -984,8 +984,8 @@ const orderedExamples: ExampleHelp[] = [
     owner: { command: 'skill', subcommand: 'install' },
   },
   {
-    text: 'archon plugin install coleam00/Archon/plugins/forge-github',
-    owner: { command: 'plugin', subcommand: 'install' },
+    text: 'archon plugin add coleam00/Archon/plugins/forge-github',
+    owner: { command: 'plugin', subcommand: 'add' },
   },
 ];
 

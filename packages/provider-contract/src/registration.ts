@@ -10,7 +10,7 @@ export function isMaintainedProvider(id: string): id is (typeof MAINTAINED_PROVI
 
 function unknownProviderMessage(id: string, registered: readonly string[]): string {
   return isMaintainedProvider(id)
-    ? `Provider '${id}' is not installed. Install it with: archon provider install ${id}`
+    ? `Provider '${id}' is not installed. Add it with: archon provider add ${id}`
     : `Unknown provider: '${id}'. Available: ${registered.join(', ')}`;
 }
 
@@ -38,7 +38,7 @@ export function hasInstalledProvider(registry: ProviderRegistry): boolean {
 
 export function noDefaultProviderMessage(registry: ProviderRegistry): string {
   return !hasInstalledProvider(registry)
-    ? `No providers installed. Run: archon provider install <${MAINTAINED_PROVIDER_IDS.join('|')}>`
+    ? `No providers installed. Run: archon provider add <${MAINTAINED_PROVIDER_IDS.join('|')}>`
     : NO_DEFAULT_PROVIDER_MESSAGE;
 }
 
@@ -54,7 +54,7 @@ export function providerVersionMismatchMessage(
   installed: string,
   current: string
 ): string {
-  return `Provider '${id}' is installed at ${installed} but this CLI is ${current}. Run: archon provider install ${id}`;
+  return `Provider '${id}' is installed at ${installed} but this CLI is ${current}. Run: archon provider add ${id}`;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */
