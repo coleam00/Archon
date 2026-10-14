@@ -6,6 +6,7 @@ import {
   parseAttentionLabelPairs,
   parseAttentionQueueCountBy,
   parseAttentionQueueOrder,
+  parseAttentionQueueRequest,
   projectRefForRun,
 } from './attention-queue';
 
@@ -36,6 +37,20 @@ describe('attention queue arguments', () => {
     expect(() => parseAttentionQueueCountBy('codebase')).toThrow(
       "count-by must be 'project' or 'label:<key>'"
     );
+  });
+
+  test('a request is refused when it names two scopes or both a sort and a count', () => {
+    expect(() => parseAttentionQueueRequest({ project: 'web', all: true, labels: [] })).toThrow(
+      'Use project or all, not both'
+    );
+    expect(() =>
+      parseAttentionQueueRequest({ labels: [], sort: 'age', countBy: 'project' })
+    ).toThrow('Use sort or count-by, not both');
+    expect(parseAttentionQueueRequest({ labels: ['ci=other'] })).toEqual({
+      labels: { ci: 'other' },
+      order: { by: 'age' },
+      countBy: undefined,
+    });
   });
 });
 

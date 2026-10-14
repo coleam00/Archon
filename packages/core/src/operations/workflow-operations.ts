@@ -489,13 +489,14 @@ export function expectedGateForOccurrence(
   return { nodeId, pauseId: occurrence };
 }
 
+/** An attention wait open to an answer: it has a pause identity an answer can name. */
+type OpenAttentionWait = WorkflowAttentionWaitContext & { pauseId: string };
+
 /**
  * The open attention wait `run` is paused at, refusing every state where an answer to one
  * cannot land. Read-only, so the CLI's detached pre-flight runs it too.
  */
-export function assertAnswerable(
-  run: WorkflowRun
-): WorkflowAttentionWaitContext & { pauseId: string } {
+export function assertAnswerable(run: WorkflowRun): OpenAttentionWait {
   const wait = pausedAttentionWait(run);
   if (wait === undefined) {
     const attention = runAttention(run);
@@ -522,7 +523,7 @@ export function assertAnswerable(
 }
 
 /**
- * The open attention wait a label write for `request.occurrence` lands on, refusing every
+ * The occurrence of the open attention wait a label write lands on, refusing every
  * state where it cannot: a malformed write, a stale occurrence (named first, like an
  * answer's), a gate, a blocked parent, or a wait already answered. Only `wait: attention`
  * pauses carry labels. Read-only, so a surface can check before it writes.
@@ -531,7 +532,7 @@ export function assertLabelable(
   run: WorkflowRun,
   request: AttentionLabelRequest,
   via: RecordSurface
-): WorkflowAttentionWaitContext & { pauseId: string } {
+): string {
   attentionLabelsSchema.parse(request.set);
   for (const key of request.unset) attentionLabelKeySchema.parse(key);
   if (Object.keys(request.set).length === 0 && request.unset.length === 0)
@@ -566,7 +567,7 @@ export function assertLabelable(
     throw new Error(
       `Run ${run.id} paused at an attention wait before pause identities existed; it takes no labels.`
     );
-  return { ...wait, pauseId: wait.pauseId };
+  return wait.pauseId;
 }
 
 /**
@@ -1378,9 +1379,9 @@ export function createWorkflowOperations({
   ): Promise<AttentionLabelResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_label_lookup_failed');
     await assertMayAct(run, actor, 'respond');
-    const wait = assertLabelable(run, request, via);
+    const occurrence = assertLabelable(run, request, via);
     const result = await store.labelAttentionWait(run.id, {
-      pauseId: wait.pauseId,
+      pauseId: occurrence,
       set: request.set,
       unset: request.unset,
       via,
@@ -1388,7 +1389,7 @@ export function createWorkflowOperations({
     if (!result.labeled) throw staleGateError(run.id, await store.getWorkflowRun(run.id));
     return {
       runId: run.id,
-      occurrence: wait.pauseId,
+      occurrence,
       revision: attentionRevision(result.wait),
       labels: attentionLabels(result.wait),
     };

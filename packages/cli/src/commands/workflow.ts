@@ -214,8 +214,7 @@ import {
   countAttentionQueue,
   listAttentionQueue,
   parseAttentionLabelPairs,
-  parseAttentionQueueCountBy,
-  parseAttentionQueueOrder,
+  parseAttentionQueueRequest,
   readAttentionQueueItem,
   selectAttentionQueue,
   type AttentionQueueItem,
@@ -4710,13 +4709,7 @@ export async function workflowAttentionCommand(
       return 0;
     }
 
-    if (opts.project !== undefined && opts.all) throw new Error('Use --project or --all, not both');
-    if (opts.sort !== undefined && opts.countBy !== undefined)
-      throw new Error('Use --sort or --count-by, not both');
-    const labels = parseAttentionLabelPairs(opts.labels);
-    const order = parseAttentionQueueOrder(opts.sort ?? 'age');
-    const countBy =
-      opts.countBy === undefined ? undefined : parseAttentionQueueCountBy(opts.countBy);
+    const { labels, order, countBy } = parseAttentionQueueRequest(opts);
     const scope = await attentionScope(host, cwd, opts);
     const items = await listAttentionQueue(source);
 

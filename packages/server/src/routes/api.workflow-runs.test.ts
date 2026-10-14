@@ -4998,7 +4998,11 @@ describe('the attention queue over HTTP', () => {
           ],
         },
       });
+      const twice = await app.request('/api/runs/attention?label=ci%3Dother&label=ci%3Dpr');
+      expect(twice.status).toBe(400);
+      expect(await twice.json()).toMatchObject({ error: "Label 'ci' is given twice" });
       expect((await app.request('/api/runs/attention?sort=newest')).status).toBe(400);
+      expect((await app.request('/api/runs/attention?sort=age&countBy=project')).status).toBe(400);
       expect((await app.request('/api/runs/attention?project=nowhere')).status).toBe(400);
     } finally {
       mockListAttentionQueueRows.mockReset();

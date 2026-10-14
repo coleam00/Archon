@@ -374,6 +374,36 @@ export function parseAttentionLabelPairs(pairs: readonly string[]): AttentionLab
   return labels;
 }
 
+/** A list or count request as a host receives it, before the host resolves scope. */
+export interface AttentionQueueRequestText {
+  project?: string;
+  all?: boolean;
+  labels: readonly string[];
+  sort?: string;
+  countBy?: string;
+}
+
+/**
+ * Parse a list or count request, refusing contradictory parameters. Scope stays with the
+ * host: a CLI defaults to its working directory's project, a server to the whole install.
+ */
+export function parseAttentionQueueRequest(request: AttentionQueueRequestText): {
+  labels: AttentionLabels;
+  order: AttentionQueueOrder;
+  countBy: AttentionQueueCountBy | undefined;
+} {
+  if (request.project !== undefined && request.all === true)
+    throw new Error('Use project or all, not both');
+  if (request.sort !== undefined && request.countBy !== undefined)
+    throw new Error('Use sort or count-by, not both');
+  return {
+    labels: parseAttentionLabelPairs(request.labels),
+    order: parseAttentionQueueOrder(request.sort ?? 'age'),
+    countBy:
+      request.countBy === undefined ? undefined : parseAttentionQueueCountBy(request.countBy),
+  };
+}
+
 function inQuery(item: AttentionQueueItem, query: AttentionQueueQuery): boolean {
   return (
     isInAttentionScope(item.project, query.scope) &&

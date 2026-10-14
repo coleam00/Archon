@@ -346,9 +346,7 @@ import {
 import {
   attentionQueueItems,
   countAttentionQueue,
-  parseAttentionLabelPairs,
-  parseAttentionQueueCountBy,
-  parseAttentionQueueOrder,
+  parseAttentionQueueRequest,
   readAttentionQueueItem,
   selectAttentionQueue,
   type AttentionQueueScope,
@@ -3622,6 +3620,11 @@ export function registerApiRoutes(
     return (c.req as unknown as { valid(k: 'json'): T }).valid('json');
   }
 
+  /** Access the Zod-validated query from a handler registered via registerOpenApiRoute. */
+  function getValidatedQuery<T>(c: Context, _schema: z.ZodType<T>): T {
+    return (c.req as unknown as { valid(k: 'query'): T }).valid('query');
+  }
+
   // Serve OpenAPI spec
   app.doc('/api/openapi.json', {
     openapi: '3.0.0',
@@ -3988,31 +3991,30 @@ export function registerApiRoutes(
   // without `project` the scope is the whole install.
   registerOpenApiRoute(getRunsNeedingAttentionRoute, async c => {
     try {
-      const project = c.req.query('project');
-      const sort = c.req.query('sort');
-      const countByText = c.req.query('countBy');
+      const query = getValidatedQuery(c, attentionQueueQuerySchema);
+      const label = query.label ?? [];
       let scope: AttentionQueueScope;
-      let labels: ReturnType<typeof parseAttentionLabelPairs>;
-      let order: ReturnType<typeof parseAttentionQueueOrder>;
-      let countBy: ReturnType<typeof parseAttentionQueueCountBy> | undefined;
+      let request: ReturnType<typeof parseAttentionQueueRequest>;
       try {
-        if (project !== undefined && c.req.query('all') === 'true')
-          throw new Error('Use project or all, not both');
-        if (sort !== undefined && countByText !== undefined)
-          throw new Error('Use sort or countBy, not both');
-        labels = parseAttentionLabelPairs(c.req.queries('label') ?? []);
-        order = parseAttentionQueueOrder(sort ?? 'age');
-        countBy = countByText === undefined ? undefined : parseAttentionQueueCountBy(countByText);
+        request = parseAttentionQueueRequest({
+          ...query,
+          all: query.all === 'true',
+          labels: typeof label === 'string' ? [label] : label,
+        });
         scope =
-          project === undefined
+          query.project === undefined
             ? { kind: 'all' }
-            : { kind: 'project', project: await resolveAttentionProject(codebaseDb, project) };
+            : {
+                kind: 'project',
+                project: await resolveAttentionProject(codebaseDb, query.project),
+              };
       } catch (refusal) {
         return apiError(c, 400, (refusal as Error).message);
       }
       // One read backs both the items and the console's dashboard rows for the same runs.
       const rows = await workflowDb.listAttentionQueueRows();
       const items = await attentionQueueItems(attentionQueue, rows);
+      const { labels, order, countBy } = request;
       if (countBy !== undefined)
         return c.json({ counts: countAttentionQueue(items, { scope, labels, countBy }) });
       const selected = selectAttentionQueue(items, { scope, labels, order });
