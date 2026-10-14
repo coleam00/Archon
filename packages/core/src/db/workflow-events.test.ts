@@ -211,6 +211,37 @@ describe('workflow-events', () => {
         })
       ).rejects.toThrow('disk full');
     });
+
+    test("waits for the run's previous write, which may fail, but not for other runs", async () => {
+      let failFirst: (error: Error) => void = () => {};
+      mockQuery.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            failFirst = reject;
+          })
+      );
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const write = (runId: string, step: string): Promise<void> =>
+        persistWorkflowEvent({
+          workflow_run_id: runId,
+          event_type: 'node_started',
+          step_name: step,
+        });
+      const queriedSteps = (): unknown[] =>
+        mockQuery.mock.calls.map(([, params]) => (Array.isArray(params) ? params[4] : undefined));
+
+      const first = write('run-a', 'first');
+      const later = write('run-a', 'later');
+      const otherRun = write('run-b', 'other');
+      await otherRun;
+      expect(queriedSteps()).toEqual(['first', 'other']);
+
+      failFirst(new Error('connection lost'));
+      await expect(first).rejects.toThrow('connection lost');
+      await later;
+      expect(queriedSteps()).toEqual(['first', 'other', 'later']);
+    });
   });
 
   describe('listWorkflowEvents', () => {
