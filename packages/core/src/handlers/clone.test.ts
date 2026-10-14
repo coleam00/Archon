@@ -417,8 +417,7 @@ describe('cloneRepository', () => {
       ).rejects.toThrow('git remote failed');
       const target = getGitCloneCall()?.[1];
       expect(target).toBeDefined();
-      // The first rm clears the empty source directory before cloning; the second removes the clone.
-      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(2);
+      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(1);
       expect(mockCreateCodebase).not.toHaveBeenCalled();
     } finally {
       syntax.mockRestore();
@@ -440,7 +439,7 @@ describe('cloneRepository', () => {
       ).rejects.toThrow("Configured base branch 'unknown' not found on remote 'origin'");
       const target = getGitCloneCall()?.[1];
       expect(target).toBeDefined();
-      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(2);
+      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(1);
       expect(mockCreateCodebase).not.toHaveBeenCalled();
     } finally {
       syntax.mockRestore();
@@ -508,14 +507,6 @@ describe('cloneRepository', () => {
         args[1]?.includes('safe.directory')
       );
       expect(safeDir).toBeDefined();
-    });
-
-    test('removes the source/ directory before cloning so git has a clean target', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
-
-      await cloneRepository('https://github.com/owner/repo');
-
-      expect(spyFsRm.mock.calls.length).toBeGreaterThan(0);
     });
   });
 
@@ -960,26 +951,9 @@ describe('cloneRepository', () => {
       await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
         'Failed to clone repository: fatal: repository unavailable'
       );
+      expect(spyFsRm).not.toHaveBeenCalled();
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
       delete process.env.GH_TOKEN;
-    });
-
-    test('re-throws non-ENOENT errors from rm()', async () => {
-      const permError = Object.assign(new Error('EPERM: operation not permitted'), {
-        code: 'EPERM',
-      });
-      spyFsRm.mockRejectedValueOnce(permError);
-
-      await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow('EPERM');
-    });
-
-    test('ignores ENOENT from rm() (target directory does not exist yet)', async () => {
-      const enoentErr = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      spyFsRm.mockRejectedValueOnce(enoentErr);
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
-
-      // Should NOT throw
-      const result = await cloneRepository('https://github.com/owner/repo');
-      expect(result).toBeDefined();
     });
   });
 

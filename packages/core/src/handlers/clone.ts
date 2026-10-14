@@ -490,16 +490,6 @@ export async function cloneRepository(
   // Resolve authentication without putting it into the repository URL.
   const credentials = resolveForgeAuth(workingUrl);
 
-  // Remove the empty source/ directory before cloning (git clone requires non-existent target)
-  try {
-    await rm(targetPath, { recursive: true });
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-
   const cloneResult = await cloneGitRepository(
     workingUrl,
     toRepoPath(targetPath),
