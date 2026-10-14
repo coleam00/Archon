@@ -596,6 +596,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
   writer_run_id TEXT,
   writer_node_path TEXT,
   writer_identity TEXT,
+  writer_via TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   PRIMARY KEY (project_key, name, revision)
 );
@@ -744,6 +745,10 @@ ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS origin JSONB;
 -- Names of a binding's event-derived inputs, kept beside the intent: older binaries
 -- parse `intent` strictly and would refuse an extra key.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS event_input_names TEXT;
+
+-- The surface a state write outside a run came through (cli, api, ...). Nullable:
+-- rows written before it existed came through the CLI.
+ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;
 
 -- ============================================================================
 -- Indexes and column comments

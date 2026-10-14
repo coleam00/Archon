@@ -1460,21 +1460,35 @@ can overlap, need audit history, or run on several hosts. `$STATE_DIR` remains t
 file area for caches and non-JSON data, with its existing concurrency limitations.
 State documents currently require the SQL store (SQLite or PostgreSQL); file-store support
 is separate follow-up work. AI nodes do not yet receive `WORKFLOW_ID`, so a write an agent
-makes by calling `archon state` from its shell is recorded as the operator (`ARCHON_USER_ID`
-or `USER`), not as its run and node. Commit through a bash or script node when the run must
+makes by calling `archon state` from its shell is recorded as a CLI write from outside any
+run, not as its run and node. Commit through a bash or script node when the run must
 be recorded. Container runs are not supported because the CLI and store are not delivered there.
 
-A document belongs to a project, shared by all its workflows. Choose names such as
-`review/acme/123` with slash-separated lowercase letters, digits, `.`, `_`, or `-`
-(1–200 characters total). Use artifact pointers for large content: a document's serialized
-JSON is capped at 64 KiB. Values are fetched explicitly; the engine adds no state to prompts.
+A document belongs to a project, shared by all its workflows, or to install scope
+(`--install`), shared across projects. A node reaches only its run's project and install
+scope. Choose names such as `review/acme/123` with slash-separated lowercase letters,
+digits, `.`, `_`, or `-` (1–200 characters total); `archon state list --prefix review/`
+finds them again. A document is any JSON value, so a markdown note is a JSON string;
+`put --raw` and `get --raw` pass it as plain text. Use artifact pointers for large content:
+a document's serialized JSON is capped at 64 KiB. Values are fetched explicitly; the engine
+adds no state to prompts.
+
+Every revision records its writer: the run and node path for a write from inside a run,
+or the surface (`cli`) for any other write. It never records who made the change. If a
+document needs to say where an entry came from (a person, an agent, a tool result), keep
+that inside the document's own entries.
 
 `put --if-revision 0` creates a document; subsequent whole-document changes must name the
 revision read. Concurrent replacements have one winner; losers exit `3`. `patch` applies
 JSON Pointer `set`, `remove`, or `append` operations to the latest revision; concurrent
 patches serialize instead of racing, though an earlier write can make a later patch invalid.
+When a patch was computed from what you read, such as setting a field to a value you
+derived from its old one, pass `patch --if-revision <n>` so a concurrent change makes it
+exit `3` instead of being silently replaced. Appending an item, or setting a key only you
+write, can patch the latest revision without it.
 An absent document starts as `{}`; appending to `/seen` creates the array. Invalid patches
-or oversized values exit `4` and write nothing. Exit `1` means usage or storage failure.
+or oversized values exit `4` and write nothing. Exit `5` means the CLI opened a different
+store than the run's. Exit `1` means usage or storage failure.
 The [CLI reference](/reference/cli/#state) describes pointer and tombstone semantics.
 
 Let the agent judge what to remember, then commit its structured output in a script node
@@ -1515,8 +1529,8 @@ the host, but it also is not mounted into container runs.
 Bash/script nodes already receive `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION`; writes
 record their run ID and node path. Invoke the JSON argv in `ARCHON_CLI_COMMAND` instead
 of assuming `archon` is on PATH. If the nested CLI opens a store that does not know the
-run, it refuses the write instead of writing to another project. Operators can inspect
-`archon state log review/ledger` and correct a value using `put --if-revision`.
+run, it refuses the write (exit `5`) instead of writing to another project. Operators can inspect
+`archon state log review/ledger` and correct a value using `put --if-revision` or `patch --if-revision`.
 
 The ledger prevents lost state updates; it does not make an external review/comment and
 the state commit one transaction. Use resource admission to serialize work that must not

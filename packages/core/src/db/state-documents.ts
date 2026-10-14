@@ -4,11 +4,17 @@ import {
   parseStatePatchInput,
   stateDeleteSchema,
   stateDocumentNameSchema,
+  stateDocumentSummarySchema,
+  stateNamePrefixSchema,
+  statePatchOperation,
   stateRevisionSchema,
+  stateScopeKey,
   validateStateValue,
   StateRevisionConflictError,
   type IStateDocumentStore,
   type StateRevision,
+  type StateScope,
+  type StateWriter,
 } from '@archon/workflows/state-document-store';
 import { z } from 'zod';
 import type { IDatabase } from './adapters/types';
@@ -23,8 +29,33 @@ interface RevisionRow {
   writer_kind: string;
   writer_run_id: string | null;
   writer_node_path: string | null;
-  writer_identity: string | null;
+  writer_via: string | null;
   created_at: string | Date;
+}
+// The shipped CHECK admits only 'run' and 'operator' as writer_kind, so 'operator' stays
+// the stored token for any write outside a run; writer_via holds its surface. Rows from
+// before writer_via existed were all written through the CLI.
+function storedWriter(
+  writer: StateWriter
+): Pick<RevisionRow, 'writer_kind' | 'writer_run_id' | 'writer_node_path' | 'writer_via'> {
+  return writer.kind === 'run'
+    ? {
+        writer_kind: 'run',
+        writer_run_id: writer.runId,
+        writer_node_path: writer.nodePath,
+        writer_via: null,
+      }
+    : {
+        writer_kind: 'operator',
+        writer_run_id: null,
+        writer_node_path: null,
+        writer_via: writer.via,
+      };
+}
+function hydrateWriter(row: Omit<RevisionRow, 'value' | 'operation'>): unknown {
+  return row.writer_kind === 'run'
+    ? { kind: 'run', runId: row.writer_run_id, nodePath: row.writer_node_path }
+    : { kind: 'surface', via: row.writer_via ?? 'cli' };
 }
 function hydrate(row: RevisionRow): StateRevision {
   return stateRevisionSchema.parse({
@@ -32,16 +63,13 @@ function hydrate(row: RevisionRow): StateRevision {
     revision: row.revision,
     value: row.value === null ? null : (JSON.parse(row.value) as unknown),
     operation: JSON.parse(row.operation) as unknown,
-    writer:
-      row.writer_kind === 'run'
-        ? { kind: row.writer_kind, runId: row.writer_run_id, nodePath: row.writer_node_path }
-        : { kind: row.writer_kind, identity: row.writer_identity },
+    writer: hydrateWriter(row),
     createdAt: toHydratedTimestamp(row.created_at).toISOString(),
   });
 }
-function scope(project: string, name: string): void {
-  z.string().min(1).parse(project);
+function scope(target: StateScope, name: string): string {
   stateDocumentNameSchema.parse(name);
+  return stateScopeKey(target);
 }
 async function latest(query: Query, project: string, name: string): Promise<StateRevision | null> {
   const result = await query<RevisionRow>(
@@ -51,10 +79,10 @@ async function latest(query: Query, project: string, name: string): Promise<Stat
   return result.rows[0] ? hydrate(result.rows[0]) : null;
 }
 async function insert(query: Query, project: string, revision: StateRevision): Promise<void> {
-  const writer = revision.writer;
+  const writer = storedWriter(revision.writer);
   await query(
     `INSERT INTO remote_agent_state_revisions
-    (project_key, name, revision, value, operation, writer_kind, writer_run_id, writer_node_path, writer_identity, created_at)
+    (project_key, name, revision, value, operation, writer_kind, writer_run_id, writer_node_path, writer_via, created_at)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [
       project,
@@ -62,10 +90,10 @@ async function insert(query: Query, project: string, revision: StateRevision): P
       revision.revision,
       revision.value === null ? null : JSON.stringify(revision.value),
       JSON.stringify(revision.operation),
-      writer.kind,
-      writer.kind === 'run' ? writer.runId : null,
-      writer.kind === 'run' ? writer.nodePath : null,
-      writer.kind === 'operator' ? writer.identity : null,
+      writer.writer_kind,
+      writer.writer_run_id,
+      writer.writer_node_path,
+      writer.writer_via,
       revision.createdAt,
     ]
   );
@@ -81,6 +109,7 @@ export function createSqlStateDocumentStore(
     compute: (prior: StateRevision | null) => StateRevision['value']
   ): Promise<StateRevision> => {
     const db = database();
+    const project = stateScopeKey(input.scope);
     // Writers to one document serialize, so a write never loses a race for its revision
     // and only an explicit ifRevision mismatch fails. SQLite has one writer: a commit that
     // read a stale snapshot fails with SQLITE_BUSY_SNAPSHOT and the adapter reruns this
@@ -89,9 +118,9 @@ export function createSqlStateDocumentStore(
     return db.withTransaction(async txQuery => {
       if (db.dialect === 'postgres')
         await txQuery('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          JSON.stringify(['state-document', input.project, input.name]),
+          JSON.stringify(['state-document', project, input.name]),
         ]);
-      const prior = await latest(txQuery, input.project, input.name);
+      const prior = await latest(txQuery, project, input.name);
       const actual = prior?.revision ?? 0;
       if (input.ifRevision !== undefined && input.ifRevision !== actual)
         throw new StateRevisionConflictError(input.name, input.ifRevision, actual);
@@ -103,17 +132,13 @@ export function createSqlStateDocumentStore(
         writer: input.writer,
         createdAt: new Date().toISOString(),
       };
-      await insert(txQuery, input.project, next);
+      await insert(txQuery, project, next);
       return next;
     });
   };
   return {
-    getStateDocument: async (
-      project,
-      name
-    ): ReturnType<IStateDocumentStore['getStateDocument']> => {
-      scope(project, name);
-      const row = await latest(query, project, name);
+    getStateDocument: async (target, name): ReturnType<IStateDocumentStore['getStateDocument']> => {
+      const row = await latest(query, scope(target, name), name);
       return row?.value === null ? null : row;
     },
     putStateDocument: async (supplied): ReturnType<IStateDocumentStore['putStateDocument']> => {
@@ -123,18 +148,18 @@ export function createSqlStateDocumentStore(
     },
     patchStateDocument: async (supplied): ReturnType<IStateDocumentStore['patchStateDocument']> => {
       const input = parseStatePatchInput(supplied);
-      return write(input, { op: 'patch', ops: input.ops }, prior =>
+      return write(input, statePatchOperation(input), prior =>
         applyStatePatch(prior?.value ?? {}, input.ops, input.name)
       );
     },
     deleteStateDocument: async (supplied): ReturnType<IStateDocumentStore['deleteStateDocument']> =>
       write(stateDeleteSchema.parse(supplied), { op: 'delete' }, () => null),
     listStateRevisions: async (
-      project,
+      target,
       name,
       options = {}
     ): ReturnType<IStateDocumentStore['listStateRevisions']> => {
-      scope(project, name);
+      const project = scope(target, name);
       const limit =
         options.limit === undefined ? undefined : z.number().int().positive().parse(options.limit);
       return (
@@ -143,6 +168,40 @@ export function createSqlStateDocumentStore(
           limit === undefined ? [project, name] : [project, name, limit]
         )
       ).rows.map(hydrate);
+    },
+    listStateDocuments: async (
+      target,
+      options = {}
+    ): ReturnType<IStateDocumentStore['listStateDocuments']> => {
+      const project = stateScopeKey(target);
+      const prefix = stateNamePrefixSchema.parse(options.prefix ?? '');
+      // substr, not LIKE: `_` is a legal name character and a LIKE wildcard.
+      const rows = await query<
+        Omit<RevisionRow, 'value' | 'operation'> & {
+          deleted: boolean | number;
+        }
+      >(
+        `SELECT name, revision, writer_kind, writer_run_id, writer_node_path, writer_via, created_at,
+            (value IS NULL) AS deleted
+          FROM remote_agent_state_revisions latest_revision
+          WHERE project_key = $1 AND substr(name, 1, $2) = $3
+            AND revision = (SELECT MAX(revision) FROM remote_agent_state_revisions other
+              WHERE other.project_key = latest_revision.project_key AND other.name = latest_revision.name)`,
+        [project, prefix.length, prefix]
+      );
+      // Sorted here by code unit: PostgreSQL's ORDER BY follows the database collation.
+      const ordered = [...rows.rows].sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      );
+      return ordered.map(row =>
+        stateDocumentSummarySchema.parse({
+          name: row.name,
+          revision: row.revision,
+          updatedAt: toHydratedTimestamp(row.created_at).toISOString(),
+          writer: hydrateWriter(row),
+          deleted: Boolean(row.deleted),
+        })
+      );
     },
     pruneStateRevisions: async (days): ReturnType<IStateDocumentStore['pruneStateRevisions']> => {
       z.number().int().nonnegative().parse(days);

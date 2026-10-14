@@ -37,7 +37,6 @@ nodes:
     ...process.env,
     ARCHON_HOME: home,
     DATABASE_URL: '',
-    ARCHON_USER_ID: 'operator',
     WORKFLOW_ID: '',
     ARCHON_NODE_EXECUTION: '',
     ARCHON_TELEMETRY_DISABLED: '1',
@@ -108,10 +107,10 @@ nodes:
     '{"ops":[{"op":"set","path":"/wrong","value":true}]}',
     { WORKFLOW_ID: '00000000-0000-4000-8000-000000000001', ARCHON_NODE_EXECUTION: '{}' }
   );
-  expect(mismatch.code).toBe(1);
+  expect(mismatch.code).toBe(5);
   expect(JSON.parse(mismatch.stdout)).toMatchObject({
     error: expect.stringContaining('different store'),
-    code: 1,
+    code: 5,
   });
   const oversized = await run(
     ['state', 'put', 'review/ledger', '--if-revision', '3'],
@@ -119,11 +118,13 @@ nodes:
   );
   expect(oversized.code).toBe(4);
   const log = await run(['state', 'log', 'review/ledger']);
-  expect(JSON.parse(log.stdout)).toMatchObject([
-    { revision: 3, writer: { kind: 'operator', identity: 'operator' } },
-    { revision: 2 },
-    { revision: 1 },
-  ]);
+  expect(JSON.parse(log.stdout)).toMatchObject({
+    revisions: [
+      { revision: 3, writer: { kind: 'surface', via: 'cli' } },
+      { revision: 2 },
+      { revision: 1 },
+    ],
+  });
 }, 30_000);
 
 test('an operator write auto-registers an unregistered checkout under its workflow project key', async () => {
@@ -142,7 +143,6 @@ test('an operator write auto-registers an unregistered checkout under its workfl
       ...process.env,
       ARCHON_HOME: home,
       DATABASE_URL: '',
-      ARCHON_USER_ID: 'operator',
       WORKFLOW_ID: '',
       ARCHON_NODE_EXECUTION: '',
       ARCHON_TELEMETRY_DISABLED: '1',
@@ -161,7 +161,7 @@ test('an operator write auto-registers an unregistered checkout under its workfl
   expect(code, output + errors).toBe(0);
   expect(JSON.parse(output)).toMatchObject({
     revision: 1,
-    writer: { kind: 'operator', identity: 'operator' },
+    writer: { kind: 'surface', via: 'cli' },
   });
   const db = new Database(join(home, 'archon.db'), { readonly: true });
   try {
