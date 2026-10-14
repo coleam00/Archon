@@ -84,6 +84,8 @@ Go to your repository settings:
 
 Click "Add webhook" and verify it shows a green checkmark after delivery.
 
+Webhook bodies are limited to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** before authentication; Archon stops reading them and creates no receipt or workflow start. This limit applies only to webhook routes. Accepted deliveries retain exact-byte signature verification and existing acknowledgement behavior.
+
 ## Step 4: Set Environment Variables
 
 ```ini
