@@ -13,15 +13,18 @@ import type {
 } from '../skills';
 
 /**
- * A credential counts as "usable" when the calling user connected it, the
- * install env already carries it, or the ambient chain is detected. Matches
+ * A credential counts as "usable" when the calling user connected it as a kind
+ * this agent consumes (a Claude subscription does not serve Pi), the install
+ * env already carries it, or the ambient chain is detected. Matches
  * the per-credential check in the server's `buildAgentCredentialMatrix`
  * (expressed there with falsy coercion rather than `=== true`). Used for the
  * per-row display and backend counts; the boolean ready/not-ready verdict
  * itself comes from the server's `ready` field (see `agentReadiness`).
  */
 export function isCredentialUsable(c: AgentCredentialStatus): boolean {
-  return c.connected !== null || c.installEnv || c.ambientConfigured === true;
+  const consumed =
+    c.connected !== null && c.kinds.includes(c.connected === 'oauth' ? 'subscription' : 'api_key');
+  return consumed || c.installEnv || c.ambientConfigured === true;
 }
 
 export type AgentReadinessState = 'ready' | 'needs-credential' | 'dynamic';

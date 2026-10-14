@@ -7,7 +7,11 @@ import type { ResolvedWorkflowPolicy } from './schemas/run-config';
  *
  * Provider types are imported directly from @archon/provider-contract.
  */
-import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
+import type {
+  CredentialStatus,
+  ProviderRegistry,
+  StoredCredentialKind,
+} from '@archon/provider-contract';
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type { AttentionOption } from './schemas/dag-node';
@@ -207,6 +211,12 @@ export type AgentProviderFactory = (provider: string) => IAgentProvider;
 // WorkflowDeps — the single injection point
 // ---------------------------------------------------------------------------
 
+/** A stored credential: how it was connected, and whether it can be used now. */
+export interface StoredProviderCredential {
+  kind: StoredCredentialKind;
+  status: CredentialStatus;
+}
+
 export interface WorkflowDeps {
   providers: ProviderRegistry;
   store: IWorkflowStore;
@@ -260,6 +270,11 @@ export interface WorkflowDeps {
   isPerUserProviderKeysEnabled?: () => boolean;
   /** Where stored per-user credentials live; `files` has none, so preflight refuses them. */
   credentialStore?: WorkflowStoreKind;
+  /** The user's stored credential for `vendor`, or `undefined` when none is stored. */
+  getUserProviderCredentialStatus?: (
+    userId: string,
+    vendor: string
+  ) => Promise<StoredProviderCredential | undefined>;
   /**
    * Optional: resolve the required connected provider credentials into a
    * delivery bag (env vars + files to write under `artifactsDir`) plus the
@@ -271,7 +286,6 @@ export interface WorkflowDeps {
    * Vendors selected as connected during preflight must remain connected at
    * delivery. Failures must throw to prevent fallback to another account.
    */
-  getUserProviderCredentialStatus?: (userId: string, vendor: string) => Promise<CredentialStatus>;
   getUserProviderEnv?: (
     userId: string,
     artifactsDir: string,

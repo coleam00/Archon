@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeAll, afterEach } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
-import { getRegisteredProviders } from '@archon/providers';
+import { getRegisteredProviders, PI_PROVIDER_ENV_VARS } from '@archon/providers';
 import {
   getVendorCatalog,
   listConnectableVendors,
@@ -58,6 +58,11 @@ describe('credentials/catalog', () => {
     expect(anthropic!.agents).toContain('pi');
     expect(anthropic!.kinds).toContain('api_key');
     expect(anthropic!.kinds).toContain('subscription');
+    // The subscription comes from Claude Code: Pi consumes only an Anthropic API key.
+    const pi = getRegisteredProviders().find(reg => reg.id === 'pi')!.credentials;
+    expect(
+      pi.kind === 'static' && pi.specs.find(spec => spec.vendor === 'anthropic')?.kinds
+    ).toEqual(['api_key']);
     // Pi-only backends carry only Pi.
     expect(catalog.get('openrouter')?.agents).toEqual(['pi']);
     // Ambient-only vendors are present but not api_key-connectable.
@@ -146,6 +151,40 @@ describe('credentials/catalog', () => {
       expect(pi.credentials.find(s => s.vendor === 'openrouter')!.connected).toBe('api_key');
       expect(pi.credentials.find(s => s.vendor === 'anthropic')!.connected).toBe('oauth');
       expect(pi.ready).toBe(true);
+    });
+
+    test('a Claude subscription makes Claude Code ready, not Pi', () => {
+      const pi = getRegisteredProviders().find(reg => reg.id === 'pi')!;
+      const piEnv = [
+        ...Object.values(PI_PROVIDER_ENV_VARS),
+        'CLAUDE_API_KEY',
+        'CLAUDE_CODE_OAUTH_TOKEN',
+        'ANTHROPIC_OAUTH_TOKEN',
+        'AWS_PROFILE',
+        'AWS_ACCESS_KEY_ID',
+        'AWS_BEARER_TOKEN_BEDROCK',
+        'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+        'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+        'AWS_WEB_IDENTITY_TOKEN_FILE',
+        'GOOGLE_CLOUD_PROJECT',
+        'GCLOUD_PROJECT',
+      ];
+      const saved = piEnv.map(key => [key, process.env[key]] as const);
+      for (const key of piEnv) delete process.env[key];
+      try {
+        const matrix = buildAgentCredentialMatrix([{ provider: 'anthropic', kind: 'oauth' }]);
+        expect(matrix.find(a => a.id === 'claude')!.ready).toBe(true);
+        const piEntry = matrix.find(a => a.id === pi.id)!;
+        const anthropic = piEntry.credentials.find(s => s.vendor === 'anthropic')!;
+        expect(anthropic.connected).toBe('oauth');
+        expect(anthropic.subscriptionAvailable).toBe(false);
+        expect(piEntry.ready).toBe(false);
+      } finally {
+        for (const [key, value] of saved) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
     });
 
     test('subscriptionAvailable: all three subscription vendors connectable (#1924 gate lifted)', () => {

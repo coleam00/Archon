@@ -390,7 +390,10 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
     providers: providerRegistry,
     store: store ?? makeStore(),
-    getUserProviderCredentialStatus: mock(async () => ({ state: 'usable', source: 'archon' })),
+    getUserProviderCredentialStatus: mock(async () => ({
+      kind: 'api_key' as const,
+      status: { state: 'usable' as const, source: 'archon' as const },
+    })),
     loadConfig: mock(
       async (): Promise<WorkflowConfig> => ({
         assistant: 'claude' as const,
@@ -6000,10 +6003,13 @@ describe('credential preflight lifecycle', () => {
       const deps = makeDeps(store);
       deps.isPerUserProviderKeysEnabled = () => true;
       const getStatus = mock(
-        async (): Promise<import('@archon/provider-contract').CredentialStatus> => ({
-          state: 'unusable',
-          source: 'archon',
-          evidence: 'stored credential unreadable',
+        async (): Promise<import('./deps').StoredProviderCredential> => ({
+          kind: 'api_key',
+          status: {
+            state: 'unusable',
+            source: 'archon',
+            evidence: 'stored credential unreadable',
+          },
         })
       );
       deps.getUserProviderCredentialStatus = getStatus;
@@ -6044,8 +6050,8 @@ describe('credential preflight lifecycle', () => {
     deps.getUserProviderCredentialStatus = mock(
       async () =>
         ({
-          state: 'usable',
-          source: 'archon',
+          kind: 'api_key',
+          status: { state: 'usable', source: 'archon' },
         }) as const
     );
     deps.getUserProviderEnv = mock(async (_user, _dir, vendors, connectedVendors) => {

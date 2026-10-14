@@ -17,6 +17,7 @@ import {
   PI_PROVIDER_ENV_VARS,
   type CredentialKind,
 } from '@archon/providers';
+import { consumesStoredCredential } from '@archon/provider-contract';
 import { KNOWN_VENDORS, normalizeCredentialVendor } from './delivery';
 import { SUBSCRIPTION_PROVIDERS } from './oauth-providers';
 
@@ -111,8 +112,8 @@ export interface AgentCredentialMatrixEntry {
   displayName: string;
   catalog: 'static' | 'dynamic';
   /**
-   * Whether at least one credential is usable (connected, present in the
-   * install env, or ambient-detected). Always false for `dynamic` agents —
+   * Whether at least one credential is usable (connected as a kind this agent
+   * consumes, present in the install env, or ambient-detected). Always false for `dynamic` agents —
    * their surface is only knowable from their own runtime introspection.
    */
   ready: boolean;
@@ -205,7 +206,13 @@ export function buildAgentCredentialMatrix(
       id: reg.id,
       displayName: reg.displayName,
       catalog: 'static' as const,
-      ready: credentials.some(s => s.connected !== null || s.installEnv || s.ambientConfigured),
+      ready: credentials.some(
+        s =>
+          (s.connected !== null &&
+            consumesStoredCredential(reg.credentials, s.vendor, s.connected)) ||
+          s.installEnv ||
+          s.ambientConfigured
+      ),
       credentials,
     };
   });

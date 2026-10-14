@@ -76,16 +76,11 @@ describe('credentials/delivery', () => {
       expect(r.files).toBeUndefined();
     });
 
-    test('oauth (Claude Pro/Max subscription) → CLAUDE_CODE_OAUTH_TOKEN + ANTHROPIC_OAUTH_TOKEN', () => {
-      // Native Claude reads CLAUDE_CODE_OAUTH_TOKEN; Pi's anthropic backend reads
-      // ANTHROPIC_OAUTH_TOKEN in env-only chat (#1984). Both carry the same bearer.
+    test('oauth (Claude Pro/Max subscription) → CLAUDE_CODE_OAUTH_TOKEN only, nothing Pi reads', () => {
       const r = deliverCredential('anthropic', oauth('claude-oauth-tok'), {
         artifactsDir: ART_DIR,
       });
-      expect(r.env).toEqual({
-        CLAUDE_CODE_OAUTH_TOKEN: 'claude-oauth-tok',
-        ANTHROPIC_OAUTH_TOKEN: 'claude-oauth-tok',
-      });
+      expect(r.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'claude-oauth-tok' });
       expect(r.files).toBeUndefined();
     });
 
@@ -184,10 +179,10 @@ describe('credentials/delivery', () => {
       expect(buildPiAuthJson([{ provider: 'totally-unknown', cred: apiKey('x') }])).toBeNull();
     });
 
-    test('aggregates api keys + subscriptions keyed by Pi backend id', () => {
+    test('aggregates the api keys + subscriptions Pi consumes, keyed by Pi backend id', () => {
       const json = buildPiAuthJson([
         { provider: 'openrouter', cred: apiKey('sk-or') },
-        { provider: 'anthropic', cred: oauth('cl-tok') },
+        { provider: 'openai', cred: oauth('oa-tok') },
       ]);
       expect(json).not.toBeNull();
       const data = JSON.parse(json!) as Record<
@@ -195,17 +190,23 @@ describe('credentials/delivery', () => {
         { type: string; key?: string; access?: string }
       >;
       expect(data.openrouter).toEqual({ type: 'api_key', key: 'sk-or' });
-      expect(data.anthropic?.type).toBe('oauth');
-      expect(data.anthropic?.access).toBe('cl-tok');
+      expect(data.openai?.type).toBe('oauth');
+      expect(data.openai?.access).toBe('oa-tok');
+    });
+
+    test('a Claude subscription is not delivered to Pi; an Anthropic API key is', () => {
+      expect(buildPiAuthJson([{ provider: 'anthropic', cred: oauth('cl-tok') }])).toBeNull();
+      const json = buildPiAuthJson([{ provider: 'anthropic', cred: apiKey('sk-ant') }]);
+      expect(JSON.parse(json!)).toEqual({ anthropic: { type: 'api_key', key: 'sk-ant' } });
     });
 
     test('legacy agent-keyed rows normalize onto Pi backend ids', () => {
       const json = buildPiAuthJson([
-        { provider: 'claude', cred: oauth('cl-tok') },
+        { provider: 'claude', cred: apiKey('sk-ant') },
         { provider: 'codex', cred: apiKey('sk-oa') },
       ]);
       const data = JSON.parse(json!) as Record<string, { type: string }>;
-      expect(data.anthropic?.type).toBe('oauth');
+      expect(data.anthropic?.type).toBe('api_key');
       expect(data.openai?.type).toBe('api_key');
     });
   });

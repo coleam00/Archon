@@ -2210,9 +2210,12 @@ nodes:
       if (failure === 'credential') {
         deps.isPerUserProviderKeysEnabled = () => true;
         deps.getUserProviderCredentialStatus = async () => ({
-          state: 'unusable',
-          source: 'archon',
-          evidence: 'credential cannot be decrypted',
+          kind: 'api_key',
+          status: {
+            state: 'unusable',
+            source: 'archon',
+            evidence: 'credential cannot be decrypted',
+          },
         });
       }
       const resolve = mock(async () => ({ cwd: '/never', envId: 'never', branchName: 'never' }));

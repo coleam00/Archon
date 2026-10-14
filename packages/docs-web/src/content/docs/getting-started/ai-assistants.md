@@ -399,8 +399,9 @@ Run `archon setup` and select **Pi** in the AI assistant multiselect. The wizard
 
 Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi` → `/login`) AND from env vars — env vars take priority per-request so codebase-scoped overrides work.
 
+A Claude Pro/Max subscription runs on the Claude provider (`provider: claude`). Archon does not deliver a Claude subscription to Pi; Pi runs Anthropic models with an Anthropic API key.
+
 **OAuth subscriptions (run `pi /login` locally):**
-- Anthropic Claude Pro/Max
 - OpenAI ChatGPT Plus/Pro
 - GitHub Copilot
 - Google Gemini CLI
@@ -410,7 +411,7 @@ Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your e
 
 | Pi provider id | Env var |
 |---|---|
-| `anthropic` | `ANTHROPIC_OAUTH_TOKEN` (subscription, read first) or `ANTHROPIC_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` |
 | `openai` | `OPENAI_API_KEY` |
 | `google` | `GEMINI_API_KEY` |
 | `groq` | `GROQ_API_KEY` |
@@ -863,7 +864,7 @@ The console **AI Settings** page (Settings in the web UI) has four sections:
 
 - **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config). Pi tier models show a cost/reasoning/context hint from Pi's model catalog.
 - **Model Aliases** — define `@custom` refs (e.g. `@fast`) usable in workflow `model:` fields, with the same scope toggle.
-- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). Every vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user.
+- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). An `anthropic` subscription runs only on Claude Code, so it does not make the Pi card ready. One credential is stored per vendor: connecting an Anthropic API key replaces a connected subscription. Every vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user.
 - **Defaults** — leads with a "Chat runs on [provider][model]" combo line in both scopes (the install line edits the default assistant + `assistants.<provider>.model`; the just-me line edits your personal default assistant + chat-model pin), with the per-provider model grid below as the advanced view.
 
 ### Per-user model preferences ("Just me")

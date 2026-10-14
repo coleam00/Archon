@@ -15292,14 +15292,17 @@ describe('workflow run credential launch refusal', () => {
     const createDeps = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
       ...original(),
       isPerUserProviderKeysEnabled: () => true,
-      getUserProviderCredentialStatus: async (_userId, vendor) =>
-        adopt && vendor === 'anthropic'
-          ? { state: 'usable', source: 'archon' }
-          : {
-              state: 'unusable',
-              source: 'archon',
-              evidence: 'stored credential unreadable',
-            },
+      getUserProviderCredentialStatus: async (_userId, vendor) => ({
+        kind: 'api_key',
+        status:
+          adopt && vendor === 'anthropic'
+            ? { state: 'usable', source: 'archon' }
+            : {
+                state: 'unusable',
+                source: 'archon',
+                evidence: 'stored credential unreadable',
+              },
+      }),
     }));
     const isolation = await import('@archon/isolation');
     const core = await import('@archon/core');

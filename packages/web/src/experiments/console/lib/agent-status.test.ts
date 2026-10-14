@@ -34,9 +34,15 @@ function agent(over: Partial<AgentCredentials> & { id: string }): AgentCredentia
 describe('isCredentialUsable', () => {
   test('connected, install env, or ambient-detected each count', () => {
     expect(isCredentialUsable(cred({ vendor: 'a', connected: 'api_key' }))).toBe(true);
-    expect(isCredentialUsable(cred({ vendor: 'a', connected: 'oauth' }))).toBe(true);
+    expect(
+      isCredentialUsable(cred({ vendor: 'a', kinds: ['subscription'], connected: 'oauth' }))
+    ).toBe(true);
     expect(isCredentialUsable(cred({ vendor: 'a', installEnv: true }))).toBe(true);
     expect(isCredentialUsable(cred({ vendor: 'a', ambientConfigured: true }))).toBe(true);
+  });
+
+  test('a connected kind the agent does not consume is not usable (Claude subscription on Pi)', () => {
+    expect(isCredentialUsable(cred({ vendor: 'anthropic', connected: 'oauth' }))).toBe(false);
   });
 
   test('nothing detected → not usable (ambientConfigured false stays false)', () => {
@@ -82,7 +88,13 @@ describe('agentReadiness', () => {
         agent({
           id: 'copilot',
           ready: true,
-          credentials: [cred({ vendor: 'github-copilot', connected: 'oauth' })],
+          credentials: [
+            cred({
+              vendor: 'github-copilot',
+              kinds: ['api_key', 'subscription'],
+              connected: 'oauth',
+            }),
+          ],
         })
       ).detail
     ).toBe('subscription connected');

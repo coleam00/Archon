@@ -321,8 +321,8 @@ test('whitespace Pi models preflight the stored vendor credential instead of nat
   const checkCredential = mock(native.checkCredential.bind(native));
   native.checkCredential = checkCredential;
   const getUserProviderCredentialStatus = mock(async (_user: string, _vendor: string) => ({
-    state: 'usable' as const,
-    source: 'archon' as const,
+    kind: 'api_key' as const,
+    status: { state: 'usable' as const, source: 'archon' as const },
   }));
   const providers = {
     get: (id: string) => (id === 'pi' ? registration : undefined),
