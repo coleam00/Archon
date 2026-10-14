@@ -77,6 +77,16 @@ archon workflow run archon-triage "#142"
 
 ---
 
+#### `archon-intake`
+
+The standing front of the pack, started by trigger bindings on issue and label events rather than by hand. A script checks whether the issue's author is on the project's maintainer list (`.archon/sdlc/policy/maintainers.json`) before any model reads the text. A maintainer's issue is triaged and gets a route label; an outside issue gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label.
+
+**When to use it**: You want new issues triaged as they arrive without letting anyone who can open an issue spend tokens. The pack installs no binding; the SDLC pack README's "Intake" section shows the two bindings to add.
+
+**What it produces**: A work item per issue (`archon state get work/<number>`) holding its trust, stage, triage fields, and history, and the labels that mirror it.
+
+---
+
 #### `archon-investigate`
 
 Establishes the proven causal chain for a bug, unexplained behavior, or open question, down to the root cause whose fix prevents the symptom.
@@ -121,7 +131,7 @@ archon workflow run archon-implement --branch feat/export-csv "Implement the pla
 
 #### `archon-pr`
 
-Opens a pull request for the committed work on the current branch. It first merges the latest base branch into the branch, resolving conflicts it can resolve with confidence and stopping with the paths named when it cannot. It runs no checks. It uses the repository's PR template when one exists, pushes the branch, and reads the created PR back to verify it.
+Opens a pull request for the committed work on the current branch. It neither merges the base nor runs checks: CI judges the pushed head. It uses the repository's PR template when one exists, pushes the branch, and reads the created PR back to verify it. It references a linked issue with `Refs #N`, never a closing keyword, because no review has judged the work yet.
 
 **When to use it**: A branch has committed work and needs a PR. Run it with `--no-worktree` from the checkout that holds the branch.
 
@@ -135,7 +145,7 @@ archon workflow run archon-pr --no-worktree --input draft=false
 
 #### `archon-deliver`
 
-The delivery tail, in capped rounds: implement the work with focused checks on what it changes, push and open (or update) a draft PR, and review it. Once a round's review passes, a structure pass looks for a smaller shape once and the implementer adopts or declines its findings; then an agent marks the PR ready, waits for CI (the full validation) however long it takes, and puts it back in draft if CI is red. A flake or infrastructure failure outside the change gets one re-run of its failed jobs first, and a green re-run delivers. Review findings, CI red the change caused, and a conflict with the base go back to the implementer for another round (it merges the base on a conflict, never rebasing), up to three rounds. Each correction is reviewed on its delta: by the same lenses after review findings, by one general code reviewer after a CI fix. Any other ending is not ready, with its reason; a red PR never stays ready. Finally it updates the PR description and relays any discoveries. `--input pull_request=<number>` continues that open PR instead of opening one. There is no approval gate inside the run; your gate is PR review and merge.
+The delivery tail, in capped rounds: implement the work with focused checks on what it changes, push and open (or update) a draft PR, and review it. Once a round's review passes, a structure pass looks for a smaller shape once and the implementer adopts or declines its findings; then an agent marks the PR ready, waits for CI (the full validation) however long it takes, and puts it back in draft if CI is red. A flake or infrastructure failure outside the change gets one re-run of its failed jobs first, and a green re-run delivers. Review findings, CI red the change caused, and a conflict with the base go back to the implementer for another round (it merges the base on a conflict, never rebasing), up to three rounds. Each correction is reviewed on its delta: by the same lenses after review findings, by one general code reviewer after a CI fix. Any other ending is not ready, with its reason; a red PR never stays ready. Finally it updates the PR description and relays any discoveries. The description closes its issue (`Closes #N`) only when the last review's contract coverage marks the required outcome and every acceptance item met; otherwise it says `Refs #N` and lists what is left, and so does the run's outcome. `--input pull_request=<number>` continues that open PR instead of opening one. There is no approval gate inside the run; your gate is PR review and merge.
 
 **When to use it**: The work is decided, for example an approved plan, and should become a reviewed, ready-to-merge PR.
 
@@ -199,6 +209,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 |----------|----------|-------------|---------------|
 | `archon-ship` | Issue or request to reviewed PR | Yes | Yes |
 | `archon-triage` | Decide what an item needs next | No | No |
+| `archon-intake` | Triage new issues as they arrive (trigger-started) | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
 | `archon-implement` | Build decided work | No | Yes (commits) |

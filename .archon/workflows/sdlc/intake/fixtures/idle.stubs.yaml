@@ -1,0 +1,20 @@
+# Dry-run fixture: every waiting item is already claimed, so the run ends with
+# nothing to do and no agent node runs.
+facts:
+  path: idle
+  item: null
+  target: ""
+  decision: null
+outcome:
+  path: idle
+  item: null
+  stage: null
+  trust: null
+  promoted: false
+  labels: []
+  summary: "stub: No item waits for intake."
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo, number: "9" }
+  expect: completed
+  reached: [facts, outcome]
+exec-code: true

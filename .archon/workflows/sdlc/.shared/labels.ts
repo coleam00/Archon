@@ -7,13 +7,8 @@
  * so a name declared anywhere else is a copy that can drift.
  */
 
-import {
-  forgeSource,
-  invokeForge,
-  readRepositoryLabels,
-  readWorkItemLabels,
-  type QualifiedPr,
-} from './forge.ts';
+import { forgeSource, invokeForge, readRepositoryLabels, type QualifiedPr } from './forge.ts';
+import { viewIssue } from './issue.ts';
 
 interface LabelSpec {
   readonly color: string;
@@ -51,6 +46,14 @@ export const PACK_LABELS = {
   'archon-size-s': { color: 'C2E0C6', description: 'Triage: a few files on one surface' },
   'archon-size-m': { color: 'FEF2C0', description: 'Triage: several files or two surfaces' },
   'archon-size-l': { color: 'F9D0C4', description: 'Triage: several packages, schemas, or surfaces' },
+  'archon-needs-maintainer': {
+    color: 'FBCA04',
+    description: 'Intake: an outside item waits for a maintainer to promote it',
+  },
+  'archon-triage': {
+    color: '5319E7',
+    description: 'Intake: a request to triage this item; intake removes it when done',
+  },
 } as const satisfies Record<string, LabelSpec>;
 
 export type PackLabel = keyof typeof PACK_LABELS;
@@ -111,6 +114,38 @@ export const SIZE_LABEL = {
   l: 'archon-size-l',
 } as const satisfies Record<Size, PackLabel>;
 
+/**
+ * The labels a person adds to ask intake for something: `archon-triage` asks for
+ * triage, and a route label on an outside item promotes it. The pack's own write of
+ * a route label is not a request; intake recognizes it as the work item's mirror.
+ */
+export const REQUEST_LABELS: readonly PackLabel[] = [
+  'archon-triage',
+  ...new Set(Object.values(ROUTE_LABEL)),
+];
+
+export function isRequestLabel(name: string): boolean {
+  return (REQUEST_LABELS as readonly string[]).includes(name);
+}
+
+/** A triage verdict as far as labels read it: a READY item carries its route. */
+export type LabelVerdict =
+  | { readonly contract: 'READY'; readonly route: Route }
+  | { readonly contract: Exclude<Contract, 'READY'> };
+
+/**
+ * The pack labels a verdict derives: one state label and one type label, plus a
+ * size label while the item can still be worked; a close verdict carries none.
+ */
+export function wantedLabels(verdict: LabelVerdict, type: WorkType, size: Size): PackLabel[] {
+  const wanted: PackLabel[] = [
+    verdict.contract === 'READY' ? ROUTE_LABEL[verdict.route] : STATE_LABEL[verdict.contract],
+    TYPE_LABEL[type],
+  ];
+  if (verdict.contract !== 'NO_ACTION') wanted.push(SIZE_LABEL[size]);
+  return wanted;
+}
+
 function gh(...args: string[]): string {
   const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
   if (result.exitCode !== 0) {
@@ -124,28 +159,6 @@ function ghRepositoryLabels(repository: string): Set<string> {
     gh('label', 'list', '--repo', repository, '--limit', '500', '--json', 'name')
   ) as { name: string }[];
   return new Set(rows.map(row => row.name));
-}
-
-/** The item's current labels, after proving the number names an issue on the tracker. */
-function ghIssueLabels(item: QualifiedPr): Set<string> {
-  const issue = JSON.parse(
-    gh('api', '--hostname', item.repo.host, `repos/${item.repo.path}/issues/${String(item.number)}`)
-  ) as {
-    number?: unknown;
-    html_url?: unknown;
-    pull_request?: unknown;
-    labels?: { name: string }[];
-  };
-  const url = `https://${item.repo.host}/${item.repo.path}/issues/${String(item.number)}`;
-  if (
-    issue.number !== item.number ||
-    (typeof issue.html_url === 'string' ? issue.html_url : '').toLowerCase() !==
-      url.toLowerCase() ||
-    'pull_request' in issue
-  ) {
-    throw new Error(`tracker identity mismatch: ${url} does not answer as that issue`);
-  }
-  return new Set((issue.labels ?? []).map(row => row.name));
 }
 
 /**
@@ -166,7 +179,7 @@ export function writeLabels(
 
 function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly OwnedLabel[]): string[] {
   const repository = `${item.repo.host}/${item.repo.path}`;
-  const current = ghIssueLabels(item);
+  const current = new Set(viewIssue(item).labels);
   const present = ghRepositoryLabels(repository);
   for (const name of add) {
     if (!present.has(name) && isPackLabel(name)) {
@@ -187,7 +200,7 @@ function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly Own
     for (const name of stale) args.push('--remove-label', name);
     gh(...args);
   }
-  const after = ghIssueLabels(item);
+  const after = new Set(viewIssue(item).labels);
   const missing = applied.filter(name => !after.has(name));
   const lingering = stale.filter(name => after.has(name));
   if (missing.length > 0 || lingering.length > 0) {
@@ -207,7 +220,7 @@ function forgeWrite(
   add: readonly string[],
   remove: readonly OwnedLabel[]
 ): string[] {
-  const current = readWorkItemLabels(item);
+  const current = viewIssue(item).labels;
   const present = new Set(readRepositoryLabels(item.repo));
   for (const name of add) {
     if (!present.has(name) && isPackLabel(name)) {

@@ -97,7 +97,7 @@ test('stale first-party providers are unavailable with the versioned install com
   );
   expect(await loadProviderPlugins(dir, { version: '0.13.0' })).toEqual([]);
   expect(() => requireProvider(providerRegistry, 'claude')).toThrow(
-    "Provider 'claude' is installed at 0.12.0 but this CLI is 0.13.0. Run: archon provider install claude"
+    "Provider 'claude' is installed at 0.12.0 but this CLI is 0.13.0. Run: archon provider add claude"
   );
 });
 

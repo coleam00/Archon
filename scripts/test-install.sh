@@ -318,7 +318,7 @@ assert_equals "0" "$piped_status" "Piped installer exits successfully"
 assert_equals "archon 1.2.3" "$("$tmp_dir/piped-bin/archon" version)" "Piped installer installs a working binary"
 
 # Provider selection. The downloaded "binary" is a shell-script stub that records each
-# invocation, so these cases prove which `archon provider install` the installer runs.
+# invocation, so these cases prove which `archon provider add` the installer runs.
 assert_provider_ids_match() {
   local owner="$repo_root/packages/provider-contract/src/registration.ts"
   local expected shell_ids powershell_ids
@@ -356,13 +356,13 @@ if [ "\$1" = "version" ]; then
   exit 0
 fi
 echo "\$*" >>"$provider_calls"
-[ "\$*" != "provider install pi" ]
+[ "\$*" != "provider add pi" ]
 BINARY
 EOF
 chmod +x "$provider_mock_dir/curl"
 
 # Runs the installer into a fresh directory with extra arguments passed through, and
-# prints its combined output. The stub fails `provider install pi` on purpose.
+# prints its combined output. The stub fails `provider add pi` on purpose.
 provider_install_count=0
 run_provider_install() {
   rm -f "$provider_calls" "$provider_curl_marker"
@@ -377,23 +377,23 @@ provider_calls_made() {
 }
 
 output=$(run_provider_install --providers codex,claude) || fail "--providers install failed: $output"
-assert_equals "provider install codex claude" "$(provider_calls_made)" "--providers runs one provider install"
+assert_equals "provider add codex claude" "$(provider_calls_made)" "--providers runs one provider add"
 
 output=$(run_provider_install --providers=codex) || fail "--providers= install failed: $output"
-assert_equals "provider install codex" "$(provider_calls_made)" "--providers=<ids> form"
+assert_equals "provider add codex" "$(provider_calls_made)" "--providers=<ids> form"
 
 output=$(ARCHON_PROVIDERS="claude" run_provider_install) || fail "ARCHON_PROVIDERS install failed: $output"
-assert_equals "provider install claude" "$(provider_calls_made)" "ARCHON_PROVIDERS selects providers"
+assert_equals "provider add claude" "$(provider_calls_made)" "ARCHON_PROVIDERS selects providers"
 
 output=$(ARCHON_PROVIDERS="claude" run_provider_install --providers codex) \
   || fail "flag over env install failed: $output"
-assert_equals "provider install codex" "$(provider_calls_made)" "--providers wins over ARCHON_PROVIDERS"
+assert_equals "provider add codex" "$(provider_calls_made)" "--providers wins over ARCHON_PROVIDERS"
 
 output=$(run_provider_install) || fail "non-interactive install failed: $output"
 assert_equals "" "$(provider_calls_made)" "No terminal and no selection installs no provider"
 case "$output" in
-  *"archon provider install <claude|codex|pi>"*) ;;
-  *) fail "non-interactive install without a selection does not print the provider install command" ;;
+  *"archon provider add <claude|codex|pi>"*) ;;
+  *) fail "non-interactive install without a selection does not print the provider add command" ;;
 esac
 
 answers="$tmp_dir/provider-answers"
@@ -404,7 +404,7 @@ assert_equals "" "$(provider_calls_made)" "An explicit empty selection installs 
 
 printf '%s\n' 'bogus' 'codex, claude' >"$answers"
 output=$(ARCHON_TTY="$answers" run_provider_install) || fail "interactive install failed: $output"
-assert_equals "provider install codex claude" "$(provider_calls_made)" \
+assert_equals "provider add codex claude" "$(provider_calls_made)" \
   "The terminal answer selects providers after an invalid one is asked again"
 case "$output" in
   *"Unknown provider 'bogus'"*) ;;
@@ -426,10 +426,10 @@ esac
 
 failed_status=0
 output=$(run_provider_install --providers pi) || failed_status=$?
-[ "$failed_status" -ne 0 ] || fail "installer succeeded when provider install failed"
+[ "$failed_status" -ne 0 ] || fail "installer succeeded when provider add failed"
 case "$output" in
-  *"Retry with: archon provider install pi"*) ;;
-  *) fail "failed provider install does not print the retry command" ;;
+  *"Retry with: archon provider add pi"*) ;;
+  *) fail "failed provider add does not print the retry command" ;;
 esac
 
 rm -f "$provider_calls"
@@ -437,7 +437,7 @@ PATH="$provider_mock_dir:$PATH" ARCHON_CPUINFO_PATH="$avx2_cpuinfo" \
   INSTALL_DIR="$tmp_dir/piped-provider-bin" SKIP_CHECKSUM=true \
   bash -s -- --providers codex <"$installer" >/dev/null 2>&1 \
   || fail "piped installer with --providers failed"
-assert_equals "provider install codex" "$(provider_calls_made)" "Piped installer passes --providers"
+assert_equals "provider add codex" "$(provider_calls_made)" "Piped installer passes --providers"
 
 # The same selection cases for install.ps1, where PowerShell is installed (the Linux CI
 # runner has it). The driver shadows the Invoke-WebRequest cmdlet with a function, so the
@@ -453,7 +453,7 @@ if [ "\$1" = "version" ]; then
   exit 0
 fi
 echo "\$*" >>"$ps_calls"
-[ "\$*" != "provider install pi" ]
+[ "\$*" != "provider add pi" ]
 EOF
   chmod +x "$ps_stub"
   ps_driver="$tmp_dir/ps-driver.ps1"
@@ -488,17 +488,17 @@ EOF
   }
 
   output=$(run_ps_install -Providers codex,claude) || fail "-Providers install failed: $output"
-  assert_equals "provider install codex claude" "$(ps_calls_made)" "-Providers runs one provider install"
+  assert_equals "provider add codex claude" "$(ps_calls_made)" "-Providers runs one provider add"
 
   output=$(run_ps_install -Providers codex) || fail "single -Providers install failed: $output"
-  assert_equals "provider install codex" "$(ps_calls_made)" "-Providers with one id"
+  assert_equals "provider add codex" "$(ps_calls_made)" "-Providers with one id"
 
   output=$(ARCHON_PROVIDERS="claude" run_ps_install -Providers codex) \
     || fail "-Providers over env install failed: $output"
-  assert_equals "provider install codex" "$(ps_calls_made)" "-Providers wins over ARCHON_PROVIDERS"
+  assert_equals "provider add codex" "$(ps_calls_made)" "-Providers wins over ARCHON_PROVIDERS"
 
   output=$(ARCHON_PROVIDERS="claude" run_ps_install) || fail "ARCHON_PROVIDERS install failed: $output"
-  assert_equals "provider install claude" "$(ps_calls_made)" "ARCHON_PROVIDERS selects providers"
+  assert_equals "provider add claude" "$(ps_calls_made)" "ARCHON_PROVIDERS selects providers"
 
   output=$(ARCHON_PROVIDERS="claude" run_ps_install -Providers "") \
     || fail "explicit empty -Providers failed: $output"
@@ -507,8 +507,8 @@ EOF
   output=$(run_ps_install) || fail "PowerShell install without a selection failed: $output"
   assert_equals "" "$(ps_calls_made)" "No console and no selection installs no provider"
   case "$output" in
-    *"archon provider install <claude|codex|pi>"*) ;;
-    *) fail "PowerShell install without a selection does not print the provider install command" ;;
+    *"archon provider add <claude|codex|pi>"*) ;;
+    *) fail "PowerShell install without a selection does not print the provider add command" ;;
   esac
 
   # With a real console, -NonInteractive makes Read-Host throw; the installer must still
@@ -522,8 +522,8 @@ EOF
       || fail "-NonInteractive install with a console failed: $output"
     assert_equals "" "$(ps_calls_made)" "-NonInteractive with a console installs no provider"
     case "$output" in
-      *"archon provider install <claude|codex|pi>"*) ;;
-      *) fail "-NonInteractive install with a console does not print the provider install command" ;;
+      *"archon provider add <claude|codex|pi>"*) ;;
+      *) fail "-NonInteractive install with a console does not print the provider add command" ;;
     esac
   else
     echo "SKIP: util-linux script not found; install.ps1 -NonInteractive console case not exercised"
@@ -540,10 +540,10 @@ EOF
 
   ps_status=0
   output=$(run_ps_install -Providers pi) || ps_status=$?
-  [ "$ps_status" -ne 0 ] || fail "install.ps1 succeeded when provider install failed"
+  [ "$ps_status" -ne 0 ] || fail "install.ps1 succeeded when provider add failed"
   case "$output" in
-    *"Retry with: archon provider install pi"*) ;;
-    *) fail "failed PowerShell provider install does not print the retry command" ;;
+    *"Retry with: archon provider add pi"*) ;;
+    *) fail "failed PowerShell provider add does not print the retry command" ;;
   esac
 else
   echo "SKIP: pwsh not found; install.ps1 provider selection not exercised"

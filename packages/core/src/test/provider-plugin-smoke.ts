@@ -1,6 +1,6 @@
 /**
  * Release smoke for the compiled provider plugins, driven through the same host code
- * `archon provider install` and a run use.
+ * `archon provider add` and a run use.
  *
  *   initialize <version> <plugin binary>...   each plugin answers with its id and version
  *   claude-code <missing|installed> <binary>  a one-turn Claude query reports, or does not

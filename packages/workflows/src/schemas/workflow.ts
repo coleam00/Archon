@@ -403,7 +403,7 @@ export type WorkflowExecutionResult =
  * - `bundled`   — embedded in the Archon binary / bundled defaults
  * - `global`    — user-level, discovered at `~/.archon/workflows/` (applies to every repo)
  * - `project`   — repo-local, discovered at `<repoRoot>/.archon/workflows/`
- * - `installed` — a workflow pack installed with `archon plugin install`, named
+ * - `installed` — a workflow pack installed with `archon plugin add`, named
  *                 `owner/plugin:entrypoint`
  *
  * Precedence for same-named files: `bundled` < `global` < `project`. Installed

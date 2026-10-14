@@ -83,6 +83,9 @@
       "src/commands/provider.test.ts"
     ],
     [
+      "src/commands/setup-provider.test.ts"
+    ],
+    [
       "src/commands/validate.test.ts"
     ],
     [

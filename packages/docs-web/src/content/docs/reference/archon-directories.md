@@ -75,7 +75,7 @@ Archon provides a unified directory and configuration system with:
 - `workspaces/<project>/state/` - `$STATE_DIR`. Cross-run workflow state, shared by every
   workflow in the project. Survives worktree teardown; never visible to git.
 - `worktrees/` - Legacy fallback for repos not registered under `workspaces/`
-- `plugins/` - Everything `archon plugin install` and `archon provider install` write.
+- `plugins/` - Everything `archon plugin add` and `archon provider add` write.
   Plugin executables such as `archon-provider-codex` (`.exe` on Windows) sit at the top,
   each plugin's receipt is `installed/<owner>/<repo>[/<path>]/receipt.json`, and
   workflow pack trees live under `packs/`. Release binaries load the Claude, Codex

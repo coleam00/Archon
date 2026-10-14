@@ -179,7 +179,7 @@ brew install coleam00/archon/archon
 Release binaries ship without AI providers. The quick installers ask which of
 Claude, Codex and Pi to install; pass `--providers codex` (shell) or
 `-Providers codex` (PowerShell) to skip the question. After a Homebrew install,
-or to add one later, run `archon setup` or `archon provider install <claude|codex|pi>`.
+or to add one later, run `archon setup` or `archon provider add <claude|codex|pi>`.
 See [Installation → Providers](https://archon.diy/getting-started/installation/#providers).
 
 > **The Claude provider needs Claude Code.** Compiled binaries don't bundle it.

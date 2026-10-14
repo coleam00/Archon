@@ -3,7 +3,7 @@ title: Publish a plugin
 description: Publish Archon workflow packs, forge plugins, provider plugins, and chat plugins on GitHub and list them on archon.diy.
 ---
 
-GitHub is the registry. Publish in your own public repository, then add the `archon-plugin` repository topic to appear in the [plugin index](/plugins/). No Archon pull request, Archon account, or publication service is required. Listing is optional: `archon plugin install owner/repo[/path][@tag]` works independently of the index.
+GitHub is the registry. Publish in your own public repository, then add the `archon-plugin` repository topic to appear in the [plugin index](/plugins/). No Archon pull request, Archon account, or publication service is required. Listing is optional: `archon plugin add owner/repo[/path][@tag]` works independently of the index.
 
 ## Workflow packs
 
@@ -29,7 +29,7 @@ The manifest is strict. Do not add version, credentials, install scripts, depend
 Git tags are versions. For workflow packs, an untagged install resolves the default branch head and freezes its commit. Publish a tag to let operators choose a version:
 
 ```bash
-archon plugin install acme/tools/packs/review-kit@v1.0.0
+archon plugin add acme/tools/packs/review-kit@v1.0.0
 ```
 
 A forge plugin declares an executable instead of workflow entrypoints:
@@ -69,7 +69,7 @@ and `archon-provider-example-windows-x64.exe`. Without `@tag`, install and updat
 select the latest GitHub release.
 
 ```sh
-archon plugin install owner/repo
+archon plugin add owner/repo
 archon plugin list
 archon plugin update owner/repo
 archon plugin remove owner/repo
@@ -119,7 +119,7 @@ It uses `@archon/chat-contract` and Slack Bolt, without engine types or database
 Install it from an Archon release that publishes the Slack asset:
 
 ```sh
-archon plugin install coleam00/Archon/plugins/chat-slack
+archon plugin add coleam00/Archon/plugins/chat-slack
 ```
 
 Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in the server environment, then restart
@@ -159,7 +159,7 @@ forge and provider plugins, for example `archon-chat-example-linux-x64` and
 `archon-chat-example-windows-x64.exe`. Do not put `.exe` in the manifest.
 
 ```sh
-archon plugin install owner/repo@v1.0.0
+archon plugin add owner/repo@v1.0.0
 archon plugin list
 archon plugin update owner/repo
 archon plugin remove owner/repo

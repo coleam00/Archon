@@ -1,5 +1,5 @@
 /**
- * `archon plugin install | update | remove | list | copy`.
+ * `archon plugin add | update | remove | list | copy`.
  *
  * GitHub is the registry: a plugin is `owner/repo[/path]` (where its
  * `archon-plugin.json` lives) and a version is a tag. Resolution uses
@@ -52,6 +52,7 @@ import {
   providerVersionMismatchMessage,
 } from '@archon/provider-contract';
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
+import { attachmentUsage, isAttachmentVerb } from '../attachment-commands';
 import { inspectChatPlugin } from './inspect-chat-plugin';
 import { publishPlugin } from './publish-plugin';
 import {
@@ -777,7 +778,7 @@ async function installPlugin(
     );
   }
   if (mode === 'update' && !previous && !brokenSelf) {
-    throw new Error(`${ref.id} is not installed. Use: archon plugin install ${ref.id}`);
+    throw new Error(`${ref.id} is not installed. Use: archon plugin add ${ref.id}`);
   }
   // A fresh install cannot know which files a broken receipt owns, so it could claim them.
   if (!previous && !brokenSelf && broken.length > 0) {
@@ -876,8 +877,7 @@ async function listPlugins(env: PluginEnvironment): Promise<void> {
   for (const entry of broken) console.log(`${entry.id}  unreadable  ${brokenReceiptNote(entry)}`);
 }
 
-const USAGE =
-  'Usage: archon plugin install <owner/repo[/path][@tag]> | update <id>[@tag] | remove <id> | copy <id> | list';
+const USAGE = attachmentUsage('plugin');
 
 export async function pluginCommand(
   subcommand: string | undefined,
@@ -885,6 +885,10 @@ export async function pluginCommand(
   env: PluginEnvironment
 ): Promise<number> {
   try {
+    if (!isAttachmentVerb('plugin', subcommand)) {
+      console.error(USAGE);
+      return 1;
+    }
     // Exact arity: an ignored extra argument would install something the
     // operator did not ask for, or silently drop a second plugin.
     if (subcommand === 'list' && args.length === 0) {
@@ -892,24 +896,31 @@ export async function pluginCommand(
       return 0;
     }
     const [target] = args;
-    if (
-      !target ||
-      args.length !== 1 ||
-      !['install', 'update', 'remove', 'copy'].includes(subcommand ?? '')
-    ) {
+    if (!target || args.length !== 1 || subcommand === 'list') {
       console.error(USAGE);
       return 1;
     }
+    if (subcommand === 'install') {
+      console.warn('Warning: archon plugin install is deprecated. Use archon plugin add instead.');
+    }
     const ref = parsePluginRef(target);
-    if (subcommand === 'remove' || subcommand === 'copy') {
-      if (ref.tag) throw new Error(`${subcommand} takes a plugin id without @tag: ${ref.id}`);
-      await withPluginMutationLock(env.pluginsDir, () =>
-        subcommand === 'remove' ? removePlugin(ref, env) : copyPlugin(ref, env)
-      );
-    } else {
-      await withPluginMutationLock(env.pluginsDir, () =>
-        installPlugin(ref, subcommand === 'install' ? 'install' : 'update', env)
-      );
+    switch (subcommand) {
+      case 'remove':
+      case 'copy':
+        if (ref.tag) throw new Error(`${subcommand} takes a plugin id without @tag: ${ref.id}`);
+        await withPluginMutationLock(env.pluginsDir, () =>
+          subcommand === 'remove' ? removePlugin(ref, env) : copyPlugin(ref, env)
+        );
+        break;
+      case 'add':
+      case 'install':
+      case 'update':
+        await withPluginMutationLock(env.pluginsDir, () =>
+          installPlugin(ref, subcommand === 'update' ? 'update' : 'install', env)
+        );
+        break;
+      default:
+        throw new Error(`Unhandled plugin subcommand: ${subcommand satisfies never}`);
     }
     return 0;
   } catch (error) {

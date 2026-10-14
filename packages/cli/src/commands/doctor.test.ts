@@ -862,7 +862,7 @@ describe('checkArchonSkill', () => {
     const result = await checkArchonSkill(tmp);
     expect(result.status).toBe('fail');
     expect(result.message).toContain('retired skill root');
-    expect(result.message).toContain('archon skill install');
+    expect(result.message).toContain('archon skill add');
   });
 
   it('fails when skills exist but archon-cli is missing', async () => {
@@ -1091,19 +1091,20 @@ describe('checkConnectedProviders', () => {
 });
 
 describe('provider diagnostics', () => {
-  it('no registered providers fails and names the install command', async () => {
+  it('no registered providers fails and names the add command', async () => {
     const check = await checkInstalledProviders(
       { get: () => undefined, list: () => [] },
       async () => new Map()
     );
     expect(check.status).toBe('fail');
     expect(check.message).toContain(
-      'No providers installed. Run: archon provider install <claude|codex|pi>'
+      'No providers installed. Run: archon provider add <claude|codex|pi>'
     );
+    expect(check.message).toContain('it does not install that CLI.');
     expect(await doctorCommand([async () => check])).toBe(1);
   });
 
-  it('only deprecated bundled providers warns and names the install command', async () => {
+  it('only deprecated bundled providers warns and names the add command', async () => {
     const { registerOpencodeProvider } = await import('@archon/providers/community/opencode');
     const { providerRegistry } = await import('@archon/providers');
     registerOpencodeProvider();
@@ -1116,7 +1117,9 @@ describe('provider diagnostics', () => {
     expect(check).toEqual({
       label: 'Installed providers',
       status: 'warn',
-      message: 'No providers installed. Run: archon provider install <claude|codex|pi>',
+      message:
+        'No providers installed. Run: archon provider add <claude|codex|pi>\n    ' +
+        'Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.',
     });
   });
 
