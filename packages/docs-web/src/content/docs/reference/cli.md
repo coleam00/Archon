@@ -1507,29 +1507,41 @@ archon isolation cleanup
 
 ### state
 
-Durable, audited JSON documents scoped to the current project. SQL storage supports
-SQLite and PostgreSQL. Values are read on demand; the engine never injects them into prompts.
+Durable, audited JSON documents. A document lives in a project or in install scope.
+SQL storage supports SQLite and PostgreSQL. Values are read on demand; the engine never
+injects them into prompts.
 
 ```bash
 archon state get review/123
 printf '{"seen":[]}' | archon state put review/123 --if-revision 0
 printf '{"ops":[{"op":"append","path":"/seen","value":123}]}' | archon state patch review/123
+printf '{"ops":[{"op":"set","path":"/owner","value":"b"}]}' | archon state patch review/123 --if-revision 2
 archon state log review/123 --limit 100
-archon state delete review/123 --if-revision 2
+archon state list --prefix review/
+archon state delete review/123 --if-revision 3
+archon state get notes --install --raw
+archon state list --project acme/widgets
 ```
 
-Every command writes JSON. `get` returns `{name, revision, value}`; an absent document
+Every command writes JSON and names the scope it used: `{kind: "project", key}` or
+`{kind: "install"}`. `get` returns `{scope, name, revision, value}`; an absent document
 returns revision `0` and value `null`. A deleted document returns value `null`,
 `deleted: true` and its tombstone revision, which is the revision a recreating `put` must
-name. `put`, `patch`, and `delete` return the new full revision. `log` returns all
-revisions newest first (use a positive `--limit` to bound the result), including
-tombstones, operation, writer and timestamp.
+name. `put`, `patch`, and `delete` return the scope and the new full revision. `log`
+returns `{scope, name, revisions}`, newest first (use a positive `--limit` to bound the
+result), including tombstones, operation, writer and timestamp. `list` returns
+`{scope, documents}`: each document's name, latest revision, `updatedAt`, writer and
+`deleted`, ordered by name and never with values. `--prefix` keeps names that start with
+the given text.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
-stdin to the latest value, initially `{}`. Writes to one document are serialized, so a
+stdin to the latest value, initially `{}`. With `--if-revision <n>` it applies only when
+`n` is still the latest revision, and otherwise exits `3`. Use it whenever the change was
+computed from what you read. Without it, writes to one document are serialized, so a
 patch never loses a revision race; it applies to whatever an earlier write left, which
-can make it invalid (for example, removing a member another patch already removed).
+can make it invalid (for example, removing a member another patch already removed). A
+revision's recorded operation includes `ifRevision` when the patch named one.
 Operations are `set`, `remove`, and `append`, using RFC 6901 JSON Pointer paths. `set`
 replaces a value, `remove` deletes an existing member (or array element), and `append`
 adds one value to an array, creating it when missing. Missing intermediate objects are
@@ -1537,17 +1549,27 @@ created for `set` and `append`. Array indices must be canonical, in-range intege
 `-` is unsupported. The empty pointer addresses the entire document. Root `null` is
 reserved for deletion; nested nulls are ordinary JSON values.
 
+A text document is a JSON string value. `put --raw` stores stdin as that string
+unchanged, and `get --raw` prints it without JSON encoding (exit `4` when the value is not
+a string). Use plain `get` when you need the revision for a following `put`.
+
 Names contain 1–200 lowercase letters, digits, `.`, `_`, `-`, and slash-separated segments.
 Values are limited to 64 KiB of serialized UTF-8 JSON. Exit codes: `0` success, `1` usage
-or storage failure, `3` revision conflict, `4` oversized value or invalid patch. Failures
+or storage failure, `3` revision conflict, `4` oversized value, invalid patch or non-text
+`--raw` value, `5` the CLI opened a store that does not know the calling run. Failures
 return `{ok:false, error, code}` and rejected writes append no revision.
 
 Inside a bash/script node, `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` resolve the run's
-project and writer. Missing runs fail loudly with the opened store kind; a missing project
-or node identity also fails. There is no project override. Outside a run, the current
-checkout (auto-registered when needed) or registered folder resolves the project and `ARCHON_USER_ID`, `USER`, or
-`USERNAME` identifies the operator. Projects with colliding storage names share state,
-just as with `$STATE_DIR`; register them with distinct names.
+project, and the writer is recorded as `{kind: "run", runId, nodePath}`. A run whose store
+does not know it fails with exit `5` naming the opened store kind; a missing project or
+node identity also fails. A node reaches only its run's project, or install scope with
+`--install`; `--project` is refused inside a run. Outside a run, the current checkout
+(auto-registered when needed) or registered folder resolves the project, `--project <key>`
+names one directly (the workspace-relative key, such as `owner/repo` or `_folder/ops`),
+and `--install` selects install scope. The writer is recorded as
+`{kind: "surface", via: "cli"}`: the surface the write came through, not who made it.
+Projects with colliding storage names share state, just as with `$STATE_DIR`; register
+them with distinct names.
 
 `archon workflow cleanup <days>` also prunes old state revisions, keeps each live document's latest
 revision, retains the latest tombstone of deleted documents, and reports both counts.

@@ -823,6 +823,19 @@ export class SqliteAdapter implements IDatabase {
       allApplied = false;
     }
 
+    // The surface a state write outside a run came through; older rows came through the CLI.
+    try {
+      const cols = this.prepareAll<{ name: string }>(
+        "PRAGMA table_info('remote_agent_state_revisions')"
+      );
+      if (cols.length && !new Set(cols.map(c => c.name)).has('writer_via')) {
+        this.db.run('ALTER TABLE remote_agent_state_revisions ADD COLUMN writer_via TEXT');
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_state_revisions_columns_failed');
+      allApplied = false;
+    }
+
     // The archive trigger copies an event row by position, and CREATE TABLE AS ran
     // only once. Give the archive every column a later ADD COLUMN gave the events
     // table, in the same order, so deleting an event never fails on a shape mismatch.
@@ -1061,6 +1074,7 @@ export class SqliteAdapter implements IDatabase {
         writer_run_id TEXT,
         writer_node_path TEXT,
         writer_identity TEXT,
+        writer_via TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         PRIMARY KEY (project_key, name, revision)
       );
