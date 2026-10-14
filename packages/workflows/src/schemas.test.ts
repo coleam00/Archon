@@ -611,12 +611,17 @@ describe('approval.decisions — new authoring surface (#2707)', () => {
     }
   });
 
-  test('rejects an id outside {approve, reject}', () => {
-    const result = dagNodeSchema.safeParse({
+  test.each([
+    { decisions: [{ id: 'accept' }, { id: 'revise' }] },
+    { decisions: [{ id: 'reject' }] },
+  ])('accepts an authored vocabulary without approve (%j)', ({ decisions }) => {
+    const result = dagNodeSchema.parse({
       id: 'gate',
-      approval: { message: 'ok?', decisions: [{ id: 'escalate' }] },
+      approval: { message: 'Choose', decisions },
     });
-    expect(result.success).toBe(false);
+    if (isIncludeDirective(result) || !isGateNode(result)) throw new Error('Expected gate');
+    expect(result.decisionsAuthored).toBe(true);
+    expect(result.decisions).toEqual([...decisions]);
   });
 
   test('rejects duplicate ids', () => {
@@ -626,15 +631,6 @@ describe('approval.decisions — new authoring surface (#2707)', () => {
     });
     expect(result.success).toBe(false);
     expect(JSON.stringify(result.error?.issues)).toContain('unique');
-  });
-
-  test('rejects decisions with no approve entry (R3 fix)', () => {
-    const result = dagNodeSchema.safeParse({
-      id: 'gate',
-      approval: { message: 'ok?', decisions: [{ id: 'reject' }] },
-    });
-    expect(result.success).toBe(false);
-    expect(JSON.stringify(result.error?.issues)).toContain('approve');
   });
 
   test('accepts an approve-only decisions array (acknowledge gate, reject optional)', () => {

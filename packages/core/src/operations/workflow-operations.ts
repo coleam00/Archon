@@ -336,6 +336,12 @@ export function workflowOperationErrorMessage(
 }
 
 export function assertApprovable(run: WorkflowRun): ApprovalContext {
+  const approval = assertApprovableContext(run);
+  assertDeclaredDecision(run, approval, 'approve');
+  return approval;
+}
+
+function assertApprovableContext(run: WorkflowRun): ApprovalContext {
   if (run.status !== 'paused') {
     throw new Error(
       `Cannot approve run with status '${run.status}'. Only paused runs can be approved.`
@@ -445,6 +451,7 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
       // The status guard excludes running and terminal runs.
       break;
   }
+  if (approval) assertDeclaredDecision(run, approval, 'reject');
   return approval;
 }
 
@@ -638,21 +645,31 @@ export interface AbandonConversationRunsResult {
   blockedParentRunId: string | null;
 }
 
-/**
- * Validate that `decision` is legal for the gate `run` is paused at, WITHOUT
- * mutating anything (mirrors `assertApprovable`'s read-only-precheck role for
- * CLI `--detach`). `approve`/`reject` are always legal (delegated to the
- * existing `approveWorkflow`/`rejectWorkflow` machinery by `respondToWorkflow`
- * — this function is not consulted for those two ids). Any OTHER decision is
- * legal only for a plain gate node (`approval`/`undefined` suspend type) whose
- * author explicitly declared `approval.decisions:` (`decisionsAuthored`) —
- * `writeback`/`interactive_loop`/`child_workflow` pauses have no author-
- * declared vocabulary and accept only approve/reject; a legacy gate (no
- * `decisions:` authored) also only ever has the synthesized approve/reject
- * pair (#2707 step 2).
- */
-export function assertRespondable(run: WorkflowRun, decision: string): ApprovalContext {
-  const approval = assertApprovable(run);
+function assertDeclaredDecision(
+  run: WorkflowRun,
+  approval: ApprovalContext,
+  decision: string
+): void {
+  if (
+    (approval.type !== 'approval' && approval.type !== undefined) ||
+    approval.decisionsAuthored !== true
+  )
+    return;
+  const declaredIds = (approval.decisions ?? []).map(d => d.id);
+  if (!declaredIds.includes(decision)) {
+    throw new Error(
+      `Run ${run.id}'s gate does not declare decision '${decision}'. Declared decisions: ` +
+        `${declaredIds.join(', ')}.`
+    );
+  }
+}
+
+/** Read-only response precheck for CLI detach and HTTP validation. */
+export function assertRespondable(run: WorkflowRun, decision: string): ApprovalContext | undefined {
+  if (decision === 'reject') return assertRejectable(run);
+  const approval = assertApprovableContext(run);
+  assertDeclaredDecision(run, approval, decision);
+  if (decision === 'approve') return approval;
   if (approval.type !== 'approval' && approval.type !== undefined) {
     throw new Error(
       `Run ${run.id}'s gate ('${approval.type}') only accepts 'approve' or 'reject' — ` +
@@ -663,13 +680,6 @@ export function assertRespondable(run: WorkflowRun, decision: string): ApprovalC
     throw new Error(
       `Run ${run.id}'s gate only accepts 'approve' or 'reject' — '${decision}' is not one of its ` +
         'declared decisions. Declare `approval.decisions:` on the gate node to author a broader vocabulary.'
-    );
-  }
-  const declaredIds = (approval.decisions ?? []).map(d => d.id);
-  if (!declaredIds.includes(decision)) {
-    throw new Error(
-      `Run ${run.id}'s gate does not declare decision '${decision}'. Declared decisions: ` +
-        `${declaredIds.join(', ')}.`
     );
   }
   return approval;
@@ -1750,6 +1760,7 @@ export function createWorkflowOperations({
     const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
     await assertMayAct(run, actor, 'respond');
     const approval = assertRespondable(run, decision);
+    if (!approval) throw new Error('Workflow run is paused but missing approval context.');
 
     const structuredOutput = { decision, text: text ?? '' };
     const events: GateResolutionEvent[] = [

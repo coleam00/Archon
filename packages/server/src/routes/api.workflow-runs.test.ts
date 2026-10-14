@@ -3317,6 +3317,47 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
     mockCreateWorkflowEvent.mockReset();
   });
 
+  test.each([
+    ['approve', 'approve'],
+    ['reject', 'reject'],
+    ['respond', 'approve'],
+    ['respond', 'reject'],
+  ])(
+    'refuses an undeclared decision at /%s (%s) without writes or resume',
+    async (route, decision) => {
+      mockHandleMessage.mockClear();
+      const run = {
+        ...MOCK_PAUSED_RUN,
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: 'review-gate',
+            message: 'Choose',
+            decisionsAuthored: true,
+            decisions: [{ id: 'accept' }, { id: 'revise' }],
+          },
+        },
+      };
+      mockGetWorkflowRun.mockResolvedValue(run);
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${run.id}/${route}`, {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toContain(`does not declare decision '${decision}'`);
+      expect(body.error).toContain('accept, revise');
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(run.status).toBe('paused');
+      expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+    }
+  );
+
   test('returns 404 when run not found', async () => {
     mockGetWorkflowRun.mockResolvedValue(null);
     const { app } = makeApp();

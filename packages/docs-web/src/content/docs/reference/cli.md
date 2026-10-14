@@ -1047,9 +1047,17 @@ warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs cascade-cancels every non-terminal descendant (children and grandchildren; already-terminal runs are left alone). These are database transitions, not process termination; an in-flight host command can continue until it returns. If part of the tree could not be reached, the command reports the count so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
 
+### `workflow respond`
+
+Resolve a paused gate with `archon workflow respond <run-id> <decision> [text]`.
+When the gate authors `approval.decisions`, only those declared ids are accepted,
+including for `approve` and `reject`. An undeclared decision is refused with the
+allowed ids, and the run stays paused. Without authored decisions, use `approve`
+or `reject`.
+
 ### `workflow approve`
 
-Approve a paused workflow run at an interactive approval gate. Optionally provide a comment that is available to the workflow via `$LOOP_USER_INPUT`.
+Approve a paused workflow run at an interactive approval gate. For a gate with authored `approval.decisions`, this command requires `approve` in that list; otherwise it is refused and the run stays paused. An optional comment is available as `$<gate-id>.output.text` for authored decisions, or `$LOOP_USER_INPUT` at a legacy interactive-loop gate.
 
 **Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own run id — the id shown in the parent's block message — not the parent's; the parent auto-resumes when the child completes. A child gate is the exception: it works for a 1:1 sub-run, but a child that pauses inside a `fan_out:` expansion **fails the node** instead — a parent has one approval slot and cannot hand it to N children, so gate before or after the fan-out node rather than inside a child of it. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id.
 
@@ -1117,7 +1125,9 @@ transcript. Precheck failures follow each verb's existing error contract:
 
 ### `workflow reject`
 
-Reject a paused workflow run at an approval gate. Optionally provide a reason that is available to the workflow via `$REJECTION_REASON`.
+For a gate with authored `approval.decisions`, this command requires `reject` in that list; otherwise it is refused with the allowed ids and the run stays paused.
+
+Reject a paused workflow run at an approval gate. An optional reason is available as `$<gate-id>.output.text` for authored decisions, or `$REJECTION_REASON` inside a legacy `on_reject` prompt.
 
 ```bash
 archon workflow reject <run-id>

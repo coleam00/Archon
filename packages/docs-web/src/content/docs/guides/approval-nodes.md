@@ -95,7 +95,7 @@ children as they finish.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `approval.message` | string | Yes | The message shown to the user when the workflow pauses |
-| `approval.decisions` | array of `{id, label?}` | No | The choices shown in chat, Slack, CLI detail and the console. Must include `approve`; IDs must be unique. Cannot be combined with `on_reject` |
+| `approval.decisions` | array of `{id, label?}` | No | The choices shown in chat, Slack, CLI detail and the console. IDs must be unique; `approve` and `reject` are optional. Cannot be combined with `on_reject` |
 | `approval.decisions[].id` | string | Yes | Exact wire value: lowercase letters and digits separated by single hyphens, such as `needs-revision`. No spaces |
 | `approval.decisions[].label` | string | No | Nonempty display label; selection always sends the ID |
 | `approval.capture_response` | boolean | No | For legacy gates, when `true`, the user's approval comment is stored as `$<node-id>.output` for downstream nodes. Default: `false` |
@@ -128,6 +128,11 @@ rejected gate, route its declared decision to your own rework node, or use legac
 ## Approving and Rejecting
 
 ### Declared decisions
+
+Only the authored ids are accepted. This applies to every response surface,
+including CLI `respond`/`approve`/`reject` and the HTTP routes. `approve` and
+`reject` work only when included in the list. An undeclared decision is refused
+with the allowed ids; the run stays paused and no resolution or resume is recorded.
 
 The displayed label is presentation. Use the exact ID to respond:
 
@@ -227,8 +232,10 @@ for the full semantics, `signal_completes`, and the AI-approver steering pattern
 ### Web UI
 
 Open the paused run from the console run list. Its run detail shows the pending
-approval, context, and decision controls. **Continue** accepts an optional
-comment. **Reject** opens a feedback field and requires text before submission.
+approval, context, and decision controls. Gates with authored decisions show
+only those decisions with the author's labels, including the label for `approve`
+when declared. Gates without authored decisions show **Continue**, which accepts
+an optional comment. **Reject** opens a feedback field and requires text before submission.
 When the gate continues execution, Web-dispatched and headless CLI runs can
 resume automatically; the gate's rejection rules can instead cancel the run.
 
