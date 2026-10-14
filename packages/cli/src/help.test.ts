@@ -84,7 +84,7 @@ describe('CLI help output', () => {
 
   it('documents the unified skill destinations and subscription providers', () => {
     expect(help).toContain(
-      'skill install [path]       Install archon-cli into .claude/skills and .agents/skills'
+      'skill add [path]           Add archon-cli into .claude/skills and .agents/skills'
     );
     expect(help).toContain(
       'ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription'
@@ -225,7 +225,7 @@ Commands:
   isolation cleanup --merged Remove environments with branches merged into the base branch
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (binary installs download server and UI on first run)
-  skill install [path]       Install archon-cli into .claude/skills and .agents/skills
+  skill add [path]           Add archon-cli into .claude/skills and .agents/skills
   provider add <id...>       Add maintained providers matching this Archon release (connects your agent CLI or SDK)
   plugin add <owner/repo[/path][@tag]>
                              Add a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
@@ -320,8 +320,8 @@ Examples:
   archon workflow cancel <run-id>
   archon workflow runs --open
   archon workflow run archon-review --adopt <run-id> "Review the changes"
-  archon skill install
-  archon skill install /path/to/project
+  archon skill add
+  archon skill add /path/to/project
   archon plugin add coleam00/Archon/plugins/forge-github
 
 `;
@@ -329,6 +329,20 @@ Examples:
   it('archon --help matches the supported global index byte-for-byte', () => {
     expect(`${renderHelp()}\n`).toBe(EXPECTED_GLOBAL_HELP);
   });
+
+  it.each(['plugin', 'skill'])(
+    'retains scoped help for the %s alias without advertising it globally',
+    command => {
+      const result = spawnSync(process.execPath, [CLI_ENTRY, command, 'install', '--help'], {
+        encoding: 'utf8',
+        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`${command} install `);
+      expect(result.stdout).toContain(`Deprecated alias for archon ${command} add`);
+      expect(renderHelp()).not.toContain(`${command} install`);
+    }
+  );
 
   it('archon help <cmd> [<subcmd>] matches archon <cmd> [<subcmd>] --help', () => {
     for (const argv of [

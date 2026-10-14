@@ -855,7 +855,7 @@ describe('checkArchonSkill', () => {
     const result = await checkArchonSkill(tmp);
     expect(result.status).toBe('fail');
     expect(result.message).toContain('retired skill root');
-    expect(result.message).toContain('archon skill install');
+    expect(result.message).toContain('archon skill add');
   });
 
   it('fails when skills exist but archon-cli is missing', async () => {

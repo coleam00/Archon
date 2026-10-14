@@ -721,7 +721,7 @@ function skillTreeMatches(skillRoot: string, bundledFiles: Record<string, string
 }
 
 /**
- * Catch the v0.10.0 skill migration that `archon skill install` performs but
+ * Catch the v0.10.0 skill migration that `archon skill add` performs but
  * upgrades never run: leftover `archon` / `manage-run` roots, or a missing
  * `archon-cli` replacement. Skip when this project has never installed skills.
  */
@@ -753,7 +753,7 @@ export async function checkArchonSkill(
     return {
       label,
       status: 'fail',
-      message: `retired skill root(s) still present. Run \`archon skill install .\` to replace them with ${CURRENT_SKILL_ROOT}.`,
+      message: `retired skill root(s) still present. Run \`archon skill add .\` to replace them with ${CURRENT_SKILL_ROOT}.`,
     };
   }
 
@@ -761,7 +761,7 @@ export async function checkArchonSkill(
     return {
       label,
       status: 'fail',
-      message: `${CURRENT_SKILL_ROOT} is missing from ${missingRoots.join(', ')}. Run \`archon skill install .\` to install the current skill in this project.`,
+      message: `${CURRENT_SKILL_ROOT} is missing from ${missingRoots.join(', ')}. Run \`archon skill add .\` to install the current skill in this project.`,
     };
   }
 
@@ -769,8 +769,7 @@ export async function checkArchonSkill(
     return {
       label,
       status: 'skip',
-      message:
-        'not installed (run `archon skill install .` if you use Claude Code or Codex skills)',
+      message: 'not installed (run `archon skill add .` if you use Claude Code or Codex skills)',
     };
   }
 
@@ -781,7 +780,7 @@ export async function checkArchonSkill(
       return {
         label,
         status: 'fail',
-        message: `${currentRoot} differs from the skill bundled with this Archon build. Run \`archon skill install .\` to update it.`,
+        message: `${currentRoot} differs from the skill bundled with this Archon build. Run \`archon skill add .\` to update it.`,
       };
     }
   }

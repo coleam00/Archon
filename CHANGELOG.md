@@ -27,7 +27,7 @@ or `archon setup`, which asks. Until you do, a workflow or chat message that nee
 
 ### Changed
 
-- Providers and plugins now use `archon provider add` and `archon plugin add`. Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI. The unshipped provider `install` verb is refused; `archon plugin install` remains a deprecated alias that prints a warning. (#4133)
+- Providers, plugins and skills now use `archon provider add`, `archon plugin add` and `archon skill add`. Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI. The unshipped provider `install` verb is refused; the shipped plugin and skill `install` verbs remain deprecated aliases that print a warning. (#4133)
 
 - SDLC triage reads the project's `.archon/sdlc/policy/triage.md` and falls back to a default the pack ships. Under the default, triage closes an item without a person only when it duplicates an open item or a merged change already delivered it; any other item that looks closable, such as an obsolete or out-of-scope one, is `BLOCKED` for a maintainer. Copy the default from the pack's `.shared/policy/triage.md` to change it. (#4100)
 
@@ -125,9 +125,9 @@ Workflow packs install straight from GitHub, workflows can start from schedules 
 
 ### Added
 
-- `archon plugin add owner/repo[/path][@tag]` installs a workflow pack from GitHub as one complete tree at one commit. `archon plugin update`, `remove` and `list` manage installed packs, and `archon plugin copy <id>` makes an editable copy under `.archon/workflows/`. (#2767, #3485)
+- The plugin command installs a workflow pack from GitHub as one complete tree at one commit. `archon plugin update`, `remove` and `list` manage installed packs, and `archon plugin copy <id>` makes an editable copy under `.archon/workflows/`. (#2767, #3485)
 - Installed packs run from the workflow catalog as `owner/pack:entrypoint` from the CLI, chat, the router, run management and the API. Only a pack's declared entrypoints can be dispatched. A run freezes the pack at the commit it started with, so `update` or `remove` affects only later runs. (#2835, #3486)
-- Forge plugins: Archon can talk to a code forge through an installable executable plugin. Each release publishes the GitHub plugin, installed with `archon plugin add coleam00/Archon/plugins/forge-github[@tag]`, including inside Docker. The delivery pack reads pull-request checks, including external commit statuses, through it, and with `ARCHON_SDLC_FORGE=forge` also creates, edits, comments on and flips pull requests through it, verifying each write by reading it back. (#3417, #3447, #3457)
+- Forge plugins: Archon can talk to a code forge through an installable executable plugin. Each release publishes the GitHub plugin, available through the plugin command, including inside Docker. The delivery pack reads pull-request checks, including external commit statuses, through it, and with `ARCHON_SDLC_FORGE=forge` also creates, edits, comments on and flips pull requests through it, verifying each write by reading it back. (#3417, #3447, #3457)
 - Event-triggered workflows: trigger bindings start ordinary governed runs from native macOS schedules and verified GitHub issue, pull-request, label, check and status webhooks. A binding names a shared resource and chooses `skip` or FIFO `queue` when a run already holds it, and queued work survives restarts. The server hosts triggers when `ARCHON_TRIGGER_HOST` is set; the CLI adds `archon trigger fire`, `drain` and `whoami`. See the workflow triggers guide. (#3415)
 - Provider SDKs updated to latest: Claude Agent SDK 0.3.282, Codex SDK 0.157.0, Pi 0.87.1. Claude cost stays per query after a resume or fork, and Pi usage now includes cache-warming and compaction calls. (#3076, #3504)
 - `concurrency.providers.<provider-id>: N` in `~/.archon/config.yaml` caps simultaneous attempts per provider across every process sharing the database. There are no default caps; `archon ai capacity release` frees a slot held by an owner on another host. (#3460)
@@ -778,7 +778,7 @@ Workflow marketplace, expanded setup wizard, and broad Pi/workflow engine fixes.
 
 - **Workflow marketplace v0**: browse and install community workflows via `archon workflow search [query]` and `archon workflow install <slug>` (#1624). Includes an automated marketplace PR review-and-merge workflow that runs schema validation, security scanning, and AI review on submissions (#1638), plus a `video-generic` entry as the first published workflow.
 - **`archon setup` overhaul**: full interactive credential and config wizard, plus `archon doctor` to verify Claude binary, gh auth, DB, and adapters end-to-end (#1566). Pi is now a first-class provider option in the wizard (#1609).
-- **`archon skill install`**: install the bundled Archon skill into `.claude/skills/archon` from the CLI without needing the source tree (#1445).
+- **Bundled skill command**: install the bundled Archon skill into `.claude/skills/archon` from the CLI without needing the source tree (#1445).
 - **Pi/Minimax variants** of the maintainer workflows: `repo-triage-minimax` (#1562) joins `maintainer-standup-minimax` for daily triage when nested-Claude-Code sessions block the Claude variants.
 - **Public roadmap page** at `/roadmap` on the docs site (#1570).
 - Docker: `/home/appuser` is now persisted by default via the `archon_user_home` named volume, so user-installed Claude Code skills/commands/agents/hooks, Codex/Pi auth, `~/.gitconfig`, and shell history survive container rebuilds. Set `ARCHON_USER_HOME=/host/path` in `.env` to bind-mount a host path instead (#1517, #1518).

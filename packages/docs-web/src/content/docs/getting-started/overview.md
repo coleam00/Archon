@@ -474,7 +474,7 @@ If you want Claude Code to be able to invoke Archon workflows on your behalf, in
 Archon skill into your project. The setup wizard handles this automatically — just run
 `archon setup` and accept the skill installation prompt.
 
-To install manually instead, run `archon skill install /path/to/your/repo`, or copy it by hand:
+To install manually instead, run `archon skill add /path/to/your/repo`, or copy it by hand:
 
 ```bash
 mkdir -p /path/to/your/repo/.claude/skills

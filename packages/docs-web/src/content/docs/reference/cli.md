@@ -172,7 +172,7 @@ archon plugin copy <id>                                             # workflow p
 archon plugin list
 ```
 
-`archon plugin install` remains a deprecated alias for `archon plugin add` and prints a warning.
+The former plugin `install` verb remains a deprecated alias for `archon plugin add` and prints a warning.
 
 `add` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the manifest's `compatibility.archon` range and a provider or chat plugin's staged handshake, runs before installed files or receipts are replaced. Without `@<tag>`, the manifest at the default branch head decides the kind: a workflow pack installs that commit, and a forge, provider, or chat plugin installs its latest release, because its executables exist only as release assets. See [Forge operations](/reference/forge/#install-the-github-plugin) for what a forge install downloads and where it writes.
 
@@ -1412,7 +1412,9 @@ archon serve --download-only
 
 The server executable is cached at `~/.archon/server/<version>/` and the web UI at `~/.archon/web-dist/<version>/`. Upgrading the CLI downloads matching artifacts on the next `archon serve`. A failed download installs nothing for that asset and exits non-zero with its URL; retry with `archon serve --download-only`. Docker continues to bundle both.
 
-### `skill install [path]`
+### `skill add [path]`
+
+The former skill `install` verb remains a deprecated alias for `archon skill add` and prints a warning.
 
 Install the bundled `archon-cli` skill into both `.claude/skills/archon-cli/`
 (Claude Code) and `.agents/skills/archon-cli/` (Codex). The command overwrites
@@ -1421,10 +1423,10 @@ removes the retired `archon` and `manage-run` skill directories.
 
 ```bash
 # Install into the current directory
-archon skill install
+archon skill add
 
 # Install into a specific project
-archon skill install /path/to/project
+archon skill add /path/to/project
 ```
 
 The unified skill covers workflow execution, run management, setup, configuration,

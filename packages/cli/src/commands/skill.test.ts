@@ -1,5 +1,5 @@
 /**
- * Tests for skill install command
+ * Tests for bundled skill copying and CLI commands
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'fs';
@@ -176,5 +176,54 @@ describe('skillInstallCommand', () => {
     // Nothing should have been written to either path
     expect(existsSync(join(missing, '.claude'))).toBe(false);
     expect(existsSync(join(missing, '.agents'))).toBe(false);
+  });
+});
+
+describe('skill CLI verbs', () => {
+  it('add and the deprecated alias write the bundled files, with one alias warning', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-skill-cli-'));
+    try {
+      for (const [verb, explicitPath] of [
+        ['add', false],
+        ['install', true],
+      ] as const) {
+        const target = join(root, verb);
+        mkdirSync(target);
+        const child = Bun.spawn(
+          [
+            process.execPath,
+            join(import.meta.dir, '../cli.ts'),
+            'skill',
+            verb,
+            ...(explicitPath ? [target] : []),
+          ],
+          {
+            cwd: explicitPath ? root : target,
+            env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: root },
+            stdout: 'pipe',
+            stderr: 'pipe',
+          }
+        );
+        const [out, err, code] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]);
+        expect(code).toBe(0);
+        expect(out).toContain('Restart Claude Code or Codex');
+        const warning =
+          'Warning: archon skill install is deprecated. Use archon skill add instead.';
+        expect(err.split(warning).length - 1).toBe(verb === 'install' ? 1 : 0);
+        for (const destination of ['.claude', '.agents']) {
+          for (const [file, content] of Object.entries(BUNDLED_SKILL_FILES)) {
+            expect(readFileSync(join(target, destination, 'skills/archon-cli', file), 'utf8')).toBe(
+              content
+            );
+          }
+        }
+      }
+    } finally {
+      await removeTempTree(root);
+    }
   });
 });

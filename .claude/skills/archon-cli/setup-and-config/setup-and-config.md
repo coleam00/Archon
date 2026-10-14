@@ -56,7 +56,7 @@ stale provider. Source checkouts and Docker run all three from source; there
 ## Credentials — the setup wizard and its pieces
 
 ```bash
-archon setup          # interactive wizard: providers + credentials + config + skill install
+archon setup          # interactive wizard: providers + credentials + config + bundled skill
 ```
 
 The wizard composes these, which also work standalone:

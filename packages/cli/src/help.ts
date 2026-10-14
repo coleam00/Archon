@@ -304,9 +304,9 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'skill',
-    subcommand: 'install',
-    spec: 'skill install [path]',
-    description: 'Install archon-cli into .claude/skills and .agents/skills',
+    subcommand: 'add',
+    spec: 'skill add [path]',
+    description: 'Add archon-cli into .claude/skills and .agents/skills',
   },
   {
     command: 'provider',
@@ -477,6 +477,18 @@ const commandHelp: HelpEntry[] = [
 // "no flag documentation is lost" invariant honest — nothing here ships in
 // global help that was not in the original.
 const scopedOnlyHelp: HelpEntry[] = [
+  {
+    command: 'plugin',
+    subcommand: 'install',
+    spec: 'plugin install <owner/repo[/path][@tag]>',
+    description: 'Deprecated alias for archon plugin add',
+  },
+  {
+    command: 'skill',
+    subcommand: 'install',
+    spec: 'skill install [path]',
+    description: 'Deprecated alias for archon skill add',
+  },
   {
     command: 'state',
     subcommand: 'get',
@@ -978,10 +990,10 @@ const orderedExamples: ExampleHelp[] = [
     text: 'archon workflow run archon-review --adopt <run-id> "Review the changes"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
-  { text: 'archon skill install', owner: { command: 'skill', subcommand: 'install' } },
+  { text: 'archon skill add', owner: { command: 'skill', subcommand: 'add' } },
   {
-    text: 'archon skill install /path/to/project',
-    owner: { command: 'skill', subcommand: 'install' },
+    text: 'archon skill add /path/to/project',
+    owner: { command: 'skill', subcommand: 'add' },
   },
   {
     text: 'archon plugin add coleam00/Archon/plugins/forge-github',

@@ -285,7 +285,7 @@ DEFAULT_AI_ASSISTANT=codex
 Codex supports installed skills from `.agents/skills/`. In workflow nodes Archon
 turns the automatic skill catalog off, so commands and prompts invoke a skill
 explicitly with `$skill-name`. Direct Codex chat keeps native discovery behavior.
-Run `archon skill install` (or `archon setup`) to install the bundled
+Run `archon skill add` (or `archon setup`) to install the bundled
 `archon-cli` skill for both Claude Code and Codex.
 
 See [Per-Node Skills](/guides/skills/#codex-compatibility) for behavior details and limitations.
