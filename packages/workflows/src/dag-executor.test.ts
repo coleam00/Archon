@@ -25001,6 +25001,197 @@ describe('executeDagWorkflow -- loop_group node', () => {
     }
   });
 
+  it('substitutes $LOOP_USER_INPUT into a resumed body command file (#3954)', async () => {
+    const feedback = 'tighten the error message';
+    await writeFile(
+      join(testDir, '.archon', 'commands', 'revise.md'),
+      'Revise per reviewer: [$LOOP_USER_INPUT]'
+    );
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'DONE' };
+      yield { type: 'result', sessionId: 'lg-cmd-input-sess' };
+    });
+    const workflowRun = makeWorkflowRun('lg-userinput-command', {
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'grp',
+          iteration: 0,
+          message: 'Review and provide feedback.',
+        },
+        loop_user_input: feedback,
+        loop_feedback_given: true,
+      },
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-userinput-command',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-userinput-command',
+          nodes: [
+            {
+              id: 'grp',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                fresh_context: true,
+                interactive: true,
+                gate_message: 'Review and provide feedback.',
+                nodes: [
+                  {
+                    id: 'revise',
+                    kind: 'agent',
+                    source: { kind: 'command', name: 'revise' },
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(mockSendQueryDag.mock.calls[0][0] as string).toContain(
+      `Revise per reviewer: [${feedback}]`
+    );
+  });
+
+  it('resolves $LOOP_PREV in a body command file to the previous iteration (#3954)', async () => {
+    await writeFile(
+      join(testDir, '.archon', 'commands', 'draft.md'),
+      'Prior draft: [$LOOP_PREV.draft.output]'
+    );
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      callCount++;
+      yield { type: 'agent_message_chunk', text: callCount === 1 ? 'first draft' : 'DONE' };
+      yield { type: 'result', sessionId: `lg-cmd-prev-sess-${callCount}` };
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-prev-command',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-prev-command',
+          nodes: [
+            {
+              id: 'grp',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                fresh_context: true,
+                nodes: [
+                  {
+                    id: 'draft',
+                    kind: 'agent',
+                    source: { kind: 'command', name: 'draft' },
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-prev-command'),
+      })
+    );
+
+    const prompts = mockSendQueryDag.mock.calls.map(call => call[0] as string);
+    expect(prompts.length).toBe(2);
+    expect(prompts[0]).toContain('Prior draft: []');
+    expect(prompts[1]).toContain('Prior draft: [first draft]');
+  });
+
+  it('runs a nested body command file through every enclosing loop scope (#3954)', async () => {
+    await writeFile(
+      join(testDir, '.archon', 'commands', 'polish.md'),
+      'outer: [$LOOP_PREV.a.output] inner: [$LOOP_PREV.polish.output]'
+    );
+    let aCalls = 0;
+    mockSendQueryDag.mockImplementation(async function* (prompt: string) {
+      let text: string;
+      if (prompt.includes('produce a')) text = `A${++aCalls}`;
+      else if (prompt.includes('inner: []')) text = 'C1';
+      else text = prompt.includes('outer: [A1]') ? 'INNER_DONE OUTER_DONE' : 'INNER_DONE';
+      yield { type: 'agent_message_chunk', text };
+      yield { type: 'result', sessionId: 'lg-nested-cmd-sess' };
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-nested-command',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-nested-command',
+          nodes: [
+            {
+              id: 'outer',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'OUTER_DONE',
+                max_iterations: 2,
+                fresh_context: true,
+                nodes: [
+                  {
+                    id: 'a',
+                    kind: 'agent',
+                    source: { kind: 'inline', prompt: 'produce a' },
+                    depends_on: [],
+                  },
+                  {
+                    id: 'inner',
+                    kind: 'loop_group',
+                    loop_group: {
+                      until: 'INNER_DONE',
+                      max_iterations: 2,
+                      fresh_context: true,
+                      nodes: [
+                        {
+                          id: 'polish',
+                          kind: 'agent',
+                          source: { kind: 'command', name: 'polish' },
+                          depends_on: [],
+                        },
+                      ],
+                    },
+                    depends_on: ['a'],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-nested-command'),
+      })
+    );
+
+    const polishPrompts = mockSendQueryDag.mock.calls
+      .map(call => call[0] as string)
+      .filter(prompt => prompt.includes('outer: ['));
+    expect(polishPrompts.length).toBe(4);
+    expect(polishPrompts[0]).toContain('outer: [] inner: []');
+    expect(polishPrompts[1]).toContain('outer: [] inner: [C1]');
+    expect(polishPrompts[2]).toContain('outer: [A1] inner: []');
+    expect(polishPrompts[3]).toContain('outer: [A1] inner: [C1]');
+  });
+
   it('exhausts loop_group iterations after a negated final until signal', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
@@ -25912,11 +26103,12 @@ describe('executeDagWorkflow -- loop_group node', () => {
           source: { kind: 'inline', prompt: 'act on $LOOP_PREV.reviw.output.verdict' },
           depends_on: [],
         } as DagNode,
-        undefined,
-        '',
-        undefined,
-        knownBodyIds,
-        directBodyIds
+        {
+          loopPrevOutputs: undefined,
+          loopUserInput: '',
+          knownBodyIds,
+          directBodyIds,
+        }
       )
     ).toThrow(OutputRefError);
 
@@ -25943,11 +26135,12 @@ describe('executeDagWorkflow -- loop_group node', () => {
         },
         depends_on: [],
       } as DagNode,
-      undefined,
-      '',
-      undefined,
-      knownBodyIds,
-      directBodyIds
+      {
+        loopPrevOutputs: undefined,
+        loopUserInput: '',
+        knownBodyIds,
+        directBodyIds,
+      }
     );
     if (!('loop_group' in nestedGroup) || nestedGroup.loop_group === undefined)
       throw new Error('expected loop_group node');
@@ -25975,11 +26168,12 @@ describe('executeDagWorkflow -- loop_group node', () => {
         },
         depends_on: [],
       } as DagNode,
-      undefined,
-      '',
-      undefined,
-      knownBodyIds,
-      directBodyIds
+      {
+        loopPrevOutputs: undefined,
+        loopUserInput: '',
+        knownBodyIds,
+        directBodyIds,
+      }
     );
     if (!('loop_group' in nestedReadsOuter) || nestedReadsOuter.loop_group === undefined)
       throw new Error('expected loop_group node');
@@ -26007,11 +26201,12 @@ describe('executeDagWorkflow -- loop_group node', () => {
           },
           depends_on: [],
         } as DagNode,
-        undefined,
-        '',
-        undefined,
-        knownBodyIds,
-        directBodyIds
+        {
+          loopPrevOutputs: undefined,
+          loopUserInput: '',
+          knownBodyIds,
+          directBodyIds,
+        }
       )
     ).toThrow(OutputRefError);
   });
@@ -26108,8 +26303,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         script: 'echo $LOOP_PREV.work.output',
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
     expect(bashScript(bashNode)).toBe("echo 'it'\\''s done'");
 
@@ -26122,8 +26316,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         runtime: 'bun',
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
     expect('script' in scriptNode && scriptNode.script).toBe("console.log(`it's done`)");
 
@@ -26135,8 +26328,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         reason: 'stopping: $LOOP_PREV.work.output',
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
     expect('reason' in cancelNode ? cancelNode.reason : undefined).toBe("stopping: it's done");
   });
@@ -26150,8 +26342,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
         when: "$LOOP_PREV.work.output == 'done'",
         depends_on: [],
       } as DagNode,
-      new Map([['work', makeOutput('completed', 'done', undefined)]]),
-      ''
+      {
+        loopPrevOutputs: new Map([['work', makeOutput('completed', 'done', undefined)]]),
+        loopUserInput: '',
+      }
     );
     expect(node.when).toBe("$LOOP_PREV.work.output == 'done'");
   });
@@ -26227,8 +26421,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         },
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
 
     expect(inlinePrompt(aiNode)).toBe('main=PRIOR');
@@ -26245,7 +26438,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
     (commandLoop.loop as typeof commandLoop.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND] =
       { prompt: `compiled=${ref}` };
 
-    const substitutedLoop = applyLoopPrevToBodyNode(commandLoop, prev, '');
+    const substitutedLoop = applyLoopPrevToBodyNode(commandLoop, {
+      loopPrevOutputs: prev,
+      loopUserInput: '',
+    });
     if (!('loop' in substitutedLoop)) throw new Error('expected substituted loop node');
     const compiled = (
       substitutedLoop.loop as typeof substitutedLoop.loop & LoopWithCompiledCommand
@@ -26261,7 +26457,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
       },
       depends_on: [],
     });
-    const substitutedGate = applyLoopPrevToBodyNode(gate as DagNode, prev, '');
+    const substitutedGate = applyLoopPrevToBodyNode(gate as DagNode, {
+      loopPrevOutputs: prev,
+      loopUserInput: '',
+    });
     if (!('kind' in substitutedGate) || substitutedGate.kind !== 'gate')
       throw new Error('expected gate node');
     expect(substitutedGate.message).toBe('approve=PRIOR');
@@ -26274,7 +26473,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
       wait: { event: ref, deadline_ms: 60_000 },
       depends_on: [],
     });
-    const substitutedWait = applyLoopPrevToBodyNode(wait as DagNode, prev, '');
+    const substitutedWait = applyLoopPrevToBodyNode(wait as DagNode, {
+      loopPrevOutputs: prev,
+      loopUserInput: '',
+    });
     if (!('kind' in substitutedWait) || substitutedWait.kind !== 'wait') {
       throw new Error('expected wait node');
     }
@@ -26290,7 +26492,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
       origin: 'review-block',
       inputs: { previous: ref },
     };
-    const substitutedScript = applyLoopPrevToBodyNode(script as DagNode, prev, '');
+    const substitutedScript = applyLoopPrevToBodyNode(script as DagNode, {
+      loopPrevOutputs: prev,
+      loopUserInput: '',
+    });
     expect(readComposedMeta(substitutedScript)?.inputs).toEqual({ previous: 'PRIOR' });
   });
 
@@ -26308,8 +26513,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         runtime: 'bun',
         depends_on: [],
       } as DagNode,
-      undefined,
-      injection
+      { loopPrevOutputs: undefined, loopUserInput: injection }
     );
     // Literal token preserved; the payload never reaches the executed source.
     expect('script' in scriptNode && scriptNode.script).toBe('console.log("$LOOP_USER_INPUT")');
@@ -26323,8 +26527,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         script: 'echo $LOOP_USER_INPUT',
         depends_on: [],
       } as DagNode,
-      undefined,
-      injection
+      { loopPrevOutputs: undefined, loopUserInput: injection }
     );
     // No single quotes in the payload → shellQuote wraps it verbatim in single quotes.
     expect(bashScript(bashNode)).toBe(`echo '${injection}'`);
@@ -26347,8 +26550,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         },
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
     if (!('loop' in nestedLoop) || nestedLoop.loop === undefined)
       throw new Error('expected loop node');
@@ -26370,8 +26572,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         },
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
     if (!('loop_group' in nestedGroup) || nestedGroup.loop_group === undefined)
       throw new Error('expected loop_group node');

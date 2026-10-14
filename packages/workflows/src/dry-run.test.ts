@@ -2045,6 +2045,92 @@ describe('dryRunWorkflow', () => {
     ]);
   });
 
+  test('substitutes loop variables into a body command file as a real run does (#3954)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-loop-command-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(
+      join(cwd, '.archon', 'commands', 'report.md'),
+      'previous: [$LOOP_PREV.round.output.pr_url] feedback: [$LOOP_USER_INPUT]'
+    );
+    const workflow = makeTestWorkflow({
+      name: 'loop-command',
+      nodes: [
+        {
+          id: 'group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 2,
+            nodes: [
+              {
+                id: 'round',
+                prompt: 'round',
+                output_format: { type: 'object', properties: { pr_url: { type: 'string' } } },
+              },
+              { id: 'report', command: 'report', depends_on: ['round'] },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { round: { pr_url: 'https://example.test/pr/1' }, report: 'more' },
+    });
+
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'report').map(entry => entry.resolvedText)
+    ).toEqual(['previous: [] feedback: []', 'previous: [https://example.test/pr/1] feedback: []']);
+  });
+
+  test('runs a nested body command file through every enclosing loop scope (#3954)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-nested-loop-command-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(
+      join(cwd, '.archon', 'commands', 'polish.md'),
+      'outer: [$LOOP_PREV.a.output] inner: [$LOOP_PREV.polish.output]'
+    );
+    const workflow = makeTestWorkflow({
+      name: 'nested-loop-command',
+      nodes: [
+        {
+          id: 'outer',
+          loop_group: {
+            until: 'OUTER_DONE',
+            max_iterations: 2,
+            nodes: [
+              { id: 'a', prompt: 'produce a' },
+              {
+                id: 'inner',
+                depends_on: ['a'],
+                loop_group: {
+                  until: 'DONE',
+                  max_iterations: 1,
+                  nodes: [{ id: 'polish', command: 'polish' }],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { a: 'A-OUT', polish: 'DONE' },
+    });
+
+    // Stubs are static, so the inner group ends on its first iteration and its own ref is
+    // empty; the outer group never sees OUTER_DONE and runs both iterations.
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'polish').map(entry => entry.resolvedText)
+    ).toEqual(['outer: [] inner: []', 'outer: [A-OUT] inner: []']);
+  });
+
   test('represents cancellation and unsupported subworkflows visibly', async () => {
     const cancelled = makeTestWorkflow({
       name: 'cancel',
