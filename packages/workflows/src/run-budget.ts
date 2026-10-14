@@ -61,8 +61,8 @@ export function attemptSpend(execution: NodeExecutionMetadata | undefined): Atte
   if (execution === undefined) return { kind: 'unavailable', reason: 'unknown' };
   const cost = execution.spend.costUsd;
   if (cost.source === 'unavailable') {
-    // Only an attempt that failed before a provider was bound records no provider, so it
-    // made no provider call: its cost is a known zero.
+    // `not_applicable` records an attempt that made no provider call: it failed before a
+    // provider was bound or before the bound provider was called. Its cost is a known zero.
     return cost.reason === 'not_applicable'
       ? { kind: 'known', usd: 0 }
       : { kind: 'unavailable', reason: cost.reason };

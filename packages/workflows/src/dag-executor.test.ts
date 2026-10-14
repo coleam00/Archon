@@ -43687,6 +43687,15 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     expect(refusals(store)).toHaveLength(0);
     expect(started(store, 'b')).toHaveLength(1);
     expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    const failed = persistedEvents(store).find(
+      e => e.step_name === 'a' && e.event_type === 'node_failed'
+    );
+    expect(failed?.data).not.toHaveProperty('cost_usd');
+    const record = failed && readNodeRecordEvent({ ...failed, data: failed.data });
+    expect(record?.metadata?.spend.costUsd).toEqual({
+      source: 'unavailable',
+      reason: 'not_applicable',
+    });
   });
 
   it('keeps an operator cancel instead of failing the run for its budget', async () => {

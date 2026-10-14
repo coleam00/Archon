@@ -2404,7 +2404,7 @@ async function executeNodeInternal(
   const failAgentNode = async (
     error: string,
     failureKind: NodeFailureKind,
-    extras: { output?: string; providerFailure?: ProviderFailure } = {}
+    extras: { output?: string; providerFailure?: ProviderFailure; providerNotCalled?: boolean } = {}
   ): Promise<NodeExecutionResult> => {
     const result = await recordNodeState(
       { store: deps.store, logDir },
@@ -2428,6 +2428,7 @@ async function executeNodeInternal(
           numTurns: nodeNumTurns,
           resolvedModel: nodeResolvedModel?.id,
           sessionId: newSessionId,
+          providerNotCalled: extras.providerNotCalled,
         }
       )
     );
@@ -2435,12 +2436,10 @@ async function executeNodeInternal(
     lastNodeActivityUpdate.delete(nodeKey);
     return result;
   };
-  // The provider is bound but was never called, so the attempt's cost is a known zero
-  // rather than unreported spend that would refuse a spend-limited run.
-  const failBeforeProviderCall = (error: string): Promise<NodeExecutionResult> => {
-    nodeCostUsd = 0;
-    return failAgentNode(error, 'config');
-  };
+  // The provider is bound but was never called, so the attempt records no spend rather
+  // than unreported spend that would refuse a spend-limited run.
+  const failBeforeProviderCall = (error: string): Promise<NodeExecutionResult> =>
+    failAgentNode(error, 'config', { providerNotCalled: true });
 
   // Load prompt
   let rawPrompt: string;
