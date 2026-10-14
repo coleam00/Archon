@@ -119,16 +119,14 @@ test('pause, approve in another process, and resume without any SQL connection',
   expect(existsSync(join(f.project, 'before-count'))).toBe(false);
   // The GitHub App alone still initializes for file-backed runs.
   f.env.TOKEN_ENCRYPTION_KEY = '';
-  const started = await cli(f, [
-    'workflow',
-    'run',
-    'portable',
-    '--folder',
-    '--no-worktree',
-    '--quiet',
-  ]);
+  const started = await cli(f, ['workflow', 'run', 'portable', '--folder', '--no-worktree']);
   expect(started.error).not.toContain('SQL open trap');
   expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  // The foreground renders progress from the file store's committed rows.
+  expect(started.error).toContain('[workflow] Transcript: ');
+  expect(started.error).toContain('[before] Started\n');
+  expect(started.error).toMatch(/\[before\] Completed \(\d/);
+  expect(started.error).toContain('[review] Waiting for approval: Approve?\n');
   const listed = await cli(f, ['workflow', 'runs', '--json']);
   expect(listed.code).toBe(0);
   const rows = JSON.parse(listed.output).runs;
@@ -141,6 +139,9 @@ test('pause, approve in another process, and resume without any SQL connection',
   const resumed = await cli(f, ['workflow', 'resume', id]);
   expect(resumed.error).not.toContain('SQL open trap');
   expect(resumed.code).toBe(0);
+  expect(resumed.error).toContain('[after] Started\n');
+  expect(resumed.error).toMatch(/\[after\] Completed \(\d/);
+  expect(resumed.error).not.toContain('[before] Started');
   const get = await cli(f, ['workflow', 'get', id, '--json', '--events']);
   expect(get.code).toBe(0);
   expect(JSON.parse(get.output)).toMatchObject({ id, status: 'completed' });

@@ -109,9 +109,12 @@ nodes:
       summary: "$assess.output.summary"
       delivered: { from: "$deliver.output.ready", if_skipped: null }
       delivery: { from: "$deliver.output.summary", if_skipped: null }
+      pr_url: { from: "$deliver.output.pr_url", if_skipped: null }
     output_format:
       type: object
       properties:
         delivered: { type: boolean }
+        # The delivery's pull request, ready or not; '' when no delivery opened one.
+        pr_url: { type: string }
         summary: { type: string }
-      required: [delivered, summary]
+      required: [delivered, pr_url, summary]

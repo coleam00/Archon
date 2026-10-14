@@ -674,7 +674,7 @@ changing between inspection and deployment.
 
 ## Building the Image
 
-The Dockerfile uses three stages:
+The Dockerfile uses three main stages, fed by two helper stages (**manifests** and **sources**) that derive the workspace layout from `packages/`, so adding a package needs no Dockerfile edit:
 
 1. **deps** — Installs all dependencies (including devDependencies for the web build)
 2. **web-build** — Builds the React web UI with Vite
@@ -687,10 +687,10 @@ docker run --env-file .env -p 3000:3000 archon
 
 **What's in the image:**
 
-- **Runtime**: Bun 1.2 (runs TypeScript directly, no compile step)
+- **Runtime**: Bun (runs TypeScript directly, no compile step)
 - **System deps**: git, curl, gh (GitHub CLI), postgresql-client, Chromium
 - **Browser tooling**: [agent-browser](https://github.com/vercel-labs/agent-browser) (Vercel Labs) — enables E2E testing workflows via CDP. Uses system Chromium (`AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`)
-- **App**: All 10 workspace packages (source), pre-built web UI
+- **App**: Source of every workspace package except `docs-web` (deployed separately), `web` (only the pre-built UI ships), and `chat-slack` (installed as a plugin). The `sources` stage lists the exclusions.
 - **User**: Non-root `appuser` (UID 1001) — required by Claude Code SDK
 - **Archon dirs**: `/.archon/workspaces`, `/.archon/worktrees`
 

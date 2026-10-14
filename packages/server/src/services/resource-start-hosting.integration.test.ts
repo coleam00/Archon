@@ -72,6 +72,9 @@ function recordingEngine(): IWorkflowEngine & {
     async resume() {
       throw new Error('not used');
     },
+    async subscribe() {
+      throw new Error('not used');
+    },
   };
 }
 
@@ -709,6 +712,9 @@ describe('server resource-start host', () => {
       async resume() {
         throw new Error('not used');
       },
+      async subscribe() {
+        throw new Error('not used');
+      },
     };
     const start = (target: IWorkflowEngine): ReturnType<typeof startAdmittedResourceStart> =>
       startAdmittedResourceStart({
@@ -736,6 +742,9 @@ describe('server resource-start host', () => {
           throw new Error('engine unavailable');
         },
         async resume() {
+          throw new Error('not used');
+        },
+        async subscribe() {
           throw new Error('not used');
         },
       },

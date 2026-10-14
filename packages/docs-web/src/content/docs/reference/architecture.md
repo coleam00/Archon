@@ -903,35 +903,15 @@ supported.
 
 **Implementation** (`substituteWorkflowVariables` in `packages/workflows/src/executor-shared.ts`):
 
-```typescript
-export function substituteWorkflowVariables(
-  prompt: string,
-  workflowId: string,
-  userMessage: string,
-  artifactsDir: string,
-  baseBranch: string,
-  docsDir: string,
-  issueContext?: string,
-  // ...loop/approval context args
-  options?: { shellSafe?: boolean }
-): { prompt: string; contextSubstituted: boolean } {
-  let result = prompt
-    .replace(/\$WORKFLOW_ID/g, workflowId)
-    .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
-    .replace(/\$BASE_BRANCH/g, baseBranch)
-    .replace(/\$DOCS_DIR/g, docsDir || 'docs/');
+Each variable is a token with its own resolver. `substituteTemplate`
+(`packages/workflows/src/output-ref.ts`) scans the template once, left to right, and
+resolves each `$` reference from its source. The DAG executor adds `$nodeId.output` and
+loop_group `$LOOP_PREV.*` tokens to the same scan. A substituted value, such as the user's
+message, is inserted as written and never scanned again, so text that mentions
+`$ARGUMENTS` or `$plan.output` stays text.
 
-  // User-controlled vars are skipped when shellSafe: true — bash/script nodes
-  // receive them via subprocess env instead, to prevent shell injection.
-  if (!options?.shellSafe) {
-    result = result
-      .replace(/\$USER_MESSAGE/g, userMessage)
-      .replace(/\$ARGUMENTS/g, userMessage);
-    // ...$LOOP_USER_INPUT, $REJECTION_REASON, $LOOP_PREV_OUTPUT, and $CONTEXT* vars
-  }
-  // ...
-}
-```
+When `shellSafe` is true, the user-controlled variables are left literal: bash and script
+nodes receive them through subprocess env vars instead, to prevent shell injection.
 
 **Example:**
 

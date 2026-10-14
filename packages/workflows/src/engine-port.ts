@@ -1,6 +1,7 @@
 import type { IWorkflowPlatform } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
-import type { WorkflowResumeCursor } from './store';
+import type { WorkflowEventCursor, WorkflowResumeCursor } from './store';
+import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ResolvedWorkflow, WorkflowRun, WorkflowExecutionResult } from './schemas';
 
 // These lists own both the public input exclusions and their runtime validation.
@@ -61,9 +62,37 @@ export type WorkflowResumeAdmission =
       settled: Promise<WorkflowExecutionResult>;
     };
 
+/** One committed event of the subscribed run tree. Resubscribing `after` its cursor continues the feed. */
+export interface WorkflowRunDelivery {
+  cursor: WorkflowEventCursor;
+  event: WorkflowEventRow;
+}
+
+export interface WorkflowRunSubscriptionOptions {
+  /** Start after this cursor instead of at the current head. */
+  after?: WorkflowEventCursor;
+  pollIntervalMs?: number;
+}
+
+export interface WorkflowRunSubscription {
+  /** Drains to the head once more, then stops. Rejects if that final read fails. Idempotent. */
+  close(): Promise<void>;
+}
+
 /** Hosts supply execution context; the implementation owns its dependencies. */
 export interface IWorkflowEngine {
   submit(input: WorkflowEngineSubmitInput): Promise<WorkflowExecutionResult>;
   /** Claims and starts a continuation before returning acceptance. */
   resume(input: WorkflowResumeInput): Promise<WorkflowResumeAdmission>;
+  /**
+   * Deliver every committed event of `runId` and of its descendant runs, in commit order,
+   * one at a time; a throwing listener is logged and delivery continues. Resolves once the
+   * starting cursor is fixed. Observes only: a delivered event can later be retracted by
+   * recovery, so run reads remain the state of record.
+   */
+  subscribe(
+    runId: string,
+    listener: (delivery: WorkflowRunDelivery) => void,
+    options?: WorkflowRunSubscriptionOptions
+  ): Promise<WorkflowRunSubscription>;
 }
