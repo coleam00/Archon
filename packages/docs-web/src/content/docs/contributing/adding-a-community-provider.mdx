@@ -115,7 +115,7 @@ an `onLog` callback. Log metadata only, never credentials, tokens, or message te
 The process host logs a fixed `provider.plugin.log` event at the supplied severity
 through `provider.<id>`, using its own descriptor id. The only plugin value it forwards
 is `bindings.failureClass`, and only when it is one of the contract's failure classes;
-otherwise the record logs severity alone. Plugin `msg`, module identity, and all other
+the host drops a record without one. Plugin `msg`, module identity, and all other
 bindings are withheld: any plugin-chosen string, even one that looks like a machine
 token, can carry a credential.
 Container requests carry their optional `env` bag as session data while the plugin

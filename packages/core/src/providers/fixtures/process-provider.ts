@@ -179,7 +179,10 @@ await serveProvider(
               params: {
                 level: process.argv[3],
                 msg: 'credential-secret private message',
-                bindings: { failureClass: prompt, module: 'provider.forged' },
+                bindings: {
+                  ...(prompt ? { failureClass: prompt } : {}),
+                  module: 'provider.forged',
+                },
               },
             })}\n`
           );
