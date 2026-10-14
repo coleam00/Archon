@@ -1363,6 +1363,10 @@ describe('CLI git repo check', () => {
 // contention, and seeding it once below keeps schema creation out of every
 // timed body (#2982).
 let jsonEnvelopeHome: string;
+let cliTestHome: string;
+let inheritedHome: string | undefined;
+let inheritedDocker: string | undefined;
+let inheritedWorkspace: string | undefined;
 
 function spawnJsonError(argv: string[], extraEnv: Record<string, string> = {}) {
   const result = spawnSync(process.execPath, [CLI_ENTRY, ...argv], {
@@ -1378,6 +1382,13 @@ function spawnJsonError(argv: string[], extraEnv: Record<string, string> = {}) {
 }
 
 beforeAll(() => {
+  cliTestHome = mkdtempSync(join(tmpdir(), 'archon-cli-test-home-'));
+  inheritedHome = process.env.ARCHON_HOME;
+  inheritedDocker = process.env.ARCHON_DOCKER;
+  inheritedWorkspace = process.env.WORKSPACE_PATH;
+  process.env.ARCHON_DOCKER = '';
+  process.env.WORKSPACE_PATH = '';
+  process.env.ARCHON_HOME = cliTestHome;
   jsonEnvelopeHome = mkdtempSync(join(tmpdir(), 'archon-json-envelope-home-'));
 
   // Build the registry once, here, so no timed body below pays for creating it.
@@ -1396,6 +1407,13 @@ beforeAll(() => {
 });
 
 afterAll(async () => {
+  if (inheritedHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = inheritedHome;
+  if (inheritedDocker === undefined) delete process.env.ARCHON_DOCKER;
+  else process.env.ARCHON_DOCKER = inheritedDocker;
+  if (inheritedWorkspace === undefined) delete process.env.WORKSPACE_PATH;
+  else process.env.WORKSPACE_PATH = inheritedWorkspace;
+  await removeTempTree(cliTestHome);
   if (jsonEnvelopeHome) await removeTempTree(jsonEnvelopeHome);
 });
 

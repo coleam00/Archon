@@ -73,7 +73,7 @@ import {
   DETACHED_RESUME_RECEIPT_FD,
 } from '../utils/detached-resume-receipt';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { getArchonHome, isDocker, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import {
@@ -135,7 +135,19 @@ beforeAll(async () => {
   registerCommunityProviders();
 });
 
+let testHome: string;
+let inheritedHome: string | undefined;
+let inheritedDocker: string | undefined;
+let inheritedWorkspace: string | undefined;
+
 beforeEach(async () => {
+  testHome = mkdtempSync(join(tmpdir(), 'archon-workflow-test-home-'));
+  inheritedHome = process.env.ARCHON_HOME;
+  inheritedDocker = process.env.ARCHON_DOCKER;
+  inheritedWorkspace = process.env.WORKSPACE_PATH;
+  process.env.ARCHON_DOCKER = '';
+  process.env.WORKSPACE_PATH = '';
+  process.env.ARCHON_HOME = testHome;
   const core = await import('@archon/core');
   (core.loadConfig as ReturnType<typeof mock>).mockResolvedValue({
     defaults: {},
@@ -144,6 +156,16 @@ beforeEach(async () => {
     aliases: { '@planner': { provider: 'claude', model: 'sonnet' } },
     commands: {},
   });
+});
+
+afterEach(async () => {
+  if (inheritedHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = inheritedHome;
+  if (inheritedDocker === undefined) delete process.env.ARCHON_DOCKER;
+  else process.env.ARCHON_DOCKER = inheritedDocker;
+  if (inheritedWorkspace === undefined) delete process.env.WORKSPACE_PATH;
+  else process.env.WORKSPACE_PATH = inheritedWorkspace;
+  await removeTempTree(testHome);
 });
 
 const mockLogger = {
@@ -252,10 +274,6 @@ const mockResolveFolderBackend = mock(() => ({
   destroy: mockFolderBackendDestroy,
 }));
 
-const mockIsDocker = (env: NodeJS.ProcessEnv = process.env): boolean =>
-  env.WORKSPACE_PATH === '/workspace' ||
-  (env.HOME === '/root' && Boolean(env.WORKSPACE_PATH)) ||
-  env.ARCHON_DOCKER === 'true';
 const mockExpandTilde = (path: string): string =>
   path.startsWith('~') ? join(homedir(), path.slice(1).replace(/^[/\\]/, '')) : path;
 // Identity by default: fixture paths are fake and must keep their spelling on Windows.
@@ -267,13 +285,9 @@ mock.module('@archon/paths', () => ({
   captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
   expandTilde: mockExpandTilde,
-  isDocker: mockIsDocker,
+  isDocker,
   getArchonHome: mock((env: NodeJS.ProcessEnv = process.env) =>
-    mockIsDocker(env)
-      ? '/.archon'
-      : env.ARCHON_HOME
-        ? mockExpandTilde(env.ARCHON_HOME)
-        : '/home/test/.archon'
+    isDocker(env) ? '/.archon' : env.ARCHON_HOME ? mockExpandTilde(env.ARCHON_HOME) : testHome
   ),
   getProjectStoragePaths: getProjectStoragePathsReal,
   getRunArtifactsDirForRoot: getRunArtifactsDirForRootReal,
@@ -8493,17 +8507,10 @@ describe('workflowRunCommand — detach', () => {
   it('spawns a detached child with its pending run and branch and does NOT await executeWorkflow', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');
-    const paths = await import('@archon/paths');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
     });
-    // Force the log-file path to fall back to 'ignore' so the test writes no files
-    (paths.getArchonHome as ReturnType<typeof mock>)
-      .mockImplementationOnce(() => '/home/test/.archon')
-      .mockImplementationOnce(() => {
-        throw new Error('no home in test');
-      });
 
     const execBefore = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
     const child = createDetachedChildFixture();
@@ -8545,6 +8552,13 @@ describe('workflowRunCommand — detach', () => {
     expect(spawnOptions?.detached).toBe(true);
     expect(spawnOptions?.windowsHide).toBe(true);
     expect(spawnOptions?.env?.ARCHON_DETACHED_RUN_OWNER).toBe('1');
+    expect(spawnOptions?.env?.ARCHON_HOME).toBe(testHome);
+    const logLine = consoleSpy.mock.calls.find((call: unknown[]) =>
+      String(call[0]).startsWith('Child output: ')
+    );
+    const logPath = String(logLine?.[0]).slice('Child output: '.length);
+    expect(dirname(logPath)).toBe(join(testHome, 'logs'));
+    expect(readFileSync(logPath, 'utf8')).toContain('--- detached workflow invocation:');
     expect(spawnCmd).not.toContain('--detach');
     expect(spawnCmd).toContain('--branch');
     expect(spawnCmd).not.toContain('--conversation-id');
@@ -8570,13 +8584,9 @@ describe('workflowRunCommand — detach', () => {
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDb = await import('@archon/core/db/workflows');
     const { resolveWorkflowAdoption } = await import('@archon/core/operations/workflow-adoption');
-    const paths = await import('@archon/paths');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValue({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
     // The parent resolves the declared adoption before forking (#2872), so this test
     // now has to give it a project and a resolvable lane to pass through.
@@ -8680,16 +8690,12 @@ describe('workflowRunCommand — detach', () => {
 
   it('hands the detached child the sealed validated layer instead of a mutable path', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const paths = await import('@archon/paths');
     const { unsealWorkflowRunConfig } = await import('@archon/core/config');
     const { workflowRunConfigMetadataSchema } =
       await import('@archon/workflows/schemas/run-config');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
 
     const child = createDetachedChildFixture();
@@ -8733,6 +8739,7 @@ describe('workflowRunCommand — detach', () => {
       expect(spawnOptions.env?.ARCHON_INTERNAL_DETACHED_RUN_CONFIG).toBeUndefined();
       expect(spawnOptions.env?.TOKEN_ENCRYPTION_KEY).toBe('ab'.repeat(32));
       expect(spawnOptions.env?.ARCHON_HOME).toBe('');
+      expect(fs.readdirSync(join(testHome, 'logs'))).toHaveLength(1);
     } finally {
       process.argv = savedArgv;
       if (savedKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
@@ -8764,7 +8771,6 @@ describe('workflowRunCommand — detach', () => {
   it('keeps stdout a parseable JSON payload while warning on stderr', async () => {
     const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const paths = await import('@archon/paths');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'assist', description: 'Help' }, 'project', [
@@ -8772,9 +8778,6 @@ describe('workflowRunCommand — detach', () => {
         ]),
       ],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
 
     const child = createDetachedChildFixture();
@@ -8825,14 +8828,10 @@ describe('workflowRunCommand — detach', () => {
 
   it('does NOT pin a --branch on the detached child for a registered folder project', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const paths = await import('@archon/paths');
     const codebaseDb = await import('@archon/core/db/codebases');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
     // Detach folder probe: exact miss, then path-prefix resolves a folder project.
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
@@ -8874,13 +8873,9 @@ describe('workflowRunCommand — detach', () => {
   it('--resume --detach acks the continuation run id without creating a row', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const workflowDb = await import('@archon/core/db/workflows');
-    const paths = await import('@archon/paths');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
     (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-paused',
@@ -8929,17 +8924,11 @@ describe('workflowRunCommand — detach', () => {
 
   it('--detach --json emits a structured ack', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const paths = await import('@archon/paths');
-    const tempHome = mkdtempSync(join(tmpdir(), 'archon-detached-paths-'));
-    const previousHome = process.env.ARCHON_HOME;
-    process.env.ARCHON_HOME = tempHome;
+    const tempHome = testHome;
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
     });
-    (paths.getArchonHome as ReturnType<typeof mock>)
-      .mockImplementationOnce(() => tempHome)
-      .mockImplementationOnce(() => tempHome);
     const child = createDetachedChildFixture();
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
     const savedArgv = process.argv;
@@ -8971,9 +8960,6 @@ describe('workflowRunCommand — detach', () => {
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
-      if (previousHome === undefined) delete process.env.ARCHON_HOME;
-      else process.env.ARCHON_HOME = previousHome;
-      await removeTempTree(tempHome);
     }
 
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
@@ -9057,13 +9043,9 @@ describe('workflowRunCommand — detach', () => {
   it('still launches without a project when isolation is not wanted', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const codebaseDb = await import('@archon/core/db/codebases');
-    const paths = await import('@archon/paths');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
@@ -9098,13 +9080,9 @@ describe('workflowRunCommand — detach', () => {
   it('acks a run whose workflow failed inside the startup window', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const workflowDb = await import('@archon/core/db/workflows');
-    const paths = await import('@archon/paths');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
     const child = createDetachedChildFixture();
@@ -9143,13 +9121,9 @@ describe('workflowRunCommand — detach', () => {
   it('fails the run row it created when the detached child dies during startup', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const workflowDb = await import('@archon/core/db/workflows');
-    const paths = await import('@archon/paths');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
     const child = createDetachedChildFixture();
@@ -9187,17 +9161,13 @@ describe('workflowRunCommand — detach', () => {
 
   it('rejects an immediate non-zero child exit with the log tail and no success ack', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const paths = await import('@archon/paths');
-    const tempHome = mkdtempSync(join(tmpdir(), 'archon-detached-failure-'));
+    const tempHome = testHome;
     const conversationId = 'cli-detached-failure';
     const logPath = join(tempHome, 'logs', `detached-run-${conversationId}.log`);
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
     });
-    (paths.getArchonHome as ReturnType<typeof mock>)
-      .mockImplementationOnce(() => tempHome)
-      .mockImplementationOnce(() => tempHome);
     const child = createDetachedChildFixture();
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
     const savedArgv = process.argv;
@@ -9229,7 +9199,6 @@ describe('workflowRunCommand — detach', () => {
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
-      rmSync(tempHome, { recursive: true, force: true });
     }
 
     expect(child.unref).not.toHaveBeenCalled();
@@ -9238,8 +9207,7 @@ describe('workflowRunCommand — detach', () => {
 
   it('writes a delimiter for every invocation sharing a conversation id', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const paths = await import('@archon/paths');
-    const tempHome = mkdtempSync(join(tmpdir(), 'archon-detached-delimiters-'));
+    const tempHome = testHome;
     const conversationId = 'cli-shared-conversation';
     const firstChild = createDetachedChildFixture();
     const secondChild = createDetachedChildFixture();
@@ -9252,11 +9220,6 @@ describe('workflowRunCommand — detach', () => {
         workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
         errors: [],
       });
-    (paths.getArchonHome as ReturnType<typeof mock>)
-      .mockImplementationOnce(() => tempHome)
-      .mockImplementationOnce(() => tempHome)
-      .mockImplementationOnce(() => tempHome)
-      .mockImplementationOnce(() => tempHome);
     const spawnSpy = spyOn(Bun, 'spawn')
       .mockReturnValueOnce(firstChild.child)
       .mockReturnValueOnce(secondChild.child);
@@ -9298,19 +9261,14 @@ describe('workflowRunCommand — detach', () => {
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
-      rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
   it('throws (no false success ack) when the detached child fails to spawn', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const paths = await import('@archon/paths');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
     // Node's spawn does not throw synchronously on a bad executable — the only
     // synchronous failure signal is an undefined pid.
@@ -9753,19 +9711,10 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     metadata: { approval: { nodeId: 'gate', message: 'Approve?' } },
   };
 
-  /** Suppress the log file so the test writes nothing to disk (logPath becomes null). */
-  const silenceLogFile = async (): Promise<void> => {
-    const paths = await import('@archon/paths');
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
-    });
-  };
-
-  it('approve --detach spawns a detached child (minus --detach) and performs ZERO writes in the parent', async () => {
+  it('approve --detach spawns a detached child (minus --detach) without changing run state in the parent', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const { executeWorkflow } = await import('@archon/workflows/executor');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({ ...pausedRun });
-    await silenceLogFile();
 
     const updateBefore = (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mock.calls
       .length;
@@ -9810,16 +9759,15 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     );
     expect((executeWorkflow as ReturnType<typeof mock>).mock.calls.length).toBe(execBefore);
     expect(consoleSpy).toHaveBeenCalledWith("Started 'approve' for run run-123 in the background.");
-    // No log file could be opened, so the child's output is discarded — say so.
-    expect(warnSpy).toHaveBeenCalledWith(
-      'Warning: could not open a log file — child output will not be captured.'
+    expect(consoleSpy).toHaveBeenCalledWith(
+      `Child output: ${join(testHome, 'logs', 'detached-run-run-123.log')}`
     );
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it('approve --detach --json emits a structured ack on stdout without approving', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({ ...pausedRun });
-    await silenceLogFile();
     const child = createDetachedChildFixture();
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
     const savedArgv = process.argv;
@@ -9850,15 +9798,12 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
       detached: true,
       workflowName: 'assist',
     });
-    // logPath is a path or null — never a serialized Promise, which is what an
-    // un-awaited spawnDetachedWorkflowRun produces ({} through JSON.stringify).
-    expect(parsed.logPath).toBeNull();
+    expect(parsed.logPath).toBe(join(testHome, 'logs', 'detached-run-run-123.log'));
   });
 
   it('--detach --json spawns a child WITHOUT --json (so it continues) and says so in the ack', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({ ...pausedRun });
-    await silenceLogFile();
     const child = createDetachedChildFixture();
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
     const savedArgv = process.argv;
@@ -9893,7 +9838,6 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
   it('threads a caller-supplied --cwd to the child instead of the parent process.cwd()', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({ ...pausedRun });
-    await silenceLogFile();
     const child = createDetachedChildFixture();
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
     const savedArgv = process.argv;
@@ -9939,11 +9883,9 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     // that await the failure arrives as an unhandled rejection AFTER `{ok:true}`
     // has already been printed — the exact hole --detach exists to close.
     const workflowDb = await import('@archon/core/db/workflows');
-    const tempHome = mkdtempSync(join(tmpdir(), 'archon-detached-control-failure-'));
+    const tempHome = testHome;
     const logPath = join(tempHome, 'logs', 'detached-run-run-123.log');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({ ...pausedRun });
-    const paths = await import('@archon/paths');
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => tempHome);
     const child = createDetachedChildFixture();
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
     const savedArgv = process.argv;
@@ -9969,7 +9911,6 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
-      rmSync(tempHome, { recursive: true, force: true });
     }
 
     // --json turns the throw into the standard { ok: false } line; either way the
@@ -10197,7 +10138,6 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
       ...pausedRun,
       metadata: {},
     });
-    await silenceLogFile();
     const child = createDetachedChildFixture();
     spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
     const savedArgv = process.argv;
@@ -10218,11 +10158,10 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     }
   });
 
-  it('reject --detach spawns a detached child (minus --detach) and performs ZERO writes in the parent', async () => {
+  it('reject --detach spawns a detached child (minus --detach) without changing run state in the parent', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const { executeWorkflow } = await import('@archon/workflows/executor');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({ ...pausedRun });
-    await silenceLogFile();
 
     const updateBefore = (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mock.calls
       .length;
@@ -10268,7 +10207,6 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
       ...pausedRun,
       status: 'failed',
     });
-    await silenceLogFile();
 
     const execBefore = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
     const child = new childProcess.ChildProcess();
@@ -10319,7 +10257,6 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
       ...pausedRun,
       status: 'failed',
     });
-    await silenceLogFile();
 
     // Bun's failed spawn: no pid and no receipt pipe; the ENOENT arrives later as an event.
     const child = new childProcess.ChildProcess();
@@ -14504,13 +14441,9 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDb = await import('@archon/core/db/workflows');
-    const paths = await import('@archon/paths');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
     // The detach pre-flight resolves the project the same way the adopt pre-flight
     // does: a subdir cwd misses the exact default-cwd lookup, then the path-prefix
@@ -14571,13 +14504,9 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const codebaseDb = await import('@archon/core/db/codebases');
     const workflowDb = await import('@archon/core/db/workflows');
-    const paths = await import('@archon/paths');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
-    });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
     });
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
     (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValueOnce({
