@@ -126,7 +126,12 @@ mock.module('../utils/commands', () => ({
 }));
 
 // ── Import module under test AFTER mocks are registered ────────────────────
-import { cloneRepository, registerRepository, registerFolder } from './sql-registration';
+import {
+  cloneRepository,
+  registerRepository,
+  registerFolder,
+  inspectProjectBaseBranch,
+} from './sql-registration';
 
 // ── Spies for fs/promises and @archon/git ──────────────────────────────────
 let spyFsAccess: ReturnType<typeof spyOn>;
@@ -382,6 +387,25 @@ describe('cloneRepository', () => {
     delete process.env.GITEA_TOKEN;
   });
 
+  test('GitHub remote inspection uses password credentials without changing the URL', async () => {
+    process.env.GH_TOKEN = 'inspection-token';
+    const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
+      status: 'available',
+      defaultBranch: gitUtils.toBranchName('main'),
+      branches: [gitUtils.toBranchName('main')],
+    });
+    try {
+      await inspectProjectBaseBranch({ url: 'https://github.com/owner/repo.git' });
+      expect(inspection).toHaveBeenCalledWith({
+        kind: 'url',
+        url: 'https://github.com/owner/repo.git',
+        credentials: { username: 'x-access-token', password: 'inspection-token' },
+      });
+    } finally {
+      inspection.mockRestore();
+    }
+  });
+
   test('a failed remote lookup after cloning removes the new clone', async () => {
     const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
     const remote = spyOn(gitUtils, 'getDefaultRemote').mockRejectedValue(
@@ -393,8 +417,7 @@ describe('cloneRepository', () => {
       ).rejects.toThrow('git remote failed');
       const target = getGitCloneCall()?.[1];
       expect(target).toBeDefined();
-      // The first rm clears the empty source directory before cloning; the second removes the clone.
-      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(2);
+      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(1);
       expect(mockCreateCodebase).not.toHaveBeenCalled();
     } finally {
       syntax.mockRestore();
@@ -416,7 +439,7 @@ describe('cloneRepository', () => {
       ).rejects.toThrow("Configured base branch 'unknown' not found on remote 'origin'");
       const target = getGitCloneCall()?.[1];
       expect(target).toBeDefined();
-      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(2);
+      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(1);
       expect(mockCreateCodebase).not.toHaveBeenCalled();
     } finally {
       syntax.mockRestore();
@@ -484,14 +507,6 @@ describe('cloneRepository', () => {
         args[1]?.includes('safe.directory')
       );
       expect(safeDir).toBeDefined();
-    });
-
-    test('removes the source/ directory before cloning so git has a clean target', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
-
-      await cloneRepository('https://github.com/owner/repo');
-
-      expect(spyFsRm.mock.calls.length).toBeGreaterThan(0);
     });
   });
 
@@ -569,7 +584,7 @@ describe('cloneRepository', () => {
       const cloneCall = getGitCloneCall();
       expect(cloneCall?.[0]).toBe('https://github.com/owner/private-repo');
       expect(cloneCall?.[2]).toEqual({
-        credentials: { username: 'ghp_testtoken123', password: '' },
+        credentials: { username: 'x-access-token', password: 'ghp_testtoken123' },
       });
     });
 
@@ -583,7 +598,7 @@ describe('cloneRepository', () => {
       expect(getGitCloneCall()).toEqual([
         'https://github.com/owner/private-repo',
         gitUtils.toRepoPath('/home/test/.archon/workspaces/owner/private-repo/source'),
-        { credentials: { username: 'ghp_github_token_456', password: '' } },
+        { credentials: { username: 'x-access-token', password: 'ghp_github_token_456' } },
       ]);
     });
 
@@ -609,7 +624,7 @@ describe('cloneRepository', () => {
       const cloneCall = getGitCloneCall();
       expect(cloneCall?.[0]).toBe('https://github.com/owner/repo.git');
       expect(cloneCall?.[2]).toEqual({
-        credentials: { username: 'ghp_testtoken123', password: '' },
+        credentials: { username: 'x-access-token', password: 'ghp_testtoken123' },
       });
     });
   });
@@ -742,10 +757,10 @@ describe('cloneRepository', () => {
   describe('resolveForgeAuth', () => {
     const { resolveForgeAuth } = require('./clone');
 
-    test('returns GH_TOKEN as username credentials for github.com', () => {
+    test('returns GH_TOKEN as password credentials for github.com', () => {
       process.env.GH_TOKEN = 'ghp_abc';
       const result = resolveForgeAuth('https://github.com/owner/repo');
-      expect(result).toEqual({ username: 'ghp_abc', password: '' });
+      expect(result).toEqual({ username: 'x-access-token', password: 'ghp_abc' });
       delete process.env.GH_TOKEN;
     });
 
@@ -770,7 +785,7 @@ describe('cloneRepository', () => {
     test('resolves GH_TOKEN for bare host/path form without protocol', () => {
       process.env.GH_TOKEN = 'ghp_bare';
       const result = resolveForgeAuth('github.com/owner/repo');
-      expect(result).toEqual({ username: 'ghp_bare', password: '' });
+      expect(result).toEqual({ username: 'x-access-token', password: 'ghp_bare' });
       delete process.env.GH_TOKEN;
     });
 
@@ -936,26 +951,9 @@ describe('cloneRepository', () => {
       await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
         'Failed to clone repository: fatal: repository unavailable'
       );
+      expect(spyFsRm).not.toHaveBeenCalled();
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
       delete process.env.GH_TOKEN;
-    });
-
-    test('re-throws non-ENOENT errors from rm()', async () => {
-      const permError = Object.assign(new Error('EPERM: operation not permitted'), {
-        code: 'EPERM',
-      });
-      spyFsRm.mockRejectedValueOnce(permError);
-
-      await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow('EPERM');
-    });
-
-    test('ignores ENOENT from rm() (target directory does not exist yet)', async () => {
-      const enoentErr = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      spyFsRm.mockRejectedValueOnce(enoentErr);
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
-
-      // Should NOT throw
-      const result = await cloneRepository('https://github.com/owner/repo');
-      expect(result).toBeDefined();
     });
   });
 

@@ -262,7 +262,19 @@ const labelEnsure = {
   color: 'abcdef',
   description: 'secret description',
 } satisfies ForgeRequest;
-test.each([issueCreate, labelsSet, labelEnsure])(
+const labelAdd = {
+  operationId: 'label-add',
+  op: 'workitem.label.add',
+  subject: { kind: 'pr', ref },
+  name: 'queued',
+} satisfies ForgeRequest;
+const labelRemove = {
+  operationId: 'label-remove',
+  op: 'workitem.label.remove',
+  subject: { kind: 'issue', ref },
+  name: 'queued',
+} satisfies ForgeRequest;
+test.each([issueCreate, labelsSet, labelEnsure, labelAdd, labelRemove])(
   'new mutation dispatch verifies proof and preserves unknown failures: $op',
   async request => {
     const result = await dispatch(request);
@@ -285,6 +297,38 @@ test.each([issueCreate, labelsSet, labelEnsure])(
       expect(audit).not.toContain(secret);
   }
 );
+test.each([labelAdd, labelRemove])(
+  'a single-label result must name the requested item kind: $op',
+  async request => {
+    expect((await dispatch(request, 'wrong-kind')).response).toMatchObject({
+      ok: false,
+      mutation: { outcome: 'outcome_unknown', target: ref },
+    });
+  }
+);
+
+test('a label listing must answer with open items of the requested repository', async () => {
+  const list = {
+    operationId: 'list',
+    op: 'workitem.list',
+    repo: ref.repo,
+    label: 'queued',
+  } satisfies ForgeRequest;
+  const result = await dispatch(list);
+  expect(result.response).toMatchObject({
+    ok: true,
+    result: {
+      op: 'workitem.list',
+      value: { label: 'queued', items: [{ kind: 'issue' }, { kind: 'pr' }] },
+    },
+  });
+  expect(result.audit.target).toEqual(ref.repo);
+  expect(JSON.stringify(result.audit.result)).toBe(JSON.stringify(result.response));
+  const closed = await dispatch(list, 'mismatch');
+  expect(closed.response).toMatchObject({ ok: false, error: { kind: 'invalid_response' } });
+  expect(closed.response).not.toHaveProperty('mutation');
+});
+
 test('dispatch permits recovery of closed marked issues with edited content', async () => {
   expect((await dispatch(issueCreate, 'recovery')).response).toMatchObject({
     ok: true,

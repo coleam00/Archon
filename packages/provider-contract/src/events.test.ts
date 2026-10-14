@@ -96,6 +96,11 @@ describe('provider event vocabulary', () => {
     }
   );
 
+  test('the result seam preserves an unavailable token measurement', () => {
+    const result = { type: 'result', tokensUnknown: true, cost: 0.2 } as const;
+    expect(providerChunkSchema.parse(result)).toEqual(result);
+  });
+
   test('the chunk union also carries result and settled', () => {
     expect(providerChunkSchema.parse({ type: 'result', sessionId: 's' })).toEqual({
       type: 'result',

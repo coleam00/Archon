@@ -216,3 +216,112 @@ test('repository list responses must echo the requested repository', () => {
     })
   ).toBe(false);
 });
+
+test('single-label proof verifies subject kind, identity and the one label', () => {
+  const pr = { ...item, kind: 'pr' } as const;
+  const add = {
+    operationId: 'add',
+    op: 'workitem.label.add',
+    subject: { kind: 'pr', ref },
+    name: 'queued',
+  } satisfies ForgeRequest;
+  const remove = { ...add, operationId: 'remove', op: 'workitem.label.remove' } as const;
+  expect(matches(add, response(add.op, ref, { workitem: pr, labels: ['other', 'queued'] }))).toBe(
+    true
+  );
+  expect(matches(add, response(add.op, ref, { workitem: pr, labels: ['other'] }))).toBe(false);
+  expect(matches(add, response(add.op, ref, { workitem: item, labels: ['queued'] }))).toBe(false);
+  expect(
+    matches(
+      add,
+      response(add.op, ref, { workitem: { ...pr, ref: { ...ref, number: 4 } }, labels: ['queued'] })
+    )
+  ).toBe(false);
+  expect(matches(remove, response(remove.op, ref, { workitem: pr, labels: ['other'] }))).toBe(true);
+  expect(matches(remove, response(remove.op, ref, { workitem: pr, labels: ['queued'] }))).toBe(
+    false
+  );
+});
+
+test('failure evidence must name the requested item kind', () => {
+  const failed = (op: string, workitem: object): ForgeResponse =>
+    forgeResponseSchema.parse({
+      operationId: 'failed',
+      ok: false,
+      error: { kind: 'invalid_response', message: 'no' },
+      mutation: { op, target: ref, outcome: 'verification_failed', leaveBehind: 'x', workitem },
+    });
+  const add = {
+    operationId: 'failed',
+    op: 'workitem.label.add',
+    subject: { kind: 'pr', ref },
+    name: 'queued',
+  } satisfies ForgeRequest;
+  const set = {
+    operationId: 'failed',
+    op: 'workitem.labels.set',
+    ref,
+    labels: [],
+  } satisfies ForgeRequest;
+  expect(matches(add, failed(add.op, { ...item, kind: 'pr' }))).toBe(true);
+  expect(matches(add, failed(add.op, item))).toBe(false);
+  expect(matches(set, failed(set.op, item))).toBe(true);
+  expect(matches(set, failed(set.op, { ...item, kind: 'pr' }))).toBe(false);
+});
+
+test('a label listing proves its repository, label and open state', () => {
+  const request = {
+    operationId: 'list',
+    op: 'workitem.list',
+    repo,
+    label: 'queued',
+  } satisfies ForgeRequest;
+  const listed = (value: object): ForgeResponse =>
+    forgeResponseSchema.parse({
+      operationId: 'list',
+      ok: true,
+      result: { op: request.op, value: { repo, label: request.label, items: [item], ...value } },
+    });
+  expect(matches(request, listed({}))).toBe(true);
+  expect(matches(request, listed({ items: [] }))).toBe(true);
+  for (const wrong of [
+    { label: 'other' },
+    { repo: { ...repo, path: 'other/repo' } },
+    { items: [{ ...item, state: 'closed' }] },
+    { items: [{ ...item, ref: { ...ref, repo: { ...repo, path: 'other/repo' } } }] },
+  ])
+    expect(matches(request, listed(wrong))).toBe(false);
+});
+
+test('item and pull request views accept an author and still parse without one', () => {
+  const author = { host: repo.host, id: '1', login: 'octo' };
+  const pr = {
+    schemaVersion: 1,
+    ...ref,
+    url: 'https://forge.example/group/team/repo/pull/3',
+    head: 'feature',
+    base: 'dev',
+    is_draft: false,
+    state: 'open',
+    head_repo: repo,
+    head_revision: 'head',
+    base_revision: 'base',
+    maintainer_can_modify: null,
+  };
+  for (const extra of [{}, { author }, { author: null }]) {
+    expect(
+      forgeResponseSchema.safeParse({
+        operationId: 'view',
+        ok: true,
+        result: { op: 'workitem.view', value: { ...item, title: '', body: '', ...extra } },
+      }).success
+    ).toBe(true);
+    expect(
+      forgeResponseSchema.safeParse({
+        operationId: 'view',
+        ok: true,
+        result: { op: 'pr.view', value: { pr, title: '', body: '', ...extra } },
+      }).success
+    ).toBe(true);
+  }
+});

@@ -92,9 +92,11 @@ forge source is for host execution: a container execution receives neither
 
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
-request, and `publish-review` upserts the one marked review comment. Triage's
-labels go through `gh` whichever source the run selected, because the forge
-contract has no label operation for issues yet. No node files discoveries: the
+request, and `publish-review` upserts the one marked review comment. Every pack
+label is declared in `.shared/labels.ts`, and every stage writes labels through its
+`writeLabels`, which adds and removes them as a delta so labels another writer adds
+survive. On the `forge` source it still writes the whole label set back, because
+the forge contract has no single-label add or remove yet. No node files discoveries: the
 outcome relays them to the operator. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
 the selected source, and fails unless the result reads back — so "the write

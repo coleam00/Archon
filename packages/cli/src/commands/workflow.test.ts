@@ -259,7 +259,12 @@ const mockWaitForRunAttention = mock(
   (
     _store: import('@archon/workflows/store').IWorkflowStore,
     _runId: string,
-    _opts?: { onAttached?: (observedStatus: string) => void | Promise<void> }
+    _opts?: {
+      onAttached?: (
+        observedStatus: string,
+        ownerLiveness?: import('@archon/core/services/run-attention-watch').UnknownOwnerLiveness
+      ) => void | Promise<void>;
+    }
   ): Promise<unknown> => Promise.resolve({ kind: 'not_found', runId: 'unset' })
 );
 mock.module('@archon/core/services/run-attention-watch', () => ({
@@ -14712,6 +14717,36 @@ describe('workflowWaitCommand', () => {
 
     expect(String(stderrSpy.mock.calls[0]?.[0])).toBe(
       `Waiting on run ${FULL_ID} — currently paused.\n`
+    );
+    stderrSpy.mockRestore();
+  });
+
+  it('says when the owner cannot be checked from this host', async () => {
+    const stderrSpy = spyOnStderr();
+    const recordedOwner = { host: 'build-2', pid: 4242, uid: 501 };
+    const announceUnknown: Parameters<
+      typeof mockWaitForRunAttention.mockImplementation
+    >[0] = async (_store, _runId, opts) => {
+      await opts?.onAttached?.('running', { kind: 'unknown', recordedOwner });
+      return terminal('completed');
+    };
+    mockWaitForRunAttention.mockImplementationOnce(announceUnknown);
+    mockWaitForRunAttention.mockImplementationOnce(announceUnknown);
+
+    await workflowWaitCommand(createTestWorkflowHost(), FULL_ID, true, '/repo');
+    await workflowWaitCommand(createTestWorkflowHost(), FULL_ID, undefined, '/repo');
+
+    expect(JSON.parse(String(stderrSpy.mock.calls[0]?.[0]))).toEqual({
+      ok: true,
+      action: 'wait',
+      runId: FULL_ID,
+      result: 'waiting',
+      observedStatus: 'running',
+      ownerLiveness: 'unknown',
+      recordedOwner,
+    });
+    expect(String(stderrSpy.mock.calls[1]?.[0])).toBe(
+      `Waiting on run ${FULL_ID} — currently running. Its owner ran on host build-2 (uid 501), whose endpoint this host cannot reach, so whether it is still alive is unknown.\n`
     );
     stderrSpy.mockRestore();
   });

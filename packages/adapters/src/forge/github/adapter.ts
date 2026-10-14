@@ -6,8 +6,8 @@ import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
 import { verifyGitHubWebhookSignature } from './webhook-signature';
-import { readdir, access } from 'fs/promises';
-import { join } from 'path';
+import { readdir, access, rm } from 'fs/promises';
+import { join, resolve } from 'path';
 import type { IPlatformAdapter, MessageMetadata, GitHubAuth } from '@archon/core';
 import type { IsolationHints } from '@archon/isolation';
 import {
@@ -31,6 +31,7 @@ import {
 import {
   isWorktreePath,
   cloneRepository,
+  githubTokenCredentials,
   syncRepository,
   addSafeDirectory,
   toRepoPath,
@@ -62,6 +63,9 @@ const MAX_LENGTH = 65000; // GitHub comment limit (~65,536, leave buffer for saf
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
+
+// Webhook readiness runs before conversation locking; adapter instances can share a checkout.
+const repositoryReadiness = new Map<string, Promise<void>>();
 
 interface PullRequestIdentity {
   host: string;
@@ -698,22 +702,38 @@ export class GitHubAdapter implements IPlatformAdapter {
 
   /**
    * Ensure repository is cloned and ready
-   * For new codebases: clone (directory won't exist)
+   * For new codebases: clone when git metadata is absent
    * For existing codebases: sync if shouldSync=true, skip if shouldSync=false
-   * @param shouldSync - Whether to sync if directory exists (pass true to ensure latest code)
+   * @param shouldSync - Whether to sync an existing clone (pass true to ensure latest code)
    */
-  private async ensureRepoReady(
+  private ensureRepoReady(
     owner: string,
     repo: string,
     defaultBranch: string,
     repoPath: string,
     shouldSync: boolean
   ): Promise<void> {
-    // Check if directory exists
-    let directoryExists = false;
+    const key = resolve(repoPath);
+    const prepare = () => this.prepareRepository(owner, repo, defaultBranch, repoPath, shouldSync);
+    const previous = repositoryReadiness.get(key) ?? Promise.resolve();
+    const pending = previous.then(prepare, prepare).finally(() => {
+      if (repositoryReadiness.get(key) === pending) repositoryReadiness.delete(key);
+    });
+    repositoryReadiness.set(key, pending);
+    return pending;
+  }
+
+  private async prepareRepository(
+    owner: string,
+    repo: string,
+    defaultBranch: string,
+    repoPath: string,
+    shouldSync: boolean
+  ): Promise<void> {
+    let repositoryExists = false;
     try {
-      await access(repoPath);
-      directoryExists = true;
+      await access(join(repoPath, '.git'));
+      repositoryExists = true;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
@@ -724,11 +744,11 @@ export class GitHubAdapter implements IPlatformAdapter {
             'Check permissions and disk health.'
         );
       }
-      // ENOENT means directory doesn't exist - we'll clone below
+      // Missing git metadata includes the empty source/ left by a failed clone.
     }
 
-    if (directoryExists) {
-      await this.installRepoCredentialHelper(owner, repo, repoPath);
+    if (repositoryExists) {
+      await this.ensureRepositorySetup(owner, repo, repoPath);
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'github.repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));
@@ -746,7 +766,6 @@ export class GitHubAdapter implements IPlatformAdapter {
       return;
     }
 
-    // Directory doesn't exist - clone the repository
     getLog().info({ owner, repo, repoPath }, 'github.repo_cloning');
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
@@ -771,10 +790,19 @@ export class GitHubAdapter implements IPlatformAdapter {
     }
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
 
+    // Readiness is serialized through cleanup, so an empty target cannot be
+    // populated by a sibling webhook while this attempt owns it.
+    let cloneOwnsTarget = true;
+    try {
+      cloneOwnsTarget = (await readdir(repoPath)).length === 0;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+
     const cloneResult = await cloneRepository(
       repoUrl,
       toRepoPath(repoPath),
-      ghToken ? { credentials: { username: ghToken, password: '' } } : undefined
+      ghToken ? { credentials: githubTokenCredentials(ghToken) } : undefined
     );
 
     if (!cloneResult.ok) {
@@ -782,6 +810,7 @@ export class GitHubAdapter implements IPlatformAdapter {
         { error: cloneResult.error, owner, repo, repoPath },
         'github.repo_clone_failed'
       );
+      if (cloneOwnsTarget) await rm(repoPath, { recursive: true, force: true });
 
       if (cloneResult.error.code === 'not_a_repo') {
         throw new Error(
@@ -799,16 +828,18 @@ export class GitHubAdapter implements IPlatformAdapter {
       );
     }
 
-    await addSafeDirectory(toRepoPath(repoPath));
-
-    await this.installRepoCredentialHelper(owner, repo, repoPath);
+    await this.ensureRepositorySetup(owner, repo, repoPath);
   }
 
-  private async installRepoCredentialHelper(
+  private async ensureRepositorySetup(
     owner: string,
     repo: string,
     repoPath: string
   ): Promise<void> {
+    await addSafeDirectory(toRepoPath(repoPath));
+
+    // App mode requires a refreshable credential source after the
+    // request-scoped clone token expires.
     if (this.auth.kind === 'app') {
       const result = await installCredentialHelper(repoPath);
       if (result.kind === 'failed') {

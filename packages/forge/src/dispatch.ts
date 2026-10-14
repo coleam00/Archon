@@ -16,7 +16,7 @@ import {
   type ForgeResponse,
   type PluginMetadata,
 } from './operations';
-import type { PrRef, RepoRef } from './identity';
+import type { ForgeSubjectRef, PrRef, RepoRef } from './identity';
 import {
   discoverPlugins,
   PluginDiscoveryError,
@@ -78,6 +78,12 @@ function sameRepo(left: RepoRef, right: RepoRef): boolean {
 function sameRef(left: PrRef, right: PrRef): boolean {
   return sameRepo(left.repo, right.repo) && left.number === right.number;
 }
+function sameSubject(
+  observed: { ref: PrRef; kind: ForgeSubjectRef['kind'] },
+  subject: ForgeSubjectRef
+): boolean {
+  return observed.kind === subject.kind && sameRef(observed.ref, subject.ref);
+}
 function sameTarget(left: ForgeMutationTarget, right: ForgeMutationTarget): boolean {
   return 'repo' in left
     ? 'repo' in right && sameRef(left, right)
@@ -105,6 +111,7 @@ function requestRepo(request: Exclude<ForgeRequest, { op: 'resolve' }>): RepoRef
   if ('repo' in request) return request.repo;
   if (request.op === 'pr.view')
     return request.selector.kind === 'head' ? request.selector.repo : request.selector.ref.repo;
+  if ('subject' in request) return request.subject.ref.repo;
   return request.ref.repo;
 }
 
@@ -115,6 +122,7 @@ function requestTarget(
   if ('repo' in request) return request.repo;
   if (request.op === 'pr.view')
     return request.selector.kind === 'head' ? request.selector.repo : request.selector.ref;
+  if ('subject' in request) return request.subject.ref;
   if (request.op !== 'resolve') return request.ref;
   if (
     response?.ok &&
@@ -187,15 +195,18 @@ export function matchesForgeOperationResponse(
       evidence.observed &&
       ('repo' in request
         ? !sameRepo(evidence.observed.repo, request.repo)
-        : !sameRef(evidence.observed, request.ref))
+        : !sameRef(evidence.observed, 'subject' in request ? request.subject.ref : request.ref))
     )
       return false;
     if (
       'workitem' in evidence &&
       evidence.workitem &&
       !(request.op === 'workitem.create'
-        ? sameRepo(evidence.workitem.ref.repo, request.repo)
-        : request.op === 'workitem.labels.set' && sameRef(evidence.workitem.ref, request.ref))
+        ? evidence.workitem.kind === 'issue' && sameRepo(evidence.workitem.ref.repo, request.repo)
+        : request.op === 'workitem.labels.set'
+          ? evidence.workitem.kind === 'issue' && sameRef(evidence.workitem.ref, request.ref)
+          : (request.op === 'workitem.label.add' || request.op === 'workitem.label.remove') &&
+            sameSubject(evidence.workitem, request.subject))
     )
       return false;
     if (
@@ -242,6 +253,15 @@ export function matchesForgeOperationResponse(
     }
     case 'repo.labels.list':
       return request.op === result.op && sameRepo(result.value.repo, request.repo);
+    case 'workitem.list':
+      return (
+        request.op === result.op &&
+        sameRepo(result.value.repo, request.repo) &&
+        result.value.label === request.label &&
+        result.value.items.every(
+          item => item.state === 'open' && sameRepo(item.ref.repo, request.repo)
+        )
+      );
     case 'workitem.create':
       return (
         request.op === result.op &&
@@ -260,6 +280,14 @@ export function matchesForgeOperationResponse(
         sameRef(result.value.workitem.ref, request.ref) &&
         result.value.labels.length === request.labels.length &&
         request.labels.every(name => result.value.labels.includes(name))
+      );
+    case 'workitem.label.add':
+    case 'workitem.label.remove':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, request.subject.ref) &&
+        sameSubject(result.value.workitem, request.subject) &&
+        result.value.labels.includes(request.name) === (request.op === 'workitem.label.add')
       );
     case 'repo.label.ensure':
       return (

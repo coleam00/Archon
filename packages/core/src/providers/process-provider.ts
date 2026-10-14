@@ -170,12 +170,12 @@ function startProcess(
             // Plugin text and arbitrary JSON can encode message excerpts or credentials.
             // Only the severity and a failure class from the contract's closed enum cross
             // this boundary. An open plugin-chosen token would let a credential-shaped
-            // word through, so no other plugin field is forwarded.
+            // word through, so no other plugin field is forwarded. A record without a
+            // valid class would reach the log as severity alone, which no operator can
+            // act on, so it is dropped.
             const failureClass = providerFailureClassSchema.safeParse(record.bindings.failureClass);
-            providerLog[record.level](
-              failureClass.success ? { failureClass: failureClass.data } : {},
-              'provider.plugin.log'
-            );
+            if (!failureClass.success) return;
+            providerLog[record.level]({ failureClass: failureClass.data }, 'provider.plugin.log');
           },
         }
       );

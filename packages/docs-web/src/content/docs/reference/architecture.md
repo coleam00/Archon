@@ -261,14 +261,13 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
     const deliveryId = c.req.header('x-github-delivery');
 
     try {
-      const payload = await readSignedBody(c.req.raw);
-      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
-
       const signature = c.req.header('x-hub-signature-256');
       if (!signature) {
         return c.json({ error: 'Missing signature header' }, 400);
       }
 
+      const payload = await readSignedBody(c.req.raw);
+      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
       if (payload.kind === 'read_failed') throw payload.error;
       if (payload.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
 
@@ -295,6 +294,27 @@ import { registerGithubWebhookRoute } from './routes/webhooks';
 if (github) {
   registerGithubWebhookRoute(app, github);
   getLog().info('github_webhook_registered');
+}
+```
+
+The route only requires a signature header and bounds and decodes the body. The adapter owns the platform half: verify the signature, parse the event, resolve the sender, and dispatch to the orchestrator. A minimal adapter for your platform follows the same shape as `GitHubAdapter.handleWebhook`:
+
+```typescript
+async handleWebhook(payload: string, signature: string): Promise<void> {
+  if (!this.verifySignature(payload, signature)) return;
+
+  const { conversationId, message, platformUserId } = this.parseEvent(JSON.parse(payload));
+  let userId: string | undefined;
+  try {
+    const user = await findOrCreateUserByPlatformIdentity(this.getPlatformType(), platformUserId);
+    userId = user.id;
+  } catch (err) {
+    getLog().warn({ err }, 'your_platform.user_resolve_failed');
+  }
+
+  await handleMessage(this, conversationId, message, {
+    actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
+  });
 }
 ```
 
@@ -528,31 +548,15 @@ yield { type: 'settled' };
 
 **Codex app-server** (`packages/providers/src/codex/provider.ts`): Archon speaks Codex's JSON-RPC protocol over stdio, one `codex app-server` process per turn.
 
-```typescript
-const { thread } = await connection.request('thread/start', { cwd, sandbox, approvalPolicy, config });
-const { turn } = await connection.request('turn/start', { threadId: thread.id, input });
-for await (const notification of connection.notifications()) {
-  if (notification.method === 'item/started' && notification.params.item.type === 'commandExecution') {
-    // The command is the title the operator reads; the kind of tool is the name.
-    yield {
-      type: 'tool_call',
-      toolCallId: notification.params.item.id,
-      name: 'command_execution',
-      title: notification.params.item.command,
-    };
-  } else if (notification.method === 'item/completed' && notification.params.item.type === 'agentMessage') {
-    yield { type: 'agent_message_chunk', text: notification.params.item.text };
-  } else if (notification.method === 'turn/completed' && notification.params.turn.id === turn.id) {
-    const { error } = notification.params.turn;
-    // The failure class comes from the typed codexErrorInfo, never from the message.
-    yield error
-      ? { type: 'result', sessionId: thread.id, failure: classify(error.codexErrorInfo, error.message) }
-      : { type: 'result', sessionId: thread.id };
-    break;
-  }
-}
-yield { type: 'settled' };
-```
+`streamTurn` maps parent-thread messages and foreground tools to provider events. The parent's `turn/completed` notification produces its successful `result`, but background work can still be live. Failure results wait until observed background work drains because the executor stops reading on failure; failure classification uses the typed `codexErrorInfo`.
+
+Subagents and unified-exec processes report separate `subtask` lifecycles. The provider tracks starts for the parent thread and turn, registers subagent threads, and tracks further subagents and processes on those recognized descendant threads. Child replies do not replace the parent result.
+
+While any observed task remains live, the provider keeps accepting background starts, including root subagents and unified-exec processes first observed after parent completion. Nested work is also drained, even after its direct parent task ends. Notification arrival order does not establish when the work began.
+
+Once the parent has completed and the observed task set is empty, the provider stops reading notifications and shuts down the app-server. This can happen immediately at parent completion if no background work was observed. Starts beyond that observation boundary are not guaranteed to be consumed; the boundary does not establish that Codex cannot report another start later.
+
+`sendQuery` emits `settled` only after a clean app-server shutdown and without lost observation. A late start observed while draining can therefore extend the wait. If the connection closes before observed work drains, the turn does not settle: before a result, the provider reports a failure result; after a result, it logs the connection failure and ends without `settled`.
 
 ### Error Handling
 

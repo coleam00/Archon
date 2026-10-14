@@ -553,21 +553,24 @@ describe('formatPausedGateSection', () => {
     expect(section.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
   });
 
-  test('asks for inspection when the approval context is unusable', () => {
-    for (const approval of [
-      undefined,
-      null,
-      {},
-      { nodeId: 'x' },
-      'garbage',
-      { nodeId: 'review', message: 'Choose', decisionsAuthored: true },
-    ]) {
+  test('asks for inspection and offers reject when legacy approval context is unusable', () => {
+    for (const approval of [undefined, null, {}, { nodeId: 'x' }, 'garbage']) {
       const section = formatPausedGateSection(pausedRun(approval));
       expect(section).toContain('missing or malformed');
       expect(section).toContain('/workflow status run-abc');
+      expect(section).toContain('/workflow reject run-abc <reason>');
       expect(section).not.toContain('/workflow approve');
-      expect(section).not.toContain('/workflow reject');
     }
+  });
+
+  test('offers only inspection when authored decisions are malformed', () => {
+    const section = formatPausedGateSection(
+      pausedRun({ nodeId: 'review', message: 'Choose', decisionsAuthored: true })
+    );
+    expect(section).toContain('missing or malformed');
+    expect(section).toContain('/workflow status run-abc');
+    expect(section).not.toContain('/workflow approve');
+    expect(section).not.toContain('/workflow reject');
   });
 
   test('does not advertise a gate this build cannot resolve as approvable', () => {

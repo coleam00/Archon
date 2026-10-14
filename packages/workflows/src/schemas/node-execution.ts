@@ -23,7 +23,15 @@ import { checkoutObservationSchema } from './checkout-observation';
 
 export const unavailableMeasurementSchema = z.object({
   source: z.literal('unavailable'),
-  reason: z.enum(['unsupported', 'not_reported', 'unknown', 'not_applicable', 'invalid']),
+  /** `incomplete` invalidates totals; `unknown` describes an unspecified reporting capability. */
+  reason: z.enum([
+    'unsupported',
+    'not_reported',
+    'unknown',
+    'not_applicable',
+    'invalid',
+    'incomplete',
+  ]),
 });
 export function reportedMeasurementSchema<T extends z.ZodType>(
   value: T

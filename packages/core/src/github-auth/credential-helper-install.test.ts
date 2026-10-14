@@ -167,47 +167,6 @@ describe('installCredentialHelper', () => {
     }
   );
 
-  test('concurrent registration shares failure and a later call retries both config writes', async () => {
-    let rejectWrite: (error: Error) => void = () => {};
-    execSpy.mockImplementationOnce(
-      () =>
-        new Promise((_resolve, reject) => {
-          rejectWrite = reject;
-        })
-    );
-    const first = installCredentialHelper('/tmp/concurrent-worktree');
-    const second = installCredentialHelper('/tmp/concurrent-worktree');
-    expect(execSpy).toHaveBeenCalledTimes(1);
-    rejectWrite(new Error('config rejected'));
-    const results = await Promise.all([first, second]);
-    expect(results.map(result => result.kind)).toEqual(['failed', 'failed']);
-    execSpy.mockClear();
-    expect((await installCredentialHelper('/tmp/concurrent-worktree')).kind).toBe('installed');
-    expect(execSpy.mock.calls.map(([, args]) => args[3])).toEqual([
-      'credential.https://github.com.helper',
-      'credential.https://github.com.useHttpPath',
-    ]);
-  });
-
-  test('simultaneous installs register both settings without competing Git config writers', async () => {
-    execSpy.mockRestore();
-    const repoPath = join(archonHome, 'repo');
-    await git.execFileAsync('git', ['init', repoPath]);
-    const results = await Promise.all(
-      Array.from({ length: 16 }, () => installCredentialHelper(repoPath))
-    );
-    expect(results.map(result => result.kind)).toEqual(Array(16).fill('installed'));
-    const { stdout } = await git.execFileAsync('git', [
-      '-C',
-      repoPath,
-      'config',
-      '--local',
-      '--list',
-    ]);
-    expect(stdout).toContain('credential.https://github.com.helper=');
-    expect(stdout).toContain('credential.https://github.com.usehttppath=true');
-  });
-
   test('simultaneous installs configure each distinct repository', async () => {
     execSpy.mockRestore();
     const repoPaths = [join(archonHome, 'first-repo'), join(archonHome, 'second-repo')];
@@ -347,8 +306,9 @@ describe('installCredentialHelper', () => {
           }
         );
         expect(exitCode, stderr).toBe(0);
-        expect(stdout).toContain('username=x-access-token');
-        expect(stdout).toContain('password=fresh-installation-token');
+        const credentials = git.githubTokenCredentials('fresh-installation-token');
+        expect(stdout).toContain(`username=${credentials.username}\n`);
+        expect(stdout).toContain(`password=${credentials.password}\n`);
         expect(stderr).toBe('');
         const curlArgs = await readFile(join(archonHome, 'curl-args'), 'utf8');
         expect(curlArgs).toContain('http://127.0.0.1:43210/internal/git-credential');

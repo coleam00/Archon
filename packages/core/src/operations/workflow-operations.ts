@@ -399,6 +399,25 @@ function assertApprovableContext(run: WorkflowRun): ApprovalContext {
 }
 
 /**
+ * The one deliberate divergence from approve: unreadable gate METADATA is still
+ * rejectable for a legacy gate. Malformed authored decisions are not, nor is an
+ * unrecognized TYPE or a block pointer with nothing to follow.
+ */
+export function isRejectableUnreadableGate(
+  run: Pick<WorkflowRun, 'metadata'>,
+  attention: Extract<RunAttention, { kind: 'unreadable' }>
+): boolean {
+  if (attention.reason !== 'malformed_gate') return false;
+  const rawApproval = run.metadata.approval;
+  return !(
+    typeof rawApproval === 'object' &&
+    rawApproval !== null &&
+    'decisionsAuthored' in rawApproval &&
+    rawApproval.decisionsAuthored === true
+  );
+}
+
+/**
  * The preconditions `rejectWorkflow` enforces. Reads the same `runAttention`
  * decision as `assertApprovable` but acts on one variant differently, and that
  * difference is real: reject has no `nodeId` requirement — it falls back to
@@ -432,21 +451,11 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
       // cascade-cancels the subtree) instead.
       throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'reject');
     case 'unreadable':
-      // The one deliberate divergence from approve: unreadable gate METADATA is
-      // still rejectable for legacy gates. An unrecognized TYPE is not, and
-      // neither is a block pointer with nothing to follow.
+      if (isRejectableUnreadableGate(run, attention)) break;
       if (attention.reason === 'malformed_gate') {
-        if (
-          typeof rawApproval === 'object' &&
-          rawApproval !== null &&
-          'decisionsAuthored' in rawApproval &&
-          rawApproval.decisionsAuthored === true
-        ) {
-          throw new Error(
-            `Run ${run.id} has malformed authored decisions. Inspect its gate context before responding.`
-          );
-        }
-        break;
+        throw new Error(
+          `Run ${run.id} has malformed authored decisions. Inspect its gate context before responding.`
+        );
       }
       throw new Error(unreadableGateMessage(run, attention, approval));
     case undefined:

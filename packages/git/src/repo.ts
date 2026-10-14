@@ -605,9 +605,11 @@ export async function syncRepository(
  */
 export async function addSafeDirectory(path: RepoPath): Promise<void> {
   try {
-    await execFileAsync('git', ['config', '--global', '--add', 'safe.directory', path], {
-      timeout: 10000,
-    });
+    await execFileAsync(
+      'git',
+      ['config', '--global', '--fixed-value', '--replace-all', 'safe.directory', path, path],
+      { timeout: 10000 }
+    );
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, path }, 'add_safe_directory_failed');

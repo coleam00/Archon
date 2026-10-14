@@ -58,6 +58,11 @@ export function parseProcessOwner(record: unknown, source: string): ProcessOwner
   throw new ProcessOwnerRecordError(source);
 }
 
+/** True when both records name the same process incarnation. */
+export function isSameOwner(a: ProcessOwner, b: ProcessOwner): boolean {
+  return a.host === b.host && a.pid === b.pid && a.instance === b.instance;
+}
+
 /** True only when this host can prove the owner process no longer exists. */
 export function isOwnerProvablyGone(
   owner: ProcessOwner,

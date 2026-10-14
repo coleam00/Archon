@@ -9,7 +9,7 @@
  *      `credential.https://github.com.helper = ~/.archon/bin/git-credential-archon`
  *      `credential.https://github.com.useHttpPath = true`
  *
- * The caller (the GitHub adapter repository setup in App mode) decides whether to
+ * The caller (the GitHub adapter in App mode) decides whether to
  * invoke this — it's a no-op for PAT-mode operators by virtue of not being
  * called. The text import is embedded by Bun, so source and compiled installs
  * use the same helper without depending on the repository's `scripts/` tree.
@@ -38,25 +38,11 @@ export type CredentialHelperInstallResult =
   | { kind: 'installed'; helperPath: string }
   | { kind: 'failed'; error: Error };
 
-const pendingInstalls = new Map<string, Promise<CredentialHelperInstallResult>>();
-
-/** Concurrent setup shares registration; completed attempts can be retried. Never throws. */
-export function installCredentialHelper(
+/** Never throws. The caller serializes setup per repository. */
+export async function installCredentialHelper(
   worktreePath: string
 ): Promise<CredentialHelperInstallResult> {
   const repoPath = resolve(worktreePath);
-  const pending = pendingInstalls.get(repoPath);
-  if (pending) return pending;
-  const installation = registerCredentialHelper(repoPath).finally(() => {
-    pendingInstalls.delete(repoPath);
-  });
-  pendingInstalls.set(repoPath, installation);
-  return installation;
-}
-
-async function registerCredentialHelper(
-  worktreePath: string
-): Promise<CredentialHelperInstallResult> {
   const binDir = resolve(getArchonHome(), 'bin');
   const helperPath = resolve(binDir, 'git-credential-archon');
   const helperCommand = `!'${helperPath.replaceAll("'", "'\"'\"'")}'`;
@@ -75,15 +61,18 @@ async function registerCredentialHelper(
     }
     await execFileAsync(
       'git',
-      ['-C', worktreePath, 'config', 'credential.https://github.com.helper', helperCommand],
+      ['-C', repoPath, 'config', 'credential.https://github.com.helper', helperCommand],
       { timeout: 5000 }
     );
     await execFileAsync(
       'git',
-      ['-C', worktreePath, 'config', 'credential.https://github.com.useHttpPath', 'true'],
+      ['-C', repoPath, 'config', 'credential.https://github.com.useHttpPath', 'true'],
       { timeout: 5000 }
     );
-    getLog().info({ worktreePath, helperPath }, 'github_auth.credential_helper_registered');
+    getLog().info(
+      { worktreePath: repoPath, helperPath },
+      'github_auth.credential_helper_registered'
+    );
     return { kind: 'installed', helperPath };
   } catch (err) {
     return { kind: 'failed', error: err as Error };

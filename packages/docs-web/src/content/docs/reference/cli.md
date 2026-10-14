@@ -36,7 +36,7 @@ Run AI-powered workflows from your terminal.
 
 ## Forge operations
 
-Use `archon forge resolve --data <json>` for an explicit remote, `archon forge checks --data <json>` for a qualified PR, and `workitem.view`, `workitem.create`, `workitem.labels.set`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` for the rest. Reads return structured observations; writes report whether they were applied and verified, refused, applied but unverified, or left with an unknown outcome. Pass a request carrying authored text with `--data-file <path>` so it stays out of argv. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack still uses `gh` by default; set `ARCHON_SDLC_FORGE=forge` to read and write through the plugin instead.
+Use `archon forge resolve --data <json>` for an explicit remote, `archon forge checks --data <json>` for a qualified PR, and `workitem.view`, `workitem.list`, `workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `repo.labels.list`, `repo.label.ensure`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft`, `pr.merge`, `checks.rerun`, `pr.reviews` or `comment.upsert` for the rest. Reads return structured observations; writes report whether they were applied and verified, refused, applied but unverified, or left with an unknown outcome. Pass a request carrying authored text with `--data-file <path>` so it stays out of argv. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack still uses `gh` by default; set `ARCHON_SDLC_FORGE=forge` to read and write through the plugin instead.
 
 ## Users and roles
 
@@ -827,10 +827,13 @@ it can attach, observe attention, or reach an explicit timeout.
 After verifying that the run's work has stopped, release its persisted state with
 `archon workflow abandon <run-id>`.
 
-Live-owner detection is local to the host running `workflow wait`. With a shared remote
-PostgreSQL database, `owner_lost` means no owner endpoint is reachable on this host; the
-run may still be executing on another host. Check the owning host before abandoning it;
-`abandon` prints the host the run recorded and says when it is not this one.
+The owner endpoint is local to one host and, on POSIX, one user. `owner_lost` is
+reported only when the run's recorded execution owner is on this host and user and its
+endpoint is gone. When the owner ran on another host or as another user, as with a
+PostgreSQL database shared by several machines, or the run records no owner, the wait
+cannot tell whether the owner is alive. It says so on its `waiting` line and keeps
+watching the run's stored state until it changes or `--timeout` passes. `abandon` prints
+the host the run recorded and says when it is not this one.
 
 `--json` emits one document. On a wake it carries the attention value:
 
@@ -861,6 +864,14 @@ same envelope with `"result": "waiting"` and the status it attached on under `--
 
 ```json
 { "ok": true, "action": "wait", "runId": "…", "result": "waiting", "observedStatus": "running" }
+```
+
+When the owner cannot be checked from this host, the line adds `"ownerLiveness":
+"unknown"` and, if the run recorded one, the owner it names:
+
+```json
+{ "ok": true, "action": "wait", "runId": "…", "result": "waiting", "observedStatus": "running",
+  "ownerLiveness": "unknown", "recordedOwner": { "host": "build-2", "pid": 4242, "uid": 501 } }
 ```
 
 Until that line the command is completely silent, so a host cannot tell a watch that
@@ -1138,8 +1149,8 @@ archon workflow reject <run-id> --json
 ### `workflow cleanup`
 
 Delete old terminal workflow run records and prune state-document revisions from the
-database. Every latest revision survives, including tombstones: removing a tombstone
-would allow revision numbers to repeat and a stale replacement to overwrite recreated state.
+selected store (files or database). Every latest revision survives, including tombstones:
+removing a tombstone would allow revision numbers to repeat and a stale replacement to overwrite recreated state.
 The command reports both counts.
 
 ```bash
@@ -1518,8 +1529,8 @@ archon isolation cleanup
 ### state
 
 Durable, audited JSON documents. A document lives in a project or in install scope.
-SQL storage supports SQLite and PostgreSQL. Values are read on demand; the engine never
-injects them into prompts.
+The command uses the selected store: files, SQLite or PostgreSQL. Values are read on demand;
+the engine never injects them into prompts.
 
 ```bash
 archon state get review/123

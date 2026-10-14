@@ -15,7 +15,7 @@ test('the architecture webhook route quotes the current server route', () => {
   const routes = readSource('../../server/src/routes/webhooks.ts');
   const route = routes.match(/^export function registerGithubWebhookRoute\([\s\S]*?^\}/m)?.[0];
 
-  expect(blocks).toHaveLength(2);
+  expect(blocks).toHaveLength(3);
   if (route === undefined) throw new Error('Could not find registerGithubWebhookRoute in source');
   expect(blocks[0]).toBe(route);
 });
