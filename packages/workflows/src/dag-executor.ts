@@ -10856,7 +10856,7 @@ function emitContainerLifecycleEvent(
       workflow_run_id: runId,
       event_type: eventType,
       step_name: 'container',
-      data,
+      data: { ...(containerId ? { containerId } : {}), ...data },
     })
     .catch((err: Error) => {
       getLog().error({ err, workflowRunId: runId, eventType }, 'workflow_event_persist_failed');
@@ -11320,21 +11320,22 @@ export async function executeDagWorkflow(
     // resume (the container was rediscovered + restarted by the caller) emits
     // `container_resumed` rather than `container_created` so the timeline is honest.
     const isResume = priorCompletedNodes !== undefined && priorCompletedNodes.size > 0;
+    // H4 — native overlay mode grants CAP_SYS_ADMIN, so an adversarial in-container
+    // agent can remount the read-only lower read-write and bypass the write-back
+    // gate. Warn LOUDLY at run start (console/platform + the lifecycle event) so the
+    // operator knows the isolation is accident-protection, not a hostile-agent
+    // sandbox, in this mode. Warning-only in v1 (see SECURITY.md).
+    const nativeOverlay = containerCtx?.overlayMode === 'native';
     emitContainerLifecycleEvent(
       deps,
       workflowRun.id,
       isResume ? 'resumed' : 'created',
       isResume ? 'container_resumed' : 'container_created',
       execContext.containerId,
-      { containerId: execContext.containerId }
+      nativeOverlay ? { overlayMode: 'native', gateBypassable: true } : {}
     );
 
-    // H4 — native overlay mode grants CAP_SYS_ADMIN, so an adversarial in-container
-    // agent can remount the read-only lower read-write and bypass the write-back
-    // gate. Warn LOUDLY at run start (console/platform + a workflow event) so the
-    // operator knows the isolation is accident-protection, not a hostile-agent
-    // sandbox, in this mode. Warning-only in v1 (see SECURITY.md).
-    if (containerCtx?.overlayMode === 'native') {
+    if (nativeOverlay) {
       await safeSendMessage(
         platform,
         conversationId,
@@ -11343,21 +11344,6 @@ export async function executeDagWorkflow(
           'this run as accident-protection, not a sandbox against hostile code. (See SECURITY.md.)',
         { workflowId: workflowRun.id }
       );
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'container_created',
-          step_name: 'container',
-          data: { overlayMode: 'native', gateBypassable: true },
-        })
-        .catch((err: Error) => {
-          // Persist failure of the security-audit event is worth a log (R2-F7) — the
-          // console/platform warning already fired, so this is observability, not fatal.
-          getLog().error(
-            { err, workflowRunId: workflowRun.id, eventType: 'container_created' },
-            'workflow_event_persist_failed'
-          );
-        });
       getLog().warn({ workflowRunId: workflowRun.id }, 'dag.container_native_mode_gate_bypassable');
     }
   }

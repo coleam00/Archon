@@ -3029,12 +3029,13 @@ export async function executeWorkflow(
     const emitter = getWorkflowEventEmitter();
     emitter.registerRun(workflowRun.id, conversationId);
 
+    const transcriptPath = archonPaths.getRunLogPathForRoot(outputRoot, workflowRun.id);
     emitter.emit({
       type: 'workflow_started',
       runId: workflowRun.id,
       workflowName: workflow.name,
       conversationId: workflowRun.conversation_id,
-      transcriptPath: archonPaths.getRunLogPathForRoot(outputRoot, workflowRun.id),
+      transcriptPath,
     });
 
     // Fire-and-forget anonymous usage telemetry. Categorical only: bundled
@@ -3089,6 +3090,7 @@ export async function executeWorkflow(
           userId: workflowRun.user_id ?? null,
           userMessage: workflowRun.user_message,
           origin: workflowRun.parent_run_id ? 'workflow' : platform.getPlatformType(),
+          transcriptPath,
         },
       })
       .catch((err: Error) => {
