@@ -68,7 +68,26 @@ export function setDeprecationReporter(report: DeprecationReporter): void {
  */
 export function registerProvider(entry: ProviderRegistration): void {
   assertProviderRegistrationAllowed(entry, registry.values());
-  registry.set(entry.id, entry);
+  const registration: ProviderRegistration = {
+    ...entry,
+    factory: () => {
+      const provider = entry.factory();
+      const resolveCredentialModel = provider.resolveCredentialModel?.bind(provider);
+      const diagnose = provider.diagnose?.bind(provider);
+      const listModels = provider.listModels?.bind(provider);
+      const adapter = {
+        checkCredential: provider.checkCredential.bind(provider),
+        sendQuery: provider.sendQuery.bind(provider),
+        getType: provider.getType.bind(provider),
+        getCapabilities: () => registration.capabilities,
+        ...(resolveCredentialModel ? { resolveCredentialModel } : {}),
+        ...(diagnose ? { diagnose } : {}),
+        ...(listModels ? { listModels } : {}),
+      } satisfies IAgentProvider;
+      return adapter satisfies Record<Exclude<keyof IAgentProvider, keyof typeof adapter>, never>;
+    },
+  };
+  registry.set(entry.id, registration);
   unavailableProviders.delete(entry.id);
   getLog().debug({ provider: entry.id, builtIn: entry.builtIn }, 'provider.registered');
 }

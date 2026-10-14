@@ -139,7 +139,7 @@ export interface ProviderRegistration {
   /** Instantiate a provider */
   factory: () => IAgentProvider;
 
-  /** Static capability declaration — used for dag-executor warnings */
+  /** Static capability declaration — owns engine capability decisions */
   capabilities: ProviderCapabilities;
 
   /** Whether this is a built-in (maintained by core team) or community provider */
