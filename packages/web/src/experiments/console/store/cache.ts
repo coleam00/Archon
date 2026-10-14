@@ -142,6 +142,10 @@ export function invalidate(keyPrefix: string): void {
   for (const key of loaders.keys()) {
     if (matches(key)) toRefresh.add(key);
   }
+  // A cold load abandoned by its last subscriber leaves only its token behind.
+  for (const key of latestLoad.keys()) {
+    if (matches(key)) toRefresh.add(key);
+  }
   for (const key of toRefresh) {
     revalidate(key);
   }

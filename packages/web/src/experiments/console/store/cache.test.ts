@@ -330,6 +330,48 @@ describe('revalidate after an abandoned in-flight load', () => {
     }
   );
 
+  test.each(['resolve', 'reject'] as const)(
+    'a cold load abandoned before invalidation cannot %s into the next mount',
+    async settlement => {
+      const key = `test:cold-abandoned-invalidation:${settlement}`;
+      let resolveA: (value: string) => void = () => {};
+      let rejectA: (error: Error) => void = () => {};
+      const unsubscribeA = subscribeKey(
+        key,
+        () => {},
+        () =>
+          new Promise<string>((resolve, reject) => {
+            resolveA = resolve;
+            rejectA = reject;
+          })
+      );
+      unsubscribeA();
+      invalidate(key);
+
+      if (settlement === 'resolve') resolveA('stale');
+      else rejectA(new Error('stale boom'));
+      await flush();
+
+      let loadsB = 0;
+      const loaderB = (): Promise<string> => {
+        loadsB++;
+        return new Promise<string>(() => {});
+      };
+      function View(): string {
+        const { data, error } = useEntity(key, loaderB);
+        return error?.message ?? data ?? 'no data';
+      }
+      const unsubscribeB = subscribeKey(key, () => {}, loaderB);
+      try {
+        expect(renderToStaticMarkup(createElement(View))).toBe('no data');
+        expect(loadsB).toBe(1);
+      } finally {
+        unsubscribeB();
+        invalidate(key);
+      }
+    }
+  );
+
   test('subscriber-less invalidation clears an old error before a remounted load settles', async () => {
     const key = 'test:invalidate-old-error';
     const unsubscribeA = subscribeKey(
