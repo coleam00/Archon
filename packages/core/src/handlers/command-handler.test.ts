@@ -1551,7 +1551,10 @@ describe('CommandHandler', () => {
           expect(mockIsolationCreate).toHaveBeenCalled();
           expect(mockIsolationEnvDbCreate).toHaveBeenCalledWith(
             expect.objectContaining({
-              metadata: { worktree_creation_id: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
+              metadata: {
+                worktree_creation_id: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+                worktree_branch_created: true,
+              },
             })
           );
         });

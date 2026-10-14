@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   classifyIsolationError,
+  ExistingBranchDivergedError,
   isKnownIsolationError,
   IsolationBlockedError,
   MissingProjectDirectoryError,
@@ -8,6 +9,17 @@ import {
 
 test('missing project guidance survives isolation classification even with timeout in its path', () => {
   const error = new MissingProjectDirectoryError('/workspace/timeout/source', 'acme/timeout');
+  expect(isKnownIsolationError(error)).toBe(true);
+  expect(classifyIsolationError(error)).toBe(`**Error:** ${error.message}`);
+});
+
+test('a diverged branch is reported as itself even when its name contains timeout', () => {
+  const error = new ExistingBranchDivergedError(
+    'fix/timeout-retry',
+    'origin/fix/timeout-retry',
+    1,
+    2
+  );
   expect(isKnownIsolationError(error)).toBe(true);
   expect(classifyIsolationError(error)).toBe(`**Error:** ${error.message}`);
 });

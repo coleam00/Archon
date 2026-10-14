@@ -455,6 +455,10 @@ This validates deterministic engine wiring; it does not validate model reasoning
 **With `--branch`:**
 - Creates/reuses worktree at `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch>/`
 - Reuses existing worktree if healthy
+- If the branch already exists but no worktree holds it, checks it out at its current head: the local branch, or `<remote>/<branch>` when that contains the local branch (the local branch is fast-forwarded to it). It never resets an existing branch to the base.
+- Fails before any work if the local branch and `<remote>/<branch>` have diverged. Reconcile them, or delete the local branch to start from the remote one.
+- To start fresh from the base, delete the branch (`git branch -D <name>`, and the remote branch if there is one) or choose another name
+- `--from` with a branch that already exists, locally or on the remote, is rejected
 
 **With `--no-worktree`:**
 - Runs in target directory directly (no isolation)
@@ -1266,6 +1270,13 @@ Archon's marker and Git registration in the expected repository. Replacement
 repositories, adopted checkouts, and older records without proof are retained for
 operator inspection. If Git removal leaves a directory behind, cleanup reports it
 and keeps the environment active; inspect that path before removing it manually.
+
+Cleanup deletes an environment's local branch only when Archon created that branch.
+A branch that already existed when the run started (see `--branch` above) is kept,
+since it may hold commits that exist nowhere else. It is deleted only together with
+its remote branch: by `--merged` (and `--include-closed`) once its PR or branch is
+finished, or by `archon complete`.
+Records created before Archon tracked this are treated the same way, keeping their branch.
 
 These ownership checks also apply to `/worktree remove` and `archon complete`;
 `--force` never bypasses them.
