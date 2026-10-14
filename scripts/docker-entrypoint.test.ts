@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { selectGitHubAuthMode } from '../packages/server/src/github-auth-bootstrap';
 
 const trackTempRoot = trackTempRoots();
 const entrypoint = fileURLToPath(new URL('../docker-entrypoint.sh', import.meta.url));
@@ -11,6 +12,11 @@ const helperKey = 'credential.https://github.com.helper';
 const patHelper = '!f() { echo "username=x-access-token"; echo "password=${GH_TOKEN}"; }; f';
 const patToken = 'entrypoint-test-pat';
 const appToken = 'entrypoint-test-installation';
+const appMode = {
+  GITHUB_APP_ID: '123',
+  GITHUB_APP_PRIVATE_KEY_PATH: '/unused-test-key.pem',
+  WEBHOOK_SECRET: 'entrypoint-test-secret',
+};
 
 async function fixture(uid = '1001') {
   const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'docker-entrypoint-')));
@@ -40,6 +46,7 @@ async function fixture(uid = '1001') {
     GITHUB_APP_PRIVATE_KEY: '',
     GITHUB_APP_PRIVATE_KEY_PATH: '',
     GITHUB_TOKEN: '',
+    WEBHOOK_SECRET: '',
     GH_TOKEN: '',
     ARCHON_HOME: '',
     ARCHON_DATA: '',
@@ -115,7 +122,7 @@ describe.skipIf(process.platform === 'win32')('Docker entrypoint Git credentials
     f.git('config', '--local', 'credential.https://github.com.useHttpPath', 'true');
     f.git('remote', 'add', 'origin', 'https://github.com/owner/repo.git');
     const input = 'url=https://github.com/owner/repo.git\n\n';
-    const mode = { GITHUB_APP_ID: '123', GH_TOKEN: retained === 'retained' ? patToken : '' };
+    const mode = { ...appMode, GH_TOKEN: retained === 'retained' ? patToken : '' };
     const before = f.run(['git', 'credential', 'fill'], mode, input);
     expect(before.exitCode, before.stderr).toBe(0);
     expect(before.stdout).toContain(`password=${retained === 'retained' ? patToken : ''}\n`);
@@ -156,25 +163,47 @@ describe.skipIf(process.platform === 'win32')('Docker entrypoint Git credentials
     }
     f.git('config', '--global', 'credential.https://example.com.helper', 'other-host');
     f.git('config', '--global', 'credential.helper', 'generic-helper');
-    f.start({ GITHUB_APP_ID: '123', GH_TOKEN: patToken });
+    f.start({ ...appMode, GH_TOKEN: patToken });
     expect(f.helpers()).toEqual(operatorHelpers);
     expect(
       f.git('config', '--global', '--get', 'credential.https://example.com.helper').trim()
     ).toBe('other-host');
     expect(f.git('config', '--global', '--get', 'credential.helper').trim()).toBe('generic-helper');
     const config = await readFile(f.configPath, 'utf8');
-    f.start({ GITHUB_APP_ID: '123' });
+    f.start(appMode);
     expect(await readFile(f.configPath, 'utf8')).toBe(config);
   });
 
   test('App restarts succeed with no matching helper or no helper key', async () => {
     const f = await fixture();
-    f.start({ GITHUB_APP_ID: '123' });
+    f.start(appMode);
     expect(f.helpers()).toEqual([]);
     f.git('config', '--global', '--add', helperKey, 'operator-helper');
     const config = await readFile(f.configPath, 'utf8');
-    f.start({ GITHUB_APP_ID: '123' });
+    f.start(appMode);
     expect(await readFile(f.configPath, 'utf8')).toBe(config);
+  });
+
+  test('PAT helper cleanup follows the server GitHub auth mode for every App/PAT combination', async () => {
+    const names = [
+      'GITHUB_APP_ID',
+      'GITHUB_APP_PRIVATE_KEY',
+      'GITHUB_APP_PRIVATE_KEY_PATH',
+      'WEBHOOK_SECRET',
+      'GITHUB_TOKEN',
+    ] as const;
+    const f = await fixture();
+    for (let mask = 0; mask < 1 << names.length; mask++) {
+      const env: NodeJS.ProcessEnv = { GH_TOKEN: patToken };
+      names.forEach((name, bit) => {
+        env[name] = mask & (1 << bit) ? `test-${name}` : '';
+      });
+      f.start(env);
+      const kind = selectGitHubAuthMode(env).kind;
+      expect(f.helpers(), `${kind}: ${JSON.stringify(env)}`).toEqual(
+        kind === 'app' ? [] : [patHelper]
+      );
+    }
   });
 
   test('without an App ID or GH_TOKEN the persisted PAT helper remains', async () => {
@@ -189,7 +218,7 @@ describe.skipIf(process.platform === 'win32')('Docker entrypoint Git credentials
   test('App cleanup propagates malformed Git config errors before starting the server', async () => {
     const f = await fixture();
     await writeFile(f.configPath, '[broken\n');
-    const result = f.run(['bash', entrypoint], { GITHUB_APP_ID: '123' });
+    const result = f.run(['bash', entrypoint], appMode);
     expect(result.exitCode).toBe(128);
     expect(result.stderr).toContain('bad config line 1');
     expect(result.stdout).not.toContain('entrypoint-test:');

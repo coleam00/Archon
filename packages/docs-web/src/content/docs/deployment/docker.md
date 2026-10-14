@@ -585,7 +585,7 @@ docker compose exec app gh auth login
 
 Outside GitHub App mode, when `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
 
-When `GITHUB_APP_ID` is set, startup removes only the exact PAT helper previously written by the entrypoint, even if `GH_TOKEN` remains set. Other Git credential helpers are preserved and remain operator-owned. The GitHub CLI can still use `GH_TOKEN` from its environment.
+In GitHub App mode (`GITHUB_APP_ID`, a private key and `WEBHOOK_SECRET` set, `GITHUB_TOKEN` unset), startup removes only the exact PAT helper previously written by the entrypoint, even if `GH_TOKEN` remains set. An incomplete App configuration leaves the PAT helper in place. Other Git credential helpers are preserved and remain operator-owned. The GitHub CLI can still use `GH_TOKEN` from its environment.
 
 ### Plugins
 
