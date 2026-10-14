@@ -83,6 +83,8 @@ Go to your repository settings in Gitea:
 
 Click **Add Webhook** and use the **Test Delivery** button to verify connectivity.
 
+Webhook bodies are limited to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** and are not processed.
+
 ## Usage
 
 Interact by @mentioning the bot in issue or PR **comments**:
@@ -111,7 +113,7 @@ Only comments trigger the bot. @mentions in issue or PR descriptions are ignored
 The Gitea adapter is a webhook-based forge adapter, similar to the GitHub adapter:
 
 - **Transport**: Receives HTTP POST webhooks from Gitea
-- **Signature verification**: HMAC SHA-256 using the `X-Gitea-Signature` header
+- **Signature verification**: HMAC SHA-256 over the exact received bytes, using the `X-Gitea-Signature` header
 - **Streaming mode**: Always batch (single coherent comment per response, no comment spam)
 - **Conversation ID format**: `owner/repo#number` for issues, `owner/repo!number` for PRs
 - **Self-loop prevention**: Bot comments include a hidden HTML marker (`<!-- archon-bot-response -->`) to avoid re-triggering on its own messages

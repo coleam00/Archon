@@ -25,8 +25,12 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-const { registerGithubWebhookRoute, registerWebhookSourceRoutes, MAX_WEBHOOK_BODY_BYTES } =
-  await import('./webhooks');
+const {
+  registerGiteaWebhookRoute,
+  registerGithubWebhookRoute,
+  registerWebhookSourceRoutes,
+  MAX_WEBHOOK_BODY_BYTES,
+} = await import('./webhooks');
 type GithubWebhookTarget = import('./webhooks').GithubWebhookTarget;
 
 const mockReceiveWebhook = mock(
@@ -132,9 +136,9 @@ describe('POST /webhooks/github', () => {
     expect(mockReceiveWebhook).not.toHaveBeenCalled();
   });
 
-  test('returns 500 and logs the cause when durable receipt acceptance fails', async () => {
+  test('returns 500 and logs the cause when webhook reception fails', async () => {
     const app = createWebhookApp();
-    const cause = new Error('receipt persistence failed');
+    const cause = new Error('webhook reception failed');
     mockReceiveWebhook.mockImplementation(async () => {
       throw cause;
     });
@@ -169,7 +173,7 @@ describe('POST /webhooks/github', () => {
     expect(res.status).toBe(500);
     expect(mockReceiveWebhook).toHaveBeenCalledTimes(1);
   });
-  test('does not acknowledge before durable intake completes', async () => {
+  test('does not acknowledge before receiveWebhook completes', async () => {
     let complete: (() => void) | undefined;
     const pending = new Promise<void>(resolve => {
       complete = resolve;
@@ -616,4 +620,65 @@ test('the webhook limit does not apply to other routes', async () => {
   });
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ size: bodyLimit + 1 });
+});
+
+describe('POST /webhooks/gitea', () => {
+  const secret = 'gitea-route-test-secret';
+  const sign = (bytes: Uint8Array) => createHmac('sha256', secret).update(bytes).digest('hex');
+
+  function setup() {
+    const app = new OpenAPIHono();
+    const handleWebhook = mock(async (_payload: Uint8Array, _signature: string) => undefined);
+    registerGiteaWebhookRoute(app, { handleWebhook });
+    return { app, handleWebhook };
+  }
+
+  test('hands the adapter the exact signed bytes, BOM included', async () => {
+    const { app, handleWebhook } = setup();
+    const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('{}')]);
+    const response = await app.request('/webhooks/gitea', {
+      method: 'POST',
+      headers: { 'x-gitea-signature': sign(bytes) },
+      body: bytes,
+    });
+    expect(response.status).toBe(200);
+    const [received, signature] = handleWebhook.mock.calls[0] ?? [];
+    expect(received).toEqual(bytes);
+    expect(signature).toBe(sign(bytes));
+  });
+
+  test('rejects a request without a signature header before reading the body', async () => {
+    const { app, handleWebhook } = setup();
+    const stream = streamedBody([new Uint8Array([1])]);
+    const response = await app.request('/webhooks/gitea', { method: 'POST', body: stream.body });
+    expect(response.status).toBe(400);
+    expect(stream.pulls).toBe(0);
+    expect(handleWebhook).not.toHaveBeenCalled();
+  });
+
+  test('returns 413 on a declared oversize body before pulling', async () => {
+    const { app, handleWebhook } = setup();
+    const stream = streamedBody([new Uint8Array([1])]);
+    const response = await app.request('/webhooks/gitea', {
+      method: 'POST',
+      headers: { 'x-gitea-signature': 'signed', 'content-length': String(bodyLimit + 1) },
+      body: stream.body,
+    });
+    expect(response.status).toBe(413);
+    expect(stream.pulls).toBe(0);
+    expect(handleWebhook).not.toHaveBeenCalled();
+  });
+
+  test('stops and cancels a streamed body on the chunk that crosses the limit', async () => {
+    const { app, handleWebhook } = setup();
+    const stream = streamedBody([new Uint8Array(bodyLimit), new Uint8Array([1])]);
+    const response = await app.request('/webhooks/gitea', {
+      method: 'POST',
+      headers: { 'x-gitea-signature': 'signed' },
+      body: stream.body,
+    });
+    expect(response.status).toBe(413);
+    expect(stream.cancelled).toBe(true);
+    expect(handleWebhook).not.toHaveBeenCalled();
+  });
 });

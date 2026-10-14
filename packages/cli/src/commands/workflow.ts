@@ -39,7 +39,7 @@ import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowDeps } from '@archon/workflows/deps';
-import type { IWorkflowEngine } from '@archon/workflows/engine-port';
+import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
 import { WorkflowNotResumableError, PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
@@ -137,6 +137,7 @@ import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import { formatDeprecationNotice } from '@archon/workflows/deprecation';
 import type { WorkflowEvent } from '@archon/workflows/logger';
 import {
+  providerEventEnvelopeSchema,
   providerEventLineSchema,
   type ProviderEventLine,
 } from '@archon/workflows/schemas/provider-event';
@@ -152,6 +153,7 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
+import { readNodeEmitterEvent } from '@archon/workflows/node-event-write';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
@@ -1120,16 +1122,16 @@ export async function maybePrintTierNotice(
 }
 
 /**
- * Tool calls started in this process and not yet closed, keyed by attempt and call id,
+ * Tool calls this subscription saw start and not yet close, keyed by attempt and call id,
  * so a completion line can name its tool and duration. One per run subscription.
  */
 type OpenToolCalls = Map<string, { name: string; observedAt: string }>;
 
 /**
- * The wording of a node's progress lines. A foreground run renders them from emitter
- * events and `workflow logs --format text` from transcript rows; both call these so the
- * lines are worded alike. The label differs: the foreground names a command node by its
- * command, the transcript by its node id, which is all its failure and skip rows record.
+ * The wording of a node's progress lines. A foreground run renders them from persisted
+ * event rows and `workflow logs --format text` from transcript rows; both call these so
+ * the lines are worded alike. The label differs: the foreground names a command node by
+ * its command, the transcript by its node id, which is all its failure and skip rows record.
  */
 const nodeLine = {
   started: (name: string, detail = ''): string => `[${name}] Started${detail}`,
@@ -1139,77 +1141,95 @@ const nodeLine = {
   skipped: (name: string, why: string): string => `[${name}] Skipped (${why})`,
 };
 
-/** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
-function renderWorkflowEvent(
-  event: WorkflowEmitterEvent,
-  verbose: boolean,
-  openToolCalls: OpenToolCalls
-): void {
+function nodeEventLine(event: WorkflowEmitterEvent): string | undefined {
   switch (event.type) {
-    case 'workflow_started':
-      process.stderr.write(`[workflow] Transcript: ${event.transcriptPath}\n`);
-      break;
     case 'node_started': {
       let suffix = '';
       if (event.provider !== undefined && event.model !== undefined) {
         const tierPart = event.tier !== undefined ? ` ← ${event.tier}` : '';
         suffix = `  (${event.provider}/${event.model}${tierPart})`;
       }
-      process.stderr.write(`${nodeLine.started(event.nodeName, suffix)}\n`);
-      break;
+      return nodeLine.started(event.nodeName, suffix);
     }
     case 'node_completed':
-      process.stderr.write(`${nodeLine.completed(event.nodeName, event.duration)}\n`);
-      break;
+      return nodeLine.completed(event.nodeName, event.duration);
     case 'node_failed':
-      process.stderr.write(`${nodeLine.failed(event.nodeName, event.error)}\n`);
-      break;
+      return nodeLine.failed(event.nodeName, event.error);
     case 'node_skipped':
-      process.stderr.write(`${nodeLine.skipped(event.nodeName, formatSkipCause(event.cause))}\n`);
-      break;
+      return nodeLine.skipped(event.nodeName, formatSkipCause(event.cause));
     case 'node_skipped_prior_success':
-      process.stderr.write(`${nodeLine.skipped(event.nodeName, 'prior_success')}\n`);
-      break;
-    case 'approval_pending':
-      process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
-      break;
-    case 'container_lifecycle': {
-      const idPart = event.containerId ? ` ${event.containerId.slice(0, 12)}` : '';
-      process.stderr.write(`[container] ${event.phase}${idPart}\n`);
-      break;
-    }
-    case 'provider_event': {
-      if (!verbose) break;
-      const providerEvent = event.event;
-      // A call id is unique within its attempt; parallel nodes can repeat one.
-      const callKey = JSON.stringify([
-        event.attemptId,
-        'toolCallId' in providerEvent ? providerEvent.toolCallId : '',
-      ]);
-      if (providerEvent.type === 'tool_call') {
-        const name = toolCallDisplayName(providerEvent);
-        openToolCalls.set(callKey, { name, observedAt: event.observedAt });
-        process.stderr.write(
-          `[${event.stepName}] tool: ${name} (started, ${providerEvent.toolCallId})\n`
-        );
-      } else if (providerEvent.type === 'tool_call_update') {
-        const started = openToolCalls.get(callKey);
-        openToolCalls.delete(callKey);
-        const duration =
-          started === undefined
-            ? ''
-            : `${String(Date.parse(event.observedAt) - Date.parse(started.observedAt))}ms, `;
-        const exitCode =
-          providerEvent.exitCode !== undefined ? `, exit ${String(providerEvent.exitCode)}` : '';
-        process.stderr.write(
-          `[${event.stepName}] tool: ${started?.name ?? providerEvent.toolCallId} (${duration}${providerEvent.toolCallId}, ${providerEvent.status}${exitCode})\n`
-        );
-      }
-      break;
-    }
+      return nodeLine.skipped(event.nodeName, 'prior_success');
+    default:
+      return undefined;
+  }
+}
+
+function containerLine(phase: string, data: Record<string, unknown>): string {
+  const id = typeof data.containerId === 'string' ? data.containerId : '';
+  const idPart = id ? ` ${id.slice(0, 12)}` : '';
+  return `[container] ${phase}${idPart}`;
+}
+
+function toolLine(row: WorkflowEventRow, openToolCalls: OpenToolCalls): string | undefined {
+  // A row this build cannot read (another build's provider events) is skipped, as the
+  // transcript reader does; a throw here would only log once per row.
+  const parsed = providerEventEnvelopeSchema.safeParse(row.data);
+  if (!parsed.success) return undefined;
+  const envelope = parsed.data;
+  const providerEvent = envelope.event;
+  // A call id is unique within its attempt; parallel nodes can repeat one.
+  const callKey = JSON.stringify([
+    envelope.attemptId,
+    'toolCallId' in providerEvent ? providerEvent.toolCallId : '',
+  ]);
+  if (providerEvent.type === 'tool_call') {
+    const name = toolCallDisplayName(providerEvent);
+    openToolCalls.set(callKey, { name, observedAt: envelope.observedAt });
+    return `[${row.step_name}] tool: ${name} (started, ${providerEvent.toolCallId})`;
+  }
+  if (providerEvent.type !== 'tool_call_update') return undefined;
+  const started = openToolCalls.get(callKey);
+  openToolCalls.delete(callKey);
+  const duration =
+    started === undefined
+      ? ''
+      : `${String(Date.parse(envelope.observedAt) - Date.parse(started.observedAt))}ms, `;
+  const exitCode =
+    providerEvent.exitCode !== undefined ? `, exit ${String(providerEvent.exitCode)}` : '';
+  return `[${row.step_name}] tool: ${started?.name ?? providerEvent.toolCallId} (${duration}${providerEvent.toolCallId}, ${providerEvent.status}${exitCode})`;
+}
+
+/** The progress line a persisted workflow event renders as, if any. */
+function workflowEventLine(
+  row: WorkflowEventRow,
+  verbose: boolean,
+  openToolCalls: OpenToolCalls
+): string | undefined {
+  const nodeEvent = readNodeEmitterEvent(row);
+  if (nodeEvent !== undefined) return nodeEventLine(nodeEvent);
+  switch (row.event_type) {
+    case 'workflow_started':
+      return typeof row.data.transcriptPath === 'string'
+        ? `[workflow] Transcript: ${row.data.transcriptPath}`
+        : undefined;
+    case 'approval_requested':
+      return typeof row.data.message === 'string'
+        ? `[${row.step_name}] Waiting for approval: ${row.data.message}`
+        : undefined;
+    case 'container_created':
+    case 'container_stopped':
+    case 'container_resumed':
+    case 'container_destroyed':
+      return containerLine(row.event_type.slice('container_'.length), row.data);
+    case 'writeback_requested':
+    case 'writeback_applied':
+    case 'writeback_discarded':
+      return containerLine(row.event_type, row.data);
+    case 'provider_event':
+      return verbose ? toolLine(row, openToolCalls) : undefined;
     default:
       // Workflow-level, loop, artifact, and cancelled events are intentionally not rendered.
-      break;
+      return undefined;
   }
 }
 
@@ -3284,6 +3304,9 @@ async function runWorkflowWithOwnedSource(
     // share parent_conversation_id).
     const ownedRunId = resumable?.id ?? detachedPreCreatedRun?.id ?? preparedSource?.runId;
     if (ownedRunId === undefined) throw new Error('Workflow execution has no resolved run ID');
+    // Set once the settled run's container is kept (paused, or an un-applied write-back),
+    // so a signal during the final progress drain does not destroy it.
+    let containerPreserved = false;
     const deregisterTermination = registerOwnedRunTermination({
       store: host.deps.store,
       runId: ownedRunId,
@@ -3295,7 +3318,7 @@ async function runWorkflowWithOwnedSource(
       teardown: async signal => {
         // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
         // PRIVILEGED container — the forced exit bypasses the teardown `finally`.
-        if (containerBackend && containerEnvId) {
+        if (containerBackend && containerEnvId && !containerPreserved) {
           try {
             await containerBackend.destroy(containerEnvId);
           } catch (destroyErr) {
@@ -3325,21 +3348,6 @@ async function runWorkflowWithOwnedSource(
     // One-time-per-version notice when the workflow uses unconfigured tier keywords.
     await maybePrintTierNotice(host, workflow, workingCwd, cliUserId, options.quiet);
 
-    // Subscribe to workflow events for progress rendering. The owner identity was
-    // already reserved by source capture, before executeWorkflow can create its row.
-    // subscribeForConversation is pure in-memory registration — cannot throw in practice.
-    // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
-    const { quiet, verbose } = options;
-    const openToolCalls: OpenToolCalls = new Map();
-    const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(
-      conversationId,
-      event => {
-        if (!quiet) {
-          renderWorkflowEvent(event, verbose ?? false, openToolCalls);
-        }
-      }
-    );
-
     // Notify Web UI that a workflow is dispatching.
     // Mirrors the orchestrator dispatch message structure (category/segment/workflowDispatch),
     // but omits the rocket emoji and "(background)" qualifier since the CLI runs synchronously.
@@ -3367,7 +3375,29 @@ async function runWorkflowWithOwnedSource(
     // the finally when the run itself succeeded — so a leaked privileged container
     // fails the CLI instead of reporting success + exit 0.
     let containerTeardownError: Error | undefined;
+    let progress: WorkflowRunSubscription | undefined;
     try {
+      // Progress lines render from the run's committed rows, its sub-runs' included.
+      // Subscribed before submit or resume so the run's first row cannot be missed.
+      // Progress is output only: a subscription that cannot start never stops the run.
+      if (!options.quiet) {
+        const openToolCalls: OpenToolCalls = new Map();
+        const verbose = options.verbose ?? false;
+        try {
+          progress = await engine.subscribe(ownedRunId, ({ event }) => {
+            const line = workflowEventLine(event, verbose, openToolCalls);
+            if (line !== undefined) process.stderr.write(`${line}\n`);
+          });
+        } catch (subscribeErr) {
+          getLog().warn(
+            { err: subscribeErr as Error, runId: ownedRunId },
+            'cli.workflow_progress_subscribe_failed'
+          );
+          process.stderr.write(
+            `[workflow] Progress output unavailable: ${(subscribeErr as Error).message}\n`
+          );
+        }
+      }
       runLiveOwner ??= await startRunLiveOwner(ownedRunId, {
         ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
       });
@@ -3491,16 +3521,6 @@ async function runWorkflowWithOwnedSource(
         });
       }
     } finally {
-      unsubscribe();
-
-      // Deregister the signal handlers now that the run's lifecycle is settled
-      // (paused / completed / failed, or the throw propagating out of this
-      // finally). A signal from here on gets default handling — the destructive
-      // failWorkflowRun cleanup must never fire against a settled run (#1123),
-      // and removal keeps repeated workflowRunCommand calls in one process from
-      // stacking handlers.
-      deregisterTermination();
-
       // Container teardown (Phase C) — in `finally` so a throw from executeWorkflow
       // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
       // can't orphan a privileged container+volume. A PAUSED run keeps its (already
@@ -3518,6 +3538,9 @@ async function runWorkflowWithOwnedSource(
       // silently discard the changes despite the "reconcile manually" message. A failed
       // run stays resumable, so `archon workflow resume <id>` re-runs the apply.
       let unresolvedWriteback = false;
+      // Kept until the lookup below proves it may go: a signal mid-lookup must not
+      // destroy an overlay that may be the only copy of the changes.
+      containerPreserved = true;
       if (containerBackend && containerEnvId && !runPaused && result?.workflowRunId) {
         try {
           const finalRun = await deps.store.getWorkflowRun(result.workflowRunId);
@@ -3534,6 +3557,29 @@ async function runWorkflowWithOwnedSource(
           );
         }
       }
+      containerPreserved = runPaused || unresolvedWriteback;
+
+      // Renders the rows the run committed since the last poll, up to its settled state.
+      // The signal handlers stay registered through it, so a Ctrl-C here still destroys
+      // a container this process would destroy below.
+      await progress?.close().catch((drainErr: unknown) => {
+        getLog().warn(
+          { err: drainErr as Error, runId: ownedRunId },
+          'cli.workflow_progress_drain_failed'
+        );
+        process.stderr.write(
+          `[workflow] Progress output may be incomplete: ${(drainErr as Error).message}\n`
+        );
+      });
+
+      // Deregister the signal handlers now that the run's lifecycle is settled
+      // (paused / completed / failed, or the throw propagating out of this
+      // finally). A signal from here on gets default handling — the destructive
+      // failWorkflowRun cleanup must never fire against a settled run (#1123),
+      // and removal keeps repeated workflowRunCommand calls in one process from
+      // stacking handlers.
+      deregisterTermination();
+
       if (containerBackend && containerEnvId && unresolvedWriteback) {
         console.error(
           '\nWARNING: the write-back did not complete — the container + overlay volume are ' +
@@ -3546,13 +3592,13 @@ async function runWorkflowWithOwnedSource(
           'workflow.container_preserved_unresolved_writeback'
         );
       }
-      if (containerBackend && containerEnvId && !runPaused && !unresolvedWriteback) {
+      if (containerBackend && containerEnvId && !containerPreserved) {
         try {
           await containerBackend.destroy(containerEnvId);
           // Persist a container_destroyed event (console timeline) and emit for any
-          // live subscriber. The emitter fire is after unsubscribe, so the DB row is
-          // the durable channel for CLI runs. No runId on the pre-result throw path —
-          // skip the event, still destroy.
+          // live subscriber. The row commits after this process closed its progress
+          // subscription, so it is not rendered here. No runId on the pre-result throw
+          // path — skip the event, still destroy.
           const runId = result?.workflowRunId;
           if (runId) {
             getWorkflowEventEmitter().emit({
@@ -3809,15 +3855,17 @@ async function buildWaitResumeAttempt(
 /**
  * True when a resume attempt lost the run to another owner rather than failing.
  *
- * Both signals mean the row already moved — another host claimed it (the
- * compare-and-swap) or still holds its endpoint — so the winner finishes it and
- * this process should stop quietly instead of reporting a failure.
+ * Both signals mean another process is executing the run — it won the claim (the
+ * compare-and-swap left the row `running`) or still holds its endpoint — so this
+ * process should say so and stop instead of reporting a failure. A claim lost to a
+ * cancel, failure or completion is not that: nothing continues the run, so it stays
+ * an error.
  */
 function isResumeSuperseded(error: unknown): boolean {
   const MAX_CAUSE_DEPTH = 5;
   for (let current: unknown = error, depth = 0; current instanceof Error; depth += 1) {
     if (
-      current instanceof WorkflowNotResumableError ||
+      (current instanceof WorkflowNotResumableError && current.currentStatus === 'running') ||
       current instanceof RunLiveOwnerAlreadyOwnedError
     ) {
       return true;
@@ -3886,6 +3934,12 @@ export async function workflowRunCommand(
           { runId: attempt.options.continuationRun?.id, workflowName: attempt.workflowName },
           'cli.wait_continuation_superseded'
         );
+        // Without this line an approve that lost the claim to `archon serve` reads as a
+        // resume that stopped mid-dispatch. The --json contract owns its own stdout.
+        const runId = attempt.options.continuationRun?.id;
+        if (runId !== undefined && !options.json) {
+          console.log(`Run ${runId} is already continuing in another process.`);
+        }
         return;
       }
       throw error;
@@ -5982,9 +6036,9 @@ export async function workflowCancelCommand(
  * Human mode records the approval on the still-'paused' run (the resolution
  * lives in metadata.approval.resolved, #2075) and then auto-resumes the run
  * inline. `--json` mode records the approval and returns a structured ack
- * WITHOUT resuming — the run stays paused-and-staged, resumable by a
- * backgrounded `resume`/`run --resume` (inline resume would stream output and
- * break the JSON).
+ * WITHOUT resuming (inline resume would stream output and break the JSON); the
+ * answered gate is then a due continuation that `archon serve` or `workflow wake`
+ * continues.
  *
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
@@ -6028,8 +6082,8 @@ export async function workflowApproveCommand(
 
   // JSON mode records the approval and returns a structured ack WITHOUT the
   // inline auto-resume (resuming executes the workflow and streams output to
-  // stdout, which would corrupt the JSON contract). The run becomes resumable
-  // — drive it to completion with a backgrounded `resume`/`run --resume`.
+  // stdout, which would corrupt the JSON contract). The answered gate is a due
+  // continuation, so a continuation host (`archon serve`, `workflow wake`) continues it.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6166,8 +6220,9 @@ export async function workflowRejectCommand(
 
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
-  // to stdout, corrupting the JSON contract). When `cancelled` is false the run
-  // is resumable for the rework pass — drive it with a backgrounded `resume`.
+  // to stdout, corrupting the JSON contract). When `cancelled` is false the answered
+  // gate is a due continuation that a continuation host picks up, except on a container
+  // run (including its write-back gate), which needs a manual `resume`.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6320,8 +6375,7 @@ export async function workflowRespondCommand(
   }
 
   // JSON mode records the decision and returns a structured ack WITHOUT the inline
-  // auto-resume, mirroring approve/reject — drive it onward with a backgrounded
-  // `resume`/`run --resume`.
+  // auto-resume, mirroring approve/reject; a continuation host continues the answered gate.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);

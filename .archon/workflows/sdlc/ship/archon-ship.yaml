@@ -131,6 +131,7 @@ nodes:
       delivered: { from: "$deliver.output.ready", if_skipped: null }
       delivery: { from: "$deliver.output.summary", if_skipped: null }
       delivery_reason: { from: "$deliver.output.reason", if_skipped: null }
+      pr_url: { from: "$deliver.output.pr_url", if_skipped: null }
     output_format:
       type: object
       properties:
@@ -154,5 +155,7 @@ nodes:
             - not_rooted
             # a planning stop, or a review that needs a check only a person can make
             - needs_human
+        # The delivery's pull request, ready or not; '' when no delivery opened one.
+        pr_url: { type: string }
         summary: { type: string }
-      required: [delivered, reason, summary]
+      required: [delivered, reason, pr_url, summary]

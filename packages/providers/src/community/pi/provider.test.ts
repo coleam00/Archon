@@ -3292,6 +3292,43 @@ describe('PiProvider', () => {
     }
   });
 
+  // #3769: the engine's idle watchdog aborts a silent node and abandons its pending
+  // next(). When the wedged session also ignores abort(), the attempt must still release
+  // its slot, or every retry waits on it and times out in turn.
+  test('a retry after watchdog aborts on wedged sessions gets a maxConcurrent slot', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    // The process-wide semaphore was sized 2 by the first maxConcurrent test above.
+    const options = { model: 'google/gemini-2.5-pro', assistantConfig: { maxConcurrent: 2 } };
+    const wedged = (): Promise<void> => new Promise<void>(() => undefined);
+    mockPrompt.mockImplementationOnce(wedged).mockImplementationOnce(wedged);
+    for (const attempt of ['one', 'two']) {
+      const controller = new AbortController();
+      const gen = new PiProvider().sendQuery(attempt, '/tmp', undefined, {
+        ...options,
+        abortSignal: controller.signal,
+      });
+      const abandoned = gen.next();
+      abandoned.catch(() => undefined);
+      while (mockPrompt.mock.calls.length < (attempt === 'one' ? 1 : 2)) {
+        await new Promise(resolve => setTimeout(resolve, 1));
+      }
+      controller.abort();
+    }
+
+    const retry = consume(new PiProvider().sendQuery('retry', '/tmp', undefined, options));
+    const outcome = await Promise.race([
+      retry,
+      new Promise<'stuck'>(resolve => setTimeout(() => resolve('stuck'), 1000)),
+    ]);
+
+    expect(outcome).not.toBe('stuck');
+    expect(outcome === 'stuck' ? undefined : outcome.error).toBeUndefined();
+    expect(mockDispose).toHaveBeenCalledTimes(3);
+    // The retry reuses the cached extension loader; it never reloads it.
+    expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+  });
+
   test('settings: create(cwd) called, inMemory seeded with pre-merged global+project (empty project → just global)', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());

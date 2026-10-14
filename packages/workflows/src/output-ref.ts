@@ -200,13 +200,52 @@ export function parseWholeInputsRef(text: string): string | undefined {
   return WHOLE_INPUTS_REF_PATTERN.exec(text.trim())?.[1];
 }
 
-/** Resolve every runtime `$INPUTS.<name>` reference in a text surface. */
-export function substituteInputRefs(
-  text: string,
-  inputs: Record<string, JsonValue> | undefined
-): string {
-  const pattern = new RegExp(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, 'g');
-  return text.replace(pattern, (_match, name: string) => {
+/**
+ * One reference grammar a template can contain, and how to resolve it (#4046). `pattern`
+ * is sticky and starts with `\$`. `resolve` returns the replacement text, or undefined to
+ * leave the match to a later token at the same `$`.
+ */
+export interface TemplateToken {
+  readonly pattern: RegExp;
+  readonly resolve: (match: RegExpExecArray) => string | undefined;
+}
+
+export function templateToken(source: string, resolve: TemplateToken['resolve']): TemplateToken {
+  return { pattern: new RegExp(source, 'y'), resolve };
+}
+
+/**
+ * Resolve a template's references in one left-to-right scan (#4046). At each `$` the first
+ * token that resolves wins, and scanning resumes after the reference, so a substituted
+ * value (a run message, an issue body, an upstream output) is inserted verbatim and never
+ * read as template syntax. Token order is precedence between grammars that can match at the
+ * same `$`.
+ */
+export function substituteTemplate(template: string, tokens: readonly TemplateToken[]): string {
+  let result = '';
+  let copied = 0;
+  let at = template.indexOf('$');
+  while (at !== -1) {
+    let next = at + 1;
+    for (const { pattern, resolve } of tokens) {
+      pattern.lastIndex = at;
+      const match = pattern.exec(template);
+      if (match === null) continue;
+      const value = resolve(match);
+      if (value === undefined) continue;
+      result += template.slice(copied, at) + value;
+      copied = next = at + match[0].length;
+      break;
+    }
+    at = template.indexOf('$', next);
+  }
+  return result + template.slice(copied);
+}
+
+/** The runtime `$INPUTS.<name>` reference. An unknown name throws with a did-you-mean. */
+export function inputRefToken(inputs: Record<string, JsonValue> | undefined): TemplateToken {
+  return templateToken(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, match => {
+    const name = match[1];
     if (inputs && Object.hasOwn(inputs, name)) return canonicalValueText(inputs[name]);
     const known = inputs ? Object.keys(inputs) : [];
     const hint = similarNodeIds(name, known);

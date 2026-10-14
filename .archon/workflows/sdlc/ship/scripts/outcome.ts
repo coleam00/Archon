@@ -16,8 +16,9 @@
  *   summary, or "null" when it did not run.
  * - INPUTS_PLAN_SUMMARY / INPUTS_OPEN_QUESTIONS: the planner's summary and the calls it
  *   left to a person, or "null" when it did not run.
- * - INPUTS_DELIVERED / INPUTS_DELIVERY / INPUTS_DELIVERY_REASON: deliver's `ready`,
- *   `summary` and `reason`, or "null" when the deliver branch was skipped.
+ * - INPUTS_DELIVERED / INPUTS_DELIVERY / INPUTS_DELIVERY_REASON / INPUTS_PR_URL:
+ *   deliver's `ready`, `summary`, `reason` and `pr_url`, or "null" when the deliver
+ *   branch was skipped.
  *
  * A failed delivery cannot reach this node: the failure cascades an
  * `upstream_failed` skip that blocks this join, and the run's terminal record names
@@ -99,6 +100,7 @@ if (delivered === 'null') {
   emit({
     delivered: false,
     reason: stop.reason,
+    pr_url: '',
     summary: `${stop.text.trim()}\nReport: ${artifacts}/${stop.report}` + caveats(artifacts, { listingFile }),
   });
 } else {
@@ -108,6 +110,7 @@ if (delivered === 'null') {
   emit({
     delivered: delivered === 'true',
     reason: text(process.env.INPUTS_DELIVERY_REASON),
+    pr_url: text(process.env.INPUTS_PR_URL),
     summary: open === '' ? delivery : `${delivery}\n\nOpen questions the planner judged non-blocking:\n${open}`,
   });
 }

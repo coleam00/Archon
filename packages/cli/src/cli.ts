@@ -591,6 +591,10 @@ async function main(): Promise<number> {
               ? { ifRevision: values['if-revision'] }
               : {}),
             ...(typeof values.limit === 'string' ? { limit: values.limit } : {}),
+            ...(typeof values.prefix === 'string' ? { prefix: values.prefix } : {}),
+            ...(typeof values.project === 'string' ? { project: values.project } : {}),
+            ...(values.install === true ? { install: true } : {}),
+            ...(values.raw === true ? { raw: true } : {}),
           },
           { storeKind: getDatabaseType() }
         );

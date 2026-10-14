@@ -888,7 +888,7 @@ Adding `--detach` **inverts** that: the child is re-invoked without `--json`, so
 
 ### `workflow wake`
 
-Wake due durable time waits, event deadlines, signaled events, and scheduled quota resumes without running a server:
+Wake due durable time waits, event deadlines, signaled events, scheduled quota resumes, and answered gates without running a server:
 
 ```bash
 archon workflow wake --json
@@ -1047,9 +1047,17 @@ warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs cascade-cancels every non-terminal descendant (children and grandchildren; already-terminal runs are left alone). These are database transitions, not process termination; an in-flight host command can continue until it returns. If part of the tree could not be reached, the command reports the count so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
 
+### `workflow respond`
+
+Resolve a paused gate with `archon workflow respond <run-id> <decision> [text]`.
+When the gate authors `approval.decisions`, only those declared ids are accepted,
+including for `approve` and `reject`. An undeclared decision is refused with the
+allowed ids, and the run stays paused. Without authored decisions, use `approve`
+or `reject`.
+
 ### `workflow approve`
 
-Approve a paused workflow run at an interactive approval gate. Optionally provide a comment that is available to the workflow via `$LOOP_USER_INPUT`.
+Approve a paused workflow run at an interactive approval gate. For a gate with authored `approval.decisions`, this command requires `approve` in that list; otherwise it is refused and the run stays paused. An optional comment is available as `$<gate-id>.output.text` for authored decisions, or `$LOOP_USER_INPUT` at a legacy interactive-loop gate.
 
 **Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own run id — the id shown in the parent's block message — not the parent's; the parent auto-resumes when the child completes. A child gate is the exception: it works for a 1:1 sub-run, but a child that pauses inside a `fan_out:` expansion **fails the node** instead — a parent has one approval slot and cannot hand it to N children, so gate before or after the fan-out node rather than inside a child of it. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id.
 
@@ -1062,7 +1070,7 @@ archon workflow approve <run-id> --comment "Looks good, proceed"
 archon workflow approve <run-id> --json   # record approval + ack; does NOT auto-resume inline
 ```
 
-In human mode `approve`/`reject` auto-resume the run inline. In `--json` mode they record the decision and return an ack **without** resuming (the run is left resumable for a backgrounded `resume`/`run --resume`).
+In human mode `approve`/`reject` auto-resume the run inline. In `--json` mode they record the decision and return an ack **without** resuming. An answered gate is a due continuation, so a running `archon serve` or [`workflow wake`](#workflow-wake) continues it; `workflow resume <run-id>` continues it by hand. Container runs are the exception and need the manual resume.
 
 #### Detached control verbs
 
@@ -1091,7 +1099,7 @@ archon workflow approve <run-id> --detach --json
 ```
 
 **`--detach --json` deliberately differs from bare `--json`.** Bare `--json` records the
-decision and withholds the inline auto-resume (you drive continuation separately).
+decision and withholds the inline auto-resume (a continuation host continues the run).
 `--detach --json` spawns a child that takes the ordinary inline path, so the run **is**
 driven onward — approve's auto-resume, reject's `on_reject` rework, resume's re-run —
 just outside your shell. The ack carries `continues: true` to say so:
@@ -1117,7 +1125,9 @@ transcript. Precheck failures follow each verb's existing error contract:
 
 ### `workflow reject`
 
-Reject a paused workflow run at an approval gate. Optionally provide a reason that is available to the workflow via `$REJECTION_REASON`.
+For a gate with authored `approval.decisions`, this command requires `reject` in that list; otherwise it is refused with the allowed ids and the run stays paused.
+
+Reject a paused workflow run at an approval gate. An optional reason is available as `$<gate-id>.output.text` for authored decisions, or `$REJECTION_REASON` inside a legacy `on_reject` prompt.
 
 ```bash
 archon workflow reject <run-id>
@@ -1507,29 +1517,41 @@ archon isolation cleanup
 
 ### state
 
-Durable, audited JSON documents scoped to the current project. SQL storage supports
-SQLite and PostgreSQL. Values are read on demand; the engine never injects them into prompts.
+Durable, audited JSON documents. A document lives in a project or in install scope.
+SQL storage supports SQLite and PostgreSQL. Values are read on demand; the engine never
+injects them into prompts.
 
 ```bash
 archon state get review/123
 printf '{"seen":[]}' | archon state put review/123 --if-revision 0
 printf '{"ops":[{"op":"append","path":"/seen","value":123}]}' | archon state patch review/123
+printf '{"ops":[{"op":"set","path":"/owner","value":"b"}]}' | archon state patch review/123 --if-revision 2
 archon state log review/123 --limit 100
-archon state delete review/123 --if-revision 2
+archon state list --prefix review/
+archon state delete review/123 --if-revision 3
+archon state get notes --install --raw
+archon state list --project acme/widgets
 ```
 
-Every command writes JSON. `get` returns `{name, revision, value}`; an absent document
+Every command writes JSON and names the scope it used: `{kind: "project", key}` or
+`{kind: "install"}`. `get` returns `{scope, name, revision, value}`; an absent document
 returns revision `0` and value `null`. A deleted document returns value `null`,
 `deleted: true` and its tombstone revision, which is the revision a recreating `put` must
-name. `put`, `patch`, and `delete` return the new full revision. `log` returns all
-revisions newest first (use a positive `--limit` to bound the result), including
-tombstones, operation, writer and timestamp.
+name. `put`, `patch`, and `delete` return the scope and the new full revision. `log`
+returns `{scope, name, revisions}`, newest first (use a positive `--limit` to bound the
+result), including tombstones, operation, writer and timestamp. `list` returns
+`{scope, documents}`: each document's name, latest revision, `updatedAt`, writer and
+`deleted`, ordered by name and never with values. `--prefix` keeps names that start with
+the given text.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
-stdin to the latest value, initially `{}`. Writes to one document are serialized, so a
+stdin to the latest value, initially `{}`. With `--if-revision <n>` it applies only when
+`n` is still the latest revision, and otherwise exits `3`. Use it whenever the change was
+computed from what you read. Without it, writes to one document are serialized, so a
 patch never loses a revision race; it applies to whatever an earlier write left, which
-can make it invalid (for example, removing a member another patch already removed).
+can make it invalid (for example, removing a member another patch already removed). A
+revision's recorded operation includes `ifRevision` when the patch named one.
 Operations are `set`, `remove`, and `append`, using RFC 6901 JSON Pointer paths. `set`
 replaces a value, `remove` deletes an existing member (or array element), and `append`
 adds one value to an array, creating it when missing. Missing intermediate objects are
@@ -1537,17 +1559,27 @@ created for `set` and `append`. Array indices must be canonical, in-range intege
 `-` is unsupported. The empty pointer addresses the entire document. Root `null` is
 reserved for deletion; nested nulls are ordinary JSON values.
 
+A text document is a JSON string value. `put --raw` stores stdin as that string
+unchanged, and `get --raw` prints it without JSON encoding (exit `4` when the value is not
+a string). Use plain `get` when you need the revision for a following `put`.
+
 Names contain 1–200 lowercase letters, digits, `.`, `_`, `-`, and slash-separated segments.
 Values are limited to 64 KiB of serialized UTF-8 JSON. Exit codes: `0` success, `1` usage
-or storage failure, `3` revision conflict, `4` oversized value or invalid patch. Failures
+or storage failure, `3` revision conflict, `4` oversized value, invalid patch or non-text
+`--raw` value, `5` the CLI opened a store that does not know the calling run. Failures
 return `{ok:false, error, code}` and rejected writes append no revision.
 
 Inside a bash/script node, `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` resolve the run's
-project and writer. Missing runs fail loudly with the opened store kind; a missing project
-or node identity also fails. There is no project override. Outside a run, the current
-checkout (auto-registered when needed) or registered folder resolves the project and `ARCHON_USER_ID`, `USER`, or
-`USERNAME` identifies the operator. Projects with colliding storage names share state,
-just as with `$STATE_DIR`; register them with distinct names.
+project, and the writer is recorded as `{kind: "run", runId, nodePath}`. A run whose store
+does not know it fails with exit `5` naming the opened store kind; a missing project or
+node identity also fails. A node reaches only its run's project, or install scope with
+`--install`; `--project` is refused inside a run. Outside a run, the current checkout
+(auto-registered when needed) or registered folder resolves the project, `--project <key>`
+names one directly (the workspace-relative key, such as `owner/repo` or `_folder/ops`),
+and `--install` selects install scope. The writer is recorded as
+`{kind: "surface", via: "cli"}`: the surface the write came through, not who made it.
+Projects with colliding storage names share state, just as with `$STATE_DIR`; register
+them with distinct names.
 
 `archon workflow cleanup <days>` also prunes old state revisions, keeps each live document's latest
 revision, retains the latest tombstone of deleted documents, and reports both counts.
