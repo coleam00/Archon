@@ -1,4 +1,5 @@
 import { registerFolder } from '../handlers/sql-registration';
+import { detectProjectKind } from '../services/project-kind';
 import {
   createRunWorktreeSetupExecutor,
   recordSetupRunSource,
@@ -54,13 +55,7 @@ import { getAgentProvider } from '../services/provider-admission';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
-import {
-  findRepoRoot,
-  getDefaultRemote,
-  syncWorkspace,
-  toBranchName,
-  toRepoPath,
-} from '@archon/git';
+import { getDefaultRemote, syncWorkspace, toBranchName, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
@@ -3565,19 +3560,16 @@ Kind: folder project (runs in place)`;
     }
   }
 
-  // Automatic detection retains the existing fallback on a git error, reported below.
-  let repoRoot: string | null = null;
-  let repoDetectFailed = false;
+  let kind: Codebase['kind'];
   try {
-    repoRoot = await findRepoRoot(canonicalPath);
+    kind = await detectProjectKind(canonicalPath);
   } catch (err) {
-    repoDetectFailed = true;
     getLog().warn(
       { err: err as Error, projectPath: canonicalPath },
       'project.register_repo_detect_failed'
     );
+    return toError(err).message;
   }
-  const kind: 'repo' | 'folder' = repoRoot ? 'repo' : 'folder';
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: canonicalPath,
@@ -3589,12 +3581,7 @@ Kind: folder project (runs in place)`;
     { name: projectName, path: canonicalPath, id: codebase.id, kind },
     'project.register_completed'
   );
-  let kindNote = kind === 'folder' ? '\nKind: folder project (runs in place)' : '';
-  if (repoDetectFailed) {
-    kindNote +=
-      '\n⚠️ Could not determine git status (git error) — registered as a folder project. ' +
-      'If this should be a git repo, resolve the error and re-register.';
-  }
+  const kindNote = kind === 'folder' ? '\nKind: folder project (runs in place)' : '';
   return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
 }
 

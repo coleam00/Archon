@@ -10,7 +10,7 @@ mock.module('../workflows/branch-launch-source', () => ({
 }));
 import * as git from '@archon/git';
 import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
-import { mkdtemp, realpath } from 'fs/promises';
+import { mkdtemp, realpath, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
@@ -1839,6 +1839,32 @@ describe('orchestrator-agent handleMessage', () => {
   // ─── Project Registration ──────────────────────────────────────────────
 
   describe('project registration', () => {
+    test('/register-project refuses a genuine git detection failure without persisting a project', async () => {
+      const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-git-failure-'));
+      try {
+        await writeFile(join(projectPath, '.git'), 'invalid gitfile\n');
+        mockExistsSync.mockReturnValue(true);
+        mockListCodebases.mockResolvedValue([]);
+
+        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+          actor: operator,
+        });
+
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'chat-456',
+          expect.stringContaining('Could not determine whether the path is a git repository')
+        );
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'chat-456',
+          expect.stringContaining('Nothing was registered')
+        );
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+        expect(mockUpdateCodebase).not.toHaveBeenCalled();
+      } finally {
+        await removeTempTree(projectPath);
+      }
+    });
+
     test('/register-project on a real non-git dir creates a folder project (clean null path)', async () => {
       // Use a REAL non-git temp dir so findRepoRoot returns null via the
       // definitive "not a git repository" path (deterministic) — not the

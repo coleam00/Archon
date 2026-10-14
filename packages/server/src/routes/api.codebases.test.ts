@@ -632,35 +632,28 @@ describe('POST /api/codebases', () => {
     expect(mockRegisterRepository).not.toHaveBeenCalled();
   });
 
-  test('when findRepoRoot throws for a NONEXISTENT path, falls through to registerFolder for its clean error', async () => {
-    // findRepoRoot throws for nonexistent paths. That case is benign: fall
-    // through so registerFolder's own existence check produces the clean error.
+  test('when findRepoRoot throws for a missing path, returns the folder registration path error', async () => {
+    const { ProjectRegistrationError } = await import('@archon/core');
+    const missingPath = '/nonexistent-archon-test/ambiguous';
     mockFindRepoRoot.mockRejectedValueOnce(new Error('git: command timed out'));
-    mockRegisterFolder.mockImplementationOnce(async () => ({
-      codebaseId: 'folder-uuid-2',
-      alreadyExisted: false,
-    }));
-    mockGetCodebase.mockImplementationOnce(async () => ({
-      ...MOCK_CODEBASE,
-      id: 'folder-uuid-2',
-      repository_url: null,
-      kind: 'folder',
-    }));
+    mockRegisterFolder.mockRejectedValueOnce(
+      new ProjectRegistrationError(`Path does not exist: ${missingPath}`)
+    );
 
     const app = makeApp();
-    // Path must NOT exist on the test host (real existsSync decides the branch).
-    const missingPath = '/nonexistent-archon-test/ambiguous';
     const response = await app.request('/api/codebases', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: missingPath }),
     });
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: `Path does not exist: ${missingPath}` });
     expect(mockRegisterFolder).toHaveBeenCalledWith(missingPath, undefined, {
       baseBranch: undefined,
     });
     expect(mockRegisterRepository).not.toHaveBeenCalled();
+    expect(mockGetCodebase).not.toHaveBeenCalled();
   });
 
   test('when findRepoRoot throws for an EXISTING path, returns 500 and registers NOTHING', async () => {
