@@ -6167,7 +6167,8 @@ export async function workflowRejectCommand(
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
   // to stdout, corrupting the JSON contract). When `cancelled` is false the answered
-  // gate is a due continuation that a continuation host picks up.
+  // gate is a due continuation that a continuation host picks up, except on a container
+  // run (including its write-back gate), which needs a manual `resume`.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);

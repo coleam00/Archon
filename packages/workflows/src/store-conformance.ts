@@ -1054,16 +1054,30 @@ export function describeWorkflowStoreConformance(
       for (const id of ids) expect(due).not.toContain(id);
     });
     test('answered gates are listed after every timed continuation', async () => {
+      // This gate's run was resumed from a quota schedule first; the triggered schedule it
+      // keeps must not sort it among the timed rows.
       const gate = await running(store);
+      await store.failWorkflowRun(gate.id, 'quota', { scheduledResume: schedule });
+      await store.resumeWorkflowRun(gate.id, {
+        kind: 'quota',
+        attempt: schedule.attempt,
+        resumeAt: schedule.resumeAt,
+      });
       await store.pauseWorkflowRun(gate.id, approval);
       await store.resolveApprovalGate(
         gate.id,
         { approval: { ...approval, resolved: 'rejected' } },
         []
       );
+      // Due later than that stale schedule, so only the gate rule puts it first.
+      const timedAt = new Date(Date.parse(schedule.resumeAt) + 60_000).toISOString();
       const timed = await running(store);
-      await store.pauseWorkflowRunForWait(timed.id, wait, { kind: 'started', stepName: 'wait' });
-      const now = new Date(Date.parse(wait.resumeAt) + 1000);
+      await store.pauseWorkflowRunForWait(
+        timed.id,
+        { ...wait, resumeAt: timedAt },
+        { kind: 'started', stepName: 'wait' }
+      );
+      const now = new Date(Date.parse(timedAt) + 1000);
       expect((await store.listDueWorkflowContinuations(now, 10)).map(run => run.id)).toEqual([
         timed.id,
         gate.id,

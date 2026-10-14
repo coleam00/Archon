@@ -1923,7 +1923,10 @@ export async function listDueWorkflowContinuations(
                AND ${metadataText('approval.pauseId')} IS NOT NULL
                AND COALESCE(${metadataText('approval.nodeId')}, '') <> ''
                AND COALESCE(${metadataText('approval.type')}, 'approval') NOT IN ('child_workflow', 'writeback')`;
-  const dueAt = `COALESCE(${retryAt}, ${resumeAt}, ${scheduledResumeAt})`;
+  // Each row sorts by its own kind's time. A run resumed from a quota schedule keeps the
+  // triggered schedule, which must not place a later answered gate among timed rows.
+  const dueAt = `COALESCE(${retryAt}, CASE WHEN status = 'paused' THEN ${resumeAt} END,
+               CASE WHEN status = 'failed' THEN ${scheduledResumeAt} END)`;
   try {
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs

@@ -94,7 +94,7 @@ export function createTransactionView(
         ? retry
         : wait
           ? wait.resumeAt
-          : isScheduledWorkflowResume(schedule)
+          : run.status === 'failed' && isScheduledWorkflowResume(schedule)
             ? schedule.resumeAt
             : undefined;
     return at === undefined ? Number.POSITIVE_INFINITY : Date.parse(at);
