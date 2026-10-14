@@ -13,6 +13,7 @@ import { tokenUsageSchema } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';
 import { nodeExecutionMetadataSchema, nodeFailureKindSchema } from './node-execution';
 import { checkoutObservationSchema } from './checkout-observation';
+import { recordSurfaceSchema } from './record-surface';
 import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
 // Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
@@ -815,7 +816,7 @@ export const approvalContextSchema = z.object({
    * (`cli`, `api`, `manage_run`, or a chat platform id) and when it was committed. Never
    * who answered. Replaced with the rest of the context by the next pause.
    */
-  answeredVia: z.string().optional(),
+  answeredVia: recordSurfaceSchema.optional(),
   answeredAt: z.string().optional(),
   /**
    * Interactive-loop only. True when the iteration this gate paused on emitted the

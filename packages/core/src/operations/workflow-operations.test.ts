@@ -1457,6 +1457,14 @@ describe('respondToWorkflow', () => {
     }
   );
 
+  test('a malformed surface id is refused before anything is written', async () => {
+    mockGetWorkflowRun.mockResolvedValue(declaredGate('pause-one'));
+    await expect(
+      respondToWorkflow('run-1', 'revise', undefined, operator, { via: 'Not A Surface' })
+    ).rejects.toThrow();
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
+
   test('a stale occurrence is refused and names the occurrence the run is at now', async () => {
     const stale = declaredGate('pause-one');
     mockGetWorkflowRun.mockResolvedValue(declaredGate('pause-two'));

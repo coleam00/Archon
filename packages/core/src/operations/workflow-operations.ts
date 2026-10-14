@@ -14,6 +14,7 @@ import { getStoragePathsForRoot, resolveRunStorageRoot } from '@archon/paths/arc
 import { finishNodeExecution } from '@archon/workflows/node-execution';
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
 import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
+import { recordSurfaceSchema, type RecordSurface } from '@archon/workflows/schemas/record-surface';
 /**
  * Shared workflow business logic — approve, reject, status, resume, abandon.
  *
@@ -334,7 +335,7 @@ export class ChildRunRedirectError extends Error {
  * refuses an answer meant for an earlier pause of the same run.
  */
 export interface GateAnswerOrigin {
-  via: string;
+  via: RecordSurface;
   expectedGate?: ExpectedApprovalGate;
 }
 
@@ -344,7 +345,14 @@ function answeredGate(
   resolved: 'approved' | 'rejected',
   origin: GateAnswerOrigin
 ): Record<string, unknown> {
-  return { ...approval, resolved, answeredVia: origin.via, answeredAt: new Date().toISOString() };
+  return {
+    ...approval,
+    resolved,
+    // Validated before the write, so a surface passing a malformed id fails loudly here
+    // instead of persisting an audit fact no reader can trust.
+    answeredVia: recordSurfaceSchema.parse(origin.via),
+    answeredAt: new Date().toISOString(),
+  };
 }
 
 /**
