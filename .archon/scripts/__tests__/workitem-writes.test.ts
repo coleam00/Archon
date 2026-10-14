@@ -123,3 +123,21 @@ test('default triage preserves inherited-property labels and accepts them as are
     for (const name of operatorLabels) expect(edit).not.toContain(`--remove-label ${name}`);
   }
 });
+
+test('a gh label write is one delta that leaves labels it does not name on the item', () => {
+  const run = runPackScript('triage/scripts/verdict', {
+    inputs: { ...inputs, INPUTS_AREA_LABELS: '[]' },
+    gh: {
+      issueLabels: ['operator', 'archon-blocked', 'archon-small'],
+      repositoryLabels: ['operator', 'archon-blocked', 'archon-small', 'archon-ready'],
+    },
+  });
+  expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+  // A delta, not a whole-set write: a label another writer adds before this edit
+  // lands is never named, so it survives.
+  expect(run.gh.filter(call => call.startsWith('issue edit'))).toEqual([
+    'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-ready --remove-label archon-blocked',
+  ]);
+  expect(run.gh.filter(call => call.includes('/issues/7')).length).toBe(2);
+  expect(JSON.parse(run.stdout).labels).toEqual(['archon-ready', 'archon-small']);
+});
