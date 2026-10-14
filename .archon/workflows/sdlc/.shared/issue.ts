@@ -3,6 +3,8 @@
  *
  * Both sources prove the number names an issue on the tracker before anything is
  * returned, so a pull request with the same number is never read as the issue.
+ * `issueAtCreation` recovers the text an issue was opened with, from GitHub's edit
+ * history; the forge source has no history and answers with the current text.
  */
 
 import {
@@ -104,5 +106,76 @@ function forgeView(item: QualifiedPr): IssueView {
     labels: labelNames(value.labels),
     state: value.state,
     url: value.url,
+  };
+}
+
+/** The title and body an issue was opened with, and whether the body really is that. */
+export interface IssueAtCreation {
+  readonly title: string;
+  readonly body: string;
+  /** `current` when the creation body could not be recovered and the current one stands in. */
+  readonly body_from: 'creation' | 'current';
+}
+
+const CREATION_QUERY = [
+  'query($owner: String!, $name: String!, $number: Int!) {',
+  'repository(owner: $owner, name: $name) { issue(number: $number) {',
+  'createdAt',
+  'userContentEdits(last: 1) { totalCount nodes { editedAt diff } }',
+  'timelineItems(first: 1, itemTypes: [RENAMED_TITLE_EVENT]) {',
+  'nodes { ... on RenamedTitleEvent { previousTitle } } }',
+  '} } }',
+].join(' ');
+
+export function issueAtCreation(item: QualifiedPr, current: IssueView): IssueAtCreation {
+  if (forgeSource() === 'forge') {
+    return { title: current.title, body: current.body, body_from: 'current' };
+  }
+  const slash = item.repo.path.indexOf('/');
+  const result = Bun.spawnSync(
+    [
+      'gh',
+      'api',
+      'graphql',
+      '--hostname',
+      item.repo.host,
+      '-f',
+      `query=${CREATION_QUERY}`,
+      '-f',
+      `owner=${item.repo.path.slice(0, slash)}`,
+      '-f',
+      `name=${item.repo.path.slice(slash + 1)}`,
+      '-F',
+      `number=${String(item.number)}`,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `gh api graphql (issue ${String(item.number)} history) failed: ${result.stderr.toString().trim()}`
+    );
+  }
+  const data = record(record(JSON.parse(result.stdout.toString()))?.data);
+  const history = record(record(data?.repository)?.issue);
+  const edits = record(history?.userContentEdits);
+  if (history === undefined || typeof edits?.totalCount !== 'number') {
+    throw new Error(`issue ${String(item.number)} has no edit history to read`);
+  }
+  // Edits are newest first and each holds the whole body at that revision, so the
+  // last one is the oldest. It is the creation body when it was made at creation; a
+  // deleted revision has no diff, and then the current body stands in, visibly.
+  const oldest = record(Array.isArray(edits.nodes) ? edits.nodes[0] : undefined);
+  const recovered =
+    edits.totalCount === 0
+      ? current.body
+      : typeof oldest?.diff === 'string' && oldest.editedAt === history.createdAt
+        ? oldest.diff
+        : undefined;
+  const renames = record(history.timelineItems)?.nodes;
+  const previousTitle = record(Array.isArray(renames) ? renames[0] : undefined)?.previousTitle;
+  return {
+    title: typeof previousTitle === 'string' ? previousTitle : current.title,
+    body: recovered ?? current.body,
+    body_from: recovered === undefined ? 'current' : 'creation',
   };
 }
