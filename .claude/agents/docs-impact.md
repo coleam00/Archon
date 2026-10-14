@@ -22,7 +22,7 @@ Wrong docs are worse than missing docs. Bloated docs are worse than concise docs
 **Review these documentation surfaces and report required changes**:
 - `AGENTS.md` - AI assistant instructions and project rules
 - `README.md` - User-facing getting started guide
-- `docs/*.md` - Architecture, configuration, guides
+- `packages/docs-web/src/content/docs/` - Published user guides and reference documentation
 - `CONTRIBUTING.md` - Contributor guidelines
 - `.env.example` - Environment variable documentation
 - `.claude/agents/*.md` - Agent definitions

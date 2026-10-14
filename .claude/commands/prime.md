@@ -35,12 +35,9 @@ Read these files to understand the primary message and execution flow:
 
 ### 4. Understand Package Dependency Layers
 
-Read the dependency chain (no @archon/* deps → most isolated):
-
-- `packages/paths/src/index.ts` — path resolution + Pino logger (zero deps)
-- `packages/git/src/index.ts` — git ops (depends only on @archon/paths)
-- `packages/isolation/src/index.ts` — worktree isolation (depends on @archon/git + @archon/paths)
-- `packages/workflows/src/index.ts` — workflow engine (depends on @archon/git + @archon/paths)
+Inspect the relevant `packages/*/package.json` manifests for workspace dependencies
+before reporting dependency order. Read each package's entry points to understand
+its responsibility.
 
 ### 5. Understand Current State
 
