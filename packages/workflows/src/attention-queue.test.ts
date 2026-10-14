@@ -19,6 +19,21 @@ describe('attention queue arguments', () => {
     });
   });
 
+  test('refuses the prototype setter key for filters and writes', () => {
+    expect(() => parseAttentionLabelPairs(['__proto__=ci'])).toThrow(
+      'Expected a label as key=value'
+    );
+    expect(() => parseAttentionQueueRequest({ labels: ['__proto__=ci'] })).toThrow(
+      'Expected a label as key=value'
+    );
+    expect(() => parseAttentionQueueOrder('label:__proto__')).toThrow('invalid label key');
+    expect(() => parseAttentionQueueCountBy('label:__proto__')).toThrow('invalid label key');
+    expect(parseAttentionLabelPairs(['constructor=x', 'toString=y'])).toEqual({
+      constructor: 'x',
+      toString: 'y',
+    });
+  });
+
   test.each([['ci'], ['=other'], ['c i=x']])('refuses the label pair %p', pair => {
     expect(() => parseAttentionLabelPairs([pair])).toThrow('Expected a label as key=value');
   });

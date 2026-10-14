@@ -5,6 +5,7 @@
 mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":true,"code":true,"tests":false,"errors":false,"docs":false}'
 head-check: "target matches"
 scope:
+  selector: ""
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }

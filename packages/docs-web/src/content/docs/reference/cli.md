@@ -945,6 +945,8 @@ HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sor
 no working directory, so without `project` it covers the whole install.
 `GET /api/runs/<run-id>/attention` reads one item.
 
+Label keys must be non-empty, contain no whitespace or `=`, and cannot be `__proto__`.
+
 ### `workflow attention label`
 
 Set or remove labels on the attention wait a run is paused at, without answering it.

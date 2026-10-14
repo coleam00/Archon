@@ -98,6 +98,7 @@ nodes:
     output_format:
       type: object
       properties:
+        selector: { type: string }
         # The qualified pull request this round reviewed, or `null` for a working
         # diff. publish below writes to this record and to nothing else, so the
         # comment can never land on an ambient branch→PR mapping. The bounds match
@@ -123,7 +124,7 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [review/scope.md] }
           required: [type, run_id, path]
-      required: [pr, report]
+      required: [selector, pr, report]
 
   - id: head-check
     script: check-review-head
@@ -131,6 +132,7 @@ nodes:
     depends_on: [scope]
     with:
       scope: "$INPUTS.scope"
+      selector: "$scope.output.selector"
       pr: "$scope.output.pr"
       head: "$mode.output.head"
 

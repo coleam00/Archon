@@ -5,6 +5,7 @@ mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-o
 route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: lifecycle ownership changed" }
 head-check: "target matches"
 scope:
+  selector: ""
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }

@@ -13,6 +13,7 @@ review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"f
 review__route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
 review__head-check: "target matches"
 review__scope:
+  selector: "https://github.com/example/repo/pull/1"
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"
@@ -44,6 +45,7 @@ reshape__assert-changed: "1 file changed"
 rereview__mode: '{"continuation":true,"head":"fixturehead2","cursor":"fixturehead","risks":"fixture-owned-policy","execution":{"path":"rereview__mode","invocation":{"loopPath":[]}},"seams":false,"code":true,"tests":false,"errors":false,"docs":false}'
 rereview__head-check: "target matches"
 rereview__scope:
+  selector: "https://github.com/example/repo/pull/1"
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 rereview__code: "0 findings in the reshape delta"

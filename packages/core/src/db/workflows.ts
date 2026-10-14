@@ -2461,7 +2461,7 @@ async function listPausedRuns(
     } catch {
       // Parser errors can quote stored data, including message text.
       getLog().error({ workflowRunId: row.id }, 'attention_run_normalization_failed');
-      continue;
+      throw new Error(`Cannot read paused workflow run ${row.id}: stored run data is invalid`);
     }
     if (keep(run)) runs.push(run);
   }

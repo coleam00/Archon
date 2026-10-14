@@ -773,7 +773,8 @@ export const attentionOptionsSchema = z
  */
 export const attentionLabelKeySchema = z
   .string()
-  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace");
+  .regex(/^[^=\s]+$/u, "must be non-empty, with no '=' or whitespace")
+  .refine(key => key !== '__proto__', "'__proto__' is not supported as a label key");
 
 /** An attention wait's labels: a flat map of plain strings the engine never interprets. */
 export const attentionLabelsSchema = z.record(attentionLabelKeySchema, z.string());

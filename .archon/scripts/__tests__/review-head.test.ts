@@ -25,6 +25,7 @@ function check(options: ScriptOptions = {}) {
     ...options,
     inputs: {
       INPUTS_SCOPE: PR_URL,
+      INPUTS_SELECTOR: PR_URL,
       INPUTS_PR: JSON.stringify(PR),
       INPUTS_HEAD: HEAD,
       ARCHON_NODE_EXECUTION: execution(HEAD),
@@ -152,10 +153,11 @@ describe('review head boundary', () => {
           const run = check({
             cwd,
             source,
-            forge: view({ head_revision: declaration === 'mismatch' ? 'anotherhead' : HEAD }),
-            gh: { pr: { headRefOid: declaration === 'mismatch' ? 'anotherhead' : HEAD } },
+            forge: view({ head_revision: declaration === 'matching' ? HEAD : 'anotherhead' }),
+            gh: { pr: { headRefOid: declaration === 'matching' ? HEAD : 'anotherhead' } },
             inputs: {
               INPUTS_SCOPE: scope,
+              INPUTS_SELECTOR: scope,
               INPUTS_PR: JSON.stringify(
                 declaration === 'null' ? null : declaration === 'wrong' ? { ...PR, number: 99 } : PR
               ),
@@ -163,7 +165,12 @@ describe('review head boundary', () => {
           });
           expect(run.code).toBe(declaration === 'matching' ? 0 : 1);
           if (declaration === 'mismatch') expect(run.stderr).toContain('anotherhead');
-          else if (declaration !== 'matching') expect(run.stderr).toContain('does not match');
+          else if (declaration !== 'matching') {
+            expect(run.stderr).toContain('does not match');
+            expect(run.stderr).toContain(
+              `archon workflow run archon-review --from 'anotherhead' --input 'scope=${PR_URL}'`
+            );
+          }
           if (source === 'forge') {
             const selector = JSON.parse(run.forgeRequests[0]).selector;
             expect(run.forgeRequests).toHaveLength(1);
@@ -191,7 +198,7 @@ describe('review head boundary', () => {
         source,
         gh: { noOpenPr: true },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-        inputs: { INPUTS_SCOPE: '', INPUTS_PR: 'null' },
+        inputs: { INPUTS_SCOPE: '', INPUTS_SELECTOR: '', INPUTS_PR: 'null' },
       });
       expect(run.code).toBe(0);
       expect(run.stdout).toContain('working diff');
@@ -201,7 +208,7 @@ describe('review head boundary', () => {
   it('refuses an ambiguous repository before trusting the declaration', () => {
     const cwd = gitCheckout({}, track);
     git(cwd, 'remote', 'add', 'fork', 'https://ghe.example.com/fork/repo.git');
-    const run = check({ cwd, inputs: { INPUTS_SCOPE: '42' } });
+    const run = check({ cwd, inputs: { INPUTS_SCOPE: '42', INPUTS_SELECTOR: '42' } });
     expect(run.code).toBe(1);
     expect(run.stderr).toContain('--input scope=<full-PR-URL>');
     expect(run.gh).toEqual([]);
@@ -212,7 +219,7 @@ describe('review head boundary', () => {
     const run = check({
       cwd,
       gh: { noOpenPr: true },
-      inputs: { INPUTS_SCOPE: 'feature', INPUTS_PR: 'null' },
+      inputs: { INPUTS_SCOPE: 'feature', INPUTS_SELECTOR: 'feature', INPUTS_PR: 'null' },
     });
     expect(run.code).toBe(1);
     expect(run.stderr).toContain('no open pull request');
@@ -301,8 +308,20 @@ const REPO = resolve(import.meta.dir, '../../..');
 
 describe('PR review scheduling with the real head check', () => {
   for (const continuation of [false, true]) {
-    for (const scenario of ['matching', 'mismatch', 'null', 'wrong']) {
+    for (const scenario of [
+      'matching',
+      'mismatch',
+      'null',
+      'wrong',
+      'message-pr',
+      'message-pr-no-ambient',
+      'message-pr-ambient-declaration',
+      'message-pr-no-ambient-null',
+    ]) {
       const matching = scenario === 'matching';
+      const override = scenario.startsWith('message-pr');
+      const target = override ? { ...PR, number: 99 } : PR;
+      const selector = override ? PR_URL.replace('/42', '/99') : PR_URL;
       it(`${continuation ? 'continuation' : 'initial'} review ${scenario}`, async () => {
         const cwd = gitCheckout({}, track);
         const head = git(cwd, 'rev-parse', 'HEAD');
@@ -310,7 +329,15 @@ describe('PR review scheduling with the real head check', () => {
         const cli = join(root, 'forge.ts');
         writeFileSync(
           cli,
-          `const argv = process.argv.slice(2);\nif (argv[0] !== 'forge' || argv[1] !== 'pr.view') throw new Error('unexpected operation');\nconsole.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: scenario === 'mismatch' ? 'anotherhead' : head }) }))});\n`
+          `import { readFileSync } from 'node:fs';
+const argv = process.argv.slice(2);
+if (argv[0] !== 'forge' || argv[1] !== 'pr.view') throw new Error('unexpected operation');
+const request = JSON.parse(readFileSync(argv[argv.indexOf('--data-file') + 1], 'utf8'));
+const response = request.selector.kind === 'number' && request.selector.ref.number === ${target.number}
+  ? ${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ number: target.number, url: selector, head_revision: matching ? head : 'anotherhead' }) }))}
+  : ${JSON.stringify(forgeOperation('pr.view', scenario.startsWith('message-pr-no-ambient') ? null : { pr: forgePrRecord({ head_revision: head }) }))};
+console.log(response);
+`
         );
         const priorEnv = {
           ARCHON_HOME: process.env.ARCHON_HOME,
@@ -352,7 +379,15 @@ describe('PR review scheduling with the real head check', () => {
             docs: continuation,
           };
           stubs.scope = {
-            pr: scenario === 'null' ? null : scenario === 'wrong' ? { ...PR, number: 99 } : PR,
+            selector,
+            pr:
+              scenario === 'null' || scenario === 'message-pr-no-ambient-null'
+                ? null
+                : scenario === 'message-pr-ambient-declaration'
+                  ? PR
+                  : scenario === 'wrong'
+                    ? { ...PR, number: 99 }
+                    : target,
             report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
           };
           const result = await dryRunWorkflow({
@@ -360,8 +395,8 @@ describe('PR review scheduling with the real head check', () => {
             cwd: REPO,
             execWorkspace: cwd,
             execCode: true,
-            userMessage: 'Review this PR',
-            inputs: { scope: PR_URL },
+            userMessage: override ? 'Review PR 99 instead' : 'Review this PR',
+            inputs: { scope: override ? '' : PR_URL },
             stubs,
           });
           const states = new Map(result.trace.map(entry => [entry.nodeId, entry.state]));
@@ -383,8 +418,16 @@ describe('PR review scheduling with the real head check', () => {
             ])
               expect(states.get(node)).toBe('skipped');
             expect(result.trace.find(entry => entry.nodeId === 'head-check')?.reason).toContain(
-              scenario === 'mismatch' ? 'anotherhead' : 'does not match'
+              scenario === 'mismatch' ||
+                scenario === 'message-pr' ||
+                scenario === 'message-pr-no-ambient'
+                ? 'anotherhead'
+                : 'does not match'
             );
+            if (override)
+              expect(result.trace.find(entry => entry.nodeId === 'head-check')?.reason).toContain(
+                `archon workflow run archon-review --from 'anotherhead' --input 'scope=${selector}'`
+              );
           }
         } finally {
           for (const [key, value] of Object.entries(priorEnv)) {
@@ -456,6 +499,7 @@ console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ hea
           docs: false,
         };
         stubs['rereview__scope'] = {
+          selector: PR_URL,
           pr: scenario === 'missing declaration' ? null : PR,
           report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
         };

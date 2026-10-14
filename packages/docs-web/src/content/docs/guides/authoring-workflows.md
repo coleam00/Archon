@@ -828,6 +828,8 @@ An attention wait pauses until someone answers it, in the form it declares. Arch
         about: "$plan.output.topic"
 ```
 
+Attention label keys must be non-empty, contain no whitespace or `=`, and cannot be `__proto__`.
+
 | Form | Answer accepted | The next node reads |
 |---|---|---|
 | `message` | free text, which may be empty | `{ text }` |

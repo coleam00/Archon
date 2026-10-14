@@ -20,10 +20,7 @@ import {
 } from '../../workflows/sdlc/.shared/forge';
 import { SIZE_LABEL, TYPE_LABEL } from '../../workflows/sdlc/.shared/labels';
 import type { PrRef } from '../../../packages/forge/src/identity';
-import {
-  forgePrRecordSchema,
-  type ForgePrRecord,
-} from '../../../packages/forge/src/lifecycle';
+import { forgePrRecordSchema, type ForgePrRecord } from '../../../packages/forge/src/lifecycle';
 
 // The pack is standalone and cannot import runtime packages. These assignments
 // check that its consumed projection stays compatible with the owning wire type.
@@ -91,7 +88,7 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     return {
       pr,
       parserAccepts,
-      schemaAccepts: validateStructuredOutput({ pr, report }, schema).valid,
+      schemaAccepts: validateStructuredOutput({ selector: '', pr, report }, schema).valid,
     };
   });
 

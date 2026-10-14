@@ -48,7 +48,7 @@ try {
   if (recorded && (!declared || !samePr(declared, recorded))) {
     throw new Error('the scope declaration does not match the recorded pull request');
   }
-  const pr = resolveReviewPr(scope, forgeSource());
+  const pr = resolveReviewPr(text(process.env.INPUTS_SELECTOR), forgeSource());
   if (pr ? !declared || !samePr(declared, pr) : declared !== undefined) {
     throw new Error(
       'the scope declaration does not match the resolved pull request. No review lenses ran.' +
