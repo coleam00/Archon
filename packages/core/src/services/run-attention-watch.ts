@@ -7,7 +7,13 @@
  */
 import { hostname } from 'node:os';
 import { createLogger } from '@archon/paths';
-import { readExecutionOwner, runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  isApprovalContext,
+  isFanOutBlockReleased,
+  isTerminalRunStatus,
+  readExecutionOwner,
+  runAttention,
+} from '@archon/workflows/schemas/workflow-run';
 import type {
   ExecutionOwnerRecord,
   RunAttention,
@@ -168,7 +174,7 @@ async function resolveFrom(
   if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
     const childRunIds =
       attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
-    let ownerNeeded: RunResolution | undefined;
+    const children: WorkflowRun[] = [];
     for (const childRunId of childRunIds) {
       if (visited.has(childRunId) || visited.size >= MAX_CHAIN_RUNS) {
         return {
@@ -192,6 +198,18 @@ async function resolveFrom(
           ),
         };
       }
+      children.push(child);
+    }
+    // A finished fan-out child's hook stands down until the gate is released, so until
+    // then nothing owns that child.
+    const approval = current.metadata?.approval;
+    const released =
+      attention.kind === 'blocked_on_child' ||
+      (isApprovalContext(approval) &&
+        isFanOutBlockReleased(approval, id => children.find(child => child.id === id)?.status));
+    let ownerNeeded: RunResolution | undefined;
+    for (const child of children) {
+      if (!released && isTerminalRunStatus(child.status)) continue;
       const resolution = await resolveFrom(store, child, [...executionChain, child], visited);
       if (resolution.kind === 'attention') return resolution;
       if (resolution.kind === 'owner_required') ownerNeeded ??= resolution;

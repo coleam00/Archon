@@ -743,6 +743,27 @@ describe('waitForRunAttention', () => {
         expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
         expect(mockWatchRunLiveOwner.mock.calls[0]?.[0]).toBe('c1');
       });
+
+      // A finished child's hook stands down while the gate still waits on a sibling,
+      // so nothing owns that child: it must not be the run the waiter watches.
+      test('a finished child does not need an owner while a sibling is unfinished', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', { status: 'running', parent_run_id: 'parent' });
+        reachableOwners = new Set(['c2']);
+
+        expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+        expect(mockWatchRunLiveOwner.mock.calls.map(call => call[0])).not.toContain('c1');
+      });
+
+      test('the finished child needs an owner once it released the gate', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', { status: 'failed', completed_at: new Date(), parent_run_id: 'parent' });
+        reachableOwners = new Set();
+
+        expect(await wait('parent', { deadlineMs: 50 })).toMatchObject({ kind: 'owner_lost' });
+      });
     });
 
     test('a chain longer than the bound is unreadable, not an assumed state', async () => {
