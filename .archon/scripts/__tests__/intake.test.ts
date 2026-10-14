@@ -15,6 +15,7 @@ import {
   claimItem,
   decideIntake,
   INTAKE_PATHS,
+  type IntakeDecision,
   type IntakeRequest,
   type IssueFacts,
   mirrorLabels,
@@ -282,8 +283,18 @@ describe('pickup', () => {
       expect(fields[key]?.properties.value.enum).toEqual([...ranks]);
   });
 
-  test("the path and trust vocabularies are archon-intake's own enums", () => {
+  test("the decision's fields, path and trust vocabularies are archon-intake's own", () => {
     type Enum = { enum: (string | null)[] };
+    // Typed against IntakeDecision, so a field added to or dropped from it fails to compile.
+    const fields: Record<keyof IntakeDecision, true> = {
+      path: true,
+      trust: true,
+      promoted: true,
+      stage: true,
+      body_digest: true,
+      labels: true,
+      notes: true,
+    };
     const workflow = Bun.YAML.parse(
       readFileSync(join(PACK, 'intake/archon-intake.yaml'), 'utf8')
     ) as {
@@ -292,13 +303,16 @@ describe('pickup', () => {
         output_format?: {
           properties: {
             path: Enum;
-            decision?: { properties: { path: Enum; trust: Enum } };
+            decision?: { properties: { path: Enum; trust: Enum }; required: string[] };
           };
         };
       }[];
     };
     const output = (id: string) => workflow.nodes.find(node => node.id === id)?.output_format;
-    const decision = output('facts')?.properties.decision?.properties;
+    const schema = output('facts')?.properties.decision;
+    const decision = schema?.properties;
+    expect(Object.keys(decision ?? {}).sort()).toEqual(Object.keys(fields).sort());
+    expect([...(schema?.required ?? [])].sort()).toEqual(Object.keys(fields).sort());
     expect(output('facts')?.properties.path.enum).toEqual(['idle', ...INTAKE_PATHS]);
     expect(decision?.path.enum).toEqual([...INTAKE_PATHS]);
     expect(decision?.trust.enum).toEqual([...TRUSTS, null]);
