@@ -1612,6 +1612,11 @@
         "msg": {
           "type": "string"
         },
+        "event": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9]*(?:[._][a-z][a-z0-9]*)*$"
+        },
         "bindings": {
           "type": "object",
           "propertyNames": {

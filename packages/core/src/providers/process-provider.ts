@@ -9,6 +9,7 @@ import {
 import { createLogger } from '@archon/paths';
 import {
   buildProviderSubprocessEnv,
+  providerFailureClassSchema,
   type IAgentProvider,
   type CredentialStatus,
   type ProviderChunk,
@@ -167,8 +168,17 @@ function startProcess(
         {
           onLog(record): void {
             // Plugin text and arbitrary JSON can encode message excerpts or credentials.
-            // Only the validated severity crosses into the host's diagnostic log.
-            providerLog[record.level]({}, 'provider.plugin.log');
+            // Only wire-validated event names and closed failure classes cross this boundary.
+            const failureClass = providerFailureClassSchema.safeParse(record.bindings.failureClass);
+            providerLog[record.level](
+              record.event
+                ? {
+                    event: record.event,
+                    ...(failureClass.success ? { failureClass: failureClass.data } : {}),
+                  }
+                : {},
+              'provider.plugin.log'
+            );
           },
         }
       );

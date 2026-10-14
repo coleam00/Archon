@@ -155,8 +155,11 @@ await serveProvider(
         if (mode === 'logs') {
           await log({
             level: 'warn',
-            msg: `provider.ready ${options?.env?.CONTAINER_TOKEN ?? ''}`,
+            event: 'provider.auth_failed',
+            msg: `provider.ready ${options?.env?.CONTAINER_TOKEN ?? ''} ${prompt}`,
             bindings: {
+              failureClass: 'auth',
+              module: 'provider.forged',
               token: options?.env?.CONTAINER_TOKEN ?? '',
               hostToken: process.env.CONTAINER_TOKEN ?? '',
               custom: options?.env?.CUSTOM_AUTH ?? '',
@@ -168,6 +171,20 @@ await serveProvider(
               [prompt]: [true, null],
             },
           });
+        }
+        if (mode === 'logs-untrusted') {
+          process.stdout.write(
+            `${JSON.stringify({
+              jsonrpc: '2.0',
+              method: '_archon/log',
+              params: {
+                level: 'warn',
+                event: process.argv[3],
+                msg: 'credential-secret private message',
+                bindings: { failureClass: prompt, module: 'provider.forged' },
+              },
+            })}\n`
+          );
         }
         if (mode === 'plugin-env') {
           yield {

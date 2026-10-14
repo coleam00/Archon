@@ -38,6 +38,7 @@ export function installProviderLogSink(log: ProviderLogSink): void {
     void log({
       level,
       msg: record.msg,
+      event: record.msg,
       bindings: {
         ...bindings,
         ...(record.module ? { module: record.module } : {}),

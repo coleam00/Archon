@@ -157,6 +157,7 @@ for (const { descriptor, path, parse, valid, invalid } of providers) {
         Array.from({ length: 2 }, () => ({
           level: 'error',
           msg: 'query_error',
+          event: 'query_error',
           bindings: {
             module: `provider.${descriptor.id === 'pi' ? 'Pi' : descriptor.id === 'claude' ? 'Claude' : 'Codex'}Provider`,
             count: 2,

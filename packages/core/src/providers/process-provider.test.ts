@@ -370,7 +370,9 @@ test('provider logs preserve severity and withhold arbitrary content', async () 
         }
       )
     );
-    expect(warn.mock.calls).toEqual([[{}, 'provider.plugin.log']]);
+    expect(warn.mock.calls).toEqual([
+      [{ event: 'provider.auth_failed', failureClass: 'auth' }, 'provider.plugin.log'],
+    ]);
     expect(info.mock.calls).toEqual([]);
   } finally {
     info.mockRestore();
@@ -507,5 +509,32 @@ test('Claude resume and fork retain per-query cost and model across fresh proces
     expect(invalid.resolvedModel).toBeUndefined();
   } finally {
     await removeTempTree(directory);
+  }
+});
+
+test.each([undefined, 'provider auth failed', 'Provider.AuthFailed', 'a'.repeat(65)])(
+  'provider logs without a valid event (%s) preserve severity only',
+  async event => {
+    const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
+    try {
+      expect(await collect(provider('logs-untrusted', event).sendQuery('auth', tmpdir()))).toEqual(
+        chunks
+      );
+      expect(warn.mock.calls).toEqual([[{}, 'provider.plugin.log']]);
+    } finally {
+      warn.mockRestore();
+    }
+  }
+);
+
+test('provider log failure classes are revalidated against the contract', async () => {
+  const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
+  try {
+    await collect(
+      provider('logs-untrusted', 'provider.auth_failed').sendQuery('credential-secret', tmpdir())
+    );
+    expect(warn.mock.calls).toEqual([[{ event: 'provider.auth_failed' }, 'provider.plugin.log']]);
+  } finally {
+    warn.mockRestore();
   }
 });
