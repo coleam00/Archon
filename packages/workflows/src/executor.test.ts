@@ -13,7 +13,7 @@ import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:te
 import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
-import { dirname, join } from 'path';
+import { delimiter, dirname, join } from 'path';
 
 // --- Mock logger ---
 const mockLogFn = mock(() => {});
@@ -178,6 +178,7 @@ import {
   inspectResumableRun,
   resolveProjectPaths,
   resolveScopeArtifactsDir,
+  resolveWorkflowGithubEnvironment,
 } from './executor';
 import { resolveWorkflow } from './graph-plan';
 import { keepAwake } from './utils/keep-awake';
@@ -3979,7 +3980,10 @@ describe('executeWorkflow', () => {
       });
       const deps: WorkflowDeps = {
         ...makeDeps(store),
-        resolveBotGitHubToken: mock(async () => 'bot-token'),
+        githubApp: {
+          resolveInstallationToken: mock(async () => 'bot-token'),
+          installCliShim: () => '/archon/bin/gh-shim',
+        },
         isPerUserGitHubEnabled: () => true,
         getUserGithubToken: mock(async () => 'user-token'),
         getUserGithubAuthor: mock(async () => ({
@@ -4036,7 +4040,7 @@ describe('executeWorkflow', () => {
       ['https://gitlab.com/acme/demo', 'inherit'],
     ] as const) {
       it(`resolves the App token for ${repositoryUrl} as ${expected}`, async () => {
-        const resolveBotGitHubToken = mock(async () => 'bot-token');
+        const resolveInstallationToken = mock(async () => 'bot-token');
         const deps: WorkflowDeps = {
           ...makeDeps(
             makeStore({
@@ -4049,7 +4053,7 @@ describe('executeWorkflow', () => {
               })),
             })
           ),
-          resolveBotGitHubToken,
+          githubApp: { resolveInstallationToken, installCliShim: () => '/archon/bin/gh-shim' },
         };
 
         const result = await executeWorkflow(
@@ -4067,20 +4071,123 @@ describe('executeWorkflow', () => {
           // A github.com remote without a resolvable owner/repo must not run on
           // whatever GitHub credential the host process happens to hold.
           expect(result.success).toBe(false);
-          expect(resolveBotGitHubToken).not.toHaveBeenCalled();
+          expect(resolveInstallationToken).not.toHaveBeenCalled();
           expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
           return;
         }
         const envVars = mockExecuteDagWorkflow.mock.calls[0]?.[0].config.envVars;
         if (expected === 'token') {
-          expect(resolveBotGitHubToken).toHaveBeenCalledWith('acme', 'demo');
+          expect(resolveInstallationToken).toHaveBeenCalledWith('acme', 'demo');
           expect(envVars).toMatchObject({ GH_TOKEN: 'bot-token', GITHUB_TOKEN: 'bot-token' });
         } else {
-          expect(resolveBotGitHubToken).not.toHaveBeenCalled();
+          expect(resolveInstallationToken).not.toHaveBeenCalled();
           expect(envVars).not.toHaveProperty('GH_TOKEN');
         }
       });
     }
+
+    describe('gh shim activation', () => {
+      let previousPort: string | undefined;
+      beforeEach(() => {
+        previousPort = process.env.ARCHON_PORT;
+      });
+      afterEach(() => {
+        if (previousPort === undefined) delete process.env.ARCHON_PORT;
+        else process.env.ARCHON_PORT = previousPort;
+      });
+
+      function githubDeps(perUser?: { token: string | undefined }): Parameters<
+        typeof resolveWorkflowGithubEnvironment
+      >[0] & {
+        githubApp: { installCliShim: ReturnType<typeof mock> };
+      } {
+        return {
+          store: {
+            getCodebase: mock(async () => ({
+              id: 'codebase-1',
+              name: 'demo',
+              repository_url: 'https://github.com/acme/demo',
+              default_cwd: '/tmp',
+              kind: 'repo' as const,
+            })),
+          },
+          githubApp: {
+            resolveInstallationToken: mock(async () => 'ghs_dispatch'),
+            installCliShim: mock(() => '/archon/bin/gh-shim'),
+          },
+          isPerUserGitHubEnabled: () => perUser !== undefined,
+          getUserGithubToken: mock(async () => perUser?.token),
+        };
+      }
+
+      it.skipIf(process.platform === 'win32')(
+        'puts the shim first on PATH when ARCHON_PORT names the App server',
+        async () => {
+          process.env.ARCHON_PORT = '3090';
+          const deps = githubDeps();
+          const environment = await resolveWorkflowGithubEnvironment(
+            deps,
+            'codebase-1',
+            undefined,
+            {
+              envVars: { PATH: '/run/bin' },
+            }
+          );
+          expect(environment.envVars).toEqual({
+            GH_TOKEN: 'ghs_dispatch',
+            GITHUB_TOKEN: 'ghs_dispatch',
+            PATH: `/archon/bin/gh-shim${delimiter}/run/bin`,
+            ARCHON_PORT: '3090',
+            ARCHON_GITHUB_APP_REPO: 'acme/demo',
+          });
+          expect(environment.protectedEnvKeys).toEqual(['GH_TOKEN', 'GITHUB_TOKEN']);
+        }
+      );
+
+      it.skipIf(process.platform === 'win32')(
+        'keeps the dispatch token and warns once without ARCHON_PORT',
+        async () => {
+          delete process.env.ARCHON_PORT;
+          const deps = githubDeps();
+          mockLogFn.mockClear();
+          const environment = await resolveWorkflowGithubEnvironment(
+            deps,
+            'codebase-1',
+            undefined,
+            {}
+          );
+          expect(environment.envVars).toEqual({
+            GH_TOKEN: 'ghs_dispatch',
+            GITHUB_TOKEN: 'ghs_dispatch',
+          });
+          expect(deps.githubApp.installCliShim).not.toHaveBeenCalled();
+          const warnings = (mockLogFn.mock.calls as unknown[][]).filter(
+            call => call[1] === 'workflow.gh_token_refresh_unavailable'
+          );
+          expect(warnings).toEqual([
+            [
+              { repo: 'acme/demo', reason: 'archon_port_unset' },
+              'workflow.gh_token_refresh_unavailable',
+            ],
+          ]);
+        }
+      );
+
+      for (const [name, token, expected] of [
+        ['a per-user token', 'gho_user', 'gho_user'],
+        ['the per-user scrub', undefined, ''],
+      ] as const) {
+        it(`leaves ${name} unrefreshed`, async () => {
+          process.env.ARCHON_PORT = '3090';
+          const deps = githubDeps({ token });
+          const environment = await resolveWorkflowGithubEnvironment(deps, 'codebase-1', 'u-1', {});
+          expect(environment.envVars?.GH_TOKEN).toBe(expected);
+          expect(environment.envVars).not.toHaveProperty('PATH');
+          expect(environment.envVars).not.toHaveProperty('ARCHON_GITHUB_APP_REPO');
+          expect(deps.githubApp.installCliShim).not.toHaveBeenCalled();
+        });
+      }
+    });
 
     it('removes stale credential files before a credential refresh failure', async () => {
       const artifactsDir = wsPath('_cwd', 'tmp', 'artifacts', 'runs', 'run-123');

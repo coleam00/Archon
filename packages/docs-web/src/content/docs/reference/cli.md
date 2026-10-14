@@ -1596,10 +1596,13 @@ When using `--branch`, workflows run inside the worktree directory.
 > **Commands and workflows are loaded from the working directory at runtime.** The CLI reads directly from disk, so it picks up uncommitted changes immediately. This is different from the server (Telegram/Slack/GitHub), which reads from the workspace clone at `~/.archon/workspaces/` -- that clone only syncs from the remote before worktree creation, so changes must be pushed to take effect there.
 
 Legacy registrations with a relative stored project path fail with a project-named
-error. Repair them in Archon chat with
+error. Attempt repair in Archon chat with
 `/register-project "project-name" /absolute/path/to/project`; changing the CLI's
-working directory does not repair the stored path. Re-registration preserves the
-existing project's identity and history.
+working directory does not repair the stored path. Repair refuses a replacement
+path or kind that would move managed storage or worktrees. A successful repair
+preserves the existing project's identity and history. See
+[Stored project path is relative](/reference/troubleshooting/#stored-project-path-is-relative)
+for recovery details.
 
 ## Environment
 

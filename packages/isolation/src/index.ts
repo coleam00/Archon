@@ -80,7 +80,7 @@ export { IsolationResolver } from './resolver';
 export type { IsolationResolverDeps } from './resolver';
 
 // --- Provider ---
-export { WorktreeProvider } from './providers/worktree';
+export { WorktreeProvider, resolveRepoLocalOverride } from './providers/worktree';
 
 // --- PR state lookup ---
 export { getPrState } from './pr-state';
