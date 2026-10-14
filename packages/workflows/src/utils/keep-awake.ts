@@ -12,7 +12,7 @@
  * Best-effort by design: on non-Windows, or if `bun:ffi` / kernel32 is
  * unavailable, every method is a no-op, and the native calls themselves are
  * try/catch-guarded. A keep-awake failure must NEVER block or fail a workflow
- * run (intentional, documented fallback — the CLAUDE.md fail-fast rule's
+ * run (intentional, documented fallback — the AGENTS.md "Fail clearly" rule's
  * sanctioned exception).
  *
  * The screen is allowed to turn off — we request `ES_SYSTEM_REQUIRED` only, not

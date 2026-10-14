@@ -58,8 +58,8 @@ List any active worktrees:
 Provide a concise summary (under 300 words) covering:
 
 ### Project Overview
-- Archon: Remote agentic coding platform (Slack, Telegram, GitHub, Discord, Web)
-- Bun + TypeScript monorepo with 8 packages: paths, git, isolation, workflows, core, adapters, server, web
+- Archon: Self-hostable, governed agentic automation engine
+- Bun + TypeScript monorepo; use `packages/` and the root `package.json` for the current workspace structure
 - SQLite (default, zero-setup) or PostgreSQL (optional via DATABASE_URL)
 
 ### Architecture

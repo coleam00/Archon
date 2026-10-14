@@ -19,18 +19,20 @@ Wrong docs are worse than missing docs. Bloated docs are worse than concise docs
 
 ## Documentation Scope
 
-**UPDATE these files**:
+**Review these documentation surfaces and report required changes**:
 - `AGENTS.md` - AI assistant instructions and project rules
 - `README.md` - User-facing getting started guide
 - `docs/*.md` - Architecture, configuration, guides
 - `CONTRIBUTING.md` - Contributor guidelines
 - `.env.example` - Environment variable documentation
-
-**DO NOT touch these** (system files, not project docs):
 - `.claude/agents/*.md` - Agent definitions
-- `.claude/commands/*.md` - Command templates
+- `.claude/commands/**/*.md` - Command templates
 - `.claude/skills/**/*.md` - Skill files
-- Plugin and workflow files
+- Documentation, prompts, and instructions in plugin and workflow files
+
+Agents read these instructions at run time, so flag text that a change makes false,
+including shipped skills. Keep this review advisory: report corrections without
+editing files, and leave executable plugin and workflow behavior to code review.
 
 ## Update Process
 
