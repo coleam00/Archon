@@ -41,11 +41,17 @@ PG_PID=""
 HOST_PID=""
 
 log() { echo "$*" | tee -a "$LOG"; }
-record_pid() { echo "$1 $2" >>"$PIDS"; }
+# A PID is stopped only while it still names the process recorded: its start time is
+# captured at record time, so a short-lived process whose PID was reused is never signalled.
+record_pid() {
+  echo "$1 $2" >>"$PIDS"
+  ps -o lstart= -p "$1" >"$WORK/pidstart-$1" 2>/dev/null
+}
 
 stop_pid() {
   local pid=$1
   kill -0 "$pid" 2>/dev/null || return 0
+  [ -s "$WORK/pidstart-$pid" ] && [ "$(ps -o lstart= -p "$pid" 2>/dev/null)" = "$(cat "$WORK/pidstart-$pid")" ] || return 0
   kill "$pid" 2>/dev/null
   for _ in $(seq 1 40); do
     kill -0 "$pid" 2>/dev/null || return 0
@@ -72,7 +78,7 @@ count_events() { # run event [step]
 }
 
 dump_events() {
-  sql "select created_at, event_type, coalesce(step_name, ''), substr(data, 1, 300) from remote_agent_workflow_events where workflow_run_id = '$1' order by created_at, id" \
+  sql "select created_at, event_type, coalesce(step_name, ''), substr(cast(data as text), 1, 300) from remote_agent_workflow_events where workflow_run_id = '$1' order by created_at, id" \
     >"$OUT/events-$1.txt" 2>&1
 }
 
@@ -395,6 +401,7 @@ start_host c58
 L=$(start_detached spike-loop)
 prev=""
 stale_verdict="not reached"
+OCC_ROUND1=none
 rounds_answered=0
 for round in 1 2 3; do
   occ=$(wait_for_next_pause "$L" "$prev")
