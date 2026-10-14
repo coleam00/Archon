@@ -135,6 +135,12 @@ function createMockStore(): IWorkflowStore {
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
     }),
+    labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
+      throw new Error('Unexpected labelAttentionWait');
+    }),
+    listRunsNeedingAttention: mock<IWorkflowStore['listRunsNeedingAttention']>(() => {
+      throw new Error('Unexpected listRunsNeedingAttention');
+    }),
     signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
       throw new Error('Unexpected signalWorkflowWait');
     }),

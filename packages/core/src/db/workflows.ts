@@ -56,7 +56,7 @@ import type {
   ScheduledWorkflowResume,
 } from '@archon/workflows/schemas/workflow-run';
 import {
-  runAttention,
+  queuedRunAttention,
   isScheduledWorkflowResume,
   workflowRunStatusSchema,
   scheduledWorkflowResumeSchema,
@@ -79,9 +79,12 @@ import type {
   WorkflowWaitCompletion,
   WorkflowWaitPause,
   NodeStateEventInput,
+  AttentionLabelWrite,
 } from '@archon/workflows/store';
 import {
   FAN_OUT_CANCEL_REASONS,
+  attentionLabeledEvent,
+  labeledAttentionWait,
   waitCompletionEvents,
   waitAnsweredEvent,
   WorkflowRunPauseConflictError,
@@ -2138,6 +2141,48 @@ export async function answerAttentionWait(
   }
 }
 
+/** Atomically apply one label write to an open attention wait (see `IWorkflowStore.labelAttentionWait`). */
+export async function labelAttentionWait(
+  id: string,
+  write: AttentionLabelWrite
+): Promise<{ labeled: true; wait: WorkflowAttentionWaitContext } | { labeled: false }> {
+  const writeWait =
+    getDatabaseType() === 'postgresql'
+      ? "jsonb_set(metadata, '{wait}', $2::jsonb, true)"
+      : "json_set(metadata, '$.wait', json($2))";
+  try {
+    return await getDatabase().withTransaction(async query => {
+      // Take SQLite's write lock before the read, as `setToolCallAttention` does, so the
+      // merge acts on the row it read.
+      if (getDatabaseType() === 'sqlite') {
+        await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
+      }
+      const result = await query<{ status: WorkflowRunStatus; metadata: unknown }>(
+        `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        [id]
+      );
+      const row = result.rows[0];
+      const labeled =
+        row &&
+        labeledAttentionWait(
+          { status: row.status, metadata: normalizeMetadata(row.metadata) },
+          write
+        );
+      if (!labeled) return { labeled: false } as const;
+      await query(`UPDATE remote_agent_workflow_runs SET metadata = ${writeWait} WHERE id = $1`, [
+        id,
+        JSON.stringify(labeled),
+      ]);
+      await insertWorkflowEvent(query, attentionLabeledEvent(id, labeled, write));
+      return { labeled: true, wait: labeled } as const;
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_attention_label_failed');
+    throw new Error(`Failed to label attention wait: ${err.message}`);
+  }
+}
+
 /** Atomically record the signal for one exact paused event wait. */
 export async function signalWorkflowWait(
   id: string,
@@ -2494,14 +2539,7 @@ export async function listRunsNeedingAttention(
       getLog().error({ workflowRunId: row.id }, 'attention_run_normalization_failed');
       continue;
     }
-    const attention = runAttention(run);
-    if (
-      attention?.kind === 'awaiting_response' ||
-      attention?.kind === 'attention' ||
-      attention?.kind === 'unreadable'
-    ) {
-      runs.push(run);
-    }
+    if (queuedRunAttention(run) !== undefined) runs.push(run);
   }
   return runs;
 }

@@ -31,6 +31,17 @@ import {
 import { workflowNodeSessionSchema } from './schemas/workflow-node-session';
 import { workflowRunNodeSessionSchema } from './schemas/workflow-run-node-session';
 import { terminalRecordSchema } from './schemas/terminal-record';
+import { join } from 'node:path';
+import { getArchonWorkspacesPath, projectKeyForCodebase } from '@archon/paths/archon-paths';
+import {
+  countAttentionQueue,
+  listAttentionQueue,
+  readAttentionQueueItem,
+  selectAttentionQueue,
+  type AttentionQueueItem,
+  type AttentionQueueSource,
+  type ProjectRef,
+} from './attention-queue';
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
@@ -1147,6 +1158,250 @@ export function describeWorkflowStoreConformance(
       expect((await store.resumeWorkflowRun(run.id, cursor)).status).toBe('running');
       expect(await store.answerAttentionWait(run.id, answeredAttention('use-dev'))).toEqual({
         answered: false,
+      });
+    });
+    test('a label write merges, bumps the revision with its audit row, and refuses another pause', async () => {
+      const run = await running(store);
+      await store.pauseWorkflowRunForWait(
+        run.id,
+        { ...attentionWait, labels: { ci: 'other', keep: 'x' } },
+        { kind: 'started', stepName: 'ask' }
+      );
+      const write = { pauseId: 'ask-1', set: {}, unset: [], via: 'cli' };
+      expect(
+        await store.labelAttentionWait(run.id, { ...write, pauseId: 'stale', set: { a: '1' } })
+      ).toEqual({ labeled: false });
+
+      const result = await store.labelAttentionWait(run.id, {
+        ...write,
+        set: { ci: 'pr', urgency: 'high' },
+        unset: ['keep'],
+      });
+      expect(result).toMatchObject({
+        labeled: true,
+        wait: { labels: { ci: 'pr', urgency: 'high' }, revision: 2 },
+      });
+      expect((await store.getWorkflowRun(run.id))?.metadata.wait).toMatchObject({
+        pauseId: 'ask-1',
+        labels: { ci: 'pr', urgency: 'high' },
+        revision: 2,
+      });
+      const audit = (await store.listWorkflowEvents(run.id)).filter(
+        event => event.event_type === 'attention_labeled'
+      );
+      expect(audit).toHaveLength(1);
+      expect(audit[0]?.step_name).toBe('ask');
+      expect(audit[0]?.data).toEqual({
+        via: 'cli',
+        occurrence: 'ask-1',
+        set: { ci: 'pr', urgency: 'high' },
+        unset: ['keep'],
+        revision: 2,
+      });
+
+      // Concurrent writes serialize: none is lost, and each commits its own revision.
+      const results = await eight(index =>
+        store.labelAttentionWait(run.id, { ...write, set: { [`k${String(index)}`]: 'v' } })
+      );
+      expect(results.every(written => written.labeled)).toBe(true);
+      const stored = (await store.getWorkflowRun(run.id))?.metadata.wait;
+      expect(stored).toMatchObject({ revision: 10 });
+      expect(Object.keys((stored as { labels: object }).labels)).toHaveLength(10);
+      const revisions = (await store.listWorkflowEvents(run.id))
+        .filter(event => event.event_type === 'attention_labeled')
+        .map(event => event.data.revision);
+      expect(new Set(revisions).size).toBe(9);
+
+      await store.answerAttentionWait(run.id, answeredAttention('use-main'));
+      expect(await store.labelAttentionWait(run.id, { ...write, set: { late: 'yes' } })).toEqual({
+        labeled: false,
+      });
+    });
+    test('the attention queue lists, scopes, filters, sorts, counts and reads one item', async () => {
+      const codebase = await store.getCodebase(CONFORMANCE_CODEBASE_ID);
+      expect(codebase).not.toBeNull();
+      const registered: ProjectRef = {
+        key: projectKeyForCodebase(codebase, codebase?.default_cwd ?? ''),
+        codebaseId: CONFORMANCE_CODEBASE_ID,
+        name: 'conformance',
+      };
+      const scratchRoot = join(getArchonWorkspacesPath(), '_cwd', 'scratch');
+      const pauseAttention = async (
+        minute: number,
+        labels: Record<string, string>,
+        input: Partial<Parameters<IWorkflowStore['createWorkflowRun']>[0]> = {
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+        },
+        outputRoot?: string
+      ): Promise<WorkflowRun> => {
+        const run = await running(store, input);
+        if (outputRoot !== undefined)
+          await store.updateWorkflowRun(run.id, { output_root: outputRoot });
+        await store.pauseWorkflowRunForWait(
+          run.id,
+          {
+            ...attentionWait,
+            pauseId: `ask-${run.id}`,
+            waitingSince: `2026-01-01T00:0${String(minute)}:00.000Z`,
+            labels,
+          },
+          { kind: 'started', stepName: 'ask' }
+        );
+        return run;
+      };
+      const a = await pauseAttention(2, { ci: 'other', team: 'web' });
+      // Paused before its codebase was renamed: its frozen root keeps the old key.
+      const b = await pauseAttention(
+        1,
+        { ci: 'pr' },
+        { codebase_id: CONFORMANCE_CODEBASE_ID },
+        join(getArchonWorkspacesPath(), '_cwd', 'old-name')
+      );
+      const c = await pauseAttention(3, { ci: 'other' }, {}, scratchRoot);
+      const gate = await running(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
+      await store.pauseWorkflowRun(gate.id, approval);
+      const parent = await running(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
+      const child = await pauseAttention(
+        4,
+        { ci: 'other', team: 'api' },
+        {
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+          parent_run_id: parent.id,
+          metadata: { parent_node_id: 'each', child_index: 2 },
+        }
+      );
+      await store.pauseWorkflowRun(parent.id, {
+        nodeId: 'each',
+        message: 'Waiting on sub-runs',
+        type: 'fan_out',
+        childRunIds: [child.id],
+        unspawnedItems: 0,
+      });
+      const live = await running(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
+      const timed = await running(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
+      await store.pauseWorkflowRunForWait(timed.id, wait, { kind: 'started', stepName: 'wait' });
+      const answered = await pauseAttention(5, {});
+      await store.answerAttentionWait(answered.id, {
+        ...answeredAttention('use-main'),
+        pauseId: `ask-${answered.id}`,
+      });
+
+      const source: AttentionQueueSource = {
+        store,
+        branchOf: async run => (run.id === a.id ? 'feat/a' : null),
+      };
+      const items = await listAttentionQueue(source);
+      const ids = (selected: readonly AttentionQueueItem[]): string[] =>
+        selected.map(item => item.runId);
+      const select = (
+        query: Partial<Parameters<typeof selectAttentionQueue>[1]>
+      ): AttentionQueueItem[] =>
+        selectAttentionQueue(items, {
+          scope: { kind: 'all' },
+          labels: {},
+          order: { by: 'age' },
+          ...query,
+        });
+
+      expect(ids(select({}))).toEqual([b.id, a.id, c.id, child.id, gate.id]);
+      expect(ids(select({ scope: { kind: 'project', project: registered } }))).toEqual([
+        b.id,
+        a.id,
+        child.id,
+        gate.id,
+      ]);
+      const scratch: ProjectRef = { key: '_cwd/scratch', codebaseId: null, name: 'scratch' };
+      expect(ids(select({ scope: { kind: 'project', project: scratch } }))).toEqual([c.id]);
+      expect(ids(select({ labels: { ci: 'other' } }))).toEqual([a.id, c.id, child.id]);
+      expect(ids(select({ labels: { ci: 'other', team: 'web' } }))).toEqual([a.id]);
+      expect(ids(select({ order: { by: 'label', key: 'team' } }))).toEqual([
+        child.id,
+        a.id,
+        b.id,
+        c.id,
+        gate.id,
+      ]);
+
+      const byId = new Map(items.map(item => [item.runId, item]));
+      expect(byId.get(a.id)).toMatchObject({
+        kind: 'attention',
+        workflow: 'conformance',
+        project: registered,
+        fanOut: null,
+        revision: 1,
+        labels: { ci: 'other', team: 'web' },
+        pausedAt: '2026-01-01T00:02:00.000Z',
+        node: 'ask',
+        occurrence: `ask-${a.id}`,
+        message: 'Which base?',
+        form: 'select',
+        options: [{ id: 'use-main' }, { id: 'use-dev' }],
+        context: { branch: 'feat/a' },
+      });
+      expect(byId.get(a.id)?.context.transcript).toEndWith(`${a.id}.jsonl`);
+      expect(byId.get(b.id)?.project).toEqual({
+        key: '_cwd/old-name',
+        codebaseId: CONFORMANCE_CODEBASE_ID,
+        name: 'conformance',
+      });
+      expect(byId.get(c.id)?.project).toEqual(scratch);
+      expect(byId.get(child.id)?.fanOut).toEqual({
+        parentRunId: parent.id,
+        nodeId: 'each',
+        index: 2,
+      });
+      expect(byId.get(gate.id)).toMatchObject({
+        kind: 'awaiting_response',
+        node: 'review',
+        occurrence: 'first',
+        pausedAt: null,
+        labels: {},
+        revision: 1,
+      });
+
+      expect(
+        countAttentionQueue(items, {
+          scope: { kind: 'all' },
+          labels: {},
+          countBy: { by: 'project' },
+        })
+      ).toEqual({
+        by: 'project',
+        counts: [
+          { project: expect.objectContaining({ codebaseId: CONFORMANCE_CODEBASE_ID }), count: 4 },
+          { project: scratch, count: 1 },
+        ],
+      });
+      expect(
+        countAttentionQueue(items, {
+          scope: { kind: 'all' },
+          labels: {},
+          countBy: { by: 'label', key: 'ci' },
+        })
+      ).toEqual({
+        by: 'label',
+        key: 'ci',
+        counts: [
+          { value: 'other', count: 3 },
+          { value: null, count: 1 },
+          { value: 'pr', count: 1 },
+        ],
+      });
+
+      expect(await readAttentionQueueItem(source, a.id)).toEqual(byId.get(a.id));
+      expect(await readAttentionQueueItem(source, parent.id)).toEqual(byId.get(child.id));
+      expect(await readAttentionQueueItem(source, live.id)).toBeNull();
+      expect(await readAttentionQueueItem(source, crypto.randomUUID())).toBeUndefined();
+
+      await store.labelAttentionWait(a.id, {
+        pauseId: `ask-${a.id}`,
+        set: { class: 'ci-other' },
+        unset: [],
+        via: 'cli',
+      });
+      expect(await readAttentionQueueItem(source, a.id)).toMatchObject({
+        revision: 2,
+        labels: { ci: 'other', team: 'web', class: 'ci-other' },
       });
     });
     test('a pause is due once answered exactly when continuablePause says the host continues it', async () => {

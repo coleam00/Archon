@@ -9878,6 +9878,40 @@ nodes:
   });
 });
 
+describe('attention wait labels', () => {
+  const parseLabels = (labels: string, dependsOn = '[plan]'): ParseResult =>
+    parseWorkflow(
+      `name: labeled
+description: Labels on an attention wait
+nodes:
+  - id: plan
+    bash: echo '{}'
+  - id: other
+    bash: echo '{}'
+  - id: ask
+    depends_on: ${dependsOn}
+    wait:
+      attention: CI is red. Retry?
+      labels: ${labels}
+`,
+      'labeled.yaml'
+    );
+
+  it('loads literal labels and labels that reference an upstream output', () => {
+    expect(parseLabels('{ ci: "$plan.output.cause", area: delivery }').error).toBeNull();
+  });
+
+  it('rejects a label key a CLI filter could not name', () => {
+    expect(parseLabels('{ "ci=x": other }').error).not.toBeNull();
+  });
+
+  it('rejects a label that references a node the wait does not depend on', () => {
+    expect(parseLabels('{ ci: "$other.output.cause" }').error?.error).toContain(
+      "field 'wait.labels.ci' references '$other.output', which is not an upstream dependency"
+    );
+  });
+});
+
 describe('attention wait options from an upstream output_format (#4038)', () => {
   function parseWithOptionsItems(items: Record<string, unknown>): ParseResult {
     const outputFormat = {

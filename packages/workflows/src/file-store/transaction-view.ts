@@ -12,6 +12,8 @@ import {
   FAN_OUT_CANCEL_REASONS,
   resumeCursorMatches,
   waitAnsweredEvent,
+  labeledAttentionWait,
+  attentionLabeledEvent,
 } from '../store';
 import {
   answeredPauseContinuation,
@@ -21,6 +23,7 @@ import {
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
+  queuedRunAttention,
   workflowWaitStepName,
   workflowWaitContextSchema,
   scheduledWorkflowResumeSchema,
@@ -234,6 +237,14 @@ export function createTransactionView(
       run.metadata.wait = stored;
       record(waitAnsweredEvent(id, stored));
       return { answered: true };
+    },
+    labelAttentionWait: async (id, write) => {
+      const run = runs.get(id);
+      const labeled = run && labeledAttentionWait(run, write);
+      if (!run || !labeled) return { labeled: false };
+      run.metadata.wait = labeled;
+      record(attentionLabeledEvent(id, labeled, write));
+      return { labeled: true, wait: structuredClone(labeled) };
     },
     signalWorkflowWait: async (id, expected, payload) => {
       const run = runs.get(id);
@@ -522,6 +533,10 @@ export function createTransactionView(
       ),
     findAdoptingRuns: async id =>
       structuredClone(newest([...runs.values()].filter(run => run.adopted_from_run_id === id))),
+    listRunsNeedingAttention: async () =>
+      structuredClone(
+        newest([...runs.values()].filter(run => queuedRunAttention(run) !== undefined))
+      ),
     findOpenWorkRuns: async options =>
       structuredClone(
         newest(
