@@ -407,7 +407,10 @@ when it ends. The end event carries the hook's name, the event that fired it
 exit code when there is one. Like other provider events, they are saved with the
 node, streamed live, served by `GET /api/workflows/runs/{runId}/provider-events`,
 and written by `archon workflow logs`, whose `--format text` view prints only
-failed and cancelled hooks. The console's run view does not display them.
+failed and cancelled hooks. The console's run stream shows each hook event beside
+tool calls, with its name, triggering event, status, and exit code when present.
+Hook events remain visible when tool calls or system messages are hidden, and
+follow the selected node filter.
 
 YAML `hooks:` record no `hook` events. They are in-process SDK callbacks, and the
 Claude Agent SDK emits lifecycle events only for hooks it executes itself.
