@@ -1534,11 +1534,13 @@ run, it refuses the write (exit `5`) instead of writing to another project. Oper
 
 An AI node's agent can also write state itself, by running `archon state` from its shell.
 On Claude, Codex, Pi and Copilot the agent's shell receives the same `WORKFLOW_ID` and
-`ARCHON_NODE_EXECUTION`, plus `ARCHON_CLI_COMMAND` on the host, so the write records the
-run and the AI node's path. Configured project env cannot override these keys. OpenCode
-runs every node in one shared server that receives no per-node environment, so an OpenCode
-agent's write is recorded as a CLI write from outside any run; commit through a script node
-when the run must be recorded. Any process that sets a run's `WORKFLOW_ID` and matching
+`ARCHON_NODE_EXECUTION`, and `ARCHON_CLI_COMMAND` on the host (empty in a container run),
+so the write records the run and the AI node's path. Configured project env cannot override
+these keys. OpenCode runs every node in one shared server that receives no per-node
+environment: an OpenCode agent's shell carries whatever identity the process hosting that
+server had. Its write is recorded as a CLI write from outside any run when Archon was started
+outside a run, and as the launching node when the run was started from another run's node. Commit
+through a script node when the run must be recorded. Any process that sets a run's `WORKFLOW_ID` and matching
 `ARCHON_NODE_EXECUTION` is recorded as that run: the writer is provenance, not access control.
 
 The ledger prevents lost state updates; it does not make an external review/comment and

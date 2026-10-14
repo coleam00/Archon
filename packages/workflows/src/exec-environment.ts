@@ -74,8 +74,9 @@ function nodeExecutionEnvValue(execution: NodeExecutionIdentity): string {
 /**
  * The run identity an AI node's provider subprocess carries, so an `archon state`
  * write from the agent's shell records this run and node (#4059). Spread after the
- * configured project env so none of these keys can be shadowed by it. The CLI command is
- * passed only for a host execution; a container does not have the host executable.
+ * configured project env so none of these keys can be shadowed by it. `ARCHON_CLI_COMMAND`
+ * is always owned here, empty when the host has none to give (a container does not have the
+ * host executable), so a project-env value never stands in for it.
  */
 export function buildAiNodeEnvironment(
   execution: NodeExecutionIdentity,
@@ -84,7 +85,7 @@ export function buildAiNodeEnvironment(
   return {
     WORKFLOW_ID: execution.runId,
     ARCHON_NODE_EXECUTION: nodeExecutionEnvValue(execution),
-    ...(cliCommand ? { ARCHON_CLI_COMMAND: cliCommand } : {}),
+    ARCHON_CLI_COMMAND: cliCommand ?? '',
   };
 }
 
