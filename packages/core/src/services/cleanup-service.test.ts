@@ -3456,6 +3456,31 @@ describe('failed-run lock release', () => {
     }
   );
 
+  test.each([
+    ['its PR is open', prAt('OPEN'), 'PR is open (active review)'],
+    [
+      'its PR lookup failed',
+      { state: 'UNAVAILABLE' } as const,
+      'PR state lookup failed — merge state unverifiable',
+    ],
+  ] as const)(
+    'the scheduled sweep keeps a stale failed run whose worktree and branch are gone while %s',
+    async (_shape, pr, reason) => {
+      mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
+      mockWorktreeExists.mockResolvedValue(false);
+      mockLocalBranchExists.mockResolvedValue(false);
+      mockGetPrState.mockResolvedValue(pr);
+      mockGetLiveRunOwningEnv.mockResolvedValue(FAILED_RUN);
+
+      const report = await runScheduledCleanup();
+
+      expect(report.skipped).toEqual([{ id: 'env-stale-failed', reason }]);
+      expect(report.removed).toEqual([]);
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+    }
+  );
+
   test('the scheduled sweep keeps a failed run whose worktree is gone while inside the window', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([staleEnv()]);
     mockWorktreeExists.mockResolvedValue(false);
