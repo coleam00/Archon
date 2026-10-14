@@ -775,6 +775,20 @@ describe('waitForRunAttention', () => {
 
         expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
       });
+
+      test('once released, an unreachable child on another host keeps the parent unknown', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', {
+          status: 'completed',
+          completed_at: new Date(),
+          parent_run_id: 'parent',
+          metadata: foreignOwner,
+        });
+        reachableOwners = new Set();
+
+        expect(await wait('parent', { deadlineMs: 50 })).toMatchObject({ kind: 'deadline' });
+      });
     });
 
     test('a chain longer than the bound is unreadable, not an assumed state', async () => {

@@ -218,12 +218,14 @@ async function resolveFrom(
     const [first] = ownerNeeded;
     if (!first) return { kind: 'ownerless' };
     // Once released, whichever child finished last continues the parent and the rows do
-    // not record which one that is, so any of their owners proves the parent owned.
+    // not record which one that is, so any of their owners proves the parent owned, and
+    // the parent is proven lost only when every recorded owner is checkable from here.
     if (!released || ownerNeeded.length === 1) return first;
     return {
       ...first,
       ownerCandidateIds: [...new Set(ownerNeeded.flatMap(r => r.ownerCandidateIds))],
-      recordedOwner: ownerNeeded.find(r => r.recordedOwner)?.recordedOwner,
+      recordedOwner: (ownerNeeded.find(r => !isOwnerEndpointLocal(r.recordedOwner)) ?? first)
+        .recordedOwner,
     };
   }
 
