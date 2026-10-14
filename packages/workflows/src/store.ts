@@ -3,9 +3,11 @@ import type { IStateDocumentStore } from './state-document-store';
 import type { IResourceStartStore } from './resource-start-store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
-  answeredGateContinuation,
+  answeredPauseContinuation,
+  workflowWaitStepName,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
+  type AttentionAnswer,
   type ExpectedApprovalGate,
 } from './schemas/workflow-run';
 import type { ResourceStartDisposition } from './schemas/resource-start';
@@ -89,6 +91,8 @@ export interface WorkflowWaitCompletion {
   execution?: NodeExecutionRecord;
   stepName: string;
   result: WorkflowWaitResult;
+  /** An attention wait's answer: the node's output in place of `result`. */
+  answer?: AttentionAnswer;
 }
 
 export type WorkflowWaitPause = { kind: 'started'; stepName: string } | { kind: 'continued' };
@@ -97,12 +101,13 @@ export type WorkflowWaitPause = { kind: 'started'; stepName: string } | { kind: 
 export type WorkflowResumeCursor =
   | { kind: 'wait'; nodeId: string; resumeAt: string }
   | { kind: 'quota'; attempt: number; resumeAt: string }
-  | { kind: 'gate'; nodeId: string; pauseId: string };
+  /** An answered gate or attention wait (`answeredPauseContinuation`). */
+  | { kind: 'answered'; nodeId: string; pauseId: string };
 
 /**
  * True when `run` is still at the exact occurrence `cursor` names. Every store's resume
  * claim and continuation deferral judge this one way, so a host that read an older wait,
- * schedule or gate answer changes nothing.
+ * schedule or answer changes nothing.
  */
 export function resumeCursorMatches(
   run: Pick<WorkflowRun, 'status' | 'metadata'>,
@@ -123,9 +128,9 @@ export function resumeCursorMatches(
         scheduled.resumeAt === cursor.resumeAt
       );
     }
-    case 'gate': {
-      const gate = answeredGateContinuation(run);
-      return gate?.nodeId === cursor.nodeId && gate.pauseId === cursor.pauseId;
+    case 'answered': {
+      const answered = answeredPauseContinuation(run);
+      return answered?.nodeId === cursor.nodeId && answered.pauseId === cursor.pauseId;
     }
   }
 }
@@ -218,6 +223,9 @@ export const WORKFLOW_EVENT_TYPES = [
   'approval_received',
   'wait_started',
   'wait_signaled',
+  // An attention wait's answer: `data` carries the surface (`via`), the occurrence it
+  // answered and the answer itself; the row's timestamp is when.
+  'wait_answered',
   'wait_completed',
   'wait_expired',
   'quota_resume_scheduled',
@@ -300,6 +308,22 @@ export type ObservabilityEventInput = WorkflowEventInput<
 >;
 
 /**
+ * The audit row for an attention wait's answer, written in the answer's transaction by
+ * every store. `wait` is the answered wait as stored.
+ */
+export function waitAnsweredEvent(
+  workflowRunId: string,
+  wait: WorkflowAttentionWaitContext
+): ObservabilityEventInput {
+  return {
+    workflow_run_id: workflowRunId,
+    event_type: 'wait_answered',
+    step_name: workflowWaitStepName(wait),
+    data: { via: wait.answeredVia, occurrence: wait.pauseId, answer: wait.answer },
+  };
+}
+
+/**
  * The two rows a wait's completion produces: the wait outcome for observability and
  * the node's own completed state. A wait completes on one of two paths, in the same
  * tick inside the executor or on resume inside the store's cursor-clearing
@@ -311,6 +335,7 @@ export function waitCompletionEvents(
   completion: WorkflowWaitCompletion
 ): { outcome: ObservabilityEventInput; node: NodeStateEventInput } {
   const { stepName, result } = completion;
+  const output = completion.answer ?? result;
   return {
     outcome: {
       workflow_run_id: workflowRunId,
@@ -328,8 +353,8 @@ export function waitCompletionEvents(
             data: {
               type: 'wait',
               duration_ms: result.waited_ms,
-              node_output: JSON.stringify(result),
-              structured_output: result,
+              node_output: JSON.stringify(output),
+              structured_output: output,
             },
           },
   };
@@ -541,16 +566,27 @@ export interface IWorkflowStore
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   /**
    * Return at most `limit` due continuations, defaulting to 25: time waits past their
-   * deadline, signaled event waits, due quota resumes, and answered gates
-   * (`answeredGateContinuation`). Timed ones come earliest first, answered gates after.
+   * deadline, signaled event waits, due quota resumes, and answered gates and attention
+   * waits (`answeredPauseContinuation`). Timed ones come earliest first, answered pauses after.
    */
   listDueWorkflowContinuations(now: Date, limit?: number): Promise<WorkflowRun[]>;
-  /** Back off only the unchanged wait, quota or gate occurrence; a stale cursor writes nothing. */
+  /** Back off only the unchanged wait, quota or answered occurrence; a stale cursor writes nothing. */
   deferWorkflowContinuation(
     id: string,
     retryAt: string,
     cursor: WorkflowResumeCursor
   ): Promise<void>;
+  /**
+   * Atomically record the answer to one open attention wait and its `wait_answered` audit
+   * row (`waitAnsweredEvent`), without changing lifecycle. `answered` is the stored wait
+   * plus `answer`, `answeredVia` and `answeredAt`. It lands only while the run is still
+   * paused at that wait's `pauseId` and the wait is unanswered; otherwise nothing is
+   * written and `answered` is false.
+   */
+  answerAttentionWait(
+    id: string,
+    answered: WorkflowAttentionWaitContext
+  ): Promise<{ answered: boolean }>;
   /** Atomically record an unexpired event signal and its audit event without changing lifecycle. */
   signalWorkflowWait(
     id: string,

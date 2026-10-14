@@ -289,6 +289,19 @@ export const respondWorkflowRunBodySchema = z
   })
   .openapi('RespondWorkflowRunBody');
 
+/**
+ * POST /api/workflows/runs/:runId/answer request body: an answer to a paused attention
+ * wait. `occurrence` is the one run-attention reports; an answer for any other occurrence
+ * is refused. `choose` holds declared option ids (none for a message form).
+ */
+export const answerWorkflowRunBodySchema = z
+  .object({
+    occurrence: z.string(),
+    choose: z.array(z.string().min(1)).optional(),
+    text: z.string().optional(),
+  })
+  .openapi('AnswerWorkflowRunBody');
+
 /** DELETE /api/workflows/:name/node-sessions path params. */
 export const resetWorkflowNodeSessionsParamsSchema = z
   .object({ name: z.string().min(1) })

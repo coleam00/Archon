@@ -831,6 +831,48 @@ const GATE_ON_A_SHELL_NODE =
  * added only when a parenthesis sits outside a quoted literal, so a typo like
  * `$a.output = 'x'` is not blamed on grouping.
  */
+/**
+ * Why a producer's `output_format` cannot yield attention options at `options`'s field,
+ * or undefined when it can or declares no schema (the pause-time check then owns it).
+ * Mirrors `attentionOptionsSchema`: an array of `{ id, label? }` objects.
+ */
+function referencedOptionsShapeError(
+  options: string,
+  producerOf: (id: string) => DagNode | IncludeDirective | undefined
+): string | undefined {
+  const ref = parseWholeOutputRef(options);
+  if (ref?.field === undefined) return undefined;
+  const producer = producerOf(ref.nodeId);
+  if (producer === undefined || isIncludeDirective(producer)) return undefined;
+  let schema: unknown = producer.output_format;
+  if (schema === undefined) return undefined;
+  for (const key of ref.field.split('.')) {
+    const properties: unknown = isRecord(schema) ? schema.properties : undefined;
+    schema = isRecord(properties) ? properties[key] : undefined;
+  }
+  const items: unknown = isRecord(schema) && schema.type === 'array' ? schema.items : undefined;
+  const itemProperties: unknown = isRecord(items) ? items.properties : undefined;
+  const required: unknown = isRecord(items) ? items.required : undefined;
+  const fits =
+    isRecord(items) &&
+    items.type === 'object' &&
+    isRecord(itemProperties) &&
+    Object.keys(itemProperties).every(key => key === 'id' || key === 'label') &&
+    isRecord(itemProperties.id) &&
+    itemProperties.id.type === 'string' &&
+    (itemProperties.label === undefined ||
+      (isRecord(itemProperties.label) && itemProperties.label.type === 'string')) &&
+    Array.isArray(required) &&
+    required.includes('id');
+  return fits
+    ? undefined
+    : `'${options}' must be an array of { id, label? } objects in '${ref.nodeId}'s output_format (id: string and required; label: optional string; no other properties)`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function unsupportedConditionSyntax(nodeId: string, field: string, text: string): string {
   const hasGrouping = ['(', ')'].some(paren => splitOutsideQuotes(text, paren).length > 1);
   const hint = hasGrouping ? 'Grouping parentheses are not supported; use' : 'Use';
@@ -1110,6 +1152,15 @@ export function validateDagStructure(
       if (node.wait.event !== undefined) waitSources.push(['wait.event', node.wait.event]);
       if (node.wait.attention !== undefined)
         waitSources.push(['wait.attention', node.wait.attention]);
+      if (typeof node.wait.options === 'string') {
+        waitSources.push(['wait.options', node.wait.options]);
+        const shapeError = referencedOptionsShapeError(
+          node.wait.options,
+          id => nodesById.get(id) ?? enclosingNodes?.get(id)
+        );
+        if (shapeError !== undefined)
+          return `Node '${node.id}' field 'wait.options': ${shapeError}`;
+      }
       for (const [field, text] of waitSources) {
         outputRefPattern.lastIndex = 0;
         let m: RegExpExecArray | null;

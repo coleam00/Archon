@@ -10,6 +10,8 @@ import type { ResolvedWorkflowPolicy } from './schemas/run-config';
 import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
+import type { AttentionOption } from './schemas/dag-node';
+import type { RunAttention } from './schemas/workflow-run';
 import type {
   IAgentProvider,
   MessageChunk,
@@ -107,6 +109,46 @@ export type WorkflowCommandSurface = Pick<IWorkflowPlatform, 'formatWorkflowComm
  */
 export function spellWorkflowCommand(surface: WorkflowCommandSurface, command: string): string {
   return surface.formatWorkflowCommand?.(command) ?? `/workflow ${command}`;
+}
+
+/**
+ * How to answer an attention wait, one line per way, spelled for `surface`. The verbs are
+ * the `approve`, `reject` and `respond` sugar every surface parses. A `multi_select`
+ * answer carries several options at once, which only the CLI's `answer` verb (and its
+ * HTTP route) takes, so that line is spelled for the CLI. A wait paused before answers
+ * existed (a `legacy:` occurrence, Archon's own token) takes no answer; it resumes.
+ */
+export function attentionAnswerLines(
+  surface: WorkflowCommandSurface,
+  attention: Pick<
+    Extract<RunAttention, { kind: 'attention' }>,
+    'runId' | 'form' | 'options' | 'occurrence'
+  >
+): string[] {
+  const { runId, options } = attention;
+  const command = (text: string): string => `\`${spellWorkflowCommand(surface, text)}\``;
+  if (attention.occurrence.startsWith('legacy:'))
+    return [`When it is done, resume: ${command(`resume ${runId}`)}`];
+  const choice = (option: AttentionOption): string =>
+    option.label === undefined ? option.id : `${option.label} (${option.id})`;
+  switch (attention.form) {
+    case 'message':
+      return [`Answer: ${command(`approve ${runId} <your answer>`)}`];
+    case 'approval':
+      return [
+        `Approve: ${command(`approve ${runId} [text]`)}`,
+        `Reject: ${command(`reject ${runId} [text]`)}`,
+      ];
+    case 'select':
+      return options.map(
+        option => `${choice(option)}: ${command(`respond ${runId} ${option.id} [text]`)}`
+      );
+    case 'multi_select':
+      return [
+        `Choose one or more of: ${options.map(choice).join(', ')}`,
+        `Answer: \`archon workflow answer ${runId} --occurrence ${attention.occurrence} --choose <id> [--choose <id>]… [--text <text>]\``,
+      ];
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -83,6 +83,7 @@ import type {
 import {
   FAN_OUT_CANCEL_REASONS,
   waitCompletionEvents,
+  waitAnsweredEvent,
   WorkflowRunPauseConflictError,
 } from '@archon/workflows/store';
 
@@ -1878,8 +1879,8 @@ export async function clearWorkflowWaitContext(
 
 /**
  * Return a bounded set of runs eligible for a resume claim: due time and event waits, due
- * quota resumes, and answered gates. The gate clause mirrors `answeredGateContinuation`,
- * which the host re-checks when it builds the claim's cursor.
+ * quota resumes, and answered gates and attention waits. The answered clauses mirror
+ * `continuablePause`, which the host re-checks when it builds the claim's cursor.
  */
 export async function listDueWorkflowContinuations(
   now: Date,
@@ -1923,8 +1924,12 @@ export async function listDueWorkflowContinuations(
                AND ${metadataText('approval.pauseId')} IS NOT NULL
                AND COALESCE(${metadataText('approval.nodeId')}, '') <> ''
                AND COALESCE(${metadataText('approval.type')}, 'approval') NOT IN ('child_workflow', 'writeback')`;
+  const answeredAttention = `status = 'paused' AND ${waitKind} = 'attention'
+               AND COALESCE(${metadataText('isolation')}, '') <> 'container'
+               AND ${metadataText('wait.pauseId')} IS NOT NULL
+               AND ${metadataText('wait.answer')} IS NOT NULL`;
   // Each row sorts by its own kind's time. A run resumed from a quota schedule keeps the
-  // triggered schedule, which must not place a later answered gate among timed rows.
+  // triggered schedule, which must not place a later answered pause among timed rows.
   const dueAt = `COALESCE(${retryAt}, CASE WHEN status = 'paused' THEN ${resumeAt} END,
                CASE WHEN status = 'failed' THEN ${scheduledResumeAt} END)`;
   try {
@@ -1934,7 +1939,8 @@ export async function listDueWorkflowContinuations(
          AND ((status = 'paused' AND ${waitKind} IN ('time', 'event')
                AND (${signaledAt} IS NOT NULL OR ${resumeAt} <= $1))
           OR (status = 'failed' AND ${scheduledResumeAt} <= $1 AND ${scheduledTriggeredAt} IS NULL)
-          OR (${answeredGate}))
+          OR (${answeredGate})
+          OR (${answeredAttention}))
        ORDER BY CASE WHEN ${dueAt} IS NULL THEN 1 ELSE 0 END, ${dueAt} ASC
        LIMIT $2`,
       [now.toISOString(), limit]
@@ -2068,6 +2074,10 @@ export async function deferWorkflowContinuation(
     getDatabaseType() === 'postgresql'
       ? "metadata->'approval'->>'nodeId'"
       : "json_extract(metadata, '$.approval.nodeId')";
+  const waitPauseId =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'wait'->>'pauseId'"
+      : "json_extract(metadata, '$.wait.pauseId')";
   try {
     await pool.query(
       `UPDATE remote_agent_workflow_runs
@@ -2075,20 +2085,56 @@ export async function deferWorkflowContinuation(
        WHERE id = $1 AND ((status = 'paused' AND ${waitResumeAt} = $3 AND ${waitNodeId} = $4)
          OR (status = 'failed' AND ${scheduledResumeAt} = $3
            AND ${scheduledTriggeredAt} IS NULL AND ${scheduledAttempt} = $5)
-         OR (status = 'paused' AND ${gatePauseId} = $6 AND ${gateNodeId} = $4))`,
+         OR (status = 'paused' AND ${gatePauseId} = $6 AND ${gateNodeId} = $4)
+         OR (status = 'paused' AND ${waitPauseId} = $6 AND ${waitNodeId} = $4))`,
       [
         id,
         JSON.stringify({ continuation_retry_at: retryAt }),
-        cursor.kind === 'gate' ? null : cursor.resumeAt,
+        cursor.kind === 'answered' ? null : cursor.resumeAt,
         cursor.kind === 'quota' ? null : cursor.nodeId,
         cursor.kind === 'quota' ? cursor.attempt : null,
-        cursor.kind === 'gate' ? cursor.pauseId : null,
+        cursor.kind === 'answered' ? cursor.pauseId : null,
       ]
     );
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_continuation_defer_failed');
     throw new Error(`Failed to defer workflow continuation: ${err.message}`);
+  }
+}
+
+/** Atomically record the answer to one open attention wait (see `IWorkflowStore.answerAttentionWait`). */
+export async function answerAttentionWait(
+  id: string,
+  answered: WorkflowAttentionWaitContext
+): Promise<{ answered: boolean }> {
+  const stored = workflowWaitContextSchema.parse(answered);
+  if (stored.kind !== 'attention' || stored.pauseId === undefined || stored.answer === undefined) {
+    throw new Error('An attention answer needs the answered wait with its pauseId and answer');
+  }
+  const postgres = getDatabaseType() === 'postgresql';
+  const waitField = (field: string): string =>
+    postgres ? `metadata->'wait'->>'${field}'` : `json_extract(metadata, '$.wait.${field}')`;
+  const writeWait = postgres
+    ? "jsonb_set(metadata, '{wait}', $3::jsonb, true)"
+    : "json_set(metadata, '$.wait', json($3))";
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${writeWait}
+         WHERE id = $1 AND status = 'paused' AND ${waitField('kind')} = 'attention'
+           AND ${waitField('pauseId')} = $2 AND ${waitField('answer')} IS NULL`,
+        [id, stored.pauseId, JSON.stringify(stored)]
+      );
+      const won = (result.rowCount ?? 0) > 0;
+      if (won) await insertWorkflowEvent(query, waitAnsweredEvent(id, stored));
+      return { answered: won };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_attention_answer_failed');
+    throw new Error(`Failed to answer attention wait: ${err.message}`);
   }
 }
 
@@ -2451,7 +2497,7 @@ export async function listRunsNeedingAttention(
     const attention = runAttention(run);
     if (
       attention?.kind === 'awaiting_response' ||
-      attention?.kind === 'action_required' ||
+      attention?.kind === 'attention' ||
       attention?.kind === 'unreadable'
     ) {
       runs.push(run);

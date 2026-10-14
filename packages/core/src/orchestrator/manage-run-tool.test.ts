@@ -327,7 +327,7 @@ describe('manage_run — reads', () => {
     expect(out).toContain('authored outcome: succeeded');
   });
 
-  test('get surfaces an outside action with resume and abandon guidance', async () => {
+  test('get sends a wait paused before answers to resume and abandon', async () => {
     mockFindByPrefix.mockResolvedValue([
       makeRun({
         status: 'paused',
@@ -345,9 +345,37 @@ describe('manage_run — reads', () => {
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
 
-    expect(out).toContain('action required: Re-run CI, then resume.');
+    expect(out).toContain('needs attention: Re-run CI, then resume.');
     expect(out).toContain('archon workflow resume r1abcdef-1234');
     expect(out).toContain('abandon it');
+  });
+
+  test('get describes an attention wait by its form, options and occurrence', async () => {
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'ask',
+            kind: 'attention',
+            waitingSince: '2026-08-28T10:00:00.000Z',
+            message: 'Which base?',
+            pauseId: 'pause-1',
+            form: 'select',
+            options: [{ id: 'use-main' }, { id: 'use-dev' }],
+          },
+        },
+      }),
+    ]);
+    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
+
+    expect(out).toContain('occurrence: pause-1');
+    expect(out).toContain('form: select');
+    expect(out).toContain('options: use-main, use-dev');
+    expect(out).toContain('action=respond, decision=<one of the options>');
+    expect(out).not.toContain('workflow resume');
   });
 
   test('get preserves the prior detail shape when outcome is undeclared', async () => {
@@ -1144,6 +1172,7 @@ describe('manage_run authorization refusal', () => {
           cancelWorkflowRun: unexpected,
           resolveApprovalGate: unexpected,
           resolveAndCancelApprovalGate: unexpected,
+          answerAttentionWait: unexpected,
           cancelResumableRunsForConversation: unexpected,
           deleteWorkflowNodeSessions: unexpected,
           signalWorkflowWait: unexpected,

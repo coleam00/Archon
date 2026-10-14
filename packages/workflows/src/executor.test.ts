@@ -275,6 +275,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
+    answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
+      throw new Error('Unexpected answerAttentionWait');
+    }),
     signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
       throw new Error('Unexpected signalWorkflowWait');
     }),
@@ -1668,7 +1671,7 @@ describe('executeWorkflow', () => {
     );
 
     it.each(['node', 'loop_group'] as const)(
-      'describes a %s attention wait with outside-action and resume guidance',
+      'describes a legacy %s attention wait with answer and resume guidance',
       async owner => {
         const otherRun = makeRun({
           id: 'abc12345-rest-of-uuid',
@@ -1700,7 +1703,7 @@ describe('executeWorkflow', () => {
         expect(result.success).toBe(false);
         expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
         const message = sendMessage.mock.calls[0][1];
-        expect(message).toContain('paused waiting for an outside action');
+        expect(message).toContain('needs attention');
         expect(message).toContain('Restore repository access');
         expect(message).toContain('/workflow resume abc12345');
         expect(message).toContain('/workflow abandon abc12345');

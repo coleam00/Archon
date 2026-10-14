@@ -7,7 +7,7 @@ import {
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { RunAttention, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { toError } from '../utils/error';
 import {
   CancelRefusedError,
@@ -256,6 +256,23 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
   };
 }
 
+/** How this tool answers an attention wait of each form. */
+function attentionAnswerAdvice(attention: Extract<RunAttention, { kind: 'attention' }>): string {
+  // Archon's own token for a wait paused before answers existed; only resume moves it.
+  if (attention.occurrence.startsWith('legacy:'))
+    return `when it is done, run \`archon workflow resume ${attention.runId}\`; abandon it if it should not continue.`;
+  switch (attention.form) {
+    case 'message':
+      return 'answer with action=approve and message=<the answer>.';
+    case 'approval':
+      return 'answer with action=approve or action=reject, optionally with message=<text>; reject is an answer and does not cancel the run.';
+    case 'select':
+      return 'answer with action=respond, decision=<one of the options>, optionally with message=<text>.';
+    case 'multi_select':
+      return `this tool cannot choose several options; the user answers with \`archon workflow answer ${attention.runId} --occurrence ${attention.occurrence} --choose <id>…\`.`;
+  }
+}
+
 // ─── Read handlers ──────────────────────────────────────────────────────────
 
 function handleHelp(subtool: string): string {
@@ -304,7 +321,8 @@ function formatRunDetail(run: WorkflowRun): string {
   // AI approver can decide finalize-vs-iterate without parsing prose.
   const rawApproval = run.metadata.approval;
   const attention = runAttention(run);
-  if (attention?.kind === 'awaiting_response') parts.push(`occurrence: ${attention.occurrence}`);
+  if (attention?.kind === 'awaiting_response' || attention?.kind === 'attention')
+    parts.push(`occurrence: ${attention.occurrence}`);
   if (attention?.kind === 'stalled_tool_calls') {
     parts.push('tool calls need attention; work remains running');
     for (const call of attention.calls)
@@ -313,11 +331,12 @@ function formatRunDetail(run: WorkflowRun): string {
       );
     parts.push(`inspect with archon workflow logs ${run.id}, or explicitly cancel`);
   }
-  if (attention?.kind === 'action_required') {
-    parts.push(`action required: ${attention.message.slice(0, 300)}`);
-    parts.push(
-      `-> complete the action, then run \`archon workflow resume ${run.id}\`; abandon it if it should not continue.`
-    );
+  if (attention?.kind === 'attention') {
+    parts.push(`needs attention: ${attention.message.slice(0, 300)}`);
+    parts.push(`form: ${attention.form}`);
+    if (attention.options.length > 0)
+      parts.push(`options: ${attention.options.map(option => option.id).join(', ')}`);
+    parts.push(`-> ${attentionAnswerAdvice(attention)}`);
   }
   if (
     run.status === 'paused' &&
