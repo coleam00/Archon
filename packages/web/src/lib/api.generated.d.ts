@@ -4910,11 +4910,6 @@ export interface components {
         captureResponse?: boolean;
         onRejectPrompt?: string;
         onRejectMaxAttempts?: number;
-        decisions?: {
-          id: string;
-          label?: string;
-        }[];
-        decisionsAuthored?: boolean;
         /** @enum {string|null} */
         resolved?: 'approved' | 'rejected' | null;
         completionSignaled?: boolean | null;
@@ -5303,7 +5298,24 @@ export interface components {
               };
         };
         commandSnapshot?: string | null;
-      };
+      } & (
+        | {
+            /** @enum {boolean} */
+            decisionsAuthored: true;
+            decisions: {
+              id: string;
+              label?: string;
+            }[];
+          }
+        | {
+            /** @enum {boolean} */
+            decisionsAuthored?: false;
+            decisions?: {
+              id: string;
+              label?: string;
+            }[];
+          }
+      );
       wait?: components['schemas']['WorkflowWaitContext'];
       stop_reason?: components['schemas']['RunStopReason'];
     } & {

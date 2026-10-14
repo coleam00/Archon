@@ -332,6 +332,7 @@ mock.module('@archon/isolation', () => ({
           provenance: 'created',
           adopted: false,
           creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+          branchCreated: true,
         },
       })
     ),
@@ -12166,6 +12167,50 @@ describe('workflowRespondCommand', () => {
 
   afterEach(() => {
     consoleSpy.mockRestore();
+  });
+
+  it.each([
+    ['approve', false],
+    ['reject', false],
+    ['approve', true],
+    ['reject', true],
+  ] as const)('refuses undeclared %s through commands (detach=%s)', async (decision, detach) => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const run = {
+      id: 'run-undeclared',
+      workflow_name: 'guided',
+      status: 'paused',
+      user_message: 'go',
+      working_path: '/repo',
+      codebase_id: null,
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Choose',
+          decisions: [{ id: 'accept' }, { id: 'revise' }],
+          decisionsAuthored: true,
+        },
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue(run);
+    const resolve = workflowDb.resolveApprovalGate as ReturnType<typeof mock>;
+    const cancel = workflowDb.resolveAndCancelApprovalGate as ReturnType<typeof mock>;
+    resolve.mockClear();
+    cancel.mockClear();
+    const host = createTestWorkflowHost();
+    const dedicated = decision === 'approve' ? workflowApproveCommand : workflowRejectCommand;
+    for (const respond of [
+      () => dedicated(host, run.id, 'feedback', false, undefined, detach),
+      () => workflowRespondCommand(host, run.id, decision, 'feedback', false, undefined, detach),
+    ]) {
+      await expect(respond()).rejects.toThrow(
+        `does not declare decision '${decision}'. Declared decisions: accept, revise.`
+      );
+      expect(run.status).toBe('paused');
+      expect(resolve).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+    }
   });
 
   it("delegates 'approve' to the exact same resolution as workflowApproveCommand", async () => {

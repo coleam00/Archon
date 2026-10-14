@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { describeStateDocumentConformance } from '@archon/workflows/state-document-conformance';
+import { stateScopeKey, type StateScope } from '@archon/workflows/state-document-store';
 import { PostgresAdapter } from './adapters/postgres';
 import { createSqlStateDocumentStore } from './state-documents';
 
@@ -29,10 +30,10 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL state documents', () => {
       db,
       url: url.toString(),
       store: createSqlStateDocumentStore(() => db),
-      backdate: async (project: string, document: string): Promise<void> => {
+      backdate: async (scope: StateScope, document: string): Promise<void> => {
         await db.query(
           'UPDATE remote_agent_state_revisions SET created_at = $3 WHERE project_key = $1 AND name = $2',
-          [project, document, '2000-01-01T00:00:00.000Z']
+          [stateScopeKey(scope), document, '2000-01-01T00:00:00.000Z']
         );
       },
       close: async () => {

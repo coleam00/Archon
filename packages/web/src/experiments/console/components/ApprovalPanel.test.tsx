@@ -37,9 +37,44 @@ describe('ApprovalPanel', () => {
 
   test('renders the declared decisions from the API snapshot', () => {
     const html = renderToStaticMarkup(<ApprovalPanel run={pausedRun('pause-before')} />);
-    expect(html).toContain('Continue');
+    expect(html).not.toContain('Continue');
+    expect(html).toContain('Approve');
     expect(html).toContain('Revise plan');
     expect(html).toContain('Escalate');
     expect(html).not.toContain('Reject');
+  });
+  test.each([
+    {
+      decisions: [
+        { id: 'answer', label: 'Answer question' },
+        { id: 'approve', label: 'Ship plan' },
+        { id: 'reject', label: 'Discard plan' },
+      ],
+    },
+    {
+      decisions: [
+        { id: 'accept', label: 'Accept plan' },
+        { id: 'revise', label: 'Revise plan' },
+      ],
+    },
+  ])('renders only authored buttons with their labels (%j)', ({ decisions }) => {
+    const run = pausedRun();
+    if (!run.approval) throw new Error('Expected approval');
+    run.approval.decisions = [...decisions];
+    const html = renderToStaticMarkup(<ApprovalPanel run={run} />);
+    expect(html).not.toContain('Continue');
+    expect(html.match(/<button /g)?.length).toBe(decisions.length);
+    for (const decision of decisions) expect(html).toContain(decision.label);
+  });
+
+  test('keeps Continue and Reject for gates without authored decisions', () => {
+    const run = pausedRun();
+    if (!run.approval) throw new Error('Expected approval');
+    run.approval.decisionsAuthored = false;
+    run.approval.decisions = [{ id: 'approve' }, { id: 'reject' }];
+    const html = renderToStaticMarkup(<ApprovalPanel run={run} />);
+    expect(html).toContain('Continue');
+    expect(html).toContain('Reject');
+    expect(html.match(/<button /g)?.length).toBe(2);
   });
 });

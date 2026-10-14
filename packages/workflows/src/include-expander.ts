@@ -77,13 +77,18 @@ import {
   COMPILED_LOOP_COMMAND,
   COMPOSED_NODE,
   attachComposedBindings,
+  cloneNodeWithEngineMetadata,
   isIncludeCommandReadError,
   readComposedBindings,
   readComposedMeta,
+  readIncludeOutputAliases,
+  resolveIncludeOutputAliases,
+  setIncludeOutputAliases,
   type ComposedBlockBoundary,
   type ComposedNodeMeta,
   type CompiledLoopCommand,
   type IncludeCommandContent,
+  type IncludeOutputAliases,
   type LoopWithCompiledCommand,
   type NodeWithComposedMeta,
 } from './compiled-command';
@@ -249,6 +254,26 @@ function applyWhenRefRename(text: string, rename: (id: string) => string): strin
     const renamed = rename(id);
     return renamed === id ? match : `$${renamed}`;
   });
+}
+
+/**
+ * Give every command-sourced node in `node`'s scope the include aliases its body may read
+ * (#3972) — the same aliases `rewriteNodeOutputRefs` applies to an inline prompt there,
+ * including inside loop_group bodies. A body list's own includes were attached first and
+ * shadow the enclosing list's, matching the order the inline rewrite runs in.
+ */
+function attachIncludeOutputAliases(node: DagNode, aliases: IncludeOutputAliases): void {
+  if (
+    (isAgentNode(node) && node.source.kind === 'command') ||
+    (isLoopNode(node) && node.loop.command !== undefined)
+  ) {
+    setIncludeOutputAliases(node, { ...aliases, ...readIncludeOutputAliases(node) });
+  }
+  if (isLoopGroupNode(node)) {
+    for (const body of node.loop_group.nodes) {
+      if (!isIncludeDirective(body)) attachIncludeOutputAliases(body, aliases);
+    }
+  }
 }
 
 /** Internal signal for a per-workflow expansion failure (resilient: drop one, keep the rest). */
@@ -432,7 +457,10 @@ function pushWorkflowScopeOntoNodes(
  * byte-for-byte fast path for include-free workflows had to go.
  */
 function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
-  const collapsed: WorkflowDefinition = { ...raw, nodes: raw.nodes.map(cloneNodeForInclude) };
+  const collapsed: WorkflowDefinition = {
+    ...raw,
+    nodes: raw.nodes.map(cloneNodeWithEngineMetadata),
+  };
   const scope = collapsed as unknown as Record<string, unknown>;
   pushWorkflowScopeOntoNodes(scope, collapsed.nodes);
   // Deleted rather than set to `undefined` so the collapsed definition has the shape a
@@ -556,13 +584,6 @@ function applyInputsMacro(
   missing: Set<string>,
   includeNode: IncludeDirective
 ): void {
-  // Names the node supplies itself. Only the compiled command body reads them: the
-  // executor merges a command node's resolved bindings OVER the run inputs into the
-  // `$INPUTS` bag it builds for the prompt, and nothing else (dag-executor.ts). So the
-  // shield is scoped to that one surface — a `when:` or `systemPrompt:` naming the same
-  // input still reads the run's bag, and a caller who never supplied it still gets the
-  // load error.
-  const boundLocally = new Set(Object.keys(readComposedBindings(node) ?? {}));
   const substitute = (text: string, shielded?: ReadonlySet<string>): string =>
     text.replace(INPUTS_REF, (match, name: string) => {
       // A name the node's own `with:` binds is neither the caller's to supply nor the
@@ -623,7 +644,19 @@ function applyInputsMacro(
     )
       return slot.value;
     if (slot.surface === 'condition') return substituteWhen(slot.value);
-    return substitute(slot.value, slot.name === 'agent.prompt' ? boundLocally : undefined);
+    // Names a command node supplies itself. Only its compiled body reads them: the
+    // executor merges the node's resolved bindings OVER the run inputs into the `$INPUTS`
+    // bag it builds for the prompt, and nothing else (dag-executor.ts). So the shield is
+    // scoped to that one surface — a `when:` or `systemPrompt:` naming the same input
+    // still reads the run's bag, and a caller who never supplied it still gets the load
+    // error. The slot's owner, not `node`, holds the bindings: the walk also visits
+    // loop_group body nodes.
+    return substitute(
+      slot.value,
+      slot.name === 'agent.prompt'
+        ? new Set(Object.keys(readComposedBindings(slot.owner) ?? {}))
+        : undefined
+    );
   });
   const valueMapped = mapNodeTemplateValueSlots(textMapped, slot => {
     const value = substituteValue(slot.value);
@@ -678,43 +711,6 @@ function resolveIncludeInputs(
   }
 }
 
-/** structuredClone intentionally drops symbol keys; retain every engine-private
- * per-node payload (compiled loop commands, the composition record) while cloning a
- * reusable child for another include level. A payload missed here works at one nesting
- * level and silently vanishes at two. */
-function cloneNodeForInclude<T extends DagNode | IncludeDirective>(node: T): T {
-  const clone = structuredClone(node);
-  const preserveEngineMetadata = (
-    source: DagNode | IncludeDirective,
-    target: DagNode | IncludeDirective
-  ): void => {
-    if (isIncludeDirective(source) || isIncludeDirective(target)) return;
-    const meta = readComposedMeta(source);
-    if (meta !== undefined) {
-      (target as DagNode & NodeWithComposedMeta)[COMPOSED_NODE] = structuredClone(meta);
-    }
-    const bindings = readComposedBindings(source);
-    if (bindings !== undefined) attachComposedBindings(target, structuredClone(bindings));
-    if (isLoopNode(source) && isLoopNode(target)) {
-      const compiled = (source.loop as typeof source.loop & LoopWithCompiledCommand)[
-        COMPILED_LOOP_COMMAND
-      ];
-      if (compiled !== undefined) {
-        (target.loop as typeof target.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND] =
-          structuredClone(compiled);
-      }
-    }
-    if (isLoopGroupNode(source) && isLoopGroupNode(target)) {
-      for (const [index, sourceChild] of source.loop_group.nodes.entries()) {
-        const targetChild = target.loop_group.nodes[index];
-        if (targetChild !== undefined) preserveEngineMetadata(sourceChild, targetChild);
-      }
-    }
-  };
-  preserveEngineMetadata(node, clone);
-  return clone;
-}
-
 /**
  * Inline one include node's fully-expanded child into namespaced parent nodes.
  * Never mutates the child's nodes (each node is deep-cloned first), so a building block
@@ -757,7 +753,7 @@ function inlineInclude(
 
   const namespaced = childNodes.map(cn => {
     const clone = materializeBlockCommandPrompts(
-      cloneNodeForInclude(cn),
+      cloneNodeWithEngineMetadata(cn),
       includeNode,
       child,
       commandContents,
@@ -1003,9 +999,10 @@ function materializeBlockCommandPrompts(
       };
     }
 
+    const prompt = resolveIncludeOutputAliases(node, content);
     const outputRefPattern = new RegExp(OUTPUT_REF_PATTERN.source, 'g');
     let match: RegExpExecArray | null;
-    while ((match = outputRefPattern.exec(content)) !== null) {
+    while ((match = outputRefPattern.exec(prompt)) !== null) {
       const referencedId = match[1];
       if (referencedId === 'INPUTS') continue;
       if (
@@ -1019,7 +1016,7 @@ function materializeBlockCommandPrompts(
         };
       }
     }
-    return { prompt: content };
+    return { prompt };
   };
 
   if (isAgentNode(node) && node.source.kind === 'command') {
@@ -1032,6 +1029,7 @@ function materializeBlockCommandPrompts(
     const bindings = node.source.with;
     const materialized: DagNode = { ...node, source: { kind: 'inline', prompt: compiled.prompt } };
     if (bindings !== undefined) attachComposedBindings(materialized, bindings);
+    setIncludeOutputAliases(materialized, undefined);
     return materialized;
   }
 
@@ -1042,7 +1040,9 @@ function materializeBlockCommandPrompts(
     if (existing !== undefined) return node;
     const loop = { ...node.loop } as typeof node.loop & LoopWithCompiledCommand;
     loop[COMPILED_LOOP_COMMAND] = compile(node.loop.command);
-    return { ...node, loop };
+    const materialized: DagNode = { ...node, loop };
+    setIncludeOutputAliases(materialized, undefined);
+    return materialized;
   }
 
   if (isLoopGroupNode(node)) {
@@ -1236,6 +1236,12 @@ export function expandWorkflowIncludes(
       // not create a parallel `$LOOP_PREV.<includeId>` grammar: previous-iteration refs
       // continue to name only the executable body ids produced by `inlineInclude()`.
       rewriteNodeOutputRefs(node, renameIncludeRef, expandIncludeDependency, id => id);
+    }
+    if (includesById.size > 0) {
+      const aliases = Object.fromEntries(
+        [...includesById].map(([id, inlined]) => [id, inlined.primarySink])
+      );
+      for (const node of expandedNodes) attachIncludeOutputAliases(node, aliases);
     }
 
     return { nodes: expandedNodes, includedRequirements, renameIncludeRef, includeAliases };

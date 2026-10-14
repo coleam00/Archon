@@ -4,11 +4,10 @@ import { mkdtemp, readdir, readFile, realpath, symlink, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { currentProcessOwner } from '@archon/paths/process-owner';
+import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/process-owner';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import {
   FileStoreLockHeldError,
-  FileStoreLockRecordError,
   FileStoreLockReleaseError,
   FileStoreUnsupportedFilesystemError,
   probeFileStoreFilesystem,
@@ -341,8 +340,8 @@ describe('file store filesystem primitives', () => {
         entered = true;
       })
     );
-    expect(error).toBeInstanceOf(FileStoreLockRecordError);
-    expect((error as FileStoreLockRecordError).path).toBe(path);
+    expect(error).toBeInstanceOf(ProcessOwnerRecordError);
+    expect((error as ProcessOwnerRecordError).source).toBe(path);
     expect(entered).toBe(false);
     expect(await readFile(path, 'utf8')).toBe('{');
   });
@@ -514,6 +513,39 @@ describe('file store filesystem primitives', () => {
     const left = await readdir(root);
     expect(left).not.toContain('lock');
     expect(left).not.toContain('lock.break');
+  });
+
+  test('the next locked operation sweeps scratch files only of provably dead owners', async () => {
+    const root = await fixture();
+    const dead = JSON.stringify({
+      ...currentProcessOwner,
+      pid: await deadPid(),
+      instance: randomUUID(),
+    });
+    const live = JSON.stringify(currentProcessOwner);
+    const unreadable = `.lock-${randomUUID()}`;
+    const files: Record<string, string> = {
+      [`.lock-${randomUUID()}`]: dead,
+      [`.probe-${randomUUID()}`]: dead,
+      [`.probe-${randomUUID()}.link`]: dead,
+      [`.lock-${randomUUID()}`]: live,
+      [`.probe-${randomUUID()}`]: live,
+      [unreadable]: '',
+    };
+    for (const [name, contents] of Object.entries(files))
+      await writeFile(join(root, name), contents);
+    await writeFile(join(root, 'lock.break'), dead);
+    // lock.break is never swept, so an otherwise free lock with a dead breaker is still taken.
+    expect(await withFileStoreLock(root, async () => 'swept')).toBe('swept');
+    const kept = Object.keys(files).filter(name => files[name] !== dead);
+    expect((await readdir(root)).filter(name => name.startsWith('.')).sort()).toEqual(kept.sort());
+    expect(await readFile(join(root, 'lock.break'), 'utf8')).toBe(dead);
+  });
+
+  test('a scratch sweep that cannot list the store still runs the operation', async () => {
+    const root = await fixture();
+    spies.push(spyOn(fsPromises, 'readdir').mockRejectedValue(injected()));
+    expect(await withFileStoreLock(root, async () => 'ran')).toBe('ran');
   });
 
   test('the probe refuses only link failures that mean no hard-link support', async () => {

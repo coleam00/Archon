@@ -82,6 +82,7 @@ import type { OverlayChangeSummary } from './container-context';
 import { mcpServerMap, mergeTokenUsage } from '@archon/provider-contract';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
+import { approvalContextSchema } from './schemas/workflow-run';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import { findStrictSchemaIssues, type StrictSchemaIssue } from '@archon/provider-contract';
 import { validateStructuredOutput } from './structured-output';
@@ -153,7 +154,6 @@ import {
   persistScopeKey,
 } from './schemas';
 import type { BindingDirective } from './schemas';
-import { mapNodeTemplateSlots } from './template-walker';
 import { buildExecNodeEnvironment } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import {
@@ -185,11 +185,14 @@ import {
   parseWholeExecutionCheckoutRef,
   resolveExecutionCheckoutStart,
   parseWholeInputsRef,
-  substituteInputRefs,
+  inputRefToken,
+  substituteTemplate,
+  templateToken,
   PRIOR_OUTPUT_PATH_SOURCE,
   CURRENT_OUTPUT_PATH_SOURCE,
   assertSupportedOutputRefs,
   type JsonValue,
+  type TemplateToken,
 } from './output-ref';
 import { buildTruncationMarker } from './utils/output-truncation';
 import { writeNodeArtifact, readNodeArtifacts, writeNodeArtifactsListing } from './artifacts-index';
@@ -197,6 +200,7 @@ import { validateArtifactPointers } from './artifact-pointer';
 import {
   COMPILED_LOOP_COMMAND,
   readComposedBindings,
+  resolveIncludeOutputAliases,
   readComposedMeta,
   type LoopWithCompiledCommand,
   type IncludeCommandContent,
@@ -228,6 +232,7 @@ import {
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
+  type TemplateReferences,
   detectCompletionSignal,
   describeUnmetCompletion,
   stripCompletionTags,
@@ -273,6 +278,7 @@ export interface ShellInputContext {
   docsDir: string;
   issueContext?: string;
   nodeOutputs: Map<string, NodeOutput>;
+  loopBodyScopes: readonly LoopBodyScope[];
 }
 
 /**
@@ -286,9 +292,9 @@ export interface ShellInputContext {
  *     NAMED script file has (its source is opaque, so the load-time `$INPUTS` macro that
  *     serves inline bodies can never reach it).
  *
- * A composed value gets the same two passes a `workflow:` node's `with:` map does —
- * workflow variables (NOT shell-safe: these become env values, never shell source) then
- * `$node.output` refs — resolved here rather than at load because a value may hold
+ * A composed value resolves like a `workflow:` node's `with:` template — workflow variables
+ * (NOT shell-safe: these become env values, never shell source) and `$node.output` refs —
+ * resolved here rather than at load because a value may hold
  * `$ARTIFACTS_DIR` or a ref that only exists at run time. Values are never shell-escaped:
  * the env bag is itself the injection-safe channel (#2115), which is why they never touch
  * the script source. Both shell env sites call this one function so the bag and its
@@ -306,22 +312,7 @@ function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv 
     // Only strings can carry templates/refs; a typed composed value passes as-is.
     env[inputEnvKey(name)] =
       typeof value === 'string'
-        ? substituteNodeOutputRefs(
-            substituteWorkflowVariables(
-              value,
-              ctx.workflowRun.id,
-              ctx.workflowRun.user_message,
-              ctx.artifactsDir,
-              ctx.baseBranch,
-              ctx.docsDir,
-              ctx.issueContext,
-              undefined,
-              undefined,
-              undefined,
-              { stateDir: ctx.stateDir, inputs: runInputs }
-            ).prompt,
-            ctx.nodeOutputs
-          )
+        ? resolveValueTemplate(value, ctx, runInputs)
         : canonicalValueText(value);
   }
   // Node-local bindings (#2637) — a script node's own `with:` map, resolved against
@@ -384,8 +375,8 @@ function wholeRefLogicalValue(
  *  - a non-string literal (boolean/number/null/array/object) passes through as-is;
  *  - a string that is EXACTLY one whole `$INPUTS.<name>` or `$node.output[.field]`
  *    reference resolves to the LOGICAL value (type preserved);
- *  - any other string is a template: two-pass text substitution (workflow vars,
- *    then `$node.output` refs), exactly as `input:` resolves.
+ *  - any other string is a template: text substitution (workflow vars and
+ *    `$node.output` refs), exactly as `input:` resolves.
  *
  * `strictWholeRef` selects the unknown-producer posture for the unfielded whole-ref
  * form: node-local bindings are a new surface and FAIL (with a did-you-mean hint);
@@ -440,8 +431,21 @@ function resolveWorkflowValue(
     // Lenient legacy surface: fall through to the template path, which resolves the
     // unknown whole-text ref to '' with a warn — byte-identical to pre-#2637.
   }
-  const { prompt: substituted } = substituteWorkflowVariables(
-    rawValue,
+  return resolveValueTemplate(rawValue, ctx, runInputs);
+}
+
+/**
+ * Resolve a value template (a `with:` value, a composed input) to text: workflow variables
+ * — never shell-safe, a value is delivered as data, not shell source — and `$node.output`
+ * references, in one pass.
+ */
+function resolveValueTemplate(
+  template: string,
+  ctx: ShellInputContext,
+  runInputs: Record<string, JsonValue> | undefined
+): string {
+  return substituteWorkflowVariables(
+    template,
     ctx.workflowRun.id,
     ctx.workflowRun.user_message,
     ctx.artifactsDir,
@@ -451,9 +455,12 @@ function resolveWorkflowValue(
     undefined,
     undefined,
     undefined,
-    { stateDir: ctx.stateDir, inputs: runInputs }
-  );
-  return substituteNodeOutputRefs(substituted, ctx.nodeOutputs);
+    {
+      stateDir: ctx.stateDir,
+      inputs: runInputs,
+      references: nodeTemplateReferences(template, ctx),
+    }
+  ).prompt;
 }
 
 /**
@@ -519,7 +526,12 @@ function resolveBindingDirective(
   const producer = ctx.nodeOutputs.get(ref.nodeId);
   if (producer === undefined || producer.state === 'skipped' || producer.state === 'pending') {
     // Presence-keyed: `if_skipped: null` (or false/0/'') is a real declared default.
-    if (Object.hasOwn(directive, 'if_skipped')) return directive.if_skipped as JsonValue;
+    if (Object.hasOwn(directive, 'if_skipped')) {
+      const fallback = directive.if_skipped as JsonValue;
+      return typeof fallback === 'string'
+        ? substituteLoopBodyText(fallback, ctx.loopBodyScopes)
+        : fallback;
+    }
     throw new Error(
       `Node '${consumerId}' binding '${name}' reads '${directive.from}', but node ` +
         `'${ref.nodeId}' did not run (skipped or pending), so it has no output to read. ` +
@@ -1404,11 +1416,7 @@ function requiredOutputRefError(
 }
 
 /**
- * Substitute $node_id.output and $node_id.output.field references in a prompt.
- * Called AFTER the standard substituteWorkflowVariables pass.
- *
- * Callers select one text value with their execution-specific escaping and timing.
- * template-walker.ts owns whole-node traversal where it is needed.
+ * The `$node_id.output[.field]` reference, resolved against `nodeOutputs`.
  *
  * @param escapedForBash - When true, wraps substituted values in single quotes so
  *   they are safe to embed in bash scripts passed to `bash -c`. Set true only for
@@ -1417,113 +1425,173 @@ function requiredOutputRefError(
  *   decision surface named. Used by `until_bash`; other callers keep the legacy empty
  *   fallback. Field refs remain strict in either mode.
  */
+function nodeOutputRefToken(
+  nodeOutputs: Map<string, NodeOutput>,
+  escapedForBash: boolean,
+  artifactsDir?: string,
+  requiredContext?: RequiredOutputRefContext
+): TemplateToken {
+  return templateToken(CURRENT_OUTPUT_PATH_SOURCE, groups => {
+    const [match, nodeId] = groups;
+    // An optional group that did not match is undefined, whatever RegExpExecArray says.
+    const field: string | undefined = groups[2];
+    const nodeOutput = nodeOutputs.get(nodeId);
+    if (!nodeOutput) {
+      // A `.field` ref that resolves to no output (for example, a programmatically
+      // constructed definition that bypassed discovery, or a real producer whose
+      // output is unavailable on this execution path) fails the consuming node loudly,
+      // matching the strict
+      // no-silent-drop posture for known-producer field access below. The whole-text
+      // `$id.output` form stays lenient ('') by default as a long-documented surface.
+      // `until_bash` opts into requiredContext because empty text would become an
+      // input to a completion decision rather than merely missing display text.
+      if (field) {
+        const error = new OutputRefError(nodeId, field, 'unknown-node', {
+          reference: match,
+          candidates: similarNodeIds(nodeId, nodeOutputs.keys()),
+        });
+        throw requiredContext
+          ? requiredOutputRefError(requiredContext, match, error.message)
+          : error;
+      }
+      if (requiredContext) {
+        const candidates = similarNodeIds(nodeId, nodeOutputs.keys());
+        const hint =
+          candidates.length > 0
+            ? ` Did you mean: ${candidates.map(candidate => `'${candidate}'`).join(', ')}?`
+            : '';
+        throw requiredOutputRefError(
+          requiredContext,
+          match,
+          `node '${nodeId}' has not produced output at this point.${hint} Fix the id, or ensure '${nodeId}' runs before this check.`
+        );
+      }
+      getLog().warn({ nodeId, match }, 'dag_node_output_ref_unknown_node');
+      return escapedForBash ? "''" : '';
+    }
+    if (!field) {
+      if (requiredContext && (nodeOutput.state === 'skipped' || nodeOutput.state === 'pending')) {
+        throw requiredOutputRefError(
+          requiredContext,
+          match,
+          `node '${nodeId}' did not run (skipped or pending), so it has no output to read. Fix the dependency or guard the consuming loop.`
+        );
+      }
+      if (requiredContext && nodeOutput.state === 'failed') {
+        throw requiredOutputRefError(
+          requiredContext,
+          match,
+          `node '${nodeId}' failed (${nodeOutput.error}), so its output cannot be trusted. Fix the failure or guard the consuming loop.`
+        );
+      }
+      // A failed producer's stale output is never spliced into a consumer's own
+      // prompt/bash/command body (#2713) — matches resolveBindingDirective's #2710
+      // guard for the same class of bug (a loop_group's failure paths leave real,
+      // last-completed-iteration text behind). Routes through `assertProducerNotFailed`
+      // in output-ref.ts (#2722), which every whole-text reader of nodeOutputs shares.
+      assertProducerNotFailed(
+        nodeOutput,
+        failed =>
+          `'$${nodeId}.output' references node '${nodeId}', but it failed ` +
+          `(${failed.error}), so its output cannot be spliced into this node's ` +
+          "prompt/script — a failed producer's stale output is never trusted. Fix the " +
+          "failure, or guard this node with a 'when:' condition that excludes the " +
+          'failed branch.'
+      );
+      return escapedForBash
+        ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, artifactsDir)
+        : nodeOutput.output;
+    }
+    // No-silent-drop field access (resolveNodeOutputField): prefers the parsed
+    // structuredOutput payload, falls back to parsing `output`, and THROWS an
+    // OutputRefError for an unresolvable reference (field not in the producer's
+    // declared schema, or a schemaless node whose output isn't JSON / lacks the
+    // key). The throw propagates to the dag-executor's per-node catch → the
+    // consuming node fails visibly instead of receiving a poisoned ''. The only
+    // value that resolves to empty is an author-declared-optional field.
+    let resolution: ReturnType<typeof resolveNodeOutputField>;
+    try {
+      resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
+    } catch (error) {
+      if (requiredContext && error instanceof OutputRefError) {
+        throw requiredOutputRefError(requiredContext, match, error.message);
+      }
+      throw error;
+    }
+    if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
+    const value = resolution.value;
+    // numbers and booleans are shell-safe without quoting: JSON disallows
+    // NaN/Infinity so String(number) is digits/sign/'.', and String(boolean) is
+    // 'true'/'false' — no shell metacharacters.
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    // Everything else takes the one value→text rule (strings raw; arrays/objects/
+    // null as canonical JSON so downstream tools like jq get one JSON literal),
+    // with the bash-escaping decision staying here at the call site.
+    const text = canonicalValueText(value);
+    return escapedForBash ? shellQuoteOrFile(text, nodeId, field, artifactsDir) : text;
+  });
+}
+
+/** What a node's template resolves against besides its workflow variables. */
+interface TemplateSources {
+  nodeOutputs: Map<string, NodeOutput>;
+  /** One per enclosing loop_group iteration, outermost first; empty outside a body. */
+  loopBodyScopes: readonly LoopBodyScope[];
+}
+
+/**
+ * How a template's resolved values are embedded: `prompt` raw; `shell` shell-quoted, for
+ * bash bodies and `until_bash`; `script` raw, with user-controlled free text left to env
+ * delivery (#2115).
+ */
+export type TextSurface = 'prompt' | 'shell' | 'script';
+
+/**
+ * The reference grammars a node's own template resolves in the same pass as its workflow
+ * variables (#4046): every enclosing loop_group scope, outermost first, then `$node.output`.
+ * Unsupported output paths are rejected on the template itself, never on a value
+ * substituted into it.
+ */
+export function nodeTemplateReferences(
+  template: string,
+  sources: TemplateSources,
+  surface: TextSurface = 'prompt',
+  options: { artifactsDir?: string; requiredContext?: RequiredOutputRefContext } = {}
+): TemplateReferences {
+  assertSupportedOutputRefs(template);
+  return {
+    before: sources.loopBodyScopes.flatMap(scope => loopScopeTokens(scope, surface)),
+    after: [
+      nodeOutputRefToken(
+        sources.nodeOutputs,
+        surface === 'shell',
+        options.artifactsDir,
+        options.requiredContext
+      ),
+    ],
+  };
+}
+
+/**
+ * Substitute $node_id.output and $node_id.output.field references, and the enclosing
+ * loop_group scopes' references, in text that carries no workflow variables (a gate
+ * message, a cancel reason, a wait timestamp). See {@link nodeOutputRefToken}.
+ */
 export function substituteNodeOutputRefs(
   prompt: string,
   nodeOutputs: Map<string, NodeOutput>,
   escapedForBash = false,
   artifactsDir?: string,
-  requiredContext?: RequiredOutputRefContext
+  requiredContext?: RequiredOutputRefContext,
+  loopBodyScopes: readonly LoopBodyScope[] = []
 ): string {
-  assertSupportedOutputRefs(prompt);
-  return prompt.replace(
-    new RegExp(CURRENT_OUTPUT_PATH_SOURCE, 'g'),
-    (match, nodeId: string, field: string | undefined) => {
-      const nodeOutput = nodeOutputs.get(nodeId);
-      if (!nodeOutput) {
-        // A `.field` ref that resolves to no output (for example, a programmatically
-        // constructed definition that bypassed discovery, or a real producer whose
-        // output is unavailable on this execution path) fails the consuming node loudly,
-        // matching the strict
-        // no-silent-drop posture for known-producer field access below. The whole-text
-        // `$id.output` form stays lenient ('') by default as a long-documented surface.
-        // `until_bash` opts into requiredContext because empty text would become an
-        // input to a completion decision rather than merely missing display text.
-        if (field) {
-          const error = new OutputRefError(nodeId, field, 'unknown-node', {
-            reference: match,
-            candidates: similarNodeIds(nodeId, nodeOutputs.keys()),
-          });
-          throw requiredContext
-            ? requiredOutputRefError(requiredContext, match, error.message)
-            : error;
-        }
-        if (requiredContext) {
-          const candidates = similarNodeIds(nodeId, nodeOutputs.keys());
-          const hint =
-            candidates.length > 0
-              ? ` Did you mean: ${candidates.map(candidate => `'${candidate}'`).join(', ')}?`
-              : '';
-          throw requiredOutputRefError(
-            requiredContext,
-            match,
-            `node '${nodeId}' has not produced output at this point.${hint} Fix the id, or ensure '${nodeId}' runs before this check.`
-          );
-        }
-        getLog().warn({ nodeId, match }, 'dag_node_output_ref_unknown_node');
-        return escapedForBash ? "''" : '';
-      }
-      if (!field) {
-        if (requiredContext && (nodeOutput.state === 'skipped' || nodeOutput.state === 'pending')) {
-          throw requiredOutputRefError(
-            requiredContext,
-            match,
-            `node '${nodeId}' did not run (skipped or pending), so it has no output to read. Fix the dependency or guard the consuming loop.`
-          );
-        }
-        if (requiredContext && nodeOutput.state === 'failed') {
-          throw requiredOutputRefError(
-            requiredContext,
-            match,
-            `node '${nodeId}' failed (${nodeOutput.error}), so its output cannot be trusted. Fix the failure or guard the consuming loop.`
-          );
-        }
-        // A failed producer's stale output is never spliced into a consumer's own
-        // prompt/bash/command body (#2713) — matches resolveBindingDirective's #2710
-        // guard for the same class of bug (a loop_group's failure paths leave real,
-        // last-completed-iteration text behind). Routes through `assertProducerNotFailed`
-        // in output-ref.ts (#2722), which every whole-text reader of nodeOutputs shares.
-        assertProducerNotFailed(
-          nodeOutput,
-          failed =>
-            `'$${nodeId}.output' references node '${nodeId}', but it failed ` +
-            `(${failed.error}), so its output cannot be spliced into this node's ` +
-            "prompt/script — a failed producer's stale output is never trusted. Fix the " +
-            "failure, or guard this node with a 'when:' condition that excludes the " +
-            'failed branch.'
-        );
-        return escapedForBash
-          ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, artifactsDir)
-          : nodeOutput.output;
-      }
-      // No-silent-drop field access (resolveNodeOutputField): prefers the parsed
-      // structuredOutput payload, falls back to parsing `output`, and THROWS an
-      // OutputRefError for an unresolvable reference (field not in the producer's
-      // declared schema, or a schemaless node whose output isn't JSON / lacks the
-      // key). The throw propagates to the dag-executor's per-node catch → the
-      // consuming node fails visibly instead of receiving a poisoned ''. The only
-      // value that resolves to empty is an author-declared-optional field.
-      let resolution: ReturnType<typeof resolveNodeOutputField>;
-      try {
-        resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
-      } catch (error) {
-        if (requiredContext && error instanceof OutputRefError) {
-          throw requiredOutputRefError(requiredContext, match, error.message);
-        }
-        throw error;
-      }
-      if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
-      const value = resolution.value;
-      // numbers and booleans are shell-safe without quoting: JSON disallows
-      // NaN/Infinity so String(number) is digits/sign/'.', and String(boolean) is
-      // 'true'/'false' — no shell metacharacters.
-      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-      // Everything else takes the one value→text rule (strings raw; arrays/objects/
-      // null as canonical JSON so downstream tools like jq get one JSON literal),
-      // with the bash-escaping decision staying here at the call site.
-      const text = canonicalValueText(value);
-      return escapedForBash ? shellQuoteOrFile(text, nodeId, field, artifactsDir) : text;
-    }
+  const { before, after } = nodeTemplateReferences(
+    prompt,
+    { nodeOutputs, loopBodyScopes },
+    escapedForBash ? 'shell' : 'prompt',
+    { artifactsDir, requiredContext }
   );
+  return substituteTemplate(prompt, [...before, ...after]);
 }
 
 /**
@@ -1535,7 +1603,7 @@ export function substituteNodeOutputRefs(
  * The transitive set (not just the outer group's direct ids) is deliberate: nested
  * loop_group bodies reuse the OUTER loop's prior-iteration snapshot, so a ref inside a
  * nested body may legitimately name an inner-group node id (which resolves to '' at the
- * outer granularity — see {@link applyLoopPrevToBodyNode}). Including descendants keeps
+ * outer granularity — see {@link loopPrevRefToken}). Including descendants keeps
  * such real-but-empty refs lenient while still catching ids that exist nowhere.
  */
 function collectLoopBodyNodeIds(
@@ -1551,10 +1619,10 @@ function collectLoopBodyNodeIds(
 }
 
 /**
- * Resolve `$LOOP_PREV.<nodeId>.output` and `$LOOP_PREV.<nodeId>.output.<field>` references
- * against a loop_group body's *prior-iteration* node outputs.
+ * The `$LOOP_PREV.<nodeId>.output[.field]` reference, resolved against one loop_group
+ * scope's *prior-iteration* node outputs.
  *
- * Cross-iteration analog of {@link substituteNodeOutputRefs}: where `$nodeId.output` reads
+ * Cross-iteration analog of {@link nodeOutputRefToken}: where `$nodeId.output` reads
  * a node's output from the *current* iteration's scope, `$LOOP_PREV.<nodeId>.output` reads
  * the same node's output from the *previous* iteration — letting a body node reference what
  * a sibling (or itself) produced one iteration ago. On iteration 1 (no prior iteration)
@@ -1566,8 +1634,8 @@ function collectLoopBodyNodeIds(
  * `OutputRefError`, propagating to the consuming node's failure). The only value that
  * resolves to empty is an author-declared-optional field — or any ref on iteration 1.
  *
- * Two static id sets from the enclosing loop_group (both via {@link collectLoopBodyNodeIds}
- * / its immediate-ids counterpart) drive the absent-output branch. `knownBodyIds` is the
+ * Two static id sets from the scope (both via {@link collectLoopBodyNodeIds} / its
+ * immediate-ids counterpart) drive the absent-output branch. `knownBodyIds` is the
  * TRANSITIVE set (this group's body plus every nested descendant); `directBodyIds` is only
  * THIS group's immediate body ids. When output is absent, the id is classified:
  *   - not in `knownBodyIds` → a typo that matches no body node anywhere. A `.field` ref
@@ -1575,79 +1643,87 @@ function collectLoopBodyNodeIds(
  *     analog of the same fix at the `$node.output.field` seam (#2135/#2142); a whole-text
  *     `$LOOP_PREV.<id>.output` ref stays lenient ('').
  *   - in `knownBodyIds` but not in `directBodyIds` → the id belongs to a NESTED loop_group,
- *     not this group's own body. The literal token is left INTACT (`return match`) so the
- *     inner loop_group resolves it against its OWN prior-iteration snapshot when it runs
- *     (nested body nodes get a second substituteLoopPrevRefs pass — the outer pass must not
- *     consume their tokens, or the inner loop could never see its own prior iteration).
+ *     not this group's own body. The token declines the reference so the inner
+ *     loop_group's scope, later in the same pass, resolves it against its OWN
+ *     prior-iteration snapshot. The outer scope must not consume it, or the inner loop
+ *     could never see its own prior iteration.
  *   - in `directBodyIds` with no prior output → legitimate iteration-1 / skipped absence → ''.
  *
- * When `knownBodyIds` is undefined (raw callers with no static set) the seam stays fully
+ * When `knownBodyIds` is undefined (a scope with no static set) the seam stays fully
  * lenient — every absent ref resolves to '', preserving the pre-#2142 behavior.
  */
-export function substituteLoopPrevRefs(
-  prompt: string,
-  loopPrevOutputs: Map<string, NodeOutput> | undefined,
-  escapedForBash = false,
-  outputFileDir?: string,
-  knownBodyIds?: ReadonlySet<string>,
-  directBodyIds?: ReadonlySet<string>
-): string {
-  // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
-  // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
-  // '' via the `!nodeOutput` branch below, rather than leaving a literal `$LOOP_PREV.…`.
-  assertSupportedOutputRefs(prompt);
-  if (!prompt.includes('$LOOP_PREV.')) {
-    return prompt;
-  }
-  return prompt.replace(
-    new RegExp(PRIOR_OUTPUT_PATH_SOURCE, 'g'),
-    (match, nodeId: string, field: string | undefined) => {
-      const nodeOutput = loopPrevOutputs?.get(nodeId);
-      if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
-        if (knownBodyIds) {
-          if (!knownBodyIds.has(nodeId)) {
-            // Typo: id matches NO body node anywhere in the enclosing loop_group (a typo
-            // the loader can't see — it never scans `$LOOP_PREV.*` refs). A `.field` ref
-            // fails the consuming node loudly, mirroring substituteNodeOutputRefs /
-            // resolveOutputRef; a whole-text ref stays lenient ('' below). The static set
-            // is required: the runtime `loopPrevOutputs` map is empty on iteration 1, so it
-            // alone cannot tell a typo from a legitimate first-pass absence.
-            if (field) {
-              throw new OutputRefError(nodeId, field, 'unknown-node', {
-                reference: match,
-                candidates: similarNodeIds(nodeId, knownBodyIds),
-              });
-            }
-          } else if (directBodyIds && !directBodyIds.has(nodeId)) {
-            // Known id owned by a NESTED loop_group, not this group's own body. Leave the
-            // literal token intact so the inner loop_group resolves it against its OWN
-            // prior-iteration snapshot when it executes — the outer pass must not consume
-            // it, or the inner loop could never reference its own previous iteration.
-            return match;
+function loopPrevRefToken(scope: LoopBodyScope, escapedForBash: boolean): TemplateToken {
+  const { loopPrevOutputs, outputFileDir, knownBodyIds, directBodyIds } = scope;
+  return templateToken(PRIOR_OUTPUT_PATH_SOURCE, groups => {
+    const [match, nodeId] = groups;
+    // An optional group that did not match is undefined, whatever RegExpExecArray says.
+    const field: string | undefined = groups[2];
+    const nodeOutput = loopPrevOutputs?.get(nodeId);
+    if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
+      if (knownBodyIds) {
+        if (!knownBodyIds.has(nodeId)) {
+          // Typo: id matches NO body node anywhere in the enclosing loop_group (a typo
+          // the loader can't see — it never scans `$LOOP_PREV.*` refs). A `.field` ref
+          // fails the consuming node loudly, mirroring nodeOutputRefToken /
+          // resolveOutputRef; a whole-text ref stays lenient ('' below). The static set
+          // is required: the runtime `loopPrevOutputs` map is empty on iteration 1, so it
+          // alone cannot tell a typo from a legitimate first-pass absence.
+          if (field) {
+            throw new OutputRefError(nodeId, field, 'unknown-node', {
+              reference: match,
+              candidates: similarNodeIds(nodeId, knownBodyIds),
+            });
           }
-          // else: known + direct id with no prior output → legitimate iteration-1 / skipped
-          // absence → lenient '' below.
+        } else if (directBodyIds && !directBodyIds.has(nodeId)) {
+          // Known id owned by a NESTED loop_group, not this group's own body. Decline it so
+          // the inner loop_group's scope resolves it against its OWN prior-iteration
+          // snapshot — this scope must not consume it, or the inner loop could never
+          // reference its own previous iteration.
+          return undefined;
         }
-        // No prior-iteration output for this body node (iteration 1, or the node was
-        // skipped / hasn't settled last iteration). Resolve to empty rather than
-        // throwing — the author opted into a cross-iteration ref, and absence on the
-        // first pass (or after a skipped node) is expected.
-        getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
-        return escapedForBash ? "''" : '';
+        // else: known + direct id with no prior output → legitimate iteration-1 / skipped
+        // absence → lenient '' below.
       }
-      if (!field) {
-        return escapedForBash
-          ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
-          : nodeOutput.output;
-      }
-      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
-      if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
-      const value = resolution.value;
-      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-      const text = canonicalValueText(value);
-      return escapedForBash ? shellQuoteOrFile(text, nodeId, field, outputFileDir) : text;
+      // No prior-iteration output for this body node (iteration 1, or the node was
+      // skipped / hasn't settled last iteration). Resolve to empty rather than
+      // throwing — the author opted into a cross-iteration ref, and absence on the
+      // first pass (or after a skipped node) is expected.
+      getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
+      return escapedForBash ? "''" : '';
     }
-  );
+    if (!field) {
+      return escapedForBash
+        ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
+        : nodeOutput.output;
+    }
+    const resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
+    if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
+    const value = resolution.value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    const text = canonicalValueText(value);
+    return escapedForBash ? shellQuoteOrFile(text, nodeId, field, outputFileDir) : text;
+  });
+}
+
+/**
+ * One loop_group scope's references: `$LOOP_PREV.*` and, when the scope carries a reply,
+ * `$LOOP_USER_INPUT`. A `shell` surface shell-quotes both (spilling large `$LOOP_PREV`
+ * values to a file, as {@link nodeOutputRefToken} does). A `script` surface leaves
+ * `$LOOP_USER_INPUT` literal: free text cannot be safely quoted into TS/Python source, so
+ * the script reads it from its env (#2115). `$LOOP_PREV.*` stays raw there (bounded
+ * producer contract).
+ */
+function loopScopeTokens(scope: LoopBodyScope, surface: TextSurface): TemplateToken[] {
+  const tokens = [loopPrevRefToken(scope, surface === 'shell')];
+  const { loopUserInput } = scope;
+  if (loopUserInput !== undefined && surface !== 'script') {
+    tokens.push(
+      templateToken(String.raw`\$LOOP_USER_INPUT`, () =>
+        surface === 'shell' ? shellQuote(loopUserInput) : loopUserInput
+      )
+    );
+  }
+  return tokens;
 }
 
 // buildSDKHooksFromYAML moved to @archon/providers/src/claude/provider.ts
@@ -2150,7 +2226,9 @@ async function executeNodeInternal(
   iteration?: number,
   checkpointSession?: SessionCheckpoint,
   typedArtifactsFile?: string,
-  resumeIntent: SessionResumeIntent = 'ordinary'
+  resumeIntent: SessionResumeIntent = 'ordinary',
+  /** `$REJECTION_REASON` for an approval gate's rework prompt; undefined elsewhere. */
+  rejectionReason?: string
 ): Promise<NodeExecutionResult> {
   const {
     deps,
@@ -2163,7 +2241,6 @@ async function executeNodeInternal(
     logDir,
     baseBranch,
     docsDir,
-    nodeOutputs,
     configuredCommandFolder,
     issueContext,
     workflowSourceRoots,
@@ -2172,7 +2249,10 @@ async function executeNodeInternal(
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Command file name when this agent node is command-sourced, undefined for an
   // inline prompt — replaces the old `node.command` field access throughout.
-  const commandName = node.source.kind === 'command' ? node.source.name : undefined;
+  const commandName =
+    node.source.kind === 'command'
+      ? substituteLoopBodyText(node.source.name, ctx.loopBodyScopes)
+      : undefined;
   // Include expansion compiles a command body into an inline prompt and moves the node's
   // `with:` map to the engine-private payload, so a composed node binds exactly as the
   // same node does standalone (#2964).
@@ -2294,7 +2374,7 @@ async function executeNodeInternal(
       getLog().error({ nodeId: node.id, error: errMsg }, 'dag_node_command_load_failed');
       return failAgentNode(errMsg, 'config');
     }
-    rawPrompt = promptResult.content;
+    rawPrompt = resolveIncludeOutputAliases(node, promptResult.content);
   } else {
     // commandName undefined implies node.source.kind === 'inline' by construction
     // (AgentBody.source is a two-member union) — but the compiler can't correlate
@@ -2308,8 +2388,7 @@ async function executeNodeInternal(
     rawPrompt = node.source.prompt;
   }
 
-  // Standard variable substitution
-  let substitutedPrompt: string;
+  let finalPrompt: string;
   try {
     // Node-local bindings (#2637): a command node's `with:` map resolves against
     // upstream outputs and merges OVER the run's inputs into the `$INPUTS` bag —
@@ -2317,33 +2396,13 @@ async function executeNodeInternal(
     // that cannot be satisfied throws here and fails the node via the catch below.
     const runInputs = resolveRunInputs(workflowRun);
     const nodeBindings =
-      nodeWith !== undefined
-        ? resolveNodeBindings(
-            node.id,
-            nodeWith,
-            {
-              workflowRun,
-              artifactsDir,
-              stateDir,
-              baseBranch,
-              docsDir,
-              issueContext,
-              nodeOutputs,
-            },
-            runInputs
-          )
-        : undefined;
+      nodeWith !== undefined ? resolveNodeBindings(node.id, nodeWith, ctx, runInputs) : undefined;
     const promptInputs =
       nodeBindings !== undefined ? { ...(runInputs ?? {}), ...nodeBindings } : runInputs;
-    // The loop group substituted this node's own slots before it ran; a command file is
-    // loaded only now, so it takes the enclosing loops' passes here. An inline prompt
-    // already has, and a second pass would reprocess the user input it spliced.
-    const loopResolvedPrompt =
-      commandName !== undefined
-        ? ctx.loopBodyScopes.reduce((text, scope) => substituteLoopBodyText(text, scope), rawPrompt)
-        : rawPrompt;
-    substitutedPrompt = buildPromptWithContext(
-      loopResolvedPrompt,
+    // An inline prompt and a command file loaded only now resolve alike: variables,
+    // enclosing loop_group scopes and upstream outputs in one pass.
+    finalPrompt = buildPromptWithContext(
+      rawPrompt,
       workflowRun.id,
       workflowRun.user_message,
       artifactsDir,
@@ -2351,7 +2410,13 @@ async function executeNodeInternal(
       docsDir,
       issueContext,
       `dag node '${node.id}' prompt`,
-      { stateDir, inputs: promptInputs, typedArtifactsFile }
+      {
+        stateDir,
+        inputs: promptInputs,
+        typedArtifactsFile,
+        rejectionReason,
+        references: nodeTemplateReferences(rawPrompt, ctx),
+      }
     );
   } catch (error) {
     const err = error as Error;
@@ -2365,9 +2430,6 @@ async function executeNodeInternal(
     );
     return result;
   }
-
-  // Substitute upstream node output references
-  const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
   const streamingMode = platform.getStreamingMode();
 
@@ -3292,8 +3354,8 @@ async function executeBashNode(
   iteration?: number,
   // Per-iteration $LOOP_USER_INPUT free-text for loop_group body bash nodes, delivered via
   // env (#2725). This is bash's SECOND delivery channel — the literal "$LOOP_USER_INPUT"
-  // token is already shell-quoted and spliced into the script source by
-  // applyLoopPrevToBodyNode before this function runs; this env var is what a script that
+  // token is shell-quoted into the script source from the enclosing loop scope
+  // (ctx.loopBodyScopes); this env var is what a script that
   // reads the variable indirectly (${LOOP_USER_INPUT}, printenv, env) actually sees. ''
   // for top-level bash nodes and non-first iterations.
   loopUserInput = ''
@@ -3309,7 +3371,6 @@ async function executeBashNode(
     logDir,
     baseBranch,
     docsDir,
-    nodeOutputs,
     issueContext,
     execContext,
   } = ctx;
@@ -3330,8 +3391,7 @@ async function executeBashNode(
   // observes the artifacts published before IT. A materialization failure propagates
   // to the retry/dispatch boundary as an explicit node provisioning error.
   const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
-  // Variable substitution on script
-  const { prompt: substitutedScript } = substituteWorkflowVariables(
+  const { prompt: finalScript } = substituteWorkflowVariables(
     node.script,
     workflowRun.id,
     workflowRun.user_message,
@@ -3342,9 +3402,13 @@ async function executeBashNode(
     undefined,
     undefined,
     undefined,
-    { shellSafe: true, stateDir, typedArtifactsFile }
+    {
+      shellSafe: true,
+      stateDir,
+      typedArtifactsFile,
+      references: nodeTemplateReferences(node.script, ctx, 'shell', { artifactsDir }),
+    }
   );
-  const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true, artifactsDir);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   // Archon-managed env only — runSubprocess adds the host env for host runs and
@@ -3361,15 +3425,7 @@ async function executeBashNode(
     // (#2470/#1764). Spread after envVars so a configured project env var can never
     // shadow an input's delivery, and before the engine-reserved keys so those still
     // win (same ordering rationale).
-    ...inputEnvVars(node, {
-      workflowRun,
-      artifactsDir,
-      stateDir,
-      baseBranch,
-      docsDir,
-      issueContext,
-      nodeOutputs,
-    }),
+    ...inputEnvVars(node, ctx),
     ...buildExecNodeEnvironment({
       artifactsDir,
       stateDir,
@@ -3522,8 +3578,8 @@ const SCRIPT_USER_VAR_PATTERN =
  * channel. Those refs are now delivered as env vars and no longer substituted, so
  * a literal `$VAR` left in the body silently stops resolving. Warn the author (log
  * + one concise platform line) with the language-appropriate accessor for one
- * release before the refs are removed. `script` is the post-workflow-var,
- * pre-node-output string so an expanded `$nodeId.output` value can't false-positive.
+ * release before the refs are removed. `script` is the author's raw template, so a
+ * substituted `$nodeId.output` value can't false-positive.
  */
 async function warnOnLiteralUserVars(
   node: ExecNode,
@@ -3569,8 +3625,8 @@ async function executeScriptNode(
   // env (never spliced into source — #2115). '' for top-level scripts and non-first
   // iterations. This is script's ONLY delivery channel; executeBashNode also uses this
   // same env-var parameter (#2725), but additionally has the literal "$LOOP_USER_INPUT"
-  // token pre-spliced (shell-quoted) into its script source by applyLoopPrevToBodyNode
-  // before it runs — a channel script deliberately has no equivalent of.
+  // token shell-quoted into its script source from the enclosing loop scope — a channel
+  // script deliberately has no equivalent of.
   loopUserInput = ''
 ): Promise<NodeExecutionResult> {
   const {
@@ -3584,7 +3640,6 @@ async function executeScriptNode(
     logDir,
     baseBranch,
     docsDir,
-    nodeOutputs,
     issueContext,
     execContext,
     workflowSourceRoots,
@@ -3609,7 +3664,7 @@ async function executeScriptNode(
   // TS/Python source; strict node-output references keep raw substitution (#2115).
   // Fresh per call, same as executeBashNode: one attempt, one observation.
   const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
-  const { prompt: substitutedScript } = substituteWorkflowVariables(
+  const { prompt: finalScript } = substituteWorkflowVariables(
     node.script,
     workflowRun.id,
     workflowRun.user_message,
@@ -3620,16 +3675,20 @@ async function executeScriptNode(
     undefined,
     undefined,
     undefined,
-    { shellSafe: true, stateDir, typedArtifactsFile }
+    {
+      shellSafe: true,
+      stateDir,
+      typedArtifactsFile,
+      references: nodeTemplateReferences(node.script, ctx, 'script'),
+    }
   );
-  const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
   if (!isInlineScript(finalScript)) {
     await assertWorkflowSourceIntegrity(workflowSourceRoots);
   }
 
   // One-release migration warn for any literal user-controlled var ref that no
   // longer substitutes now that delivery moved to env vars (#2115).
-  await warnOnLiteralUserVars(node, substitutedScript, platform, conversationId, nodeContext);
+  await warnOnLiteralUserVars(node, node.script, platform, conversationId, nodeContext);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   // Archon-managed env only — runSubprocess adds the host env for host runs and
@@ -3645,15 +3704,7 @@ async function executeScriptNode(
     // Named run and composed-workflow inputs as INPUTS_<UPPER_SNAKE> env vars
     // (#2470/#1764) — same ordering rationale as executeBashNode: after envVars,
     // before the engine-reserved keys.
-    ...inputEnvVars(node, {
-      workflowRun,
-      artifactsDir,
-      stateDir,
-      baseBranch,
-      docsDir,
-      issueContext,
-      nodeOutputs,
-    }),
+    ...inputEnvVars(node, ctx),
     ...buildExecNodeEnvironment({
       artifactsDir,
       stateDir,
@@ -4391,7 +4442,7 @@ async function executeLoopGroupBody(
   // pre-populated from them (executeDagWorkflow's resume pre-population, itself
   // sourced from getDagResumeSnapshot's #2726/#2732 bounded-rows + spill/rehydrate
   // read), keyed by that full step name. Re-key to the bare body id so
-  // substituteLoopPrevRefs finds them exactly as it would mid-loop.
+  // the loop scope finds them exactly as it would mid-loop.
   if (isLoopResume) {
     const restoredLoopPrevOutputs = new Map<string, NodeOutput>();
     const bodyNodesById = new Map(bodyNodes.map(n => [n.id, n]));
@@ -4413,7 +4464,7 @@ async function executeLoopGroupBody(
         ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
       });
     }
-    // Kept as an empty-map guard for clarity only — substituteLoopPrevRefs reads via
+    // Kept as an empty-map guard for clarity only — loopPrevRefToken reads via
     // `loopPrevOutputs?.get(id)`, so an empty Map and undefined are indistinguishable
     // to every consumer; this has no behavioral effect either way.
     if (restoredLoopPrevOutputs.size > 0) loopPrevOutputs = restoredLoopPrevOutputs;
@@ -4449,7 +4500,15 @@ async function executeLoopGroupBody(
         // iteration BEFORE this one resolves empty here, same as a fresh
         // iteration 1. Not expected to matter in practice: Design A's canonical
         // pattern reads only $<gateId>.output inside until_bash, never $LOOP_PREV.
-        const { prompt: resumedBashPrompt } = substituteWorkflowVariables(
+        // Merge outer-DAG outputs underneath the reconstructed body outputs —
+        // mirrors how a normal (non-resumed) iteration seeds scopedNodeOutputs
+        // (`new Map(outerNodeOutputs)`, then overwritten by this iteration's own
+        // body results) — so an until_bash combining an outer-scope ref with the
+        // gate's own decision resolves the outer ref correctly on resume too,
+        // not just mid-loop. outerNodeOutputs is already an in-scope parameter;
+        // no new reconstruction needed.
+        const resumedScope = new Map([...outerNodeOutputs, ...loopPrevOutputs]);
+        const { prompt: resumedSubstitutedBash } = substituteWorkflowVariables(
           group.until_bash,
           workflowRun.id,
           workflowRun.user_message,
@@ -4460,22 +4519,20 @@ async function executeLoopGroupBody(
           undefined,
           undefined,
           undefined,
-          { shellSafe: true, stateDir, typedArtifactsFile }
-        );
-        // Merge outer-DAG outputs underneath the reconstructed body outputs —
-        // mirrors how a normal (non-resumed) iteration seeds scopedNodeOutputs
-        // (`new Map(outerNodeOutputs)`, then overwritten by this iteration's own
-        // body results) — so an until_bash combining an outer-scope ref with the
-        // gate's own decision resolves the outer ref correctly on resume too,
-        // not just mid-loop. outerNodeOutputs is already an in-scope parameter;
-        // no new reconstruction needed.
-        const resumedScope = new Map([...outerNodeOutputs, ...loopPrevOutputs]);
-        const resumedSubstitutedBash = substituteNodeOutputRefs(
-          resumedBashPrompt,
-          resumedScope,
-          true, // escapedForBash
-          artifactsDir,
-          { consumerId: node.id, field: 'loop_group.until_bash' }
+          {
+            shellSafe: true,
+            stateDir,
+            typedArtifactsFile,
+            references: nodeTemplateReferences(
+              group.until_bash,
+              { nodeOutputs: resumedScope, loopBodyScopes: ctx.loopBodyScopes },
+              'shell',
+              {
+                artifactsDir,
+                requiredContext: { consumerId: node.id, field: 'loop_group.until_bash' },
+              }
+            ),
+          }
         );
         const resumedBashPath = resolveBashPath();
         try {
@@ -4637,26 +4694,21 @@ async function executeLoopGroupBody(
         logEventStoreError(err, i);
       });
 
-    // Pre-substitute $LOOP_PREV.* refs and $LOOP_USER_INPUT into the body node prompt
-    // fields. The body is a sealed sub-DAG whose executors build prompts from node
-    // definitions; resolving these here (before runLayers) keeps the body executors
-    // unaware of the enclosing loop iteration. On iteration 1 loopPrevOutputs is undefined
-    // → $LOOP_PREV refs resolve to ''; $LOOP_USER_INPUT is '' except on the first resumed
-    // iteration of an interactive loop.
+    // This iteration's $LOOP_PREV.* outputs and $LOOP_USER_INPUT reply, which every body
+    // node resolves through iterCtx.loopBodyScopes. On iteration 1 loopPrevOutputs is
+    // undefined → $LOOP_PREV refs resolve to ''; $LOOP_USER_INPUT is '' except on the first
+    // resumed iteration of an interactive loop.
     const prevSnapshot = loopPrevOutputs;
     const userInputForIter = isLoopResume && i === startIteration ? loopUserInput : '';
     const iterScope = loopBodyScope(bodyNodes, prevSnapshot, userInputForIter, artifactsDir);
-    const iterBodyNodes = applyLoopPrevToBody(bodyNodes, iterScope);
-    // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
-    // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
-    const iterBodyLayers = planGraph(iterBodyNodes).layers;
+    const iterBodyLayers = planGraph(bodyNodes).layers;
 
     // Fresh scoped output map per iteration. Seed it read-only with the outer DAG's
     // upstream outputs so body nodes can reference outer context via $nodeId.output if
     // needed (the body is sealed against depends_on, but prompt refs remain valid).
     const scopedNodeOutputs = new Map<string, NodeOutput>(outerNodeOutputs);
 
-    const terminalSuspendNode = findLoopGroupTerminalSuspendNode(iterBodyNodes);
+    const terminalSuspendNode = findLoopGroupTerminalSuspendNode(bodyNodes);
     const iterCtx: RunLayersContext = {
       toolAttention: ctx.toolAttention,
       bodyGateOwner:
@@ -4730,9 +4782,9 @@ async function executeLoopGroupBody(
       stepNamePrefix: bodyStepNamePrefix,
       loopGroupPath: [...ctx.loopGroupPath, { groupId: node.id, iteration: i }],
       // Deliver this iteration's approval-gate free-text to body exec: nodes via env
-      // (#2115, #2725). Script bodies use this as their ONLY channel (applyLoopPrevToBodyNode
-      // skips their literal token, unsafe to splice into TS/Python source). Bash bodies get
-      // it as a SECOND channel — applyLoopPrevToBodyNode already spliced the literal
+      // (#2115, #2725). Script bodies use this as their ONLY channel (their loop scope leaves
+      // the literal token alone, unsafe to splice into TS/Python source). Bash bodies get
+      // it as a SECOND channel — their loop scope shell-quotes the literal
       // "$LOOP_USER_INPUT" token into the script source; this env var covers indirect reads
       // (${LOOP_USER_INPUT}, printenv, env) that splice can't reach.
       bodyLoopUserInput: userInputForIter,
@@ -4784,7 +4836,7 @@ async function executeLoopGroupBody(
     // (any failed node fails the run) and executeLoopNode (an iteration failure stops
     // the loop). Silently re-running the body would burn AI cost every remaining
     // iteration and bury the root cause under a generic max-iterations error.
-    const failedBodyOutputs = iterBodyNodes.flatMap(n => {
+    const failedBodyOutputs = bodyNodes.flatMap(n => {
       const o = scopedNodeOutputs.get(n.id);
       return o?.state === 'failed' ? [{ id: n.id, output: o }] : [];
     });
@@ -4849,7 +4901,7 @@ async function executeLoopGroupBody(
     if (
       postBodyStatus === 'paused' &&
       bodySessionCursorAncestry.size > 0 &&
-      iterBodyNodes.some(
+      bodyNodes.some(
         n => n.kind === 'loop_group' && scopedNodeOutputs.get(n.id)?.state === 'running'
       )
     ) {
@@ -4870,7 +4922,7 @@ async function executeLoopGroupBody(
     // the iteration's own result, not a caller contract — `returns:` selects a WORKFLOW's
     // result and only rebinds a child run's terminal output (see executeDagWorkflow). Leave
     // this positional scan as-is; do not "fix" the inconsistency.
-    const terminalSink = loopGroupBodySinks(iterBodyNodes)
+    const terminalSink = loopGroupBodySinks(bodyNodes)
       .map(n => scopedNodeOutputs.get(n.id))
       .find(o => o?.state === 'completed' && o.output.trim().length > 0);
     const iterationOutput = terminalSink?.output ?? '';
@@ -4913,36 +4965,43 @@ async function executeLoopGroupBody(
         // Resolve this group's own cross-iteration refs against the snapshot captured
         // before its body ran. `loopPrevOutputs` now contains the CURRENT iteration, so
         // using it here would collapse `$LOOP_PREV` into `$node.output` semantics. Only
-        // direct body ids belong to this scope; refs owned by an enclosing group were
-        // already resolved while preparing this nested group, and descendant ids are not
+        // direct body ids belong to this scope; refs owned by an enclosing group resolve
+        // through that group's scope ahead of this one, and descendant ids are not
         // present in this group's per-iteration output map.
-        const prevResolvedBash = substituteLoopPrevRefs(
-          group.until_bash,
-          prevSnapshot,
-          true,
-          logDir,
+        const ownScope: LoopBodyScope = {
+          loopPrevOutputs: prevSnapshot,
+          outputFileDir: logDir,
+          knownBodyIds: directBodyIds,
           directBodyIds,
-          directBodyIds
-        );
-        const { prompt: bashPrompt } = substituteWorkflowVariables(
-          prevResolvedBash,
+        };
+        const { prompt: substitutedBash } = substituteWorkflowVariables(
+          group.until_bash,
           workflowRun.id,
           workflowRun.user_message,
           artifactsDir,
           baseBranch,
           docsDir,
           issueContext,
-          i === startIteration ? loopUserInput : undefined,
           undefined,
           undefined,
-          { shellSafe: true, stateDir, typedArtifactsFile }
-        );
-        const substitutedBash = substituteNodeOutputRefs(
-          bashPrompt,
-          scopedNodeOutputs,
-          true, // escapedForBash
-          artifactsDir,
-          { consumerId: node.id, field: 'loop_group.until_bash' }
+          undefined,
+          {
+            shellSafe: true,
+            stateDir,
+            typedArtifactsFile,
+            references: nodeTemplateReferences(
+              group.until_bash,
+              {
+                nodeOutputs: scopedNodeOutputs,
+                loopBodyScopes: [...ctx.loopBodyScopes, ownScope],
+              },
+              'shell',
+              {
+                artifactsDir,
+                requiredContext: { consumerId: node.id, field: 'loop_group.until_bash' },
+              }
+            ),
+          }
         );
         await runSubprocess(execContext, groupBashPath, ['-c', substitutedBash], {
           cwd,
@@ -5198,14 +5257,18 @@ async function executeLoopGroupBody(
 }
 
 /**
- * What one loop_group iteration substitutes into its body's text: the prior-iteration
- * outputs `$LOOP_PREV.*` reads, the `$LOOP_USER_INPUT` free-text, and the static id sets
- * {@link substituteLoopPrevRefs} classifies absent refs with. Built once per iteration by
- * {@link loopBodyScope}; a body inside nested groups sees one scope per enclosing group.
+ * What one loop_group iteration resolves in its body's text: the prior-iteration outputs
+ * `$LOOP_PREV.*` reads, the `$LOOP_USER_INPUT` reply, and the static id sets
+ * {@link loopPrevRefToken} classifies absent refs with. Built once per iteration by
+ * {@link loopBodyScope}. A body node resolves its templates against one scope per enclosing
+ * group ({@link RunLayersContext.loopBodyScopes}) in the same pass as its workflow variables
+ * and `$node.output` references, so a reply or a previous output is never read as template
+ * syntax (#4046).
  */
 export interface LoopBodyScope {
   loopPrevOutputs: Map<string, NodeOutput> | undefined;
-  loopUserInput: string;
+  /** Undefined leaves `$LOOP_USER_INPUT` to an enclosing scope or the run-level variable. */
+  loopUserInput?: string;
   outputFileDir?: string;
   knownBodyIds?: ReadonlySet<string>;
   directBodyIds?: ReadonlySet<string>;
@@ -5215,7 +5278,7 @@ export interface LoopBodyScope {
  * `knownBodyIds` is TRANSITIVE (this group's body + every nested descendant) — an id absent
  * from it is a typo (`.field` ref → loud failure). `directBodyIds` is only THIS group's
  * immediate ids — an id in knownBodyIds but not directBodyIds belongs to a nested group and
- * its token is preserved for that inner group's own pass (#2142).
+ * is left to that inner group's own scope (#2142).
  */
 export function loopBodyScope(
   bodyNodes: readonly DagNode[],
@@ -5233,95 +5296,19 @@ export function loopBodyScope(
 }
 
 /**
- * Substitute `$LOOP_PREV.*` refs and `$LOOP_USER_INPUT` into one piece of loop-body text.
- * The single owner of loop-body text substitution: {@link applyLoopPrevToBodyNode} runs it
- * over a body node's template slots, and the agent-node path runs it over a body command
- * node's file body once loaded, so a command behaves exactly like the same text inline.
- *
- * Resolve $LOOP_PREV FIRST, then splice $LOOP_USER_INPUT — so user input containing a
- * literal "$LOOP_PREV." is not itself reprocessed as a workflow-ref. A `shell` surface
- * (bash/until_bash) shell-quotes $LOOP_PREV values (spilling to a file over the size
- * threshold, same as substituteNodeOutputRefs) and $LOOP_USER_INPUT before splicing (user
- * input is free-text; unquoted it could break or inject into the bash command). A `prompt`
- * surface (prompts, command bodies, display text) uses the raw values. A `script` surface
- * leaves $LOOP_USER_INPUT as a literal token: free-text cannot be safely quoted into
- * TS/Python source, so it is delivered to the script as a subprocess env var instead
- * (#2115) — matching how executeScriptNode delivers every other user-controlled variable.
- * $LOOP_PREV.* refs stay raw-spliced there (bounded producer contract).
+ * Resolve only the loop_group scopes' references in `text`, for text that is not a
+ * template of its own: a body command node's file name, a binding's `if_skipped` default.
  */
 export function substituteLoopBodyText(
   text: string,
-  scope: LoopBodyScope,
-  surface: 'prompt' | 'shell' | 'script' = 'prompt'
+  scopes: readonly LoopBodyScope[],
+  surface: TextSurface = 'prompt'
 ): string {
-  const escapedForBash = surface === 'shell';
-  const prevResolved = substituteLoopPrevRefs(
+  assertSupportedOutputRefs(text);
+  return substituteTemplate(
     text,
-    scope.loopPrevOutputs,
-    escapedForBash,
-    scope.outputFileDir,
-    scope.knownBodyIds,
-    scope.directBodyIds
+    scopes.flatMap(scope => loopScopeTokens(scope, surface))
   );
-  if (surface === 'script') return prevResolved;
-  const userInput = escapedForBash ? shellQuote(scope.loopUserInput) : scope.loopUserInput;
-  return prevResolved.replace(/\$LOOP_USER_INPUT/g, userInput);
-}
-
-/**
- * Clone a body node with `$LOOP_PREV.<id>.output[.field]` refs and `$LOOP_USER_INPUT`
- * pre-substituted into every text field a body executor reads prompts from. Used by
- * {@link executeLoopGroupNode} so the sealed body sub-DAG's executors stay unaware of the
- * enclosing loop iteration (the body's own executors call substituteWorkflowVariables, but
- * that uses the run's user_message — not the loop's per-iteration user input — so
- * $LOOP_USER_INPUT must be resolved here, at the loop-group level). A command node's file
- * body is not a slot here: it is loaded at execution time and substituted there against
- * the same scopes ({@link RunLayersContext.loopBodyScopes}).
- *
- * Prompt-bearing fields include node prompts, AI configuration, and load-time compiled loop
- * command prompts. `when:` conditions remain expressions: runLayers resolves their
- * `$LOOP_PREV` references against this iteration's prior-output snapshot.
- *
- * The scope's `knownBodyIds` (transitive body-id set) and `directBodyIds` (this group's
- * immediate body ids) are threaded UNCHANGED into every substitution AND into the
- * nested-loop_group recursion — deliberately not recomputed for the inner group. This keeps
- * `$LOOP_PREV.*` refs validated against the OUTER loop's snapshot (whose body they resolve
- * against): a ref to an outer-direct id resolves now, a ref owned by a nested group is left
- * intact for that inner group's own pass, and a ref to nothing is a typo. Both omitted by
- * raw callers, which then skip the typo/nested classification entirely (fully lenient).
- */
-export function applyLoopPrevToBodyNode(node: DagNode, scope: LoopBodyScope): DagNode {
-  // Node-local `with:` bindings (#2637) are per-iteration surfaces like every other
-  // body field: string values (whole refs and templates alike) get the same raw
-  // `$LOOP_PREV` splice — raw because binding values never touch shell source, the
-  // env bag / `$INPUTS` channel is the injection-safe delivery (#2115). A spliced
-  // `$LOOP_PREV.<id>.output` therefore delivers the previous iteration's TEXT
-  // ('' on iteration 1), exactly like the prompt/bash surfaces — never the literal
-  // token. Directives stay untouched: `from` must remain a current-iteration node
-  // ref (the loader rejects `$LOOP_PREV` there, naming this string form), and only
-  // a string `if_skipped` default carries the splice, mirroring the include macro.
-  const substitutedNode = mapNodeTemplateSlots(node, slot => {
-    if (slot.surface === 'binding_from' || slot.surface === 'condition') return slot.value;
-    if (slot.surface === 'shell') return substituteLoopBodyText(slot.value, scope, 'shell');
-    if (slot.surface === 'script') return substituteLoopBodyText(slot.value, scope, 'script');
-    return substituteLoopBodyText(slot.value, scope);
-  });
-  if (isAgentNode(substitutedNode) && substitutedNode.source.kind === 'command') {
-    substitutedNode.source.name = substituteLoopBodyText(substitutedNode.source.name, scope);
-  }
-  return substitutedNode;
-}
-
-/**
- * Apply {@link applyLoopPrevToBodyNode} to every node of one loop_group iteration's body.
- * The single per-iteration resolution path shared by {@link executeLoopGroupNode} and the
- * dry-run simulator, so a dry run binds `$LOOP_PREV.*` exactly as a real run does.
- */
-export function applyLoopPrevToBody(
-  bodyNodes: readonly DagNode[],
-  scope: LoopBodyScope
-): DagNode[] {
-  return bodyNodes.map(n => applyLoopPrevToBodyNode(n, scope));
 }
 
 /**
@@ -5355,7 +5342,6 @@ async function executeLoopNode(
     logDir,
     baseBranch,
     docsDir,
-    nodeOutputs,
     config,
     issueContext,
     configuredCommandFolder,
@@ -5591,7 +5577,7 @@ async function executeLoopNode(
           data: { command: loop.command },
         });
       }
-      loopPromptTemplate = promptResult.content;
+      loopPromptTemplate = resolveIncludeOutputAliases(node, promptResult.content);
     }
   } else if (typeof loop.prompt === 'string') {
     loopPromptTemplate = loop.prompt;
@@ -5904,7 +5890,7 @@ async function executeLoopNode(
           // the first iteration (no prior output exists). Across an interactive resume, the
           // executor starts a fresh `lastIterationOutput` variable, so the first iteration of
           // the resume also receives an empty $LOOP_PREV_OUTPUT.
-          const { prompt: substitutedPrompt } = substituteWorkflowVariables(
+          const { prompt: basePrompt } = substituteWorkflowVariables(
             loopPromptTemplate,
             workflowRun.id,
             workflowRun.user_message,
@@ -5915,9 +5901,13 @@ async function executeLoopNode(
             i === startIteration ? loopUserInput : '',
             undefined, // rejectionReason
             i === startIteration ? '' : lastIterationOutput,
-            { stateDir, inputs: resolveRunInputs(workflowRun), typedArtifactsFile }
+            {
+              stateDir,
+              inputs: resolveRunInputs(workflowRun),
+              typedArtifactsFile,
+              references: nodeTemplateReferences(loopPromptTemplate, ctx),
+            }
           );
-          const basePrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
           // A reask re-runs this iteration's prompt with the schema errors appended, so
           // the model is told WHAT was wrong rather than silently asked again.
           const finalPrompt =
@@ -6510,7 +6500,7 @@ async function executeLoopNode(
       // to the caller instead of being swallowed by the per-iteration catch.
       const loopBashPath = resolveBashPath();
       try {
-        const { prompt: bashPrompt } = substituteWorkflowVariables(
+        const { prompt: substitutedBash } = substituteWorkflowVariables(
           loop.until_bash,
           workflowRun.id,
           workflowRun.user_message,
@@ -6521,14 +6511,15 @@ async function executeLoopNode(
           undefined,
           undefined,
           undefined,
-          { shellSafe: true, stateDir, typedArtifactsFile }
-        );
-        const substitutedBash = substituteNodeOutputRefs(
-          bashPrompt,
-          nodeOutputs,
-          true, // escapedForBash
-          artifactsDir,
-          { consumerId: node.id, field: 'loop.until_bash' }
+          {
+            shellSafe: true,
+            stateDir,
+            typedArtifactsFile,
+            references: nodeTemplateReferences(loop.until_bash, ctx, 'shell', {
+              artifactsDir,
+              requiredContext: { consumerId: node.id, field: 'loop.until_bash' },
+            }),
+          }
         );
         await runSubprocess(execContext, loopBashPath, ['-c', substitutedBash], {
           cwd,
@@ -6973,6 +6964,14 @@ async function executeWaitNode(
             : {}),
         } as const);
   const condition = waitCondition(node.wait);
+  const resolveEventText = (text: string): string => {
+    const { before, after } = nodeTemplateReferences(text, ctx);
+    return substituteTemplate(text, [
+      ...before,
+      inputRefToken(resolveRunInputs(workflowRun)),
+      ...after,
+    ]);
+  };
   let context: WorkflowWaitContext;
   if (persisted !== undefined) {
     context = persisted;
@@ -6985,15 +6984,23 @@ async function executeWaitNode(
     };
   } else if (condition.kind === 'until') {
     const inputsName = parseWholeInputsRef(condition.timestamp);
-    let rawUntil = condition.timestamp;
+    let rendered: string;
     if (inputsName !== undefined) {
       const runInputs = resolveRunInputs(workflowRun);
       if (!runInputs || !Object.hasOwn(runInputs, inputsName)) {
         throw new Error(`Wait node '${node.id}' references unknown input '$INPUTS.${inputsName}'`);
       }
-      rawUntil = canonicalValueText(runInputs[inputsName]);
+      rendered = canonicalValueText(runInputs[inputsName]);
+    } else {
+      rendered = substituteNodeOutputRefs(
+        condition.timestamp,
+        nodeOutputs,
+        false,
+        undefined,
+        undefined,
+        ctx.loopBodyScopes
+      );
     }
-    const rendered = substituteNodeOutputRefs(rawUntil, nodeOutputs);
     if (!waitUntilTimestampSchema.safeParse(rendered).success) {
       throw new Error(
         `Wait node '${node.id}' has an invalid 'until' timestamp after substitution: '${rendered}'`
@@ -7007,10 +7014,7 @@ async function executeWaitNode(
       resumeAt: new Date(resumeAtMs).toISOString(),
     };
   } else if (condition.kind === 'event') {
-    const event = substituteNodeOutputRefs(
-      substituteInputRefs(condition.event, resolveRunInputs(workflowRun)),
-      nodeOutputs
-    ).trim();
+    const event = resolveEventText(condition.event).trim();
     if (event === '') {
       throw new Error(`Wait node '${node.id}' resolved 'event' to an empty string`);
     }
@@ -7022,10 +7026,7 @@ async function executeWaitNode(
       resumeAt: new Date(now.getTime() + condition.deadlineMs).toISOString(),
     };
   } else {
-    const message = substituteNodeOutputRefs(
-      substituteInputRefs(condition.message, resolveRunInputs(workflowRun)),
-      nodeOutputs
-    ).trim();
+    const message = resolveEventText(condition.message).trim();
     if (message === '') {
       throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
     }
@@ -7168,13 +7169,9 @@ async function executeApprovalNode(
     workflowModel,
     cwd,
     artifactsDir,
-    stateDir,
-    baseBranch,
-    docsDir,
     nodeOutputs,
     config,
     workflowLevelOptions,
-    issueContext,
     aiProfile,
     workflowPreset,
     execContext,
@@ -7235,21 +7232,6 @@ async function executeApprovalNode(
     // ordinary agent invocation, so it observes artifacts published before this attempt.
     const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
 
-    // Run the rework prompt via AI
-    const { prompt: substitutedPrompt } = substituteWorkflowVariables(
-      rework.prompt,
-      workflowRun.id,
-      workflowRun.user_message ?? '',
-      artifactsDir,
-      baseBranch,
-      docsDir,
-      issueContext,
-      undefined, // loopUserInput
-      rejectionReason,
-      undefined, // loopPrevOutput
-      { stateDir, inputs: resolveRunInputs(workflowRun), typedArtifactsFile }
-    );
-
     // Build a synthetic PromptNode to reuse executeNodeInternal.
     // Use a distinct ID so the node_completed event written by executeNodeInternal
     // does not collide with the approval gate's own ID in the resume snapshot.
@@ -7263,10 +7245,10 @@ async function executeApprovalNode(
     // execution view during an on_reject cycle. This is cosmetic-only — the approval gate
     // still re-presents correctly and the human gate contract is preserved. A follow-up can
     // filter synthetic `:on_reject` IDs from the UI's nodeMap if needed.
-    const syntheticNode = gateReworkNode(
-      node,
-      substituteNodeOutputRefs(substitutedPrompt, nodeOutputs)
-    );
+    //
+    // The synthetic node carries the rework TEMPLATE: executeNodeInternal resolves it, with
+    // the rejection reason, in the one pass every agent prompt gets.
+    const syntheticNode = gateReworkNode(node, rework.prompt);
 
     const {
       provider,
@@ -7307,7 +7289,9 @@ async function executeApprovalNode(
       stepNamePrefix,
       iteration,
       undefined, // synthetic on_reject node never carries a session checkpoint
-      typedArtifactsFile
+      typedArtifactsFile,
+      'ordinary',
+      rejectionReason
     );
 
     if (output.state === 'failed') {
@@ -7318,7 +7302,14 @@ async function executeApprovalNode(
 
   // Resolve $nodeId.output[.field] references so the human sees concrete values
   // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
-  const renderedMessage = substituteNodeOutputRefs(node.message, nodeOutputs);
+  const renderedMessage = substituteNodeOutputRefs(
+    node.message,
+    nodeOutputs,
+    false,
+    undefined,
+    undefined,
+    ctx.loopBodyScopes
+  );
   const choices = node.decisions.map(decision => {
     const label =
       decision.label ??
@@ -7339,7 +7330,7 @@ async function executeApprovalNode(
     }
   );
   const bodyGateOwner = ctx.bodyGateOwner?.bodyGateId === node.id ? ctx.bodyGateOwner : undefined;
-  const approvalContext: ApprovalContext = {
+  const approvalContext = approvalContextSchema.parse({
     execution: executionMetadata(suspended),
     message: renderedMessage,
     nodeId: bodyGateOwner?.nodeId ?? node.id,
@@ -7364,7 +7355,7 @@ async function executeApprovalNode(
       ...(d.label !== undefined ? { label: d.label } : {}),
     })),
     decisionsAuthored: node.decisionsAuthored,
-  };
+  });
   const paused = await pauseGateRespectingExternalTransition(
     deps,
     workflowRun.id,
@@ -7511,7 +7502,7 @@ async function executeWorkflowNode(
   // Resolve the input data string (workflow vars + $node.output refs), exactly as
   // prompt/bash nodes resolve their text surface.
   const rawInput = node.input ?? '';
-  const { prompt: substitutedInput } = substituteWorkflowVariables(
+  const { prompt: input } = substituteWorkflowVariables(
     rawInput,
     parentRun.id,
     parentRun.user_message ?? '',
@@ -7526,15 +7517,18 @@ async function executeWorkflowNode(
     // exactly as it does in the sibling `with:` values below (a nested sub-run forwarding
     // a parent input into a grandchild's $ARGUMENTS). Without this the token would throw
     // "This run has no declared inputs" on a run that DOES have inputs (#2470 parity).
-    { stateDir: ctx.stateDir, inputs: parentInputs }
+    {
+      stateDir: ctx.stateDir,
+      inputs: parentInputs,
+      references: nodeTemplateReferences(rawInput, ctx),
+    }
   );
-  const input = substituteNodeOutputRefs(substitutedInput, ctx.nodeOutputs);
 
   // Resolve the node's `with:` map (#2470/#2637) into concrete JSON values: a
   // non-string literal passes through with its logical type; a string that is exactly
   // one whole `$INPUTS.<name>` / `$node.output[.field]` ref resolves to the LOGICAL
-  // value; any other string keeps the two-pass text-template path (workflow vars —
-  // non-shellSafe: these become the child's `$INPUTS`, not shell source — then
+  // value; any other string keeps the text-template path (workflow vars —
+  // non-shellSafe: these become the child's `$INPUTS`, not shell source — and
   // `$node.output` refs). The result is persisted to the child's metadata at spawn
   // and reconstituted on cold resume. Throws on a bad ref exactly as the input
   // surface does — caught by the caller's try/catch → fail closed.
@@ -7546,6 +7540,7 @@ async function executeWorkflowNode(
     docsDir: ctx.docsDir,
     issueContext: ctx.issueContext,
     nodeOutputs: ctx.nodeOutputs,
+    loopBodyScopes: ctx.loopBodyScopes,
   };
   let resolvedInputs: Record<string, JsonValue> | undefined;
   if (node.with !== undefined) {
@@ -7764,8 +7759,8 @@ const FAN_OUT_RECOVERABLE_CANCEL_REASONS: ReadonlySet<string> = new Set(FAN_OUT_
  * A `running`/`pending` child found on re-entry is ambiguous: a crash-orphan of a prior
  * pass, or a live execution in another process. Past this idle window (no
  * `last_activity_at` heartbeat — written ≤ every 60s while a child runs) it reads as an
- * orphan; within it, as possibly still live. Only the MESSAGE differs — per CLAUDE.md's
- * "No Autonomous Lifecycle Mutation Across Process Boundaries", NEITHER branch cancels.
+ * orphan; within it, as possibly still live. Only the MESSAGE differs — per AGENTS.md
+ * "Do not guess lifecycle ownership", NEITHER branch cancels.
  */
 const FAN_OUT_CHILD_STALE_MS = 5 * 60_000;
 
@@ -7821,9 +7816,9 @@ function fanOutAutonomousGateMessage(
 
 /**
  * A `running`/`pending` fan-out child found on re-entry — ambiguous ownership, so NOT
- * auto-cancelled (CLAUDE.md lifecycle rule). Names the state and the run to act on, with
- * wording keyed to `last_activity_at` staleness (fresh → likely live; stale → likely
- * orphaned). This text is persisted as the node failure and read on every surface, so it
+ * auto-cancelled (AGENTS.md "Do not guess lifecycle ownership"). Names the state and the
+ * run to act on, with wording keyed to `last_activity_at` staleness (fresh → likely live;
+ * stale → likely orphaned). This text is persisted as the node failure and read on every surface, so it
  * names the run in full and leaves the abandon command to whichever surface renders it.
  */
 function fanOutAmbiguousChildMessage(
@@ -7964,8 +7959,8 @@ async function findFanOutChildRuns(
  *   - #2180 (D5): a fan-out child that PAUSES at a gate FAILS the node (autonomous fan-out
  *     — the single parent gate slot can't hold N children) and is cancelled tagged
  *     `fan_out_gate` (removing the gate + resuming re-drives it). A `running`/`pending`
- *     child found on resume is ambiguous → the node fails WITHOUT auto-cancel (CLAUDE.md
- *     lifecycle rule), surfacing a staleness-keyed wait/abandon action;
+ *     child found on resume is ambiguous → the node fails WITHOUT auto-cancel (AGENTS.md
+ *     "Do not guess lifecycle ownership"), surfacing a staleness-keyed wait/abandon action;
  *   - EVERY index is spawned and every child runs to its own terminal state — no child's
  *     outcome ends another's — and only then does the join reduce: `all_success` (any
  *     failed/cancelled child fails the node) / `all_done` (aggregate all terminal if a
@@ -8068,22 +8063,25 @@ async function executeFanOutWorkflowNode(
   // since canonicalValueText is byte-identical to the previous inline mapping.
   const itemToInput = (item: unknown): string => canonicalValueText(item);
 
-  // 1. Resolve `fan_out.items` → a JSON array. Two-pass substitution (workflow vars,
-  //    then $node.output refs) exactly as the input surface uses. A `.field` ref that
+  // 1. Resolve `fan_out.items` → a JSON array. Workflow vars and $node.output refs,
+  //    exactly as the input surface resolves them. A `.field` ref that
   //    can't be honored throws an OutputRefError → caught → fail closed. Never silently
   //    zero items: a resolution that isn't a JSON array fails the node.
   let parsedItems: unknown;
   try {
-    const { prompt: itemsVarsResolved } = substituteWorkflowVariables(
+    const { prompt: itemsResolved } = substituteWorkflowVariables(
       fanOut.items,
       parentRun.id,
       parentRun.user_message ?? '',
       ctx.artifactsDir,
       ctx.baseBranch,
       ctx.docsDir,
-      ctx.issueContext
+      ctx.issueContext,
+      undefined,
+      undefined,
+      undefined,
+      { references: nodeTemplateReferences(fanOut.items, ctx) }
     );
-    const itemsResolved = substituteNodeOutputRefs(itemsVarsResolved, ctx.nodeOutputs);
     parsedItems = JSON.parse(itemsResolved);
   } catch (err) {
     const msg = `fan_out.items on '${node.id}' could not be resolved to a JSON array: ${(err as Error).message}`;
@@ -8118,6 +8116,7 @@ async function executeFanOutWorkflowNode(
         docsDir: ctx.docsDir,
         issueContext: ctx.issueContext,
         nodeOutputs: ctx.nodeOutputs,
+        loopBodyScopes: ctx.loopBodyScopes,
       };
       for (const [name, rawValue] of Object.entries(node.with)) {
         fanOutStaticInputs[name] = resolveWorkflowValue(
@@ -8223,8 +8222,8 @@ async function executeFanOutWorkflowNode(
   //      rejection: cancel it (tagged `fan_out_gate`, so removing the gate + resuming
   //      re-drives it) and point the author at the gate.
   //    - `running`/`pending` = AMBIGUOUS (a crash-orphan of a prior pass, or a live run in
-  //      another process). Per CLAUDE.md's "No Autonomous Lifecycle Mutation Across Process
-  //      Boundaries" rule we DO NOT cancel — surface the state + a one-click action, wording
+  //      another process). Per AGENTS.md "Do not guess lifecycle ownership"
+  //      we DO NOT cancel — surface the state + a one-click action, wording
   //      keyed to `last_activity_at` staleness. NEVER the gate message for a non-gate cause.
   const pausedExisting = [...existingByIndex.entries()].filter(([, c]) => c.status === 'paused');
   if (pausedExisting.length > 0) {
@@ -8649,16 +8648,19 @@ async function executeComposeFanOutNode(
 
   const resolveCurrentItems = (): { items: JsonValue[] } | { error: string } => {
     try {
-      const { prompt: itemsVarsResolved } = substituteWorkflowVariables(
+      const { prompt: itemsResolved } = substituteWorkflowVariables(
         fanOut.items,
         parentRun.id,
         parentRun.user_message ?? '',
         ctx.artifactsDir,
         ctx.baseBranch,
         ctx.docsDir,
-        ctx.issueContext
+        ctx.issueContext,
+        undefined,
+        undefined,
+        undefined,
+        { references: nodeTemplateReferences(fanOut.items, ctx) }
       );
-      const itemsResolved = substituteNodeOutputRefs(itemsVarsResolved, ctx.nodeOutputs);
       const parsed: unknown = JSON.parse(itemsResolved);
       if (!Array.isArray(parsed)) {
         return {
@@ -8736,6 +8738,7 @@ async function executeComposeFanOutNode(
           docsDir: ctx.docsDir,
           issueContext: ctx.issueContext,
           nodeOutputs: ctx.nodeOutputs,
+          loopBodyScopes: ctx.loopBodyScopes,
         };
         staticInputs = Object.fromEntries(
           Object.entries(node.with).map(([name, rawValue]) => [
@@ -9316,17 +9319,16 @@ interface RunLayersContext extends RunInputs, RunDerived {
   loopGroupPath: NodeArtifactLoopFrame[];
   /**
    * One {@link LoopBodyScope} per enclosing loop_group iteration, outermost first; empty
-   * outside a loop_group body. A body command node's file body is loaded at execution time,
-   * after {@link applyLoopPrevToBodyNode} substituted the node's own slots, so it is run
-   * through every scope in order — the same passes an inline prompt in that position got.
+   * outside a loop_group body. Every body node template resolves its `$LOOP_PREV.*` and
+   * `$LOOP_USER_INPUT` references against these, in the same pass as its other references.
    */
   loopBodyScopes: readonly LoopBodyScope[];
   /**
    * Per-iteration `$LOOP_USER_INPUT` free-text for loop_group body `exec:` nodes, delivered
    * into the subprocess as an env var (#2115, #2725). `script:` nodes never splice this into
    * source (unsafe for TS/Python) and rely on this env var exclusively. `bash:` nodes get it
-   * as a second channel alongside `applyLoopPrevToBodyNode`'s pre-existing shell-quoted
-   * splice of the literal `$LOOP_USER_INPUT` token — this env var is what covers an indirect
+   * as a second channel alongside the loop scope's shell-quoted splice of the literal
+   * `$LOOP_USER_INPUT` token — this env var is what covers an indirect
    * read (`${LOOP_USER_INPUT}`, `printenv`, `env`) that splice can't reach. Only non-empty on
    * the first resumed iteration of an interactive group; undefined for the top-level DAG
    * (top-level exec nodes have no loop user input).
@@ -9559,30 +9561,28 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             // call. Coordination-only nodes leave it undefined, so an AI-config text
             // that references $TYPED_ARTIFACTS_FILE there fails loudly.
             let typedArtifactsFile: string | undefined;
-            // `systemPrompt:` and `agents.*` go straight to the provider, so they get the
-            // same two substitution passes a `prompt:` does (#2476). Inside a loop_group
-            // body this reads the body's scoped `nodeOutputs`, matching every other surface.
+            // `systemPrompt:` and `agents.*` go straight to the provider, so they resolve
+            // exactly as a `prompt:` does (#2476). Inside a loop_group body this reads the
+            // body's scoped `nodeOutputs` and loop scopes, matching every other surface.
             const resolveAiConfigText = (text: string): string =>
-              substituteNodeOutputRefs(
-                substituteWorkflowVariables(
-                  text,
-                  ctx.workflowRun.id,
-                  ctx.workflowRun.user_message,
-                  ctx.artifactsDir,
-                  ctx.baseBranch,
-                  ctx.docsDir,
-                  ctx.issueContext,
-                  undefined,
-                  undefined,
-                  undefined,
-                  {
-                    stateDir: ctx.stateDir,
-                    inputs: resolveRunInputs(ctx.workflowRun),
-                    typedArtifactsFile,
-                  }
-                ).prompt,
-                ctx.nodeOutputs
-              );
+              substituteWorkflowVariables(
+                text,
+                ctx.workflowRun.id,
+                ctx.workflowRun.user_message,
+                ctx.artifactsDir,
+                ctx.baseBranch,
+                ctx.docsDir,
+                ctx.issueContext,
+                undefined,
+                undefined,
+                undefined,
+                {
+                  stateDir: ctx.stateDir,
+                  inputs: resolveRunInputs(ctx.workflowRun),
+                  typedArtifactsFile,
+                  references: nodeTemplateReferences(text, ctx),
+                }
+              ).prompt;
 
             // A prior success is reusable only while every enclosing include is still active.
             // Unlike ordinary node-local rules, a composed boundary governs the whole block,
@@ -10082,7 +10082,14 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 const execution = beginExecution(ctx, node);
                 await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, execution);
                 // Cancel node dispatch — terminates the workflow run
-                const reason = substituteNodeOutputRefs(node.reason, ctx.nodeOutputs);
+                const reason = substituteNodeOutputRefs(
+                  node.reason,
+                  ctx.nodeOutputs,
+                  false,
+                  undefined,
+                  undefined,
+                  ctx.loopBodyScopes
+                );
                 const cancelMsg = `❌ **Workflow cancelled** (node \`${node.id}\`): ${reason}`;
                 await safeSendMessage(ctx.platform, ctx.conversationId, cancelMsg, {
                   workflowId: ctx.workflowRun.id,

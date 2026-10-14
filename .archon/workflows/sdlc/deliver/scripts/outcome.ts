@@ -17,6 +17,7 @@ const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
   ready: boolean;
   reason: string;
   pr_url: string;
+  ci_rerun: string;
   summary: string;
 };
 const notes = caveats(artifactsDir(), { listingFile: process.env.TYPED_ARTIFACTS_FILE });
@@ -26,5 +27,6 @@ emit({
   ready: rounds.ready,
   reason: rounds.reason,
   pr_url: rounds.pr_url,
+  ci_rerun: rounds.ci_rerun,
   summary: `${rounds.ready ? 'Ready' : 'Not ready'}: ${rounds.summary}${where}${notes}`,
 });

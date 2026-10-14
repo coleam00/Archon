@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -54,10 +54,11 @@ function row(f: Fixture): RunRow {
 }
 async function runProcess(
   f: Fixture,
-  args: string[]
+  args: string[],
+  cwd = f.root
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const child = Bun.spawn([process.execPath, ...args], {
-    cwd: f.root,
+    cwd,
     env: f.env,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -71,8 +72,10 @@ async function runProcess(
   children.delete(child);
   return { exitCode, stdout, stderr };
 }
-async function seed(wait: string, secondWait = ''): Promise<Fixture> {
-  const root = mkdtempSync(join(tmpdir(), 'archon-cold-wake-'));
+/** `first` is the body of the paused first node; `second` an optional node between it and finish. */
+async function seed(first: string, second = ''): Promise<Fixture> {
+  // Canonical, so the CLI's project lookup from the project directory finds the codebase.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-cold-wake-')));
   roots.push(root);
   const project = join(root, 'project');
   const home = join(root, 'home');
@@ -83,7 +86,7 @@ async function seed(wait: string, secondWait = ''): Promise<Fixture> {
   const workflowPath = join(project, '.archon/workflows/cold.yaml');
   writeFileSync(
     workflowPath,
-    `name: cold\ndescription: cold continuation\nprovider: claude\ninputs:\n  proof:\n    required: true\nnodes:\n  - id: first\n    wait:\n${wait}\n${secondWait}  - id: finish\n    depends_on: [${secondWait ? 'second' : 'first'}]\n    bash: echo "frozen-$INPUTS_PROOF-$WAKE_CONFIG_PROOF" >> marker\n`
+    `name: cold\ndescription: cold continuation\nprovider: claude\ninputs:\n  proof:\n    required: true\nnodes:\n  - id: first\n${first}\n${second}  - id: finish\n    depends_on: [${second ? 'second' : 'first'}]\n    bash: echo "frozen-$INPUTS_PROOF-$WAKE_CONFIG_PROOF" >> marker\n`
   );
   const env = {
     ...process.env,
@@ -170,7 +173,7 @@ function events(f: Fixture, type: string): number {
 
 describe('cold CLI continuation host', () => {
   test('two fresh processes wake a one-second wait once using captured source', async () => {
-    const f = await seed('      duration_ms: 1000');
+    const f = await seed('    wait:\n      duration_ms: 1000');
     const original = row(f);
     expect(original.user_id).toBeString();
     await due(f);
@@ -195,9 +198,37 @@ describe('cold CLI continuation host', () => {
     expect(JSON.parse(again.stdout).accepted).toBe(0);
   }, 30_000);
 
+  test('an answer recorded without resuming is continued by the next wake', async () => {
+    const f = await seed(
+      '    approval:\n      message: Continue?\n      decisions:\n        - id: approve\n        - id: reject'
+    );
+    const id = row(f).id;
+    const before = await runProcess(f, [cli, 'workflow', 'wake', '--json']);
+    expect(before.exitCode, before.stderr || before.stdout).toBe(0);
+    expect(JSON.parse(before.stdout).accepted).toBe(0);
+    // `--json` records the answer and returns; it never continues the run itself.
+    // Answering resolves the project from the working directory, so it runs there.
+    const answered = await runProcess(
+      f,
+      [cli, 'workflow', 'respond', id, 'approve', 'ship it', '--json'],
+      f.project
+    );
+    expect(answered.exitCode, answered.stderr || answered.stdout).toBe(0);
+    expect(row(f).status).toBe('paused');
+    const woken = await runProcess(f, [cli, 'workflow', 'wake', '--json']);
+    expect(woken.exitCode, woken.stderr || woken.stdout).toBe(0);
+    expect(JSON.parse(woken.stdout).accepted).toBe(1);
+    expect(row(f).status).toBe('completed');
+    expect(readFileSync(join(f.project, 'marker'), 'utf8')).toBe(
+      'frozen-original-input-original-config\n'
+    );
+    const again = await runProcess(f, [cli, 'workflow', 'wake', '--json']);
+    expect(JSON.parse(again.stdout).accepted).toBe(0);
+  }, 30_000);
+
   test('signals an exact event, rejects its stale occurrence, then completes the next one', async () => {
     const f = await seed(
-      '      event: ready\n      deadline_ms: 60000',
+      '    wait:\n      event: ready\n      deadline_ms: 60000',
       '  - id: second\n    depends_on: [first]\n    wait:\n      event: ready\n      deadline_ms: 60000\n'
     );
     const id = row(f).id;
@@ -250,7 +281,7 @@ describe('cold CLI continuation host', () => {
   }, 30_000);
 
   test('a valid signal survives a visible container refusal without claiming', async () => {
-    const f = await seed('      event: ready\n      deadline_ms: 60000');
+    const f = await seed('    wait:\n      event: ready\n      deadline_ms: 60000');
     const db = new Database(join(f.home, 'archon.db'));
     try {
       db.run(
@@ -281,7 +312,7 @@ describe('cold CLI continuation host', () => {
   }, 30_000);
 
   test('refuses missing paths, external origins and missing captures before claim', async () => {
-    const f = await seed('      duration_ms: 1000');
+    const f = await seed('    wait:\n      duration_ms: 1000');
     const original = row(f);
     await due(f);
     const reset = (): Database => {
@@ -329,7 +360,7 @@ describe('cold CLI continuation host', () => {
   test('watch wakes a later deadline and SIGTERM exits during idle sleep', async () => {
     // The deadline must still be ahead at the watch's first pass. A short duration races
     // the seed process, so wait out the first pass and only then make the deadline due.
-    const f = await seed('      duration_ms: 3600000');
+    const f = await seed('    wait:\n      duration_ms: 3600000');
     const child = Bun.spawn([process.execPath, cli, 'workflow', 'wake', '--watch', '--json'], {
       cwd: f.root,
       env: f.env,

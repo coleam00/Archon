@@ -114,27 +114,39 @@ archon version
 If GitHub Actions can't run (billing issues, private repo limits), create the release manually:
 
 ```bash
-# 1. Build binaries locally (only builds for your current platform)
+# 1. Build binaries locally (every target in the script's local TARGETS list).
+#    TARGET or OUTFILE left set in the shell switches the script to single-target mode.
+unset TARGET OUTFILE
 ./scripts/build-binaries.sh
 
-# 2. Create the release with binaries
+# 2. Generate checksums.txt, which the install scripts verify against
+./scripts/checksums.sh
+
+# 3. Create the release with binaries and checksums
 gh release create vX.Y.Z dist/binaries/* \
   --title "Archon CLI vX.Y.Z" \
   --generate-notes
 
-# 3. Verify the release
+# 4. Verify the release
 gh release view vX.Y.Z
 ```
 
-> **Note:** Local builds only create binaries for your current platform.
-> For cross-platform binaries, you need GitHub Actions or access to each platform.
+> **Note:** With `TARGET` and `OUTFILE` unset, `scripts/build-binaries.sh` cross-compiles
+> the CLI and server executables for every target in its local `TARGETS` list into
+> `dist/binaries/`. That list has no Windows target.
+>
+> A manual release is therefore incomplete. It lacks the assets only the CI release
+> builds: the Windows binaries, the plugin executables (`archon plugin install`
+> downloads these), and `archon-web.tar.gz` (`archon serve` downloads it). The `files:`
+> list of the release step in `.github/workflows/release.yml` is the full set CI publishes.
 
 ## Manual Build (for Testing)
 
 To build binaries locally without creating a release:
 
 ```bash
-# Build all platform binaries
+# Build every target in the script's local TARGETS list (no Windows)
+unset TARGET OUTFILE
 ./scripts/build-binaries.sh
 
 # Binaries are in dist/binaries/

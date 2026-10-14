@@ -2909,3 +2909,99 @@ describe('named loop owner ancestry after composition', () => {
     expect(group.depends_on).toEqual(['delivery__implement']);
   });
 });
+
+// #3972 — a command body is read after expansion has replaced every include node, so its
+// `$<include>.output` alias and its own `with:` names must survive into the composed body
+// exactly as an inline prompt's do.
+describe('expandWorkflowIncludes — command bodies read include aliases and own bindings', () => {
+  const leaf = (): WorkflowDefinition =>
+    wf('open-pr', [
+      { id: 'prep', bash: 'echo prep' },
+      { id: 'open', bash: 'echo 42', depends_on: ['prep'] },
+    ]);
+
+  test('names the include primary sink in top-level command and loop.command bodies', () => {
+    const block = wf('deliver', [
+      { id: 'pr', include: 'open-pr' },
+      { id: 'check', command: 'check-ci', depends_on: ['pr'] },
+      {
+        id: 'retry',
+        depends_on: ['pr'],
+        loop: { command: 'retry-ci', until: 'DONE', max_iterations: 1 },
+      },
+    ]);
+    const parent = wf('ship', [{ id: 'deliver', include: 'deliver' }]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(leaf(), block, parent),
+      new Map([
+        ['check-ci', 'Check CI for $pr.output and PR $pr.output.number.'],
+        ['retry-ci', 'Retry CI for $pr.output.'],
+      ])
+    );
+    expect(errors).toEqual([]);
+    const ship = workflows.get('ship')!;
+    expect(inlinePrompt(nodeById(ship, 'deliver__check'))).toBe(
+      'Check CI for $deliver__pr__open.output and PR $deliver__pr__open.output.number.'
+    );
+    expect(compiledLoopPrompt(nodeById(ship, 'deliver__retry'))).toBe(
+      'Retry CI for $deliver__pr__open.output.'
+    );
+  });
+
+  test('names enclosing and body-scoped include sinks in a loop-body command body', () => {
+    const block = wf('deliver', [
+      { id: 'pr', include: 'open-pr' },
+      {
+        id: 'fix',
+        depends_on: ['pr'],
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [
+            { id: 'p', include: 'open-pr' },
+            { id: 'ci', command: 'check-ci', depends_on: ['p'] },
+          ],
+        },
+      },
+    ]);
+    const parent = wf('ship', [{ id: 'deliver', include: 'deliver' }]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(leaf(), block, parent),
+      new Map([['check-ci', 'PR $pr.output, this pass $p.output, last $LOOP_PREV.p__open.output.']])
+    );
+    expect(errors).toEqual([]);
+    const ci = loopGroupNodes(nodeById(workflows.get('ship')!, 'deliver__fix'))?.find(
+      node => node.id === 'ci'
+    );
+    expect(inlinePrompt(ci)).toBe(
+      'PR $deliver__pr__open.output, this pass $p__open.output, last $LOOP_PREV.p__open.output.'
+    );
+  });
+
+  test('shields a loop-body command own with: name from the caller', () => {
+    const block = wf('deliver', [
+      {
+        id: 'fix',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [
+            { id: 'p', bash: 'echo 42' },
+            { id: 'ci', command: 'check-ci', depends_on: ['p'], with: { bound: '$p.output' } },
+          ],
+        },
+      },
+    ]);
+    const parent = wf('ship', [{ id: 'deliver', include: 'deliver' }]);
+    const { workflows, errors } = expandWorkflowIncludes(
+      mapOf(block, parent),
+      new Map([['check-ci', 'Check PR $INPUTS.bound.']])
+    );
+    expect(errors).toEqual([]);
+    const ci = loopGroupNodes(nodeById(workflows.get('ship')!, 'deliver__fix'))?.find(
+      node => node.id === 'ci'
+    );
+    expect(inlinePrompt(ci)).toBe('Check PR $INPUTS.bound.');
+    expect(composedBindings(ci)).toEqual({ bound: '$p.output' });
+  });
+});

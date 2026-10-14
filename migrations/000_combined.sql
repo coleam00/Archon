@@ -596,6 +596,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
   writer_run_id TEXT,
   writer_node_path TEXT,
   writer_identity TEXT,
+  writer_via TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   PRIMARY KEY (project_key, name, revision)
 );
@@ -745,6 +746,10 @@ ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS origin JSONB;
 -- parse `intent` strictly and would refuse an extra key.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS event_input_names TEXT;
 
+-- The surface a state write outside a run came through (cli, api, ...). Nullable:
+-- rows written before it existed came through the CLI.
+ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;
+
 -- ============================================================================
 -- Indexes and column comments
 -- ============================================================================
@@ -871,8 +876,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id
   ON remote_agent_workflow_events(workflow_run_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_events_type
   ON remote_agent_workflow_events(event_type);
--- Global created_at index for the dashboard event poller's cross-run tail
--- (WHERE created_at >= $1 ORDER BY created_at ASC).
+-- Global created_at index. No cross-run created_at reader remains; it stays
+-- because shipped schema is additive-only.
 CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at
   ON remote_agent_workflow_events(created_at);
 -- Tie-breaker order within a run; NULL for rows written before event_order

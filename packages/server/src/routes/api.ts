@@ -1,3 +1,4 @@
+import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { WebPushDestination } from '../services/web-push';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
 import { deleteWebPushSubscription } from '@archon/core/db/web-push-subscriptions';
@@ -2854,9 +2855,17 @@ export function registerApiRoutes(
       : attention;
   }
 
+  function toApiRunMetadata(metadata: WorkflowRun['metadata']): ApiWorkflowRun['metadata'] {
+    const approval = metadata.approval;
+    return isApprovalContext(approval)
+      ? { ...metadata, approval: { ...approval, decisions: getApprovalDecisions(approval) } }
+      : metadata;
+  }
+
   function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
     return {
       ...row,
+      metadata: toApiRunMetadata(row.metadata),
       attention: toApiRunAttention(row),
       started_at: toISOString(row.started_at),
       completed_at: toISOString(row.completed_at),
@@ -2867,6 +2876,7 @@ export function registerApiRoutes(
   function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
     return {
       ...row,
+      metadata: toApiRunMetadata(row.metadata),
       attention: toApiRunAttention(row),
       started_at: toISOString(row.started_at),
       completed_at: toISOString(row.completed_at),
@@ -4193,6 +4203,11 @@ export function registerApiRoutes(
       if (approveBlocker) {
         return c.json(approveBlocker, 400);
       }
+      try {
+        assertRespondable(run, 'approve');
+      } catch (validationError) {
+        return apiError(c, 400, (validationError as Error).message);
+      }
       // Distinguish "no body sent" (legitimate bare approve) from "body sent but
       // unparseable" (client bug). Since #2074 a bare approve FINALIZES a
       // signal-bearing loop gate, so silently coercing a malformed body to {}
@@ -4262,6 +4277,11 @@ export function registerApiRoutes(
       );
       if (rejectBlocker) {
         return c.json(rejectBlocker, 400);
+      }
+      try {
+        assertRespondable(run, 'reject');
+      } catch (validationError) {
+        return apiError(c, 400, (validationError as Error).message);
       }
       // Mirror of the approve route's malformed-body guard: a swallowed parse
       // failure would silently drop the reviewer's reason.
@@ -4346,18 +4366,10 @@ export function registerApiRoutes(
       const body = getValidatedBody(c, respondWorkflowRunBodySchema);
       const decision = body.decision;
 
-      // Pre-validate a non-default decision so an undeclared id is a 400 naming the
-      // gate's actual options, not an opaque 500 — mirrors the approve/reject routes'
-      // pre-checks above. 'approve'/'reject' skip this: assertRespondable enforces
-      // decisionsAuthored, which legacy gates (the ones those two ids also serve)
-      // never set — see assertRespondable's doc comment for why it is not consulted
-      // for those two ids.
-      if (decision !== 'approve' && decision !== 'reject') {
-        try {
-          assertRespondable(run, decision);
-        } catch (validationError) {
-          return apiError(c, 400, (validationError as Error).message);
-        }
+      try {
+        assertRespondable(run, decision);
+      } catch (validationError) {
+        return apiError(c, 400, (validationError as Error).message);
       }
 
       // Mirrors the dedicated /reject route's default: an empty/omitted text becomes

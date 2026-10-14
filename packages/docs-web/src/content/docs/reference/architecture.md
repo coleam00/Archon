@@ -252,35 +252,49 @@ async start(): Promise<void> {
 
 **Webhooks** (GitHub pattern):
 
+The GitHub route in `packages/server/src/routes/webhooks.ts` uses a Hono context. This excerpt uses that file's `OpenAPIHono` and `GithubWebhookTarget` types and its local `readSignedBody` and `getLog` helpers:
+
 ```typescript
-// In packages/server/src/index.ts, add route
-app.post('/webhooks/your-platform', async (req, res) => {
-  const signature = req.headers['x-signature'];
-  const payload = req.body;
+export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebhookTarget): void {
+  app.post('/webhooks/github', async c => {
+    const eventType = c.req.header('x-github-event');
+    const deliveryId = c.req.header('x-github-delivery');
 
-  await adapter.handleWebhook(payload, signature);
-  res.sendStatus(200);
-});
+    try {
+      const payload = await readSignedBody(c.req.raw);
+      if (payload.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
 
-// In adapter
-async handleWebhook(payload: any, signature: string): Promise<void> {
-  // Verify signature
-  if (!this.verifySignature(payload, signature)) return;
+      const signature = c.req.header('x-hub-signature-256');
+      if (!signature) {
+        return c.json({ error: 'Missing signature header' }, 400);
+      }
 
-  // Parse event, extract conversationId and message
-  const { conversationId, message, platformUserId } = this.parseEvent(payload);
-  let userId: string | undefined;
-  try {
-    const user = await findOrCreateUserByPlatformIdentity(this.getPlatformType(), platformUserId);
-    userId = user.id;
-  } catch (err) {
-    getLog().warn({ err }, 'your_platform.user_resolve_failed');
-  }
+      if (payload.kind === 'read_failed') throw payload.error;
+      if (payload.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
 
-  // Route to orchestrator
-  await handleMessage(this, conversationId, message, {
-    actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
+      // Conversation handling runs asynchronously without a durable receipt;
+      // HTTP 200 does not guarantee that processing will succeed or survive a restart.
+      const result = await github.receiveWebhook(payload.body, signature, deliveryId, eventType);
+      if (result === 'invalid_signature') return c.json({ error: 'Invalid signature' }, 401);
+      if (result === 'malformed') return c.json({ error: 'Malformed payload' }, 400);
+
+      return c.text('OK', 200);
+    } catch (error) {
+      getLog().error({ err: error as Error, eventType, deliveryId }, 'webhook_endpoint_error');
+      return c.json({ error: 'Internal server error' }, 500);
+    }
   });
+}
+```
+
+`packages/server/src/index.ts` imports and calls the route-registration function when the GitHub adapter is enabled:
+
+```typescript
+import { registerGithubWebhookRoute } from './routes/webhooks';
+
+if (github) {
+  registerGithubWebhookRoute(app, github);
+  getLog().info('github_webhook_registered');
 }
 ```
 
@@ -595,7 +609,7 @@ export interface IIsolationProvider {
 
 ```typescript
 type TaskBranchSelection =
-  | { kind: 'new'; fromBranch?: BranchName }
+  | { kind: 'new'; branch?: BranchName; fromBranch?: BranchName }
   | { kind: 'existing'; branch: BranchName };
 
 interface IsolationRequest {
@@ -652,13 +666,18 @@ export class WorktreeProvider implements IIsolationProvider {
 
 ### Branch Naming Convention
 
-| Workflow           | Identifier      | Generated Branch                |
-| ------------------ | --------------- | ------------------------------- |
-| issue              | `"42"`          | `issue-42`                      |
-| pr (same-repo)     | `"123"`         | `feature/auth` (actual branch)  |
-| pr (fork)          | `"123"`         | `pr-123-review`                 |
-| task               | `"my-feature"`  | `task-my-feature`               |
-| thread             | `"C123:ts.123"` | `thread-a1b2c3d4` (8-char hash) |
+| Workflow       | Identifier      | Git Branch                            |
+| -------------- | --------------- | ------------------------------------- |
+| issue          | `"42"`          | `archon/issue-42`                      |
+| pr (same-repo) | `"123"`         | `feature/auth` (actual branch)         |
+| pr (fork)      | `"123"`         | `pr-123-review`                        |
+| review         | `"456"`         | `archon/review-456`                    |
+| task           | `"my-feature"`  | `archon/task-my-feature`               |
+| thread         | `"C123:ts.123"` | `archon/thread-57078b80` (8-char hash)  |
+
+Same-repository PRs use the actual PR branch. Tasks with an explicitly selected branch use that name instead of the default `archon/task-` name.
+
+Fork PRs use the Git branch `pr-123-review`, while their worktree path ends in `archon/pr-123-review`.
 
 ### Storage Location
 
@@ -903,35 +922,15 @@ supported.
 
 **Implementation** (`substituteWorkflowVariables` in `packages/workflows/src/executor-shared.ts`):
 
-```typescript
-export function substituteWorkflowVariables(
-  prompt: string,
-  workflowId: string,
-  userMessage: string,
-  artifactsDir: string,
-  baseBranch: string,
-  docsDir: string,
-  issueContext?: string,
-  // ...loop/approval context args
-  options?: { shellSafe?: boolean }
-): { prompt: string; contextSubstituted: boolean } {
-  let result = prompt
-    .replace(/\$WORKFLOW_ID/g, workflowId)
-    .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
-    .replace(/\$BASE_BRANCH/g, baseBranch)
-    .replace(/\$DOCS_DIR/g, docsDir || 'docs/');
+Each variable is a token with its own resolver. `substituteTemplate`
+(`packages/workflows/src/output-ref.ts`) scans the template once, left to right, and
+resolves each `$` reference from its source. The DAG executor adds `$nodeId.output` and
+loop_group `$LOOP_PREV.*` tokens to the same scan. A substituted value, such as the user's
+message, is inserted as written and never scanned again, so text that mentions
+`$ARGUMENTS` or `$plan.output` stays text.
 
-  // User-controlled vars are skipped when shellSafe: true — bash/script nodes
-  // receive them via subprocess env instead, to prevent shell injection.
-  if (!options?.shellSafe) {
-    result = result
-      .replace(/\$USER_MESSAGE/g, userMessage)
-      .replace(/\$ARGUMENTS/g, userMessage);
-    // ...$LOOP_USER_INPUT, $REJECTION_REASON, $LOOP_PREV_OUTPUT, and $CONTEXT* vars
-  }
-  // ...
-}
-```
+When `shellSafe` is true, the user-controlled variables are left literal: bash and script
+nodes receive them through subprocess env vars instead, to prevent shell injection.
 
 **Example:**
 

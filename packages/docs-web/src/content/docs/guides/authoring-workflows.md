@@ -610,9 +610,10 @@ nodes:
     # The command file can use $classify.output or $classify.output.field
 ```
 
-Variable substitution order:
-1. Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.)
-2. Node output references (`$nodeId.output`, `$nodeId.output.field`)
+Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.) and node output
+references resolve in one pass over the template. A substituted value is inserted as written
+and never scanned again, so a message or an upstream output that quotes `$nodeId.output`
+reaches the node unchanged. See [Substitution Order](/reference/variables/#substitution-order).
 
 Output references can follow nested object fields. For example, this gate receives
 `Proposed: add` when `review` emits `{"proposal":{"action":"add"}}`:
@@ -823,7 +824,7 @@ curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/signal \
 
 Use a Better Auth session cookie instead of `X-Archon-User` when browser authentication is enabled. The header is only for a trusted reverse proxy or loopback client; an auth-disabled local install can omit it. The event name must match the run's open wait. The signal and its audit event are committed together; duplicate or wrong-run signals do nothing.
 
-The process that owns the run enforces a `duration_ms`/`until`/`event` deadline itself: a foreground `archon workflow run` and the child started by `--detach` stay alive through the wait and re-execute the run when its deadline arrives, so a CLI-only install needs no server. If the owner has exited, [`archon workflow wake`](/reference/cli/#workflow-wake) resumes due waits without a server; a running `archon serve` performs the same scan automatically. A run can always be advanced by hand with `archon workflow resume <run-id>`. The `/signal` endpoint above requires the server; [`archon workflow signal`](/reference/cli/#workflow-signal) signals the same exact event occurrence from the CLI.
+The process that owns the run enforces a `duration_ms`/`until`/`event` deadline itself: a foreground `archon workflow run` and the child started by `--detach` stay alive through the wait and re-execute the run when its deadline arrives, so a CLI-only install needs no server. If the owner has exited, [`archon workflow wake`](/reference/cli/#workflow-wake) resumes due waits without a server; a running `archon serve` performs the same scan automatically. The same scan continues a gate that was answered without being resumed, for example through `--json`. A run can always be advanced by hand with `archon workflow resume <run-id>`. The `/signal` endpoint above requires the server; [`archon workflow signal`](/reference/cli/#workflow-signal) signals the same exact event occurrence from the CLI.
 
 Read `metadata.wait.resumeAt` from the run before sending the signal and pass it back unchanged. It identifies the open wait occurrence, so a delayed retry from an earlier loop iteration cannot satisfy a later wait for the same event.
 
@@ -1460,21 +1461,35 @@ can overlap, need audit history, or run on several hosts. `$STATE_DIR` remains t
 file area for caches and non-JSON data, with its existing concurrency limitations.
 State documents currently require the SQL store (SQLite or PostgreSQL); file-store support
 is separate follow-up work. AI nodes do not yet receive `WORKFLOW_ID`, so a write an agent
-makes by calling `archon state` from its shell is recorded as the operator (`ARCHON_USER_ID`
-or `USER`), not as its run and node. Commit through a bash or script node when the run must
+makes by calling `archon state` from its shell is recorded as a CLI write from outside any
+run, not as its run and node. Commit through a bash or script node when the run must
 be recorded. Container runs are not supported because the CLI and store are not delivered there.
 
-A document belongs to a project, shared by all its workflows. Choose names such as
-`review/acme/123` with slash-separated lowercase letters, digits, `.`, `_`, or `-`
-(1–200 characters total). Use artifact pointers for large content: a document's serialized
-JSON is capped at 64 KiB. Values are fetched explicitly; the engine adds no state to prompts.
+A document belongs to a project, shared by all its workflows, or to install scope
+(`--install`), shared across projects. A node reaches only its run's project and install
+scope. Choose names such as `review/acme/123` with slash-separated lowercase letters,
+digits, `.`, `_`, or `-` (1–200 characters total); `archon state list --prefix review/`
+finds them again. A document is any JSON value, so a markdown note is a JSON string;
+`put --raw` and `get --raw` pass it as plain text. Use artifact pointers for large content:
+a document's serialized JSON is capped at 64 KiB. Values are fetched explicitly; the engine
+adds no state to prompts.
+
+Every revision records its writer: the run and node path for a write from inside a run,
+or the surface (`cli`) for any other write. It never records who made the change. If a
+document needs to say where an entry came from (a person, an agent, a tool result), keep
+that inside the document's own entries.
 
 `put --if-revision 0` creates a document; subsequent whole-document changes must name the
 revision read. Concurrent replacements have one winner; losers exit `3`. `patch` applies
 JSON Pointer `set`, `remove`, or `append` operations to the latest revision; concurrent
 patches serialize instead of racing, though an earlier write can make a later patch invalid.
+When a patch was computed from what you read, such as setting a field to a value you
+derived from its old one, pass `patch --if-revision <n>` so a concurrent change makes it
+exit `3` instead of being silently replaced. Appending an item, or setting a key only you
+write, can patch the latest revision without it.
 An absent document starts as `{}`; appending to `/seen` creates the array. Invalid patches
-or oversized values exit `4` and write nothing. Exit `1` means usage or storage failure.
+or oversized values exit `4` and write nothing. Exit `5` means the CLI opened a different
+store than the run's. Exit `1` means usage or storage failure.
 The [CLI reference](/reference/cli/#state) describes pointer and tombstone semantics.
 
 Let the agent judge what to remember, then commit its structured output in a script node
@@ -1515,8 +1530,8 @@ the host, but it also is not mounted into container runs.
 Bash/script nodes already receive `WORKFLOW_ID` and `ARCHON_NODE_EXECUTION`; writes
 record their run ID and node path. Invoke the JSON argv in `ARCHON_CLI_COMMAND` instead
 of assuming `archon` is on PATH. If the nested CLI opens a store that does not know the
-run, it refuses the write instead of writing to another project. Operators can inspect
-`archon state log review/ledger` and correct a value using `put --if-revision`.
+run, it refuses the write (exit `5`) instead of writing to another project. Operators can inspect
+`archon state log review/ledger` and correct a value using `put --if-revision` or `patch --if-revision`.
 
 The ledger prevents lost state updates; it does not make an external review/comment and
 the state commit one transaction. Use resource admission to serialize work that must not
@@ -1637,8 +1652,9 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   definition order (the same terminal-selection rule `loop_group` uses). For a
   single-sink block like the review block the two coincide; they differ only when a block
   has multiple leaf nodes.
-- **Output.** `$<includeId>.output` in another node resolves to the block's primary sink.
-  In the example, `$review.output` is the output of the block's `implement-fixes` node.
+- **Output.** `$<includeId>.output` in another node resolves to the block's primary sink,
+  including when it appears in that node's `command:` or `loop.command` file body. In the
+  example, `$review.output` is the output of the block's `implement-fixes` node.
 - **Inside a `loop_group` body.** An include expands inside that sealed body at load time.
   Its nodes keep the usual `<includeId>__<nodeId>` names, then the loop runtime prefixes
   persisted step names with the group id (for example `fix-loop.review__synthesize`). Every
@@ -3335,6 +3351,12 @@ If the workflow fails at `batch-2`, run `archon workflow run large-migration --r
 
 ### Pattern: Human-in-the-Loop
 
+When a gate authors `approval.decisions`, the console offers exactly those choices
+with their labels, and every response must use a declared id. This includes
+`archon workflow respond`, `approve`, `reject`, and the HTTP routes. An undeclared
+id is refused with the allowed ids without resolving or resuming the run. Gates
+without authored decisions keep the default approve/reject controls.
+
 Use an `approval` node to pause for human review before continuing:
 
 ```yaml
@@ -3363,15 +3385,17 @@ nodes:
 When the workflow reaches `review-gate`, it pauses and notifies you. Approve or reject via:
 
 - **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` — deterministic; resolves and continues the run
-- **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>` — resolves and continues (`--json` records the decision only)
+- **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>` — resolves and continues (`--json` records the decision; `archon serve` or `archon workflow wake` then continues the run)
 - **Chat**: tell the agent what you want ("looks good, ship it" / "no, stop") — it resolves the gate and the run continues. An ambiguous message resolves nothing and the agent asks; a plain message is **not** an automatic approval
 - **Web UI**: Open the paused run in the console. Use **Continue** with an optional comment, or **Reject** and enter the required feedback that flows to `$REJECTION_REASON`. When the gate continues execution, Web-dispatched and headless CLI runs can auto-resume; the gate's rejection rules can instead cancel the run.
 - **API**: `POST /api/workflows/runs/<run-id>/approve` or `/reject`
 
 Every path applies the gate's approval or rejection rules. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Cross-platform caveat: Web UI decisions on runs with Slack, Telegram, or GitHub parents record the decision but do not auto-resume when the gate continues execution. Use `archon workflow resume <run-id>` or resume it from the originating conversation to continue the same run.
 
-Without `on_reject`: rejecting cancels the workflow.
-With `on_reject`: rejecting triggers an AI rework prompt and re-pauses for re-review.
+For gates without authored decisions, rejecting cancels the workflow unless
+`on_reject` is configured, which triggers an AI rework prompt and re-pauses for
+re-review. Authored decisions instead produce `$review-gate.output.decision` and
+`.text`; the graph determines what happens next.
 See [Approval Nodes](/guides/approval-nodes/) for full details.
 
 ### Pattern: Early Termination with Cancel

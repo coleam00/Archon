@@ -858,7 +858,7 @@ describe('workflows database', () => {
       expect(mockQuery).not.toHaveBeenCalled();
     });
 
-    test('lists due paused waits and quota-failed continuations', async () => {
+    test('lists due paused waits, quota-failed continuations and answered gates', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([mockWorkflowRun]));
       const result = await listDueWorkflowContinuations(new Date('2026-08-25T10:00:00.000Z'), 25);
       expect(result).toHaveLength(1);
@@ -867,7 +867,9 @@ describe('workflows database', () => {
       expect(query).toContain("status = 'failed'");
       expect(query).toContain("IN ('time', 'event')");
       expect(query).toContain("metadata->>'continuation_retry_at' IS NULL");
-      expect(query).toContain("ORDER BY COALESCE(metadata->>'continuation_retry_at'");
+      expect(query).toContain("metadata->'approval'->>'resolved' IN ('approved', 'rejected')");
+      expect(query).toContain("NOT IN ('child_workflow', 'writeback')");
+      expect(query).toContain("ORDER BY CASE WHEN COALESCE(metadata->>'continuation_retry_at'");
       expect(params).toEqual(['2026-08-25T10:00:00.000Z', 25]);
     });
 
@@ -952,7 +954,7 @@ describe('workflows database', () => {
       expect(JSON.parse(params[1] as string)).toEqual({
         continuation_retry_at: '2026-08-25T10:01:00.000Z',
       });
-      expect(params.slice(2)).toEqual([wait.resumeAt, wait.nodeId, null]);
+      expect(params.slice(2)).toEqual([wait.resumeAt, wait.nodeId, null, null]);
     });
 
     test('keys quota backoff to the exact attempt cursor', async () => {
@@ -966,7 +968,7 @@ describe('workflows database', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("(metadata->'scheduled_resume'->>'attempt')::integer = $5");
-      expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2]);
+      expect(params.slice(2)).toEqual(['2026-08-25T10:00:00.000Z', null, 2, null]);
     });
 
     test('clears only the exact active wait cursor on a running run', async () => {

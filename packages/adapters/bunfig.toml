@@ -11,4 +11,4 @@
 # Missing core mocks can also write real state under ARCHON_HOME (#2308).
 # See src/test/no-network.ts and src/test/no-archon-home-writes.ts.
 [test]
-preload = ["../../scripts/test-telemetry-off.ts", "./src/test/no-network.ts", "./src/test/no-archon-home-writes.ts"]
+preload = ["../../scripts/test-preload.ts", "./src/test/no-network.ts", "./src/test/no-archon-home-writes.ts"]

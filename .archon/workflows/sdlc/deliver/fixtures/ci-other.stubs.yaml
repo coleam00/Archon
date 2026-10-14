@@ -1,5 +1,6 @@
-# Outcome: not ready, ci_other. CI is red for a cause outside the change; the CI
-# agent has put the pull request back to draft, and the rounds end with its cause.
+# Outcome: not ready, ci_other. CI is red because the base is red: a re-run cannot
+# fix that, so the CI agent re-runs nothing, puts the pull request back to draft, and
+# the rounds end with its cause.
 implement__implement:
   done: true
   green: true
@@ -31,7 +32,7 @@ review__publish:
   discoveries: []
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
-ci: { state: other, summary: "stub: the same check fails on the base" }
+ci: { state: other, rerun: none, summary: "stub: the same check fails on the base" }
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   expect: completed

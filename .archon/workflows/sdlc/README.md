@@ -56,7 +56,9 @@ answers green, pr_caused, or other. On anything but green it puts the pull reque
 back to draft before it answers, so a red PR never stays ready. A red the change
 caused, or a conflict with the base, goes back to the implementer in the next
 round, which merges the base on a conflict, and that correction is reviewed before
-CI runs again; any other red ends the run not ready.
+CI runs again. A flake or infrastructure failure outside the change gets one re-run
+of its failed jobs before the agent answers, recorded as `rerun`; any other red ends
+the run not ready, and a defect outside the change becomes a discovery.
 
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is
@@ -178,6 +180,14 @@ own values, so a taste finding cites one of them or is left out, and an owner
 declines a finding by the same standard. Each read is conditional on the file
 existing, so the pack stays portable: a repository without one loses nothing. A
 new pack prompt that writes or judges code carries the same sentence.
+
+A project's policy for a decision the pack makes, such as what triage accepts, is
+one more sidecar document, found in the same places. The pack ships a default for
+each policy document a prompt names, and the project's own document replaces it.
+A policy document may be only a pointer to documents the project already has, and
+the agent reads what it points to. A prompt names only the policy documents its
+decision needs, and agents interpret them; anything that must be exact, such as
+label names, stays typed configuration.
 
 ## A node's streams are the operator's channel
 
