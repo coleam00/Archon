@@ -2,6 +2,7 @@
 # change touches no type, contract, state or boundary, and selects only docs.
 mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false}'
 route: { seams: false, code: false, tests: false, errors: false, docs: true, reason: "stub: only shipped prose changed" }
+head-check: "target matches"
 scope:
   # A standalone review of the working diff: no pull request to publish to.
   pr: null

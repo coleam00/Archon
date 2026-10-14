@@ -20,7 +20,7 @@ $mode.output.head
 
 $mode.output.cursor
 
-These two commits are not yours to choose. Every diff you record ends at the commit under review, written as that SHA, never as a branch name or a revision read from a pull-request record. The report that publishes this round must name the commit under review, and publication refuses when the checkout or the pull request's remote head is anywhere else.
+These two commits are not yours to choose. Every diff you record ends at the commit under review, written as that SHA, never as a branch name or a revision read from a pull-request record. The report that publishes this round must name the commit under review, and head-check refuses before lenses when the checkout or the pull request's remote head is anywhere else, and publication checks again before writing.
 
 **Accepted work order** (may be empty for a standalone review):
 
@@ -33,7 +33,7 @@ $ARGUMENTS
 ## Resolve the target
 
 - When the requested scope is a recorded pull request — delivery passes its verified record as JSON, carrying `repo`, `number`, `head` and `base` — review exactly that pull request. The record names the pull request and its base, so read nothing from a forge to establish them. It does not name the commit: its `head_revision` was captured when the pull request opened and is stale after any later push, so ignore it. The review object is the diff of the commit under review against that base. Fetch the base first, from the remote whose URL is the record's `repo` (`git remote -v`; it need not be named `origin`), and diff against the fetched ref (`git diff <that remote>/<base>...<commit under review>`): a local `<base>` branch can lag the forge's base during a long run, and a stale base reviews a diff the pull request does not have. Do not resolve a PR from the current branch, and do not accept a different target.
-- A PR number, URL, or branch → resolve it with `gh pr view` (title, body, base, head, state, files) and `gh pr diff`. The PR's head must be the commit under review; when it is not, stop and say so rather than reviewing either one. **In PR mode the review object is the PR's diff, exactly — uncommitted or untracked local state is out of scope and must not appear in the scope file.**
+- A PR number, URL, or branch → resolve it with `gh pr view` (title, body, base, head, state, files) and `gh pr diff`. Return the actual requested qualified PR even when its head differs from the commit under review. Record that mismatch truthfully in scope.md; the mandatory head-check node stops the run before any lens. Never reinterpret a mismatched PR as a working diff or choose another PR. **In PR mode the review object is the PR's diff, exactly — uncommitted or untracked local state is out of scope and must not appear in the scope file.**
 - Empty scope → first check whether the current branch has an open PR (`gh pr view`); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). The head is the commit under review.
 
 ## Resolve the accepted contract
@@ -65,7 +65,7 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 
 ## Verify before finishing
 
-Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract's source, has all three of its Acceptance, Invariants, and Steering subsections, names the head SHA, and that the diff commands in it actually produce output in this checkout. Then declare:
+Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract's source, has all three of its Acceptance, Invariants, and Steering subsections, names the head SHA, and that the diff commands in it describe this checkout truthfully, including an empty diff or a PR-head mismatch. Then declare:
 
 - `pr`: the qualified pull request this round reviews, as `{"repo": {"host": ..., "path": "owner/repo"}, "number": N}` — the same identity scope.md records. For a working-diff target, `null`. The node that publishes the review report writes to this record and to nothing else, so a wrong or guessed identity would put the report on the wrong pull request.
 - `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/scope.md"}`. The engine refuses this node if that file is missing or empty, so write it before you declare.

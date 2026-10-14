@@ -577,7 +577,7 @@ describe('bundled-defaults', () => {
       const specialists = ['seams', 'code', 'tests', 'errors', 'docs'];
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
       expect(reviewComplete?.kind).toBe('exec');
-      expect(reviewComplete?.depends_on).toEqual(['scope', 'route', ...specialists]);
+      expect(reviewComplete?.depends_on).toEqual(['head-check', 'route', ...specialists]);
       // Structure is judged once, by delivery after a review passes, not as a lens.
       expect(parsed.workflow.nodes.find(node => node.id === 'simplify')).toBeUndefined();
       // Reviewers are read-only by the engine's check, not only by their prompts.
@@ -599,7 +599,7 @@ describe('bundled-defaults', () => {
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
       expect(synthesize?.kind).toBe('agent');
       if (synthesize?.kind !== 'agent') throw new Error('synthesize is not an agent');
-      expect(synthesize.depends_on).toEqual(['scope', 'review-complete']);
+      expect(synthesize.depends_on).toEqual(['head-check', 'review-complete']);
       expect(synthesize.trigger_rule).toBeUndefined();
       expect(synthesize.output_format).toMatchObject({
         properties: {

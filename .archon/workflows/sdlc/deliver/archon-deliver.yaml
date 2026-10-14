@@ -109,7 +109,7 @@ nodes:
             # The PR node's structured read-back names the pull request, so review
             # never rediscovers an ambient branch→PR mapping. It does not name the
             # commit: every round reviews the checkout's HEAD, which archon-review
-            # checks against this PR's remote head before publishing.
+            # checks against this PR's remote head before lenses and before publishing.
             scope: "$pr.output"
             # A later round reviews only the delta since the previous round's
             # published report: the same lenses after review findings, the general

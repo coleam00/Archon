@@ -3,6 +3,7 @@
 # runs anyway fails this fixture instead of passing quietly.
 mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false}'
 route: { seams: true, code: true, tests: false, errors: false, docs: true, reason: "stub: a typed contract and its docs changed" }
+head-check: "target matches"
 scope:
   # A standalone review of the working diff: no pull request to publish to.
   pr: null

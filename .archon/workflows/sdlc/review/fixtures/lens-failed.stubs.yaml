@@ -3,6 +3,7 @@
 # selected lens, and it reports the gap as not ready.
 mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false}'
 route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: lifecycle ownership changed" }
+head-check: "target matches"
 scope:
   # A standalone review of the working diff: no pull request to publish to.
   pr: null

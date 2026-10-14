@@ -36,39 +36,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
-import {
-  forgeSource,
-  parseQualifiedPr,
-  record,
-  sameRepo,
-  type QualifiedPr,
-} from '../../.shared/forge.ts';
+import { forgeSource, record, sameRepo, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
+import { recordedPr, declaredPr } from '../../.shared/review-target.ts';
 import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 
 const MARKER = '<!-- archon-review-report -->';
-
-/** The pull request delivery recorded, when the scope is that JSON record. */
-function recordedPr(scope: string): QualifiedPr | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(scope);
-  } catch {
-    return undefined; // a PR URL, a branch name, or empty
-  }
-  return record(parsed) ? parseQualifiedPr(scope) : undefined;
-}
-
-/** The pull request the scope agent declared, or undefined for a working diff. */
-function declaredPr(value: string): QualifiedPr | undefined {
-  const target = value.trim() || 'null';
-  const parsed: unknown = JSON.parse(target);
-  // Older persisted scope output used `{}` for a working diff.
-  if (parsed === null || (typeof parsed === 'object' && Object.keys(parsed).length === 0)) {
-    return undefined;
-  }
-  return parseQualifiedPr(target);
-}
 
 /** The lenses this round ran: the route agent's call on a first round, review-round's otherwise. */
 function lenses(): Record<string, boolean> {

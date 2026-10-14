@@ -29,6 +29,14 @@ A node the dry run cannot execute — a composed `bash:` node, for instance, whi
 never receives its caller's `with:` values — can only ever be stubbed, so no
 fixture can show the guard working or catch it breaking.
 
+PR review has two checks at different times. After scope resolves the qualified
+PR, `head-check` compares its live head with the commit fixed by `mode`, before
+routing or lenses. A mismatch stops with a branch retry and a fetch plus pinned
+`--from` retry (also usable for forks). It never changes the checkout. Keep other
+non-default review inputs when retrying. Publication checks again before its write,
+because the PR can move while the lenses run. Working-diff reviews need no forge
+head check.
+
 ### Why this rule exists
 
 The pack once verified "the checkout is on the branch my PR is on" in three places:

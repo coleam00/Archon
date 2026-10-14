@@ -14,7 +14,8 @@ description: |
   continuation reviewer carries the prior findings forward.
 
   When reviewing a PR, the final synthesized report is posted to it as one
-  canonical comment, edited in place on re-review.
+  canonical comment, edited in place on re-review. Before any lens runs, the PR
+  head must match the checkout commit; otherwise the run stops with retry commands.
 
   Use when: changes need judging — "review this PR", "review my changes",
   "is this ready to merge".
@@ -60,10 +61,10 @@ nodes:
   # the engine observed it), and, on a continuation, the previous round's
   # reviewed commit, which the head must descend from. A caller's pull-request
   # record names the PR, never the commit: its head revision goes stale with
-  # every push after the PR opens. publish refuses a report about any other
-  # commit. The node also turns the input into the routable fact the lenses gate
-  # on: an include's inputs are substituted as text at load time and cannot be
-  # compared in a `when:`.
+  # every push after the PR opens. head-check refuses before lenses; publish
+  # checks again before the public write. The node also turns the input into the
+  # routable fact the lenses gate on: an include's inputs are substituted as text
+  # at load time and cannot be compared in a `when:`.
   - id: mode
     script: review-round
     runtime: bun
@@ -123,6 +124,15 @@ nodes:
           required: [type, run_id, path]
       required: [pr, report]
 
+  - id: head-check
+    script: check-review-head
+    runtime: bun
+    depends_on: [scope]
+    with:
+      scope: "$INPUTS.scope"
+      pr: "$scope.output.pr"
+      head: "$mode.output.head"
+
   # The lens decision is quick and separate from scope: a small model reads the diff
   # summary and the work order and answers, with seams on by default. Only a first
   # round decides; a continuation reruns what mode read back.
@@ -131,7 +141,7 @@ nodes:
     model: small
     context: fresh
     mutates_checkout: false
-    depends_on: [mode]
+    depends_on: [head-check]
     when: "$mode.output.continuation == false"
     output_format:
       type: object
@@ -154,8 +164,8 @@ nodes:
     command: review-seams
     context: fresh
     mutates_checkout: false
-    depends_on: [scope, route]
-    # A later round skips route; scope alone must have succeeded.
+    depends_on: [head-check, route]
+    # A later round skips route; head-check alone must have succeeded.
     trigger_rule: none_failed_min_one_success
     when: "$mode.output.continuation == false && $route.output.seams == true || $mode.output.seams == true"
 
@@ -165,7 +175,7 @@ nodes:
     command: review-code
     context: fresh
     mutates_checkout: false
-    depends_on: [scope, route]
+    depends_on: [head-check, route]
     trigger_rule: none_failed_min_one_success
     when: "$mode.output.continuation == false && $route.output.code == true || $mode.output.code == true"
 
@@ -174,7 +184,7 @@ nodes:
     command: review-tests
     context: fresh
     mutates_checkout: false
-    depends_on: [scope, route]
+    depends_on: [head-check, route]
     trigger_rule: none_failed_min_one_success
     when: "$mode.output.continuation == false && $route.output.tests == true || $mode.output.tests == true"
 
@@ -183,7 +193,7 @@ nodes:
     command: review-errors
     context: fresh
     mutates_checkout: false
-    depends_on: [scope, route]
+    depends_on: [head-check, route]
     trigger_rule: none_failed_min_one_success
     when: "$mode.output.continuation == false && $route.output.errors == true || $mode.output.errors == true"
 
@@ -192,17 +202,17 @@ nodes:
     command: review-docs
     context: fresh
     mutates_checkout: false
-    depends_on: [scope, route]
+    depends_on: [head-check, route]
     trigger_rule: none_failed_min_one_success
     when: "$mode.output.continuation == false && $route.output.docs == true || $mode.output.docs == true"
 
   # all_done lets this barrier settle after unselected lenses, or a lens whose
   # retries were exhausted. The deciding
   # agent can then tolerate specialist failures without also tolerating a failed
-  # mode/scope preflight: synthesize separately requires scope to have succeeded.
+  # head check: synthesize separately requires head-check to have succeeded.
   - id: review-complete
     bash: "true"
-    depends_on: [scope, route, seams, code, tests, errors, docs]
+    depends_on: [head-check, route, seams, code, tests, errors, docs]
     trigger_rule: all_done
 
   # A failed specialist (a provider stream dying mid-review, say) must not kill
@@ -227,7 +237,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     output_type: review-report
-    depends_on: [scope, review-complete]
+    depends_on: [head-check, review-complete]
     output_format: &review_verdict
       type: object
       properties:

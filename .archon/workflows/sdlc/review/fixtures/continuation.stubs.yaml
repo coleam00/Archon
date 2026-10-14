@@ -3,6 +3,7 @@
 # the synthesizer carries the prior findings forward. The route node and the lenses
 # the selection left out carry no stub, so one that runs anyway fails this fixture.
 mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":true,"code":true,"tests":false,"errors":false,"docs":false}'
+head-check: "target matches"
 scope:
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
