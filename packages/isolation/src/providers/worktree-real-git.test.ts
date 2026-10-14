@@ -272,65 +272,6 @@ describe('WorktreeProvider against real git', () => {
     }
   });
 
-  test.each(['expected-path', 'registered-branch', 'public'])(
-    'rejected %s adoption withdraws new trust and preserves existing trust',
-    async route => {
-      if (route === 'expected-path') {
-        const other = join(root, 'other');
-        await cp(templateRepo, other, { recursive: true });
-        await mkdir(resolve(worktreePath, '..'), { recursive: true });
-        await git(other, 'worktree', 'add', '-q', worktreePath, TASK_BRANCH);
-      } else if (route === 'registered-branch') {
-        worktreePath = join(root, 'external');
-        await git(repoPath, 'worktree', 'add', '-q', worktreePath, TASK_BRANCH);
-        await git(
-          repoPath,
-          'worktree',
-          'lock',
-          '--reason',
-          'archon: worktree setup in progress: other',
-          worktreePath
-        );
-      } else {
-        await mkdir(join(worktreePath, '.git'), { recursive: true });
-      }
-      await git(root, 'config', '--global', '--add', 'safe.directory', '/unrelated');
-      const reject = async (): Promise<void> => {
-        if (route === 'public') expect(await provider.adopt(worktreePath)).toBeNull();
-        else await expect(provider.create(request)).rejects.toThrow();
-      };
-      await reject();
-      expect(
-        (await git(root, 'config', '--global', '--get-all', 'safe.directory')).trim().split('\n')
-      ).toEqual(['/unrelated']);
-      await git(root, 'config', '--global', '--add', 'safe.directory', worktreePath);
-      await reject();
-      expect(
-        (await git(root, 'config', '--global', '--get-all', 'safe.directory')).trim().split('\n')
-      ).toEqual(['/unrelated', worktreePath]);
-    }
-  );
-
-  test.each([false, true])(
-    'failed setup preserves pre-existing trust only (%s)',
-    async preexisting => {
-      await git(root, 'config', '--global', '--add', 'safe.directory', '/unrelated');
-      if (preexisting)
-        await git(root, 'config', '--global', '--add', 'safe.directory', worktreePath);
-      provider = new WorktreeProvider(
-        async () => ({ postCreate: ['fail'] }),
-        async () => {
-          throw new Error('setup rejected');
-        }
-      );
-      await expect(provider.create(request)).rejects.toThrow('setup rejected');
-      expect(existsSync(worktreePath)).toBe(false);
-      expect(
-        (await git(root, 'config', '--global', '--get-all', 'safe.directory')).trim().split('\n')
-      ).toEqual(preexisting ? ['/unrelated', worktreePath] : ['/unrelated']);
-    }
-  );
-
   test('post-create sees copied files in a new checkout of an existing branch and skips reuse', async () => {
     await writeFile(join(repoPath, '.seed'), 'seed');
     let executions = 0;
@@ -668,9 +609,6 @@ describe('WorktreeProvider against real git', () => {
     await expect(provider.create(attempt)).rejects.toThrow('hook-failure already exists');
     expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
     expect(existsSync(path)).toBe(false);
-    await expect(
-      git(root, 'config', '--global', '--fixed-value', '--get-all', 'safe.directory', path)
-    ).rejects.toThrow();
 
     await writeFile(
       join(repoPath, '.git', 'hooks', 'post-checkout'),

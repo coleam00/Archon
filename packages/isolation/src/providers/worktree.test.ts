@@ -635,10 +635,7 @@ describe('WorktreeProvider', () => {
     });
 
     test('throws when branch already exists and fromBranch is specified', async () => {
-      execSpy.mockImplementation(async (_cmd, args) => ({
-        stdout: args.includes('rev-parse') ? 'existing-branch-sha\n' : '',
-        stderr: '',
-      }));
+      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
 
       const request: IsolationRequest = {
         ...baseRequest,
@@ -1112,10 +1109,7 @@ describe('WorktreeProvider', () => {
     });
 
     test('checks out an existing issue branch as it is', async () => {
-      execSpy.mockImplementation(async (_cmd, args) => ({
-        stdout: args.includes('rev-parse') ? 'existing-branch-sha\n' : '',
-        stderr: '',
-      }));
+      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
 
       const env = await provider.create(baseRequest);
 
@@ -1335,10 +1329,7 @@ describe('WorktreeProvider', () => {
         isForkPR: false,
       };
 
-      execSpy.mockImplementation(async (_cmd, args) => ({
-        stdout: args.includes('rev-parse') ? 'existing-branch-sha\n' : '',
-        stderr: '',
-      }));
+      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
 
       const environment = await provider.create(request);
 

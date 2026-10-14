@@ -600,64 +600,9 @@ export async function syncRepository(
 }
 
 /**
- * Trust a checkout before Git validation (including checkout hooks), retaining
- * the grant only if setup accepts it. Existing exact grants belong to the
- * operator and are never withdrawn. A cleanup failure preserves both errors.
- */
-export async function withProvisionalSafeDirectory<T>(
-  path: RepoPath,
-  operation: () => Promise<T>,
-  accepted: (result: T) => boolean = () => true
-): Promise<T> {
-  let preexisting = false;
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['config', '--global', '--fixed-value', '--get-all', 'safe.directory', path],
-      { timeout: 10000 }
-    );
-    preexisting = stdout.length > 0;
-  } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 1)) throw error;
-  }
-
-  await addSafeDirectory(path);
-  const revoke = async (): Promise<void> => {
-    if (preexisting) return;
-    try {
-      await execFileAsync(
-        'git',
-        ['config', '--global', '--fixed-value', '--unset-all', 'safe.directory', path],
-        { timeout: 10000 }
-      );
-    } catch (error) {
-      // Git returns 5 when the entry has already been removed.
-      if (!(error instanceof Error && 'code' in error && error.code === 5)) throw error;
-    }
-  };
-  let result: T;
-  try {
-    result = await operation();
-  } catch (error) {
-    try {
-      await revoke();
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        `Failed setup and trust cleanup for '${path}'`,
-        {
-          cause: error,
-        }
-      );
-    }
-    throw error;
-  }
-  if (!accepted(result)) await revoke();
-  return result;
-}
-
-/**
  * Add a directory to git's global safe.directory config.
+ * Grants persist after setup failure: revocation could remove trust that a
+ * concurrent setup accepted for the same path.
  * Uses execFileAsync (no shell interpolation) for safety.
  */
 export async function addSafeDirectory(path: RepoPath): Promise<void> {
