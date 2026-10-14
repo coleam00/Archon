@@ -174,7 +174,7 @@ curl -X PATCH http://localhost:3090/api/codebases/{id} \
   -d '{"name": "my-repo"}'
 ```
 
-Returns the updated codebase. The name is trimmed and must be 1 to 255 characters. The response is `409` when another codebase already uses the name, or when the new name would change where Archon stores the project's worktrees, state, logs and artifacts. That location comes from the name: an `owner/repo` name maps to `owner/repo`, any other name to `_local/<directory name>`, and a folder project to the slug of its name. The Web UI renames from the project's **More actions** menu or by double-clicking its name.
+Returns the updated codebase. The name is trimmed and must be 1 to 255 characters. The response is `409` when another codebase already uses the name, or when the new name would change where Archon stores the project's worktrees, state, logs and artifacts. Repository state, logs and artifacts use the `owner/repo` name when supplied, otherwise `_local/<directory name>`; folder storage uses the slug of its name. Default worktree locations also use repository identity, which can come from the checkout path. A configured repo-local `worktree.path` instead anchors worktrees to the checkout. Rename checks the actual storage and worktree locations and succeeds only when they stay unchanged. The Web UI renames from the project's **More actions** menu or by double-clicking its name.
 
 ### Delete a Codebase
 

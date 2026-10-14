@@ -451,11 +451,14 @@ function sanitizeRecommendedWorkflows(raw: unknown, configPath: string): string[
   return cleaned;
 }
 
-/** Read .archon/config.yaml, degrading to an empty config when it is missing or unreadable. */
-async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> {
+/** Missing config uses defaults; strict reads propagate all other failures. */
+async function readRepoConfig(configPath: string, strict = false): Promise<RepoConfig> {
   try {
     const content = await readConfigFile(configPath);
     const raw = parseYaml(content);
+    if (strict && raw !== null && (typeof raw !== 'object' || Array.isArray(raw))) {
+      throw new Error(`Repository config must be a mapping: ${configPath}`);
+    }
     validateWorkflowContinuationConfig(raw, configPath);
     validateModelBindingConfig(raw, configPath);
     const parsed = (raw as RepoConfig | null) ?? {};
@@ -475,6 +478,7 @@ async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> 
       // File doesn't exist - expected, use defaults
       return {};
     }
+    if (strict) throw error;
     // Log specific error message based on error type
     logConfigError(configPath, error);
     return {};
@@ -486,11 +490,14 @@ async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> 
  * Returns empty object if no config found
  *
  * Throws when `assistants.*` names a setting the provider cannot honour; every
- * other failure degrades to defaults.
+ * other failure degrades to defaults unless `strict` is requested for a location check.
  */
-export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
+export async function loadRepoConfig(
+  repoPath: string,
+  options: { strict?: boolean } = {}
+): Promise<RepoConfig> {
   const configPath = join(repoPath, '.archon', 'config.yaml');
-  const parsed = await readRepoConfigOrDegrade(configPath);
+  const parsed = await readRepoConfig(configPath, options.strict);
   validateWorktreePostCreate(parsed.worktree);
   validateAssistantDefaults(parsed, configPath);
   return parsed;
