@@ -139,9 +139,13 @@ export function stagingName(fileName: string): string {
 /** A broken receipt's own error and the two commands that repair it. */
 function brokenReceiptNote(broken: BrokenReceipt): string {
   // A receipt.json placed outside the owner/repo layout has no id the commands accept.
+  let ref: PluginRef;
   try {
-    parsePluginRef(broken.id);
+    ref = parsePluginRef(broken.id);
   } catch {
+    return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand`;
+  }
+  if (ref.id !== broken.id) {
     return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand`;
   }
   return `${broken.message}. Repair it: archon plugin update ${broken.id}, or archon plugin remove ${broken.id}`;

@@ -443,22 +443,31 @@ describe('archon plugin: workflow packs', () => {
     expect(Object.keys(await snapshot(occupied))).toEqual(['mine.txt']);
   });
 
-  test('update repairs an unreadable receipt, reinstalling the tree it pointed at', async () => {
+  test('repair and removal of unreadable receipts preserve unidentified pack trees', async () => {
     const env = await environment();
     expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    const oldTree = packTreePath(env.pluginsDir, ID, commit('v1'));
+    const oldFiles = await snapshot(oldTree);
     await writeFile(receiptPath(env.pluginsDir, ID), '{not json');
-    const updated = await run(env, 'update', `${ID}@v1`);
+    const updated = await run(env, 'update', `${ID}@v2`);
     expect(updated.err).toBe('');
     expect(updated.code).toBe(0);
     expect(updated.out).toContain('Replaced the unreadable receipt');
     const receipts = await readReceipts(env.pluginsDir);
     expect(receipts).toHaveLength(1);
-    expect(receipts[0]).toMatchObject({ id: ID, tag: 'v1', commit: commit('v1') });
-    const tree = packTreePath(env.pluginsDir, ID, commit('v1'));
+    expect(receipts[0]).toMatchObject({ id: ID, tag: 'v2', commit: commit('head') });
+    expect(await snapshot(oldTree)).toEqual(oldFiles);
+    const tree = packTreePath(env.pluginsDir, ID, commit('head'));
     expect(Object.keys(await snapshot(tree))).toEqual(TREE_FILES);
+    expect(await readFile(join(tree, 'review/review.yaml'), 'utf8')).toContain('# v2');
     expect((await run(env, 'list')).out).toBe(
-      `${ID}  workflow-pack  v1  ${commit('v1').slice(0, 12)}  archon any`
+      `${ID}  workflow-pack  v2  ${commit('head').slice(0, 12)}  archon any`
     );
+    await writeFile(receiptPath(env.pluginsDir, ID), '{not json');
+    const beforeRemove = await snapshot(env.pluginsDir);
+    expect((await run(env, 'remove', ID)).code).toBe(0);
+    delete beforeRemove[join('installed', ...ID.split('/'), 'receipt.json')];
+    expect(await snapshot(env.pluginsDir)).toEqual(beforeRemove);
   });
 
   test('refuses a second pack with the same owner and name', async () => {
