@@ -186,7 +186,7 @@ export function parseWorkItem(value: unknown): WorkItem {
     typeof doc.created_at !== 'string' ||
     typeof doc.stage !== 'string' ||
     !Object.hasOwn(STAGES, doc.stage) ||
-    !(doc.trust === null || doc.trust === 'maintainer' || doc.trust === 'outside') ||
+    !(doc.trust === null || (TRUSTS as readonly unknown[]).includes(doc.trust)) ||
     claim === undefined ||
     (claim !== null && (typeof claim.run_id !== 'string' || !Array.isArray(claim.requests))) ||
     !Array.isArray(doc.requests) ||
