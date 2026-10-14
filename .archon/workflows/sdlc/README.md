@@ -246,10 +246,12 @@ pack labels mirror it, and a label a person adds is a request, never the state.
   waiting item that sorts first by the `order` input (default
   `["urgency desc","importance desc","size asc","created asc"]`; an untriaged item
   sorts after triaged ones, oldest first) with a conditional write. A request that
-  arrives while its item is claimed waits for the next intake run. A run removes a
-  request label only when it claimed that label's request or wrote the label
-  itself, so a label whose request is recorded late stays for the run that reads
-  it. An open, edit or
+  arrives while its item is claimed waits for the next intake run. A request label
+  whose request no run has claimed may have a request on its way, so a run leaves
+  it for the run that claims that request. It waits one pickup; the next pickup
+  that still finds no request for it removes it. On a maintainer's item only
+  `archon-triage` waits, since a route label is reconciled away either way. An
+  open, edit or
   reopen adds no request while another one waits, since the pickup reads the live
   issue; label requests keep the newest 50. A run clears its
   claim only after the item's labels are written. The next pickup releases a claim

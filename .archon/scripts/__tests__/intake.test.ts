@@ -220,7 +220,7 @@ describe('the intake decision', () => {
   test('the outcome refuses to add a request label to an outside item no maintainer promoted', () => {
     const outside = item({
       trust: 'outside',
-      facts: { intake: { body_digest: DIGEST, at: AT, run_id: 'run' } },
+      facts: { intake: { body_digest: DIGEST, at: AT, run_id: 'run', waiting: [] } },
     });
     expect(() => assertNoSelfPromotion(outside, ['archon-ready'])).toThrow(
       'no maintainer promoted'
@@ -293,6 +293,7 @@ describe('pickup', () => {
       stage: true,
       body_digest: true,
       labels: true,
+      waiting: true,
       notes: true,
     };
     const workflow = Bun.YAML.parse(
@@ -343,7 +344,7 @@ describe('pickup', () => {
     // A decision recorded after the release means the item's last attempt finished.
     const recovered = {
       ...released,
-      facts: { ...released.facts, intake: { body_digest: DIGEST, at: '2026-10-15T00:00:00.000Z', run_id: 'later' } },
+      facts: { ...released.facts, intake: { body_digest: DIGEST, at: '2026-10-15T00:00:00.000Z', run_id: 'later', waiting: [] } },
     };
     expect(order([recovered, fresh])).toEqual([1, 2]);
   });
@@ -773,6 +774,40 @@ describe('the intake scripts', () => {
       statuses: { 'run-1': 'completed' },
     }).output;
     expect(retriage).toMatchObject({ path: 'triage', decision: { notes: [] } });
+  }, 60_000);
+
+  test("a route label on a maintainer's item that no request claims is removed at once", () => {
+    const at = install();
+    const stale = { issueLabels: ['archon-plan'] };
+    const decided = facts(at, { ...stale, runId: 'run-1' }).output;
+    const applied = outcome(at, { ...stale, runId: 'run-1' }, decided, READY_VERDICT);
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
+      'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-ready --add-label archon-size-s --add-label archon-type-feature --remove-label archon-plan',
+    ]);
+  }, 60_000);
+
+  test('a request label on an outside item waits one pickup for its request, then is removed', () => {
+    const at = install();
+    const stale = { author: 'stranger', issueLabels: ['archon-plan'] };
+    const first = facts(at, { ...stale, runId: 'run-1' }).output;
+    const kept = outcome(at, { ...stale, runId: 'run-1' }, first, SKIPPED_TRIAGE);
+    expect({ code: kept.code, stderr: kept.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(kept.gh.filter(call => call.includes('--remove-label'))).toEqual([]);
+    expect(stored(at).value.facts.intake?.waiting).toEqual(['archon-plan']);
+
+    const edited = {
+      ...stale,
+      action: 'edited',
+      issueLabels: ['archon-plan', 'archon-needs-maintainer'],
+    };
+    const second = facts(at, { ...edited, runId: 'run-2', statuses: { 'run-1': 'completed' } });
+    const removed = outcome(at, { ...edited, runId: 'run-2' }, second.output, SKIPPED_TRIAGE);
+    expect({ code: removed.code, stderr: removed.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(removed.gh.filter(call => call.startsWith('issue edit'))).toEqual([
+      'issue edit 7 --repo ghe.example.com/example/repo --remove-label archon-plan',
+    ]);
+    expect(stored(at).value.facts.intake?.waiting).toEqual([]);
   }, 60_000);
 
   test('a claim keeps the newest label requests and one other request', () => {

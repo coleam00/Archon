@@ -104,6 +104,8 @@ export interface WorkItem {
       readonly body_digest: string;
       readonly at: string;
       readonly run_id: string;
+      /** The request labels the last pickup left waiting for their requests. */
+      readonly waiting: readonly string[];
     };
     readonly triage?: TriageFacts;
   };
@@ -122,6 +124,8 @@ export interface IntakeDecision {
    * only owned labels among them.
    */
   readonly labels: readonly string[];
+  /** The request labels on the issue that wait for a request not yet recorded. */
+  readonly waiting: readonly string[];
   readonly notes: readonly HistoryEntry[];
 }
 
@@ -389,11 +393,18 @@ export function decideIntake(
   const notes: HistoryEntry[] = [];
   const mirror = new Set<string>(mirrorLabels(doc));
   const claimed = new Set((doc.claim?.requests ?? []).map(request => request.label));
-  // A request label this run neither claimed a request for nor wrote itself has a
-  // request still on its way, which may land at any point of this run or after it.
-  const labels = issue.labels.filter(
-    label => !isRequestLabel(label) || mirror.has(label) || claimed.has(label)
-  );
+  const waited = new Set(doc.facts.intake?.waiting ?? []);
+  // A request label this run neither claimed a request for nor wrote itself may have
+  // a request on its way, landing at any point of this run or after it, so the label
+  // waits for the run that claims it. It waits one pickup: a label still unclaimed
+  // after that has no request coming. On a maintainer's item only archon-triage
+  // waits, because any route label's request is reconciled away.
+  const waits = (label: string): boolean =>
+    isRequestLabel(label) &&
+    !mirror.has(label) &&
+    !claimed.has(label) &&
+    !waited.has(label) &&
+    (trust !== 'maintainer' || label === 'archon-triage');
   const noted = (outcome: string, summary: string): void => {
     notes.push({ at, stage: 'intake', run_id: runId, outcome, summary });
   };
@@ -403,7 +414,8 @@ export function decideIntake(
     promoted,
     stage,
     body_digest: issue.digest,
-    labels,
+    labels: issue.labels.filter(label => !waits(label)),
+    waiting: issue.labels.filter(waits),
     notes,
   });
   if (issue.state === 'closed') {
@@ -500,7 +512,10 @@ export function applyDecision(
   const history: HistoryEntry[] = [...doc.history, ...decision.notes];
   let stage = decision.stage;
   let promoted = decision.promoted;
-  let facts = { ...doc.facts, intake: { body_digest: decision.body_digest, at, run_id: runId } };
+  let facts = {
+    ...doc.facts,
+    intake: { body_digest: decision.body_digest, at, run_id: runId, waiting: decision.waiting },
+  };
   if (decision.path === 'triage') {
     if (triage === null) throw new Error('the triage path has no triage verdict');
     const { verdict, pull_request, type, size, complexity, importance, urgency, summary, report } =
