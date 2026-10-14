@@ -81,6 +81,16 @@ Archon maintains the provider and platform integrations it explicitly designates
 
 When citing this policy in a PR comment: `direction.md §community-plugins`.
 
+## SDLC pack as a software factory
+
+The SDLC pack is the Archon team's own delivery workflow, a reference pack (§user-owns-policy, §defaults-reference-implementations). Its target shape is a software factory built only from primitives the engine offers every workflow: triggers, the durable pause, state documents and the forge seam.
+
+- **Stages are queues joined by forge labels.** Triage labels an incoming issue, the label starts the matching check or delivery, a ready pull request gets a label, and that label starts the merge queue. Each queue is a standing workflow a trigger starts. Its work item is a state document that links the item's runs and is claimed with a conditional write. The implement-review-fix loop stays one composed run. Label names are pack configuration the user owns.
+- **A new failure class pauses; a recurring one gets a handler.** The run pauses as an attention item labelled with its class. A small handler workflow, started by a trigger on that label, answers through the normal answer channel; a class with no handler waits for any answerer. Counts per label show which handler to build next. Adding a handler changes neither the pack's main path nor the engine.
+- **The factory asks nothing pack-specific of the engine.** When it needs a capability the engine lacks, the engine gains a general primitive any workflow can use, never behavior that knows the pack's stages, labels or failure classes.
+
+Triage clause: cite this direction as `direction.md §software-factory`.
+
 ## Workflow language (YAML surface)
 
 The workflow YAML is a **coordination language**, not a programming language. Admissibility test for any new YAML surface feature (field, node type, expression capability): (1) does the *engine* need to see it to govern the run? (2) is it declarative data, not evaluation? (3) could a script node + existing wiring express it today? A feature that computes rather than coordinates is declined with a pointer to the escape hatch. Full rationale, case law, and the five failure smells: `.archon/workflow-language-constitution.md`.
