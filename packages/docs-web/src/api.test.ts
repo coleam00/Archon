@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { createMarkdownProcessor, type RemarkPlugin } from '@astrojs/markdown-remark';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 
@@ -38,20 +39,57 @@ const page = readFileSync(new URL('./content/docs/reference/api.md', import.meta
   /\r\n/g,
   '\n'
 );
-const rows = [
-  ...page
-    .replace(/```[^\n]*\n[\s\S]*?```/g, '')
-    .matchAll(/^\|[ \t]*(.*?)[ \t]*\|[ \t]*`([^`]+)`[ \t]*\|[ \t]*(.+?)[ \t]*\|[ \t]*$/gm),
-].filter(row => row[3]?.trim());
+interface TextNode {
+  type: string;
+  value?: string;
+  children?: TextNode[];
+}
+
+function textContent(node: TextNode): string {
+  return node.value ?? node.children?.map(textContent).join('') ?? '';
+}
+
+async function referenceOperations(markdown: string): Promise<{ method: string; path: string }[]> {
+  const operations: { method: string; path: string }[] = [];
+  const collectTables: RemarkPlugin = () => tree => {
+    for (const node of tree.children) {
+      if (node.type !== 'table') continue;
+      for (const row of node.children.slice(1)) {
+        const [method, path, purpose] = row.children.map(cell => textContent(cell).trim());
+        if (method && path && purpose) operations.push({ method, path });
+      }
+    }
+  };
+  const processor = await createMarkdownProcessor({
+    syntaxHighlight: false,
+    remarkPlugins: [collectTables],
+  });
+  await processor.render(markdown);
+  return operations;
+}
+const documentedOperations = await referenceOperations(page);
+
+test('only visible table rows with a purpose count as documentation', async () => {
+  const table = (path: string, purpose = 'Read status') =>
+    `| Method | Path | Description |\n| --- | --- | --- |\n| GET | \`${path}\` | ${purpose} |`;
+  const fixture = [
+    table('/visible'),
+    `<!--\n${table('/commented')}\n-->`,
+    `~~~markdown\n${table('/example')}\n~~~`,
+    table('/blank', '   '),
+    '| GET | `/outside-table` | Read status |',
+  ].join('\n\n');
+  expect(await referenceOperations(fixture)).toEqual([{ method: 'GET', path: '/visible' }]);
+});
 
 test('every generated API path has a reference table row', () => {
-  const documented = new Set(rows.map(row => row[2]));
+  const documented = new Set(documentedOperations.map(operation => operation.path));
   const missing = [...new Set(routes.map(route => route.path))].filter(path => !documented.has(path));
   expect(missing).toEqual([]);
 });
 
 test('every generated API operation has a method and purpose in the reference', () => {
-  const documented = new Set(rows.map(row => `${row[1]} ${row[2]}`));
+  const documented = new Set(documentedOperations.map(operation => `${operation.method} ${operation.path}`));
   const missing = routes
     .map(route => `${route.method} ${route.path}`)
     .filter(operation => !documented.has(operation));

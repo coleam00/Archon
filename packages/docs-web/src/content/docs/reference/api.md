@@ -427,7 +427,7 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/runs/attention` | List attention queue items or count them with `countBy` |
-| GET | `/api/runs/{runId}/attention` | Read a run's attention queue item, or `null` when it needs no attention |
+| GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when the run needs no attention |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
 
 Outside answerers can read the queue, then submit an answer through `/api/workflows/runs/{runId}/answer`. Answers and label writes that name a stale occurrence return `409`.
