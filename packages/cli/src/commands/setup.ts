@@ -18,7 +18,7 @@
  *
  * Writes are merge-only by default: existing non-empty values are preserved,
  * user-added custom keys survive, and a timestamped backup is written before
- * every rewrite. A confirmed GitHub mode switch replaces only its auth keys.
+ * every rewrite. A confirmed GitHub authentication replacement affects only its auth keys.
  * `--force` skips the merge (proposed wins) but still backs up.
  */
 import {
@@ -209,12 +209,32 @@ const GITHUB_APP_PRIVATE_KEY_KEYS = [
   'GITHUB_APP_PRIVATE_KEY_PATH',
 ] as const;
 const GITHUB_APP_CREDENTIAL_KEYS = ['GITHUB_APP_ID', ...GITHUB_APP_PRIVATE_KEY_KEYS] as const;
-const GITHUB_APP_KEYS = [
+export const GITHUB_APP_KEYS = [
   ...GITHUB_APP_CREDENTIAL_KEYS,
   'GITHUB_APP_CLIENT_ID',
   'GITHUB_APP_SLUG',
   'GITHUB_APP_INSTALLATION_ID',
 ] as const;
+
+function hasCompleteAppCredential(env: Record<string, string | undefined>): boolean {
+  return (
+    Boolean(env.GITHUB_APP_ID?.trim()) &&
+    GITHUB_APP_PRIVATE_KEY_KEYS.some(key => Boolean(env[key]?.trim()))
+  );
+}
+
+function githubAuthMode(
+  env: Record<string, string | undefined>
+): 'pat' | 'app' | 'none' | 'conflict' {
+  const app = Boolean(
+    env.GITHUB_APP_ID && GITHUB_APP_PRIVATE_KEY_KEYS.some(key => env[key]) && env.WEBHOOK_SECRET
+  );
+  const pat = Boolean(env.GITHUB_TOKEN && env.WEBHOOK_SECRET);
+  if (app && pat) return 'conflict';
+  if (app) return 'app';
+  if (pat) return 'pat';
+  return 'none';
+}
 
 interface TelegramConfig {
   botToken: string;
@@ -390,6 +410,7 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
   // Counts the deprecated unprefixed names too: the server still reads them this release.
   const env = parseDotenv(content);
   const codex = readCodexSetupEnv(env).values;
+  const githubMode = githubAuthMode(env);
 
   return {
     hasClaude:
@@ -403,10 +424,7 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
     // env vars never get a Pi login check.
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
     platforms: {
-      github:
-        GITHUB_PAT_KEYS.some(key => Boolean(env[key]?.trim())) ||
-        (Boolean(env.GITHUB_APP_ID?.trim()) &&
-          GITHUB_APP_PRIVATE_KEY_KEYS.some(key => Boolean(env[key]?.trim()))),
+      github: githubMode === 'app' || githubMode === 'pat',
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
       slack: hasEnvValue(content, 'SLACK_BOT_TOKEN') && hasEnvValue(content, 'SLACK_APP_TOKEN'),
     },
@@ -1828,7 +1846,7 @@ export function serializeEnv(entries: Record<string, string>): string {
       ["'", value],
       ['`', value],
     ]) {
-      if (!contents.replaceAll(`\\${quote}`, '').includes(quote) && !contents.endsWith('\\')) {
+      if (!contents.replaceAll(`\\${quote}`, '').includes(quote)) {
         candidates.push(`${key}=${quote}${contents}${quote}`);
       }
     }
@@ -1868,8 +1886,8 @@ interface WriteScopedEnvResult {
  * Write env content to exactly one archon-owned file, selected by scope.
  * Merge-only by default (existing non-empty values win, user-added keys
  * survive). Backs up the existing file (if any) before every rewrite, even
- * when `--force` is set. Without force, a confirmed GitHub mode switch replaces
- * auth keys while keeping shared webhook settings and unrelated values.
+ * when `--force` is set. Without force, a confirmed GitHub authentication change
+ * replaces auth keys while keeping shared webhook settings and unrelated values.
  */
 export function writeScopedEnv(
   content: string,
@@ -2280,10 +2298,15 @@ async function runSetup(options: SetupOptions): Promise<void> {
   }
 
   let replaceGitHubAuth = false;
+  const saved = existsSync(targetEnvPath) ? parseDotenv(readFileSync(targetEnvPath, 'utf8')) : {};
+  if (!config.github && githubAuthMode(saved) === 'conflict') {
+    cancel(
+      `Conflicting GitHub authentication in ${targetEnvPath}. Select GitHub to resolve the conflict. No env files were changed.`
+    );
+    exitSetup(1);
+  }
   if (config.platforms.github) {
-    const saved = existsSync(targetEnvPath) ? parseDotenv(readFileSync(targetEnvPath, 'utf8')) : {};
-    const githubMode =
-      config.github?.mode ?? (GITHUB_PAT_KEYS.some(key => saved[key]?.trim()) ? 'pat' : 'app');
+    const githubMode = config.github?.mode ?? githubAuthMode(saved);
     const otherEnvPath = resolveScopedEnvPath(
       scope === 'home' ? 'project' : 'home',
       options.repoPath
@@ -2291,7 +2314,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
     if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
       const other = parseDotenv(readFileSync(otherEnvPath, 'utf8'));
       const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
-      if (conflictingKeys.some(key => other[key]?.trim())) {
+      if (conflictingKeys.some(key => other[key])) {
         cancel(
           `Conflicting GitHub authentication in ${otherEnvPath}. Remove the other mode's credentials there before running setup again. No env files were changed.`
         );
@@ -2299,7 +2322,11 @@ async function runSetup(options: SetupOptions): Promise<void> {
       }
     }
     const oppositeKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_KEYS;
-    if (config.github && oppositeKeys.some(key => key in saved)) {
+    const replacePartialApp =
+      config.github?.mode === 'app' &&
+      !hasCompleteAppCredential(saved) &&
+      GITHUB_APP_CREDENTIAL_KEYS.some(key => key in saved);
+    if (config.github && (oppositeKeys.some(key => key in saved) || replacePartialApp)) {
       const approved = await confirm({
         message: `Replace existing GitHub authentication with ${config.github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
         initialValue: false,
