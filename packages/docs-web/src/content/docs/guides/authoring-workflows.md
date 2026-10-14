@@ -454,11 +454,18 @@ nodes:
     wait:
       attention: "Review found issues. Approve to continue."
       form: approval
+  - id: stop
+    depends_on: [gate]
+    when: "$gate.output.decision == 'reject'"
+    cancel: "Review issues were not approved"
   - id: next
-    depends_on: [review, gate]
+    depends_on: [review, gate, stop]
     trigger_rule: none_failed_min_one_success
     bash: echo continue
 ```
+
+A rejection is an answer, so `gate` completes either way. `next` also depends on
+`stop`, which cancels the run on a rejection before `next` can start.
 
 Use `all_done` instead only when the next step should run even after the gate fails.
 

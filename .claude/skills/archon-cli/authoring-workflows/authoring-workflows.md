@@ -70,7 +70,9 @@ Work through these questions in order, with the user where marked:
      delete data, send customer-facing communication). Everything else should be
      decidable by code or by another agent. The pause holds the run durably in the
      attention queue, whether it started in the foreground, detached, or from a
-     trigger. Reject is an answer, not a cancel: add a `cancel:` node behind
+     trigger. Container-isolated workflows cannot hold one: Archon refuses a
+     workflow with any `wait:` node under container isolation before creating the
+     run. Reject is an answer, not a cancel: add a `cancel:` node behind
      `when: "$<id>.output.decision == 'reject'"` where rejecting should end the run.
      The older `approval:` node is deprecated.
 
