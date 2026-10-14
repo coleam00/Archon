@@ -24797,6 +24797,82 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(prompts[1]).toContain('Prior draft: [first draft]');
   });
 
+  it('runs a nested body command file through every enclosing loop scope (#3954)', async () => {
+    await writeFile(
+      join(testDir, '.archon', 'commands', 'polish.md'),
+      'outer: [$LOOP_PREV.a.output] inner: [$LOOP_PREV.polish.output]'
+    );
+    let aCalls = 0;
+    mockSendQueryDag.mockImplementation(async function* (prompt: string) {
+      let text: string;
+      if (prompt.includes('produce a')) text = `A${++aCalls}`;
+      else if (prompt.includes('inner: []')) text = 'C1';
+      else text = prompt.includes('outer: [A1]') ? 'INNER_DONE OUTER_DONE' : 'INNER_DONE';
+      yield { type: 'agent_message_chunk', text };
+      yield { type: 'result', sessionId: 'lg-nested-cmd-sess' };
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-nested-command',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-nested-command',
+          nodes: [
+            {
+              id: 'outer',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'OUTER_DONE',
+                max_iterations: 2,
+                fresh_context: true,
+                nodes: [
+                  {
+                    id: 'a',
+                    kind: 'agent',
+                    source: { kind: 'inline', prompt: 'produce a' },
+                    depends_on: [],
+                  },
+                  {
+                    id: 'inner',
+                    kind: 'loop_group',
+                    loop_group: {
+                      until: 'INNER_DONE',
+                      max_iterations: 2,
+                      fresh_context: true,
+                      nodes: [
+                        {
+                          id: 'polish',
+                          kind: 'agent',
+                          source: { kind: 'command', name: 'polish' },
+                          depends_on: [],
+                        },
+                      ],
+                    },
+                    depends_on: ['a'],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-nested-command'),
+      })
+    );
+
+    const polishPrompts = mockSendQueryDag.mock.calls
+      .map(call => call[0] as string)
+      .filter(prompt => prompt.includes('outer: ['));
+    expect(polishPrompts.length).toBe(4);
+    expect(polishPrompts[0]).toContain('outer: [] inner: []');
+    expect(polishPrompts[1]).toContain('outer: [] inner: [C1]');
+    expect(polishPrompts[2]).toContain('outer: [A1] inner: []');
+    expect(polishPrompts[3]).toContain('outer: [A1] inner: [C1]');
+  });
+
   it('exhausts loop_group iterations after a negated final until signal', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
