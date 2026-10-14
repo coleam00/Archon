@@ -101,7 +101,7 @@ nodes:
     # `&&` short-circuits, so a skipped producer's output is never read.
     when: "$triage.output.route == 'deliver' || $triage.output.route == 'continue' || $triage.output.route == 'investigate' && $inv.output.verdict == 'rooted' || $triage.output.route == 'plan' && $planned.output.ready == true"
 
-  # One return for every legitimate terminal result. Negative advisory verdicts
+  # The result of every legitimate ending, relayed by `report`. Negative advisory verdicts
   # complete with the report that explains them; a delivery is reported from the
   # deliver branch's own outcome, ready or not (bound with if_skipped, so a skipped
   # branch arrives as null) — see scripts/outcome.ts.
@@ -169,7 +169,8 @@ nodes:
             - not_rooted
             # a planning stop, or a review that needs a check only a person can make
             - needs_human
-        # The delivery's pull request, ready or not; '' when no delivery opened one.
+        # The delivery's pull request, ready or not; '' when no delivery opened one,
+        # or when a node failure kept the report from learning it.
         pr_url: { type: string }
         summary: { type: string }
       required: [delivered, reason, pr_url, summary]

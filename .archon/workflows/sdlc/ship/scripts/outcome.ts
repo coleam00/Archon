@@ -1,5 +1,6 @@
 /**
- * One return for every legitimate terminal result of the routed fix chain.
+ * The result of every legitimate ending of the routed fix chain, which the `report`
+ * node relays as the workflow's return.
  *
  * Delivery is accepted when the deliver branch ran and reported its pull request
  * ready; a delivery that ended not ready reports deliver's own reason. Every other
