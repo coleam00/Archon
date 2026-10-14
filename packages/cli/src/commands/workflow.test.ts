@@ -12830,6 +12830,29 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(progressLines()).toEqual(['[workflow] Transcript: /logs/test-run-id.jsonl']);
   });
 
+  it('removes the signal handlers before the final drain reads', async () => {
+    const sigtermBaseline = process.listenerCount('SIGTERM');
+    setupWorkflowMocks();
+    let runSettled = false;
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      runSettled = true;
+      return { success: true, workflowRunId: OWNED_RUN, paused: true };
+    });
+    const host = createTestWorkflowHost();
+    const read = host.deps.store.readWorkflowEventsAfter.bind(host.deps.store);
+    const listenersAtDrain: number[] = [];
+    host.deps.store.readWorkflowEventsAfter = async (after, options) => {
+      if (runSettled) listenersAtDrain.push(process.listenerCount('SIGTERM'));
+      return read(after, options);
+    };
+
+    await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
+
+    expect(listenersAtDrain.length).toBeGreaterThan(0);
+    expect(listenersAtDrain.every(count => count === sigtermBaseline)).toBe(true);
+  });
+
   it('reports a failed final drain without masking the run outcome', async () => {
     setupWorkflowMocks();
     executeCommitting(() => {

@@ -3515,6 +3515,16 @@ async function runWorkflowWithOwnedSource(
         });
       }
     } finally {
+      // Deregister the signal handlers now that the run's lifecycle is settled
+      // (paused / completed / failed, or the throw propagating out of this
+      // finally). A signal from here on gets default handling — the destructive
+      // failWorkflowRun cleanup must never fire against a settled run (#1123),
+      // and removal keeps repeated workflowRunCommand calls in one process from
+      // stacking handlers.
+      // Before the progress drain: a signal during it must not tear down a paused
+      // run's preserved container.
+      deregisterTermination();
+
       // Renders the rows the run committed since the last poll, up to its settled state.
       await progress?.close().catch((drainErr: unknown) => {
         getLog().warn(
@@ -3525,14 +3535,6 @@ async function runWorkflowWithOwnedSource(
           `[workflow] Progress output may be incomplete: ${(drainErr as Error).message}\n`
         );
       });
-
-      // Deregister the signal handlers now that the run's lifecycle is settled
-      // (paused / completed / failed, or the throw propagating out of this
-      // finally). A signal from here on gets default handling — the destructive
-      // failWorkflowRun cleanup must never fire against a settled run (#1123),
-      // and removal keeps repeated workflowRunCommand calls in one process from
-      // stacking handlers.
-      deregisterTermination();
 
       // Container teardown (Phase C) — in `finally` so a throw from executeWorkflow
       // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
