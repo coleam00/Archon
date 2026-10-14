@@ -49,11 +49,7 @@ import {
   SUBRUN_METADATA_KEYS,
   WORKFLOW_SOURCE_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
-import {
-  assertComposedGateDriveable,
-  assertInteractiveClassNotBackgrounded,
-  assertWorkflowRequirementsMet,
-} from '@archon/workflows/utils/workflow-requirements';
+import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import {
   resolveDeclaredInputs,
@@ -132,8 +128,6 @@ async function prepareBinding(
     }
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
 
-    assertInteractiveClassNotBackgrounded(workflow);
-    assertComposedGateDriveable(workflow.nodes);
     if (host.deps.isPerUserGitHubEnabled?.() && workflow.requires?.length) {
       assertWorkflowRequirementsMet(workflow, {
         githubConnected: Boolean(await host.deps.getUserGithubToken?.(intent.runAsUserId)),

@@ -97,7 +97,7 @@ function BuilderNodeRender({ data, selected }: NodeProps<BuilderFlowNode>): Reac
           {node.base.trigger_rule !== undefined && node.base.trigger_rule !== 'all_success' ? (
             <Pill>{node.base.trigger_rule}</Pill>
           ) : null}
-          {capabilities.requiresInteractive === true ? <Pill>interactive</Pill> : null}
+          {capabilities.pausesRun === true ? <Pill>pauses</Pill> : null}
           {node.base.output_format !== undefined ? <Pill>{'{}'} JSON</Pill> : null}
         </div>
       </div>

@@ -72,10 +72,6 @@ import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discover
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { loadConfig } from '../config/config-loader';
 import {
-  assertComposedGateDriveable,
-  assertInteractiveClassNotBackgrounded,
-} from '@archon/workflows/utils/workflow-requirements';
-import {
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
@@ -359,20 +355,6 @@ async function dispatchBackgroundWorkflowOwned(
     prBranch?: string;
   }
 ): Promise<void> {
-  // 0. A backgrounded run cannot present a pause inline. Two checks, covering the two
-  // things the class declaration can and cannot see (#2707 step 2): the workflow's OWN
-  // declared class (`interactive: true` — refused unconditionally, whether or not it
-  // happens to contain a pause node right now) and a gate that arrived through `include:`
-  // in a workflow that omits `interactive: true` — written by someone looking at a
-  // different file (#1764), so the class declaration alone cannot catch it. Checked HERE,
-  // in the one function that backgrounds a run, rather than at each caller — this has two
-  // entrypoints (the console's default dispatch and the `manage_run` tool's startWorkflow,
-  // which reaches every platform with native tools), and a rule enforced per caller is a
-  // rule that fails open the moment a third appears. Throws before the worker conversation
-  // exists, so a refusal leaves nothing behind.
-  assertInteractiveClassNotBackgrounded(workflow);
-  assertComposedGateDriveable(workflow.nodes);
-
   const workflowDeps = createWorkflowDeps();
   const engine = new InProcessWorkflowEngine(workflowDeps);
   const prepare = async (

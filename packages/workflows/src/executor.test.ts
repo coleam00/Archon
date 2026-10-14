@@ -347,7 +347,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     completeWorkflowRun: mock(async () => {}),
     pauseWorkflowRun: mock(async () => {}),
     pauseWorkflowRunForWait: mock(async () => {}),
-    failPausedAttentionWait: mock(async () => ({ failed: true })),
     clearWorkflowWaitContext: mock(
       async (id: string, _wait: unknown, completion: { stepName: string }) => ({
         cleared: true as const,
@@ -359,7 +358,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
         },
       })
     ),
-    failPausedApproval: mock(async () => ({ failed: true })),
     claimWriteback: mock(async () => ({ claimed: true })),
     releaseWritebackClaim: mock(async () => {}),
     cancelWorkflowRun: mock(async () => ({ cancelled: false })),
@@ -841,44 +839,6 @@ describe('executeWorkflow', () => {
     expect(store.createWorkflowRun).not.toHaveBeenCalled();
     expect(deps.loadConfig).not.toHaveBeenCalled();
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
-  });
-
-  it('does not report a notification-failed attention wait as a successful pause', async () => {
-    const wait = {
-      owner: 'node' as const,
-      nodeId: 'rerun-ci',
-      kind: 'attention' as const,
-      waitingSince: '2026-09-01T10:00:00.000Z',
-      message: 'Re-run the failing check, then resume.',
-    };
-    const store = makeStore({
-      getWorkflowRun: mock(async () =>
-        makeRun({
-          status: 'failed',
-          metadata: {
-            wait,
-            error: "Wait node 'rerun-ci' could not deliver its attention notification",
-          },
-        })
-      ),
-      getWorkflowRunStatus: mock(async () => 'failed' as const),
-    });
-
-    const result = await executeWorkflow(
-      makeDeps(store),
-      makePlatform(),
-      'conv-1',
-      '/tmp/ops',
-      makeWorkflow(),
-      'msg',
-      { conversationId: 'db-conv-1' }
-    );
-
-    expect(result).toEqual({
-      success: false,
-      workflowRunId: 'run-123',
-      error: 'Workflow did not complete successfully',
-    });
   });
 
   // -------------------------------------------------------------------------

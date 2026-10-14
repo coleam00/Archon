@@ -4271,7 +4271,7 @@ export function registerApiRoutes(
       // without requiring the user to re-run the workflow command. Mirrors
       // what `workflowApproveCommand` does in the CLI. Requires
       // `parent_conversation_id` on the run (set by orchestrator-agent for any
-      // web-dispatched workflow — foreground, interactive, and background via
+      // web-dispatched workflow — foreground and background via
       // the pre-created run) and a web-platform parent (guarded in the helper).
       const autoResumed = await tryAutoResumeAfterGate(run, 'approve', actor);
 

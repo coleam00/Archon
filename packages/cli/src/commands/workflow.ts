@@ -130,8 +130,6 @@ import {
   type ResolvedContinuation,
 } from '@archon/workflows/executor';
 import {
-  assertComposedGateDriveable,
-  assertInteractiveClassNotBackgrounded,
   assertWorkflowRequirementsMet,
   resolveTopLevelInputs,
 } from '@archon/workflows/utils/workflow-requirements';
@@ -1222,6 +1220,8 @@ function workflowEventLine(
       return typeof row.data.message === 'string'
         ? `[${row.step_name}] Waiting for approval: ${row.data.message}`
         : undefined;
+    case 'pause_notice_undelivered':
+      return `[${row.step_name}] Pause notice not delivered; the run is still waiting`;
     case 'container_created':
     case 'container_stopped':
     case 'container_resumed':
@@ -2330,27 +2330,6 @@ async function runWorkflowWithOwnedSource(
   // codebase lookup does happen here — see the folder-detection probe below —
   // to decide folder-vs-repo branch pinning before forking.
   if (options.detach) {
-    // Interactive-class refusal (#2707 step 2): a detached FRESH launch pauses with
-    // nobody watching and nothing to resume it — the exact #1991 hang. Checked here,
-    // synchronously, before the fork and before any worktree/clone/AI cost, mirroring
-    // the requirements gate immediately above. Two checks, like the orchestrator's
-    // shared background-dispatch gate (dispatchBackgroundWorkflowOwned): the
-    // workflow's own declared class, and a gate that arrived via `include:` in a
-    // workflow that omits `interactive: true` (the class declaration alone cannot see
-    // that case — see assertComposedGateDriveable's doc comment).
-    //
-    // Scoped to a genuinely FRESH dispatch (`!isContinuation`) — refusing this at
-    // "launch" only, per the issue's own wording. A run that has ALREADY proved it can
-    // pause (it paused once) is not launching; `resume <id> --detach` and `run --resume
-    // --detach` are legitimate continuation actions that must keep working, since the
-    // whole point of --detach on those is to drive one gate and let a background
-    // process continue to the next. If it pauses again, it sits paused again —
-    // discoverable via `workflow status`/`runs`, not a silent hang nobody knows exists.
-    if (!isContinuation) {
-      assertInteractiveClassNotBackgrounded(workflow);
-      assertComposedGateDriveable(workflow.nodes);
-    }
-
     const childDestination = await resolveRunDestination(host, options, continuationRun);
     const extraArgs: string[] = [];
     let pinnedBranch: string | undefined;

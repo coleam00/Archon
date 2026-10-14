@@ -75,8 +75,7 @@ archon workflow run <workflow> --branch <branch-name> "<message>" --detach
 # Start from a specific base instead of the current branch
 archon workflow run <workflow> --branch <name> --from <base> "<message>" --detach
 
-# Foreground (blocks the shell) — REQUIRED for interactive-class workflows,
-# whose fresh launches refuse --detach
+# Foreground (blocks the shell)
 archon workflow run <workflow> --branch <name> "<message>"
 
 # No isolation — only when the user explicitly asks to work on the checkout directly

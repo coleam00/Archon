@@ -221,6 +221,9 @@ export const WORKFLOW_EVENT_TYPES = [
   'ralph_story_completed',
   'approval_requested',
   'approval_received',
+  // A paused run's inline notice could not be delivered. The run stays paused; the
+  // attention queue is where it is answered. `data` carries `nodeId` and `platform`.
+  'pause_notice_undelivered',
   'wait_started',
   'wait_signaled',
   // An attention wait's answer: `data` carries the surface (`via`), the occurrence it
@@ -668,15 +671,6 @@ export interface IWorkflowStore
     pause: WorkflowWaitPause
   ): Promise<void>;
   /**
-   * Fail the exact paused attention cursor after its required notification is lost.
-   * Reports terminal telemetry after a won commit (see completeWorkflowRun).
-   */
-  failPausedAttentionWait(
-    id: string,
-    waitContext: WorkflowAttentionWaitContext,
-    error: string
-  ): Promise<{ failed: boolean }>;
-  /**
    * Consume the exact wait cursor and persist its completion snapshot atomically. Both
    * rows come from `waitCompletionEvents`, and the node's `node_completed` row is
    * handed back so the caller derives the transcript and emitter from the row that
@@ -687,12 +681,6 @@ export interface IWorkflowStore
     waitContext: WorkflowWaitContext,
     completion: WorkflowWaitCompletion
   ): Promise<{ cleared: false } | { cleared: true; nodeEvent: NodeStateEventInput }>;
-  /** Fail only this still-unresolved gate when its required prompt cannot be delivered. */
-  failPausedApproval(
-    id: string,
-    approvalContext: ApprovalContext,
-    error: string
-  ): Promise<{ failed: boolean }>;
 
   /**
    * Atomically CLAIM the container write-back apply before the live root is mutated

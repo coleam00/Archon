@@ -13,14 +13,7 @@ import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { isApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
-import {
-  getWorkflowRun,
-  createWorkflowRun,
-  pauseWorkflowRun,
-  failPausedApproval,
-  resumeWorkflowRun,
-  cancelWorkflowRun,
-} from './workflows';
+import { getWorkflowRun, createWorkflowRun, pauseWorkflowRun } from './workflows';
 
 const { approveWorkflow, rejectWorkflow } = createSqlWorkflowOperations();
 
@@ -192,7 +185,7 @@ describe('per-run gate deferral — real SQLite', () => {
 
   for (const kind of ['loop', 'loop_group'] as const) {
     test.each(['immediate decision', 'failed delivery', 'failed delivery after decision'] as const)(
-      `${kind} persists suspension before %s and leaves no invisible gate`,
+      `${kind} persists suspension before %s and continues after the answer`,
       async outcome => {
         let providerCalls = 0;
         let prompts = 0;
@@ -271,13 +264,13 @@ describe('per-run gate deferral — real SQLite', () => {
         expect(prompts).toBe(1);
         expect(suspensionVisible).toBe(true);
         if (outcome === 'failed delivery') {
-          expect((await getWorkflowRun(id))?.status).toBe('failed');
-          const failed = await getDatabase().query(
-            "SELECT id FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND step_name = 'review' AND event_type = 'node_failed'",
+          expect((await getWorkflowRun(id))?.status).toBe('paused');
+          const undelivered = await getDatabase().query(
+            "SELECT id FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND step_name = 'review' AND event_type = 'pause_notice_undelivered'",
             [id]
           );
-          expect(failed.rowCount).toBe(1);
-          return;
+          expect(undelivered.rowCount).toBe(1);
+          await approveWorkflow(id, undefined, { kind: 'operator' }, { via: 'cli' });
         }
         await closeDatabase();
         resetDatabase();
@@ -580,44 +573,6 @@ describe('per-run gate deferral — real SQLite', () => {
     expect((await getWorkflowRun(run.id))?.metadata.approval).toBeUndefined();
   });
 
-  test('an undelivered prompt fails only its still-active gate; decisions and cancellation win the race', async () => {
-    const run = await createWorkflowRun({
-      workflow_name: 'gates',
-      origin: { conversationId },
-      user_message: '',
-    });
-    await getDatabase().query(
-      "UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1",
-      [run.id]
-    );
-    const first = { nodeId: 'first', message: 'Review first', type: 'approval' as const };
-    const second = { ...first, nodeId: 'second' };
-    await pauseWorkflowRun(run.id, first);
-    await approveWorkflow(run.id, undefined, { kind: 'operator' }, { via: 'cli' });
-    expect(await failPausedApproval(run.id, first, 'late send error')).toEqual({ failed: false });
-    await resumeWorkflowRun(run.id);
-    await pauseWorkflowRun(run.id, second);
-    expect(await failPausedApproval(run.id, first, 'stale send error')).toEqual({ failed: false });
-    expect(await failPausedApproval(run.id, second, 'delivery failed')).toEqual({ failed: true });
-    expect((await getWorkflowRun(run.id))?.status).toBe('failed');
-    const failed = await getDatabase().query<{ data: string }>(
-      "SELECT data FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND event_type = 'workflow_failed'",
-      [run.id]
-    );
-    expect(failed.rows).toHaveLength(1);
-    expect(JSON.parse(failed.rows[0].data)).toMatchObject({
-      error: 'delivery failed',
-      exit_reason: 'node_error',
-    });
-    await resumeWorkflowRun(run.id);
-    await pauseWorkflowRun(run.id, first);
-    await cancelWorkflowRun(run.id);
-    expect(await failPausedApproval(run.id, first, 'cancelled send error')).toEqual({
-      failed: false,
-    });
-    expect((await getWorkflowRun(run.id))?.status).toBe('cancelled');
-  });
-
   test('a decision made while prompt delivery is in flight survives the executor finishing that send', async () => {
     const platform: IWorkflowPlatform = {
       sendMessage: async (_id, message) => {
@@ -666,7 +621,7 @@ describe('per-run gate deferral — real SQLite', () => {
     expect(snapshot.completedNodeOutputs.has('review')).toBe(true);
   });
 
-  test('failed prompt delivery leaves no invisible paused run', async () => {
+  test('an undelivered approval prompt leaves the run paused with the failure recorded', async () => {
     const platform: IWorkflowPlatform = {
       sendMessage: async (_id, message) => {
         if (message.includes('**Approval required**')) throw new Error('Transport unavailable');
@@ -698,8 +653,13 @@ describe('per-run gate deferral — real SQLite', () => {
       }),
       userMessage: 'goal',
     });
-    const run = await getWorkflowRun(result.workflowRunId!);
-    expect(run?.status).toBe('failed');
-    expect(run?.metadata?.error).toContain('message failed to deliver');
+    expect((await getWorkflowRun(result.workflowRunId!))?.status).toBe('paused');
+    const undelivered = await getDatabase().query<{ data: string }>(
+      "SELECT data FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND event_type = 'pause_notice_undelivered'",
+      [result.workflowRunId]
+    );
+    expect(undelivered.rows.map(row => JSON.parse(row.data))).toEqual([
+      { nodeId: 'review', platform: 'test' },
+    ]);
   });
 });

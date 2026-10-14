@@ -78,7 +78,6 @@ import { liveSourceRoots } from '@archon/workflows/workflow-discovery';
 import {
   assertWorkflowRequirementsMet,
   WorkflowRequirementError,
-  ComposedApprovalGateError,
   resolveTopLevelInputs,
   WorkflowMissingInputsError,
 } from '@archon/workflows/utils/workflow-requirements';
@@ -1142,51 +1141,32 @@ async function dispatchOrchestratorWorkflowOwned(
     codebase_id: codebase.id,
   });
 
-  if (
-    !willContinueExistingRun &&
-    platform.capabilities.defaultWorkflowDispatch === 'background' &&
-    !workflow.interactive
-  ) {
-    // Background dispatch: adapter-default, non-interactive workflows with no resumable run.
+  if (!willContinueExistingRun && platform.capabilities.defaultWorkflowDispatch === 'background') {
+    // Background dispatch: adapter-default workflows with no resumable run.
     // This is the console's default path, so it is exactly where a console-supplied
     // input map must not be dropped.
-    //
-    // `dispatchBackgroundWorkflow` refuses a composed approval gate a background run
-    // cannot present (#1764); turn that into a message rather than an unhandled throw.
-    try {
-      await dispatchBackgroundWorkflow(
-        {
-          platform,
-          conversationId,
-          cwd: launchConfigCwd,
-          originalMessage: userMessage,
-          conversationDbId: conversation.id,
-          codebaseId: codebase.id,
-          availableWorkflows: [workflow],
-          isolationHints,
-          userId,
-          source,
-          parseWarnings,
-          inputs: resolvedInputs,
-          modelOverrides: options?.modelOverrides,
-          runConfig: options?.runConfig,
-          adoptRunId: options?.adoptRunId,
-          supersedesRunId: options?.supersedesRunId,
-          adoptionLane,
-        },
-        workflow
-      );
-    } catch (err) {
-      if (err instanceof ComposedApprovalGateError) {
-        getLog().info(
-          { workflowName: workflow.name, conversationId, gate: err.gate },
-          'workflow.composed_gate_undriveable'
-        );
-        await platform.sendMessage(conversationId, err.message);
-        return;
-      }
-      throw err;
-    }
+    await dispatchBackgroundWorkflow(
+      {
+        platform,
+        conversationId,
+        cwd: launchConfigCwd,
+        originalMessage: userMessage,
+        conversationDbId: conversation.id,
+        codebaseId: codebase.id,
+        availableWorkflows: [workflow],
+        isolationHints,
+        userId,
+        source,
+        parseWarnings,
+        inputs: resolvedInputs,
+        modelOverrides: options?.modelOverrides,
+        runConfig: options?.runConfig,
+        adoptRunId: options?.adoptRunId,
+        supersedesRunId: options?.supersedesRunId,
+        adoptionLane,
+      },
+      workflow
+    );
     return;
   }
 
@@ -1548,7 +1528,7 @@ async function dispatchOrchestratorWorkflowOwned(
         if (!resumeOwnerClosed) await resumeOwner.close();
       }
     } else {
-      // Fresh foreground execution for interactive workflows and foreground-default adapters.
+      // Fresh foreground execution for foreground-default adapters.
       // Reaching this branch means `resumableRun?.working_path` is falsy, which implies
       // `willContinueExistingRun` was false and step 2 above ran. `freshCaptured` is
       // invariantly defined here — the capture-flow helper ran before this branch.

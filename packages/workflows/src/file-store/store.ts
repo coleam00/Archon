@@ -210,10 +210,6 @@ export async function createFileWorkflowStore(
       write([id], view => view.pauseWorkflowRunForWait(id, wait, pause)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write([id], view => view.clearWorkflowWaitContext(id, wait, completion)),
-    failPausedAttentionWait: (id, wait, error) =>
-      write([id], view => view.failPausedAttentionWait(id, wait, error)),
-    failPausedApproval: (id, approval, error) =>
-      write([id], view => view.failPausedApproval(id, approval, error)),
     resolveApprovalGate: (id, metadata, events, expected) =>
       write([id], view => view.resolveApprovalGate(id, metadata, events, expected)),
     resolveAndCancelApprovalGate: (id, events, cancellation, expected) =>

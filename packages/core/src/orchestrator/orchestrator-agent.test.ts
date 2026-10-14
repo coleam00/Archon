@@ -2300,15 +2300,25 @@ describe('provider cwd resolution', () => {
   });
 });
 
-// ─── Workflow dispatch routing — interactive flag ─────────────────────────────
+// ─── Workflow dispatch routing ────────────────────────────────────────────────
 
-describe('workflow dispatch routing — interactive flag', () => {
+describe('workflow dispatch routing', () => {
   function makeDispatchConversation(overrides: Partial<Conversation> = {}) {
     return makeConversation({ codebase_id: 'codebase-1', ...overrides });
   }
 
+  /** A chat-style adapter that runs fresh workflows in the foreground. */
+  function makeForegroundPlatform() {
+    return {
+      ...makePlatform(),
+      capabilities: {
+        messagePersistence: 'adapter',
+        defaultWorkflowDispatch: 'foreground',
+      } as const,
+    };
+  }
+
   function makeWorkflowResult(
-    interactive?: boolean,
     options: {
       force?: boolean;
       resumeRun?: WorkflowRun;
@@ -2326,7 +2336,6 @@ describe('workflow dispatch routing — interactive flag', () => {
             kind: 'start' as const,
             definition: makeTestResolvedWorkflow({
               name: 'test-workflow',
-              interactive,
               ...(options.inputs ? { inputs: options.inputs } : {}),
             }),
             args: options.args ?? 'test message',
@@ -2393,7 +2402,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockResolveWorkflowSourceRoot.mockResolvedValue(undefined);
     mockDiscoverWorkflowsWithConfig.mockReset();
     mockDiscoverWorkflowsWithConfig.mockResolvedValue({
-      workflows: [makeTestWorkflowWithSource({ name: 'test-workflow', interactive: true })],
+      workflows: [makeTestWorkflowWithSource({ name: 'test-workflow' })],
       errors: [],
     });
     mockStartRunLiveOwner.mockClear();
@@ -2405,26 +2414,26 @@ describe('workflow dispatch routing — interactive flag', () => {
     const { IsolationBlockedError } = await import('@archon/isolation');
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
     mockGetCodebase.mockResolvedValueOnce(makeCodebase());
-    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult(true));
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
     mockValidateAndResolveIsolation.mockRejectedValueOnce(
       new IsolationBlockedError('setup failed', 'creation_failed')
     );
     mockFailPreparedRun.mockRejectedValueOnce(new Error('database write unavailable'));
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
     expect(mockFailPreparedRun).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
   });
 
-  test('calls executeWorkflow (not dispatchBackground) for interactive workflow on web', async () => {
+  test('calls executeWorkflow (not dispatchBackground) on a foreground-default adapter', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(
       Promise.resolve(makeCodebase({ default_branch: 'develop' }))
     );
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
 
-    const platform = makePlatform(); // getPlatformType returns 'web'
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -2443,12 +2452,12 @@ describe('workflow dispatch routing — interactive flag', () => {
   });
 
   // Adoption lane on the FOREGROUND dispatch (#2747 review): the background path
-  // inherits the adopted estate; the interactive/chat path must honor it too.
+  // inherits the adopted estate; the foreground path must honor it too.
   test('adopt with reuse-worktree lane runs the foreground dispatch in the adopted worktree', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+      Promise.resolve(makeWorkflowResult({ args: 'test message' }))
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
@@ -2461,7 +2470,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       })
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowAdoptRunId: 'prior-run',
@@ -2487,7 +2496,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+      Promise.resolve(makeWorkflowResult({ args: 'test message' }))
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
@@ -2499,7 +2508,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       })
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowAdoptRunId: 'prior-run',
@@ -2527,7 +2536,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+      Promise.resolve(makeWorkflowResult({ args: 'test message' }))
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
@@ -2539,7 +2548,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       })
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowAdoptRunId: 'prior-run',
@@ -2565,7 +2574,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+      Promise.resolve(makeWorkflowResult({ args: 'test message' }))
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
@@ -2578,7 +2587,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       })
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowAdoptRunId: 'prior-run',
@@ -2607,7 +2616,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+      Promise.resolve(makeWorkflowResult({ args: 'test message' }))
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
@@ -2619,7 +2628,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       })
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowAdoptRunId: 'prior-run',
@@ -2655,7 +2664,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+      Promise.resolve(makeWorkflowResult({ args: 'test message' }))
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
@@ -2667,7 +2676,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       })
     );
     try {
-      await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
         actor: operator,
         workflowAdoptRunId: 'prior-run',
       });
@@ -2755,7 +2764,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+      Promise.resolve(makeWorkflowResult({ args: 'test message' }))
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
@@ -2767,7 +2776,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       })
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowAdoptRunId: 'prior-run',
@@ -2781,7 +2790,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { args: 'test message' }))
+      Promise.resolve(makeWorkflowResult({ args: 'test message' }))
     );
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(makeResumableRun({ status: 'paused' }))
@@ -2796,7 +2805,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       })
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowAdoptRunId: 'prior-run',
@@ -2813,7 +2822,7 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('adopt is refused when the workflow opts out of worktrees', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    const noWorktreeResult = makeWorkflowResult(true, { args: 'test message' });
+    const noWorktreeResult = makeWorkflowResult({ args: 'test message' });
     if (noWorktreeResult.workflow.kind !== 'start') throw new Error('expected start request');
     noWorktreeResult.workflow.definition.worktree = { enabled: false };
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(noWorktreeResult));
@@ -2827,7 +2836,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       })
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowAdoptRunId: 'prior-run',
@@ -2843,12 +2852,12 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('failed_resume_user_prompted: failed runs are not auto-resumed', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(makeResumableRun())
     );
 
-    const platform = makePlatform(); // getPlatformType returns 'web'
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
@@ -2875,14 +2884,14 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('failed_resume_user_prompted: stale running orphan gates with status-accurate copy', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     // findResumableRunByParentConversation also surfaces stale 'running' orphans,
     // not just 'failed' runs — the prompt must not mislabel them as "failed".
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(makeResumableRun({ status: 'running' }))
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     // Gate still fires (no silent auto-resume) ...
@@ -2914,7 +2923,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     const priorMessage = `line one\n${'x'.repeat(220)}`;
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -2924,7 +2933,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const prompt = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.at(-1)?.[1] as
@@ -2938,7 +2947,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { args: 'fix \\ path "quoted" `tick`' }))
+      Promise.resolve(makeWorkflowResult({ args: 'fix \\ path "quoted" `tick`' }))
     );
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
@@ -2948,7 +2957,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const prompt = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.at(-1)?.[1] as
@@ -2963,11 +2972,9 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('--force flag: skips resume detection and dispatches a fresh run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { force: true }))
-    );
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult({ force: true })));
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow --force', {
       actor: operator,
     });
@@ -2988,10 +2995,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { resumeRun: requestedRun }))
+      Promise.resolve(makeWorkflowResult({ resumeRun: requestedRun }))
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow resume old-run', { actor: operator });
 
     expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
@@ -3018,10 +3025,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { resumeRun: requestedRun }))
+      Promise.resolve(makeWorkflowResult({ resumeRun: requestedRun }))
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow resume old-run-missing-path', {
       actor: operator,
     });
@@ -3063,9 +3070,9 @@ describe('workflow dispatch routing — interactive flag', () => {
         mockGetCodebase.mockResolvedValueOnce(makeCodebase());
         mockFindResumableRunByParentConversation.mockResolvedValueOnce(run);
         mockValidateAndResolveIsolation.mockClear();
-        const platform = makePlatform();
+        const platform = makeForegroundPlatform();
         if (entry === 'slash command')
-          mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult(true));
+          mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
         else {
           mockListCodebases.mockResolvedValueOnce([makeCodebase()]);
           platform.getStreamingMode.mockReturnValue(
@@ -3121,7 +3128,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetCodebase.mockReturnValueOnce(
       Promise.resolve(makeCodebase({ default_branch: 'develop' }))
     );
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -3130,7 +3137,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
 
-    const platform = makePlatform(); // getPlatformType returns 'web'
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockHydrateResumableRun).toHaveBeenCalled();
@@ -3157,7 +3164,7 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('a plain workflow run does not consume an attention pause', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -3175,7 +3182,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
 
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
     });
 
@@ -3199,10 +3206,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { resumeRun: requestedRun }))
+      Promise.resolve(makeWorkflowResult({ resumeRun: requestedRun }))
     );
 
-    await handleMessage(makePlatform(), 'conv-1', `/workflow resume ${requestedRun.id}`, {
+    await handleMessage(makeForegroundPlatform(), 'conv-1', `/workflow resume ${requestedRun.id}`, {
       actor: operator,
     });
 
@@ -3225,7 +3232,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetCodebase.mockReturnValueOnce(
       Promise.resolve(makeCodebase({ default_branch: 'develop' }))
     );
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -3236,7 +3243,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
-    const platform = makePlatform(); // getPlatformType returns 'web'
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockHydrateResumableRun).toHaveBeenCalled();
@@ -3276,13 +3283,13 @@ describe('workflow dispatch routing — interactive flag', () => {
     };
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(makeResumableRun({ id: 'empty-config-run', status: 'paused' }))
     );
     mockInspectResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowRunConfig: runConfig,
@@ -3318,7 +3325,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -3329,7 +3336,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     // No run started against an undefined capture.
@@ -3405,7 +3412,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -3416,7 +3423,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(prepareWorkflowSource).toHaveBeenCalled();
@@ -3437,10 +3444,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(sent).toContain('starting fresh in the same worktree');
   });
 
-  test('calls dispatchBackgroundWorkflow for non-interactive workflow on web', async () => {
+  test('calls dispatchBackgroundWorkflow for a fresh run on web', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
 
     const platform = makePlatform(); // getPlatformType returns 'web'
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
@@ -3449,10 +3456,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  test('calls dispatchBackgroundWorkflow for non-interactive workflow on a background-default adapter', async () => {
+  test('calls dispatchBackgroundWorkflow for a fresh run on a background-default adapter', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
 
     const platform = { ...makePlatform(), getPlatformType: mock(() => 'matrix-chat') };
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
@@ -3469,10 +3476,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+      Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
 
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowInputs: { diff: 'D1' },
     });
@@ -3483,12 +3490,12 @@ describe('workflow dispatch routing — interactive flag', () => {
   });
 
   test('threads context.workflowInputs into dispatchBackgroundWorkflow — the console default path', async () => {
-    // Web non-interactive runs never touch the executeWorkflow branches, so dropping
+    // Fresh web runs never touch the executeWorkflow branches, so dropping
     // the map here would ship a console run form that silently does nothing.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(undefined, { inputs: { diff: { required: true } } }))
+      Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
 
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
@@ -3520,9 +3527,9 @@ describe('workflow dispatch routing — interactive flag', () => {
       Promise.resolve(makeDispatchConversation({ cwd: '/worktrees/conv' }))
     );
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     try {
-      await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
         actor: operator,
       });
       expect(loadConfig).toHaveBeenCalledWith('/repos/test-repo');
@@ -3549,10 +3556,10 @@ describe('workflow dispatch routing — interactive flag', () => {
         evidence: 'cannot read',
       }),
     }));
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     try {
       await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
         actor: { kind: 'user', userId: 'origin' },
@@ -3571,9 +3578,9 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('threads context.workflowModelOverrides into a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
 
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowModelOverrides: { tiers: { large: 'openai/gpt-5.6' } },
     });
@@ -3588,7 +3595,7 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('threads context.workflowModelOverrides into the console background path', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
 
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
@@ -3608,8 +3615,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     };
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowRunConfig: runConfig,
     });
@@ -3617,7 +3624,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowRunConfig: runConfig,
@@ -3629,10 +3636,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+      Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -3646,9 +3653,9 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('hands the capture to a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
 
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
     });
 
@@ -3662,10 +3669,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+      Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
 
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
     });
 
@@ -3680,12 +3687,12 @@ describe('workflow dispatch routing — interactive flag', () => {
     (prepareWorkflowSource as ReturnType<typeof mock>).mockClear();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(makeResumableRun({ id: 'paused-run', status: 'paused' }))
     );
 
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
     });
 
@@ -3698,10 +3705,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+      Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowInputs: { diff: 'D1', stlye: 'terse' },
@@ -3722,7 +3729,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+      Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
@@ -3734,7 +3741,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
@@ -3752,7 +3759,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+      Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
@@ -3764,7 +3771,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowInputs: { diff: 'D-new' },
@@ -3783,7 +3790,7 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('tells the caller when model bindings could not be applied to an auto-resumed run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -3794,7 +3801,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowModelOverrides: {
@@ -3815,7 +3822,7 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('refuses a new run config when the command would auto-resume existing work', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -3826,7 +3833,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
       workflowRunConfig: {
@@ -3849,13 +3856,13 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(
-        makeWorkflowResult(true, {
+        makeWorkflowResult({
           resumeRun: makeResumableRun({ id: 'failed-model-resume', status: 'failed' }),
         })
       )
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow resume failed-model-resume', {
       actor: operator,
       workflowModelOverrides: { tiers: { large: 'openai/gpt-5.6' } },
@@ -3876,7 +3883,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+      Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
@@ -3900,7 +3907,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       errors: [],
     });
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
@@ -3923,7 +3930,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+      Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
@@ -3979,7 +3986,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
+      Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
@@ -3991,7 +3998,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
@@ -4009,14 +4016,14 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(
-        makeWorkflowResult(true, {
+        makeWorkflowResult({
           inputs: { diff: { required: true } },
           resumeRun: makeResumableRun({ status: 'paused' }),
         })
       )
     );
 
-    const platform = makePlatform();
+    const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
@@ -4024,15 +4031,14 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockExecuteWorkflow).toHaveBeenCalled();
   });
 
-  test('web non-interactive workflow with resumable run resumes foreground (not background)', async () => {
+  test('web workflow with resumable run resumes foreground (not background)', async () => {
     // Pins the priority order: resume detection comes before the background-dispatch
-    // gate. If a resumable run exists, web non-interactive workflows must resume
-    // foreground rather than dispatching a fresh background run. A future refactor
-    // that accidentally moves the resume check inside the interactive guard would
-    // lose worktree state for web users with paused non-interactive runs.
+    // gate. If a resumable run exists, web workflows must resume foreground rather
+    // than dispatching a fresh background run, or they would lose the paused run's
+    // worktree state.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined))); // non-interactive
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -4046,7 +4052,6 @@ describe('workflow dispatch routing — interactive flag', () => {
     const platform = makePlatform(); // getPlatformType returns 'web'
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
-    // Must resume foreground even though workflow is non-interactive
     expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
@@ -4054,10 +4059,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(callArgs[3]).toBe('/repos/test-repo/worktrees/web-feature');
   });
 
-  test('a background-default adapter non-interactive workflow with resumable run resumes foreground (not background)', async () => {
+  test('a background-default adapter workflow with resumable run resumes foreground (not background)', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined))); // non-interactive
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -4078,13 +4083,13 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(callArgs[3]).toBe('/repos/test-repo/worktrees/web-feature');
   });
 
-  test('calls executeWorkflow for interactive workflow on non-web platform', async () => {
+  test('calls executeWorkflow on a non-web foreground platform', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
 
     const platform = {
-      ...makePlatform(),
+      ...makeForegroundPlatform(),
       capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'slack' as const),
     };
@@ -4103,7 +4108,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     // hydrated state.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     mockFindResumableRunByParentConversation.mockReturnValueOnce(
       Promise.resolve(
         makeResumableRun({
@@ -4115,7 +4120,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = {
-      ...makePlatform(),
+      ...makeForegroundPlatform(),
       capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'telegram' as const),
     };
@@ -4141,10 +4146,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     // run from project B.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
 
     const platform = {
-      ...makePlatform(),
+      ...makeForegroundPlatform(),
       capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'slack' as const),
     };
@@ -4160,11 +4165,11 @@ describe('workflow dispatch routing — interactive flag', () => {
   test('starts fresh run when no resumable run exists on chat platform', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult()));
     // Default mock returns null — no resumable run
 
     const platform = {
-      ...makePlatform(),
+      ...makeForegroundPlatform(),
       capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'discord' as const),
     };
@@ -4191,7 +4196,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 // ─── Natural-language approval routing ──────────────────────────────────────
 
 describe('paused approval gate routing', () => {
-  const approvalWorkflow = makeTestResolvedWorkflow({ name: 'prd', interactive: true });
+  const approvalWorkflow = makeTestResolvedWorkflow({ name: 'prd' });
 
   type ManageRunHandler = (input: Record<string, unknown>) => Promise<string>;
 
