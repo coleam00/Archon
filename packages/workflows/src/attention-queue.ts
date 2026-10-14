@@ -131,6 +131,19 @@ function projectKeyOf(root: string): string | null {
   return key.success ? key.data : null;
 }
 
+/** The project a key names: the codebase's, or one with no codebase row, named by the key. */
+export function projectRef(
+  key: string,
+  codebase: Pick<NonNullable<AttentionQueueItemSources['codebase']>, 'id' | 'name'> | null
+): ProjectRef {
+  const parsed = stateProjectKeySchema.parse(key);
+  return {
+    key: parsed,
+    codebaseId: codebase?.id ?? null,
+    name: codebase?.name ?? parsed.slice(parsed.lastIndexOf('/') + 1),
+  };
+}
+
 /** The project a run belongs to, from its trusted storage root (`resolveRunStorageRoot`). */
 export function projectRefForRun(
   run: Pick<WorkflowRun, 'output_root'>,
@@ -138,12 +151,7 @@ export function projectRefForRun(
 ): ProjectRef | null {
   const root = resolveRunStorageRoot(run, codebase);
   const key = root === null ? null : projectKeyOf(root);
-  if (key === null) return null;
-  return {
-    key,
-    codebaseId: codebase?.id ?? null,
-    name: codebase?.name ?? key.slice(key.lastIndexOf('/') + 1),
-  };
+  return key === null ? null : projectRef(key, codebase);
 }
 
 /** The fan-out position a child run records at spawn, or null when it is not a fan-out child. */

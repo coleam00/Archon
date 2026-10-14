@@ -4,7 +4,11 @@
  */
 import { canonicalizeProjectPath } from '@archon/paths';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
-import type { AttentionQueueSource, ProjectRef } from '@archon/workflows/attention-queue';
+import {
+  projectRef,
+  type AttentionQueueSource,
+  type ProjectRef,
+} from '@archon/workflows/attention-queue';
 import { stateProjectKeySchema } from '@archon/workflows/state-document-store';
 import type { Codebase } from '../schemas/codebase';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
@@ -33,17 +37,9 @@ export function attentionQueueSource(
   };
 }
 
-function lastSegment(key: string): string {
-  return key.slice(key.lastIndexOf('/') + 1);
-}
-
 /** The project a codebase row names, keyed the way `archon state` keys it. */
 export function projectRefForCodebase(codebase: Codebase): ProjectRef {
-  return {
-    key: stateProjectKeySchema.parse(projectKeyForCodebase(codebase, codebase.default_cwd)),
-    codebaseId: codebase.id,
-    name: codebase.name,
-  };
+  return projectRef(projectKeyForCodebase(codebase, codebase.default_cwd), codebase);
 }
 
 /**
@@ -67,8 +63,7 @@ export async function resolveAttentionProject(
     );
   const [named] = byName;
   if (named) return projectRefForCodebase(named);
-  const key = stateProjectKeySchema.safeParse(spec);
-  if (key.success) return { key: key.data, codebaseId: null, name: lastSegment(key.data) };
+  if (stateProjectKeySchema.safeParse(spec).success) return projectRef(spec, null);
   throw new Error(
     `No project matches '${spec}'. Pass a codebase id, a codebase name, or a project key.`
   );
@@ -87,8 +82,8 @@ export async function attentionProjectForCwd(
 ): Promise<ProjectRef> {
   const { codebase, repoRoot } = await resolveCodebaseForPath(cwd, codebases);
   if (codebase) return projectRefForCodebase(codebase);
-  const key = stateProjectKeySchema.parse(
-    projectKeyForCodebase(null, repoRoot ?? (await canonicalizeProjectPath(cwd)))
+  return projectRef(
+    projectKeyForCodebase(null, repoRoot ?? (await canonicalizeProjectPath(cwd))),
+    null
   );
-  return { key, codebaseId: null, name: lastSegment(key) };
 }
