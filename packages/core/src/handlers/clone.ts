@@ -18,6 +18,7 @@ import {
   toRepoPath,
   validateCloneUrl,
   type CloneCredentials,
+  githubTokenCredentials,
   getDefaultRemote,
   findRepoRoot,
   inspectRemoteBranches,
@@ -82,7 +83,7 @@ const FORGE_AUTH: ForgeAuthEntry[] = [
   {
     hostPattern: 'github.com',
     resolveToken: resolveGitHubTokenFromEnv,
-    buildCredentials: tokenAsUsername,
+    buildCredentials: githubTokenCredentials,
   },
   {
     hostPattern: 'gitlab.com',

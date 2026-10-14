@@ -6,7 +6,7 @@ import { githubPolicy } from './policy';
 import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
 import { verifyGitHubWebhookSignature } from './webhook-signature';
-import { readdir, access } from 'fs/promises';
+import { readdir, access, rm } from 'fs/promises';
 import { join } from 'path';
 import type { IPlatformAdapter, MessageMetadata, GitHubAuth } from '@archon/core';
 import type { IsolationHints } from '@archon/isolation';
@@ -31,6 +31,7 @@ import {
 import {
   isWorktreePath,
   cloneRepository,
+  githubTokenCredentials,
   syncRepository,
   addSafeDirectory,
   toRepoPath,
@@ -727,6 +728,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     }
 
     if (repositoryExists) {
+      await this.ensureRepositorySetup(owner, repo, repoPath);
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'github.repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));
@@ -768,10 +770,19 @@ export class GitHubAdapter implements IPlatformAdapter {
     }
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
 
+    // Only an initially empty target belongs to this clone attempt. A failed
+    // clone into a nonempty directory must preserve its pre-existing files.
+    let cloneOwnsTarget = true;
+    try {
+      cloneOwnsTarget = (await readdir(repoPath)).length === 0;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+
     const cloneResult = await cloneRepository(
       repoUrl,
       toRepoPath(repoPath),
-      ghToken ? { credentials: { username: 'x-access-token', password: ghToken } } : undefined
+      ghToken ? { credentials: githubTokenCredentials(ghToken) } : undefined
     );
 
     if (!cloneResult.ok) {
@@ -779,6 +790,7 @@ export class GitHubAdapter implements IPlatformAdapter {
         { error: cloneResult.error, owner, repo, repoPath },
         'github.repo_clone_failed'
       );
+      if (cloneOwnsTarget) await rm(repoPath, { recursive: true, force: true });
 
       if (cloneResult.error.code === 'not_a_repo') {
         throw new Error(
@@ -796,6 +808,14 @@ export class GitHubAdapter implements IPlatformAdapter {
       );
     }
 
+    await this.ensureRepositorySetup(owner, repo, repoPath);
+  }
+
+  private async ensureRepositorySetup(
+    owner: string,
+    repo: string,
+    repoPath: string
+  ): Promise<void> {
     await addSafeDirectory(toRepoPath(repoPath));
 
     // App mode requires a refreshable credential source after the

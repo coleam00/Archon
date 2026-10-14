@@ -34,7 +34,7 @@ import type { Mock } from 'bun:test';
 import type { Octokit } from '@octokit/rest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { mkdir, mkdtemp, access } from 'node:fs/promises';
+import { mkdir, mkdtemp, access, writeFile, readFile } from 'node:fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'node:path';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
@@ -1706,7 +1706,8 @@ describe('GitHubAdapter', () => {
       mockCloneRepository.mockReset();
       mockCloneRepository.mockResolvedValue({ ok: true, value: undefined });
       mockSyncRepository.mockClear();
-      mockAddSafeDirectory.mockClear();
+      mockAddSafeDirectory.mockReset();
+      mockAddSafeDirectory.mockResolvedValue(undefined);
       mockLogger.error.mockClear();
       mockLogger.info.mockClear();
     });
@@ -1754,34 +1755,57 @@ describe('GitHubAdapter', () => {
       }
     });
 
-    test('retries a failed clone when the source directory remains empty', async () => {
-      const root = await mkdtemp(join(tmpdir(), 'github-clone-retry-'));
-      const repoPath = join(root, 'source');
-      mockCloneRepository.mockImplementationOnce(async () => {
-        await mkdir(repoPath, { recursive: true });
-        return {
-          ok: false,
-          error: { code: 'permission_denied', path: 'https://github.com/owner/repo.git' },
-        };
-      });
-
-      try {
-        await expect(callEnsureRepoReady('owner', 'repo', 'main', repoPath, false)).rejects.toThrow(
-          'Authentication failed'
-        );
+    test.each([false, true])(
+      'retries a failed clone with leftover git metadata: %s',
+      async hasGitMetadata => {
+        const root = await mkdtemp(join(tmpdir(), 'github-clone-retry-'));
+        const repoPath = join(root, 'source');
         mockCloneRepository.mockImplementationOnce(async () => {
-          await mkdir(join(repoPath, '.git'), { recursive: true });
-          return { ok: true, value: undefined };
+          await mkdir(hasGitMetadata ? join(repoPath, '.git') : repoPath, { recursive: true });
+          await writeFile(join(repoPath, 'partial.txt'), 'incomplete checkout');
+          return {
+            ok: false,
+            error: { code: 'permission_denied', path: 'https://github.com/owner/repo.git' },
+          };
         });
 
-        await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
-        expect(mockCloneRepository).toHaveBeenCalledTimes(2);
-        expect(mockSyncRepository).not.toHaveBeenCalled();
-        await access(join(repoPath, '.git'));
+        try {
+          await expect(
+            callEnsureRepoReady('owner', 'repo', 'main', repoPath, false)
+          ).rejects.toThrow('Authentication failed');
+          await expect(access(repoPath)).rejects.toMatchObject({ code: 'ENOENT' });
+          mockCloneRepository.mockImplementationOnce(async () => {
+            await mkdir(join(repoPath, '.git'), { recursive: true });
+            return { ok: true, value: undefined };
+          });
 
-        await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
-        expect(mockCloneRepository).toHaveBeenCalledTimes(2);
-        await access(join(repoPath, '.git'));
+          await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
+          expect(mockCloneRepository).toHaveBeenCalledTimes(2);
+          expect(mockSyncRepository).not.toHaveBeenCalled();
+          await access(join(repoPath, '.git'));
+
+          await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
+          expect(mockCloneRepository).toHaveBeenCalledTimes(2);
+          await access(join(repoPath, '.git'));
+        } finally {
+          await removeTempTree(root);
+        }
+      }
+    );
+
+    test('preserves pre-existing files when git refuses a nonempty clone target', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'github-clone-preserve-'));
+      const filePath = join(root, 'operator.txt');
+      await writeFile(filePath, 'keep this file');
+      mockCloneRepository.mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'unknown', message: 'destination already exists and is not empty' },
+      });
+      try {
+        await expect(callEnsureRepoReady('owner', 'repo', 'main', root, false)).rejects.toThrow(
+          'destination already exists'
+        );
+        expect(await readFile(filePath, 'utf8')).toBe('keep this file');
       } finally {
         await removeTempTree(root);
       }
@@ -1803,19 +1827,24 @@ describe('GitHubAdapter', () => {
       }
     });
 
-    test('skips sync when shouldSync is false and directory exists', async () => {
-      const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
-      await mkdir(join(tmpDir, '.git'));
+    test.each(['directory', 'file'])(
+      'preserves existing clone with .git %s when shouldSync is false',
+      async metadata => {
+        const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
+        if (metadata === 'directory') await mkdir(join(tmpDir, '.git'));
+        else await writeFile(join(tmpDir, '.git'), 'gitdir: /external/git-directory');
 
-      try {
-        await callEnsureRepoReady('owner', 'repo', 'main', tmpDir, false);
+        try {
+          await callEnsureRepoReady('owner', 'repo', 'main', tmpDir, false);
 
-        expect(mockSyncRepository).not.toHaveBeenCalled();
-        expect(mockCloneRepository).not.toHaveBeenCalled();
-      } finally {
-        await removeTempTree(tmpDir);
+          expect(mockSyncRepository).not.toHaveBeenCalled();
+          expect(mockCloneRepository).not.toHaveBeenCalled();
+          await access(join(tmpDir, '.git'));
+        } finally {
+          await removeTempTree(tmpDir);
+        }
       }
-    });
+    );
 
     test('throws user-friendly error for not_a_repo clone error', async () => {
       mockCloneRepository.mockResolvedValue({
@@ -2206,41 +2235,50 @@ describe('GitHubAdapter', () => {
     test('credential helper install is attempted after successful App-mode clone', async () => {
       const { adapter } = createAppModeAdapter();
       const clonePath = unclonedPath();
-      try {
-        // @ts-expect-error - calling private method
-        await adapter.ensureRepoReady('owner', 'repo', 'main', clonePath, false);
-      } catch {
-        // ensureRepoReady may throw inside addSafeDirectory on the bogus path;
-        // we only care that installCredentialHelper was reached.
-      }
-      // Control: prove the CLONE branch ran. Without it, a path that happens to
-      // exist would send ensureRepoReady down the sync branch and this test
-      // would report on a flow it never entered.
-      expect(mockCloneRepository).toHaveBeenCalled();
-      // Asserted on the function itself rather than through its `git config`
-      // side effect. The old proxy assertion required running the REAL
-      // installCredentialHelper, which writes the bundled helper script into
-      // $ARCHON_HOME/bin/ — a genuine write into the developer's ~/.archon from
-      // a unit test (#2305). What this test is actually about is the adapter's
-      // wiring: App-mode clone → install helper on the cloned path. The helper's
-      // own copy/chmod/git-config behaviour is covered directly by
-      // packages/core/src/github-auth/credential-helper-install.test.ts.
+      // @ts-expect-error - calling private method
+      await adapter.ensureRepoReady('owner', 'repo', 'main', clonePath, false);
+      expect(mockCloneRepository).toHaveBeenCalledTimes(1);
       expect(installCredentialHelperSpy).toHaveBeenCalledWith(clonePath);
     });
 
-    test('App-mode setup fails when the credential helper cannot be registered', async () => {
-      installCredentialHelperSpy.mockImplementationOnce(async () => ({
-        kind: 'failed',
-        error: new Error('git config rejected the helper'),
-      }));
-      const { adapter } = createAppModeAdapter();
-
-      // @ts-expect-error - calling private method
-      const setup = adapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
-
-      await expect(setup).rejects.toThrow('git config rejected the helper');
-      expect(mockCloneRepository).toHaveBeenCalled();
-    });
+    test.each(['safe directory', 'credential helper'])(
+      'retries failed App %s setup without re-cloning',
+      async failure => {
+        const root = await mkdtemp(join(tmpdir(), 'github-setup-retry-'));
+        const repoPath = join(root, 'source');
+        const { adapter } = createAppModeAdapter();
+        mockCloneRepository.mockImplementationOnce(async () => {
+          await mkdir(join(repoPath, '.git'), { recursive: true });
+          return { ok: true, value: undefined };
+        });
+        mockAddSafeDirectory.mockClear();
+        if (failure === 'safe directory') {
+          mockAddSafeDirectory.mockRejectedValueOnce(new Error('safe directory setup failed'));
+        } else {
+          installCredentialHelperSpy.mockImplementationOnce(async () => ({
+            kind: 'failed',
+            error: new Error('credential helper setup failed'),
+          }));
+        }
+        const ensureReady = () => {
+          // @ts-expect-error - calling private method
+          return adapter.ensureRepoReady('owner', 'repo', 'main', repoPath, false);
+        };
+        try {
+          await expect(ensureReady()).rejects.toThrow(`${failure} setup failed`);
+          await access(join(repoPath, '.git'));
+          await ensureReady();
+          expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+          expect(mockAddSafeDirectory).toHaveBeenCalledTimes(2);
+          expect(installCredentialHelperSpy).toHaveBeenCalledTimes(
+            failure === 'safe directory' ? 1 : 2
+          );
+          await access(join(repoPath, '.git'));
+        } finally {
+          await removeTempTree(root);
+        }
+      }
+    );
 
     test('App-mode setup fails when the bundled credential helper is unavailable', async () => {
       installCredentialHelperSpy.mockImplementationOnce(async () => ({
