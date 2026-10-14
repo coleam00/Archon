@@ -107,6 +107,9 @@
       "src/output-ref.test.ts"
     ],
     [
+      "src/run-budget.test.ts"
+    ],
+    [
       "src/event-emitter.test.ts"
     ],
     [
