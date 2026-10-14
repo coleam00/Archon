@@ -8,7 +8,7 @@
  *      `credential.https://github.com.helper = ~/.archon/bin/git-credential-archon`
  *      `credential.https://github.com.useHttpPath = true`
  *
- * The caller (the GitHub adapter clone path in App mode) decides whether to
+ * The caller (the GitHub adapter repository setup in App mode) decides whether to
  * invoke this — it's a no-op for PAT-mode operators by virtue of not being
  * called. The text import is embedded by Bun, so source and compiled installs
  * use the same helper without depending on the repository's `scripts/` tree.
@@ -37,12 +37,13 @@ export type CredentialHelperInstallResult =
   | { kind: 'installed'; helperPath: string }
   | { kind: 'failed'; error: Error };
 
-/** Idempotent — safe to call from every clone path. Never throws. */
+/** Idempotent — safe to call on every repository setup. Never throws. */
 export async function installCredentialHelper(
   worktreePath: string
 ): Promise<CredentialHelperInstallResult> {
   const binDir = resolve(getArchonHome(), 'bin');
   const helperPath = resolve(binDir, 'git-credential-archon');
+  const helperCommand = `!'${helperPath.replaceAll("'", "'\"'\"'")}'`;
   const tempPath = resolve(binDir, `git-credential-archon.${randomUUID()}.tmp`);
   try {
     mkdirSync(binDir, { recursive: true });
@@ -56,7 +57,7 @@ export async function installCredentialHelper(
     getLog().info({ helperPath }, 'github_auth.credential_helper_updated');
     await execFileAsync(
       'git',
-      ['-C', worktreePath, 'config', 'credential.https://github.com.helper', helperPath],
+      ['-C', worktreePath, 'config', 'credential.https://github.com.helper', helperCommand],
       { timeout: 5000 }
     );
     await execFileAsync(

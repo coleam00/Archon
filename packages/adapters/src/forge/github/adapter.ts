@@ -728,6 +728,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     }
 
     if (directoryExists) {
+      await this.installRepoCredentialHelper(owner, repo, repoPath);
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'github.repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));
@@ -800,8 +801,14 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     await addSafeDirectory(toRepoPath(repoPath));
 
-    // App mode requires a refreshable credential source after the
-    // request-scoped clone token expires.
+    await this.installRepoCredentialHelper(owner, repo, repoPath);
+  }
+
+  private async installRepoCredentialHelper(
+    owner: string,
+    repo: string,
+    repoPath: string
+  ): Promise<void> {
     if (this.auth.kind === 'app') {
       const result = await installCredentialHelper(repoPath);
       if (result.kind === 'failed') {

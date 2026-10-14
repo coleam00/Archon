@@ -5,7 +5,7 @@
  * The packaging test checks that source and compiled installs share the asset.
  */
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { cp, mkdtemp, readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile, mkdir, stat, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as git from '@archon/git';
@@ -76,7 +76,13 @@ describe('installCredentialHelper', () => {
     // Registered under the exact git config key the credential protocol reads.
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      ['-C', '/tmp/some-worktree', 'config', 'credential.https://github.com.helper', helperPath],
+      [
+        '-C',
+        '/tmp/some-worktree',
+        'config',
+        'credential.https://github.com.helper',
+        `!'${helperPath}'`,
+      ],
       { timeout: 5000 }
     );
   });
@@ -109,16 +115,27 @@ describe('installCredentialHelper', () => {
     const helperPath = join(binDir, 'git-credential-archon');
     await writeFile(helperPath, '#!/bin/sh\n# pre-existing\n', { mode: 0o755 });
 
-    const result = await installCredentialHelper('/tmp/another-worktree');
-
-    expect(result.kind).toBe('installed');
+    const oldReader = await open(helperPath, 'r');
+    try {
+      const result = await installCredentialHelper('/tmp/another-worktree');
+      expect(result.kind).toBe('installed');
+      expect(await oldReader.readFile('utf8')).toBe('#!/bin/sh\n# pre-existing\n');
+    } finally {
+      await oldReader.close();
+    }
     expect(await readFile(helperPath, 'utf8')).toBe(credentialHelperScript);
     expect((await installCredentialHelper('/tmp/another-worktree')).kind).toBe('installed');
     expect(await readFile(helperPath, 'utf8')).toBe(credentialHelperScript);
     // Registration still runs — every cloned worktree needs its own config entry.
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      ['-C', '/tmp/another-worktree', 'config', 'credential.https://github.com.helper', helperPath],
+      [
+        '-C',
+        '/tmp/another-worktree',
+        'config',
+        'credential.https://github.com.helper',
+        `!'${helperPath}'`,
+      ],
       { timeout: 5000 }
     );
   });
@@ -175,6 +192,8 @@ describe('installCredentialHelper', () => {
     'registered helper supplies a refreshed token to a later Git credential operation',
     async () => {
       execSpy.mockRestore();
+      archonHome = join(archonHome, "with space and 'quote");
+      process.env.ARCHON_HOME = archonHome;
       const repoPath = join(archonHome, 'repo');
       const fakeBin = join(archonHome, 'fake-bin');
       await mkdir(fakeBin, { recursive: true });
@@ -298,6 +317,8 @@ describe('installCredentialHelper', () => {
           'owner/.repo',
           'owner/foo..bar',
           'foo..bar/repo',
+          'owner/repo\\u002e',
+          'owner/repo\",\"path\":\"victim\\u002fproject',
         ].map(path => ({ host: 'github.com', path, port: '43210' })),
         ...['', '0', '65536', '123456', '-1', '3.5', '3000/secret', 'secret-token'].map(port => ({
           host: 'github.com',

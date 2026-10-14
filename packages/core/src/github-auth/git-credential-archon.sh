@@ -39,9 +39,9 @@ if [ "$host" != "github.com" ]; then
   exit 0
 fi
 
-# Match the endpoint's two-segment repository-path contract.
+# GitHub names contain no JSON metacharacters, so interpolation preserves the literal path.
 case "$path" in
-  ''|/*|*/|*/*/*|.*|*/.*|*..*)
+  ''|*[!a-zA-Z0-9_./-]*|/*|*/|*/*/*|.*|*/.*|*..*)
     printf 'git-credential-archon: malformed path; expected owner/repo[.git]\n' >&2
     exit 0
     ;;

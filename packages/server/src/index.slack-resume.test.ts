@@ -1,18 +1,20 @@
 import { mkdir, mkdtemp, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import {
   clearPlatformPolicies,
   retainsWorkspace,
   getRegisteredPlatformPolicies,
 } from '@archon/core/platforms/registry';
 import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
+import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowResumeTarget } from './services/workflow-resume-service';
 
+const trackTempRoot = trackTempRoots();
 let pluginsDir: string;
 let expectedSlackRetention: 'age-based' | 'retain' = 'age-based';
 
@@ -318,7 +320,17 @@ mock.module('./adapters/web/pg-notify-listener', () => ({
 }));
 mock.module('./static-cache', () => ({ serveWebUi: (): void => undefined }));
 mock.module('./routes/openapi-defaults', () => ({ validationErrorHook: (): void => undefined }));
-mock.module('./routes/api', () => ({ registerApiRoutes: (): void => undefined }));
+let credentialRequests: unknown[] | undefined;
+mock.module('./routes/api', () => ({
+  registerApiRoutes: (app: OpenAPIHono): void => {
+    if (credentialRequests) {
+      app.post('/internal/git-credential', async c => {
+        credentialRequests?.push(await c.req.json());
+        return c.json({ token: 'inherited-port-token' });
+      });
+    }
+  },
+}));
 mock.module('./routes/webhooks', () => ({
   registerGiteaWebhookRoute: (): void => undefined,
   registerGithubWebhookRoute: (): void => undefined,
@@ -443,6 +455,81 @@ describe('Slack workflow resume composition', () => {
       delete process.env.PORT;
     }
   });
+
+  test.skipIf(process.platform === 'win32')(
+    'installed Git helper inherits the port published by server startup',
+    async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'server-credential-handoff-')));
+      const repoPath = join(root, 'repo');
+      const env = {
+        ...process.env,
+        ARCHON_HOME: root,
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_SYSTEM: '/dev/null',
+        GIT_TERMINAL_PROMPT: '0',
+      };
+      const init = Bun.spawnSync(['git', 'init', repoPath], { env });
+      expect(init.exitCode).toBe(0);
+      const installer = join(
+        import.meta.dir,
+        '../../core/src/github-auth/credential-helper-install.ts'
+      );
+      const install = Bun.spawnSync(
+        [
+          process.execPath,
+          '-e',
+          `import { installCredentialHelper } from ${JSON.stringify(installer)};
+         const result = await installCredentialHelper(${JSON.stringify(repoPath)});
+         if (result.kind === 'failed') throw result.error;`,
+        ],
+        { env }
+      );
+      expect(install.exitCode, install.stderr.toString()).toBe(0);
+      const realServe = Bun.serve.bind(Bun);
+      let listener: ReturnType<typeof Bun.serve> | undefined;
+      const serveSpy = spyOn(Bun, 'serve').mockImplementation((options => {
+        listener = realServe(options);
+        return listener;
+      }) as typeof Bun.serve);
+      process.env.ARCHON_PORT = '3090';
+      process.env.PORT = '3000';
+      credentialRequests = [];
+      try {
+        const { startServer } = await import('./index');
+        await startServer({ port: 0, skipPlatformAdapters: true });
+        expect(listener?.port).not.toBe(3090);
+        const child = Bun.spawn(['git', '-C', repoPath, 'credential', 'fill'], {
+          env: {
+            ...process.env,
+            ARCHON_HOME: root,
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_CONFIG_SYSTEM: '/dev/null',
+            GIT_TERMINAL_PROMPT: '0',
+          },
+          stdin: 'pipe',
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        child.stdin.write('protocol=https\nhost=github.com\npath=owner/repo.git\n\n');
+        child.stdin.end();
+        const [exitCode, stdout, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ]);
+        expect(exitCode, stderr).toBe(0);
+        expect(stdout).toContain('password=inherited-port-token');
+        expect(stderr).toBe('');
+        expect(credentialRequests).toEqual([{ host: 'github.com', path: 'owner/repo.git' }]);
+      } finally {
+        serveSpy.mockRestore();
+        listener?.stop(true);
+        credentialRequests = undefined;
+        delete process.env.ARCHON_PORT;
+        delete process.env.PORT;
+      }
+    }
+  );
 
   test('server registers offline policies with all platform transports skipped', async () => {
     clearPlatformPolicies();

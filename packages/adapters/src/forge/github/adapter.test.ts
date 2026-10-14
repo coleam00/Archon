@@ -34,11 +34,15 @@ import type { Mock } from 'bun:test';
 import type { Octokit } from '@octokit/rest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
+import { mkdtemp, mkdir } from 'node:fs/promises';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { join } from 'node:path';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
 import { parseWorkflow } from '@archon/workflows/loader';
 import { validateStructuredOutput } from '@archon/workflows/structured-output';
 import type { WorkflowEventSignalCandidate } from '@archon/core/db/workflows';
+
+const trackTempRoot = trackTempRoots();
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -2194,6 +2198,38 @@ describe('GitHubAdapter', () => {
 
       await expect(setup).rejects.toThrow('git config rejected the helper');
       expect(mockCloneRepository).toHaveBeenCalled();
+    });
+
+    test('App-mode retries helper setup on a clone left by a failed config write', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-helper-retry-')));
+      const repoPath = join(root, 'repo');
+      mockSyncRepository.mockResolvedValue({ ok: true, value: undefined });
+      mockCloneRepository.mockImplementationOnce(async () => {
+        await mkdir(repoPath);
+        return { ok: true, value: undefined };
+      });
+      installCredentialHelperSpy.mockResolvedValueOnce({
+        kind: 'failed',
+        error: new Error('path config rejected'),
+      });
+      const { adapter } = createAppModeAdapter();
+      // @ts-expect-error - calling private method
+      const firstSetup = adapter.ensureRepoReady('owner', 'repo', 'main', repoPath, false);
+      await expect(firstSetup).rejects.toThrow('path config rejected');
+      for (const shouldSync of [false, true]) {
+        installCredentialHelperSpy.mockResolvedValueOnce({
+          kind: 'failed',
+          error: new Error('still rejected'),
+        });
+        // @ts-expect-error - calling private method
+        const retry = adapter.ensureRepoReady('owner', 'repo', 'main', repoPath, shouldSync);
+        await expect(retry).rejects.toThrow('still rejected');
+        // @ts-expect-error - calling private method
+        await adapter.ensureRepoReady('owner', 'repo', 'main', repoPath, shouldSync);
+      }
+      expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+      expect(installCredentialHelperSpy).toHaveBeenCalledTimes(5);
+      expect(installCredentialHelperSpy).toHaveBeenLastCalledWith(repoPath);
     });
 
     test('App-mode setup fails when the bundled credential helper is unavailable', async () => {
