@@ -63,11 +63,11 @@ archon workflow run archon-ship --branch fix/login-crash "#142"
 
 ```bash
 archon workflow run archon-ship --branch feat/export-csv-api \
-  --input part='{"delivers":1,"parts":[{"part":1,"items":["The API returns CSV."]},{"part":2,"items":["The console offers a CSV download."]}]}' \
+  --input part='{"delivers":1,"parts":[{"part":1,"items":["The API returns CSV."]},{"part":2,"items":["The console offers a CSV download.","Users can export their data as CSV."]}]}' \
   "#142"
 ```
 
-The review then treats an item that only later parts list as deferred: it is neither a blocking finding nor a discovery, and the PR says `Refs #N` instead of closing the issue. An item the input lists under no part is still reviewed as part of this PR, and the review still reports a change that contradicts a later part. The run never works out part ownership from the plan's prose; without this input, the PR is reviewed against the whole contract.
+The review then treats an item that only later parts list as deferred: it is neither a blocking finding nor a discovery, and the PR says `Refs #N` instead of closing the issue. The required outcome is an item like any other, so list it under the part that completes it, as the example does with "Users can export their data as CSV." An item the input lists under no part is still reviewed as part of this PR, and the review still reports a change that contradicts a later part. The run never works out part ownership from the plan's prose; without this input, the PR is reviewed against the whole contract.
 
 ---
 
