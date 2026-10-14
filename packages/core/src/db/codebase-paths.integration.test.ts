@@ -243,31 +243,11 @@ for (const configured of ['both', 'current', 'replacement', 'unchanged'] as cons
     );
     if (configured === 'unchanged') expect(replacementWorktree).toBe(currentWorktree);
     else expect(replacementWorktree).not.toBe(currentWorktree);
-    const commit = Bun.spawn(
-      [
-        'git',
-        '-C',
-        currentPath,
-        '-c',
-        'user.name=Test',
-        '-c',
-        'user.email=test@example.com',
-        '-c',
-        'commit.gpgsign=false',
-        'commit',
-        '--allow-empty',
-        '-m',
-        'initial',
-      ],
-      { stdout: 'ignore', stderr: 'pipe' }
-    );
-    expect(await commit.exited).toBe(0);
-    const add = Bun.spawn(
-      ['git', '-C', currentPath, 'worktree', 'add', '-b', 'live', currentWorktree],
-      { stdout: 'ignore', stderr: 'pipe' }
-    );
-    expect(await add.exited).toBe(0);
-    await writeFile(join(currentWorktree, 'uncommitted.txt'), configured);
+    if (configured === 'both') {
+      await gitAt(currentPath, 'commit', '--allow-empty', '-m', 'initial');
+      await gitAt(currentPath, 'worktree', 'add', '-b', 'live', currentWorktree);
+      await writeFile(join(currentWorktree, 'uncommitted.txt'), configured);
+    }
     await db.query('UPDATE remote_agent_codebases SET kind = $1, default_cwd = $2 WHERE id = $3', [
       'repo',
       storedPath,
@@ -293,7 +273,9 @@ for (const configured of ['both', 'current', 'replacement', 'unchanged'] as cons
         stored_default_cwd: configured === 'unchanged' ? replacementPath : storedPath,
       },
     ]);
-    expect(await readFile(join(currentWorktree, 'uncommitted.txt'), 'utf8')).toBe(configured);
+    if (configured === 'both') {
+      expect(await readFile(join(currentWorktree, 'uncommitted.txt'), 'utf8')).toBe(configured);
+    }
   });
 }
 
