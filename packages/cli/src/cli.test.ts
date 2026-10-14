@@ -10,6 +10,7 @@ import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
+import ts from 'typescript';
 import { cliArgOptions } from './args';
 import { generateConversationId } from './utils/conversation-id';
 import * as git from '@archon/git';
@@ -489,13 +490,69 @@ describe('workflow answer flag rejection and command discovery', () => {
     });
   }
 
-  it('lists answer and attention when a workflow subcommand is unknown', () => {
+  it('returns nonzero when a JSON answer cannot find its run', () => {
+    const result = invoke(['answer', 'missing-run', '--occurrence', 'x', '--json']);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('Workflow run not found'),
+    });
+    expect(result.status).toBe(1);
+  });
+
+  it('advertises every workflow dispatch route and no others', () => {
     const result = invoke(['unknown-command']);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('Unknown workflow subcommand: unknown-command');
     const available = result.stderr.split('Available: ')[1]?.split('\n')[0]?.split(', ');
-    expect(available).toContain('answer');
-    expect(available).toContain('attention');
+    const source = ts.createSourceFile(
+      CLI_ENTRY,
+      readFileSync(CLI_ENTRY, 'utf8'),
+      ts.ScriptTarget.Latest,
+      true
+    );
+    const routes = new Set<string>();
+    const comparisons = (node: ts.Node, identifier: string): string[] => {
+      const names: string[] = [];
+      const visit = (child: ts.Node): void => {
+        if (
+          ts.isBinaryExpression(child) &&
+          child.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken &&
+          ts.isIdentifier(child.left) &&
+          child.left.text === identifier &&
+          ts.isStringLiteral(child.right)
+        )
+          names.push(child.right.text);
+        ts.forEachChild(child, visit);
+      };
+      visit(node);
+      return names;
+    };
+    const visit = (node: ts.Node, workflow = false): void => {
+      if (ts.isIfStatement(node) && comparisons(node.expression, 'command').includes('workflow')) {
+        for (const name of comparisons(node.expression, 'subcommand')) routes.add(name);
+      }
+      const inWorkflow =
+        workflow ||
+        (ts.isCaseClause(node) &&
+          ts.isStringLiteral(node.expression) &&
+          node.expression.text === 'workflow');
+      if (
+        inWorkflow &&
+        ts.isSwitchStatement(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'subcommand'
+      ) {
+        for (const clause of node.caseBlock.clauses) {
+          if (ts.isCaseClause(clause) && ts.isStringLiteral(clause.expression)) {
+            routes.add(clause.expression.text);
+          }
+        }
+      }
+      ts.forEachChild(node, child => visit(child, inWorkflow));
+    };
+    visit(source);
+    expect(routes.size).toBeGreaterThan(0);
+    expect(available?.toSorted()).toEqual([...routes].sort());
   });
 });
 

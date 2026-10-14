@@ -6364,7 +6364,7 @@ export async function workflowAnswerCommand(
   text: string | undefined,
   json?: boolean,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   const request = { choose, ...(text !== undefined ? { text } : {}) };
   if (json) {
     try {
@@ -6383,10 +6383,11 @@ export async function workflowAnswerCommand(
         workflowName: result.workflowName,
         resumable: true,
       });
+      return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'answer', error);
+      return 1;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6413,6 +6414,7 @@ export async function workflowAnswerCommand(
     failurePrefix: 'Answer recorded but',
     recorded: 'answer',
   });
+  return 0;
 }
 
 /**

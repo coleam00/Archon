@@ -1139,7 +1139,7 @@ async function main(): Promise<number> {
                 'Usage: archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <text>] [--json]'
               );
             }
-            await workflowAnswerCommand(
+            return await workflowAnswerCommand(
               workflowHost,
               answerRunId,
               answerOccurrence,
@@ -1148,7 +1148,6 @@ async function main(): Promise<number> {
               jsonFlag,
               effectiveCwd
             );
-            break;
           }
 
           case 'attention': {
