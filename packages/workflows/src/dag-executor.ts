@@ -154,7 +154,7 @@ import {
   persistScopeKey,
 } from './schemas';
 import type { BindingDirective } from './schemas';
-import { buildExecNodeEnvironment } from './exec-environment';
+import { buildAiNodeEnvironment, buildExecNodeEnvironment } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import {
   FAN_OUT_CANCEL_REASONS,
@@ -2225,6 +2225,16 @@ function observeNodeCheckout(ctx: RunLayersContext): Promise<CheckoutObservation
   });
 }
 
+function aiNodeEnvironment(
+  ctx: RunLayersContext,
+  execution: NodeExecutionRecord
+): Record<string, string> {
+  return buildAiNodeEnvironment(
+    execution,
+    ctx.execContext.kind === 'host' ? process.env.ARCHON_CLI_COMMAND : undefined
+  );
+}
+
 async function executeNodeInternal(
   ctx: RunLayersContext,
   node: AgentNode,
@@ -2457,6 +2467,7 @@ async function executeNodeInternal(
   const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
+    env: { ...nodeOptions?.env, ...aiNodeEnvironment(ctx, execution) },
     ...(nodeMcp.kind === 'load'
       ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
       : {}),
@@ -2519,7 +2530,10 @@ async function executeNodeInternal(
         reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
         provider: provider,
         thresholdMs: ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
-        env: { ...(ctx.execContext.kind === 'host' ? process.env : {}), ...nodeOptions?.env },
+        env: {
+          ...(ctx.execContext.kind === 'host' ? process.env : {}),
+          ...nodeOptionsWithAbort.env,
+        },
         protectedEnvKeys: ctx.config.protectedEnvKeys,
         protectedCredentialValues: ctx.config.protectedCredentialValues,
       }),
@@ -5552,6 +5566,7 @@ async function executeLoopNode(
     }
   }
   ctx.currentExecution = execution;
+  const iterationEnv = { ...resolvedOptions?.env, ...aiNodeEnvironment(ctx, execution) };
   loopFinalStopReason = undefined;
   // Iterations share the loop's attempt, so they share its provider-event sequence.
   const attemptEvents = createAttemptEventSequence(execution.attempt.id);
@@ -5834,7 +5849,7 @@ async function executeLoopNode(
               ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
             env: {
               ...(ctx.execContext.kind === 'host' ? process.env : {}),
-              ...resolvedOptions?.env,
+              ...iterationEnv,
             },
             protectedEnvKeys: ctx.config.protectedEnvKeys,
             protectedCredentialValues: ctx.config.protectedCredentialValues,
@@ -5959,6 +5974,7 @@ async function executeLoopNode(
 
           const iterationOptions: SendQueryOptions | undefined = {
             ...resolvedOptions,
+            env: iterationEnv,
             abortSignal: iterationAbortController.signal,
           };
 
