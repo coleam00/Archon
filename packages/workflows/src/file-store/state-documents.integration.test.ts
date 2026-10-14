@@ -6,81 +6,44 @@ import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from './store';
 const roots = trackTempRoots();
-for (const phase of ['publication', 'redo'] as const) {
-  test.each([false, true])(
-    `prune removes published scratch links after ${phase} (deletion denied: %s)`,
-    async denied => {
-      const root = roots(await mkdtemp(join(tmpdir(), 'file-state-scratch-prune-')));
-      const store = await createFileWorkflowStore({ root });
-      const input = {
-        scope: { kind: 'install' } as const,
-        name: 'ledger',
-        writer: { kind: 'surface', via: 'cli' } as const,
-      };
-      const realUnlink = fsPromises.unlink;
-      const spy = spyOn(fsPromises, 'unlink').mockImplementation(async path => {
-        if (String(path).endsWith('1.json.publish.tmp') && (await Bun.file(String(path)).exists()))
-          throw Object.assign(new Error('scratch handle denies deletion'), { code: 'EPERM' });
-        return realUnlink(path);
-      });
-      try {
-        setSystemTime(new Date('2000-01-01T00:00:00Z'));
-        const row = await store.putStateDocument({ ...input, value: 'old', ifRevision: 0 });
-        setSystemTime();
-        const dir = (await readdir(join(root, 'state')))[0]!;
-        const revisionPath = join(root, 'state', dir, '1.json');
-        const scratch = `${revisionPath}.publish.tmp`;
-        expect(await readFile(scratch)).toEqual(await readFile(revisionPath));
-        expect((await fsPromises.stat(scratch)).ino).toBe(
-          (await fsPromises.stat(revisionPath)).ino
-        );
-        if (phase === 'redo') {
-          const seq = JSON.parse(await readFile(join(root, 'head.json'), 'utf8')).seq;
-          await fsPromises.writeFile(
-            join(root, 'intent.json'),
-            JSON.stringify({
-              seq,
-              lines: [],
-              documents: {},
-              deleteRuns: [],
-              immutableDocuments: { [`state/${dir}/1.json`]: row },
-            })
-          );
-          await createFileWorkflowStore({ root });
-        }
-        await store.deleteStateDocument(input);
-        const latestPath = join(root, 'state', dir, '2.json');
-        const latestBytes = await readFile(latestPath);
-        if (denied) {
-          await expect(store.pruneStateRevisions(30)).rejects.toThrow(
-            'scratch handle denies deletion'
-          );
-          expect(await Bun.file(join(root, 'intent.json')).exists()).toBe(true);
-          expect(await Bun.file(revisionPath).exists()).toBe(true);
-          expect(await Bun.file(scratch).exists()).toBe(true);
-          spy.mockRestore();
-        } else {
-          spy.mockRestore();
-          expect(await store.pruneStateRevisions(30)).toEqual({ count: 1 });
-        }
-        const reopened = await createFileWorkflowStore({ root });
-        expect(await Bun.file(revisionPath).exists()).toBe(false);
-        expect(await Bun.file(scratch).exists()).toBe(false);
-        expect((await readdir(join(root, 'state', dir))).sort()).toEqual(['2.json', 'name.json']);
-        expect(await readFile(latestPath)).toEqual(latestBytes);
-        expect(await reopened.getStateDocument(input.scope, input.name)).toBeNull();
-        expect(
-          (await reopened.listStateRevisions(input.scope, input.name)).map(row => row.revision)
-        ).toEqual([2]);
-        expect(await reopened.pruneStateRevisions(30)).toEqual({ count: 0 });
-        expect(await Bun.file(join(root, 'intent.json')).exists()).toBe(false);
-      } finally {
-        setSystemTime();
-        spy.mockRestore();
-      }
-    }
-  );
-}
+test('failed revision deletion retains its intent and recovers without deleting the latest', async () => {
+  const root = roots(await mkdtemp(join(tmpdir(), 'file-state-prune-recovery-')));
+  const store = await createFileWorkflowStore({ root });
+  const input = {
+    scope: { kind: 'install' } as const,
+    name: 'ledger',
+    writer: { kind: 'surface', via: 'cli' } as const,
+  };
+  setSystemTime(new Date('2000-01-01T00:00:00Z'));
+  try {
+    await store.putStateDocument({ ...input, value: 'old', ifRevision: 0 });
+    await store.deleteStateDocument(input);
+  } finally {
+    setSystemTime();
+  }
+  const dir = join(root, 'state', (await readdir(join(root, 'state')))[0]!);
+  const latest = await readFile(join(dir, '2.json'));
+  const realUnlink = fsPromises.unlink;
+  const spy = spyOn(fsPromises, 'unlink').mockImplementation(async path => {
+    if (String(path) === join(dir, '1.json'))
+      throw Object.assign(new Error('revision handle denies deletion'), { code: 'EPERM' });
+    return realUnlink(path);
+  });
+  try {
+    await expect(store.pruneStateRevisions(30)).rejects.toThrow('revision handle denies deletion');
+    expect(await Bun.file(join(root, 'intent.json')).exists()).toBe(true);
+    expect(await Bun.file(join(dir, '1.json')).exists()).toBe(true);
+    expect(await readFile(join(dir, '2.json'))).toEqual(latest);
+  } finally {
+    spy.mockRestore();
+  }
+  const reopened = await createFileWorkflowStore({ root });
+  expect((await readdir(dir)).sort()).toEqual(['2.json', 'name.json']);
+  expect(await readFile(join(dir, '2.json'))).toEqual(latest);
+  expect(await reopened.getStateDocument(input.scope, input.name)).toBeNull();
+  expect(await reopened.pruneStateRevisions(30)).toEqual({ count: 0 });
+  expect(await Bun.file(join(root, 'intent.json')).exists()).toBe(false);
+});
 test('prune removes only old non-latest revisions within a mixed-age document', async () => {
   const root = roots(await mkdtemp(join(tmpdir(), 'file-state-mixed-age-')));
   const store = await createFileWorkflowStore({ root });
@@ -186,7 +149,6 @@ try {
 );
 
 test('a history reader holds the lock until prune can remove its revisions', async () => {
-  const { setSystemTime, spyOn } = await import('bun:test');
   const persistence = await import('./commit');
   const root = roots(await mkdtemp(join(tmpdir(), 'file-state-read-prune-')));
   const store = await createFileWorkflowStore({ root });

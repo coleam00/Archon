@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import type { StateRevision } from '../state-document-store';
 import { expect, spyOn, test } from 'bun:test';
 import { appendFile, mkdtemp, readFile, unlink, writeFile } from 'node:fs/promises';
-import * as fsPromises from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -329,10 +328,10 @@ test.each([...deletionCrashSteps])(
   }
 );
 
-const stateCrashSteps = ['intent', 'name', 'linked', 'deleted', 'head'] as const;
+const stateCrashSteps = ['intent', 'name', 'scratch', 'published', 'deleted', 'head'] as const;
 test.each([...stateCrashSteps])('state redo preserves immutable files after %s', async step => {
   const { root, store } = await fixture();
-  const { link, mkdir, stat } = await import('node:fs/promises');
+  const { rename, mkdir, stat } = await import('node:fs/promises');
   const dir = `state/${createHash('sha256')
     .update(JSON.stringify(['_install', 'ledger']))
     .digest('hex')}`;
@@ -376,11 +375,13 @@ test.each([...stateCrashSteps])('state redo preserves immutable files after %s',
       join(root, `${revision}.publish.tmp`),
       JSON.stringify(immutableDocuments[revision])
     );
-    await link(join(root, `${revision}.publish.tmp`), join(root, revision));
+  }
+  if (stateCrashSteps.indexOf(step) >= 3) {
+    await rename(join(root, `${revision}.publish.tmp`), join(root, revision));
     inode = (await stat(join(root, revision))).ino;
   }
-  if (stateCrashSteps.indexOf(step) >= 3) await unlink(join(root, obsolete));
-  if (stateCrashSteps.indexOf(step) >= 4)
+  if (stateCrashSteps.indexOf(step) >= 4) await unlink(join(root, obsolete));
+  if (stateCrashSteps.indexOf(step) >= 5)
     await writeFile(join(root, 'head.json'), JSON.stringify({ format: 1, seq }));
   expect(await store.getStateDocument({ kind: 'install' }, 'ledger')).toBeNull();
   expect(await store.listStateRevisions({ kind: 'install' }, 'ledger')).toEqual([row]);
@@ -409,86 +410,4 @@ test('immutable publication rejects different bytes and retains the recovery int
   ).rejects.toThrow('Immutable store document differs');
   expect(await readFile(join(root, 'state/test/1.json'))).toEqual(before);
   expect(await Bun.file(join(root, 'intent.json')).exists()).toBe(true);
-});
-
-test.each(['publication', 'redo'] as const)(
-  'published scratch cleanup failure does not block %s or later state writes',
-  async phase => {
-    const { root, store } = await fixture();
-    const input = {
-      scope: { kind: 'install' } as const,
-      name: 'ledger',
-      writer: { kind: 'surface', via: 'cli' } as const,
-      ops: [{ op: 'append' as const, path: '/seen', value: 1 }],
-    };
-    if (phase === 'redo') {
-      const row = await store.patchStateDocument(input);
-      const dir = (await fsPromises.readdir(join(root, 'state')))[0]!;
-      const path = `state/${dir}/1.json`;
-      await fsPromises.link(join(root, path), join(root, `${path}.publish.tmp`));
-      const seq = JSON.parse(await readFile(join(root, 'head.json'), 'utf8')).seq;
-      await writeFile(
-        join(root, 'intent.json'),
-        JSON.stringify({
-          seq,
-          lines: [],
-          documents: {},
-          deleteRuns: [],
-          immutableDocuments: { [path]: row },
-        })
-      );
-    }
-    const realUnlink = fsPromises.unlink;
-    let failures = 0;
-    const spy = spyOn(fsPromises, 'unlink').mockImplementation(async path => {
-      if (String(path).endsWith('.publish.tmp') && (await Bun.file(String(path)).exists())) {
-        failures++;
-        throw Object.assign(new Error('scratch handle denies deletion'), { code: 'EPERM' });
-      }
-      return realUnlink(path);
-    });
-    try {
-      if (phase === 'publication') expect((await store.patchStateDocument(input)).revision).toBe(1);
-      const reopened = await createFileWorkflowStore({ root });
-      expect((await reopened.getStateDocument(input.scope, input.name))?.value).toEqual({
-        seen: [1],
-      });
-      expect(
-        (
-          await reopened.patchStateDocument({
-            ...input,
-            ops: [{ op: 'append', path: '/seen', value: 2 }],
-          })
-        ).revision
-      ).toBe(2);
-      expect(
-        (await reopened.listStateRevisions(input.scope, input.name)).map(row => row.revision)
-      ).toEqual([2, 1]);
-      expect((await reopened.getStateDocument(input.scope, input.name))?.value).toEqual({
-        seen: [1, 2],
-      });
-      expect(await Bun.file(join(root, 'intent.json')).exists()).toBe(false);
-      expect(failures).toBeGreaterThan(0);
-    } finally {
-      spy.mockRestore();
-    }
-  }
-);
-
-test('publication never truncates a stale scratch hard link to an immutable file', async () => {
-  const { root } = await fixture();
-  await commitModule.commit(root, [], async () => ({
-    result: undefined,
-    changes: { immutableDocuments: { 'state/test/1.json': { value: 1 } } },
-  }));
-  const original = join(root, 'state/test/1.json');
-  await fsPromises.link(original, join(root, 'state/test/2.json.publish.tmp'));
-  await commitModule.commit(root, [], async () => ({
-    result: undefined,
-    changes: { immutableDocuments: { 'state/test/2.json': { value: 2 } } },
-  }));
-  expect(await readFile(original, 'utf8')).toBe(JSON.stringify({ value: 1 }));
-  expect(await readFile(join(root, 'state/test/2.json'), 'utf8')).toBe(
-    JSON.stringify({ value: 2 })
-  );
 });

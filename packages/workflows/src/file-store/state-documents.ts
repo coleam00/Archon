@@ -45,14 +45,7 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
     const record = nameRecordSchema.parse(await readJson(join(root, dir, 'name.json')));
     if (record.name !== name || stateScopeKey(record.scope) !== stateScopeKey(scope))
       throw new Error(`State name record differs: ${dir}`);
-    if (
-      files.some(
-        file =>
-          file !== 'name.json' &&
-          !/^[1-9][0-9]*\.json$/.test(file) &&
-          !/^(name|[1-9][0-9]*)\.json\.publish\.tmp$/.test(file)
-      )
-    )
+    if (files.some(file => file !== 'name.json' && !/^[1-9][0-9]*\.json$/.test(file)))
       throw new Error(`Invalid state file: ${dir}`);
     const numbers = files
       .filter(file => /^[1-9][0-9]*\.json$/.test(file))
@@ -177,7 +170,7 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
         return {
           result: { count: deleted.length },
           changes: {
-            deleteDocuments: deleted.flatMap(path => [`${path}.publish.tmp`, path]),
+            deleteDocuments: deleted,
           },
         };
       });

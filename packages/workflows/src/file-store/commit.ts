@@ -5,7 +5,7 @@ import {
   type WorkflowEventPage,
   type IWorkflowEventFeed,
 } from '../store';
-import { link, mkdir, open, readFile, readdir, rm, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rm, stat, unlink } from 'node:fs/promises';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
@@ -170,13 +170,6 @@ async function removeDocument(path: string): Promise<void> {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
   }
 }
-async function discardPublishedScratch(path: string): Promise<void> {
-  try {
-    await removeDocument(path);
-  } catch (error) {
-    log.warn({ path, err: error }, 'file_store.cleanup_failed');
-  }
-}
 async function publishJson(path: string, value: unknown): Promise<void> {
   const contents = JSON.stringify(value);
   const scratch = `${path}.publish.tmp`;
@@ -190,7 +183,6 @@ async function publishJson(path: string, value: unknown): Promise<void> {
     if (existing !== contents) throw new Error(`Immutable store document differs: ${path}`);
   } else {
     await mkdir(dirname(path), { recursive: true });
-    // A leftover scratch can still link to an immutable inode, even after pruning its name.
     await removeDocument(scratch);
     const file = await open(scratch, 'wx', 0o600);
     try {
@@ -199,9 +191,10 @@ async function publishJson(path: string, value: unknown): Promise<void> {
     } finally {
       await file.close();
     }
-    await retryFileStoreHandles('link', path, () => link(scratch, path));
+    // The store lock keeps the checked destination absent until publication.
+    await renameReplacing(scratch, path);
   }
-  await discardPublishedScratch(scratch);
+  if (existing !== undefined) await removeDocument(scratch);
   await syncDirectory(dirname(path));
 }
 async function readLog(
