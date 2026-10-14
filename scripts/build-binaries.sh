@@ -123,7 +123,7 @@ for target_pair in "${TARGETS[@]}"; do
   IFS=':' read -r target outfile <<< "$target_pair"
   server_asset=$(TARGET="$target" bun -e 'import { serverReleaseAsset } from "./packages/paths/src/server-launch.ts"; console.log(serverReleaseAsset(process.env.TARGET));')
   server_outfile="$(dirname "$outfile")/$server_asset"
-  # Provider plugins are named the way `archon provider install` requests them.
+  # Provider plugins are named the way `archon provider add` requests them.
   provider_plugins=$(TARGET="$target" bun -e '
     const { relative } = await import("node:path");
     const { MAINTAINED_PROVIDER_IDS } = await import("./packages/provider-contract/src/registration.ts");

@@ -415,7 +415,7 @@ test('a source host with only Codex refuses a Claude workflow before any worktre
     expect(failure).toBeInstanceOf(Error);
     expect(failure).toHaveProperty(
       'message',
-      expect.stringContaining('archon provider install claude')
+      expect.stringContaining('archon provider add claude')
     );
     expect(logs.length).toBeGreaterThan(0);
     expect(logs.some(line => line.includes('worktree_creating'))).toBe(false);

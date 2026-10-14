@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 test('installs each requested first-party provider pinned to this CLI version', async () => {
-  expect(await providerCommand('install', ['codex', 'pi'], env)).toBe(0);
+  expect(await providerCommand('add', ['codex', 'pi'], env)).toBe(0);
   expect(replacePlugin.mock.calls).toEqual([
     ['coleam00/Archon/plugins/provider-codex@v0.13.0', env],
     ['coleam00/Archon/plugins/provider-pi@v0.13.0', env],
@@ -22,17 +22,23 @@ test('installs each requested first-party provider pinned to this CLI version', 
 });
 test('invalid ids and command arity fail before any installation', async () => {
   for (const [command, ids] of [
-    ['install', ['codex', 'third-party']],
-    ['install', []],
+    ['add', ['codex', 'third-party']],
+    ['add', []],
     ['remove', ['pi']],
   ] as const) {
     expect(await providerCommand(command, ids, env)).toBe(1);
   }
   expect(replacePlugin).not.toHaveBeenCalled();
 });
+test('install is refused with add usage before any installation', async () => {
+  expect(await providerCommand('install', ['codex'], env)).toBe(1);
+  expect(error.mock.calls.flat().join('\n')).toContain('Usage: archon provider add <id...>');
+  expect(replacePlugin).not.toHaveBeenCalled();
+});
+
 test('source checkouts refuse installation', async () => {
   mock.module('@archon/paths', () => ({ ...paths, BUNDLED_IS_BINARY: false }));
-  expect(await providerCommand('install', ['claude'], env)).toBe(1);
+  expect(await providerCommand('add', ['claude'], env)).toBe(1);
   expect(error.mock.calls.flat().join('\n')).toContain(
     'Source checkouts run maintained providers from source'
   );

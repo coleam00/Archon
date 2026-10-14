@@ -92,7 +92,7 @@ export async function forgeCommand(
     const result = await (dependencies.dispatch ?? dispatchForge)(request, {
       config,
       env: trustedEnv,
-      // The trusted directory `archon plugin install` writes; repo env cannot move it.
+      // The trusted directory `archon plugin add` writes; repo env cannot move it.
       pluginsDir: getPluginsPath(archonHome),
       // Repo scope may supply the credential named by trusted user config. It
       // cannot replace executable discovery or the plugin's runtime identity.

@@ -4,7 +4,7 @@
 # Usage: irm https://archon.diy/install.ps1 | iex
 #
 # Options:
-#   -Providers <ids> - Comma-separated providers to install (claude, codex, pi).
+#   -Providers <ids> - Comma-separated providers to add (claude, codex, pi).
 #                      An empty value installs none. Without it, the installer asks.
 #                      Releases up to 0.11.1 bundle their providers and have no
 #                      `archon provider`; pin one with -Providers ''.
@@ -243,7 +243,7 @@ function Read-ProviderSelection {
     while ($true) {
         # Read-Host throws in a -NonInteractive session, which UserInteractive does not reveal.
         try {
-            $answer = Read-Host "Which providers should Archon install? ($($PROVIDER_IDS -join ', '), comma-separated; empty for none)"
+            $answer = Read-Host "Which providers should Archon add? ($($PROVIDER_IDS -join ', '), comma-separated; empty for none)"
         } catch {
             return $null
         }
@@ -257,17 +257,18 @@ function Read-ProviderSelection {
 
 function Install-Providers {
     param([string]$Archon, [string[]]$Ids)
+    Write-Info "Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI."
     if ($Ids.Count -eq 0) {
-        Write-Warn "No providers installed. AI workflows and chat need one; install it with:"
-        Write-Host "  archon provider install <$($PROVIDER_IDS -join '|')>"
+        Write-Warn "No providers installed. AI workflows and chat need one; add it with:"
+        Write-Host "  archon provider add <$($PROVIDER_IDS -join '|')>"
         Write-Host "  (or run: archon setup)"
         return
     }
-    Write-Info "Installing providers: $($Ids -join ' ')"
-    & $Archon provider install @Ids
+    Write-Info "Adding providers: $($Ids -join ' ')"
+    & $Archon provider add @Ids
     if ($LASTEXITCODE -ne 0) {
-        Write-Err "Archon is installed, but installing providers failed."
-        Write-Err "Retry with: archon provider install $($Ids -join ' ')"
+        Write-Err "Archon is installed, but adding providers failed."
+        Write-Err "Retry with: archon provider add $($Ids -join ' ')"
         exit 1
     }
     Write-Ok "Providers installed: $($Ids -join ' ')"
@@ -385,7 +386,7 @@ function Main {
         if ($null -eq $providerIds) {
             $providerIds = Read-ProviderSelection
             if ($null -eq $providerIds) {
-                Write-Info "No console to ask which providers to install; installing none."
+                Write-Info "No console to ask which providers to add; adding none."
                 $providerIds = @()
             }
         }
