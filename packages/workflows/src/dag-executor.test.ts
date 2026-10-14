@@ -32532,6 +32532,45 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     return store;
   }
 
+  it.each([
+    ['fuse', { containerId: 'cid-1' }],
+    ['native', { containerId: 'cid-1', overlayMode: 'native', gateBypassable: true }],
+  ] as const)(
+    'a fresh %s-overlay run records one container_created row with its facts',
+    async (overlayMode, expectedData) => {
+      const store = createMockStore();
+      const execSpy = stubMissingContainer();
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            conversationId: 'conv-created',
+            cwd: wbTestDir,
+            workflow: {
+              name: 'created',
+              nodes: [{ id: 'a', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
+            },
+            workflowRun: makeWorkflowRun('created-run'),
+            execContext: CONTAINER_EXEC,
+            containerCtx: {
+              envId: 'env-x',
+              writeBack: 'approve',
+              backend: makeWritebackBackend(),
+              overlayMode,
+            },
+          })
+        );
+      } finally {
+        execSpy.mockRestore();
+      }
+
+      const created = persistedEvents(store).filter(
+        event => event.event_type === 'container_created'
+      );
+      expect(created.map(event => event.data)).toEqual([expectedData]);
+    }
+  );
+
   it('empty diff → completes normally, no pause', async () => {
     const backend = makeWritebackBackend({
       finalize: mock(async () => ({ requiresApproval: false })),
