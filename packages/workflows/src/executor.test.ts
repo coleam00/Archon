@@ -224,6 +224,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(() => {
       throw new Error('Unexpected listStateRevisions');
     }),
+    listStateDocuments: mock<IWorkflowStore['listStateDocuments']>(() => {
+      throw new Error('Unexpected listStateDocuments');
+    }),
     pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
       throw new Error('Unexpected pruneStateRevisions');
     }),
@@ -2850,6 +2853,7 @@ describe('executeWorkflow', () => {
         userId: 'user-1',
         userMessage: 'persisted input',
         origin: 'web',
+        transcriptPath: expect.stringMatching(/run-123\.jsonl$/),
       });
     });
 

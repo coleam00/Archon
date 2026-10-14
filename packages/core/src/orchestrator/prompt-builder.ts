@@ -139,14 +139,11 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     return '';
 
   if (attention.kind === 'unreadable') {
-    // Paused, but the gate cannot be described — unreadable metadata, or a gate type
-    // this build cannot resolve. Preserve the explicit-command guidance the old
-    // natural-language branch sent directly to the user.
     return (
       header +
       `Run \`${runId}\` (**${workflowName}**) is paused, but its approval context is ` +
-      'missing or malformed, so the gate cannot be described. Tell the user to resolve it ' +
-      `explicitly with \`${cmd(`approve ${runId}`)}\` or \`${cmd(`reject ${runId} <reason>`)}\`.`
+      'missing or malformed, so the gate cannot be described. Do not resolve it. ' +
+      `Tell the user to inspect it with \`${cmd(`status ${runId}`)}\` before choosing an action.`
     );
   }
 
@@ -184,13 +181,24 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     facts.push(`- Loop iteration: ${String(approval.iteration)}`);
   }
 
-  const explicitCommands = `\`${cmd(`approve ${runId} [comment]`)}\` or \`${cmd(`reject ${runId} <reason>`)}\``;
+  const authoredDecisions =
+    (approval?.type === 'approval' || approval?.type === undefined) &&
+    approval?.decisionsAuthored === true
+      ? approval.decisions
+      : undefined;
+  const explicitCommands = authoredDecisions
+    ? authoredDecisions.map(d => `\`${cmd(`respond ${runId} ${d.id} [text]`)}\``).join(' or ')
+    : `\`${cmd(`approve ${runId} [comment]`)}\` or \`${cmd(`reject ${runId} <reason>`)}\``;
 
   const preamble =
     header +
     'A workflow run in this conversation is PAUSED waiting for a human decision. It does not ' +
     'continue until the gate is resolved.\n\n' +
     facts.join('\n') +
+    (authoredDecisions
+      ? '\n- Declared decisions: ' +
+        authoredDecisions.map(d => `\`${d.id}\`${d.label ? ` (${d.label})` : ''}`).join(', ')
+      : '') +
     '\n\nWhat the run is asking:\n\n' +
     `> ${attention.message.replace(/\n/g, '\n> ')}\n\n`;
 
@@ -216,6 +224,19 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
       `container. Tell the user to finish it with \`archon workflow resume ${runId}\` ` +
       'from the CLI in the same project.'
     : 'Resolving the gate also continues the run — there is no separate resume step.';
+
+  if (authoredDecisions) {
+    return (
+      preamble +
+      "Read the user's full message and judge which declared decision, if any, it expresses. " +
+      'Use the respond action with that exact declared ID and pass their own words verbatim as text. ' +
+      'Only these declared IDs are accepted. If the message asks a question, is unrelated, or does not ' +
+      'clearly select a decision, resolve NOTHING. Answer them or ask for clarification and leave the gate open. ' +
+      'An unambiguous decision is the human confirmation: resolve it in the same turn.\n\n' +
+      continuation +
+      ` The user can always decide it themselves with ${explicitCommands}.`
+    );
+  }
 
   return (
     preamble +

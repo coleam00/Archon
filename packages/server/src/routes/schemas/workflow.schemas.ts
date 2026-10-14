@@ -18,6 +18,7 @@ import {
 import {
   createRunAttentionSchema,
   approvalContextSchema,
+  expectedApprovalGateSchema,
   workflowRunSchema as engineWorkflowRunSchema,
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
   workflowWaitContextSchema as engineWorkflowWaitContextSchema,
@@ -284,7 +285,7 @@ export const respondWorkflowRunBodySchema = z
   .object({
     decision: z.string().min(1),
     text: z.string().optional(),
-    expectedGate: approvalContextSchema.pick({ nodeId: true, pauseId: true }).required().optional(),
+    expectedGate: expectedApprovalGateSchema.optional(),
   })
   .openapi('RespondWorkflowRunBody');
 

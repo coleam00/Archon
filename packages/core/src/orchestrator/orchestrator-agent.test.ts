@@ -4414,15 +4414,19 @@ describe('paused approval gate routing', () => {
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
 
-  test('a paused run with a malformed approval context points the agent at the explicit commands', async () => {
+  test('a paused run with a malformed approval context sends the user to inspect it, not resolve it', async () => {
     arrangeGatedChat({ metadata: {} });
 
     await handleMessage(makePlatform(), 'conv-1', 'looks good', { actor: operator });
 
+    // approve refuses an unreadable gate, so naming it would hand the user a command that fails.
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
     expect(prompt).toContain('missing or malformed');
-    expect(prompt).toContain('/workflow approve run-1');
+    expect(prompt).toContain('/workflow status run-1');
+    expect(prompt).not.toContain('/workflow approve run-1');
+    expect(prompt).not.toContain('/workflow reject run-1');
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
 
   test('a slash command never reaches the gate lookup', async () => {

@@ -421,6 +421,7 @@ export async function createFileWorkflowStore(
     patchStateDocument: unsupportedStateDocuments,
     deleteStateDocument: unsupportedStateDocuments,
     listStateRevisions: unsupportedStateDocuments,
+    listStateDocuments: unsupportedStateDocuments,
     // The file store can never hold a state revision, so `workflow cleanup` has none to prune.
     pruneStateRevisions: async () => ({ count: 0 }),
   };

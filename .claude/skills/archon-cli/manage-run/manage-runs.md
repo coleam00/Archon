@@ -64,8 +64,12 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 ## The approve/resume two-step
 
 With `--json`, `approve`/`reject`/`respond` **record the decision and stop** —
-the run becomes resumable but does not execute (streaming output would corrupt
-the JSON). To record AND continue:
+this command does not execute the run (streaming output would corrupt the JSON).
+The answered gate is a due continuation: a running `archon serve`, or
+`archon workflow wake [--watch]`, continues it without anyone resuming by hand.
+Container runs (including a container write-back gate) are the exception: the
+hosts cannot continue them, so run `archon workflow resume <run-id>` yourself.
+To record AND continue in this process:
 
 ```bash
 archon workflow approve <run-id> "ship it"   # no --json: records + auto-resumes; background task!

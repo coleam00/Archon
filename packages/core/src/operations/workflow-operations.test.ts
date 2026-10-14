@@ -1122,27 +1122,6 @@ describe('rejectWorkflow', () => {
     expect(approvalReceived).toMatchObject({ step_name: 'grp' });
   });
 
-  test('new-mode approve-only gate rejects — no reject decision declared, cancels (no unreachable decision)', async () => {
-    const run = makePausedRun({
-      metadata: {
-        approval: {
-          nodeId: 'review',
-          message: 'Please review',
-          type: 'approval',
-          decisions: [{ id: 'approve' }],
-          decisionsAuthored: true,
-        },
-      },
-    });
-    mockGetWorkflowRun.mockResolvedValueOnce(run);
-
-    const result = await rejectWorkflow('run-1', 'no good', operator, { via: 'cli' });
-
-    expect(result.cancelled).toBe(true);
-    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
-    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-  });
-
   test('terminal reject concurrent loser (CAS miss) writes NO event or telemetry (#2113)', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun());
     // No onRejectPrompt ⇒ the atomic resolve-and-cancel CAS is the guard.
@@ -1429,6 +1408,100 @@ describe('respondToWorkflow', () => {
     mockGetWorkflowRun.mockClear();
     mockResolveApprovalGate.mockClear();
     mockResolveApprovalGate.mockResolvedValue({ resolved: true });
+  });
+
+  test.each(['approve', 'reject'])(
+    'refuses undeclared %s through both response and dedicated operations without writes',
+    async decision => {
+      const run = makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Choose',
+            type: 'approval',
+            decisionsAuthored: true,
+            decisions: [{ id: 'accept' }, { id: 'revise' }],
+          },
+        },
+      });
+      mockGetWorkflowRun.mockResolvedValue(run);
+      mockResolveAndCancelApprovalGate.mockClear();
+      const before = structuredClone(run);
+      const dedicated = decision === 'approve' ? approveWorkflow : rejectWorkflow;
+      for (const respond of [
+        () => dedicated(run.id, 'feedback', operator, { via: 'cli' }),
+        () => respondToWorkflow(run.id, decision, 'feedback', operator, { via: 'cli' }),
+      ]) {
+        await expect(respond()).rejects.toThrow(
+          `does not declare decision '${decision}'. Declared decisions: accept, revise.`
+        );
+        expect(run).toEqual(before);
+        expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+        expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+        expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  test.each([{ decisions: undefined }, { decisions: [] }])(
+    'malformed authored vocabularies cannot fall through to legacy cancellation (%j)',
+    async ({ decisions }) => {
+      mockGetWorkflowRun.mockResolvedValue(
+        makePausedRun({
+          metadata: {
+            approval: {
+              nodeId: 'review',
+              message: 'Choose',
+              type: 'approval',
+              decisionsAuthored: true,
+              decisions,
+            },
+          },
+        })
+      );
+      mockResolveAndCancelApprovalGate.mockClear();
+      await expect(rejectWorkflow('run-1', 'Stop', operator, { via: 'cli' })).rejects.toThrow(
+        'malformed authored decisions'
+      );
+      await expect(
+        respondToWorkflow('run-1', 'reject', 'Stop', operator, { via: 'cli' })
+      ).rejects.toThrow('malformed authored decisions');
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+      expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
+    }
+  );
+
+  test('resolves a declared custom decision without approve in the vocabulary', async () => {
+    mockResolveAndCancelApprovalGate.mockClear();
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Choose',
+            type: 'approval',
+            decisionsAuthored: true,
+            decisions: [{ id: 'accept' }, { id: 'revise' }],
+          },
+        },
+      })
+    );
+    await respondToWorkflow('run-1', 'accept', 'Use this plan', operator, { via: 'cli' });
+    expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
+    const call = mockResolveApprovalGate.mock.calls[0];
+    if (!call) throw new Error('Expected gate resolution');
+    expect(call[2]).toContainEqual(
+      expect.objectContaining({
+        event_type: 'node_completed',
+        step_name: 'review',
+        data: expect.objectContaining({
+          structured_output: { decision: 'accept', text: 'Use this plan' },
+          node_output: JSON.stringify({ decision: 'accept', text: 'Use this plan' }),
+        }),
+      })
+    );
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
   });
 
   test('resolves a custom decision on an escalated body-terminal-gate pause — node_completed lands under the namespaced <nodeId>.<bodyGateId> step_name (#2707 step 3)', async () => {

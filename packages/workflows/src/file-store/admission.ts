@@ -3,7 +3,7 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
-import { isOwnerProvablyGone, type ProcessOwner } from '@archon/paths/process-owner';
+import { isOwnerProvablyGone, parseProcessOwner } from '@archon/paths/process-owner';
 import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
@@ -32,20 +32,22 @@ import { WorkflowNotResumableError, WorkflowResourceBusyError } from '../store';
 import { commit, isRunArchived, readJson, readSnapshot, recoverBeforeRead } from './commit';
 import { createTransactionView } from './transaction-view';
 
-const ownerSchema = z.object({
-  host: z.string(),
-  pid: z.number().int(),
-  instance: z.string(),
-}) satisfies z.ZodType<ProcessOwner>;
-const holderSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('run'), id: z.string() }),
-  z.object({ kind: z.literal('attempt'), id: z.string(), owner: ownerSchema }),
-]);
-const slotSchema = z.object({
-  capacity: z.number().int().positive(),
-  holders: z.array(holderSchema),
-  queue: z.array(z.string()),
-});
+/** `source` names the slot document in a malformed attempt owner's error. */
+const slotSchema = (source: string) =>
+  z.object({
+    capacity: z.number().int().positive(),
+    holders: z.array(
+      z.discriminatedUnion('kind', [
+        z.object({ kind: z.literal('run'), id: z.string() }),
+        z.object({
+          kind: z.literal('attempt'),
+          id: z.string(),
+          owner: z.unknown().transform(owner => parseProcessOwner(owner, source)),
+        }),
+      ])
+    ),
+    queue: z.array(z.string()),
+  });
 const requestSchema = z.object({
   id: z.string(),
   resource: z.string(),
@@ -85,7 +87,7 @@ function disposition(row: Request): ResourceStartDisposition {
   throw new Error(`Resource start request '${row.id}' has no executable disposition`);
 }
 
-type Slot = z.infer<typeof slotSchema>;
+type Slot = z.infer<ReturnType<typeof slotSchema>>;
 type Receipt = z.infer<typeof receiptSchema>;
 type Binding = z.infer<typeof bindingSchema>;
 interface BindingIdentity {
@@ -115,7 +117,7 @@ interface AdmissionTransaction {
 // Used only inside commit: all holder reads and document changes share the run's lock.
 export function createAdmissionTransaction(root: string): AdmissionTransaction {
   const documents: Record<string, unknown> = {};
-  const slots = new Map<string, z.infer<typeof slotSchema>>();
+  const slots = new Map<string, Slot>();
   const receipts = new Map<string, z.infer<typeof receiptSchema>>();
   async function read<S extends z.ZodType>(path: string, schema: S): Promise<z.output<S> | null> {
     const raw = path in documents ? documents[path] : await readJson(join(root, path));
@@ -130,10 +132,11 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
   }
   async function slot(resource: string, capacity?: number): Promise<Slot> {
     const path = pathFor('slots', resource);
+    const schema = slotSchema(join(root, path));
     const row =
       slots.get(resource) ??
-      (await read(path, slotSchema)) ??
-      slotSchema.parse({ capacity: capacity ?? 1, holders: [], queue: [] });
+      (await read(path, schema)) ??
+      schema.parse({ capacity: capacity ?? 1, holders: [], queue: [] });
     if (capacity !== undefined && row.capacity !== capacity)
       throw new ResourceSlotCapacityConflictError(resource, row.capacity, capacity);
     documents[path] = row;

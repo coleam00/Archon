@@ -13,7 +13,11 @@ import {
 } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
-import { isWorkflowWaitContext, runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  answeredGateContinuation,
+  isWorkflowWaitContext,
+  runAttention,
+} from '@archon/workflows/schemas/workflow-run';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
@@ -424,3 +428,96 @@ test('a source host with only Codex refuses a Claude workflow before any worktre
     clearConfigCache();
   }
 });
+
+/**
+ * Pause a run at a gate, then make `interleave` happen between approve recording the
+ * answer and its inline resume, as `archon serve` or a cancel can on a shared database.
+ */
+async function approveAfter(
+  interleave: (store: WorkflowHost['deps']['store'], runId: string) => Promise<void>
+): Promise<{ host: WorkflowHost; runId: string; log: ReturnType<typeof spyOn> }> {
+  const root = tempRoots(mkdtempSync(join(tmpdir(), 'archon-cli-store-')));
+  const project = join(root, 'project');
+  process.env.ARCHON_HOME = join(root, 'home');
+  process.env.ARCHON_TELEMETRY_DISABLED = '1';
+  delete process.env.DATABASE_URL;
+  setPlatformPolicies([]);
+  registerBuiltinProviders();
+  mkdirSync(join(project, '.archon', 'workflows'), { recursive: true });
+  writeFileSync(
+    join(project, '.archon', 'workflows', 'raced.yaml'),
+    `name: raced
+description: a gate answered while another process acts on the run
+interactive: true
+worktree:
+  enabled: false
+nodes:
+  - id: before
+    bash: echo before
+  - id: review
+    depends_on: [before]
+    approval:
+      message: Approve?
+  - id: after
+    depends_on: [review]
+    bash: echo after
+`
+  );
+  const host = createTestHost();
+  const { store } = host.deps;
+  const log = spyOn(console, 'log').mockImplementation(() => undefined);
+  const { workflowRunCommand } = await import('./workflow');
+  await workflowRunCommand(host, project, 'raced', 'go', {
+    folder: true,
+    noWorktree: true,
+    quiet: true,
+  });
+  const paused = (await store.listWorkflowRuns()).runs[0];
+  if (!paused) throw new Error('Run not recorded');
+  const approve = host.operations.approveWorkflow;
+  host.operations.approveWorkflow = async (...args) => {
+    const result = await approve(...args);
+    await interleave(store, paused.id);
+    return result;
+  };
+  log.mockClear();
+  return { host, runId: paused.id, log };
+}
+
+test('approve reports a run the continuation host claimed first as continuing elsewhere', async () => {
+  const { host, runId, log } = await approveAfter(async (store, id) => {
+    const answered = await store.getWorkflowRun(id);
+    const gate = answered ? answeredGateContinuation(answered) : undefined;
+    if (!gate) throw new Error('Approval did not leave an answered gate');
+    await store.resumeWorkflowRun(id, { kind: 'gate', ...gate });
+  });
+  try {
+    const { workflowApproveCommand } = await import('./workflow');
+    await workflowApproveCommand(host, runId);
+
+    expect((await host.deps.store.getWorkflowRun(runId))?.status).toBe('running');
+    expect(log.mock.calls.flat()).toContain(
+      `Run ${runId} is already continuing in another process.`
+    );
+  } finally {
+    log.mockRestore();
+  }
+}, 30_000);
+
+test('approve still fails when the run was cancelled before its inline resume', async () => {
+  const { host, runId, log } = await approveAfter(async (store, id) => {
+    await store.cancelWorkflowRun(id);
+  });
+  try {
+    const { workflowApproveCommand } = await import('./workflow');
+    await expect(workflowApproveCommand(host, runId)).rejects.toThrow(
+      "Approved but failed to resume workflow 'raced'"
+    );
+
+    expect(log.mock.calls.flat()).not.toContain(
+      `Run ${runId} is already continuing in another process.`
+    );
+  } finally {
+    log.mockRestore();
+  }
+}, 30_000);

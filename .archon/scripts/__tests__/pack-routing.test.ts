@@ -153,32 +153,34 @@ describe("upkeep's terminal outcome", () => {
 });
 
 describe("deliver's terminal outcome", () => {
-  const outcome = (rounds: object): { ready: boolean; reason: string; pr_url: string; summary: string } => {
+  interface Outcome { ready: boolean; reason: string; pr_url: string; ci_rerun: string; summary: string }
+  const outcome = (rounds: object): Outcome => {
     const run = runPackScript('deliver/scripts/outcome', {
       inputs: { INPUTS_ROUNDS: JSON.stringify(rounds), TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
       artifacts: { 'listing.json': EMPTY_LISTING },
     });
     expect(run.code).toBe(0);
-    return JSON.parse(run.stdout) as { ready: boolean; reason: string; pr_url: string; summary: string };
+    return JSON.parse(run.stdout) as Outcome;
   };
 
   it("reports the last round's ending with its pull request", () => {
     expect(
-      outcome({ ready: true, reason: 'delivered', pr_url: PR_URL, summary: 'Round 1: delivered. all passed' })
+      outcome({ ready: true, reason: 'delivered', pr_url: PR_URL, ci_rerun: 'green', summary: 'Round 1: delivered. all passed' })
     ).toEqual({
       ready: true,
       reason: 'delivered',
       pr_url: PR_URL,
+      ci_rerun: 'green',
       summary: `Ready: Round 1: delivered. all passed\n${PR_URL}`,
     });
-    const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', summary: 'Round 1: implement_blocked. x' });
+    const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', ci_rerun: 'none', summary: 'Round 1: implement_blocked. x' });
     expect(blocked).toMatchObject({ ready: false, reason: 'implement_blocked', pr_url: '' });
     expect(blocked.summary).toBe('Not ready: Round 1: implement_blocked. x');
   });
 });
 
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; summary: string }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; ci_rerun: string; summary: string }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -194,6 +196,7 @@ describe("deliver's round", () => {
           INPUTS_REVIEW_ACTION: 'none',
           INPUTS_REVIEW_SUMMARY: 'clean',
           INPUTS_CI: 'green',
+          INPUTS_CI_RERUN: 'none',
           INPUTS_CI_SUMMARY: 'all passed',
           ...inputs,
         },
@@ -243,6 +246,14 @@ describe("deliver's round", () => {
     expect(open).toMatchObject({ done: false, ready: false, reason: 'review_open' });
     expect(open.summary).toContain('reshape broke it');
     expect(round({ INPUTS_REREVIEW_READY: 'true', INPUTS_REREVIEW_ACTION: 'none' })).toMatchObject({ reason: 'delivered' });
+  });
+
+  it("records the CI agent's re-run, and none when CI never ran", () => {
+    expect(round({ INPUTS_CI_RERUN: 'green' })).toMatchObject({ reason: 'delivered', ci_rerun: 'green' });
+    expect(round({ INPUTS_CI: 'other', INPUTS_CI_RERUN: 'red' })).toMatchObject({ reason: 'ci_other', ci_rerun: 'red' });
+    expect(
+      round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI: 'null', INPUTS_CI_RERUN: 'null' })
+    ).toMatchObject({ reason: 'review_open', ci_rerun: 'none' });
   });
 
   it('ends typed at the round cap instead of exhausting the loop', () => {

@@ -56,7 +56,7 @@ rereview__publish:
   findings_summary: "stub: the reshape delta is clean"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
-ci: { state: green, summary: "stub: every check passed; marked ready" }
+ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   expect: completed

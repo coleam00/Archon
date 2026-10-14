@@ -15,7 +15,7 @@
  * - INPUTS_REVIEW_READY / INPUTS_REVIEW_ACTION: the review verdict.
  * - INPUTS_REREVIEW_*: the light review of reshape's delta, which decides in the
  *   review's place when it ran.
- * - INPUTS_CI: the CI agent's state.
+ * - INPUTS_CI / INPUTS_CI_RERUN: the CI agent's state, and whether it re-ran failed jobs.
  * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.
  */
 
@@ -42,6 +42,7 @@ const review = rereviewed ? 'REREVIEW' : 'REVIEW';
 const reviewReady = text(process.env[`INPUTS_${review}_READY`]);
 const reviewAction = text(process.env[`INPUTS_${review}_ACTION`]);
 const ci = text(process.env.INPUTS_CI);
+const ciRerun = text(process.env.INPUTS_CI_RERUN);
 const prUrl = text(process.env.INPUTS_PR_URL);
 
 /** The reason this round ended, and whether another round can change it. */
@@ -82,6 +83,8 @@ emit({
   // The next round's review continues from the last published report, if any.
   // A correction for CI gets a light review: the code lens alone, on the delta.
   light_review: reason === 'ci_pr_caused',
+  // A round whose CI agent never ran re-ran nothing.
+  ci_rerun: ciRerun === 'null' ? 'none' : ciRerun,
   prior_report:
     reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
   summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(process.env[`INPUTS_${SUMMARY_OF[reason]}`])}`,

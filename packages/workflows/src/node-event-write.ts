@@ -15,7 +15,11 @@ import type { WorkflowEmitterEvent } from './event-emitter';
 import { getWorkflowEventEmitter } from './event-emitter';
 
 import type { NodeStateEventInput, DurableNodeEventInput } from './store';
-import { readNodeRecordEvent, type ReadNodeRecordEvent } from './node-record-reader';
+import {
+  readNodeRecordEvent,
+  type NodeRecordEventEnvelope,
+  type ReadNodeRecordEvent,
+} from './node-record-reader';
 
 /** Storage rejection must leave node retry policy and reach the run failure boundary. */
 export class NodeEventWriteError extends Error {
@@ -124,8 +128,31 @@ export function deriveEmitterEvent(
 ): WorkflowEmitterEvent | undefined {
   const record = readNodeRecordEvent(event);
   if (!record) return undefined;
+  return emitterEventFromRecord(record, { id: node.id, name: nodeDisplayName(node) });
+}
+
+/**
+ * The emitter event a persisted node row stands for, read from the row alone. A row
+ * written without its node descriptor is labelled by its step name.
+ */
+export function readNodeEmitterEvent(
+  row: NodeRecordEventEnvelope
+): WorkflowEmitterEvent | undefined {
+  const record = readNodeRecordEvent(row);
+  if (!record) return undefined;
+  const node = record.data.node;
+  return emitterEventFromRecord(
+    record,
+    node ? { id: node.id, name: nodeDisplayName(node) } : { id: record.path, name: record.path }
+  );
+}
+
+function emitterEventFromRecord(
+  record: ReadNodeRecordEvent,
+  node: { id: string; name: string }
+): WorkflowEmitterEvent | undefined {
   if (record.metadata) return serializeNodeEmitter(record.metadata);
-  const nodeName = nodeDisplayName(node);
+  const nodeName = node.name;
   switch (record.eventType) {
     case 'node_started':
       return {
