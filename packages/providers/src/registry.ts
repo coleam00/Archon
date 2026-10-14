@@ -90,8 +90,21 @@ export function registerProvider(entry: ProviderRegistration): void {
   assertProviderRegistrationAllowed(entry, registry.values());
   const registration: ProviderRegistration = {
     ...entry,
-    factory: () =>
-      Object.assign(entry.factory(), { getCapabilities: () => registration.capabilities }),
+    factory: () => {
+      const provider = entry.factory();
+      const resolveCredentialModel = provider.resolveCredentialModel?.bind(provider);
+      const diagnose = provider.diagnose?.bind(provider);
+      const listModels = provider.listModels?.bind(provider);
+      return {
+        checkCredential: provider.checkCredential.bind(provider),
+        sendQuery: provider.sendQuery.bind(provider),
+        getType: provider.getType.bind(provider),
+        getCapabilities: () => registration.capabilities,
+        ...(resolveCredentialModel ? { resolveCredentialModel } : {}),
+        ...(diagnose ? { diagnose } : {}),
+        ...(listModels ? { listModels } : {}),
+      };
+    },
   };
   registry.set(entry.id, registration);
   unavailableProviders.delete(entry.id);

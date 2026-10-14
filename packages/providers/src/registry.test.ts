@@ -250,16 +250,17 @@ describe('registry', () => {
 
   describe('registerProvider', () => {
     test('registered factories derive instance capabilities from the descriptor', async () => {
-      const native = makeMockProvider('custom');
       const nativeCapabilities = mock(() => ({
         ...makeMockProvider('custom').getCapabilities(),
         backgroundWork: 'reported' as const,
       }));
-      native.getCapabilities = nativeCapabilities;
-      const factory = mock(() => native);
+      const factory = mock(() => ({
+        ...makeMockProvider('custom'),
+        getCapabilities: nativeCapabilities,
+      }));
       const entry = makeMockRegistration('custom', {
         factory,
-        capabilities: { ...native.getCapabilities(), backgroundWork: 'none' },
+        capabilities: { ...makeMockProvider('custom').getCapabilities(), backgroundWork: 'none' },
       });
       nativeCapabilities.mockClear();
       registerProvider(entry);
@@ -275,7 +276,6 @@ describe('registry', () => {
           .filter(provider => provider.id === 'custom')
           .map(provider => provider.factory()),
       ]) {
-        expect(provider).toBe(native);
         expect(provider.getCapabilities()).toBe(entry.capabilities);
         expect(provider.getType()).toBe('custom');
         expect(await Array.fromAsync(provider.sendQuery('prompt', '/tmp'))).toEqual([
@@ -283,7 +283,113 @@ describe('registry', () => {
         ]);
       }
       expect(factory).toHaveBeenCalledTimes(3);
+      expect(new Set(factory.mock.results.map(result => result.value)).size).toBe(3);
       expect(nativeCapabilities).not.toHaveBeenCalled();
+    });
+
+    test.each(['frozen', 'sealed', 'readonly', 'getter-only'] as const)(
+      'adapts a %s provider without changing it or its method receivers',
+      async shape => {
+        const nativeCaps = makeMockProvider('custom').getCapabilities();
+        class NativeProvider implements IAgentProvider {
+          #id = 'custom';
+          getType() {
+            return this.#id;
+          }
+          getCapabilities() {
+            return nativeCaps;
+          }
+          async *sendQuery(...args: Parameters<IAgentProvider['sendQuery']>) {
+            expect(args).toEqual(['prompt', '/tmp', 'resume', { model: 'model' }]);
+            yield { type: 'result' as const, sessionId: this.#id };
+          }
+          async checkCredential() {
+            expect(this.#id).toBe('custom');
+            return { state: 'not_checked' as const, source: 'native' as const };
+          }
+          async resolveCredentialModel() {
+            return this.#id;
+          }
+          async diagnose() {
+            return {
+              checks: [{ id: this.#id, label: 'native', status: 'ok' as const, message: '' }],
+            };
+          }
+          async listModels() {
+            return { models: [{ id: this.#id }] };
+          }
+        }
+        const native = new NativeProvider();
+        if (shape === 'frozen') Object.freeze(native);
+        if (shape === 'sealed') Object.seal(native);
+        if (shape === 'readonly') {
+          Object.defineProperty(native, 'getCapabilities', {
+            value: native.getCapabilities,
+            writable: false,
+          });
+        }
+        if (shape === 'getter-only') {
+          Object.defineProperty(native, 'getCapabilities', {
+            get: () => NativeProvider.prototype.getCapabilities,
+          });
+        }
+        const before = Object.getOwnPropertyDescriptors(native);
+        const entry = makeMockRegistration('custom', {
+          factory: () => native,
+          capabilities: { ...nativeCaps, backgroundWork: 'none' },
+        });
+        registerProvider(entry);
+        const signal = new AbortController().signal;
+        for (const provider of [
+          getAgentProvider('custom'),
+          getRegistration('custom').factory(),
+          ...getRegisteredProviders()
+            .filter(entry => entry.id === 'custom')
+            .map(entry => entry.factory()),
+        ]) {
+          expect(provider.getCapabilities()).toBe(entry.capabilities);
+          expect(provider.getType()).toBe('custom');
+          expect(
+            await Array.fromAsync(
+              provider.sendQuery('prompt', '/tmp', 'resume', { model: 'model' })
+            )
+          ).toEqual([{ type: 'result', sessionId: 'custom' }]);
+          expect(await provider.checkCredential({ env: {}, signal })).toEqual({
+            state: 'not_checked',
+            source: 'native',
+          });
+          expect(await provider.resolveCredentialModel?.({ cwd: '/tmp' })).toBe('custom');
+          expect(await provider.diagnose?.({ signal })).toEqual({
+            checks: [{ id: 'custom', label: 'native', status: 'ok', message: '' }],
+          });
+          expect(await provider.listModels?.({ signal })).toEqual({ models: [{ id: 'custom' }] });
+        }
+        expect(Object.getOwnPropertyDescriptors(native)).toEqual(before);
+        expect(native.getCapabilities()).toBe(nativeCaps);
+      }
+    );
+
+    test('shared factory results retain a separate capability view for each registration', () => {
+      const native = makeMockProvider('shared');
+      const nativeCaps = native.getCapabilities();
+      native.getCapabilities = () => nativeCaps;
+      const first = makeMockRegistration('first', {
+        factory: () => native,
+        capabilities: { ...nativeCaps, backgroundWork: 'none' },
+      });
+      const second = makeMockRegistration('second', {
+        factory: () => native,
+        capabilities: { ...nativeCaps, backgroundWork: 'reported' },
+      });
+      registerProvider(first);
+      registerProvider(second);
+      const firstProvider = getAgentProvider('first');
+      const secondProvider = getAgentProvider('second');
+      expect(firstProvider.getCapabilities()).toBe(first.capabilities);
+      expect(secondProvider.getCapabilities()).toBe(second.capabilities);
+      expect(firstProvider.getType()).toBe('shared');
+      expect(secondProvider.getType()).toBe('shared');
+      expect(native.getCapabilities()).toBe(nativeCaps);
     });
 
     test('registers a new provider', () => {
