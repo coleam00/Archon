@@ -680,12 +680,13 @@ After recording why the run stopped, the owner ends the process tree of every `b
 interrupted attempt, apart from the escapes below. This applies to foreground `workflow run`, `workflow resume` and
 `trigger execute`. A node counts as running until its output closes, so a background job that
 still writes to the node's output ends with it. On macOS and Linux those subprocesses run in
-their own session during a foreground run, so they have no controlling terminal. If the owner
-dies before its teardown ends the tree (a terminal hangup, a second Ctrl-C, `kill -9`), a small
-watcher process still ends the node's process group; a run whose stop was never recorded stays
+their own session during a foreground run, so they have no controlling terminal, and a small
+watcher process ends the node's process group if the owner dies before its teardown does (a
+terminal hangup, a second Ctrl-C, `kill -9`); a run whose stop was never recorded stays
 `running`. A process that starts its own session or process group (`setsid`, a daemon)
 escapes this. On Windows the tree is ended from the node's root process, so a descendant whose
-root already exited is not reached.
+root already exited is not reached, and an owner killed before its teardown leaves the tree
+running.
 
 Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
 separate unsupported reporting, a supported value not reported, unknown capability, non-provider
