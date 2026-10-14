@@ -1,6 +1,6 @@
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -202,7 +202,9 @@ test('admission preserves FIFO, skips overlap, deduplicates receipts and fences 
 
 test('receipt preparation and real engine execution use supplied ports without SQL or chat', async () => {
   const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-store-')));
-  const project = join(root, 'project');
+  // Registration stores canonical paths; the temp dir is a symlink on macOS and an
+  // 8.3 short name on Windows.
+  const project = join(await realpath(root), 'project');
   const previousHome = process.env.ARCHON_HOME;
   process.env.ARCHON_HOME = join(root, 'home');
   registerBuiltinProviders();
@@ -408,7 +410,7 @@ async function prepareTriggerInputs(
   error?: unknown;
 }> {
   const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-store-')));
-  const project = join(root, 'project');
+  const project = join(await realpath(root), 'project');
   await mkdir(join(project, '.archon/workflows'), { recursive: true });
   await writeFile(join(project, '.archon/workflows/portable.yaml'), workflowYaml);
   const previousHome = process.env.ARCHON_HOME;

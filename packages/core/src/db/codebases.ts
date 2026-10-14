@@ -20,14 +20,14 @@ function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row:
   return row;
 }
 
-export type CodebaseRegistration = Pick<Codebase, 'id' | 'name'> & {
+export type CodebaseRegistration = Pick<Codebase, 'id' | 'name' | 'kind'> & {
   stored_default_cwd: Codebase['default_cwd'];
 };
 
 /** Administrative metadata stays readable so invalid registrations can be repaired or removed. */
 export async function listCodebaseRegistrations(): Promise<readonly CodebaseRegistration[]> {
   const result = await pool.query<CodebaseRegistration>(
-    'SELECT id, name, default_cwd AS stored_default_cwd FROM remote_agent_codebases ORDER BY name ASC'
+    'SELECT id, name, kind, default_cwd AS stored_default_cwd FROM remote_agent_codebases ORDER BY name ASC'
   );
   return result.rows;
 }

@@ -4335,6 +4335,7 @@ export interface components {
       | {
           path: string;
           base_branch?: string | null;
+          folder?: boolean;
         };
     RenameCodebaseBody: {
       name: string;

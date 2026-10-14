@@ -1,3 +1,5 @@
+import { parseSlashCommand } from '../utils/command-args';
+
 import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
 import { RunActionForbiddenError } from '../operations/run-authorization';
 /**
@@ -175,10 +177,8 @@ async function formatRepoContext(
     return 'No codebase configured';
   }
 
-  // Folder projects have no git — show an honest "no git" label instead of a
-  // branch (a folder root may not be a repo at all).
   if (codebase.kind === 'folder') {
-    return `${codebase.name} (folder — no git)`;
+    return `${codebase.name} (folder — runs in place)`;
   }
 
   // If in a worktree, use the worktree's branch name from database
@@ -206,66 +206,7 @@ async function formatRepoContext(
 }
 
 export function parseCommand(text: string): { command: string; args: string[] } {
-  const matches: string[] = [];
-  let current = '';
-  let quote: '"' | "'" | null = null;
-  let escaping = false;
-  let hasToken = false;
-
-  for (const char of text.trim()) {
-    if (quote) {
-      hasToken = true;
-      if (escaping) {
-        current += char;
-        escaping = false;
-      } else if (char === '\\') {
-        escaping = true;
-      } else if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (hasToken) {
-        matches.push(current);
-        current = '';
-        hasToken = false;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char;
-      hasToken = true;
-      continue;
-    }
-
-    current += char;
-    hasToken = true;
-  }
-
-  if (escaping) {
-    current += '\\';
-  }
-  if (hasToken) {
-    matches.push(current);
-  }
-
-  if (matches.length === 0 || !matches[0]) {
-    return { command: '', args: [] };
-  }
-
-  if (!matches[0].startsWith('/')) {
-    return { command: '', args: [] };
-  }
-
-  const command = matches[0].substring(1); // Remove leading '/'
-  const args = matches.slice(1);
-
-  return { command, args };
+  return parseSlashCommand(text);
 }
 
 function findWorkflowLoadError(

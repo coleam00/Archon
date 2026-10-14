@@ -67,6 +67,7 @@ export async function verifyCodebasePathContract(db: IDatabase): Promise<void> {
     {
       id: project.id,
       name: project.name,
+      kind: project.kind,
       stored_default_cwd: 'projects/repo',
     },
   ]);

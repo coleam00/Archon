@@ -877,7 +877,7 @@ describe('CommandHandler', () => {
         expect(result.message).not.toContain('Working Directory: /workspace/my-repo');
       });
 
-      test('folder project: shows "(folder — no git)", lists child repos, skips worktrees', async () => {
+      test('folder project: shows "(folder — runs in place)", lists child repos, skips worktrees', async () => {
         const conversation = { ...baseConversation, codebase_id: 'cb-folder' };
         mockGetCodebase.mockResolvedValue(
           makeCodebase({
@@ -897,7 +897,7 @@ describe('CommandHandler', () => {
         try {
           const result = await handleCommand(conversation, '/status', operator);
           expect(result.success).toBe(true);
-          expect(result.message).toContain('platform (folder — no git)');
+          expect(result.message).toContain('platform (folder — runs in place)');
           // Folder projects get the same cwd fallback as repos.
           expect(result.message).toContain('Working Directory: /tmp/platform');
           expect(result.message).toContain('Contains 2 git repos: auth-service, billing-service');

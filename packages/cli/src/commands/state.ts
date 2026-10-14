@@ -1,6 +1,5 @@
 import { relative } from 'node:path';
 import { z } from '@hono/zod-openapi';
-import * as git from '@archon/git';
 import {
   canonicalizeProjectPath,
   getArchonWorkspacesPath,
@@ -10,7 +9,7 @@ import {
 } from '@archon/paths';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { registerRepository } from '@archon/core/handlers/clone';
-import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
+import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
 import {
   stateDocumentNameSchema,
@@ -110,11 +109,7 @@ export async function stateCommand(
       // Folder registration stores the canonical path (#2927), so look up the same
       // spelling: a symlinked or Windows 8.3 cwd would otherwise miss its project.
       const cwd = await canonicalizeProjectPath(options.cwd);
-      const repoRoot = await git.findRepoRoot(cwd);
-      let codebase = repoRoot
-        ? await findCodebaseForCheckoutPath(repoRoot, host.records.codebases)
-        : ((await host.records.codebases.findCodebaseByDefaultCwd(cwd)) ??
-          (await host.records.codebases.findCodebaseByPathPrefix(cwd)));
+      let { codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases);
       if (repoRoot && !codebase) {
         const registered = await registerRepository(host.records.codebases, repoRoot);
         codebase = await host.records.codebases.getCodebase(registered.codebaseId);

@@ -2189,9 +2189,9 @@ or use 'inherit' (shared checkout).
 
 You get this when:
 
-- the project is a **folder project** — a non-git workspace registered with `--folder`
-  ([Multi-Repo Projects](/guides/multi-repo-projects/)). There is no repository to make a
-  worktree in. Use `inherit`, or split the work so the writing step targets a real repo.
+- the project is a **folder project** — a directory registered for in-place execution with no Archon-managed git machinery; it may itself be a git repository
+  ([Multi-Repo Projects](/guides/multi-repo-projects/)). Archon does not manage worktrees
+  for folder projects. Use `inherit`, or target a separately registered repo project.
 - the run resolved no codebase at all (for example a background dispatch with no project
   bound, or a database lookup that failed at run start).
 

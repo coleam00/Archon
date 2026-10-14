@@ -576,6 +576,33 @@ describe('POST /api/codebases', () => {
     expect(mockRegisterFolder).not.toHaveBeenCalled();
   });
 
+  test('explicit folder choice skips git detection even for a git root', async () => {
+    mockRegisterFolder.mockResolvedValueOnce({
+      codebaseId: 'folder-uuid-1',
+      alreadyExisted: false,
+    });
+    mockGetCodebase.mockResolvedValueOnce({ ...MOCK_CODEBASE, id: 'folder-uuid-1' });
+    const response = await makeApp().request('/api/codebases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/repo', folder: true }),
+    });
+    expect(response.status).toBe(201);
+    expect(mockFindRepoRoot).not.toHaveBeenCalled();
+    expect(mockRegisterRepository).not.toHaveBeenCalled();
+    expect(mockRegisterFolder).toHaveBeenCalledWith('/repo', undefined, { baseBranch: undefined });
+  });
+
+  test('URL registration rejects a folder override', async () => {
+    const response = await makeApp().request('/api/codebases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://example.com/repo', folder: true }),
+    });
+    expect(response.status).toBe(400);
+    expect(mockCloneRepository).not.toHaveBeenCalled();
+  });
+
   test('registers a non-git path as a folder project and returns 201', async () => {
     // A path that is NOT a git repository → findRepoRoot resolves null → folder.
     mockFindRepoRoot.mockResolvedValueOnce(null);
@@ -882,13 +909,13 @@ test('prefill preserves unknown default and folder results', async () => {
 
 test('registration reports typed branch and folder errors as bad requests', async () => {
   const { ProjectRegistrationError } = await import('@archon/core');
-  mockCloneRepository.mockRejectedValueOnce(
+  mockRegisterFolder.mockRejectedValueOnce(
     new ProjectRegistrationError('Folder projects have no base branch; remove --base-branch.')
   );
   const response = await makeApp().request('/api/codebases', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: '/folder', base_branch: 'release' }),
+    body: JSON.stringify({ path: '/git-root', folder: true, base_branch: 'release' }),
   });
   expect(response.status).toBe(400);
   expect(await response.text()).toContain('Folder projects have no base branch');

@@ -29,7 +29,10 @@ export const addCodebaseBodySchema = z
   .union(
     [
       codebaseSourceSchema.options[0].extend(registrationFields),
-      codebaseSourceSchema.options[1].extend(registrationFields),
+      codebaseSourceSchema.options[1].extend({
+        ...registrationFields,
+        folder: z.boolean().optional(),
+      }),
     ],
     { error: codebaseSourceError }
   )

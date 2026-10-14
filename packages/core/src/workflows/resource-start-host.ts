@@ -19,7 +19,7 @@ import { requireTerminalStatusWrite } from '@archon/workflows/terminal-status-wr
 import { randomUUID } from 'node:crypto';
 import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
-import { toBranchName, toRepoPath, findRepoRoot } from '@archon/git';
+import { toBranchName, toRepoPath } from '@archon/git';
 import { getIsolationProvider, worktreeRegistrationMetadata } from '@archon/isolation';
 import { createLogger, canonicalizeProjectPath } from '@archon/paths';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
@@ -65,7 +65,7 @@ import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
 import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
-import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
+import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 
@@ -80,11 +80,7 @@ interface BindingIdentity {
 }
 
 async function findOrRegisterCodebase(host: WorkflowHost, cwd: string): Promise<Codebase> {
-  const repoRoot = await findRepoRoot(cwd);
-  const found = repoRoot
-    ? await findCodebaseForCheckoutPath(repoRoot, host.records.codebases)
-    : ((await host.records.codebases.findCodebaseByDefaultCwd(cwd)) ??
-      (await host.records.codebases.findCodebaseByPathPrefix(cwd)));
+  const { codebase: found, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases);
   if (found) return found;
   const registered = repoRoot
     ? await host.records.codebases.getCodebase(

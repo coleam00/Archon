@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -207,4 +208,40 @@ test('JSON input keeps own prototype keys and enforces their size', async () => 
   );
   expect(await invoke('log')).toBe(0);
   expect(output.at(-1)).toHaveLength(2);
+});
+
+test('operator state from a folder descendant inside Git belongs only to the folder', async () => {
+  const { host, root } = await fixture();
+  expect(spawnSync('git', ['init', '-q', root]).status).toBe(0);
+  await host.records.codebases.createCodebase({
+    name: 'owner/repo',
+    default_cwd: await canonicalizeProjectPath(root),
+    kind: 'repo',
+  });
+  const folder = join(root, 'ops');
+  const descendant = join(folder, 'deep');
+  mkdirSync(descendant, { recursive: true });
+  await host.records.codebases.createCodebase({
+    name: 'Ops',
+    default_cwd: await canonicalizeProjectPath(folder),
+    kind: 'folder',
+  });
+  expect(
+    await stateCommand(
+      host,
+      'put',
+      ['ledger'],
+      { cwd: descendant, ifRevision: '0' },
+      {
+        env: { ARCHON_USER_ID: 'rasmus' },
+        readInput: async () => '{"approved":true}',
+        write: async () => undefined,
+      }
+    )
+  ).toBe(0);
+  expect(await host.deps.store.getStateDocument('_folder/ops', 'ledger')).toMatchObject({
+    revision: 1,
+    value: { approved: true },
+  });
+  expect(await host.deps.store.getStateDocument('owner/repo', 'ledger')).toBeNull();
 });

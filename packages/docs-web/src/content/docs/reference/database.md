@@ -161,7 +161,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Commands stored as JSONB: `{command_name: {path, description}}`
   - Optional explicit AI assistant choice; `NULL` follows project configuration for new conversations
   - Default working directory
-  - `kind` (`'repo'` | `'folder'`, default `'repo'`) discriminates git-repo projects from non-git folder projects (which run in place, no worktree)
+  - `kind` (`'repo'` | `'folder'`, default `'repo'`) discriminates repo projects with Archon-managed git from folder projects (which run in place without managed git machinery, whether or not the directory has git)
   - Optional explicit base branch; `NULL` resolves the remote default when needed. Existing stored values remain explicit.
 
 - **`remote_agent_conversations`** - Platform conversation tracking

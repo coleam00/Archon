@@ -127,6 +127,7 @@ mock.module('../db/codebases', () => ({
     (await mockListCodebases()).map(row => ({
       id: row.id,
       name: row.name,
+      kind: row.kind,
       stored_default_cwd: row.default_cwd,
     })),
   createCodebase: mockCreateCodebase,
