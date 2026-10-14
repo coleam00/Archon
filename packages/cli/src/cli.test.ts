@@ -13,7 +13,7 @@ import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
 import { generateConversationId } from './utils/conversation-id';
 import * as git from '@archon/git';
-import { canonicalizeProjectPath } from '@archon/paths';
+import { canonicalizeProjectPath, projectKeyForCodebase } from '@archon/paths';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
 import {
@@ -1317,49 +1317,6 @@ describe('CLI env isolation', () => {
 });
 
 describe('CLI git repo check', () => {
-  /**
-   * These tests verify the command categorization logic used in cli.ts.
-   * The CLI uses: requiresGitRepo = !noGitCommands.includes(command ?? '')
-   * where noGitCommands = ['version', 'help']
-   */
-  describe('command categorization', () => {
-    // Mirror the actual noGitCommands array from cli.ts
-    const noGitCommands = ['version', 'help'];
-
-    // Helper that mirrors the CLI's logic
-    const requiresGitRepo = (command: string | undefined): boolean => {
-      return !noGitCommands.includes(command ?? '');
-    };
-
-    describe('commands that bypass git check', () => {
-      it('version command should not require git repo', () => {
-        expect(requiresGitRepo('version')).toBe(false);
-      });
-
-      it('help command should not require git repo', () => {
-        expect(requiresGitRepo('help')).toBe(false);
-      });
-    });
-
-    describe('commands that require git repo', () => {
-      it('workflow command should require git repo', () => {
-        expect(requiresGitRepo('workflow')).toBe(true);
-      });
-
-      it('isolation command should require git repo', () => {
-        expect(requiresGitRepo('isolation')).toBe(true);
-      });
-
-      it('undefined command should require git repo (fail with unknown command later)', () => {
-        expect(requiresGitRepo(undefined)).toBe(true);
-      });
-
-      it('unknown commands should require git repo', () => {
-        expect(requiresGitRepo('unknown')).toBe(true);
-      });
-    });
-  });
-
   describe('findRepoRoot behavior', () => {
     // Test the actual git.findRepoRoot function with real directories
     it('should find repo root from current test directory', async () => {
@@ -1703,6 +1660,30 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
+  });
+
+  it('lets workflow attention past the git gate in every scope', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'archon-attention-outside-'));
+    try {
+      const project = projectKeyForCodebase(null, await canonicalizeProjectPath(outside));
+      for (const scope of [['--all'], ['--project', project], []]) {
+        const { status, envelope } = spawnJsonError([
+          'workflow',
+          'attention',
+          ...scope,
+          '--json',
+          '--cwd',
+          outside,
+        ]);
+
+        expect({ status, envelope: envelope() }).toMatchObject({
+          status: 0,
+          envelope: { ok: true, action: 'attention', items: [] },
+        });
+      }
+    } finally {
+      await removeTempTree(outside);
+    }
   });
 
   it('leaves the default home untouched when the gate opens the registry', async () => {

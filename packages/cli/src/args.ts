@@ -41,6 +41,12 @@ export const cliArgOptions: CliArgOptions = {
   occurrence: { type: 'string' },
   // Repeatable: `--choose a --choose b` answers a multi_select attention wait with both.
   choose: { type: 'string', multiple: true },
+  // Repeatable attention-queue filters and label writes: `--label k=v`, `--set k=v`, `--unset k`.
+  label: { type: 'string', multiple: true },
+  set: { type: 'string', multiple: true },
+  unset: { type: 'string', multiple: true },
+  sort: { type: 'string' },
+  'count-by': { type: 'string' },
   port: { type: 'string' },
   'download-only': { type: 'boolean' },
   scope: { type: 'string' },

@@ -824,6 +824,8 @@ An attention wait pauses until someone answers it, in the form it declares. Arch
       options:                           # select and multi_select only
         - { id: use-main, label: "Base on main" }
         - { id: use-dev }
+      labels:                            # optional; values may use runtime references
+        about: "$plan.output.topic"
 ```
 
 | Form | Answer accepted | The next node reads |
@@ -837,6 +839,7 @@ An attention wait pauses until someone answers it, in the form it declares. Arch
 - `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`. It is read when the wait pauses and must pass the same rules: an array of `{ id, label? }` with unique kebab-case ids and at least one entry. If it does not, the wait node fails with an error naming the producer; it never pauses with options nobody can answer. When the producer declares `output_format`, the loader also checks that the field is an array of `{ id, label? }`.
 - `form` is always a literal, because it fixes the node's output contract, so a strict `$ask.output.decision` reference is checked at load time.
 - An undeclared option is refused on every surface. In the `approval` form `reject` is an answer like any other and never cancels the run; wire `cancel:` with `when: "$ask.output.decision == 'reject'"` if a rejection should end it.
+- `labels` is an optional flat map of strings, resolved when the wait pauses. The engine gives labels no meaning; your own handler workflows select items in the [attention queue](/guides/attention-queue/) by them.
 
 Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /api/workflows/runs/<run-id>/answer`, or the console. `approve`, `reject` and `respond <option>` work as shorthand on every surface: `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses the option of the same id. An answer names the occurrence it was meant for, so an answer to an earlier pause of the same run is refused. The answer is recorded with the surface it came through and the time (`answeredVia`, `answeredAt` on the wait, and a `wait_answered` event). The run stays `paused` until a continuation host (`archon serve`, or `archon workflow wake`) continues it; answering through the CLI without `--json` continues it in that process.
 
@@ -2725,9 +2728,59 @@ incomplete observations. Cancellation can record pending or running nodes and fi
 that are still changing; terminalization does not make the filesystem snapshot atomic.
 You do not need a new YAML field or collector node to obtain these facts.
 
-Workflow-pack adoption remains separate: [#3127](https://github.com/coleam00/Archon/issues/3127)
-owns typed discovery and failure-cause consumption and completion-only outcome formatting.
-A consumer must still depend on the producers whose artifacts it needs.
+#### Reporting on a failed run
+
+A `returns:` node on the success path is skipped when an upstream node fails, leaving
+`terminal_record.returns` unavailable with reason `node_not_completed`. Keep that success
+composer and add a reporter as `returns:`. With `trigger_rule: all_done`, it runs after the
+composer completes or is skipped; `{ from: "$result.output", if_skipped: null }` lets it
+pass the composer's value through or author a not-done report when the binding is `null`.
+`always_run: true` re-executes the reporter on resume, so a report that reads artifacts
+reflects the current pass instead of replaying a cached completion.
+
+```yaml
+name: failure-report
+description: Preserve an authored report after a node failure
+returns: report
+outcome_field: ok
+nodes:
+  - id: fail
+    bash: exit 1
+  - id: result
+    depends_on: [fail]
+    bash: 'printf ''{"ok":true,"summary":"Done"}'''
+  - id: report
+    depends_on: [result]
+    trigger_rule: all_done
+    always_run: true
+    with:
+      result: { from: "$result.output", if_skipped: null }
+    script: |
+      const result = process.env.INPUTS_RESULT;
+      console.log(result === 'null'
+        ? JSON.stringify({ ok: false, summary: 'Not done: a node failed before the result.' })
+        : result);
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        ok: { type: boolean }
+        summary: { type: string }
+      required: [ok, summary]
+```
+
+The run's status stays `failed`; the authored outcome follows the reporter's
+[`outcome_field:`](#workflow-signature-inputs-returns-and-inputs) (`ok: false` here).
+The reporter owns the result schema and validates the value it passes through. Bind only
+the composer: a [failed producer always fails a binding](#reading-across-a-skipped-branch),
+so if the composer itself fails, this reporter fails too. Cancellation runs no further
+nodes, and an executor crash can prevent reporting; this pattern covers ordinary node
+failures that skip the composer, not every terminal path.
+
+An `include:` caller waits on the block's sinks. When this reporter is its only sink and
+completes, nodes depending on the block can run even after a node inside it failed. Gate
+success-only work on the returned verdict, for example `when: "$block.output.ok == true"`.
+The enclosing run still fails and its terminal record still names the failed node.
 
 ### A deterministic producer owns the same contract
 

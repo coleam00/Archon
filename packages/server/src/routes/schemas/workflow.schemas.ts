@@ -12,6 +12,11 @@ import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@a
  */
 import { z } from '@hono/zod-openapi';
 import {
+  attentionQueueCountsSchema,
+  attentionQueueItemSchema,
+} from '@archon/workflows/attention-queue';
+import { attentionLabelKeySchema, attentionLabelsSchema } from '@archon/workflows/schemas/dag-node';
+import {
   workflowDefinitionSchema as engineWorkflowDefinitionSchema,
   workflowSourceSchema as engineWorkflowSourceSchema,
 } from '@archon/workflows/schemas/workflow';
@@ -341,11 +346,57 @@ export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   })
   .openapi('DashboardWorkflowRun');
 
+/**
+ * GET /api/runs/attention query. A server has no working directory, so without
+ * `project` the queue is install-wide; `all=true` says so explicitly. `label` repeats.
+ */
+export const attentionQueueQuerySchema = z.object({
+  project: z.string().optional(),
+  all: z.enum(['true', 'false']).optional(),
+  label: z.union([z.string(), z.array(z.string())]).optional(),
+  sort: z.string().optional(),
+  countBy: z.string().optional(),
+});
+
+/**
+ * GET /api/runs/attention list response. `items` is the queue; `runs` holds the same runs
+ * as dashboard rows for the console.
+ */
 export const runsNeedingAttentionResponseSchema = z
   .object({
     runs: z.array(dashboardWorkflowRunSchema),
+    items: z.array(attentionQueueItemSchema.openapi('AttentionQueueItem')),
   })
   .openapi('RunsNeedingAttentionResponse');
+
+/** GET /api/runs/attention response when `countBy` is given. */
+export const attentionQueueCountsResponseSchema = z
+  .object({ counts: attentionQueueCountsSchema.openapi('AttentionQueueCounts') })
+  .openapi('AttentionQueueCountsResponse');
+
+/** GET /api/runs/{runId}/attention response: null when the run needs no one now. */
+export const attentionQueueItemResponseSchema = z
+  .object({ item: attentionQueueItemSchema.nullable() })
+  .openapi('AttentionQueueItemResponse');
+
+/** POST /api/runs/{runId}/attention/labels body. */
+export const labelAttentionBodySchema = z
+  .object({
+    occurrence: z.string(),
+    set: attentionLabelsSchema.optional(),
+    unset: z.array(attentionLabelKeySchema).optional(),
+  })
+  .openapi('LabelAttentionBody');
+
+/** POST /api/runs/{runId}/attention/labels response. */
+export const labelAttentionResponseSchema = z
+  .object({
+    runId: z.string(),
+    occurrence: z.string(),
+    revision: z.number().int(),
+    labels: attentionLabelsSchema,
+  })
+  .openapi('LabelAttentionResponse');
 
 /** GET /api/dashboard/runs response. */
 export const dashboardRunsResponseSchema = z

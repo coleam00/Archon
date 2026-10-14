@@ -1,0 +1,37 @@
+# Dry-run fixture: a maintainer's issue run in eval with trust outside. Facts
+# decides `outside`, and no triage node is stubbed: a dry run fails on a reached
+# agent node without a stub, so completing proves no agent node ran.
+facts:
+  path: outside
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  target: "# Stub title at creation\n\nStub body at creation."
+  decision:
+    path: outside
+    trust: outside
+    promoted: null
+    stage: needs_maintainer
+    body_digest: "sha256:stub"
+    labels: []
+    waiting: []
+    notes: []
+  seen: { title: "Stub title at creation", body_digest: "sha256:stub", body_from: creation }
+outcome:
+  path: outside
+  item: 7
+  stage: needs_maintainer
+  trust: outside
+  promoted: false
+  labels: [archon-needs-maintainer]
+  summary: "stub: Issue 7: needs_maintainer"
+  evaluation:
+    trust_input: outside
+    seen: { title: "Stub title at creation", body_digest: "sha256:stub", body_from: creation }
+    labels: { add: [archon-needs-maintainer], remove: [] }
+    reasons: []
+    triage: null
+fixture:
+  inputs:
+    { repo_host: github.com, repo_path: example/repo, number: "7", mode: eval, trust: outside }
+  expect: completed
+  reached: [facts, outcome]
+exec-code: true
