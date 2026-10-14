@@ -4789,11 +4789,11 @@ export async function workflowAttentionLabelCommand(
   occurrence: string,
   set: readonly string[],
   unset: readonly string[],
-  json?: boolean,
-  cwd?: string
+  json: boolean | undefined,
+  cwd: string
 ): Promise<number> {
   try {
-    const resolvedId = cwd === undefined ? runId : await resolveAttentionRunId(host, runId, cwd);
+    const resolvedId = await resolveAttentionRunId(host, runId, cwd);
     const result = await host.operations.labelAttentionWait(
       resolvedId,
       { occurrence, set: parseAttentionLabelPairs(set), unset },
