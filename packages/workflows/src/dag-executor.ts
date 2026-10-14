@@ -4098,16 +4098,40 @@ async function executeLoopGroupNode(
       lifecycle: { status: 'started' },
     }
   );
-  const result = await executeLoopGroupBody(
-    ctx,
-    node,
-    execution,
-    workflowProvider,
-    workflowModel,
-    workflowTier,
-    workflowPreset,
-    stepNamePrefix
-  );
+  const usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens'> = {};
+  let result: LoopGroupBodyResult;
+  try {
+    result = await executeLoopGroupBody(
+      ctx,
+      node,
+      execution,
+      usage,
+      workflowProvider,
+      workflowModel,
+      workflowTier,
+      workflowPreset,
+      stepNamePrefix
+    );
+  } catch (error) {
+    // Durable-write rejection belongs to run recovery, not a failed node outcome.
+    if (error instanceof TerminalStatusWriteError || error instanceof NodeEventWriteError)
+      throw error;
+    const err = error instanceof Error ? error : new Error(String(error));
+    getLog().error({ err, nodeId: node.id }, 'loop_group_node.execution_failed');
+    result = {
+      state: 'failed',
+      output: '',
+      error: err.message,
+      failureKind: 'unknown',
+      ...usage,
+    };
+    await safeSendMessage(
+      ctx.platform,
+      ctx.conversationId,
+      `Loop-group node '${node.id}' failed: ${err.message}`,
+      { workflowId: ctx.workflowRun.id, nodeName: node.id }
+    );
+  }
   if (result.execution?.lifecycle.status === 'suspended') return result;
   let lifecycle: NodeExecutionRecord['lifecycle'];
   if (result.state === 'failed') {
@@ -4153,6 +4177,7 @@ async function executeLoopGroupBody(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   execution: NodeExecutionRecord,
+  usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens'>,
   workflowProvider: string | undefined,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
@@ -4535,8 +4560,6 @@ async function executeLoopGroupBody(
   // beside the text so the group's completed NodeOutput carries the logical value
   // (sibling `loop:` has done this since #2563; the group used to discard it).
   let lastIterationStructuredOutput: unknown;
-  let loopTotalCostUsd: number | undefined;
-  let loopTotalTokens: TokenUsage | undefined;
   // Loop-level session cursor: threaded across iterations when fresh_context is false
   // (so a body AI node resumes the prior iteration's session), reset to undefined when
   // fresh_context is true or on iteration 1. runLayers mutates this in place each call.
@@ -4584,6 +4607,7 @@ async function executeLoopGroupBody(
         output: '',
         error: `Workflow ${effectiveStatus}`,
         failureKind: 'cancelled',
+        ...usage,
       };
     }
 
@@ -4713,6 +4737,17 @@ async function executeLoopGroupBody(
     };
     await runLayers(iterCtx);
 
+    // Accumulate usage across iterations (charged on the failure path below too).
+    if (iterCtx.totalCostUsd !== undefined) {
+      usage.costUsd = (usage.costUsd ?? 0) + iterCtx.totalCostUsd;
+    }
+    if (iterCtx.totalTokens !== undefined) {
+      usage.tokens = sumTokenUsage(
+        [...(usage.tokens !== undefined ? [usage.tokens] : []), iterCtx.totalTokens],
+        { nodeId: node.id, iteration: i }
+      );
+    }
+
     // A body approval/cancel node may have paused or cancelled the run mid-iteration.
     // `paused` is tolerated (a sibling gate in the same iteration layer) — mirror
     // executeLoopNode's between-iteration tolerance — but a terminal/cancelled state
@@ -4731,19 +4766,9 @@ async function executeLoopGroupBody(
         output: lastIterationOutput,
         error: `Workflow ${effectiveStatus}`,
         failureKind: 'cancelled',
+        ...usage,
       };
     }
-    // Accumulate usage across iterations (charged on the failure path below too).
-    if (iterCtx.totalCostUsd !== undefined) {
-      loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
-    }
-    if (iterCtx.totalTokens !== undefined) {
-      loopTotalTokens = sumTokenUsage(
-        [...(loopTotalTokens !== undefined ? [loopTotalTokens] : []), iterCtx.totalTokens],
-        { nodeId: node.id, iteration: i }
-      );
-    }
-
     // Carry the body's final sequential session into the next iteration (unless
     // fresh_context forces a reset, handled above by seeding undefined). Taken
     // before handling the terminal gate below: its pause persists this
@@ -4778,8 +4803,7 @@ async function executeLoopGroupBody(
         error: errorMsg,
         failureKind: 'child_failed',
         ...(providerFailure !== undefined ? { providerFailure } : {}),
-        costUsd: loopTotalCostUsd,
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        ...usage,
         loopIterations: i,
       };
     }
@@ -4811,8 +4835,7 @@ async function executeLoopGroupBody(
         return {
           state: 'running',
           output: lastIterationOutput,
-          costUsd: loopTotalCostUsd,
-          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          ...usage,
           loopIterations: i,
           ...(suspensionPoint !== undefined ? { suspensionPoint } : {}),
         };
@@ -4829,8 +4852,7 @@ async function executeLoopGroupBody(
       return {
         state: 'running',
         output: lastIterationOutput,
-        costUsd: loopTotalCostUsd,
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        ...usage,
         loopIterations: i,
       };
     }
@@ -5031,8 +5053,7 @@ async function executeLoopGroupBody(
       return {
         state: 'completed',
         output: lastIterationOutput,
-        costUsd: loopTotalCostUsd,
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        ...usage,
         loopIterations: i,
         // The final iteration's sink payload, so downstream `$group.output.field`
         // resolves from the logical value (#2637). No declaredOutputPaths: a group's
@@ -5057,8 +5078,7 @@ async function executeLoopGroupBody(
         { status: 'suspended', point: 'interactive_loop' },
         {
           output: { text: lastIterationOutput, structured: lastIterationStructuredOutput },
-          costUsd: loopTotalCostUsd,
-          tokens: loopTotalTokens,
+          ...usage,
           diagnostics: { loopIterations: i },
         }
       );
@@ -5100,8 +5120,7 @@ async function executeLoopGroupBody(
         return {
           state: 'running',
           output: lastIterationOutput,
-          costUsd: loopTotalCostUsd,
-          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          ...usage,
           loopIterations: i,
         };
       await recordDerivedExecution({ logDir }, suspended);
@@ -5127,8 +5146,7 @@ async function executeLoopGroupBody(
           return {
             state: 'running',
             output: lastIterationOutput,
-            costUsd: loopTotalCostUsd,
-            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            ...usage,
             loopIterations: i,
           };
         getLog().error(
@@ -5140,6 +5158,7 @@ async function executeLoopGroupBody(
           output: lastIterationOutput,
           failureKind: 'unknown',
           error: undeliveredGatePromptError('Loop-group gate', node.id),
+          ...usage,
         };
       }
       deps.store
@@ -5169,8 +5188,7 @@ async function executeLoopGroupBody(
     output: lastIterationOutput,
     error: errorMsg,
     failureKind: 'max_iterations',
-    costUsd: loopTotalCostUsd,
-    ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+    ...usage,
     loopIterations: iterationLimit,
   };
 }
