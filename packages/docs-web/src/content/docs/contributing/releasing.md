@@ -117,12 +117,15 @@ If GitHub Actions can't run (billing issues, private repo limits), create the re
 # 1. Build binaries locally (every target in the script's local TARGETS list)
 ./scripts/build-binaries.sh
 
-# 2. Create the release with binaries
+# 2. Generate checksums.txt, which the install scripts verify against
+./scripts/checksums.sh
+
+# 3. Create the release with binaries and checksums
 gh release create vX.Y.Z dist/binaries/* \
   --title "Archon CLI vX.Y.Z" \
   --generate-notes
 
-# 3. Verify the release
+# 4. Verify the release
 gh release view vX.Y.Z
 ```
 
@@ -132,9 +135,8 @@ gh release view vX.Y.Z
 >
 > A manual release is therefore incomplete. It lacks the assets only the CI release
 > builds: the Windows binaries, the plugin executables (`archon plugin install`
-> downloads these), `archon-web.tar.gz` (`archon serve` downloads it), and
-> `checksums.txt` (install scripts verify against it). The `files:` list of the release
-> step in `.github/workflows/release.yml` is the full set CI publishes.
+> downloads these), and `archon-web.tar.gz` (`archon serve` downloads it). The `files:`
+> list of the release step in `.github/workflows/release.yml` is the full set CI publishes.
 
 ## Manual Build (for Testing)
 
