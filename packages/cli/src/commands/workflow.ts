@@ -17,6 +17,10 @@ import { providerRegistry } from '@archon/providers';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
 import {
+  createRegisteredWorktree,
+  type RegisteredWorktree,
+} from '@archon/core/workflows/registered-worktree';
+import {
   prepareRunAiConfiguration,
   assertRunCredentials,
   type PreparedRunAiConfiguration,
@@ -71,14 +75,8 @@ import {
   getIsolationProvider,
   resolveFolderBackend,
   classifyIsolationError,
-  worktreeRegistrationMetadata,
 } from '@archon/isolation';
-import type {
-  ExecutionContext,
-  ContainerBackend,
-  ContainerBackendConfig,
-  WorktreeCreationEnvironment,
-} from '@archon/isolation';
+import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
 import {
   createLogger,
@@ -3076,12 +3074,10 @@ async function runWorkflowWithOwnedSource(
       // Configure isolation with repo config loader (same as orchestrator)
       configureWorktreeIsolation();
 
-      const provider = getIsolationProvider();
-
       // Check for existing worktree (only when explicit --branch)
       const existingEnv = existingBranchEnv;
 
-      if (existingEnv && (await provider.healthCheck(existingEnv.working_path))) {
+      if (existingEnv && (await getIsolationProvider().healthCheck(existingEnv.working_path))) {
         if (options.fromBranch) {
           getLog().warn(
             { path: existingEnv.working_path, fromBranch: options.fromBranch },
@@ -3145,7 +3141,7 @@ async function runWorkflowWithOwnedSource(
           'worktree_creating'
         );
 
-        let isolatedEnv: WorktreeCreationEnvironment;
+        let created: RegisteredWorktree;
         try {
           if (!preparedSource)
             throw new Error('Worktree setup requires a captured workflow source');
@@ -3191,8 +3187,8 @@ async function runWorkflowWithOwnedSource(
             codebase.default_cwd,
             codebase.id
           );
-          isolatedEnv = await provider.create(
-            {
+          created = await createRegisteredWorktree(host.records.isolation, {
+            request: {
               workflowType: 'task',
               identifier: branchIdentifier,
               taskBranch: adoptedTaskBranch
@@ -3219,34 +3215,22 @@ async function runWorkflowWithOwnedSource(
               canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
               description: `CLI workflow: ${workflowName}`,
             },
-            createRunWorktreeSetupExecutor(host.deps, setupRun, preparedAiConfiguration.config)
-          );
+            setupExecutor: createRunWorktreeSetupExecutor(
+              host.deps,
+              setupRun,
+              preparedAiConfiguration.config
+            ),
+            createdByPlatform: 'cli',
+          });
         } catch (createError) {
-          // Same translation the container branches above apply. The classified
-          // message also carries the note a failed cleanup records outside
-          // `err.message`, which the raw error would drop on this path.
-          const err = createError as Error;
-          getLog().error({ err, branch: branchIdentifier }, 'worktree.create_failed');
-          throw new Error(classifyIsolationError(err), { cause: err });
+          getLog().error({ err: createError, branch: branchIdentifier }, 'worktree.create_failed');
+          throw createError;
         }
 
-        // Track in database
-        const envRecord = await host.records.isolation.create({
-          codebase_id: codebase.id,
-          workflow_type: 'task',
-          workflow_id: branchIdentifier,
-          provider: 'worktree',
-          working_path: isolatedEnv.workingPath,
-          branch_name: isolatedEnv.branchName,
-          created_by_platform: 'cli',
-          metadata: { ...worktreeRegistrationMetadata(isolatedEnv.metadata) },
-        });
-
-        workingCwd = isolatedEnv.workingPath;
-        isolationEnvId = envRecord.id;
-        if (isolatedEnv.metadata.provenance === 'created')
-          ownedWorktree = { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId };
-        if (!isolatedEnv.metadata.adopted) cutFromCommit = isolatedEnv.metadata.cutFromCommit;
+        workingCwd = created.env.workingPath;
+        isolationEnvId = created.envId;
+        ownedWorktree = created.ownedWorktree;
+        cutFromCommit = created.cutFromCommit;
         getLog().info({ path: workingCwd }, 'worktree_created');
       }
     } else if (options.noWorktree) {

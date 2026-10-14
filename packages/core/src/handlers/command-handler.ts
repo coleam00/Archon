@@ -16,12 +16,7 @@ import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
-import {
-  classifyIsolationError,
-  getIsolationProvider,
-  readWorktreeCreationId,
-  worktreeRegistrationMetadata,
-} from '@archon/isolation';
+import { getIsolationProvider, readWorktreeCreationId } from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
   cleanupMergedWorktrees,
@@ -52,6 +47,7 @@ import {
   type AbandonConversationRunsResult,
 } from '../operations/workflow-operations';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
+import { createRegisteredWorktree } from '../workflows/registered-worktree';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { createLogger } from '@archon/paths';
 
@@ -345,19 +341,20 @@ async function handleWorktreeCommand(
       }
 
       try {
-        // Use isolation provider for worktree creation
         ensureIsolationConfigured();
-        const provider = getIsolationProvider();
-        const env = await provider.create({
-          codebaseId: conversation.codebase_id,
-          codebaseName: codebase.name,
-          canonicalRepoPath: toRepoPath(mainPath),
-          workflowType: 'task',
-          identifier: branchName,
-          description: `Manual worktree: ${branchName}`,
+        const { env, envId } = await createRegisteredWorktree(isolationEnvDb, {
+          request: {
+            codebaseId: conversation.codebase_id,
+            codebaseName: codebase.name,
+            canonicalRepoPath: toRepoPath(mainPath),
+            workflowType: 'task',
+            identifier: branchName,
+            description: `Manual worktree: ${branchName}`,
+          },
+          workflowId: `task-${branchName}`,
+          createdByPlatform: conversation.platform_type,
         });
 
-        // Add to git safe.directory
         await execFileAsync('git', [
           'config',
           '--global',
@@ -366,21 +363,8 @@ async function handleWorktreeCommand(
           env.workingPath,
         ]);
 
-        // Create database record for isolation environment
-        const dbEnv = await isolationEnvDb.create({
-          codebase_id: conversation.codebase_id,
-          workflow_type: 'task',
-          workflow_id: `task-${branchName}`,
-          provider: 'worktree',
-          working_path: env.workingPath,
-          branch_name: env.branchName ?? branchName,
-          created_by_platform: conversation.platform_type,
-          metadata: { ...worktreeRegistrationMetadata(env.metadata) },
-        });
-
-        // Update conversation with isolation info (use database UUID)
         await db.updateConversation(conversation.id, {
-          isolation_env_id: dbEnv.id,
+          isolation_env_id: envId,
           cwd: env.workingPath,
         });
 
@@ -389,7 +373,7 @@ async function handleWorktreeCommand(
         const shortPath = shortenPath(env.workingPath, mainPath);
         return {
           success: true,
-          message: `Worktree created!\n\nBranch: ${env.branchName ?? branchName}\nPath: ${shortPath}\n\nThis conversation now works in isolation.\nRun dependency install if needed (e.g., bun install).`,
+          message: `Worktree created!\n\nBranch: ${env.branchName}\nPath: ${shortPath}\n\nThis conversation now works in isolation.\nRun dependency install if needed (e.g., bun install).`,
           modified: true,
         };
       } catch (error) {
@@ -403,9 +387,7 @@ async function handleWorktreeCommand(
             message: 'Failed to create worktree: conversation state changed. Please try again.',
           };
         }
-        // Classified, not raw: the note an isolation failure carries about a
-        // leftover workspace lives outside `err.message`.
-        return { success: false, message: classifyIsolationError(err) };
+        return { success: false, message: err.message };
       }
     }
 
