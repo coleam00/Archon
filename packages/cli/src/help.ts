@@ -16,6 +16,7 @@
 
 import { userRoleSchema } from '@archon/core/schemas/user';
 import type { ForgeRequest } from '@archon/forge/operations';
+import { attachmentCommands } from './attachment-commands';
 
 interface FlagOwner {
   command: string;
@@ -52,6 +53,12 @@ interface HelpEntry {
   // Options block stays byte-identical to the pre-refactor text while
   // scoped help can still surface every flag the entry actually accepts.
   scopedFlags?: FlagHelp[];
+}
+
+function attachmentHelp(command: keyof typeof attachmentCommands, scopedOnly = false): HelpEntry[] {
+  return Object.entries(attachmentCommands[command])
+    .filter(([, entry]) => Object.hasOwn(entry, 'scopedOnly') === scopedOnly)
+    .map(([subcommand, entry]) => ({ command, subcommand, ...entry }));
 }
 
 const forgeOperationDescriptions = {
@@ -302,50 +309,9 @@ const commandHelp: HelpEntry[] = [
     spec: 'serve',
     description: 'Start the web UI server (binary installs download server and UI on first run)',
   },
-  {
-    command: 'skill',
-    subcommand: 'add',
-    spec: 'skill add [path]',
-    description: 'Add archon-cli into .claude/skills and .agents/skills',
-  },
-  {
-    command: 'provider',
-    subcommand: 'add',
-    spec: 'provider add <id...>',
-    description:
-      'Add maintained providers matching this Archon release (connects your agent CLI or SDK)',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'add',
-    spec: 'plugin add <owner/repo[/path][@tag]>',
-    description:
-      'Add a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'update',
-    spec: 'plugin update <id>[@tag]',
-    description: 'Reinstall an installed plugin at a tag, or its latest release or default branch',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'remove',
-    spec: 'plugin remove <id>',
-    description: 'Delete the files an installed plugin wrote',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'copy',
-    spec: 'plugin copy <id>',
-    description: "Copy an installed workflow pack into this project's .archon/workflows/",
-  },
-  {
-    command: 'plugin',
-    subcommand: 'list',
-    spec: 'plugin list',
-    description: 'Show installed plugins with tag and commit',
-  },
+  ...attachmentHelp('skill'),
+  ...attachmentHelp('provider'),
+  ...attachmentHelp('plugin'),
   {
     command: 'doctor',
     spec: 'doctor',
@@ -477,18 +443,8 @@ const commandHelp: HelpEntry[] = [
 // "no flag documentation is lost" invariant honest — nothing here ships in
 // global help that was not in the original.
 const scopedOnlyHelp: HelpEntry[] = [
-  {
-    command: 'plugin',
-    subcommand: 'install',
-    spec: 'plugin install <owner/repo[/path][@tag]>',
-    description: 'Deprecated alias for archon plugin add',
-  },
-  {
-    command: 'skill',
-    subcommand: 'install',
-    spec: 'skill install [path]',
-    description: 'Deprecated alias for archon skill add',
-  },
+  ...attachmentHelp('plugin', true),
+  ...attachmentHelp('skill', true),
   {
     command: 'state',
     subcommand: 'get',

@@ -50,6 +50,7 @@ if (inheritedInstallContext) {
 import { installPipeSafeConsole } from './utils/safe-console';
 import { exitWithDrain, withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
+import { isAttachmentVerb } from './attachment-commands';
 import {
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
@@ -1484,31 +1485,24 @@ async function main(): Promise<number> {
       }
 
       case 'skill': {
-        switch (subcommand) {
-          case 'add':
-          case 'install': {
-            if (subcommand === 'install') {
-              console.warn(
-                'Warning: archon skill install is deprecated. Use archon skill add instead.'
-              );
-            }
-            // Optional positional path; otherwise install into the resolved cwd.
-            const targetArg = positionals[2];
-            const targetPath = targetArg ? resolve(targetArg) : cwd;
-            const { skillInstallCommand } = await loadRoute(() => import('./commands/skill'), {
-              providers: false,
-            });
-            return await skillInstallCommand(targetPath);
-          }
-
-          default: {
-            const problem =
-              subcommand === undefined
-                ? 'Missing skill subcommand'
-                : `Unknown skill subcommand: ${subcommand}`;
-            return await fail(jsonFlag, `${problem}\nAvailable: add`);
-          }
+        if (!isAttachmentVerb('skill', subcommand)) {
+          const problem =
+            subcommand === undefined
+              ? 'Missing skill subcommand'
+              : `Unknown skill subcommand: ${subcommand}`;
+          return await fail(jsonFlag, `${problem}\nAvailable: add`);
         }
+        if (subcommand === 'install') {
+          console.warn(
+            'Warning: archon skill install is deprecated. Use archon skill add instead.'
+          );
+        }
+        const targetArg = positionals[2];
+        const targetPath = targetArg ? resolve(targetArg) : cwd;
+        const { skillInstallCommand } = await loadRoute(() => import('./commands/skill'), {
+          providers: false,
+        });
+        return await skillInstallCommand(targetPath);
       }
 
       default: {

@@ -52,6 +52,7 @@ import {
   providerVersionMismatchMessage,
 } from '@archon/provider-contract';
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
+import { isAttachmentVerb } from '../attachment-commands';
 import { inspectChatPlugin } from './inspect-chat-plugin';
 import { publishPlugin } from './publish-plugin';
 import {
@@ -885,6 +886,10 @@ export async function pluginCommand(
   env: PluginEnvironment
 ): Promise<number> {
   try {
+    if (!isAttachmentVerb('plugin', subcommand)) {
+      console.error(USAGE);
+      return 1;
+    }
     // Exact arity: an ignored extra argument would install something the
     // operator did not ask for, or silently drop a second plugin.
     if (subcommand === 'list' && args.length === 0) {
@@ -892,11 +897,7 @@ export async function pluginCommand(
       return 0;
     }
     const [target] = args;
-    if (
-      !target ||
-      args.length !== 1 ||
-      !['add', 'install', 'update', 'remove', 'copy'].includes(subcommand ?? '')
-    ) {
+    if (!target || args.length !== 1 || subcommand === 'list') {
       console.error(USAGE);
       return 1;
     }
@@ -904,15 +905,23 @@ export async function pluginCommand(
       console.warn('Warning: archon plugin install is deprecated. Use archon plugin add instead.');
     }
     const ref = parsePluginRef(target);
-    if (subcommand === 'remove' || subcommand === 'copy') {
-      if (ref.tag) throw new Error(`${subcommand} takes a plugin id without @tag: ${ref.id}`);
-      await withPluginMutationLock(env.pluginsDir, () =>
-        subcommand === 'remove' ? removePlugin(ref, env) : copyPlugin(ref, env)
-      );
-    } else {
-      await withPluginMutationLock(env.pluginsDir, () =>
-        installPlugin(ref, subcommand === 'update' ? 'update' : 'install', env)
-      );
+    switch (subcommand) {
+      case 'remove':
+      case 'copy':
+        if (ref.tag) throw new Error(`${subcommand} takes a plugin id without @tag: ${ref.id}`);
+        await withPluginMutationLock(env.pluginsDir, () =>
+          subcommand === 'remove' ? removePlugin(ref, env) : copyPlugin(ref, env)
+        );
+        break;
+      case 'add':
+      case 'install':
+      case 'update':
+        await withPluginMutationLock(env.pluginsDir, () =>
+          installPlugin(ref, subcommand === 'update' ? 'update' : 'install', env)
+        );
+        break;
+      default:
+        throw new Error(`Unhandled plugin subcommand: ${subcommand satisfies never}`);
     }
     return 0;
   } catch (error) {

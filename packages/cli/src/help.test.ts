@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { forgeRequestSchema } from '@archon/forge/operations';
 import { renderHelp } from './help';
+import { attachmentCommands } from './attachment-commands';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 
@@ -412,4 +413,18 @@ it('provider and plugin add help exposes the supported commands and plugin examp
   const plugin = renderHelp('plugin', 'add');
   expect(plugin).toContain('plugin add <owner/repo[/path][@tag]>');
   expect(plugin).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
+});
+
+it('every supported attachment verb has scoped help, with aliases scoped only', () => {
+  const global = renderHelp();
+  for (const [command, verbs] of Object.entries(attachmentCommands)) {
+    for (const [verb, entry] of Object.entries(verbs)) {
+      expect(renderHelp(command, verb)).toContain(entry.spec);
+      if ('scopedOnly' in entry) {
+        expect(global).not.toContain(entry.spec);
+      } else {
+        expect(global).toContain(entry.spec);
+      }
+    }
+  }
 });
