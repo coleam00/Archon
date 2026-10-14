@@ -320,6 +320,7 @@ mock.module('./static-cache', () => ({ serveWebUi: (): void => undefined }));
 mock.module('./routes/openapi-defaults', () => ({ validationErrorHook: (): void => undefined }));
 mock.module('./routes/api', () => ({ registerApiRoutes: (): void => undefined }));
 mock.module('./routes/webhooks', () => ({
+  registerGiteaWebhookRoute: (): void => undefined,
   registerGithubWebhookRoute: (): void => undefined,
   registerWebhookSourceRoutes: (): void => undefined,
 }));

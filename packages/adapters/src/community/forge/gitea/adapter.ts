@@ -273,7 +273,7 @@ export class GiteaAdapter implements IPlatformAdapter {
    * Verify webhook signature using HMAC SHA-256
    * Gitea uses X-Gitea-Signature header with raw hex (no sha256= prefix)
    */
-  private verifySignature(payload: string, signature: string): boolean {
+  private verifySignature(payload: Uint8Array, signature: string): boolean {
     try {
       const hmac = createHmac('sha256', this.webhookSecret);
       const digest = hmac.update(payload).digest('hex');
@@ -746,18 +746,20 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
   /**
    * Handle incoming webhook event
    */
-  async handleWebhook(payload: string, signature: string): Promise<void> {
-    // 1. Verify signature
+  async handleWebhook(payload: Uint8Array, signature: string): Promise<void> {
+    // 1. Verify signature over the bytes Gitea signed, before any decoding
     if (!this.verifySignature(payload, signature)) {
       getLog().error(
-        { signaturePrefix: signature?.substring(0, 15) + '...', payloadSize: payload.length },
+        { signaturePrefix: signature?.substring(0, 15) + '...', payloadSize: payload.byteLength },
         'invalid_webhook_signature'
       );
       return;
     }
 
-    // 2. Parse event
-    const event = JSON.parse(payload) as WebhookEvent;
+    // 2. Parse event (the default decoder drops a leading BOM, which JSON.parse rejects)
+    const event = JSON.parse(
+      new TextDecoder('utf-8', { fatal: true }).decode(payload)
+    ) as WebhookEvent;
 
     // 2b. Authorization check - verify sender is in whitelist
     const senderUsername = event.sender?.login;
