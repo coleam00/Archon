@@ -144,19 +144,78 @@ describe('review head boundary', () => {
     });
   }
 
-  for (const scope of ['42', PR_URL, 'feature', '']) {
-    it(`uses typed agent resolution for opaque scope ${JSON.stringify(scope)}`, () => {
-      const run = check({ inputs: { INPUTS_SCOPE: scope } });
+  for (const source of ['gh', 'forge']) {
+    for (const scope of ['42', PR_URL, 'feature', '']) {
+      for (const declaration of ['matching', 'null', 'wrong', 'mismatch']) {
+        it(`resolves standalone scope ${JSON.stringify(scope)} through ${source} with ${declaration} declaration`, () => {
+          const cwd = gitCheckout({}, track);
+          const run = check({
+            cwd,
+            source,
+            forge: view({ head_revision: declaration === 'mismatch' ? 'anotherhead' : HEAD }),
+            gh: { pr: { headRefOid: declaration === 'mismatch' ? 'anotherhead' : HEAD } },
+            inputs: {
+              INPUTS_SCOPE: scope,
+              INPUTS_PR: JSON.stringify(
+                declaration === 'null' ? null : declaration === 'wrong' ? { ...PR, number: 99 } : PR
+              ),
+            },
+          });
+          expect(run.code).toBe(declaration === 'matching' ? 0 : 1);
+          if (declaration === 'mismatch') expect(run.stderr).toContain('anotherhead');
+          else if (declaration !== 'matching') expect(run.stderr).toContain('does not match');
+          if (source === 'forge') {
+            const selector = JSON.parse(run.forgeRequests[0]).selector;
+            expect(run.forgeRequests).toHaveLength(1);
+            expect(selector).toEqual(
+              scope === '' || scope === 'feature'
+                ? { kind: 'head', repo: PR.repo, headRepo: PR.repo, head: 'feature' }
+                : { kind: 'number', ref: PR }
+            );
+          } else {
+            expect(run.gh).toHaveLength(1);
+            expect(run.gh[0]).toContain(
+              scope === '' || scope === 'feature'
+                ? 'pr list --repo ghe.example.com/example/repo --head feature'
+                : 'pr view 42 --repo ghe.example.com/example/repo'
+            );
+          }
+        });
+      }
+    }
+
+    it(`accepts a verified working diff through ${source}`, () => {
+      const cwd = gitCheckout({}, track);
+      const run = check({
+        cwd,
+        source,
+        gh: { noOpenPr: true },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+        inputs: { INPUTS_SCOPE: '', INPUTS_PR: 'null' },
+      });
       expect(run.code).toBe(0);
-      expect(run.gh).toHaveLength(1);
+      expect(run.stdout).toContain('working diff');
     });
   }
 
-  it('accepts a working diff without selecting or reading a forge', () => {
-    const run = check({ source: 'unsupported', inputs: { INPUTS_SCOPE: '', INPUTS_PR: '' } });
-    expect(run.code).toBe(0);
+  it('refuses an ambiguous repository before trusting the declaration', () => {
+    const cwd = gitCheckout({}, track);
+    git(cwd, 'remote', 'add', 'fork', 'https://ghe.example.com/fork/repo.git');
+    const run = check({ cwd, inputs: { INPUTS_SCOPE: '42' } });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('--input scope=<full-PR-URL>');
     expect(run.gh).toEqual([]);
-    expect(run.forge).toEqual([]);
+  });
+
+  it('does not turn an unresolved branch into a working diff', () => {
+    const cwd = gitCheckout({}, track);
+    const run = check({
+      cwd,
+      gh: { noOpenPr: true },
+      inputs: { INPUTS_SCOPE: 'feature', INPUTS_PR: 'null' },
+    });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('no open pull request');
   });
 
   it('refuses unknown head facts without inventing a pinned retry', () => {
@@ -242,15 +301,16 @@ const REPO = resolve(import.meta.dir, '../../..');
 
 describe('PR review scheduling with the real head check', () => {
   for (const continuation of [false, true]) {
-    for (const matching of [false, true]) {
-      it(`${continuation ? 'continuation' : 'initial'} review ${matching ? 'reaches lenses on the PR head' : 'stops before all review work on another head'}`, async () => {
+    for (const scenario of ['matching', 'mismatch', 'null', 'wrong']) {
+      const matching = scenario === 'matching';
+      it(`${continuation ? 'continuation' : 'initial'} review ${scenario}`, async () => {
         const cwd = gitCheckout({}, track);
         const head = git(cwd, 'rev-parse', 'HEAD');
         const root = track(mkdtempSync(join(tmpdir(), 'archon-head-graph-')));
         const cli = join(root, 'forge.ts');
         writeFileSync(
           cli,
-          `const argv = process.argv.slice(2);\nif (argv[0] !== 'forge' || argv[1] !== 'pr.view') throw new Error('unexpected operation');\nconsole.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: matching ? head : 'anotherhead' }) }))});\n`
+          `const argv = process.argv.slice(2);\nif (argv[0] !== 'forge' || argv[1] !== 'pr.view') throw new Error('unexpected operation');\nconsole.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: scenario === 'mismatch' ? 'anotherhead' : head }) }))});\n`
         );
         const priorEnv = {
           ARCHON_HOME: process.env.ARCHON_HOME,
@@ -292,7 +352,7 @@ describe('PR review scheduling with the real head check', () => {
             docs: continuation,
           };
           stubs.scope = {
-            pr: PR,
+            pr: scenario === 'null' ? null : scenario === 'wrong' ? { ...PR, number: 99 } : PR,
             report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
           };
           const result = await dryRunWorkflow({
@@ -323,7 +383,7 @@ describe('PR review scheduling with the real head check', () => {
             ])
               expect(states.get(node)).toBe('skipped');
             expect(result.trace.find(entry => entry.nodeId === 'head-check')?.reason).toContain(
-              'anotherhead'
+              scenario === 'mismatch' ? 'anotherhead' : 'does not match'
             );
           }
         } finally {

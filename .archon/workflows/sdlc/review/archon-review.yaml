@@ -28,8 +28,9 @@ inputs:
   scope:
     default: ""
     description: >-
-      What to review — a PR number/URL, a branch, or empty for the working diff
-      against the merge-base.
+      Explicit selector — a positive PR number, full PR URL, exact branch name,
+      or empty to discover the current branch's open PR, then the working diff.
+      Use a full PR URL when remotes name several repositories.
   prior_report:
     default: ""
     description: >-

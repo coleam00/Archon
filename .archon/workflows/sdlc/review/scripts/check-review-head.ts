@@ -1,9 +1,8 @@
 import { nodeStartCommit } from '../../.shared/checkout.ts';
-import { forgeSource, sameRepo, type PrRecord } from '../../.shared/forge.ts';
+import { forgeSource, samePr, sameRepo, type PrRecord } from '../../.shared/forge.ts';
 import { report, refuse, text } from '../../.shared/io.ts';
-import { viewPr } from '../../.shared/pr.ts';
 import { findRemote } from '../../.shared/remote.ts';
-import { declaredPr, recordedPr } from '../../.shared/review-target.ts';
+import { declaredPr, recordedPr, resolveReviewPr } from '../../.shared/review-target.ts';
 
 function quote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -43,26 +42,31 @@ try {
   if (checkout !== head) {
     throw new Error(`this round fixed ${head}, but the checkout is now at ${checkout}`);
   }
-  const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
+  const scope = text(process.env.INPUTS_SCOPE);
+  const recorded = recordedPr(scope);
   const declared = declaredPr(text(process.env.INPUTS_PR));
-  if (
-    recorded &&
-    (declared?.number !== recorded.number || !sameRepo(declared.repo, recorded.repo))
-  ) {
+  if (recorded && (!declared || !samePr(declared, recorded))) {
     throw new Error('the scope declaration does not match the recorded pull request');
   }
-  const target = recorded ?? declared;
-  if (target) {
-    const pr = viewPr(target, forgeSource()).pr;
-    if (pr.head_revision !== head) {
-      throw new Error(
-        `${target.repo.host}/${target.repo.path}#${String(target.number)} is at ` +
-          `${pr.head_revision ?? 'an unknown head'}, but this round fixed ${head}. ` +
-          `No review lenses ran.\n${retry(pr)}`
-      );
-    }
+  const pr = resolveReviewPr(scope, forgeSource());
+  if (pr ? !declared || !samePr(declared, pr) : declared !== undefined) {
+    throw new Error(
+      'the scope declaration does not match the resolved pull request. No review lenses ran.' +
+        (pr ? `\n${retry(pr)}` : '')
+    );
   }
-  report('check-review-head: the resolved target matches the commit under review.');
+  if (pr && pr.head_revision !== head) {
+    throw new Error(
+      `${pr.repo.host}/${pr.repo.path}#${String(pr.number)} is at ` +
+        `${pr.head_revision ?? 'an unknown head'}, but this round fixed ${head}. ` +
+        `No review lenses ran.\n${retry(pr)}`
+    );
+  }
+  report(
+    pr
+      ? 'check-review-head: the resolved target matches the commit under review.'
+      : 'check-review-head: no open PR; reviewing the working diff.'
+  );
 } catch (error) {
   refuse(`check-review-head: ${error instanceof Error ? error.message : String(error)}`);
 }
