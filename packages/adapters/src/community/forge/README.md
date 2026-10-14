@@ -78,7 +78,7 @@ app.post('/webhooks/my-forge', async (c) => {
 });
 ```
 
-Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds non-interactive fresh runs. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
+Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds all fresh runs, including workflows that can pause. Pauses wait in the attention queue until answered. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
 
 Hosts set platform policies as described in the [chat adapter guide](../chat/README.md#registration).
 

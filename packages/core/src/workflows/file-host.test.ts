@@ -34,6 +34,28 @@ test('file host records persist across hosts and released worktrees fence pendin
     name: 'project',
     default_cwd: home,
   });
+  const widerInput = {
+    default_cwd: join(home, 'checkout'),
+    repository_url: 'https://example.test/repo',
+    default_branch: 'main',
+    kind: 'folder' as const,
+  };
+  await host.records.codebases.updateCodebase(codebase, widerInput);
+  expect(await host.records.codebases.getCodebase(codebase.id)).toMatchObject({
+    ...widerInput,
+    kind: 'repo',
+  });
+  await host.records.codebases.updateCodebase(codebase, {
+    default_cwd: undefined,
+    repository_url: null,
+    default_branch: null,
+  });
+  expect(await host.records.codebases.getCodebase(codebase.id)).toMatchObject({
+    default_cwd: widerInput.default_cwd,
+    repository_url: null,
+    default_branch: null,
+    kind: 'repo',
+  });
   const user = await host.records.users.findOrCreateUserByPlatformIdentity(
     'cli',
     'operator',
