@@ -3576,8 +3576,8 @@ const SCRIPT_USER_VAR_PATTERN =
  * channel. Those refs are now delivered as env vars and no longer substituted, so
  * a literal `$VAR` left in the body silently stops resolving. Warn the author (log
  * + one concise platform line) with the language-appropriate accessor for one
- * release before the refs are removed. `script` is the post-workflow-var,
- * pre-node-output string so an expanded `$nodeId.output` value can't false-positive.
+ * release before the refs are removed. `script` is the author's raw template, so a
+ * substituted `$nodeId.output` value can't false-positive.
  */
 async function warnOnLiteralUserVars(
   node: ExecNode,

@@ -41624,6 +41624,38 @@ describe('executeDagWorkflow -- substituted values reach the node verbatim (#404
     expect(prompts()).toEqual(['Request: explain $CONTEXT\n\n---\n\nISSUE BODY']);
   });
 
+  it("sends an upstream node's output exactly as written", async () => {
+    const upstream = 'Use $ARGUMENTS and $INPUTS.plan and $gate.output and $& here';
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: upstream };
+      yield { type: 'result', sessionId: 'verbatim-upstream' };
+    });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'verbatim-upstream',
+          nodes: [
+            { id: 'gate', kind: 'agent', source: { kind: 'inline', prompt: 'decide' } },
+            {
+              id: 'act',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Got: $gate.output' },
+              depends_on: ['gate'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('verbatim-upstream-run'),
+      })
+    );
+
+    expect(prompts()).toEqual(['decide', `Got: ${upstream}`]);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+  });
+
   it('still fails a mistyped field reference in the template with the unknown-node error', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: '{"decision":"approve"}' };
