@@ -33,7 +33,7 @@ review__publish:
   discoveries: []
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
-ci: { state: pr_caused, summary: "stub: conflicts with dev in src/a.ts; marked draft" }
+ci: { state: pr_caused, rerun: none, summary: "stub: conflicts with dev in src/a.ts; marked draft" }
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   expect: completed
