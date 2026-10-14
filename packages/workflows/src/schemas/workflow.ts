@@ -180,27 +180,6 @@ export const workflowBaseSchema = z.object({
   model: z.string().optional(),
   modelReasoningEffort: modelReasoningEffortSchema.optional(),
   webSearchMode: webSearchModeSchema.optional(),
-  /**
-   * The workflow's CLASS declaration (#2707 step 2): `true` means this
-   * workflow's tree may pause. Every background-dispatch entry point
-   * independently refuses to background an `interactive: true` workflow —
-   * CLI `--detach`, the `manage_run` native tool, and web's default
-   * background dispatch — so a pause always has a foreground driver watching
-   * for it. Absent/`false` means the workflow is unattended-class; it is
-   * also the class a `fan_out:` target must resolve to.
-   *
-   * See `validateWorkflowClassPlacement`'s doc comment in `loader.ts` for the
-   * precise load-time enforcement scope — it is narrower than "no pause node
-   * anywhere": a NATIVE gate/interactive-loop authored directly in this
-   * workflow's own DAG without `interactive: true` is inferred as
-   * `interactive: true` with a one-time WARN during a grace period (#2736/
-   * #2738), not a load error. A gate that arrives via `include:` composition
-   * is deliberately NOT covered here (`assertComposedGateDriveable` remains
-   * the invocation-time check for that case — the same reusable block can be
-   * legitimately composed by different parents, so load time cannot always
-   * tell which workflow will own a given run).
-   */
-  interactive: z.boolean().optional(),
   effort: effortLevelSchema.optional(),
   fallbackModel: z.string().min(1).optional(),
   betas: betasSchema.optional(),

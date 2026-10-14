@@ -5,9 +5,6 @@ description: >-
   issue deserves an investigation, a stronger agent investigates and drafts a
   reply, a person approves or rejects the draft, and only an approved draft is
   posted to the issue. Explained in the docs guide "Proactive workflows".
-# Validation requires this of a workflow with an approval gate.
-interactive: true
-
 inputs:
   repository:
     required: true

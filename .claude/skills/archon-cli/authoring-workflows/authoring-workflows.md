@@ -68,9 +68,9 @@ Work through these questions in order, with the user where marked:
      each iteration, or a **super load-bearing** action — irreversible,
      public-facing, or expensive beyond easy rollback (deploy, post publicly,
      delete data, send customer-facing communication). Everything else should be
-     decidable by code or by another agent. Remember: any `approval:` gate forces
-     `interactive: true` at the workflow level. The fresh launch cannot detach;
-     continuation actions on an already-paused run can.
+     decidable by code or by another agent. A gate pauses the run durably in the
+     attention queue, whether it started in the foreground, detached, or from a
+     trigger.
 
    On a project-specific workflow the user often already knows some of these —
    "never push before I see the diff", "stop if the migration touches billing",
@@ -196,8 +196,8 @@ tax on non-enforcing providers. Provider-agnostic YAML always: tiers
   leaves the choice to the caller. On a `workflow:` child node,
   `isolation: worktree` explicitly gives the child its own worktree. A worktree
   bounds git files; it does NOT isolate `~/.archon`, env, database, or sessions.
-- Any `approval:` gate requires `interactive: true` at the workflow level. A fresh
-  interactive launch cannot detach; continuation actions on an already-paused run can.
+- An `approval:` gate pauses the run in the attention queue until it is answered. It
+  needs no workflow-level declaration and does not stop a detached or triggered launch.
 - Composition (`include:`) runs inside the parent's single run/isolation/audit
   trail. Use `workflow:` sub-runs only when a separately governed launch is the
   actual requirement.

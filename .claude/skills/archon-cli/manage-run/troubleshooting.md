@@ -124,11 +124,11 @@ restored from saved run-scoped handles, and an interactive loop with
 `fresh_context: false` resumes its pre-pause session when the provider supports
 it. Artifact-based handoff remains the provider-independent path.
 
-### Approval gate not appearing on web UI
+### Paused run with no chat message
 
-The workflow has an approval node but still runs in the background and no chat message appears.
+A run is paused at a gate or an attention wait, but no message reached the conversation that started it.
 
-**Fix:** Set `interactive: true` at the **workflow level**. Node-level `interactive` is not a supported field; the loader ignores it and warns that the key is unknown.
+**Cause:** the platform could not deliver the pause notice. The run still waits. The failure is logged as `platform_message_send_failed` and recorded on the run as a `pause_notice_undelivered` event, which the console's run view shows. Answer the run by id: `archon workflow status`, then `approve`, `reject`, or `respond`.
 
 ### `MCP server connection failed: <plugin>` noise in chat
 
@@ -162,7 +162,7 @@ Common causes:
 
 ### A workflow-level field seems to have no effect
 
-Invalid values for optional workflow-level fields (`interactive`, `effort`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a warn-level `*_ignored` loader log is written (stderr for CLI commands, the server log for `archon serve`). AI-only fields on bash/script nodes, unknown keys, and deprecations are parse warnings instead: run `archon validate workflows` or `archon workflow list` to see them, or set `LOG_LEVEL=debug` to see them in the logs. Check both before assuming the field is broken.
+Invalid values for optional workflow-level fields (`effort`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a warn-level `*_ignored` loader log is written (stderr for CLI commands, the server log for `archon serve`). AI-only fields on bash/script nodes, unknown keys, and deprecations are parse warnings instead: run `archon validate workflows` or `archon workflow list` to see them, or set `LOG_LEVEL=debug` to see them in the logs. Check both before assuming the field is broken.
 
 ### Persisted session didn't restore (cold resume)
 

@@ -67,11 +67,8 @@ Four hard rules:
 - Never launch against a thin brief. A weak input does not produce a weak result — it
   produces a confident, well-formed answer to the wrong question, at full price.
 
-- A fresh launch of an interactive-class workflow refuses `--detach`. Run that
-  launch in the foreground as a background *task* of your harness. Once the run
-  pauses, `resume`/`approve`/`reject`/`respond --detach` are supported continuation
-  actions.
-- Prefer `--detach` if the workflow is not interactive.
+- Prefer `--detach`. A run that pauses for an answer waits in the attention queue;
+  `resume`/`approve`/`reject`/`respond --detach` continue it.
 - One workflow per shell; multiple tasks = separate invocations, separate branches.
 
 ## Gotchas

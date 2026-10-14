@@ -696,41 +696,35 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  test('refuses a composed approval gate before creating anything (#1764)', async () => {
-    // Enforced HERE rather than at the callers, because there are two entrypoints that
-    // background a run — the console's default dispatch and the `manage_run` tool's
-    // startWorkflow, which reaches every platform with native tools. A rule enforced per
-    // caller fails open the moment a third appears.
-    const block = makeTestWorkflow({
-      name: 'gate-blk',
-      nodes: [{ id: 'gate', approval: { message: 'Approve?' } }],
-    });
-    const parent = makeTestComposedWorkflow(
-      [block, makeTestWorkflow({ name: 'bg-parent', nodes: [{ id: 'inc', include: 'gate-blk' }] })],
-      'bg-parent'
-    );
+  test.each(['own', 'composed'] as const)(
+    'a workflow with its %s approval gate dispatches in the background',
+    async origin => {
+      const gate = { id: 'gate', approval: { message: 'Approve?' } };
+      const block = makeTestWorkflow({ name: 'gate-blk', nodes: [gate] });
+      const workflow =
+        origin === 'own'
+          ? makeTestComposedWorkflow(
+              [makeTestWorkflow({ name: 'bg-gate', nodes: [gate], worktree: { enabled: false } })],
+              'bg-gate'
+            )
+          : makeTestComposedWorkflow(
+              [
+                block,
+                makeTestWorkflow({
+                  name: 'bg-gate',
+                  nodes: [{ id: 'inc', include: 'gate-blk' }],
+                  worktree: { enabled: false },
+                }),
+              ],
+              'bg-gate'
+            );
 
-    await expect(dispatchBackgroundWorkflow(makeRoutingCtx(), parent)).rejects.toThrow(
-      /composes 'gate-blk'.*approval gate/s
-    );
-
-    // Refused before any side effect — no worker conversation, no run row.
-    expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
-    expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  test('a workflow with only its OWN approval gate still dispatches', async () => {
-    // The rule is about a gate written in another file, not about gates.
-    const own = makeTestWorkflow({
-      name: 'own-gate',
-      nodes: [{ id: 'gate', approval: { message: 'Approve?' } }],
-      worktree: { enabled: false },
-    });
-
-    await dispatchBackgroundWorkflow(makeRoutingCtx(), makeTestComposedWorkflow([own], 'own-gate'));
-    expect(mockGetOrCreateConversation).toHaveBeenCalled();
-    await flushBackgroundExecution();
-  });
+      await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
+      await flushBackgroundExecution();
+      expect(mockGetOrCreateConversation).toHaveBeenCalled();
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    }
+  );
 
   // #2910: a rejected terminal write means the row still says 'running' and the run's
   // real outcome is unknown. Both sides of the branch are asserted — an ordinary

@@ -241,7 +241,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     completeWorkflowRun: mock(async () => {}),
     pauseWorkflowRun: mock(async () => {}),
     pauseWorkflowRunForWait: mock(async () => {}),
-    failPausedAttentionWait: mock(async () => ({ failed: true })),
     clearWorkflowWaitContext: mock(
       async (id: string, _wait: unknown, completion: { stepName: string }) => ({
         cleared: true as const,
@@ -253,7 +252,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
         },
       })
     ),
-    failPausedApproval: mock(async () => ({ failed: true })),
     claimWriteback: mock(async () => ({ claimed: true })),
     releaseWritebackClaim: mock(async () => {}),
     cancelWorkflowRun: mock(async () => ({ cancelled: false })),

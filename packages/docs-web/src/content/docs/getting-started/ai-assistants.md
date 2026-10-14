@@ -479,7 +479,7 @@ Most extensions need three config surfaces:
 |---|---|
 | `extensionFlags` | Per-extension feature flags (maps 1:1 to Pi's `--flag` CLI switches) |
 | `env` | Env vars the extension reads at runtime (managed via `.archon/config.yaml` or the Web UI codebase env panel) |
-| `interactive: true` | Binds a UI context so approval-gate extensions can block for human input; also set the **workflow-level** `interactive: true` on the web UI so the run stays foreground |
+| `interactive: true` | Binds a UI context so approval-gate extensions can block for human input |
 
 #### Scoping extension posture per node
 
@@ -517,7 +517,6 @@ Then grant the `plan` flag and a UI context to the planner node, and explicitly 
 # .archon/workflows/plan-then-build.yaml
 name: plan-then-build
 provider: pi
-interactive: true             # workflow-level: keeps the run foreground on the web UI so you can approve
 nodes:
   - id: plan
     prompt: "Draft a plan for: $ARGUMENTS"

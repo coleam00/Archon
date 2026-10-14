@@ -132,7 +132,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     completeWorkflowRun: noop,
     pauseWorkflowRun: noop,
     pauseWorkflowRunForWait: noop,
-    failPausedAttentionWait: async () => ({ failed: true }),
     clearWorkflowWaitContext: async (id, _wait, completion) => ({
       cleared: true as const,
       nodeEvent: {
@@ -141,7 +140,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
         step_name: completion.stepName,
       },
     }),
-    failPausedApproval: async () => ({ failed: true }),
     claimWriteback: async () => ({ claimed: true }),
     releaseWritebackClaim: noop,
     cancelWorkflowRun: async () => ({ cancelled: false }),
