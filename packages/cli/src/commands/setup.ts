@@ -44,6 +44,7 @@ import { homedir } from 'os';
 import { randomBytes, createPrivateKey } from 'crypto';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
 import { execFileAsync } from '@archon/git';
+import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
 import { getRegisteredProviders, registerProvider, providerRegistry } from '@archon/providers';
 import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
 import { providerCommand } from './provider';
@@ -223,19 +224,6 @@ function hasCompleteAppCredential(env: Record<string, string | undefined>): bool
   );
 }
 
-function githubAuthMode(
-  env: Record<string, string | undefined>
-): 'pat' | 'app' | 'none' | 'conflict' {
-  const app = Boolean(
-    env.GITHUB_APP_ID && GITHUB_APP_PRIVATE_KEY_KEYS.some(key => env[key]) && env.WEBHOOK_SECRET
-  );
-  const pat = Boolean(env.GITHUB_TOKEN && env.WEBHOOK_SECRET);
-  if (app && pat) return 'conflict';
-  if (app) return 'app';
-  if (pat) return 'pat';
-  return 'none';
-}
-
 interface TelegramConfig {
   botToken: string;
   allowedUserIds: string;
@@ -410,7 +398,10 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
   // Counts the deprecated unprefixed names too: the server still reads them this release.
   const env = parseDotenv(content);
   const codex = readCodexSetupEnv(env).values;
-  const githubMode = githubAuthMode(env);
+  const githubMode = selectGitHubAuthMode(env).kind;
+  const nonblankGitHubMode = selectGitHubAuthMode(
+    Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value.trim()]))
+  ).kind;
 
   return {
     hasClaude:
@@ -424,7 +415,7 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
     // env vars never get a Pi login check.
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
     platforms: {
-      github: githubMode === 'app' || githubMode === 'pat',
+      github: (githubMode === 'app' || githubMode === 'pat') && githubMode === nonblankGitHubMode,
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
       slack: hasEnvValue(content, 'SLACK_BOT_TOKEN') && hasEnvValue(content, 'SLACK_APP_TOKEN'),
     },
@@ -2299,14 +2290,14 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
   let replaceGitHubAuth = false;
   const saved = existsSync(targetEnvPath) ? parseDotenv(readFileSync(targetEnvPath, 'utf8')) : {};
-  if (!config.github && githubAuthMode(saved) === 'conflict') {
+  if (!force && !config.github && selectGitHubAuthMode(saved).kind === 'conflict') {
     cancel(
       `Conflicting GitHub authentication in ${targetEnvPath}. Select GitHub to resolve the conflict. No env files were changed.`
     );
     exitSetup(1);
   }
   if (config.platforms.github) {
-    const githubMode = config.github?.mode ?? githubAuthMode(saved);
+    const githubMode = config.github?.mode ?? selectGitHubAuthMode(saved).kind;
     const otherEnvPath = resolveScopedEnvPath(
       scope === 'home' ? 'project' : 'home',
       options.repoPath

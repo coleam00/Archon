@@ -3,11 +3,11 @@
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { generateKeyPairSync } from 'node:crypto';
 import * as git from '@archon/git';
-import { selectGitHubAuthMode } from '../../../server/src/github-auth-bootstrap';
+import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
 import { loadGitHubAppConfig } from '@archon/core/github-auth/config';
 import {
   GITHUB_APP_KEYS,
@@ -1189,7 +1189,7 @@ describe('GitHub setup wizard', () => {
   let authMode: 'app' | 'pat';
   let keySource: 'path' | 'inline';
   let switchAnswer: boolean | symbol;
-  let setupMode: 'update' | 'add';
+  let setupMode: 'update' | 'add' | 'fresh';
   let scope: 'home' | 'project';
   let output: string[];
   let restore: (() => void)[];
@@ -1284,26 +1284,6 @@ describe('GitHub setup wizard', () => {
 
   const run = (force = false) => setupCommand({ repoPath: root, scope, providers: [], force });
   const read = () => parseDotenv(readFileSync(target, 'utf8'));
-
-  it('configured detection conforms to server selection across every auth prerequisite', () => {
-    const keys = [
-      'GITHUB_APP_ID',
-      'GITHUB_APP_PRIVATE_KEY',
-      'GITHUB_APP_PRIVATE_KEY_PATH',
-      'GITHUB_TOKEN',
-      'WEBHOOK_SECRET',
-    ];
-    for (let mask = 0; mask < 2 ** keys.length; mask++) {
-      const env = Object.fromEntries(
-        keys.filter((_, index) => mask & (1 << index)).map(key => [key, 'present'])
-      );
-      writeFileSync(target, serializeEnv(env));
-      const decision = selectGitHubAuthMode(env);
-      expect(checkExistingConfig(target)?.platforms.github).toBe(
-        decision.kind === 'app' || decision.kind === 'pat'
-      );
-    }
-  });
 
   it('switch cleanup covers every App env key read by runtime authentication', () => {
     const authDir = join(import.meta.dir, '../../../core/src/github-auth');
@@ -1552,6 +1532,122 @@ describe('GitHub setup wizard', () => {
       platforms.mockRestore();
     }
   });
+
+  it.each(['home', 'project'] as const)(
+    'force clears selected-file dual mode without selecting GitHub in %s',
+    async selectedScope => {
+      scope = selectedScope;
+      target = resolveScopedEnvPath(scope, root);
+      const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+      try {
+        for (const mode of ['fresh', 'add', 'update'] as const) {
+          setupMode = mode;
+          for (const source of ['path', 'inline'] as const) {
+            const original = serializeEnv({
+              GITHUB_APP_ID: '999',
+              [source === 'path' ? 'GITHUB_APP_PRIVATE_KEY_PATH' : 'GITHUB_APP_PRIVATE_KEY']:
+                source === 'path' ? keyPath : privateKey,
+              GITHUB_TOKEN: pat,
+              WEBHOOK_SECRET: webhookSecret,
+              CUSTOM_KEY: `${mode}-${source}`,
+            });
+            writeFileSync(target, original);
+            expect(await run(true)).toBe(0);
+            expect(selectGitHubAuthMode(read())).toEqual({ kind: 'none' });
+            for (const key of [...GITHUB_APP_KEYS, 'GH_TOKEN', 'GITHUB_TOKEN'])
+              expect(read()[key]).toBeUndefined();
+            const backups = Array.from(
+              new Bun.Glob('.env.archon-backup-*').scanSync(dirname(target))
+            );
+            expect(backups.length).toBeGreaterThan(0);
+            expect(
+              backups.some(file => readFileSync(join(dirname(target), file), 'utf8') === original)
+            ).toBe(true);
+          }
+        }
+      } finally {
+        platforms.mockRestore();
+      }
+    }
+  );
+
+  it.each(['home', 'project'] as const)(
+    'Add collects credentials for each blank authentication field in %s',
+    async selectedScope => {
+      scope = selectedScope;
+      target = resolveScopedEnvPath(scope, root);
+      setupMode = 'add';
+      for (const key of [
+        'GITHUB_TOKEN',
+        'GITHUB_APP_ID',
+        'GITHUB_APP_PRIVATE_KEY',
+        'GITHUB_APP_PRIVATE_KEY_PATH',
+      ]) {
+        authMode = key === 'GITHUB_TOKEN' ? 'pat' : 'app';
+        for (const whitespace of [' ', '   ', '\t']) {
+          const original = serializeEnv({
+            ...(authMode === 'pat'
+              ? { GITHUB_TOKEN: pat }
+              : {
+                  GITHUB_APP_ID: '999',
+                  [key === 'GITHUB_APP_PRIVATE_KEY' ? key : 'GITHUB_APP_PRIVATE_KEY_PATH']:
+                    key === 'GITHUB_APP_PRIVATE_KEY' ? privateKey : keyPath,
+                }),
+            WEBHOOK_SECRET: webhookSecret,
+            CUSTOM_KEY: 'keep',
+            [key]: whitespace,
+          });
+          writeFileSync(target, original);
+          expect(checkExistingConfig(target)?.platforms.github).toBe(false);
+          initialAuthMode = undefined;
+          expect(await run()).toBe(0);
+          expect(initialAuthMode).toBe('pat');
+          expect(selectGitHubAuthMode(read())).toEqual({ kind: authMode });
+          expect(read().CUSTOM_KEY).toBe('keep');
+          if (authMode === 'app')
+            expect(loadGitHubAppConfig(read())).toMatchObject({ appId: '123', privateKey });
+          else expect(read().GITHUB_TOKEN).toBe(pat);
+        }
+      }
+    }
+  );
+
+  it('Add resolves a raw conflict even when the PAT is blank', async () => {
+    setupMode = 'add';
+    writeFileSync(
+      target,
+      serializeEnv({
+        GITHUB_APP_ID: '999',
+        GITHUB_APP_PRIVATE_KEY_PATH: keyPath,
+        GITHUB_TOKEN: '   ',
+        WEBHOOK_SECRET: webhookSecret,
+      })
+    );
+    expect(checkExistingConfig(target)?.platforms.github).toBe(false);
+    expect(await run()).toBe(0);
+    expect(read().GITHUB_TOKEN).toBeUndefined();
+    expect(loadGitHubAppConfig(read())).toMatchObject({ appId: '123', privateKey });
+  });
+
+  it.each(['path', 'inline'] as const)(
+    'Add retains a usable %s key when the alternate source is blank',
+    async source => {
+      setupMode = 'add';
+      writeFileSync(
+        target,
+        serializeEnv({
+          GITHUB_APP_ID: '999',
+          GITHUB_APP_PRIVATE_KEY: source === 'inline' ? privateKey : '   ',
+          GITHUB_APP_PRIVATE_KEY_PATH: source === 'path' ? keyPath : '   ',
+          WEBHOOK_SECRET: webhookSecret,
+        })
+      );
+      expect(checkExistingConfig(target)?.platforms.github).toBe(true);
+      expect(await run()).toBe(0);
+      expect(initialAuthMode).toBeUndefined();
+      expect(loadGitHubAppConfig(read())).toMatchObject({ appId: '999', privateKey });
+    }
+  );
 
   it.each(['home', 'project'] as const)(
     'refuses runtime-active whitespace in the other scope from %s',
