@@ -254,27 +254,6 @@ describe('registry', () => {
       const provider = getAgentProvider('my-llm');
       expect(provider.getType()).toBe('my-llm');
     });
-
-    test('throws on duplicate registration', () => {
-      expect(() => registerProvider(makeMockRegistration('claude'))).toThrow(
-        "Provider 'claude' is already registered"
-      );
-    });
-
-    test('rejects session fork support without session resume support', () => {
-      const entry = makeMockRegistration('invalid-fork', {
-        capabilities: {
-          ...makeMockProvider('invalid-fork').getCapabilities(),
-          sessionFork: true,
-          backgroundWork: 'unobserved' as const,
-          sessionResume: false,
-        },
-      });
-
-      expect(() => registerProvider(entry)).toThrow(
-        "Provider 'invalid-fork' cannot advertise sessionFork without sessionResume"
-      );
-    });
   });
 
   describe('getRegistration', () => {

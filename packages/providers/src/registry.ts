@@ -16,6 +16,7 @@ import type {
 import { createLogger } from '@archon/paths';
 import {
   EFFORT_LADDER,
+  assertProviderRegistrationAllowed,
   type ProviderRegistry,
   parseProviderRunModel as parseRegisteredRunModel,
   UnknownProviderError,
@@ -60,27 +61,6 @@ let reportDeprecation = logDeprecation;
  */
 export function setDeprecationReporter(report: DeprecationReporter): void {
   reportDeprecation = report;
-}
-
-function assertValidCapabilities(entry: ProviderRegistration): void {
-  if (entry.capabilities.sessionFork === true && !entry.capabilities.sessionResume) {
-    throw new Error(`Provider '${entry.id}' cannot advertise sessionFork without sessionResume`);
-  }
-}
-
-export function assertProviderRegistrationAllowed(
-  entry: ProviderRegistration,
-  existing: Iterable<ProviderRegistration>
-): void {
-  const registrations = [...existing];
-  if (registrations.some(provider => provider.id === entry.id)) {
-    throw new Error(`Provider '${entry.id}' is already registered`);
-  }
-  const owner = registrations.find(provider => provider.ownsUnprefixedModelRefs);
-  if (entry.ownsUnprefixedModelRefs && owner) {
-    throw new Error(`Provider '${owner.id}' already owns unprefixed model refs`);
-  }
-  assertValidCapabilities(entry);
 }
 
 /**
