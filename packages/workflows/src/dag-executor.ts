@@ -2435,6 +2435,12 @@ async function executeNodeInternal(
     lastNodeActivityUpdate.delete(nodeKey);
     return result;
   };
+  // The provider is bound but was never called, so the attempt's cost is a known zero
+  // rather than unreported spend that would refuse a spend-limited run.
+  const failBeforeProviderCall = (error: string): Promise<NodeExecutionResult> => {
+    nodeCostUsd = 0;
+    return failAgentNode(error, 'config');
+  };
 
   // Load prompt
   let rawPrompt: string;
@@ -2450,7 +2456,7 @@ async function executeNodeInternal(
     if (!promptResult.success) {
       const errMsg = promptResult.message;
       getLog().error({ nodeId: node.id, error: errMsg }, 'dag_node_command_load_failed');
-      return failAgentNode(errMsg, 'config');
+      return failBeforeProviderCall(errMsg);
     }
     rawPrompt = resolveIncludeOutputAliases(node, promptResult.content);
   } else {
@@ -2499,7 +2505,7 @@ async function executeNodeInternal(
   } catch (error) {
     const err = error as Error;
     getLog().error({ nodeId: node.id, error: err.message }, 'dag.node_prompt_substitution_failed');
-    const result = await failAgentNode(err.message, 'config');
+    const result = await failBeforeProviderCall(err.message);
     await safeSendMessage(
       platform,
       conversationId,

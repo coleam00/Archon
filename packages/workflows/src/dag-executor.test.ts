@@ -43674,6 +43674,36 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     });
   });
 
+  it('charges no spend for an agent attempt that failed before calling its provider', async () => {
+    providerCosts(0.1);
+    const store = await run({
+      name: 'missing-command',
+      budget: { max_spend_usd: 5 },
+      nodes: [
+        { ...ai('a'), source: { kind: 'command', name: 'missing-command' } },
+        ai('b', ['a'], { trigger_rule: 'all_done' }),
+      ],
+    });
+    expect(refusals(store)).toHaveLength(0);
+    expect(started(store, 'b')).toHaveLength(1);
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an operator cancel instead of failing the run for its budget', async () => {
+    providerCosts(0.1);
+    const store = durableStore();
+    store.getWorkflowRunStatus.mockImplementation(async () => 'cancelled');
+    // One parallel layer, so the second node is refused inside the layer, before any
+    // between-layer stop.
+    await run(
+      { name: 'cancelled', budget: { max_work_units: 1 }, nodes: [ai('a'), ai('b')] },
+      store
+    );
+    expect(persistedEvents(store).filter(e => e.event_type === 'node_started')).toHaveLength(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(refusals(store)).toHaveLength(0);
+  });
+
   it('records no run cost when a run without AI attempts is refused', async () => {
     const store = await run({
       name: 'bash-refused',
