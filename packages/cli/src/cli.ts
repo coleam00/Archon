@@ -395,7 +395,11 @@ async function main(): Promise<number> {
     'user',
     'ai',
   ];
-  const requiresGitRepo = !noGitCommands.includes(command ?? '');
+  // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
+  // directory's project, which need not be registered or a git repository.
+  const requiresGitRepo =
+    !noGitCommands.includes(command ?? '') &&
+    !(command === 'workflow' && subcommand === 'attention');
   let detachedRunConfig: WorkflowRunConfigInput | undefined;
 
   const showUpdateNotice =
@@ -726,6 +730,8 @@ async function main(): Promise<number> {
           workflowRejectCommand,
           workflowRespondCommand,
           workflowAnswerCommand,
+          workflowAttentionCommand,
+          workflowAttentionLabelCommand,
           workflowCleanupCommand,
           workflowResetSessionsCommand,
           workflowEventEmitCommand,
@@ -1146,6 +1152,42 @@ async function main(): Promise<number> {
               effectiveCwd
             );
             break;
+          }
+
+          case 'attention': {
+            if (positionals[2] === 'label') {
+              const labelRunId = positionals[3];
+              const labelOccurrence = values.occurrence as string | undefined;
+              if (!labelRunId || labelOccurrence === undefined || positionals[4] !== undefined) {
+                return await fail(
+                  jsonFlag,
+                  'Usage: archon workflow attention label <run-id> --occurrence <id> [--set k=v]... [--unset k]... [--json]'
+                );
+              }
+              return await workflowAttentionLabelCommand(
+                workflowHost,
+                labelRunId,
+                labelOccurrence,
+                (values.set as string[] | undefined) ?? [],
+                (values.unset as string[] | undefined) ?? [],
+                jsonFlag,
+                effectiveCwd
+              );
+            }
+            if (positionals[3] !== undefined) {
+              return await fail(
+                jsonFlag,
+                'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>] [--json]'
+              );
+            }
+            return await workflowAttentionCommand(workflowHost, effectiveCwd, positionals[2], {
+              json: jsonFlag,
+              project: values.project as string | undefined,
+              all: values.all as boolean | undefined,
+              labels: (values.label as string[] | undefined) ?? [],
+              sort: values.sort as string | undefined,
+              countBy: values['count-by'] as string | undefined,
+            });
           }
 
           case 'cleanup': {

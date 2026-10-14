@@ -7101,6 +7101,12 @@ async function executeWaitNode(
       throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
     }
     const options = resolveAttentionOptions(node.id, condition.options, ctx);
+    const labels =
+      condition.labels === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(condition.labels).map(([key, value]) => [key, resolveEventText(value)])
+          );
     context = {
       ...owner,
       kind: 'attention',
@@ -7109,6 +7115,7 @@ async function executeWaitNode(
       pauseId: randomUUID(),
       form: condition.form,
       ...(options !== undefined ? { options } : {}),
+      ...(labels !== undefined ? { labels } : {}),
     };
   }
 

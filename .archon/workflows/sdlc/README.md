@@ -228,11 +228,12 @@ too — a `gh` update notice merged into a read becomes the value.
 ## Intake
 
 [`archon-intake`](intake/archon-intake.yaml) is the front of the label-driven pack.
-Trigger bindings start it on issue events; nobody runs it by hand. Each issue has a
-work item, the state document `work/<number>` in the project's scope, owned by
-[`.shared/workitem.ts`](.shared/workitem.ts). The document is the item's state:
-its trust, stage, triage fields, promotion, claim and a short history. The issue's
-pack labels mirror it, and a label a person adds is a request, never the state.
+Trigger bindings start it on issue events; only an eval run (below) is started by
+hand. Each issue has a work item, the state document `work/<number>` in the
+project's scope, owned by [`.shared/workitem.ts`](.shared/workitem.ts). The
+document is the item's state: its trust, stage, triage fields, promotion, claim and
+a short history. The issue's pack labels mirror it, and a label a person adds is a
+request, never the state.
 
 - **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` (a JSON
   array of forge logins) at the head of the default branch and records once whether
@@ -273,6 +274,24 @@ pack labels mirror it, and a label a person adds is a request, never the state.
   decision, no stage change, no label write.
 - **Inputs.** `label_actor` is the one input that can create a promotion, never
   trust. Only the binding, or someone with access to the install, can supply it.
+  `trust: outside` sends the item down the outside path whatever the maintainer
+  list says. It only lowers trust a run decides: an item whose trust is already
+  recorded as a maintainer's refuses the run, since recorded trust never changes.
+  There is no `maintainer` value; `facts` refuses any value but `auto` and
+  `outside`, and any `mode` but `live` and `eval`, before it reads or writes
+  anything.
+- **Eval mode.** `mode: eval` runs intake on the issue named by `number` and
+  writes nothing: no request, claim, work item, label or comment. It reads the
+  maintainer list and the issue, and decides the issue as a fresh item as it was
+  opened, unlabelled and open. Triage is shown only the title and body at creation,
+  recovered from GitHub's edit history, without the issue's number, state or links.
+  The `forge` source has no edit history and shows the current text; the outcome's
+  `evaluation.seen.body_from` says which one triage saw. The outcome returns the
+  whole decision as `evaluation`: the trust input, what triage saw, the label delta
+  live would write, this run's history entries, and triage's verdict with its five
+  fields. The triage agent keeps its read tools and can still look the issue up,
+  and it reads the run's message too, so launch an eval run without a message that
+  names the issue.
 
 The pack installs no binding, and none should be installed on a repository until the
 backlog bench passes. Two bindings in the GitHub source plugin's configuration start

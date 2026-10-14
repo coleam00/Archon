@@ -139,6 +139,9 @@ const store: WorkflowOperationsDeps['store'] = {
   answerAttentionWait: async () => {
     throw new Error('Unexpected answerAttentionWait');
   },
+  labelAttentionWait: async () => {
+    throw new Error('Unexpected labelAttentionWait');
+  },
   deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
 };
 const {

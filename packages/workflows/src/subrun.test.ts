@@ -300,6 +300,12 @@ class InMemoryStore implements IWorkflowStore {
   answerAttentionWait: IWorkflowStore['answerAttentionWait'] = () => {
     throw new Error('Unexpected answerAttentionWait');
   };
+  labelAttentionWait: IWorkflowStore['labelAttentionWait'] = () => {
+    throw new Error('Unexpected labelAttentionWait');
+  };
+  listAttentionQueueRows: IWorkflowStore['listAttentionQueueRows'] = () => {
+    throw new Error('Unexpected listAttentionQueueRows');
+  };
   signalWorkflowWait: IWorkflowStore['signalWorkflowWait'] = () => {
     throw new Error('Unexpected signalWorkflowWait');
   };
