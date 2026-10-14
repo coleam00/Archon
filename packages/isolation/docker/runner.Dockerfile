@@ -64,7 +64,7 @@ ENV PATH="/root/.local/bin:/root/.bun/bin:${PATH}"
 # The merged overlay is mounted at the host's absolute cwd, whose files git would
 # otherwise flag as dubious-ownership. Trust every path (the container is
 # single-purpose and isolated).
-RUN git config --system --add safe.directory '*'
+RUN git config --system --fixed-value --replace-all safe.directory '*' '*'
 
 # Claude Code refuses --dangerously-skip-permissions as root UNLESS IS_SANDBOX=1.
 # We run in-container work as root under this flag deliberately: writing across
