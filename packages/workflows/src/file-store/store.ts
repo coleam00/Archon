@@ -1,3 +1,4 @@
+import { createFileAdmissionStore, createAdmissionTransaction } from './admission';
 import { NODE_LIFECYCLE_EVENT_TYPES, foldActiveNodeIds } from '../store';
 import { FileStoreUnsupportedError } from './errors';
 import { createHash } from 'node:crypto';
@@ -24,6 +25,8 @@ import {
 } from './transaction-view';
 import {
   commit,
+  createFileEventFeed,
+  isRunArchived,
   openFileStore,
   readJson,
   readRun,
@@ -34,9 +37,6 @@ import {
 } from './commit';
 
 const log = createLogger('file-store');
-const unsupportedTriggerAdmission = async (): Promise<never> => {
-  throw new FileStoreUnsupportedError('trigger admission');
-};
 const unsupportedStateDocuments = async (): Promise<never> => {
   throw new FileStoreUnsupportedError('state documents');
 };
@@ -87,7 +87,10 @@ export async function createFileWorkflowStore(
    */
   async function write<T>(
     ids: readonly string[] | 'all',
-    call: (view: TransactionView) => Promise<T>,
+    call: (
+      view: TransactionView,
+      admission: ReturnType<typeof createAdmissionTransaction>
+    ) => Promise<T>,
     { events: loadEvents = true }: { events?: boolean } = {}
   ): Promise<T> {
     const reports: { run: WorkflowRun; events: WorkflowEventRow[] }[] = [];
@@ -96,7 +99,8 @@ export async function createFileWorkflowStore(
       const events = loadEvents ? await eventsFor([...runs.keys()]) : [];
       const prior = byRun(events);
       const priorIds = new Set(events.map(event => event.id));
-      const result = await call(createTransactionView(runs, events, getCodebase));
+      const admission = createAdmissionTransaction(root);
+      const result = await call(createTransactionView(runs, events, getCodebase), admission);
       const next = byRun(events);
       const nextIds = new Set(events.map(event => event.id));
       const changes = [];
@@ -120,7 +124,10 @@ export async function createFileWorkflowStore(
         changes: {
           runs: changes,
           deleteRuns: deleted,
-          documents: await clearDeletedSessionReferences(deleted),
+          documents: {
+            ...(await clearDeletedSessionReferences(deleted)),
+            ...(await admission.changedDocuments()),
+          },
         },
       };
     });
@@ -165,25 +172,40 @@ export async function createFileWorkflowStore(
     return documents;
   }
   const store: IWorkflowStore & { deleteWorkflowRun(id: string): Promise<void> } = {
+    ...createFileEventFeed(root),
     getCodebase,
     getCodebaseEnvVars,
     createWorkflowRun: data => {
       const input = { ...data, id: data.id ?? crypto.randomUUID() };
-      return write([input.id], view => view.createWorkflowRun(input));
+      return write([input.id], async view => {
+        if (await isRunArchived(root, input.id)) throw new Error('Duplicate run');
+        return view.createWorkflowRun(input);
+      });
     },
     getWorkflowRun: id => readRun(root, id),
     getWorkflowRunStatus: async id => (await readRun(root, id))?.status ?? null,
     claimPendingWorkflowRun: (id, path) =>
-      write([id], async view => {
+      write([id], async (view, admission) => {
         const run = await view.getWorkflowRun(id);
-        if (!run || (await options.isCheckoutReleased?.(run, path))) return null;
+        if (
+          !run ||
+          !(await admission.canClaim(id)) ||
+          (await options.isCheckoutReleased?.(run, path))
+        )
+          return null;
         return view.claimPendingWorkflowRun(id, path);
       }),
     updateWorkflowRun: (id, updates) => write([id], view => view.updateWorkflowRun(id, updates)),
     updateWorkflowActivity: id => write([id], view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write([id], view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
-    resumeWorkflowRun: (id, cursor) => write([id], view => view.resumeWorkflowRun(id, cursor)),
+    resumeWorkflowRun: (id, cursor) =>
+      write([id], async (view, admission) => {
+        const prior = await view.getWorkflowRun(id);
+        const resumed = await view.resumeWorkflowRun(id, cursor);
+        if (prior) await admission.resume(prior);
+        return resumed;
+      }),
     recoverCancelledFanOutRun: id => write([id], view => view.recoverCancelledFanOutRun(id)),
     pauseWorkflowRun: (id, approval, extra, suspension) =>
       write([id], view => view.pauseWorkflowRun(id, approval, extra, suspension)),
@@ -292,7 +314,7 @@ export async function createFileWorkflowStore(
       write([id], view => view.deferWorkflowContinuation(id, retry, cursor)),
     signalWorkflowWait: (id, wait, payload) =>
       write([id], view => view.signalWorkflowWait(id, wait, payload)),
-    // A deleted run's directory goes away whole, so its events are never read.
+    // Cleanup archives logs without hydrating current-state events.
     deleteOldWorkflowRuns: days =>
       write('all', view => view.deleteOldWorkflowRuns(days), { events: false }),
     deleteWorkflowRun: id =>
@@ -393,19 +415,7 @@ export async function createFileWorkflowStore(
           changes: { documents: { [path]: [...rows.filter(row => row !== prior), next] } },
         };
       }),
-    admitResourceStart: unsupportedTriggerAdmission,
-    drainResourceStarts: unsupportedTriggerAdmission,
-    acceptStartReceipt: unsupportedTriggerAdmission,
-    getStartReceipt: unsupportedTriggerAdmission,
-    listStartReceipts: unsupportedTriggerAdmission,
-    listPendingStartBindings: unsupportedTriggerAdmission,
-    getResourceStartRequest: unsupportedTriggerAdmission,
-    listQueuedResourceStartsForHost: unsupportedTriggerAdmission,
-    withdrawQueuedResourceStart: unsupportedTriggerAdmission,
-    claimStartBindingPreparation: unsupportedTriggerAdmission,
-    completeStartBindingPreparation: unsupportedTriggerAdmission,
-    failStartBindingPreparation: unsupportedTriggerAdmission,
-    resetStartBindingPreparation: unsupportedTriggerAdmission,
+    ...createFileAdmissionStore(root),
     getStateDocument: unsupportedStateDocuments,
     putStateDocument: unsupportedStateDocuments,
     patchStateDocument: unsupportedStateDocuments,

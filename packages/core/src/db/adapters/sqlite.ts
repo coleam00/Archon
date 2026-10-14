@@ -62,6 +62,32 @@ async function retryWhileBusy<T>(
 }
 
 /**
+ * `retryWhileBusy` for the synchronous open path. Switching a fresh file to WAL takes
+ * a lock that SQLite does not wait for through busy_timeout, so a process opening the
+ * same new database as another one gets SQLITE_BUSY there instead of waiting.
+ */
+function retryWhileBusySync(attempt: () => void): void {
+  const startedAt = Date.now();
+  let delayMs = 10;
+  let nextWarnAtMs = 0;
+  for (;;) {
+    try {
+      attempt();
+      return;
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      const waitedMs = Date.now() - startedAt;
+      if (waitedMs >= nextWarnAtMs) {
+        getLog().warn({ operation: 'open', code: error.code, waitedMs }, 'db.sqlite_busy_waiting');
+        nextWarnAtMs = waitedMs + BUSY_WARN_INTERVAL_MS;
+      }
+      Bun.sleepSync(delayMs);
+      delayMs = Math.min(delayMs * 2, BUSY_RETRY_MAX_DELAY_MS);
+    }
+  }
+}
+
+/**
  * The resource slot holders table. One definition serves fresh creation and the
  * one-time rebuild that widens a dev database's narrow holder-kind CHECK.
  * `owner_*` name the process that owns an 'attempt' holder and are NULL for 'run'.
@@ -108,7 +134,7 @@ export class SqliteAdapter implements IDatabase {
     this.db.run('PRAGMA busy_timeout = 5000');
 
     // Enable WAL mode for better concurrent performance
-    this.db.run('PRAGMA journal_mode = WAL');
+    retryWhileBusySync(() => this.db.run('PRAGMA journal_mode = WAL'));
 
     // Enable foreign keys
     this.db.run('PRAGMA foreign_keys = ON');
@@ -339,7 +365,26 @@ export class SqliteAdapter implements IDatabase {
     // Probe BEFORE createSchema(): once CREATE TABLE IF NOT EXISTS has run there is
     // no way left to tell a fresh database from one that predates version tracking.
     const preExisting = this.hasAnyArchonTable();
-    this.createSchema();
+    if (preExisting) {
+      // Every statement is an IF NOT EXISTS no-op on an existing database, so this takes
+      // no write lock beside a running server.
+      this.createSchema();
+    } else {
+      // A fresh database gets its schema in one commit instead of one per statement:
+      // each commit is an fsync, and on a slow disk dozens of them took seconds. IMMEDIATE
+      // makes a second process creating the same fresh file wait (busy_timeout) and then
+      // find every table present, instead of failing to upgrade a stale read.
+      this.db.run('BEGIN IMMEDIATE');
+      try {
+        this.createSchema();
+        this.db.run('COMMIT');
+      } catch (error) {
+        // SQLite may already have rolled back (SQLITE_FULL, SQLITE_IOERR); a ROLLBACK
+        // then would throw and hide the error that explains the failure.
+        if (this.db.inTransaction) this.db.run('ROLLBACK');
+        throw error;
+      }
+    }
     const allApplied = this.migrateColumns();
     this.recordSchemaVersion(preExisting, allApplied);
   }
@@ -636,37 +681,53 @@ export class SqliteAdapter implements IDatabase {
       allApplied = false;
     }
 
-    // Lifecycle ordering: SQLite timestamps have one-second precision. A trigger
-    // assigns a durable, monotonically increasing value for each inserted event.
-    try {
-      const cols = this.prepareAll<{ name: string }>(
-        "PRAGMA table_info('remote_agent_workflow_events')"
-      );
-      if (!new Set(cols.map(c => c.name)).has('event_order')) {
-        this.db.run('ALTER TABLE remote_agent_workflow_events ADD COLUMN event_order INTEGER');
-      }
-      this.db.run(
-        `CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_run_order
-           ON remote_agent_workflow_events(workflow_run_id, event_order)
-           WHERE event_order IS NOT NULL`
-      );
-      this.db.run(
-        `CREATE TRIGGER IF NOT EXISTS remote_agent_workflow_events_assign_order
-           AFTER INSERT ON remote_agent_workflow_events
-           WHEN NEW.event_order IS NULL
-           BEGIN
-             UPDATE remote_agent_workflow_events
-             SET event_order = (
-               SELECT COALESCE(MAX(event_order), 0) + 1
-               FROM remote_agent_workflow_events
-             )
-             WHERE rowid = NEW.rowid;
-           END`
-      );
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_events_columns_failed');
-      allApplied = false;
-    }
+    // The high-water row survives event deletion. SQLite serializes writers;
+    // PostgreSQL records its sequence allocation here in the deferred trigger.
+    this.db
+      .transaction(() => {
+        const cols = this.prepareAll<{ name: string }>(
+          "PRAGMA table_info('remote_agent_workflow_events')"
+        );
+        if (!new Set(cols.map(c => c.name)).has('event_order')) {
+          this.db.run('ALTER TABLE remote_agent_workflow_events ADD COLUMN event_order INTEGER');
+        }
+        this.db.run(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_run_order
+         ON remote_agent_workflow_events(workflow_run_id, event_order)
+         WHERE event_order IS NOT NULL`
+        );
+        this.db.run(`CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_sequence (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      value INTEGER NOT NULL DEFAULT 0
+    )`);
+        this.db.run(`INSERT INTO remote_agent_workflow_event_sequence (id, value)
+      SELECT 1, COALESCE(MAX(event_order), 0) FROM remote_agent_workflow_events WHERE true
+      ON CONFLICT(id) DO UPDATE SET value = MAX(value, excluded.value)`);
+        this.db.run(`CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_archive AS
+          SELECT * FROM remote_agent_workflow_events WHERE false`);
+        this.db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_event_archive_order
+          ON remote_agent_workflow_event_archive(event_order)`);
+        this.db.run(`CREATE TRIGGER IF NOT EXISTS remote_agent_workflow_events_archive
+          BEFORE DELETE ON remote_agent_workflow_events
+          BEGIN
+            INSERT INTO remote_agent_workflow_event_archive
+              SELECT * FROM remote_agent_workflow_events WHERE rowid = OLD.rowid;
+          END`);
+        this.db.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
+        this.db.run(
+          `CREATE TRIGGER remote_agent_workflow_events_assign_order
+         AFTER INSERT ON remote_agent_workflow_events
+         BEGIN
+           UPDATE remote_agent_workflow_event_sequence SET value = value + 1 WHERE id = 1;
+           UPDATE remote_agent_workflow_events
+           SET event_order = (SELECT value FROM remote_agent_workflow_event_sequence WHERE id = 1)
+           WHERE rowid = NEW.rowid;
+         END`
+        );
+        this.db.run(`CREATE INDEX IF NOT EXISTS idx_workflow_events_order
+      ON remote_agent_workflow_events(event_order)`);
+      })
+      .immediate();
 
     // #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
     // copilot→github-copilot). Idempotent data fix mirroring
@@ -761,6 +822,28 @@ export class SqliteAdapter implements IDatabase {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_receipt_bindings_columns_failed');
       allApplied = false;
     }
+
+    // The archive trigger copies an event row by position, and CREATE TABLE AS ran
+    // only once. Give the archive every column a later ADD COLUMN gave the events
+    // table, in the same order, so deleting an event never fails on a shape mismatch.
+    // The write transaction keeps a concurrent opener from adding the same column.
+    this.db
+      .transaction(() => {
+        const archived = new Set(
+          this.prepareAll<{ name: string }>(
+            "PRAGMA table_info('remote_agent_workflow_event_archive')"
+          ).map(column => column.name)
+        );
+        for (const column of this.prepareAll<{ name: string; type: string }>(
+          "PRAGMA table_info('remote_agent_workflow_events')"
+        )) {
+          if (!archived.has(column.name))
+            this.db.run(
+              `ALTER TABLE remote_agent_workflow_event_archive ADD COLUMN "${column.name}" ${column.type}`
+            );
+        }
+      })
+      .immediate();
 
     return allApplied;
   }
@@ -1044,6 +1127,15 @@ export class SqliteAdapter implements IDatabase {
         ON remote_agent_resource_start_requests(host_id, status, resource_key, queue_position);
       CREATE INDEX IF NOT EXISTS idx_start_binding_preparation
         ON remote_agent_start_receipt_bindings(host_id, preparation_status, created_at);
+
+      CREATE TABLE IF NOT EXISTS remote_agent_web_push_subscriptions (
+        id TEXT PRIMARY KEY NOT NULL,
+        user_id TEXT NOT NULL REFERENCES remote_agent_users(id) ON DELETE CASCADE,
+        endpoint TEXT NOT NULL UNIQUE,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
 
       -- Workflow events table
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (

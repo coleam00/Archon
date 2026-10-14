@@ -82,7 +82,12 @@ interface CliResult {
 function runCli(fixture: Fixture, args: string[]): CliResult {
   const result = spawnSync(process.execPath, [CLI_ENTRY, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, ARCHON_HOME: fixture.archonHome, ARCHON_TELEMETRY_DISABLED: '1' },
+    env: {
+      ...process.env,
+      ARCHON_HOME: fixture.archonHome,
+      ARCHON_TELEMETRY_DISABLED: '1',
+      DATABASE_URL: '',
+    },
   });
   return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 }
@@ -94,7 +99,7 @@ interface ForegroundOwner {
 }
 
 /** Start `workflow run` as a real foreground owner and keep its handle. */
-function startForegroundRun(fixture: Fixture): ForegroundOwner {
+function startForegroundRun(fixture: Fixture, setup = false): ForegroundOwner {
   const child = Bun.spawn(
     [
       process.execPath,
@@ -104,11 +109,16 @@ function startForegroundRun(fixture: Fixture): ForegroundOwner {
       WORKFLOW_NAME,
       '--cwd',
       fixture.repo,
-      '--no-worktree',
+      ...(setup ? [] : ['--no-worktree']),
     ],
     {
       cwd: fixture.repo,
-      env: { ...process.env, ARCHON_HOME: fixture.archonHome, ARCHON_TELEMETRY_DISABLED: '1' },
+      env: {
+        ...process.env,
+        ARCHON_HOME: fixture.archonHome,
+        ARCHON_TELEMETRY_DISABLED: '1',
+        DATABASE_URL: '',
+      },
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -173,9 +183,10 @@ function readRun(fixture: Fixture): RunRow | undefined {
 async function waitFor<T>(
   what: string,
   read: () => T | undefined,
-  owner?: ForegroundOwner
+  owner?: ForegroundOwner,
+  timeoutMs = 90_000
 ): Promise<T> {
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const ownerExited = owner !== undefined && owner.child.exitCode !== null;
     const value = read();
@@ -195,8 +206,71 @@ function getRunJson(fixture: Fixture, runId: string): Record<string, unknown> {
   return JSON.parse(result.output.trim()) as Record<string, unknown>;
 }
 
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return false;
+    if (code === 'EPERM') return true;
+    throw error;
+  }
+}
+
 // Windows has no POSIX signal delivery, so there is no interrupt to deliver or record.
 describe.skipIf(process.platform === 'win32')('an interrupted foreground run', () => {
+  test('Ctrl-C during worktree setup ends its background descendant', async () => {
+    const fixture = makeFixture();
+    const root = join(fixture.repo, '..');
+    const ready = join(root, 'setup.ready');
+    const go = join(root, 'setup.go');
+    const leaked = join(root, 'setup.leaked');
+    const pidFile = join(root, 'setup.pid');
+    const command = `bash -c 'echo $$ > "${pidFile}"; touch "${ready}"; while [ ! -f "${go}" ]; do sleep 0.01; done; touch "${leaked}"' & wait`;
+    writeFileSync(
+      join(fixture.repo, '.archon', 'config.yaml'),
+      `worktree:\n  baseBranch: main\n  postCreate:\n    - ${JSON.stringify(command)}\n`
+    );
+    const origin = join(root, 'origin.git');
+    mkdirSync(origin);
+    const git = (cwd: string, args: string[]): void => {
+      const result = spawnSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args],
+        { cwd, encoding: 'utf8' }
+      );
+      if (result.status !== 0) throw new Error(result.stderr);
+    };
+    git(origin, ['init', '--bare', '-q']);
+    git(fixture.repo, ['add', '.archon']);
+    git(fixture.repo, ['commit', '-qm', 'Setup interrupt fixture']);
+    git(fixture.repo, ['branch', '-M', 'main']);
+    git(fixture.repo, ['remote', 'add', 'origin', origin]);
+    git(fixture.repo, ['push', '-q', 'origin', 'main']);
+    const owner = startForegroundRun(fixture, true);
+    try {
+      await waitFor('setup to start', () => (existsSync(ready) ? true : undefined), owner);
+      const descendantPid = Number(readFileSync(pidFile, 'utf8'));
+      expect(processExists(descendantPid)).toBe(true);
+      owner.child.kill('SIGINT');
+      await owner.settled;
+      await waitFor(
+        'the setup descendant to exit',
+        () => (!processExists(descendantPid) ? true : undefined),
+        undefined,
+        3000
+      );
+      writeFileSync(go, '');
+      expect(existsSync(leaked)).toBe(false);
+    } finally {
+      if (owner.child.exitCode === null) owner.child.kill('SIGKILL');
+      await owner.settled;
+      writeFileSync(go, '');
+      await Bun.sleep(100);
+    }
+  }, 120000);
+
   test('records why it stopped and still resumes to completion', async () => {
     const fixture = makeFixture();
     const owner = startForegroundRun(fixture);

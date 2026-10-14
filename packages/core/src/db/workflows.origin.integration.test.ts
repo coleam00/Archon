@@ -206,16 +206,26 @@ describe('optional workflow origin', () => {
     raw.exec(await readFile(join(import.meta.dir, 'fixtures/sqlite-vintages/v0.11.0.sql'), 'utf8'));
     raw.close();
     db = new SqliteAdapter(path);
-    const conversationId = await seedConversation();
-    const legacyId = crypto.randomUUID();
-    await oldWriter(legacyId, conversationId);
-    expect((await workflows.getWorkflowRun(legacyId))?.origin).toEqual({ conversationId });
-    const run = await workflows.createWorkflowRun({ workflow_name: 'upgraded', user_message: '' });
-    expect(run.origin).toBeNull();
-    const columns = await db.query<{ name: string; notnull: number }>(
-      'SELECT name, "notnull" FROM pragma_table_info(\'remote_agent_workflow_runs\')'
-    );
-    expect(columns.rows.find(column => column.name === 'conversation_id')?.notnull).toBe(1);
-    expect(columns.rows.find(column => column.name === 'origin')?.notnull).toBe(0);
+    try {
+      const conversationId = await seedConversation();
+      const legacyId = crypto.randomUUID();
+      await oldWriter(legacyId, conversationId);
+      expect((await workflows.getWorkflowRun(legacyId))?.origin).toEqual({ conversationId });
+      const run = await workflows.createWorkflowRun({
+        workflow_name: 'upgraded',
+        user_message: '',
+      });
+      expect(run.origin).toBeNull();
+      const columns = await db.query<{ name: string; notnull: number }>(
+        'SELECT name, "notnull" FROM pragma_table_info(\'remote_agent_workflow_runs\')'
+      );
+      expect(columns.rows.find(column => column.name === 'conversation_id')?.notnull).toBe(1);
+      expect(columns.rows.find(column => column.name === 'origin')?.notnull).toBe(0);
+    } finally {
+      // Close the file-backed adapter before the temp root is removed: Windows refuses
+      // to delete an open database file.
+      await db.close();
+      db = new SqliteAdapter(':memory:');
+    }
   });
 });

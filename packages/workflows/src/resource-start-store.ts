@@ -1,3 +1,4 @@
+import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
   ResourceStartBindingIntent,
@@ -5,6 +6,8 @@ import type {
   ResourceStartIntent,
   SourceReceiptInput,
   SourceReceiptAcceptance,
+  startBindingPreparationStatusSchema,
+  resourceStartRequestStatusSchema,
 } from './schemas/resource-start';
 import type { WorkflowRunStatus } from './schemas/workflow-run';
 
@@ -28,7 +31,7 @@ export interface StartBindingInspection {
   bindingId: string;
   bindingRevision: string | null;
   hostId: string | null;
-  status: 'pending' | 'preparing' | 'failed' | 'rejected' | 'unmatched' | 'complete';
+  status: z.infer<typeof startBindingPreparationStatusSchema>;
   ownerId: string | null;
   error: string | null;
   intent: ResourceStartBindingIntent | null;
@@ -54,7 +57,7 @@ export interface ResourceStartRequestInspection {
   resource: string;
   hostId: string;
   overlap: ResourceStartIntent['overlap'];
-  status: ResourceStartDisposition['status'] | 'withdrawn';
+  status: z.infer<typeof resourceStartRequestStatusSchema>;
   runStatus: WorkflowRunStatus | null;
   blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker'] | null;
   blockerRunStatus: WorkflowRunStatus | null;
@@ -65,6 +68,34 @@ export function validateStartReceiptLimit(limit = 50): number {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
     throw new Error('Receipt limit must be an integer from 1 to 1000.');
   return limit;
+}
+
+// The receipt schema accepts UTC datetimes with optional seconds and arbitrary
+// fractional precision; Date.parse would discard precision below milliseconds.
+function receiptTimeKey(receivedAt: string): string {
+  const dot = receivedAt.indexOf('.');
+  const seconds = receivedAt.slice(0, dot === -1 ? -1 : dot).padEnd(19, ':00');
+  const fraction = dot === -1 ? '' : receivedAt.slice(dot + 1, -1).replace(/0+$/, '');
+  return `${seconds}.${fraction}`;
+}
+
+export function compareStartReceipts(
+  a: Pick<SourceReceiptInput, 'id' | 'receivedAt'>,
+  b: Pick<SourceReceiptInput, 'id' | 'receivedAt'>
+): number {
+  return (
+    compareCodeUnits(receiptTimeKey(b.receivedAt), receiptTimeKey(a.receivedAt)) ||
+    compareCodeUnits(b.id, a.id)
+  );
+}
+
+/**
+ * Ascending code-unit order, as SQLite's default BINARY collation sorts text. In-process
+ * stores use it instead of localeCompare, whose result depends on the runtime's locale.
+ * Postgres sorts by the database collation, so mixed-case values may order differently there.
+ */
+export function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 export interface IResourceStartStore {

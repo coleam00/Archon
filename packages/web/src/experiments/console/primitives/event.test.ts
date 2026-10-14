@@ -335,6 +335,20 @@ describe('toRunEvent — error & workflow lifecycle', () => {
 });
 
 describe('toRunEvent — fallback', () => {
+  test.each(['mystery_event', 'node_suspended'])(
+    'structured %s records are system events rather than agent questions',
+    event_type => {
+      const e = toRunEvent(raw({ event_type, data: { foo: 'bar' } }));
+      expect(e).toMatchObject({ kind: 'system', label: event_type, detail: '{"foo":"bar"}' });
+    }
+  );
+  test.each(['text', 'message'])('a prose-bearing event keeps its %s content', field => {
+    const e = toRunEvent(
+      raw({ event_type: 'agent_text', data: { [field]: 'Which target should I use?' } })
+    );
+    expect(e).toMatchObject({ kind: 'text', content: 'Which target should I use?' });
+  });
+
   test.each(['started', 'completed', 'failed'])(
     'worktree setup %s shows its message without creating node transitions',
     phase => {
@@ -353,13 +367,6 @@ describe('toRunEvent — fallback', () => {
       expect(foldNodeRuns([event], [])).toEqual([]);
     }
   );
-
-  test('unknown event types fall through to a text event with a payload summary', () => {
-    const e = toRunEvent(raw({ event_type: 'mystery_event', data: { foo: 'bar' } }));
-    expect(e.kind).toBe('text');
-    if (e.kind !== 'text') throw new Error('unreachable');
-    expect(e.content).toContain('mystery_event');
-  });
 });
 
 describe('countTerminalNodes', () => {
@@ -678,5 +685,27 @@ describe('toRunEvent — container lifecycle (DB rows)', () => {
     );
     expect(e.kind).toBe('system');
     if (e.kind === 'system') expect(e.label).toBe('Container removed');
+  });
+});
+
+test.each([
+  { baseline: false, label: 'Attention notice sent' },
+  { baseline: true, label: 'Attention baseline recorded' },
+])('attention audit rows stay out of agent text ($label)', ({ baseline, label }) => {
+  expect(
+    toRunEvent(
+      raw({
+        event_type: 'attention_notice_sent',
+        data: {
+          destination: 'web-push',
+          key: 'review:pause-1',
+          ...(baseline ? { baseline: true } : {}),
+        },
+      })
+    )
+  ).toMatchObject({
+    kind: 'system',
+    label,
+    detail: 'web-push',
   });
 });

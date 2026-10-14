@@ -1991,6 +1991,60 @@ describe('dryRunWorkflow', () => {
     expect(result.trace[1]?.resolvedText).toBe('finish fresh');
   });
 
+  test('resolves $LOOP_PREV in body bindings and conditions as a real run does (#3996)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-loop-prev-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(join(cwd, '.archon', 'commands', 'report.md'), 'previous PR: [$INPUTS.pr_url]');
+    const workflow = makeTestWorkflow({
+      name: 'loop-prev',
+      nodes: [
+        {
+          id: 'group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 2,
+            nodes: [
+              {
+                id: 'round',
+                prompt: 'round',
+                output_format: { type: 'object', properties: { pr_url: { type: 'string' } } },
+              },
+              {
+                id: 'report',
+                command: 'report',
+                depends_on: ['round'],
+                with: { pr_url: '$LOOP_PREV.round.output.pr_url' },
+              },
+              {
+                id: 'followup',
+                prompt: 'follow up',
+                depends_on: ['round'],
+                when: "$LOOP_PREV.round.output.pr_url == 'https://example.test/pr/1'",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { round: { pr_url: 'https://example.test/pr/1' }, report: 'more', followup: 'ok' },
+    });
+
+    const entries = (nodeId: string) => result.trace.filter(entry => entry.nodeId === nodeId);
+    expect(entries('report').map(entry => entry.resolvedText)).toEqual([
+      'previous PR: []',
+      'previous PR: [https://example.test/pr/1]',
+    ]);
+    expect(entries('followup').map(entry => [entry.iteration, entry.state])).toEqual([
+      [1, 'skipped'],
+      [2, 'stubbed'],
+    ]);
+  });
+
   test('represents cancellation and unsupported subworkflows visibly', async () => {
     const cancelled = makeTestWorkflow({
       name: 'cancel',

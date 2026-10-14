@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rm, truncate, unlink } from 'node:fs/promises';
+import {
+  WorkflowEventCursorError,
+  type WorkflowEventCursor,
+  type WorkflowEventPage,
+  type IWorkflowEventFeed,
+} from '../store';
+import { mkdir, open, readFile, readdir, rm, stat, unlink } from 'node:fs/promises';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
@@ -34,6 +40,53 @@ const intentSchema = z.object({
   deleteRuns: z.array(z.string()),
 });
 type Intent = z.infer<typeof intentSchema>;
+const feedIndexSchema = headSchema.extend({
+  runs: z.record(z.string(), z.number().int().positive()),
+});
+type FeedIndex = z.infer<typeof feedIndexSchema>;
+
+// Cleanup transfers logs to the feed archive; the index remains disposable.
+async function rebuildFeedIndex(root: string, seq: number): Promise<FeedIndex> {
+  const runs: FeedIndex['runs'] = {};
+  await mkdir(archiveRoot(root), { recursive: true });
+  const dirs = [
+    ...(await readdir(join(root, 'runs'), { withFileTypes: true })),
+    ...(await readdir(archiveRoot(root), { withFileTypes: true })),
+  ];
+  for (let start = 0; start < dirs.length; start += 64) {
+    await Promise.all(
+      dirs
+        .slice(start, start + 64)
+        .filter(dir => dir.isDirectory())
+        .map(async dir => {
+          const last = (await readFeedLog(root, dir.name)).lines
+            .reverse()
+            .find(line => line.events.length > 0);
+          if (last) runs[dir.name] = last.seq;
+        })
+    );
+  }
+  const index = { format: 1 as const, seq, runs };
+  await replaceJson(join(root, 'feed-index.json'), index);
+  return index;
+}
+async function readFeedIndex(root: string, seq: number): Promise<FeedIndex> {
+  const value = await readJson(join(root, 'feed-index.json'));
+  const index = value === undefined ? undefined : feedIndexSchema.parse(value);
+  return index?.seq === seq ? index : rebuildFeedIndex(root, seq);
+}
+async function updateFeedIndex(root: string, intent: Intent): Promise<void> {
+  const value = await readJson(join(root, 'feed-index.json'));
+  const index = value === undefined ? undefined : feedIndexSchema.parse(value);
+  if (index?.seq === intent.seq) return;
+  if (index?.seq !== (await readHead(root))) {
+    await rebuildFeedIndex(root, intent.seq);
+    return;
+  }
+  for (const line of intent.lines) if (line.events.length) index.runs[line.run.id] = line.seq;
+  index.seq = intent.seq;
+  await replaceJson(join(root, 'feed-index.json'), index);
+}
 export interface CommitChanges {
   runs?: { run: WorkflowRun; events?: WorkflowEventRow[]; retract?: string[] }[];
   documents?: Record<string, unknown>;
@@ -47,6 +100,24 @@ export interface RunState {
 export function runPath(root: string, id: string): string {
   if (!/^[a-zA-Z0-9-]+$/.test(id)) throw new Error(`Invalid file store run id: ${id}`);
   return join(root, 'runs', id);
+}
+// Deletion moves a run's log here; the ID stays reserved so the feed never loses its history.
+function archiveRoot(root: string): string {
+  return join(root, 'archived-runs');
+}
+function archivedRunPath(root: string, id: string): string {
+  runPath(root, id);
+  return join(archiveRoot(root), id);
+}
+/** Whether `id` belonged to a deleted run. Callers creating a run must hold the store lock. */
+export async function isRunArchived(root: string, id: string): Promise<boolean> {
+  try {
+    await stat(archivedRunPath(root, id));
+    return true;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 function documentPath(root: string, path: string): string {
   const target = resolve(root, path);
@@ -90,11 +161,12 @@ export async function replaceJson(path: string, value: unknown): Promise<void> {
 }
 async function readLog(
   root: string,
-  id: string
+  id: string,
+  archived = false
 ): Promise<{ lines: RunCommitLine[]; bytes: number; total: number }> {
   let contents: Buffer;
   try {
-    const path = join(runPath(root, id), 'log.jsonl');
+    const path = join(archived ? archivedRunPath(root, id) : runPath(root, id), 'log.jsonl');
     contents = (await retryFileStoreHandles('read', path, () => readFile(path))).value;
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
@@ -111,6 +183,29 @@ async function readLog(
     bytes,
     total: contents.length,
   };
+}
+async function readFeedLog(root: string, id: string): ReturnType<typeof readLog> {
+  const live = await readLog(root, id);
+  return live.lines.length ? live : readLog(root, id, true);
+}
+async function archiveRunLog(root: string, id: string): Promise<void> {
+  const source = runPath(root, id);
+  const target = archivedRunPath(root, id);
+  await mkdir(target, { recursive: true });
+  await syncDirectory(root);
+  await syncDirectory(dirname(target));
+  try {
+    await renameReplacing(join(source, 'log.jsonl'), join(target, 'log.jsonl'));
+  } catch (error) {
+    // Redo may find the log already transferred and the run directory removed.
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    if (!(await readLog(root, id, true)).lines.length)
+      throw new Error('Deleted run has no retained feed log', { cause: error });
+    await syncDirectory(target);
+    return;
+  }
+  await syncDirectory(target);
+  await syncDirectory(source);
 }
 async function lastLogLine(root: string, id: string): Promise<RunCommitLine | null> {
   return (
@@ -158,12 +253,10 @@ async function apply(root: string, intent: Intent): Promise<void> {
     const dir = runPath(root, line.run.id);
     await mkdir(dir, { recursive: true });
     await syncDirectory(dirname(dir));
-    const prior = await readLog(root, line.run.id);
-    const last = prior.lines.at(-1);
+    const last = await lastLogLine(root, line.run.id);
     if (last && last.seq > line.seq) throw new Error('File store intent is behind the log');
-    // Cut a torn tail by path: on Windows an append-mode handle lacks the
-    // write access SetEndOfFile needs, so FileHandle.truncate fails with EPERM.
-    if (prior.bytes !== prior.total) await truncate(join(dir, 'log.jsonl'), prior.bytes);
+    // Tail repair uses a read/write handle: Windows cannot truncate an append-only handle.
+    await truncateTornTail(join(dir, 'log.jsonl'));
     const file = await open(join(dir, 'log.jsonl'), 'a+', 0o600);
     try {
       if (last?.seq !== line.seq) await file.writeFile(`${JSON.stringify(line)}\n`);
@@ -176,11 +269,14 @@ async function apply(root: string, intent: Intent): Promise<void> {
   }
   for (const [path, value] of Object.entries(intent.documents))
     await replaceJson(documentPath(root, path), value);
-  for (const id of intent.deleteRuns)
+  for (const id of intent.deleteRuns) {
+    await archiveRunLog(root, id);
     await retryFileStoreHandles('remove', runPath(root, id), () =>
       rm(runPath(root, id), { recursive: true, force: true })
     );
+  }
   if (intent.deleteRuns.length) await syncDirectory(join(root, 'runs'));
+  await updateFeedIndex(root, intent);
   await replaceJson(join(root, 'head.json'), { format: 1, seq: intent.seq });
   await retryFileStoreHandles('unlink', join(root, 'intent.json'), () =>
     unlink(join(root, 'intent.json'))
@@ -203,6 +299,7 @@ export async function openFileStore(root: string): Promise<void> {
     if (head === undefined && (await readJson(join(root, 'head.json'))) === undefined)
       await replaceJson(join(root, 'head.json'), { format: 1, seq: 0 });
     await mkdir(join(root, 'runs'), { recursive: true });
+    await readFeedIndex(root, await readHead(root));
     await syncDirectory(root);
   });
 }
@@ -298,7 +395,116 @@ export async function commit<T>(
   });
 }
 
-// Commit-time read: the caller holds the lock, so a stale snapshot is rebuilt from the log.
-async function readSnapshot(root: string, id: string): Promise<WorkflowRun | null> {
-  return (await freshSnapshot(root, id)) ?? (await readRunState(root, id))?.run ?? null;
+// The caller holds the lock. The last committed row suffices; never fold event history here.
+export async function readSnapshot(root: string, id: string): Promise<WorkflowRun | null> {
+  return (await freshSnapshot(root, id)) ?? (await lastLogLine(root, id))?.run ?? null;
+}
+
+async function truncateTornTail(path: string): Promise<void> {
+  let file;
+  try {
+    file = await open(path, 'r+');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  try {
+    const { size } = await file.stat();
+    let end = size;
+    while (end > 0) {
+      const start = Math.max(0, end - 4096);
+      const bytes = Buffer.alloc(end - start);
+      await file.read(bytes, 0, bytes.length, start);
+      const newline = bytes.lastIndexOf(10);
+      if (newline >= 0) {
+        if (start + newline + 1 !== size) await file.truncate(start + newline + 1);
+        return;
+      }
+      end = start;
+    }
+    if (size) await file.truncate(0);
+  } finally {
+    await file.close();
+  }
+}
+
+const endOfCommit = Number.MAX_SAFE_INTEGER;
+function fileCursor(seq: number, index: number): WorkflowEventCursor {
+  return `file:${seq}.${index}` as WorkflowEventCursor;
+}
+function filePosition(cursor: WorkflowEventCursor): { seq: number; index: number } {
+  const match = /^file:(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.exec(cursor);
+  if (!match) throw new WorkflowEventCursorError();
+  const seq = Number(match[1]),
+    index = Number(match[2]);
+  if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(index))
+    throw new WorkflowEventCursorError();
+  return { seq, index };
+}
+async function readHead(root: string): Promise<number> {
+  return headSchema.parse(await readJson(join(root, 'head.json'))).seq;
+}
+export function createFileEventFeed(root: string): IWorkflowEventFeed {
+  return {
+    getWorkflowEventHead: async (): Promise<WorkflowEventCursor> => {
+      await recoverBeforeRead(root);
+      return fileCursor(await readHead(root), endOfCommit);
+    },
+    readWorkflowEventsAfter: async (after, { limit, eventTypes }): Promise<WorkflowEventPage> => {
+      const position = filePosition(after);
+      if (!Number.isSafeInteger(limit) || limit <= 0)
+        throw new RangeError('limit must be a positive integer');
+      await recoverBeforeRead(root);
+      const head = await readHead(root);
+      if (position.seq > head) throw new WorkflowEventCursorError();
+      if (position.seq === head && position.index === endOfCommit)
+        return { events: [], next: after };
+      // A committed head must never outrun the log scan: writes/deletes and recovery
+      // share this lock. Otherwise a paged scan could advance past an unseen commit.
+      return withFileStoreLock(root, async () => {
+        await redo(root);
+        const head = await readHead(root);
+        const deliveries: { seq: number; index: number; event: WorkflowEventRow }[] = [];
+        const feedIndex = await readFeedIndex(root, head);
+        const ids = Object.entries(feedIndex.runs)
+          .filter(
+            ([, seq]) =>
+              seq > position.seq || (seq === position.seq && position.index !== endOfCommit)
+          )
+          .map(([id]) => id);
+        for (let start = 0; start < ids.length; start += 64) {
+          await Promise.all(
+            ids.slice(start, start + 64).map(async id => {
+              for (const line of (await readFeedLog(root, id)).lines) {
+                if (line.seq < position.seq || line.seq > head) continue;
+                for (const event of line.events) {
+                  const index = event.event_order;
+                  if (index == null) throw new Error('File event has no commit position');
+                  if (line.seq > position.seq || index > position.index)
+                    deliveries.push({ seq: line.seq, index, event });
+                }
+              }
+            })
+          );
+        }
+        deliveries.sort((a, b) => a.seq - b.seq || a.index - b.index);
+        const scanned = deliveries.slice(0, limit);
+        const last = scanned.at(-1);
+        return {
+          events: scanned
+            .filter(
+              ({ event }) =>
+                eventTypes === undefined || eventTypes.some(type => type === event.event_type)
+            )
+            .map(({ seq, index, event }) => ({ cursor: fileCursor(seq, index), event })),
+          next:
+            deliveries.length <= limit
+              ? fileCursor(head, endOfCommit)
+              : last
+                ? fileCursor(last.seq, last.index)
+                : after,
+        };
+      });
+    },
+  };
 }

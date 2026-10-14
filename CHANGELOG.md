@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A workflow node can name its MCP servers as optional with `mcp: { path: <file>, optional: true }`. When the provider cannot load MCP servers (Pi, OpenCode) or the config file does not exist, the node runs without them instead of failing validation or the run, and its lifecycle rows record `mcp_unavailable` with the path and reason. A plain `mcp: <file>` stays required. Codex and Copilot now also report each MCP server's status, so a declared server that fails to start is recorded and warned about as it already was on Claude. See [Optional servers](https://archon.diy/guides/mcp-servers/#optional-servers). (#3994)
+
 - Any service that signs webhooks with the [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md) `v1` HMAC scheme can now start a workflow run, through a bundled source plugin you configure with a signing-secret environment variable and trigger bindings. Archon checks the signature over the exact received bytes and a timestamp within 300 seconds before it records anything; an unsigned, tampered or stale delivery gets HTTP 401 and leaves no record. A retried delivery with the same `webhook-id` and body starts nothing new, and reusing a `webhook-id` with different content gets HTTP 409. The delivery body can only fill the inputs a binding maps from it with JSON Pointers, and only inputs the workflow declares; the binding alone chooses the workflow, checkout, isolation, host, resource and run-as user. See [Start workflows from any signed webhook](https://archon.diy/guides/workflow-triggers/#start-workflows-from-any-signed-webhook). (#3975, #3980)
 
 ### Changed

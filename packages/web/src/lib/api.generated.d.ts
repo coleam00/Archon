@@ -3441,6 +3441,106 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/web-push/key': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Browser push public key */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description VAPID public key */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WebPushKey'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/web-push/subscriptions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Opt this browser into push */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['WebPushSubscription'];
+        };
+      };
+      responses: {
+        /** @description Subscribed */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WebPushSuccess'];
+          };
+        };
+      };
+    };
+    /** Opt this browser out of push */
+    delete: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['WebPushDelete'];
+        };
+      };
+      responses: {
+        /** @description Unsubscribed */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WebPushSuccess'];
+          };
+        };
+      };
+    };
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/health': {
     parameters: {
       query?: never;
@@ -3921,6 +4021,12 @@ export interface components {
           kind: 'upstream_skipped';
           origin: string;
         };
+    WebPushPayload: {
+      runId: string;
+      workflowName: string;
+      /** @enum {string} */
+      kind: 'gate' | 'action_required' | 'terminal';
+    };
     RunAttention:
       | {
           /** @enum {string} */
@@ -4513,7 +4619,12 @@ export interface components {
           timeout?: number;
         }[];
       };
-      mcp?: string;
+      mcp?:
+        | string
+        | {
+            path: string;
+            optional?: boolean;
+          };
       skills?: string[];
       plugins?: string[];
       agents?: {
@@ -5925,6 +6036,25 @@ export interface components {
       updated_at: string;
       days_since_activity: number;
     };
+    WebPushKey: {
+      publicKey: string;
+    };
+    WebPushSuccess: {
+      /** @enum {boolean} */
+      success: true;
+    };
+    WebPushSubscription: {
+      /** Format: uri */
+      endpoint: string;
+      keys: {
+        p256dh: string;
+        auth: string;
+      };
+    };
+    WebPushDelete: {
+      /** Format: uri */
+      endpoint: string;
+    };
     HealthResponse: {
       status: string;
       adapter: string;
@@ -5937,6 +6067,11 @@ export interface components {
       is_wsl: boolean;
       wsl_distro?: string;
       activePlatforms?: string[];
+      attentionDestinations?: {
+        id: string;
+        /** @enum {string} */
+        state: 'active' | 'no_subscribers' | 'plugin_down' | 'misconfigured';
+      }[];
       schema?: {
         createdAppVersion: string | null;
         appVersion: string;

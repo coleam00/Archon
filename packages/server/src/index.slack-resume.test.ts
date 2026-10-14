@@ -329,6 +329,13 @@ mock.module('./services/webhook-source-plugins', () => ({
 mock.module('./services/resource-start-hosting', () => ({
   createServerResourceStartHost: (): undefined => undefined,
 }));
+mock.module('./services/attention-router', () => ({
+  AttentionRouter: class {
+    start(): void {}
+    async stop(): Promise<void> {}
+  },
+}));
+mock.module('./services/web-push', () => ({ WebPushDestination: class {} }));
 const workflowHost = {} as import('@archon/core/workflows/host-store').WorkflowHost;
 mock.module('@archon/core/workflows/sql-host', () => ({
   createSqlWorkflowHost: () => workflowHost,

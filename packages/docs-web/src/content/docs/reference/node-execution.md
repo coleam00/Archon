@@ -336,27 +336,32 @@ Presence is relative to the containing object: a required child of an optional p
 
 #### diagnostics
 
-| Field path                                | Type / values   | Presence | Alternative |
-| ----------------------------------------- | --------------- | -------- | ----------- |
-| `diagnostics`                             | `object`        | optional | —           |
-| `diagnostics.iteration`                   | `number`        | optional | —           |
-| `diagnostics.loopIterations`              | `number`        | optional | —           |
-| `diagnostics.outputType`                  | `string`        | optional | —           |
-| `diagnostics.command`                     | `string`        | optional | —           |
-| `diagnostics.status`                      | `string`        | optional | —           |
-| `diagnostics.maxIterations`               | `number`        | optional | —           |
-| `diagnostics.sessionSourceNodeId`         | `string`        | optional | —           |
-| `diagnostics.sessionForkRequested`        | `boolean`       | optional | —           |
-| `diagnostics.sessionForked`               | `boolean`       | optional | —           |
-| `diagnostics.backgroundTasksIncomplete`   | `array<string>` | optional | —           |
-| `diagnostics.backgroundTasksIncomplete[]` | `string`        | item     | —           |
-| `diagnostics.childRunId`                  | `string`        | optional | —           |
-| `diagnostics.blockedOnChildRunId`         | `string`        | optional | —           |
-| `diagnostics.fanOut`                      | `boolean`       | optional | —           |
-| `diagnostics.identity`                    | `string`        | optional | —           |
-| `diagnostics.ordinal`                     | `number`        | optional | —           |
-| `diagnostics.approvalDecision`            | `string`        | optional | —           |
-| `diagnostics.expr`                        | `string`        | optional | —           |
+| Field path                                | Type / values                                | Presence | Alternative |
+| ----------------------------------------- | -------------------------------------------- | -------- | ----------- |
+| `diagnostics`                             | `object`                                     | optional | —           |
+| `diagnostics.iteration`                   | `number`                                     | optional | —           |
+| `diagnostics.loopIterations`              | `number`                                     | optional | —           |
+| `diagnostics.outputType`                  | `string`                                     | optional | —           |
+| `diagnostics.command`                     | `string`                                     | optional | —           |
+| `diagnostics.status`                      | `string`                                     | optional | —           |
+| `diagnostics.maxIterations`               | `number`                                     | optional | —           |
+| `diagnostics.sessionSourceNodeId`         | `string`                                     | optional | —           |
+| `diagnostics.sessionForkRequested`        | `boolean`                                    | optional | —           |
+| `diagnostics.sessionForked`               | `boolean`                                    | optional | —           |
+| `diagnostics.backgroundTasksIncomplete`   | `array<string>`                              | optional | —           |
+| `diagnostics.backgroundTasksIncomplete[]` | `string`                                     | item     | —           |
+| `diagnostics.childRunId`                  | `string`                                     | optional | —           |
+| `diagnostics.blockedOnChildRunId`         | `string`                                     | optional | —           |
+| `diagnostics.fanOut`                      | `boolean`                                    | optional | —           |
+| `diagnostics.identity`                    | `string`                                     | optional | —           |
+| `diagnostics.ordinal`                     | `number`                                     | optional | —           |
+| `diagnostics.approvalDecision`            | `string`                                     | optional | —           |
+| `diagnostics.expr`                        | `string`                                     | optional | —           |
+| `diagnostics.mcpUnavailable`              | `object`                                     | optional | —           |
+| `diagnostics.mcpUnavailable.path`         | `string`                                     | required | —           |
+| `diagnostics.mcpUnavailable.reason`       | `"provider_unsupported" \| "config_missing"` | required | —           |
+| `diagnostics.mcpUnavailable.servers`      | `array<string>`                              | optional | —           |
+| `diagnostics.mcpUnavailable.servers[]`    | `string`                                     | item     | —           |
 
 #### sessionId
 
@@ -941,6 +946,11 @@ Presence is relative to the containing object: a required child of an optional p
 | `identity`                                                  | `string`                                                                                                                                                                                    | optional | —                                                                                           |
 | `ordinal`                                                   | `number`                                                                                                                                                                                    | optional | —                                                                                           |
 | `approval_decision`                                         | `string`                                                                                                                                                                                    | optional | —                                                                                           |
+| `mcp_unavailable`                                           | `object`                                                                                                                                                                                    | optional | —                                                                                           |
+| `mcp_unavailable.path`                                      | `string`                                                                                                                                                                                    | required | —                                                                                           |
+| `mcp_unavailable.reason`                                    | `"provider_unsupported" \| "config_missing"`                                                                                                                                                | required | —                                                                                           |
+| `mcp_unavailable.servers`                                   | `array<string>`                                                                                                                                                                             | optional | —                                                                                           |
+| `mcp_unavailable.servers[]`                                 | `string`                                                                                                                                                                                    | item     | —                                                                                           |
 | `session_id`                                                | `string`                                                                                                                                                                                    | optional | —                                                                                           |
 
 <!-- END GENERATED NODE EXECUTION TABLES -->

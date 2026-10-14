@@ -136,6 +136,7 @@ import type {
   WorkflowRunStatus,
   ApprovalContext,
   WorkflowWaitContext,
+  NodeMcp,
 } from './schemas';
 import {
   dagNodeSchema,
@@ -230,6 +231,12 @@ function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
 function createMockStore(): MockWorkflowStore {
   const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(async _data => {});
   return {
+    getWorkflowEventHead: mock<IWorkflowStore['getWorkflowEventHead']>(() => {
+      throw new Error('Unexpected event feed read');
+    }),
+    readWorkflowEventsAfter: mock<IWorkflowStore['readWorkflowEventsAfter']>(() => {
+      throw new Error('Unexpected event feed read');
+    }),
     getStateDocument: mock<IWorkflowStore['getStateDocument']>(() => {
       throw new Error('Unexpected getStateDocument');
     }),
@@ -6066,6 +6073,46 @@ describe('executeDagWorkflow -- skills options', () => {
       )
     ).rejects.toThrow("Node 'second' (provider 'pi') names mcp");
     expect(mockSendQueryDag).not.toHaveBeenCalled();
+  });
+
+  it('runs a node whose optional mcp its provider cannot load, recording why', async () => {
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'dag-pi-optional-mcp',
+          nodes: [
+            {
+              id: 'only',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              provider: 'pi',
+              mcp: { path: 'mcp.json', optional: true },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.mcp).toBeUndefined();
+    const events = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+      call => call[0] as { event_type: string; data?: Record<string, unknown> }
+    );
+    const completed = events.find(event => event.event_type === 'node_completed');
+    expect(completed?.data?.mcp_unavailable).toEqual({
+      path: 'mcp.json',
+      reason: 'provider_unsupported',
+    });
+    const sent = platform.sendMessage.mock.calls.map(call => call[1]);
+    expect(sent).toContain(
+      "Node 'only' runs without its optional MCP servers (mcp.json): provider 'pi' cannot load MCP servers."
+    );
   });
 
   it('runs a node with empty skills and plugins lists on a provider without those capabilities', async () => {
@@ -14139,25 +14186,19 @@ describe('executeDagWorkflow -- break at settled (no hang on subprocess exit)', 
     const workflowRun = makeWorkflowRun();
 
     // Should complete promptly (not hang for 30 min)
-    const result = await Promise.race([
-      executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          cwd: testDir,
-          workflow: {
-            name: 'break-test',
-            nodes: [{ id: 'n1', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
-          },
-          workflowRun,
-        })
-      ).then(() => 'completed'),
-      new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error('Timed out — break at settled not working')), 5000)
-      ),
-    ]);
-
-    expect(result).toBe('completed');
+    // A regression hangs until the test's own budget fails it.
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'break-test',
+          nodes: [{ id: 'n1', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
+        },
+        workflowRun,
+      })
+    );
   });
 
   it('loop node completes at settled — does not block on a subprocess that never exits', async () => {
@@ -14173,36 +14214,30 @@ describe('executeDagWorkflow -- break at settled (no hang on subprocess exit)', 
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
 
-    const result = await Promise.race([
-      executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          cwd: testDir,
-          workflow: {
-            name: 'loop-break-test',
-            nodes: [
-              {
-                id: 'loop1',
-                kind: 'loop',
-                loop: {
-                  fresh_context: false,
-                  prompt: 'Do the thing. Say COMPLETE when done.',
-                  until: 'COMPLETE',
-                  max_iterations: 3,
-                },
+    // A regression hangs until the test's own budget fails it.
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'loop-break-test',
+          nodes: [
+            {
+              id: 'loop1',
+              kind: 'loop',
+              loop: {
+                fresh_context: false,
+                prompt: 'Do the thing. Say COMPLETE when done.',
+                until: 'COMPLETE',
+                max_iterations: 3,
               },
-            ],
-          },
-          workflowRun,
-        })
-      ).then(() => 'completed'),
-      new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error('Timed out — break at settled not working')), 5000)
-      ),
-    ]);
-
-    expect(result).toBe('completed');
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
   });
 });
 
@@ -14643,18 +14678,15 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       })
     );
     try {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          thresholdMs === 0
-            ? workOpen.then(() => new Promise(resolve => setTimeout(resolve, 80)))
-            : publication,
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => reject(new Error('Tool attention was never published')), 1000);
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
+      // Reaching the open work is bounded by the test's own budget, not a fixed timer:
+      // startup took 110-190 ms here and over a second on a loaded Windows runner. With
+      // attention disabled, the 80 ms after the work opens is the window in which it must
+      // stay quiet.
+      if (thresholdMs === 0) {
+        await workOpen;
+        await Bun.sleep(80);
+      } else {
+        await publication;
       }
       expect(signal?.aborted).toBe(false);
       expect(workflowRun.status).toBe('running');
@@ -14787,21 +14819,14 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
           },
         })
       );
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          secondStarted,
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => reject(new Error('Successor never started')), 1000);
-          }),
-        ]);
+        await secondStarted;
         expect(failures).toBe(4);
         expect(snapshots.get(firstStream!)).toEqual([]);
         expect(workflowRun.status).toBe('running');
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
         expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
       } finally {
-        clearTimeout(timer);
         finishFirst();
         finishSecond();
         await execution;
@@ -21013,60 +21038,75 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
   });
 });
 
-describe('loadConfiguredMcpServerNames', () => {
+describe('resolveNodeMcp', () => {
   let testDir: string;
+  const claude = getProviderCapabilities('claude');
+  const pi = getProviderCapabilities('pi');
 
   beforeEach(async () => {
-    testDir = join(tmpdir(), `mcp-names-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    testDir = join(tmpdir(), `mcp-resolve-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await mkdir(testDir, { recursive: true });
   });
 
   afterEach(async () => {
-    await rm(testDir, { recursive: true, force: true });
+    await removeTempTree(testDir);
   });
 
-  it('returns empty set when nodeMcpPath is undefined', async () => {
-    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
-    const names = await loadConfiguredMcpServerNames(undefined, testDir);
-    expect(names.size).toBe(0);
+  it('hands no path to the provider when the node declares no mcp', async () => {
+    const { resolveNodeMcp } = await import('./dag-executor');
+    expect(await resolveNodeMcp(undefined, claude, testDir)).toEqual({ kind: 'none' });
   });
 
-  it('returns server names for a valid JSON config (relative path)', async () => {
-    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
-    await writeFile(
-      join(testDir, 'mcp.json'),
-      JSON.stringify({ foo: { command: 'x' }, bar: { command: 'y' } })
-    );
-    const names = await loadConfiguredMcpServerNames('mcp.json', testDir);
-    expect([...names].sort()).toEqual(['bar', 'foo']);
+  it('hands a required path to the provider even when the file is missing', async () => {
+    const { resolveNodeMcp } = await import('./dag-executor');
+    expect(await resolveNodeMcp('missing.json', claude, testDir)).toEqual({
+      kind: 'load',
+      path: 'missing.json',
+      servers: new Set(),
+    });
   });
 
-  it('returns server names for an absolute path', async () => {
-    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+  it('loads an optional declaration whose file exists, with its server names', async () => {
+    const { resolveNodeMcp } = await import('./dag-executor');
     const absolutePath = join(testDir, 'abs.json');
-    await writeFile(absolutePath, JSON.stringify({ baz: {} }));
-    const names = await loadConfiguredMcpServerNames(absolutePath, '/nonexistent/cwd');
-    expect([...names]).toEqual(['baz']);
+    await writeFile(absolutePath, JSON.stringify({ foo: {}, bar: {} }));
+    const result = await resolveNodeMcp(
+      { path: absolutePath, optional: true },
+      claude,
+      '/nonexistent/cwd'
+    );
+    expect(result).toEqual({ kind: 'load', path: absolutePath, servers: new Set(['foo', 'bar']) });
   });
 
-  it('returns empty set when file is missing (no crash)', async () => {
-    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
-    const names = await loadConfiguredMcpServerNames('missing.json', testDir);
-    expect(names.size).toBe(0);
+  it('withholds an optional declaration whose file does not exist', async () => {
+    const { resolveNodeMcp } = await import('./dag-executor');
+    expect(await resolveNodeMcp({ path: 'missing.json', optional: true }, claude, testDir)).toEqual(
+      {
+        kind: 'unavailable',
+        fullPath: join(testDir, 'missing.json'),
+        record: { path: 'missing.json', reason: 'config_missing' },
+      }
+    );
   });
 
-  it('returns empty set for invalid JSON (provider surfaces its own error)', async () => {
-    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+  it('withholds an optional declaration on a provider without MCP, naming its servers', async () => {
+    const { resolveNodeMcp } = await import('./dag-executor');
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify({ posthog: {} }));
+    const result = await resolveNodeMcp({ path: 'mcp.json', optional: true }, pi, testDir);
+    expect(result).toMatchObject({
+      kind: 'unavailable',
+      record: { path: 'mcp.json', reason: 'provider_unsupported', servers: ['posthog'] },
+    });
+  });
+
+  it('still hands a broken optional file to the provider, which reports it', async () => {
+    const { resolveNodeMcp } = await import('./dag-executor');
     await writeFile(join(testDir, 'broken.json'), '{ not-json');
-    const names = await loadConfiguredMcpServerNames('broken.json', testDir);
-    expect(names.size).toBe(0);
-  });
-
-  it('returns empty set when JSON is an array (not an object of servers)', async () => {
-    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
-    await writeFile(join(testDir, 'arr.json'), '["foo","bar"]');
-    const names = await loadConfiguredMcpServerNames('arr.json', testDir);
-    expect(names.size).toBe(0);
+    expect(await resolveNodeMcp({ path: 'broken.json', optional: true }, claude, testDir)).toEqual({
+      kind: 'load',
+      path: 'broken.json',
+      servers: new Set(),
+    });
   });
 });
 
@@ -21103,7 +21143,8 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
 
   async function runWithEvents(
     events: MessageChunk[],
-    nodeMcpPath?: string
+    nodeMcp?: NodeMcp,
+    store: MockWorkflowStore = createMockStore()
   ): Promise<IWorkflowPlatform> {
     mockSendQueryDag.mockImplementation(async function* () {
       yield* events;
@@ -21114,7 +21155,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
     const platform = createMockPlatform();
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(),
+        deps: createMockDeps(store),
         platform,
         conversationId: 'conv-mcp-filter',
         cwd: testDir,
@@ -21125,7 +21166,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
               id: 'review',
               kind: 'agent',
               source: { kind: 'command', name: 'my-cmd' },
-              ...(nodeMcpPath ? { mcp: nodeMcpPath } : {}),
+              ...(nodeMcp ? { mcp: nodeMcp } : {}),
             },
           ],
         },
@@ -21133,6 +21174,14 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
       })
     );
     return platform;
+  }
+
+  function nodeRows(
+    store: MockWorkflowStore
+  ): { event_type: string; data?: Record<string, unknown> }[] {
+    return (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+      .map(call => call[0] as { event_type: string; data?: Record<string, unknown> })
+      .filter(event => event.event_type.startsWith('node_'));
   }
 
   function mcpMessages(platform: IWorkflowPlatform): string[] {
@@ -21160,6 +21209,51 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
 
     expect(mcpMessages(platform)).toEqual([
       'MCP server connection failed: workflow-server (failed): timeout',
+    ]);
+  });
+
+  it.each([
+    ['required', 'mcp.json'],
+    ['optional', { path: 'mcp.json', optional: true }],
+  ] as const)('hands a %s declaration whose file exists to the provider', async (_label, mcp) => {
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify({ 'workflow-server': {} }));
+    const store = createMockStore();
+    await runWithEvents([], mcp, store);
+
+    expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.mcp).toBe('mcp.json');
+    expect(nodeRows(store).every(row => row.data?.mcp_unavailable === undefined)).toBe(true);
+  });
+
+  it('runs an optional declaration whose file is missing without it, and records why', async () => {
+    const store = createMockStore();
+    const platform = await runWithEvents([], { path: 'absent.json', optional: true }, store);
+
+    expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.mcp).toBeUndefined();
+    const rows = nodeRows(store);
+    expect(rows.map(row => row.event_type)).toEqual(['node_started', 'node_completed']);
+    for (const row of rows) {
+      expect(row.data?.mcp_unavailable).toEqual({ path: 'absent.json', reason: 'config_missing' });
+    }
+    const sent = (platform.sendMessage as Mock<typeof platform.sendMessage>).mock.calls.map(
+      c => c[1] as string
+    );
+    expect(sent).toContain(
+      `Node 'review' runs without its optional MCP servers (absent.json): config file not found at ${join(testDir, 'absent.json')}.`
+    );
+  });
+
+  it('forwards a failure of a server declared inside the mcpServers wrapper', async () => {
+    await writeFile(
+      join(testDir, 'mcp.json'),
+      JSON.stringify({ mcpServers: { 'workflow-server': {} } })
+    );
+    const platform = await runWithEvents(
+      [{ type: 'mcp_server_status', server: 'workflow-server', status: 'failed' }],
+      { path: 'mcp.json', optional: true }
+    );
+
+    expect(mcpMessages(platform)).toEqual([
+      'MCP server connection failed: workflow-server (failed)',
     ]);
   });
 
