@@ -159,7 +159,11 @@ import {
   persistScopeKey,
 } from './schemas';
 import type { BindingDirective } from './schemas';
-import { buildAiNodeEnvironment, buildExecNodeEnvironment } from './exec-environment';
+import {
+  buildAiNodeEnvironment,
+  buildExecNodeEnvironment,
+  type ExecNodeEnvironmentContext,
+} from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import {
   FAN_OUT_CANCEL_REASONS,
@@ -287,23 +291,23 @@ export interface ShellInputContext {
 }
 
 /**
- * Env-var bag delivering named inputs to a bash/script node as `INPUTS_<UPPER_SNAKE>`.
+ * Env-var bag delivering named inputs to a node shell as `INPUTS_<UPPER_SNAKE>`.
  *
- * Two sources, in precedence order:
+ * Sources, in precedence order:
  *   - the RUN's own inputs (#2470) — a `workflow:` sub-run child carries them in metadata.
  *   - the node's COMPOSED inputs (#1764) — the contract-resolved `inputs:` of the workflow
  *     this node was authored in, stamped at expansion when it arrived through `include:`.
  *     These win: a node's own file is the nearer contract, and it is the only channel a
  *     NAMED script file has (its source is opaque, so the load-time `$INPUTS` macro that
  *     serves inline bodies can never reach it).
+ *   - node-local `with:` bindings on script nodes (#2637), the nearest contract.
  *
  * A composed value resolves like a `workflow:` node's `with:` template — workflow variables
  * (NOT shell-safe: these become env values, never shell source) and `$node.output` refs —
  * resolved here rather than at load because a value may hold
  * `$ARTIFACTS_DIR` or a ref that only exists at run time. Values are never shell-escaped:
  * the env bag is itself the injection-safe channel (#2115), which is why they never touch
- * the script source. Both shell env sites call this one function so the bag and its
- * ordering cannot diverge between them.
+ * the script source.
  */
 function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv {
   const runInputs = resolveRunInputs(ctx.workflowRun);
@@ -332,6 +336,20 @@ function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv 
     }
   }
   return env;
+}
+
+/** Project env cannot shadow inputs or engine-owned delivery keys (#2115). */
+function buildNodeShellEnvironment(
+  node: DagNode,
+  ctx: ShellInputContext,
+  envVars: NodeJS.ProcessEnv | undefined,
+  executionContext: ExecNodeEnvironmentContext
+): NodeJS.ProcessEnv {
+  return {
+    ...envVars,
+    ...inputEnvVars(node, ctx),
+    ...buildExecNodeEnvironment(executionContext),
+  };
 }
 
 /**
@@ -3452,35 +3470,21 @@ async function executeBashNode(
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
-  // Configured project env (envVars) spreads FIRST so the engine-reserved keys below
-  // always win — a codebase env var named ARGUMENTS/CONTEXT/… must never shadow the
-  // values this node delivers (that IS the injection-safe delivery channel, #2115).
-  // The GitHub-token scrub keys (GH_TOKEN/GITHUB_TOKEN/COPILOT_GITHUB_TOKEN) are
-  // disjoint from the reserved set and stay in the bag, still overriding the ambient
-  // host token via runSubprocess's process.env layering — the scrub is unaffected.
-  const subprocessEnv: NodeJS.ProcessEnv = {
-    ...(envVars ?? {}),
-    // Named run and composed-workflow inputs as INPUTS_<UPPER_SNAKE> env vars
-    // (#2470/#1764). Spread after envVars so a configured project env var can never
-    // shadow an input's delivery, and before the engine-reserved keys so those still
-    // win (same ordering rationale).
-    ...inputEnvVars(node, ctx),
-    ...buildExecNodeEnvironment({
-      artifactsDir,
-      stateDir,
-      logDir,
-      workflowId: workflowRun.id,
-      baseBranch,
-      userMessage: workflowRun.user_message,
-      loopUserInput,
-      loopPrevOutput: '',
-      rejectionReason: '',
-      issueContext,
-      adoptedRunDir: currentAdoptedRunDir(),
-      typedArtifactsFile,
-      nodeExecution: execution,
-    }),
-  };
+  const subprocessEnv: NodeJS.ProcessEnv = buildNodeShellEnvironment(node, ctx, envVars, {
+    artifactsDir,
+    stateDir,
+    logDir,
+    workflowId: workflowRun.id,
+    baseBranch,
+    userMessage: workflowRun.user_message,
+    loopUserInput,
+    loopPrevOutput: '',
+    rejectionReason: '',
+    issueContext,
+    adoptedRunDir: currentAdoptedRunDir(),
+    typedArtifactsFile,
+    nodeExecution: execution,
+  });
 
   const bashPath = resolveBashPath();
   let certified: ReturnType<typeof certifyExecOutput>;
@@ -3734,17 +3738,8 @@ async function executeScriptNode(
   // delivers ONLY this bag into the container (host process.env never crosses).
   // User-controlled values ride env vars (never spliced into source) — the
   // sanctioned injection-safe channel, matching executeBashNode (#2115).
-  // Configured project env (envVars) spreads FIRST so the engine-reserved keys below
-  // always win — a codebase env var named ARGUMENTS/CONTEXT/… must never shadow this
-  // delivery channel. The GitHub-token scrub keys are disjoint from the reserved set
-  // and still override the ambient host token via runSubprocess (scrub unaffected).
   const subprocessEnv: NodeJS.ProcessEnv = {
-    ...(envVars ?? {}),
-    // Named run and composed-workflow inputs as INPUTS_<UPPER_SNAKE> env vars
-    // (#2470/#1764) — same ordering rationale as executeBashNode: after envVars,
-    // before the engine-reserved keys.
-    ...inputEnvVars(node, ctx),
-    ...buildExecNodeEnvironment({
+    ...buildNodeShellEnvironment(node, ctx, envVars, {
       artifactsDir,
       stateDir,
       logDir,
@@ -4598,24 +4593,21 @@ async function executeLoopGroupBody(
               nodeId: `${node.id}-iteration-${String(resumedIteration)}`,
               label: '<until_bash>',
             },
-            env: {
-              ...(config.envVars ?? {}),
-              ...buildExecNodeEnvironment({
-                artifactsDir,
-                stateDir,
-                logDir,
-                workflowId: workflowRun.id,
-                baseBranch,
-                userMessage: workflowRun.user_message,
-                loopUserInput: '',
-                loopPrevOutput: '',
-                rejectionReason: '',
-                issueContext,
-                adoptedRunDir: currentAdoptedRunDir(),
-                typedArtifactsFile,
-                nodeExecution: ctx.currentExecution ?? null,
-              }),
-            },
+            env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+              artifactsDir,
+              stateDir,
+              logDir,
+              workflowId: workflowRun.id,
+              baseBranch,
+              userMessage: workflowRun.user_message,
+              loopUserInput: '',
+              loopPrevOutput: '',
+              rejectionReason: '',
+              issueContext,
+              adoptedRunDir: currentAdoptedRunDir(),
+              typedArtifactsFile,
+              nodeExecution: ctx.currentExecution ?? null,
+            }),
           });
           resumedBashComplete = true;
         } catch (e) {
@@ -5067,30 +5059,21 @@ async function executeLoopGroupBody(
             nodeId: `${node.id}-iteration-${String(i)}`,
             label: '<until_bash>',
           },
-          // Archon-managed env only (no process.env spread) — runSubprocess
-          // layers the host env for host runs, or delivers ONLY this bag into
-          // the container. Configured project env spreads FIRST so the reserved
-          // workflow vars below win over any colliding codebase env var (#2115);
-          // the token-scrub keys are disjoint and still override the ambient host
-          // token via runSubprocess, so the unconnected-user scrub is unaffected.
-          env: {
-            ...(config.envVars ?? {}),
-            ...buildExecNodeEnvironment({
-              artifactsDir,
-              stateDir,
-              logDir,
-              workflowId: workflowRun.id,
-              baseBranch,
-              userMessage: workflowRun.user_message,
-              loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
-              loopPrevOutput: prevIterationOutput,
-              rejectionReason: '',
-              issueContext,
-              adoptedRunDir: currentAdoptedRunDir(),
-              typedArtifactsFile,
-              nodeExecution: ctx.currentExecution ?? null,
-            }),
-          },
+          env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+            artifactsDir,
+            stateDir,
+            logDir,
+            workflowId: workflowRun.id,
+            baseBranch,
+            userMessage: workflowRun.user_message,
+            loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
+            loopPrevOutput: prevIterationOutput,
+            rejectionReason: '',
+            issueContext,
+            adoptedRunDir: currentAdoptedRunDir(),
+            typedArtifactsFile,
+            nodeExecution: ctx.currentExecution ?? null,
+          }),
         });
         bashComplete = true;
       } catch (e) {
@@ -6593,33 +6576,21 @@ async function executeLoopNode(
             nodeId: `${node.id}-iteration-${String(i)}`,
             label: '<until_bash>',
           },
-          // Archon-managed env only (no process.env spread) — runSubprocess
-          // layers the host env for host runs, or delivers ONLY this bag into
-          // the container. Configured project env (managed per-project vars +
-          // per-user GitHub token overrides incl. the unconnected-user scrub)
-          // spreads FIRST so the reserved workflow vars below win over any
-          // colliding codebase env var (#2115). The scrub keys (GH_TOKEN/
-          // GITHUB_TOKEN/COPILOT_GITHUB_TOKEN) are disjoint from the reserved set
-          // and stay in the bag, so they still override the server's ambient GH
-          // token via runSubprocess's process.env layering — scrub unaffected.
-          env: {
-            ...(config.envVars ?? {}),
-            ...buildExecNodeEnvironment({
-              artifactsDir,
-              stateDir,
-              logDir,
-              workflowId: workflowRun.id,
-              baseBranch,
-              userMessage: workflowRun.user_message,
-              loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
-              loopPrevOutput: prevIterationOutput,
-              rejectionReason: '',
-              issueContext,
-              adoptedRunDir: currentAdoptedRunDir(),
-              typedArtifactsFile,
-              nodeExecution: execution,
-            }),
-          },
+          env: buildNodeShellEnvironment(node, ctx, config.envVars, {
+            artifactsDir,
+            stateDir,
+            logDir,
+            workflowId: workflowRun.id,
+            baseBranch,
+            userMessage: workflowRun.user_message,
+            loopUserInput: i === startIteration ? (loopUserInput ?? '') : '',
+            loopPrevOutput: prevIterationOutput,
+            rejectionReason: '',
+            issueContext,
+            adoptedRunDir: currentAdoptedRunDir(),
+            typedArtifactsFile,
+            nodeExecution: execution,
+          }),
         });
         bashComplete = true; // exit 0 = complete
       } catch (e) {

@@ -1763,8 +1763,9 @@ substitution is syntax-agnostic.
 Named `script:` files are different: they are opaque programs, not prompt templates. Archon
 does not scan or rewrite their source, so it delivers a composed workflow's declared inputs to
 them the same way it delivers everything else user-controlled — as environment variables.
-Every `bash:` and `script:` node in a composed workflow receives that workflow's resolved
-inputs as `INPUTS_<UPPER_SNAKE>` (hyphens fold to underscores, so `base-branch` arrives as
+Every `bash:` and `script:` node, and each `loop.until_bash` and
+`loop_group.until_bash` completion check (including checks after resume), receives its
+workflow's resolved inputs as `INPUTS_<UPPER_SNAKE>` (hyphens fold to underscores, so `base-branch` arrives as
 `INPUTS_BASE_BRANCH`), whether the body is inline or a named file:
 
 ```bash
