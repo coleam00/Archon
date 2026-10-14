@@ -196,6 +196,36 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'workflow',
+    subcommand: 'attention',
+    spec: 'workflow attention [<run-id>]',
+    description:
+      'List the attention queue, count it, or read the item one run stands for\n(defaults to the current project)',
+    scopedFlags: [
+      { spec: '--project <id|name|key>', description: 'Scope to another project' },
+      { spec: '--all', description: 'The whole install' },
+      { spec: '--label <k=v>', description: 'Exact label match; repeat to require several' },
+      {
+        spec: '--sort age|label:<key>',
+        description: 'Oldest pause first (default), or by a label',
+      },
+      {
+        spec: '--count-by project|label:<key>',
+        description: 'Count items per project or per label value',
+      },
+    ],
+  },
+  {
+    command: 'workflow',
+    subcommand: 'attention label',
+    spec: 'workflow attention label <run-id> --occurrence <id>',
+    description: 'Set or remove labels on the attention wait a run is paused at',
+    scopedFlags: [
+      { spec: '--set <k=v>', description: 'Set a label; repeatable' },
+      { spec: '--unset <k>', description: 'Remove a label; repeatable' },
+    ],
+  },
+  {
+    command: 'workflow',
     subcommand: 'resume',
     spec: 'workflow resume <run-id>',
     description: 'Resume a failed or paused run from completed nodes',
@@ -836,7 +866,7 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--json',
     description:
-      'Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/answer/cancel/abandon/resume)',
+      'Output machine-readable JSON (list/status/get/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume)',
     owners: [],
   },
   {
@@ -850,12 +880,13 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--occurrence <id>',
     description:
-      "For 'workflow approve/reject/respond/answer': refuse the answer unless the run is still paused at\nthis occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer)",
+      "For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still\npaused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer\nand attention label)",
     owners: [
       { command: 'workflow', subcommand: 'approve' },
       { command: 'workflow', subcommand: 'reject' },
       { command: 'workflow', subcommand: 'respond' },
       { command: 'workflow', subcommand: 'answer' },
+      { command: 'workflow', subcommand: 'attention label' },
     ],
   },
   {

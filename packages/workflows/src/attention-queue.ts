@@ -235,17 +235,25 @@ async function itemFor(
   });
 }
 
-/** Every item in the install, in the store's order: most recently started run first. */
-export async function listAttentionQueue(
-  source: AttentionQueueSource
+/** The items for rows the store's queue list returned, in their order. */
+export async function attentionQueueItems(
+  source: AttentionQueueSource,
+  runs: readonly WorkflowRun[]
 ): Promise<AttentionQueueItem[]> {
   const codebases: CodebaseCache = new Map();
   const items: AttentionQueueItem[] = [];
-  for (const run of await source.store.listRunsNeedingAttention()) {
+  for (const run of runs) {
     const attention = queuedRunAttention(run);
     if (attention !== undefined) items.push(await itemFor(source, run, attention, codebases));
   }
   return items;
+}
+
+/** Every item in the install, in the store's order: most recently started run first. */
+export async function listAttentionQueue(
+  source: AttentionQueueSource
+): Promise<AttentionQueueItem[]> {
+  return attentionQueueItems(source, await source.store.listRunsNeedingAttention());
 }
 
 /**
