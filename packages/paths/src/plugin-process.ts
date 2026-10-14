@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { extname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
+import { isPidProvablyGone } from './process-owner';
 
 const execFileAsync = promisify(execFile);
 
@@ -36,7 +37,7 @@ export async function terminateWindowsTree(
     // taskkill's exit code does not say whether the tree survived: 128 means the root was
     // already gone, and 255 can mean the root exited while its children were being ended.
     // A root that no longer exists is the only proof that is not taskkill's prose.
-    if (!isProcessGone(pid)) throw error;
+    if (!isPidProvablyGone(pid)) throw error;
   }
 }
 
@@ -47,14 +48,4 @@ function runTaskkill(pid: number): Promise<unknown> {
     ['/PID', String(pid), '/T', '/F'],
     { windowsHide: true, timeout: 5_000 }
   );
-}
-
-function isProcessGone(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (error) {
-    // EPERM means the pid exists under another user; only ESRCH proves it is gone.
-    return (error as NodeJS.ErrnoException).code === 'ESRCH';
-  }
 }
