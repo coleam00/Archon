@@ -1138,8 +1138,8 @@ archon workflow reject <run-id> --json
 ### `workflow cleanup`
 
 Delete old terminal workflow run records and prune state-document revisions from the
-database. Every latest revision survives, including tombstones: removing a tombstone
-would allow revision numbers to repeat and a stale replacement to overwrite recreated state.
+selected store (files or database). Every latest revision survives, including tombstones:
+removing a tombstone would allow revision numbers to repeat and a stale replacement to overwrite recreated state.
 The command reports both counts.
 
 ```bash
@@ -1518,8 +1518,8 @@ archon isolation cleanup
 ### state
 
 Durable, audited JSON documents. A document lives in a project or in install scope.
-SQL storage supports SQLite and PostgreSQL. Values are read on demand; the engine never
-injects them into prompts.
+The command uses the selected store: files, SQLite or PostgreSQL. Values are read on demand;
+the engine never injects them into prompts.
 
 ```bash
 archon state get review/123

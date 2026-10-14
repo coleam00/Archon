@@ -5,7 +5,7 @@ import {
   type WorkflowEventPage,
   type IWorkflowEventFeed,
 } from '../store';
-import { mkdir, open, readFile, readdir, rm, stat, unlink } from 'node:fs/promises';
+import { link, mkdir, open, readFile, readdir, rm, stat, unlink } from 'node:fs/promises';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
@@ -38,6 +38,8 @@ const intentSchema = z.object({
   lines: z.array(lineSchema),
   documents: z.record(z.string(), z.unknown()),
   deleteRuns: z.array(z.string()),
+  immutableDocuments: z.record(z.string(), z.unknown()).default({}),
+  deleteDocuments: z.array(z.string()).default([]),
 });
 type Intent = z.infer<typeof intentSchema>;
 const feedIndexSchema = headSchema.extend({
@@ -91,6 +93,8 @@ export interface CommitChanges {
   runs?: { run: WorkflowRun; events?: WorkflowEventRow[]; retract?: string[] }[];
   documents?: Record<string, unknown>;
   deleteRuns?: string[];
+  immutableDocuments?: Intent['immutableDocuments'];
+  deleteDocuments?: Intent['deleteDocuments'];
 }
 export interface RunState {
   run: WorkflowRun;
@@ -157,6 +161,40 @@ export async function replaceJson(path: string, value: unknown): Promise<void> {
     await file.close();
   }
   await renameReplacing(scratch, path);
+  await syncDirectory(dirname(path));
+}
+async function removeDocument(path: string): Promise<void> {
+  try {
+    await retryFileStoreHandles('unlink', path, () => unlink(path));
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
+}
+async function publishJson(path: string, value: unknown): Promise<void> {
+  const contents = JSON.stringify(value);
+  const scratch = `${path}.publish.tmp`;
+  let existing: string | undefined;
+  try {
+    existing = (await retryFileStoreHandles('read', path, () => readFile(path, 'utf8'))).value;
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
+  if (existing !== undefined) {
+    if (existing !== contents) throw new Error(`Immutable store document differs: ${path}`);
+    // A crash can leave scratch hard-linked to the published inode. Never truncate it.
+    await removeDocument(scratch);
+  } else {
+    await mkdir(dirname(path), { recursive: true });
+    const file = await open(scratch, 'w', 0o600);
+    try {
+      await file.writeFile(contents);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await retryFileStoreHandles('link', path, () => link(scratch, path));
+    await removeDocument(scratch);
+  }
   await syncDirectory(dirname(path));
 }
 async function readLog(
@@ -269,6 +307,18 @@ async function apply(root: string, intent: Intent): Promise<void> {
   }
   for (const [path, value] of Object.entries(intent.documents))
     await replaceJson(documentPath(root, path), value);
+  for (const [path, value] of Object.entries(intent.immutableDocuments))
+    await publishJson(documentPath(root, path), value);
+  for (const path of intent.deleteDocuments) {
+    const target = documentPath(root, path);
+    await removeDocument(target);
+    await syncDirectory(dirname(target));
+  }
+  if (Object.keys(intent.immutableDocuments).length) {
+    for (const path of Object.keys(intent.immutableDocuments))
+      await syncDirectory(dirname(dirname(documentPath(root, path))));
+    await syncDirectory(root);
+  }
   for (const id of intent.deleteRuns) {
     await archiveRunLog(root, id);
     await retryFileStoreHandles('remove', runPath(root, id), () =>
@@ -369,7 +419,9 @@ export async function commit<T>(
     if (
       !changes.runs?.length &&
       !Object.keys(changes.documents ?? {}).length &&
-      !changes.deleteRuns?.length
+      !changes.deleteRuns?.length &&
+      !Object.keys(changes.immutableDocuments ?? {}).length &&
+      !changes.deleteDocuments?.length
     )
       return result;
     const head = headSchema.parse(await readJson(join(root, 'head.json')));
@@ -385,9 +437,13 @@ export async function commit<T>(
       })),
       documents: changes.documents ?? {},
       deleteRuns: changes.deleteRuns ?? [],
+      immutableDocuments: changes.immutableDocuments ?? {},
+      deleteDocuments: changes.deleteDocuments ?? [],
     });
     for (const line of intent.lines) runPath(root, line.run.id);
     for (const path of Object.keys(intent.documents)) documentPath(root, path);
+    for (const path of [...Object.keys(intent.immutableDocuments), ...intent.deleteDocuments])
+      documentPath(root, path);
     for (const id of intent.deleteRuns) runPath(root, id);
     await replaceJson(join(root, 'intent.json'), intent);
     await apply(root, intent);

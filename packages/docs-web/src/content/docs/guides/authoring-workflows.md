@@ -1459,9 +1459,8 @@ a guarantee; a prompt instructing an AI node to append is a convention it may no
 Use `archon state` for a standing agent's small JSON ledger, cursor or index when updates
 can overlap, need audit history, or run on several hosts. `$STATE_DIR` remains the free-form
 file area for caches and non-JSON data, with its existing concurrency limitations.
-State documents currently require the SQL store (SQLite or PostgreSQL); file-store support
-is separate follow-up work. AI nodes do not yet receive `WORKFLOW_ID`, so a write an agent
-makes by calling `archon state` from its shell is recorded as a CLI write from outside any
+State documents use the selected store: files, SQLite or PostgreSQL. AI nodes do not yet
+receive `WORKFLOW_ID`, so a write an agent makes by calling `archon state` from its shell is recorded as a CLI write from outside any
 run, not as its run and node. Commit through a bash or script node when the run must
 be recorded. Container runs are not supported because the CLI and store are not delivered there.
 
