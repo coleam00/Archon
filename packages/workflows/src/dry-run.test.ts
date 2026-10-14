@@ -3068,3 +3068,47 @@ test('dry-run nested conditions enforce the same declared contract as live outpu
   expect(typo.outcome).toBe('failed');
   expect(typo.trace.find(node => node.nodeId === 'read')?.reason).toContain("field 'typo'");
 });
+
+describe('dryRunWorkflow — substituted values are previewed verbatim (#4046)', () => {
+  const quoted =
+    "Check $gate.output.decision, read $gate.output, use $INPUTS.plan, keep $& and it's done.";
+
+  test('previews the run message exactly as written', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'verbatim-message',
+        nodes: [{ id: 'summarize', prompt: 'Summarize this request: $ARGUMENTS' }],
+      }),
+      userMessage: quoted,
+      cwd: process.cwd(),
+      defaultStubs: true,
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.trace[0]?.resolvedText).toBe(`Summarize this request: ${quoted}`);
+  });
+
+  test('previews a previous-iteration output exactly as written', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'verbatim-prior',
+        nodes: [
+          {
+            id: 'grp',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 2,
+              nodes: [{ id: 'draft', prompt: 'Prior: [$LOOP_PREV.draft.output]' }],
+            },
+          },
+        ],
+      }),
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { draft: quoted },
+    });
+
+    const drafts = result.trace.filter(entry => entry.nodeId === 'draft');
+    expect(drafts.map(entry => entry.resolvedText)).toEqual(['Prior: []', `Prior: [${quoted}]`]);
+  });
+});

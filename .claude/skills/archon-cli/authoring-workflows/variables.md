@@ -31,8 +31,11 @@ Variables are placeholders in command files and workflow prompts that get replac
 
 ## Substitution Order
 
-1. Standard workflow variables (`$WORKFLOW_ID`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$CONTEXT`, loop/rejection vars)
-2. Node output references (`$nodeId.output`, `$nodeId.output.field`, `$LOOP_PREV.*`) — DAG mode only
+A template is substituted in one pass. Each reference written in the template resolves once, and the value is inserted exactly as written: a message, issue context, loop reply, rejection reason, previous output, or input value that contains `$nodeId.output`, `$INPUTS.<name>`, a variable name, or `$&` reaches the node unchanged. Where two grammars match at the same `$`, the earlier group wins:
+
+1. Loop references inside a `loop_group` body (`$LOOP_PREV.<nodeId>.output`, the group's `$LOOP_USER_INPUT`)
+2. Workflow variables (`$WORKFLOW_ID`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$INPUTS.<name>`, `$CONTEXT`, loop/rejection vars)
+3. Node output references (`$nodeId.output`, `$nodeId.output.field`) — DAG mode only
 
 ## Context Auto-Append
 
