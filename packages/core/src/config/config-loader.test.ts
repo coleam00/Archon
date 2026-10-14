@@ -131,6 +131,28 @@ describe('config-loader', () => {
     expect(mockFsWriteFile).not.toHaveBeenCalled();
   });
 
+  test.each(['concurrency:', 'concurrency: null', 'concurrency: ~'])(
+    '%s preserves unrelated global settings and the default conversation limit',
+    async concurrency => {
+      mockFsReadFile.mockResolvedValue(`botName: MyBot\n${concurrency}\n`);
+      const config = await loadConfig();
+      expect(config.botName).toBe('MyBot');
+      expect(config.concurrency.maxConversations).toBe(10);
+    }
+  );
+
+  test.each(['concurrency:', 'concurrency: null', 'concurrency: ~'])(
+    '%s allows unrelated global settings updates',
+    async concurrency => {
+      mockFsReadFile.mockResolvedValue(`botName: MyBot\n${concurrency}\n`);
+      await updateGlobalConfig({ botName: 'UpdatedBot' });
+      expect(Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string)).toEqual({
+        botName: 'UpdatedBot',
+        concurrency: null,
+      });
+    }
+  );
+
   test('invalid conversation limits degrade with diagnostics and cannot be persisted', async () => {
     mockFsReadFile.mockResolvedValue('concurrency:\n  maxConversations: -1\n');
     mockLogger.error.mockClear();

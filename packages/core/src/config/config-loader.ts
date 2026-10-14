@@ -381,7 +381,7 @@ function validateStreamingConfig(parsed: unknown, configPath: string): void {
 }
 
 function validateConversationConcurrencyConfig(parsed: unknown, configPath: string): void {
-  if (!isConfigRecord(parsed) || parsed.concurrency === undefined) return;
+  if (!isConfigRecord(parsed) || parsed.concurrency == null) return;
   if (!isConfigRecord(parsed.concurrency)) {
     throw new InvalidConfigError(
       'Invalid concurrency config',
