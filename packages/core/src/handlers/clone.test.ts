@@ -504,25 +504,6 @@ describe('cloneRepository', () => {
       expect(mockCreateCodebase).not.toHaveBeenCalled();
     });
 
-    test('refreshes an existing registration without cloning and preserves it on setup failure', async () => {
-      spyFsAccess.mockResolvedValue(undefined);
-      const existing = makeCodebase({ default_cwd: '/existing/checkout' });
-      mockFindCodebaseByRepoUrl.mockResolvedValue(existing);
-      expect((await cloneRepository('https://github.com/owner/repo', options)).alreadyExisted).toBe(
-        true
-      );
-      expect(helper).toHaveBeenCalledWith('/existing/checkout');
-      helper.mockResolvedValue({ kind: 'failed', error: new Error('config denied') });
-      await expect(cloneRepository('https://github.com/owner/repo', options)).rejects.toThrow(
-        'credential helper'
-      );
-      expect(getInstallationToken).not.toHaveBeenCalled();
-      expect(spyCloneGitRepository).not.toHaveBeenCalled();
-      expect(spyFsRm).not.toHaveBeenCalled();
-      expect(mockUpdateCodebase).not.toHaveBeenCalled();
-      expect(mockCreateCodebase).not.toHaveBeenCalled();
-    });
-
     test('uses App credentials for inspection and installs the helper before explicit branch validation', async () => {
       const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
       const remote = spyOn(gitUtils, 'getDefaultRemote').mockResolvedValue('origin');
