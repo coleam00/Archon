@@ -498,7 +498,8 @@ export function collectLoopGroupSinkWarnings(
           `'loop_group.until_bash' does not reference '${pauseRef}' — the answer is ` +
           'recorded but never consulted for completion, so the loop only ends via ' +
           `max_iterations. Declare 'until_bash' checking '${pauseRef}' (e.g. ` +
-          `'[ "${pauseRef}.decision" = "approve" ]') so the answer drives completion.`;
+          `'decision=${pauseRef}.decision; [ "$decision" = "approve" ]') so the answer ` +
+          'drives completion.';
         warnings.push(message);
         getLog().debug(
           { id: soleSink.id, warning: message },

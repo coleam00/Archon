@@ -4716,7 +4716,7 @@ description: An attention wait as the body's sole terminal sink, completion read
 nodes:
   - id: grp
     loop_group:
-      until_bash: '[ "$check.output.decision" = "approve" ]'
+      until_bash: 'decision=$check.output.decision; [ "$decision" = "approve" ]'
       max_iterations: 3
       nodes:
         - id: work
@@ -7892,7 +7892,7 @@ nodes:
         '  - id: grp',
         '    depends_on: [first]',
         '    loop_group:',
-        '      until_bash: test "$second.output" = done',
+        '      until_bash: \'decision=$second.output.decision; test "$decision" = approve\'',
         '      max_iterations: 2',
         '      nodes:',
         '        - id: work',
