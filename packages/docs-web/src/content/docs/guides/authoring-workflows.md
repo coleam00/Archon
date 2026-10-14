@@ -844,6 +844,8 @@ Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /
 
 A wait paused before attention waits took answers has no pause id. It reads as a `message` wait, takes no answer, and continues with `archon workflow resume <run-id>`. A bare resume also completes any `message` wait, with empty text; the other forms refuse it until they are answered.
 
+Before forms existed, an attention wait produced `{ status, waited_ms }`. It now produces only its answer, so a workflow that reads `status` or `waited_ms` from an attention wait fails to load; read `text` instead. A run paused at such a wait usually resumes from the workflow source it captured, which still reads the old fields, so it cannot resume: abandon it and start a fresh run of the edited workflow.
+
 Signal one exact run through the authenticated API:
 
 ```bash
