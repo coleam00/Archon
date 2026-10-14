@@ -59,6 +59,16 @@ archon workflow run archon-ship --branch fix/login-crash "#142"
 
 **What it produces**: A PR marked ready for review once review findings are closed and CI is green, or an explained stop with the PR left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The workflow never merges; merging stays with you.
 
+**Delivering one part of a multi-part plan**: When an approved plan splits the work into several PRs, tell the run which part it delivers and which contract items each part owns, quoting each item as the contract states it:
+
+```bash
+archon workflow run archon-ship --branch feat/export-csv-api \
+  --input part='{"delivers":1,"parts":[{"part":1,"items":["The API returns CSV."]},{"part":2,"items":["The console offers a CSV download.","Users can export their data as CSV."]}]}' \
+  "#142"
+```
+
+The review then treats an item that only later parts list as deferred: it is neither a blocking finding nor a discovery, and the PR says `Refs #N` instead of closing the issue. The required outcome is an item like any other, so list it under the part that completes it, as the example does with "Users can export their data as CSV." An item the input lists under no part is still reviewed as part of this PR, and the review still reports a change that contradicts a later part. The run never works out part ownership from the plan's prose; without this input, the PR is reviewed against the whole contract.
+
 ---
 
 ### One stage at a time
@@ -145,7 +155,7 @@ archon workflow run archon-pr --no-worktree --input draft=false
 
 #### `archon-deliver`
 
-The delivery tail, in capped rounds: implement the work with focused checks on what it changes, push and open (or update) a draft PR, and review it. Once a round's review passes, a structure pass looks for a smaller shape once and the implementer adopts or declines its findings; then an agent marks the PR ready, waits for CI (the full validation) however long it takes, and puts it back in draft if CI is red. A flake or infrastructure failure outside the change gets one re-run of its failed jobs first, and a green re-run delivers. Review findings, CI red the change caused, and a conflict with the base go back to the implementer for another round (it merges the base on a conflict, never rebasing), up to three rounds. Each correction is reviewed on its delta: by the same lenses after review findings, by one general code reviewer after a CI fix. Any other ending is not ready, with its reason; a red PR never stays ready. Finally it updates the PR description and relays any discoveries. The description closes its issue (`Closes #N`) only when the last review's contract coverage marks the required outcome and every acceptance item met; otherwise it says `Refs #N` and lists what is left, and so does the run's outcome. `--input pull_request=<number>` continues that open PR instead of opening one. There is no approval gate inside the run; your gate is PR review and merge.
+The delivery tail, in capped rounds: implement the work with focused checks on what it changes, push and open (or update) a draft PR, and review it. Once a round's review passes, a structure pass looks for a smaller shape once and the implementer adopts or declines its findings; then an agent marks the PR ready, waits for CI (the full validation) however long it takes, and puts it back in draft if CI is red. A flake or infrastructure failure outside the change gets one re-run of its failed jobs first, and a green re-run delivers. Review findings, CI red the change caused, and a conflict with the base go back to the implementer for another round (it merges the base on a conflict, never rebasing), up to three rounds. Each correction is reviewed on its delta: by the same lenses after review findings, by one general code reviewer after a CI fix. Any other ending is not ready, with its reason; a red PR never stays ready. Finally it updates the PR description and relays any discoveries. The description closes its issue (`Closes #N`) only when the last review's contract coverage marks the required outcome and every acceptance item met; otherwise it says `Refs #N` and lists what is left, and so does the run's outcome. `--input pull_request=<number>` continues that open PR instead of opening one. `--input part=<json>` delivers one part of a multi-part plan, as described for `archon-ship`. There is no approval gate inside the run; your gate is PR review and merge.
 
 **When to use it**: The work is decided, for example an approved plan, and should become a reviewed, ready-to-merge PR.
 
@@ -161,7 +171,7 @@ archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in
 
 #### `archon-review`
 
-Reviews a change through specialist lenses and produces one evidence-based verdict. On a first round a quick route agent picks the lenses the change earns: seams (on unless the change touches no type, contract, state or boundary), code (which uses the configured `large` model tier), tests, errors, and docs. `--input errors=true` or `false` overrides its errors call. A continuation (`--input prior_report=<path>`) reruns the lenses the first round selected on the correction delta only, judging whether each prior finding was resolved or validly declined; `--input light=true` runs the general code reviewer alone. The review also holds the change to its stated contract, taken from the PR description or a work order you pass: each stated acceptance item and invariant is met with cited evidence or raised as a blocking finding.
+Reviews a change through specialist lenses and produces one evidence-based verdict. On a first round a quick route agent picks the lenses the change earns: seams (on unless the change touches no type, contract, state or boundary), code (which uses the configured `large` model tier), tests, errors, and docs. `--input errors=true` or `false` overrides its errors call. A continuation (`--input prior_report=<path>`) reruns the lenses the first round selected on the correction delta only, judging whether each prior finding was resolved or validly declined; `--input light=true` runs the general code reviewer alone. The review also holds the change to its stated contract, taken from the PR description or a work order you pass: each stated acceptance item and invariant is met with cited evidence or raised as a blocking finding. `--input part=<json>` reviews one part of a multi-part plan, as described for `archon-ship`.
 
 **When to use it**: A PR or your working diff needs judging. It is read-only and never edits code.
 
