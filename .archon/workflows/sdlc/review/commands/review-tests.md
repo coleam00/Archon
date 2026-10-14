@@ -17,6 +17,8 @@ Never report "missing test for line X" — name the observable failure that rema
 
 Prioritize gaps where regression means incorrect user-visible behavior, data loss, failure semantics becoming success, or resume/concurrency/ordering breaks. Test at the lowest stable boundary that proves the behavior — and only at the unit level when it can prove it without mocking the behavior under review away. Check the existing doubles and fixtures for exactly that: a mock that omits the changed behavior makes every test through it blind to the change, which no amount of assertion-reading reveals.
 
+Never propose a test that re-runs a whole suite, a package, or the project's test command to prove an invariant. That repeats CI inside the suite, costs every future run, and fails on its time budget rather than on the behavior. Check such an invariant once yourself and cite the result; the test you propose, if any, exercises the behavior at the boundary that owns it.
+
 ## Do not report
 
 Coverage targets; tests for getters, wiring, or framework behavior; implementation-detail assertions; snapshot volume; one test per permutation where one representative proves the invariant; deleted behavior.

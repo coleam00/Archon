@@ -31,7 +31,7 @@ Then declare one state:
 ## Act
 
 - `green`: leave the pull request ready, and write the checks and the head they passed on to `$ARTIFACTS_DIR/ci.md`.
-- `pr_caused` or `other`: first put the pull request back to draft (`gh pr ready <number> --repo <owner>/<repo> --undo`) and read it back to confirm it is a draft, so a red pull request never stays ready. Then write the failing checks, their log lines, the file each points at, and the cause with its evidence to `$ARTIFACTS_DIR/ci.md`. On `pr_caused` the next round's implementer fixes from that file, and review sees the correction again. If a draft flip fails, say so in the summary; the state stays what CI showed.
+- `pr_caused` or `other`: first put the pull request back to draft (`gh pr ready <number> --repo <owner>/<repo> --undo`) and read it back to confirm it is a draft, so a red pull request never stays ready. Then write the failing checks, their log lines, the file each points at, and the cause with its evidence to `$ARTIFACTS_DIR/ci.md`. On `pr_caused` the next round's implementer fixes from that file, and review sees the correction again. When the failure is a test this pull request added that fails on its own cost, such as a timeout or a resource budget rather than a wrong assertion, the instruction may be to remove that test, or replace it with a focused test of the same behavior, instead of making it fit the budget. If a draft flip fails, say so in the summary; the state stays what CI showed.
 
 ## Declare
 
