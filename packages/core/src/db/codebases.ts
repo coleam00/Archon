@@ -271,8 +271,8 @@ export async function renameCodebase(id: string, name: string): Promise<Codebase
   if (!current) throw new CodebaseNotFoundError(id);
   if (current.name === name) return current;
 
-  const currentPaths = getProjectLocations(current);
-  const requestedPaths = getProjectLocations({ ...current, name });
+  const currentPaths = await getProjectLocations(current);
+  const requestedPaths = await getProjectLocations({ ...current, name });
   const moved = currentPaths.findIndex((path, i) => path !== requestedPaths[i]);
   if (moved !== -1) {
     throw new CodebaseStorageIdentityChangeError(

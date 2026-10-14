@@ -344,10 +344,7 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
-  // orchestrator.ts imports createCodebaseChildResolver, which imports
-  // loadRepoConfig by name. This factory replaces the module process-wide, so
-  // omitting it fails that import at module-eval even though no test calls it.
-  loadRepoConfig: mock(() => Promise.resolve(null)),
+  loadRepoConfig: mock<typeof ConfigLoader.loadRepoConfig>(() => Promise.resolve({})),
 }));
 
 // Workflow source root: undefined = "read the cwd", the non-worktree behavior.

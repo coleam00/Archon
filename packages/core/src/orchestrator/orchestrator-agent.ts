@@ -3569,8 +3569,8 @@ Kind: folder project (runs in place)`;
   if (alreadyExists) {
     const current = { ...alreadyExists, default_cwd: alreadyExists.stored_default_cwd };
     const replacement = { ...current, default_cwd: canonicalPath, kind };
-    const currentPaths = getProjectLocations(current);
-    const replacementPaths = getProjectLocations(replacement);
+    const currentPaths = await getProjectLocations(current);
+    const replacementPaths = await getProjectLocations(replacement);
     const moved = currentPaths.findIndex((path, i) => path !== replacementPaths[i]);
     if (moved !== -1) {
       return `Repairing "${projectName}" would move its Archon storage (worktrees, state, logs, artifacts) from ${currentPaths[moved]} to ${replacementPaths[moved]}. Nothing was changed; use a replacement path and kind that keep the same storage location.`;
