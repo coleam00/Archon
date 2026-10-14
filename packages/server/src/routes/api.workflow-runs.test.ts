@@ -34,6 +34,7 @@ import type {
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
+import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
 import {
   dashboardWorkflowRunSchema as apiDashboardWorkflowRunSchema,
   workflowRunSchema as apiWorkflowRunSchema,
@@ -640,7 +641,7 @@ function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
       await fn();
       return { status: 'started' };
     }),
-    getStats: mock(() => ({ active: 0, queued: 0 })),
+    getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return { app, mockWebAdapter };

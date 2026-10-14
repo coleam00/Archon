@@ -393,8 +393,8 @@ export type AgentNode = z.infer<typeof agentNodeSchema>;
  * script), `deps:`/named-script-file resolution (script-only), and per-runtime
  * error diagnostics. `$LOOP_USER_INPUT` delivery is NOT a script-only concept —
  * both runtimes deliver it via env (#2725); bash additionally gets the literal
- * `$LOOP_USER_INPUT` token pre-spliced (shell-quoted) into its source by
- * `applyLoopPrevToBodyNode`, a channel script has no equivalent of. A "merge but
+ * `$LOOP_USER_INPUT` token shell-quoted into its source by its loop_group scope, a
+ * channel script has no equivalent of. A "merge but
  * keep behavior byte-identical" refactor would relocate rather than remove that
  * complexity, while unifying the ~230 lines of near-identical scaffolding (event
  * emission/persistence, retry wiring, error formatting) into one function risks

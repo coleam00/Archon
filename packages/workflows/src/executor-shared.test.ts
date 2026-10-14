@@ -561,6 +561,24 @@ describe('substituteWorkflowVariables', () => {
     );
     expect(prompt).toBe('cd /tmp/artifacts && git checkout main # run-1 docs/');
   });
+
+  it('inserts every value verbatim, never reading it as a variable or a replacement pattern', () => {
+    const { prompt, contextSubstituted } = substituteWorkflowVariables(
+      '$ARGUMENTS | $INPUTS.plan | $CONTEXT',
+      'run-1',
+      "msg $& $' $INPUTS.plan $CONTEXT",
+      '/tmp',
+      'main',
+      'docs/',
+      'issue $ARGUMENTS',
+      undefined,
+      undefined,
+      undefined,
+      { inputs: { plan: 'plan $ARGUMENTS $$' } }
+    );
+    expect(prompt).toBe("msg $& $' $INPUTS.plan $CONTEXT | plan $ARGUMENTS $$ | issue $ARGUMENTS");
+    expect(contextSubstituted).toBe(true);
+  });
 });
 
 describe('buildPromptWithContext', () => {
