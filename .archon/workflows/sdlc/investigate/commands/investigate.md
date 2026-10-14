@@ -44,7 +44,7 @@ Follow the chain past the first plausible explanation — a proximate cause that
 
 ## From proven cause to a decided fix
 
-An investigation ends implementation-ready, in this same session: the verified chain in your context is exactly what deciding the fix needs, and a later planner would have to re-earn all of it. Once the chain is proven:
+An investigation ends implementation-ready, in this same session: the verified chain in your context is exactly what deciding the fix needs, and a later planner would have to re-earn all of it. The fix is judged against the project's own values, so read, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point. A call those documents already rule on is settled by them, and they draw the line between an engineering decision and a product decision. Once the chain is proven:
 
 - Weigh the plausible fix options against the boundary you established. Name each option, its blast radius, and why the chosen one wins — a rejected option with its reason stops the fixer from relitigating it.
 - Decide the fix: ordered steps anchored to concrete files, functions, and existing tests; the validation that proves it; and what the change must NOT touch.

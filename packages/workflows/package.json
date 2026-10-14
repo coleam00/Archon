@@ -221,6 +221,9 @@
       "src/file-store/"
     ],
     [
+      "src/run-subscription.test.ts"
+    ],
+    [
       "src/state-document-store.test.ts",
       "src/state-document-conformance.test.ts"
     ]

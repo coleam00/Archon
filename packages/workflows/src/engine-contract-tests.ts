@@ -97,6 +97,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     },
     getStateDocument: async () => null,
     listStateRevisions: async () => [],
+    listStateDocuments: async () => [],
     putStateDocument: async () => {
       throw new Error('Unsupported state documents');
     },

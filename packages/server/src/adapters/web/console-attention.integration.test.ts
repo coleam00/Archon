@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { closeDatabase, resetDatabase } from '@archon/core/db/connection';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
+import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { registerApiRoutes } from '../../routes/api';
 import { runsNeedingAttentionResponseSchema } from '../../routes/schemas/workflow.schemas';
@@ -26,7 +27,7 @@ test(
     process.env.DATABASE_URL = '';
     resetDatabase();
     const transport = new SSETransport();
-    const poller = new DashboardEventPoller();
+    const poller = new DashboardEventPoller(createWorkflowStore());
     const app = new OpenAPIHono();
     const adapter = new WebAdapter(
       transport,
@@ -70,7 +71,7 @@ test(
         }
       },
     });
-    poller.start(transport, intervalMs);
+    await poller.start(transport, intervalMs);
     try {
       expect(
         runsNeedingAttentionResponseSchema.parse(

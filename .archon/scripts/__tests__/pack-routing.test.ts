@@ -1,7 +1,7 @@
 /**
  * Small deterministic steps of the delivery tail whose fixtures stub them: the
- * investigation's derived outcome, deliver's correction round, and the deliver and
- * ship terminal reports. Run as
+ * investigation's derived outcome, deliver's correction round, and the deliver, ship
+ * and upkeep terminal reports. Run as
  * the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
@@ -30,7 +30,8 @@ describe('investigate verdict', () => {
 });
 
 describe("ship's terminal outcome", () => {
-  const outcome = (inputs: Record<string, string>): { delivered: boolean; reason: string; summary: string } => {
+  interface ShipOutcome { delivered: boolean; reason: string; pr_url: string; summary: string }
+  const outcome = (inputs: Record<string, string>): ShipOutcome => {
     const run = runPackScript('ship/scripts/outcome', {
       inputs: {
         INPUTS_ROUTE: 'no_action',
@@ -44,13 +45,14 @@ describe("ship's terminal outcome", () => {
         INPUTS_DELIVERED: 'null',
         INPUTS_DELIVERY: 'null',
         INPUTS_DELIVERY_REASON: 'null',
+        INPUTS_PR_URL: 'null',
         TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
         ...inputs,
       },
       artifacts: { 'listing.json': EMPTY_LISTING },
     });
     expect(run.code).toBe(0);
-    return JSON.parse(run.stdout) as { delivered: boolean; reason: string; summary: string };
+    return JSON.parse(run.stdout) as ShipOutcome;
   };
 
   it('reports a refuted investigation as no work owed, in the investigator’s words', () => {
@@ -82,7 +84,7 @@ describe("ship's terminal outcome", () => {
       INPUTS_PLAN_SUMMARY: 'needs a product call',
       INPUTS_OPEN_QUESTIONS: JSON.stringify(['keep the field?', 'which default?']),
     });
-    expect(result).toMatchObject({ delivered: false, reason: 'needs_human' });
+    expect(result).toMatchObject({ delivered: false, reason: 'needs_human', pr_url: '' });
     expect(result.summary).toContain('needs a product call\n- keep the field?\n- which default?');
   });
 
@@ -109,22 +111,44 @@ describe("ship's terminal outcome", () => {
     expect(outcome({}).summary).toStartWith('No delivery needed: triage summary');
   });
 
-  it("reports deliver's own outcome, ready or not", () => {
-    const deliver = { INPUTS_ROUTE: 'deliver', INPUTS_CONTRACT: 'READY' };
+  it("reports deliver's own outcome and pull request, ready or not", () => {
+    const deliver = { INPUTS_ROUTE: 'deliver', INPUTS_CONTRACT: 'READY', INPUTS_PR_URL: PR_URL };
     expect(
-      outcome({ ...deliver, INPUTS_DELIVERED: 'true', INPUTS_DELIVERY: 'https://x/pull/1', INPUTS_DELIVERY_REASON: 'delivered' })
+      outcome({ ...deliver, INPUTS_DELIVERED: 'true', INPUTS_DELIVERY: `Ready: done\n${PR_URL}`, INPUTS_DELIVERY_REASON: 'delivered' })
     ).toEqual({
       delivered: true,
       reason: 'delivered',
-      summary: 'https://x/pull/1',
+      pr_url: PR_URL,
+      summary: `Ready: done\n${PR_URL}`,
     });
     expect(
       outcome({ ...deliver, INPUTS_DELIVERED: 'false', INPUTS_DELIVERY: 'Not ready, red: lint', INPUTS_DELIVERY_REASON: 'ci_other' })
     ).toEqual({
       delivered: false,
       reason: 'ci_other',
+      pr_url: PR_URL,
       summary: 'Not ready, red: lint',
     });
+  });
+});
+
+describe("upkeep's terminal outcome", () => {
+  const outcome = (inputs: Record<string, string>): { delivered: boolean; pr_url: string; summary: string } => {
+    const run = runPackScript('upkeep/scripts/outcome', {
+      inputs: { INPUTS_SUMMARY: 'already current', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json', ...inputs },
+      artifacts: { 'listing.json': EMPTY_LISTING },
+    });
+    expect(run.code).toBe(0);
+    return JSON.parse(run.stdout) as { delivered: boolean; pr_url: string; summary: string };
+  };
+
+  it("reports deliver's pull request, and none when no update was needed", () => {
+    expect(
+      outcome({ INPUTS_ACTION: 'update', INPUTS_DELIVERED: 'false', INPUTS_DELIVERY: 'Not ready: ci_other', INPUTS_PR_URL: PR_URL })
+    ).toEqual({ delivered: false, pr_url: PR_URL, summary: 'Not ready: ci_other' });
+    expect(
+      outcome({ INPUTS_ACTION: 'no_action', INPUTS_DELIVERED: 'null', INPUTS_DELIVERY: 'null', INPUTS_PR_URL: 'null' })
+    ).toMatchObject({ delivered: false, pr_url: '' });
   });
 });
 

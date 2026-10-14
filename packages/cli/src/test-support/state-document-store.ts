@@ -3,25 +3,30 @@ import {
   statePutSchema,
   parseStatePatchInput,
   stateDeleteSchema,
+  stateNamePrefixSchema,
+  statePatchOperation,
+  stateScopeKey,
   validateStateValue,
   StateRevisionConflictError,
   type IStateDocumentStore,
   type StateRevision,
+  type StateScope,
 } from '@archon/workflows/state-document-store';
 
 export function createInMemoryStateDocumentStore(): IStateDocumentStore & {
-  backdate(project: string, name: string): Promise<void>;
+  backdate(scope: StateScope, name: string): Promise<void>;
 } {
   const documents = new Map<string, StateRevision[]>();
-  const key = (project: string, name: string): string => JSON.stringify([project, name]);
-  const rows = (project: string, name: string): StateRevision[] =>
-    documents.get(key(project, name)) ?? [];
+  const key = (scope: StateScope, name: string): string =>
+    JSON.stringify([stateScopeKey(scope), name]);
+  const rows = (scope: StateScope, name: string): StateRevision[] =>
+    documents.get(key(scope, name)) ?? [];
   const commit = (
     input: Parameters<IStateDocumentStore['deleteStateDocument']>[0],
     operation: StateRevision['operation'],
     value: StateRevision['value']
   ): StateRevision => {
-    const history = rows(input.project, input.name);
+    const history = rows(input.scope, input.name);
     const actual = history.at(-1)?.revision ?? 0;
     if (input.ifRevision !== undefined && input.ifRevision !== actual)
       throw new StateRevisionConflictError(input.name, input.ifRevision, actual);
@@ -34,15 +39,12 @@ export function createInMemoryStateDocumentStore(): IStateDocumentStore & {
       writer: input.writer,
       createdAt: new Date().toISOString(),
     };
-    documents.set(key(input.project, input.name), [...history, structuredClone(next)]);
+    documents.set(key(input.scope, input.name), [...history, structuredClone(next)]);
     return structuredClone(next);
   };
   return {
-    getStateDocument: async (
-      project,
-      name
-    ): ReturnType<IStateDocumentStore['getStateDocument']> => {
-      const row = rows(project, name).at(-1);
+    getStateDocument: async (scope, name): ReturnType<IStateDocumentStore['getStateDocument']> => {
+      const row = rows(scope, name).at(-1);
       return row && row.value !== null ? structuredClone(row) : null;
     },
     putStateDocument: async (supplied): ReturnType<IStateDocumentStore['putStateDocument']> => {
@@ -53,18 +55,42 @@ export function createInMemoryStateDocumentStore(): IStateDocumentStore & {
       const input = parseStatePatchInput(supplied);
       return commit(
         input,
-        { op: 'patch', ops: input.ops },
-        applyStatePatch(rows(input.project, input.name).at(-1)?.value ?? {}, input.ops, input.name)
+        statePatchOperation(input),
+        applyStatePatch(rows(input.scope, input.name).at(-1)?.value ?? {}, input.ops, input.name)
       );
     },
     deleteStateDocument: async (supplied): ReturnType<IStateDocumentStore['deleteStateDocument']> =>
       commit(stateDeleteSchema.parse(supplied), { op: 'delete' }, null),
     listStateRevisions: async (
-      project,
+      scope,
       name,
       options
     ): ReturnType<IStateDocumentStore['listStateRevisions']> =>
-      structuredClone([...rows(project, name)].reverse().slice(0, options?.limit)),
+      structuredClone([...rows(scope, name)].reverse().slice(0, options?.limit)),
+    listStateDocuments: async (
+      scope,
+      options
+    ): ReturnType<IStateDocumentStore['listStateDocuments']> => {
+      const prefix = stateNamePrefixSchema.parse(options?.prefix ?? '');
+      const scopeKey = stateScopeKey(scope);
+      return [...documents.entries()]
+        .flatMap(([id, history]) => {
+          const [owner, name] = JSON.parse(id) as [string, string];
+          const last = history.at(-1);
+          return owner === scopeKey && name.startsWith(prefix) && last
+            ? [
+                {
+                  name,
+                  revision: last.revision,
+                  updatedAt: last.createdAt,
+                  writer: structuredClone(last.writer),
+                  deleted: last.value === null,
+                },
+              ]
+            : [];
+        })
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    },
     pruneStateRevisions: async (days): ReturnType<IStateDocumentStore['pruneStateRevisions']> => {
       const cutoff = Date.now() - days * 86400000;
       let count = 0;
@@ -78,8 +104,8 @@ export function createInMemoryStateDocumentStore(): IStateDocumentStore & {
       }
       return { count };
     },
-    backdate: async (project, name): Promise<void> => {
-      for (const row of rows(project, name)) row.createdAt = '2000-01-01T00:00:00.000Z';
+    backdate: async (scope, name): Promise<void> => {
+      for (const row of rows(scope, name)) row.createdAt = '2000-01-01T00:00:00.000Z';
     },
   };
 }

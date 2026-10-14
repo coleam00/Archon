@@ -83,7 +83,9 @@ nodes:
               the requested outcome requires that expansion. When
               $ARTIFACTS_DIR/ci.md records CI red that this change caused on the
               pull request's current head, fix that too, at its cause, never by
-              weakening a test. When it records a conflict with the base, merge the
+              weakening a test. Removing or replacing a test this pull request
+              added, when ci.md says it fails on its own cost, fixes the cause.
+              When it records a conflict with the base, merge the
               base branch into this branch with a normal merge commit, never a
               rebase, and resolve every conflict it names. Record every disposition — fixed, declined with its
               reason or evidence, or unrelated — in implementation.md.

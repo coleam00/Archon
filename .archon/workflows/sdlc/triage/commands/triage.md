@@ -14,7 +14,7 @@ Their explicit task, constraints, and scope take precedence over the target and 
 
 ## Make one routing decision
 
-Begin with the repository guidance and any product-direction document the project identifies. Treat direction as the team's current recorded judgment, not timeless law: call out evidence that it has become stale rather than silently routing against an old decision.
+Begin by reading, where the project has them, its `architecture.md` and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point. Treat direction as the team's current recorded judgment, not timeless law: call out evidence that it has become stale rather than silently routing against an old decision.
 
 When the target names a tracker item, retrieve its body and only the history that can change the requested outcome, constraints, current status, or an earlier decision. Stop following links once they no longer affect the route. If required source material is inaccessible, do not reconstruct it from hints: record what is missing and declare `BLOCKED` until the input can be grounded.
 

@@ -4,7 +4,7 @@
  * (CLI) workflow runs stream to the console with near-zero latency on Postgres.
  *
  * The notification carries no payload to emit; it only triggers `poller.drainNow()`.
- * That keeps the cursor + row→SSE mapping + dedup in ONE place (the poller), so a
+ * That keeps the cursor + row→SSE mapping in ONE place (the poller), so a
  * dropped or coalesced notification can never desync state — the cursor drain is
  * authoritative, and the poller's interval backstop reconciles anything missed
  * across a `LISTEN` reconnect.

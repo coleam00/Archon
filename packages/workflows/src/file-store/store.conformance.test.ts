@@ -80,11 +80,13 @@ test('state documents refuse with a typed error until the file store backs them'
   const store = await createFileWorkflowStore({
     root: roots(await mkdtemp(join(tmpdir(), 'workflow-files-state-'))),
   });
-  const writer = { kind: 'operator', identity: 'cli' } as const;
-  const scope = { project: 'p', name: 'notes', writer };
+  const writer = { kind: 'surface', via: 'cli' } as const;
+  const project = { kind: 'project', key: 'owner/p' } as const;
+  const scope = { scope: project, name: 'notes', writer };
   for (const operation of [
-    store.getStateDocument('p', 'notes'),
-    store.listStateRevisions('p', 'notes'),
+    store.getStateDocument(project, 'notes'),
+    store.listStateRevisions(project, 'notes'),
+    store.listStateDocuments(project),
     store.putStateDocument({ ...scope, value: { a: 1 }, ifRevision: 0 }),
     store.patchStateDocument({ ...scope, ops: [{ op: 'set', path: '/a', value: 1 }] }),
     store.deleteStateDocument(scope),

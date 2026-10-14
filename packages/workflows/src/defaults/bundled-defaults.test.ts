@@ -186,31 +186,55 @@ describe('bundled-defaults', () => {
     });
 
     // A reusable pack must not hardcode one project's context paths (AGENTS.md,
-    // "Project guidance should be available, not sprayed everywhere"). Every evaluative
-    // prompt reads the pack-owned scope artifact plus the project's conventional
-    // architecture, engineering and direction documents, each only where it exists — the
-    // same conditional read implementation makes — so a reviewer judges taste against the
-    // project's own values rather than its own. Project guidance arrives through the
+    // "Project guidance should be available, not sprayed everywhere"). Every prompt that
+    // judges reads the project's conventional sidecar documents in one shared sentence,
+    // each only where it exists, and only the documents its judgment needs: direction
+    // where the node decides or judges scope. Project guidance arrives through the
     // provider's own context mechanism, which is why no prompt instructs reading
     // AGENTS.md. The rules the prompts used to delegate to a project file are stated in
     // the prompts themselves.
-    it('no review prompt hardcodes a project context path', () => {
-      const lenses = [
+    it('every judging prompt reads the sidecar documents it needs, and no project path', () => {
+      const sentence = (docs: string): string =>
+        `where the project has them, its ${docs} — at the root, in a config directory such as \`.archon/\`, or wherever its steering files point`;
+      const all = sentence('`architecture.md`, its `engineering.md`, and its direction document');
+      const lens = sentence('`architecture.md` and its `engineering.md`');
+      const reads: Record<string, string> = {
+        '__archon_pack__bundled:sdlc:triage::triage': sentence(
+          '`architecture.md` and its direction document'
+        ),
+        '__archon_pack__bundled:sdlc:plan::plan': all,
+        '__archon_pack__bundled:sdlc:investigate::investigate': all,
+        '__archon_pack__bundled:sdlc:implement::implement': all,
+        '__archon_pack__bundled:sdlc:review::review-code': all,
+        '__archon_pack__bundled:sdlc:simplify::simplify': all,
+        '__archon_pack__bundled:sdlc:review::review-synthesize': all,
+        '__archon_pack__bundled:sdlc:review::review-seams': all,
+        '__archon_pack__bundled:sdlc:review::review-tests': lens,
+        '__archon_pack__bundled:sdlc:review::review-errors': lens,
+        '__archon_pack__bundled:sdlc:review::review-docs': lens,
+      };
+      for (const [key, read] of Object.entries(reads)) {
+        const content = BUNDLED_COMMANDS[key];
+        expect(content).toBeDefined();
+        expect(content).not.toContain('.archon/engineering.md');
+        expect(content).not.toContain('Read `AGENTS.md`');
+        expect({ key, read: content.includes(read) }).toEqual({ key, read: true });
+      }
+    });
+
+    it('every reviewer states the finding boundary and its round inputs', () => {
+      const reviewers = [
         '__archon_pack__bundled:sdlc:review::review-code',
         '__archon_pack__bundled:sdlc:review::review-seams',
         '__archon_pack__bundled:sdlc:simplify::simplify',
         '__archon_pack__bundled:sdlc:review::review-tests',
         '__archon_pack__bundled:sdlc:review::review-errors',
         '__archon_pack__bundled:sdlc:review::review-docs',
+        '__archon_pack__bundled:sdlc:review::review-synthesize',
       ];
-      for (const key of [...lenses, '__archon_pack__bundled:sdlc:review::review-synthesize']) {
+      for (const key of reviewers) {
         const content = BUNDLED_COMMANDS[key];
         expect(content).toBeDefined();
-        expect(content).not.toContain('.archon/engineering.md');
-        expect(content).not.toContain('Read `AGENTS.md`');
-        expect(content).toContain(
-          'where the project has them, its `architecture.md`, its `engineering.md`, and its direction document'
-        );
         // One boundary decides whether a defect blocks now or becomes a filed issue:
         // anything that touches the change is a finding, only unrelated work is a
         // discovery. Every reviewer states it in the same words.
