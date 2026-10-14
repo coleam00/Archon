@@ -24,7 +24,7 @@ Draw the workflow as nodes and outcomes before building it. Test each outcome on
 
 ## 6. CI is one agent node
 
-One agent waits for CI and judges it. Green: it marks the PR ready. Red because of the change: the work goes back to the implementer. Red from a flake or an infrastructure failure on a path the change doesn't touch: the agent may re-run the failed jobs once and judge again, in the same round. Red for any other reason, such as a broken base branch: the run stops, not ready, with the cause. No polling loops, no retry nodes, no classification scripts. Every loop has a round limit. Never leave a red PR ready.
+One agent waits for CI and judges it. Green: it marks the PR ready. Red because of the change: the work goes back to the implementer. Red from a flake or an infrastructure failure on a path the change doesn't touch: the agent may re-run the failed jobs once and judge again, in the same round. Still red after that re-run, or red for any other reason, such as a broken base branch: the run pauses, not ready, with the cause, as section 11 describes. No polling loops, no retry nodes, no classification scripts. Every loop has a round limit. Never leave a red PR ready.
 
 ## 7. CI is the validation
 
@@ -37,3 +37,25 @@ The pack doesn't know a project's commands, branches, CI names or language. An a
 ## 9. Smaller is the default
 
 Before adding a node, look for one to delete. A structural change is drawn with the maintainer first, and benched against the current pack before it replaces it. The bench reports outcome correctness, wall clock and cost.
+
+## 10. Stages are queues joined by labels
+
+The pack is a set of queues joined by labels on the forge. Triage labels an incoming issue. That label starts the check or delivery the issue needs. A pull request that is ready gets a label, and that label starts the merge queue. A new stage is one more queue on the same pattern.
+
+Each queue is a standing workflow that a trigger starts. Its work item is a state document: it links the runs that worked on the item, and a run claims the item with a conditional write, so two runs never take the same one. The implement-review-fix loop stays one composed run; queues sit between stages, never inside that loop.
+
+Label names are pack configuration, and the project owns them.
+
+## 11. A new failure pauses; a recurring one gets a handler
+
+A failure the pack has no answer for doesn't end the run. The run pauses as an attention item labelled with the failure's class, such as `ci: other` or `merge: conflict`.
+
+When a class recurs, write a small handler workflow for it. A trigger on the class label starts the handler, and the handler answers the pause through the normal answer channel. A class with no handler waits for any answerer. The count of attention items per label shows which handler to build next.
+
+Adding a handler changes neither the pack's main path nor the engine.
+
+## 12. Policy is a project document
+
+Pack policy, such as what triage accepts or when a pull request may merge, lives in markdown policy documents the project can reword. They work like the project's other sidecar documents: a judging node reads them where the project has them, at the root, in a config directory such as `.archon/`, or wherever its steering files point. The pack ships a default for each, and the project's own document replaces it. A policy document may be nothing but a pointer to documents the project already has, such as "Triage against `.archon/direction.md`, and against `docs/product/` for feature scope", and the agent reads what it points to.
+
+Each node names only the policy documents its decision needs; no policy goes to every node. Agents interpret policy prose, and nothing parses it. Anything that must be exact, such as label names, allow-lists of users or numeric caps, stays typed configuration.
