@@ -616,7 +616,7 @@ describe('workflow status project scope', () => {
 
       const database = new Database(join(archonHome, 'archon.db'));
       try {
-        const insertCodebase = database.prepare(
+        const insertCodebase = database.query(
           'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)'
         );
         insertCodebase.run(
@@ -630,13 +630,13 @@ describe('workflow status project scope', () => {
           await canonicalizeProjectPath(projectBRoot.stdout.trim())
         );
 
-        const insertConversation = database.prepare(
+        const insertConversation = database.query(
           'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)'
         );
         insertConversation.run('conversation-a', 'cli', 'cli-a', 'codebase-a');
         insertConversation.run('conversation-b', 'cli', 'cli-b', 'codebase-b');
 
-        const insertRun = database.prepare(
+        const insertRun = database.query(
           'INSERT INTO remote_agent_workflow_runs (id, conversation_id, codebase_id, workflow_name, user_message, status) VALUES (?, ?, ?, ?, ?, ?)'
         );
         insertRun.run(
@@ -656,7 +656,7 @@ describe('workflow status project scope', () => {
           'paused'
         );
         database
-          .prepare('UPDATE remote_agent_conversations SET codebase_id = ? WHERE id = ?')
+          .query('UPDATE remote_agent_conversations SET codebase_id = ? WHERE id = ?')
           .run('codebase-b', 'conversation-a');
       } finally {
         database.close();

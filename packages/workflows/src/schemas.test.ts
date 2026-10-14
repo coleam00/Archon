@@ -344,6 +344,32 @@ describe('dagNodeSchema — context', () => {
   });
 });
 
+describe('dagNodeSchema — mcp', () => {
+  const parseMcp = (mcp: unknown) => dagNodeSchema.safeParse({ id: 'node', prompt: 'work', mcp });
+
+  test('keeps the string form as a required path', () => {
+    const result = parseMcp(' .archon/mcp/github.json ');
+    expect(result.success && (result.data as DagNode).mcp).toBe('.archon/mcp/github.json');
+  });
+
+  test('parses the optional form and trims its path', () => {
+    const result = parseMcp({ path: ' .archon/mcp/posthog.json ', optional: true });
+    expect(result.success && (result.data as DagNode).mcp).toEqual({
+      path: '.archon/mcp/posthog.json',
+      optional: true,
+    });
+  });
+
+  test('rejects a misspelled key instead of treating the server as required', () => {
+    expect(parseMcp({ path: 'mcp.json', optinal: true }).success).toBe(false);
+  });
+
+  test('rejects an empty path', () => {
+    const result = parseMcp({ path: '', optional: true });
+    expect(result.success).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // isExecNode (formerly isBashNode + isScriptNode — bash/script collapsed into
 // one 'exec' kind, distinguished by `runtime`, #2486)

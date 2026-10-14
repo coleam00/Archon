@@ -5,7 +5,7 @@ import {
   type WorkflowEventPage,
   type IWorkflowEventFeed,
 } from '../store';
-import { mkdir, open, readFile, readdir, rm, stat, truncate, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rm, stat, unlink } from 'node:fs/promises';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
@@ -253,12 +253,10 @@ async function apply(root: string, intent: Intent): Promise<void> {
     const dir = runPath(root, line.run.id);
     await mkdir(dir, { recursive: true });
     await syncDirectory(dirname(dir));
-    const prior = await readLog(root, line.run.id);
-    const last = prior.lines.at(-1);
+    const last = await lastLogLine(root, line.run.id);
     if (last && last.seq > line.seq) throw new Error('File store intent is behind the log');
-    // Cut a torn tail by path: on Windows an append-mode handle lacks the
-    // write access SetEndOfFile needs, so FileHandle.truncate fails with EPERM.
-    if (prior.bytes !== prior.total) await truncate(join(dir, 'log.jsonl'), prior.bytes);
+    // Tail repair uses a read/write handle: Windows cannot truncate an append-only handle.
+    await truncateTornTail(join(dir, 'log.jsonl'));
     const file = await open(join(dir, 'log.jsonl'), 'a+', 0o600);
     try {
       if (last?.seq !== line.seq) await file.writeFile(`${JSON.stringify(line)}\n`);
@@ -397,9 +395,37 @@ export async function commit<T>(
   });
 }
 
-// Commit-time read: the caller holds the lock, so a stale snapshot is rebuilt from the log.
-async function readSnapshot(root: string, id: string): Promise<WorkflowRun | null> {
-  return (await freshSnapshot(root, id)) ?? (await readRunState(root, id))?.run ?? null;
+// The caller holds the lock. The last committed row suffices; never fold event history here.
+export async function readSnapshot(root: string, id: string): Promise<WorkflowRun | null> {
+  return (await freshSnapshot(root, id)) ?? (await lastLogLine(root, id))?.run ?? null;
+}
+
+async function truncateTornTail(path: string): Promise<void> {
+  let file;
+  try {
+    file = await open(path, 'r+');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  try {
+    const { size } = await file.stat();
+    let end = size;
+    while (end > 0) {
+      const start = Math.max(0, end - 4096);
+      const bytes = Buffer.alloc(end - start);
+      await file.read(bytes, 0, bytes.length, start);
+      const newline = bytes.lastIndexOf(10);
+      if (newline >= 0) {
+        if (start + newline + 1 !== size) await file.truncate(start + newline + 1);
+        return;
+      }
+      end = start;
+    }
+    if (size) await file.truncate(0);
+  } finally {
+    await file.close();
+  }
 }
 
 const endOfCommit = Number.MAX_SAFE_INTEGER;

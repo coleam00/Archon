@@ -65,6 +65,9 @@
       "src/claude/provider.test.ts"
     ],
     [
+      "src/claude/session-spend-reader.test.ts"
+    ],
+    [
       "src/codex/provider.test.ts"
     ],
     [

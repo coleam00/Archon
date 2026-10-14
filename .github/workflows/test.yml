@@ -169,9 +169,25 @@ jobs:
       # proves that; they cost seconds. The installer check is POSIX-only (validate skips
       # it on Windows). The test check uses the shared 20 s per-test budget in
       # scripts/bun-test-command.ts; see coleam00/Archon#3294.
+      #
+      # Temp goes to the runner's local disk (`runner.temp`, D:). C: is the remote-backed
+      # OS disk that Windows background maintenance also reads from: measured on this
+      # runner, an fsync there took 2.5 ms idle and 8-25 ms after the suite against
+      # 0.3 ms on D:, a fresh Archon database 220-870 ms against 30 ms. Tests put every
+      # scratch repository, worktree and database under temp, and children that stalled
+      # on C: were the timeouts. Evidence on the PR that added this.
+      #
+      # `Git\bin\git.exe` on the runner's PATH is a launcher that starts
+      # `mingw64\bin\git.exe` as a second process, so every git call cost two processes
+      # (about 4,700 extra per leg). Putting the real binary first removes the launcher.
       - name: Validate (Windows)
         if: runner.os == 'Windows'
-        run: bun run validate --only cli-import-boundary,package-edges,generated-files,tests
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
+          bun run validate --only cli-import-boundary,package-edges,generated-files,tests
 
   # Windows fixtures run beside the Windows tests rather than after them: they are the
   # second-slowest Windows check, and serial they made that leg the critical path.

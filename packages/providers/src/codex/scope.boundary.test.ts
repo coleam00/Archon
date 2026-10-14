@@ -451,6 +451,25 @@ describe('Codex capability scope on the real binary', () => {
   );
 
   test(
+    'a declared server that fails to start is reported as failed',
+    async () => {
+      await writeFile(
+        join(repo, 'broken-mcp.json'),
+        JSON.stringify({ broken_srv: { command: join(root, 'no-such-command') } })
+      );
+      const chunks = await runNode({ mcp: 'broken-mcp.json' });
+      expect(chunks).toContainEqual(
+        expect.objectContaining({
+          type: 'mcp_server_status',
+          server: 'broken_srv',
+          status: 'failed',
+        })
+      );
+    },
+    testTimeout(20_000)
+  );
+
+  test(
     'a named plugin that is not installed fails misconfigured before any model request',
     async () => {
       const result = resultOf(await runNode({ plugins: ['ghost@fixture'] }));

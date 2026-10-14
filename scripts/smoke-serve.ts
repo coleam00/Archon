@@ -47,7 +47,11 @@ try {
     stderr: 'pipe',
   });
   if (extracted.exitCode !== 0) throw new Error(extracted.stderr.toString());
-  const port = 43090;
+  // A free port from the OS. A fixed one sits inside Linux's ephemeral range
+  // (32768-60999), where an outbound connection on the runner can already hold it.
+  const probe = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response() });
+  const port = probe.port;
+  await probe.stop(true);
   child = Bun.spawn([cli, 'serve', '--port', String(port)], {
     cwd: root,
     env: {

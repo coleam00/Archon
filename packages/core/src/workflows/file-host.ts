@@ -17,6 +17,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
+import { userRowSchema, identityPlatformSchema } from '../schemas/user';
 import { codebaseRowSchema, type Codebase } from '../schemas/codebase';
 import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
@@ -50,8 +51,17 @@ export const isolationSchema = z.array(
     metadata: z.record(z.string(), z.unknown()),
   })
 );
+const fileUserSchema = userRowSchema.extend({
+  created_at: z.coerce.date(),
+  updated_at: z.coerce.date(),
+  platform: identityPlatformSchema,
+  platform_user_id: z.string(),
+});
 export async function createFileWorkflowHost(root: string): Promise<WorkflowHost> {
   await assertFileStoreConfiguration();
+  async function users(): Promise<z.infer<typeof fileUserSchema>[]> {
+    return z.array(fileUserSchema).parse((await readJson(join(root, 'host/users.json'))) ?? []);
+  }
   async function codebases(): Promise<z.infer<typeof codebasesSchema>> {
     const rows = codebasesSchema.parse((await readJson(join(root, 'host/codebases.json'))) ?? []);
     for (const row of rows) assertAbsoluteDefaultCwd(row.default_cwd, row.name);
@@ -133,7 +143,33 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           row.commands = commands;
         }),
     },
-    users: { getUserById: async () => null, findOrCreateUserByPlatformIdentity: async () => null },
+    users: {
+      getUserById: async id => {
+        await recoverBeforeRead(root);
+        const row = (await users()).find(row => row.id === id);
+        return row ? userRowSchema.parse(row) : null;
+      },
+      findOrCreateUserByPlatformIdentity: (platform, id, displayName) =>
+        commit(root, [], async () => {
+          const rows = await users();
+          const prior = rows.find(row => row.platform === platform && row.platform_user_id === id);
+          if (prior) return { result: userRowSchema.parse(prior), changes: {} };
+          const row = fileUserSchema.parse({
+            id: randomUUID(),
+            platform,
+            platform_user_id: id,
+            display_name: displayName ?? null,
+            email: null,
+            role: userRowSchema.shape.role.enum.member,
+            created_at: new Date(),
+            updated_at: new Date(),
+          });
+          return {
+            result: userRowSchema.parse(row),
+            changes: { documents: { 'host/users.json': [...rows, row] } },
+          };
+        }),
+    },
     conversations: {
       getConversationById: unsupported('conversations'),
       updateConversation: unsupported('conversations'),

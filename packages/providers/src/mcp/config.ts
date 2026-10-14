@@ -1,5 +1,6 @@
 import { readFile } from 'fs/promises';
 import { isAbsolute, resolve } from 'path';
+import { mcpServerMap } from '@archon/provider-contract';
 import { ClassifiedProviderError } from '../shared/failure';
 
 type EnvSource = Record<string, string | undefined>;
@@ -103,33 +104,6 @@ function expandEnvVars(
   return { expanded: result, missingVars };
 }
 
-function normalizeMcpConfig(
-  parsed: Record<string, unknown>,
-  mcpPath: string
-): Record<string, unknown> {
-  const keys = Object.keys(parsed);
-  if (!keys.includes('mcpServers')) {
-    return parsed;
-  }
-
-  if (keys.length > 1) {
-    throw new ClassifiedProviderError(
-      'misconfigured',
-      `MCP config cannot mix top-level "mcpServers" with other keys: ${mcpPath}. Use either a direct server map or { "mcpServers": { ... } }.`
-    );
-  }
-
-  const servers = parsed.mcpServers;
-  if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) {
-    throw new ClassifiedProviderError(
-      'misconfigured',
-      `MCP config field "mcpServers" must be a JSON object: ${mcpPath}`
-    );
-  }
-
-  return servers as Record<string, unknown>;
-}
-
 /**
  * Load MCP server config from a JSON file and expand environment variables.
  */
@@ -159,9 +133,9 @@ export async function loadMcpConfig(
     throw new Error(message);
   }
 
-  let parsed: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed = JSON.parse(raw);
   } catch (parseErr) {
     const detail = (parseErr as SyntaxError).message;
     throw new ClassifiedProviderError(
@@ -170,15 +144,11 @@ export async function loadMcpConfig(
     );
   }
 
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new ClassifiedProviderError(
-      'misconfigured',
-      `MCP config must be a JSON object (Record<string, ServerConfig>): ${mcpPath}`
-    );
+  const serverMap = mcpServerMap(parsed);
+  if (!serverMap.ok) {
+    throw new ClassifiedProviderError('misconfigured', `${serverMap.error}: ${mcpPath}`);
   }
-
-  const normalized = normalizeMcpConfig(parsed, mcpPath);
-  const { expanded, missingVars } = expandEnvVars(normalized, envSource);
+  const { expanded, missingVars } = expandEnvVars(serverMap.servers, envSource);
   const serverNames = Object.keys(expanded);
   return { servers: expanded, serverNames, missingVars };
 }

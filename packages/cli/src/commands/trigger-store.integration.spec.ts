@@ -29,6 +29,7 @@ import {
   createInMemoryWorkflowStore,
   createInMemoryWorkflowHostStore,
 } from '../test-support/workflow-store';
+import { registerFolder } from '@archon/core/handlers/clone';
 import { triggerCommand } from './trigger';
 
 const tempRoots = trackTempRoots();
@@ -214,11 +215,9 @@ test('receipt preparation and real engine execution use supplied ports without S
     'name: portable\ndescription: Portable trigger\nworktree:\n  enabled: false\nnodes:\n  - id: result\n    bash: echo executed >> count; echo done\n'
   );
   const host = hostForTest();
-  await host.records.codebases.createCodebase({
-    name: 'portable',
-    kind: 'folder',
-    default_cwd: project,
-  });
+  // Register through the production owner so default_cwd is the canonical path the
+  // binding's cwd resolves to (macOS /var -> /private/var, Windows RUNNER~1 short names).
+  await registerFolder(host.records.codebases, project, 'portable');
   const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
   if (!user) throw new Error('Expected test identity');
   let accesses = 0;
@@ -419,11 +418,7 @@ async function prepareTriggerInputs(
   registerBuiltinProviders();
   setPlatformPolicies([]);
   const host = hostForTest();
-  await host.records.codebases.createCodebase({
-    name: 'portable',
-    kind: 'folder',
-    default_cwd: project,
-  });
+  await registerFolder(host.records.codebases, project, 'portable');
   const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
   if (!user) throw new Error('Expected test identity');
   const receipt = acceptance(

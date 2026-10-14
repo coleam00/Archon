@@ -1,3 +1,8 @@
+import {
+  resourceStartDispositionSchema,
+  type ResourceStartDisposition,
+} from '@archon/workflows/schemas/resource-start';
+import { z } from '@hono/zod-openapi';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
 import { expect, test } from 'bun:test';
 import {
@@ -193,10 +198,9 @@ test('wake schedule skips provider and file-store startup checks, as it does on 
   expect(result.output + result.error).toContain('Usage: archon workflow wake schedule');
   expect(result.output + result.error).not.toContain('concurrency.providers');
 }, 30000);
-test('trigger admission and SQL-only commands fail explicitly under files', async () => {
+test('SQL-only commands fail explicitly under files', async () => {
   const f = fixture();
   for (const args of [
-    ['trigger', 'list'],
     ['ai', 'show'],
     ['state', 'get', 'notes'],
   ]) {
@@ -273,3 +277,116 @@ test('non-git folder lookup reports the file lock holder and path', async () => 
   expect(readFileSync(join(root, 'lock'), 'utf8')).toBe(JSON.stringify(owner));
   expect(existsSync(f.trap)).toBe(false);
 }, 30000);
+
+test('timer fire admits, queues, skips and drains through files without SQL', async () => {
+  const f = fixture();
+  writeFileSync(
+    join(f.project, '.archon/workflows/register.yaml'),
+    `name: register
+description: register project
+worktree:
+  enabled: false
+nodes:
+  - id: ready
+    bash: echo ready
+`
+  );
+  writeFileSync(
+    join(f.project, '.archon/workflows/timer.yaml'),
+    `name: timer
+description: timer resource
+worktree:
+  enabled: false
+nodes:
+  - id: proof
+    bash: echo timer >> timer-count
+  - id: hold
+    depends_on: [proof]
+    wait:
+      duration_ms: 600000
+`
+  );
+  const registered = await cli(f, [
+    'workflow',
+    'run',
+    'register',
+    '--folder',
+    '--no-worktree',
+    '--quiet',
+  ]);
+  expect(registered, registered.output + registered.error).toMatchObject({ code: 0 });
+  const identity = await cli(f, ['trigger', 'whoami']);
+  expect(identity, identity.output + identity.error).toMatchObject({ code: 0 });
+  const runAsUserId = JSON.parse(identity.output).runAsUserId;
+  const config = (overlap: 'queue' | 'skip'): string => {
+    const path = join(f.root, `timer-${overlap}.json`);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        sourceInstanceId: 'timer',
+        schedule: { intervalSeconds: 60, runAtLoad: false },
+        binding: {
+          bindingId: 'timer',
+          bindingRevision: null,
+          hostId: 'timer-host',
+          runAsUserId,
+          resource: 'timer',
+          capacity: 1,
+          overlap,
+          launch: {
+            cwd: f.project,
+            workflowName: 'timer',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+      })
+    );
+    return path;
+  };
+  const queueConfig = config('queue'),
+    skipConfig = config('skip');
+  async function fire(path: string): Promise<ResourceStartDisposition> {
+    const result = await cli(f, ['trigger', 'fire', '--config', path]);
+    expect(result, result.output + result.error).toMatchObject({ code: 0 });
+    return z
+      .object({ bindings: z.tuple([z.object({ disposition: resourceStartDispositionSchema })]) })
+      .parse(JSON.parse(result.output)).bindings[0].disposition;
+  }
+  async function paused(id: string): Promise<void> {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const result = await cli(f, ['workflow', 'get', id, '--json']);
+      expect(result, result.output + result.error).toMatchObject({ code: 0 });
+      const row = JSON.parse(result.output);
+      if (row.status === 'paused') return;
+      expect(row.status).not.toBe('failed');
+      await Bun.sleep(25);
+    }
+    throw new Error(`Timer run ${id} did not pause`);
+  }
+  const first = await fire(queueConfig);
+  expect(first.status).toBe('admitted');
+  if (first.status !== 'admitted') throw new Error('First timer was not admitted');
+  await paused(first.runId);
+  const queued = await fire(queueConfig);
+  expect(queued).toMatchObject({ status: 'queued', blocker: { kind: 'run', id: first.runId } });
+  const skipped = await fire(skipConfig);
+  expect(skipped).toMatchObject({
+    status: 'skipped',
+    blocker: { kind: 'request', id: queued.requestId },
+  });
+  expect(existsSync(join(f.home, 'store/runs', queued.requestId))).toBe(false);
+  expect(existsSync(join(f.home, 'store/runs', skipped.requestId))).toBe(false);
+  const cancelled = await cli(f, ['workflow', 'abandon', first.runId]);
+  expect(cancelled, cancelled.output + cancelled.error).toMatchObject({ code: 0 });
+  const drained = await cli(f, ['trigger', 'drain', '--host', 'timer-host']);
+  expect(drained, drained.output + drained.error).toMatchObject({ code: 0 });
+  await paused(queued.requestId);
+  const cancelledNext = await cli(f, ['workflow', 'abandon', queued.requestId]);
+  expect(cancelledNext, cancelledNext.output + cancelledNext.error).toMatchObject({ code: 0 });
+  expect(readFileSync(join(f.project, 'timer-count'), 'utf8')).toBe('timer\ntimer\n');
+  expect(existsSync(f.trap)).toBe(false);
+  expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+}, 60000);

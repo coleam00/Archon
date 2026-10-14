@@ -14,11 +14,11 @@ import { rootLogger } from './logger';
  * instead of Bun's 5 s default (see `scripts/bun-test-command.ts`).
  *
  * This is an attributed runner-floor residual, not headroom for slow tests: on the 4-vCPU
- * `windows-latest` VM the suite's several hundred child processes periodically saturate the
- * CPUs and the OS disk (sometimes together with Windows' own background maintenance), and any
- * spawn issued in such a second can take 5 to 15 s regardless of which test issued it. Fifty
- * instrumented runs found no per-test, per-package, disk-layout or service-level change that
- * removes the class; the attribution is on coleam00/Archon#3294.
+ * `windows-latest` VM a child that touches the OS disk while it is saturated (Windows' own
+ * background maintenance reads it too) can take seconds regardless of which test issued it
+ * (coleam00/Archon#3294). The Windows leg keeps test temp on the runner's local disk for that
+ * reason (`.github/workflows/test.yml`). A wait inside a test should be bounded by this
+ * budget, not by a shorter timer of its own.
  */
 export const DEFAULT_TEST_TIMEOUT_MS = 20_000;
 

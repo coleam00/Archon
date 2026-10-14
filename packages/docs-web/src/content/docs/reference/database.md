@@ -39,7 +39,12 @@ archived-runs/<id>/log.jsonl  retained feed log after run deletion
 runs/<id>/node-sessions.json
 node-sessions/<hash>.json
 host/codebases.json       project records with per-project envVars
-host/isolation.json      isolation records
+host/isolation.json       isolation records
+host/users.json           trigger run-as identities
+resource/slots/<hash>.json resource capacity, holders and FIFO request IDs
+resource/requests/<hash>.json prepared start requests
+resource/receipts/<hash>.json receipts and preparation ownership
+resource/deliveries/<hash>.json delivery deduplication identities
 ```
 
 Every write uses one store-wide lock and a recoverable intent. The next writer or a
@@ -65,8 +70,12 @@ The intent and file synchronization protect against process crashes. Power-loss 
 is limited by the platform's `fsync` guarantees; macOS does not force drive caches with
 `fsync`, and Windows does not support directory `fsync` through this API.
 
-The server refuses file storage because its routes read SQL. Trigger admission is also
-refused until file-backed admission is implemented. Provider concurrency caps
+Triggers work with file storage: `archon trigger whoami` records a local run-as identity,
+and timer fire, admission, queueing, inspection and drain use the file store. Admission
+commits the run, request and resource holder together. A terminal or missing run releases
+its slot; failed-run resume respects live holders and queued requests.
+
+The server refuses file storage because its routes read SQL. Provider concurrency caps
 (`concurrency.providers`) require `store: database` and fail at startup.
 Per-user GitHub identity (`GITHUB_APP_ID` with `TOKEN_ENCRYPTION_KEY`) fails at startup under
 file storage, because files hold no user tokens and a run would otherwise use the shared

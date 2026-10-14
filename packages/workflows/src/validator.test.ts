@@ -671,6 +671,42 @@ describe('validateWorkflowResources — MCP validation', () => {
     const error = issues.find(i => i.field === 'mcp' && i.level === 'error');
     expect(error?.message).toContain("Provider 'pi' cannot load MCP servers");
   });
+
+  test('a bundled optional MCP declaration with no file on a provider without MCP is clean', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'do stuff' },
+          mcp: { path: '.archon/mcp/absent.json', optional: true },
+        } as DagNode,
+      ],
+      'pi'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry, {
+      workflowSource: 'bundled',
+    });
+    expect(issues.filter(i => i.field === 'mcp')).toEqual([]);
+  });
+
+  test('an optional MCP declaration whose file exists still rejects invalid JSON', async () => {
+    const mcpPath = join(tmpDir, 'bad.json');
+    await writeFile(mcpPath, '{bad json');
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'step1',
+        kind: 'agent',
+        source: { kind: 'inline', prompt: 'do stuff' },
+        mcp: { path: mcpPath, optional: true },
+      } as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
+    const mcpErrors = issues.filter(i => i.field === 'mcp' && i.level === 'error');
+    expect(mcpErrors).toHaveLength(1);
+    expect(mcpErrors[0].message).toContain('invalid JSON');
+  });
 });
 
 // =============================================================================

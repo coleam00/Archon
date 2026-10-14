@@ -292,6 +292,38 @@ describe('mapCopilotEvent', () => {
     expect(out).toEqual([{ type: 'tool_call_update', toolCallId: 'c1', status: 'failed', output }]);
   });
 
+  test.each([
+    ['connected', 'connected'],
+    ['failed', 'failed'],
+    ['needs-auth', 'needs_auth'],
+    ['pending', 'pending'],
+    ['disabled', 'disabled'],
+    ['stopped', 'disabled'],
+    ['not_configured', 'failed'],
+  ] as const)('session.mcp_server_status_changed %s → mcp_server_status %s', (status, mapped) => {
+    const out = mapCopilotEvent(
+      evt('session.mcp_server_status_changed', { serverName: 'posthog', status }),
+      makeCtx()
+    );
+    expect(out).toEqual([{ type: 'mcp_server_status', server: 'posthog', status: mapped }]);
+  });
+
+  test('session.mcp_servers_loaded → one mcp_server_status per server, with its error', () => {
+    const out = mapCopilotEvent(
+      evt('session.mcp_servers_loaded', {
+        servers: [
+          { name: 'posthog', status: 'failed', error: 'spawn ENOENT' },
+          { name: 'linear', status: 'connected' },
+        ],
+      }),
+      makeCtx()
+    );
+    expect(out).toEqual([
+      { type: 'mcp_server_status', server: 'posthog', status: 'failed', error: 'spawn ENOENT' },
+      { type: 'mcp_server_status', server: 'linear', status: 'connected' },
+    ]);
+  });
+
   test('session.error → no chunk emitted, markErrored called (deferred to bridgeSession)', () => {
     const ctx = makeCtx();
     const out = mapCopilotEvent(

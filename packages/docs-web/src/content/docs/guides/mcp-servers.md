@@ -16,8 +16,9 @@ user/project/plugin MCP by default, including the servers of plugins the node na
 governed native tools that Archon injects for the current workflow when applicable.
 
 MCP works with Claude, Codex, and Copilot workflow nodes. On Pi and OpenCode, a
-node with `mcp:` fails the run before any node starts, and `archon validate workflows`
-reports it as an error.
+node with a required `mcp:` fails the run before any node starts, and
+`archon validate workflows` reports it as an error. A node can instead declare its
+servers [optional](#optional-servers) and run without them.
 
 ## Quick Start
 
@@ -48,6 +49,52 @@ nodes:
 
 That's it. The MCP server starts when the node runs, its tools become available
 to the AI, and it shuts down when the node completes.
+
+## Optional Servers
+
+A node that can do useful work without its servers declares them optional:
+
+```yaml
+nodes:
+  - id: intel
+    prompt: |
+      If mcp__posthog__* tools are available, query product usage for the area this
+      change touches. Otherwise, report that no product data source is connected.
+    mcp:
+      path: .archon/mcp/posthog.json
+      optional: true
+```
+
+The node gets exactly the servers in the file when its provider supports MCP and the
+file exists. Otherwise it runs without them:
+
+| Reason | When |
+|--------|------|
+| `provider_unsupported` | The node's provider cannot load MCP servers (Pi, OpenCode) |
+| `config_missing` | The config file does not exist |
+
+The node's `node_started` and terminal rows record `mcp_unavailable` with the declared
+`path`, the `reason`, and the server names when the file was readable, and the chat
+shows a warning such as
+`Node 'intel' runs without its optional MCP servers (.archon/mcp/posthog.json): config file not found at /repo/.archon/mcp/posthog.json.`
+A server that reaches the provider but fails to connect is recorded as an
+`mcp_server_status` provider event, as described under
+[Connection Failure Handling](#connection-failure-handling).
+
+The engine adds nothing to the prompt. The agent sees which servers loaded from its own
+tool list, so write the prompt to check for the `mcp__<server>__*` tools, as above.
+
+Only a missing file counts as absent. A file that exists but is unreadable or invalid
+JSON still fails `archon validate workflows`, and fails the node on a provider that loads
+MCP. `archon validate workflows`
+reports nothing for an optional declaration whose file is missing or whose provider
+lacks MCP, because that is the expected state for most users of a portable workflow.
+
+The path resolves against the run's checkout. A gitignored file such as
+`.archon/mcp/posthog.json` reaches a worktree run only through `worktree.copyFiles`;
+without it the run records `config_missing`.
+
+The plain string form, `mcp: .archon/mcp/github.json`, is a required declaration.
 
 ## Config File Format
 
@@ -229,6 +276,9 @@ MCP server connection failed: github (failed)
 
 The node continues executing but without the tools from the failed server.
 Check your config file path, server command, and environment variables if this happens.
+
+Claude, Codex, and Copilot report each server's status as an `mcp_server_status`
+provider event, which the run record keeps with the server name and the vendor's error.
 
 Claude's and Codex's strict workflow configuration prevents undeclared user/plugin MCPs
 from starting, so their connection failures do not affect the run.
@@ -423,8 +473,9 @@ bun run cli workflow run my-workflow "Review PR #123"
   `allowed_tools` / `denied_tools` restrictions are still ignored by Codex.
 - **Haiku model** — Tool search (lazy loading for many tools) is not supported on
   Haiku. You'll see a warning. Consider using Sonnet or Opus for MCP nodes.
-- **No load-time validation** — The MCP config file is read at execution time, not
-  when the workflow YAML is loaded. A typo in the path won't surface until the node runs.
+- **No load-time validation** — Loading the workflow YAML does not read the MCP config
+  file. `archon validate workflows` checks that a required file exists and is valid JSON;
+  otherwise a typo in the path surfaces when the node runs.
 - **No inline config** — MCP configs must be in a separate JSON file, not inline in YAML.
   This is intentional — it keeps secrets out of version-controlled workflow files.
 

@@ -21,7 +21,7 @@ import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
 import { toBranchName, toRepoPath } from '@archon/git';
 import { getIsolationProvider, worktreeRegistrationMetadata } from '@archon/isolation';
-import { createLogger } from '@archon/paths';
+import { createLogger, canonicalizeProjectPath } from '@archon/paths';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
   finalizeWorkflowSource,
@@ -103,7 +103,7 @@ async function prepareBinding(
   identity: BindingIdentity,
   runConfig: Awaited<ReturnType<typeof loadWorkflowRunConfigFile>> | undefined
 ): Promise<ResourceStartDisposition> {
-  const cwd = resolve(intent.launch.cwd);
+  const cwd = await canonicalizeProjectPath(intent.launch.cwd);
   const sourceRoot = resolve(intent.launch.discoveryCwd ?? cwd);
 
   return await withCapturedSource(async owner => {
