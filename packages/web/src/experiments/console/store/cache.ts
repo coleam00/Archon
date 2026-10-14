@@ -14,7 +14,7 @@
  *   `invalidate()` fully releases subscriber-less keys.
  * - A resubscribe that arrives while a previous, abandoned load for the key is
  *   still in flight starts its OWN loader; the orphaned load can no longer
- *   clobber the fresh result (per-key `loadSeq` guard, #2101).
+ *   clobber the fresh result (per-key `latestLoad` guard, #2101).
  *
  * Deliberately minimal. No React Query, no Zustand.
  */
@@ -34,12 +34,9 @@ const pendingRevalidation = new Set<string>();
 // the value stays `undefined` and a value-identity snapshot would bail out and
 // never surface `error` (e.g. a 401 panel would hang on "Loading…").
 const versions = new Map<string, number>();
-// Load IDs must not repeat after subscriber-less invalidation releases a key:
-// an abandoned promise may still settle after a resubscribe starts a new load.
-let nextLoadSeq = 0;
 // Retained across unsubscribe to allow warm settles; invalidate releases it
 // together with cache/errors so abandoned loads cannot resurrect a purged key.
-const loadSeq = new Map<string, number>();
+const latestLoad = new Map<string, symbol>();
 
 function notify(key: string): void {
   // No subscribers ⇒ nothing snapshots the counter, so don't bump it — a late
@@ -54,17 +51,17 @@ function notify(key: string): void {
 }
 
 function runLoad(key: string, loader: () => Promise<unknown>): void {
-  const seq = ++nextLoadSeq;
-  loadSeq.set(key, seq);
+  const token = Symbol();
+  latestLoad.set(key, token);
   const p = loader()
     .then(v => {
-      if ((loadSeq.get(key) ?? 0) !== seq) return; // superseded by a newer load for this key
+      if (latestLoad.get(key) !== token) return; // superseded by a newer load for this key
       cache.set(key, v);
       errors.delete(key);
       notify(key);
     })
     .catch((e: unknown) => {
-      if ((loadSeq.get(key) ?? 0) !== seq) return; // superseded — don't surface a stale error
+      if (latestLoad.get(key) !== token) return; // superseded — don't surface a stale error
       const err = e instanceof Error ? e : new Error(String(e));
       errors.set(key, err);
       notify(key); // surface the error; any stale value stays in cache
@@ -119,7 +116,7 @@ function revalidate(key: string): void {
     cache.delete(key);
     errors.delete(key);
     versions.delete(key); // fully release the key — nothing subscribes, so nothing snapshots it
-    loadSeq.delete(key); // release the sequence alongside cache/errors (they move together)
+    latestLoad.delete(key);
     return;
   }
   if (inflight.has(key)) {
@@ -200,7 +197,7 @@ export function subscribeKey(
       versions.delete(key);
       // Detach any in-flight load. Promises aren't cancellable, so it keeps
       // running and may still warm the cache for a future remount (guarded by
-      // its `loadSeq`), but dropping it from `inflight` here means a resubscribe
+      // its `latestLoad` token), but dropping it from `inflight` here means a resubscribe
       // arriving before it settles runs its OWN loader via `ensureLoad` instead
       // of inheriting this abandoned request's eventual result (#2101).
       inflight.delete(key);
