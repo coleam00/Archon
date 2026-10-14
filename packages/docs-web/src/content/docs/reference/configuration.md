@@ -115,7 +115,9 @@ paths:
   workspaces: ~/.archon/workspaces
   worktrees: ~/.archon/worktrees
 
-# Concurrency limits
+# Server-wide conversation admission
+# Precedence: default (10) < global YAML < MAX_CONCURRENT_CONVERSATIONS.
+# Repository config cannot change this limit; invalid env overrides are ignored.
 concurrency:
   maxConversations: 10
   # Optional install-wide cap on simultaneous provider attempts, by provider ID.
