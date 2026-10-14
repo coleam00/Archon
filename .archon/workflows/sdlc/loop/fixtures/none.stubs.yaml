@@ -5,6 +5,7 @@ pick:
   target: ""
   pr: ""
   confidence: high
+  area: ""
   reason: "stub: everything open waits on the owner's answer in the decisions issue"
 fixture:
   expect: completed

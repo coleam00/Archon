@@ -6,6 +6,7 @@ pick:
   target: https://github.com/example/app/issues/6
   pr: ''
   confidence: high
+  area: app/
   reason: 'stub: tags need a migration and search across modules'
 ship__triage__triage:
   contract: READY
@@ -40,13 +41,20 @@ review:
   outcome: nothing
   pr: ''
   reason: 'stub: ship stopped at its green gate'
+claim:
+  held: "true"
+  holder: fixture-run
+  reason: "stub: this run holds the work item"
+release: "released 1 claim(s)"
 fixture:
   expect: failed
   fail-node: ship__deliver__gate-green
   reached:
   - pick
+  - claim
   - check-app
   - review
+  - release
   resolved-text-contains:
     review: NO PR the issue has no open pull request
 exec-code: true

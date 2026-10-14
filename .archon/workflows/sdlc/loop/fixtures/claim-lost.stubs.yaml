@@ -1,0 +1,18 @@
+# Dry-run fixture: a parallel run claimed the same issue moments earlier. claim
+# reports the item held by the other run, so this run builds nothing, checks
+# nothing, reviews nothing and has no claim to release; an unstubbed node that
+# ran would fail the fixture.
+pick:
+  route: simple
+  target: "https://github.com/example/app/issues/5"
+  pr: ""
+  confidence: high
+  area: app/notes.py
+  reason: "stub: next unblocked issue, one module, clear criteria"
+claim:
+  held: "false"
+  holder: other-run
+  reason: "stub: run other-run claimed https://github.com/example/app/issues/5 first; this run does no work this lap"
+fixture:
+  expect: completed
+  reached: [pick, claim]

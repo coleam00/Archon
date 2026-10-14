@@ -7,6 +7,7 @@ pick:
   target: "https://github.com/example/app/issues/5"
   pr: ""
   confidence: high
+  area: app/
   reason: "stub: next unblocked issue, one module, clear criteria"
 build: "Built the notes endpoint.\nPR: https://github.com/example/app/pull/9"
 check-app: "APP CHECK https://github.com/example/app/pull/9 at abc1234\nC1 PASS  saves a note  POST /notes returned 201\nOverall: PASS"
@@ -14,9 +15,14 @@ review:
   outcome: merged
   pr: "https://github.com/example/app/pull/9"
   reason: "stub: every criterion passed, CI green"
+claim:
+  held: "true"
+  holder: fixture-run
+  reason: "stub: this run holds the work item"
+release: "released 1 claim(s)"
 fixture:
   expect: completed
-  reached: [pick, build, check-app, review]
+  reached: [pick, claim, build, check-app, review, release]
   resolved-text-contains:
     build: "Route: simple"
     check-app: "/private/holdout.md"

@@ -14,6 +14,24 @@ GitHub is the only state. Read it fresh:
 - The product's direction and conventions: `engineering.md`, the mission and the product document the repository keeps (look once at the root and in `docs/`; treat a file that is not there as absent). How the app is run: $INPUTS.runtime
 - This loop's history on each item: its comments on issues and pull requests (builder reports, `Loop review:` comments, `Contract` comments) say what was already tried and what came back.
 
+## Other runs working right now
+
+Other runs of this loop may be working this repository at the same time as you. Each one marks
+its work item with a comment that starts `Loop claim: run <id>` and states the `Area` it expects
+to touch. A claim is live until it is edited to `Loop claim released` or `Loop claim withdrawn`,
+or until it is more than $INPUTS.claim_hours hours old.
+
+- Never choose an item with a live claim, or an open pull request whose work item has one.
+- Avoid an item whose change would land in the same files or module as a live claim's area:
+  two runs editing one area produce merge conflicts and undo each other's work. Choose
+  independent work instead, and say in `reason` which claim you stayed clear of. When every
+  actionable item is claimed or overlaps a claimed area, the route is `none`.
+- A pull request still open from an earlier run whose claim was released is ordinary work for rule 1.
+
+After you choose, the loop claims the item for you; if another run claimed it in the same
+moment, the oldest claim keeps it and this run does nothing. You never write claim comments
+yourself.
+
 ## Choose (finish before you start)
 
 1. **Continue** an open pull request this loop owns (its branch starts with `archon/`, or it carries this loop's comments) that has review findings not yet addressed, red CI, a merge conflict, is a draft, or is approved but unmerged. A ready pull request with nothing outstanding and no review since its last commit is also `continue`: the builder will leave it alone and the reviewers will take it.
@@ -54,4 +72,5 @@ Return the structured verdict:
 - `target`: the issue URL for new work, or the issue the pull request closes for `continue` (the pull request URL if it closes none). Empty for `none`.
 - `pr`: the pull request URL for `continue`, otherwise empty.
 - `confidence`: `high`, `medium` or `low`.
+- `area`: the files, directories or modules the work will most likely change (one line, for example `app/notes.py, templates/list.html`). Other runs use it to stay out of your way. Empty for `none`.
 - `reason`: one or two sentences. For `none`, say which owner answers or which closed dependencies would unblock which items.
