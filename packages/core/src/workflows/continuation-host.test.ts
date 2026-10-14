@@ -2,13 +2,22 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
-const mockListDueWorkflowContinuations = mock(async () => [] as WorkflowRun[]);
+const mockWarn = mock((_fields: unknown, _message: string) => undefined);
+const paths = await import('@archon/paths');
+mock.module('@archon/paths', () => ({
+  ...paths,
+  createLogger: () => ({ warn: mockWarn, error: mock(() => undefined) }),
+}));
+const { WorkflowSourceUnavailableError } = await import('../../../workflows/src/workflow-source');
+const mockListDueWorkflowContinuations = mock(
+  async (_now: Date, _limit: number) => [] as WorkflowRun[]
+);
 const mockDeferWorkflowContinuation = mock(async () => undefined);
 const store = {
   listDueWorkflowContinuations: mockListDueWorkflowContinuations,
   deferWorkflowContinuation: mockDeferWorkflowContinuation,
 };
-import { wakeDueWorkflowContinuations } from '@archon/core/workflows/continuation-host';
+const { wakeDueWorkflowContinuations } = await import('@archon/core/workflows/continuation-host');
 
 async function scanDueWorkflowContinuations(
   now: Date,
@@ -253,4 +262,134 @@ test('reports deferral failure while admitting other rows', async () => {
     deferError: expect.any(Error),
   });
   expect(outcomes[1]?.kind).toBe('accepted');
+});
+
+test('bounds structural source failures locally and warns once', async () => {
+  const candidate = run('structural-source', 'paused', {
+    wait: {
+      owner: 'node',
+      kind: 'time',
+      nodeId: 'delay',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      resumeAt: '2026-08-24T11:00:00.000Z',
+    },
+  });
+  mockListDueWorkflowContinuations.mockResolvedValue([candidate]);
+  mockDeferWorkflowContinuation.mockClear();
+  mockWarn.mockClear();
+  const resume = mock(async () => {
+    throw new WorkflowSourceUnavailableError(
+      '/owning-host/source/manifest.json',
+      new Error('ENOENT')
+    );
+  });
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await wakeDueWorkflowContinuations(
+      store,
+      new Date(Date.parse('2026-08-24T11:00:00Z') + attempt * 60_000),
+      resume
+    );
+  }
+  expect(resume).toHaveBeenCalledTimes(3);
+  expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(2);
+  expect(mockWarn).toHaveBeenCalledTimes(1);
+  expect(mockWarn).toHaveBeenCalledWith(
+    { runId: candidate.id, path: '/owning-host/source/manifest.json', attempts: 3 },
+    expect.stringContaining(`archon workflow resume ${candidate.id}`)
+  );
+  expect(mockWarn.mock.calls[0]).toEqual([
+    expect.any(Object),
+    expect.stringContaining(`archon workflow abandon ${candidate.id}`),
+  ]);
+  expect(candidate.status).toBe('paused');
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      '--eval',
+      `
+    import { wakeDueWorkflowContinuations } from ${JSON.stringify(new URL('./continuation-host.ts', import.meta.url).pathname)};
+    const run = ${JSON.stringify(candidate)};
+    let resumed = false;
+    const outcomes = await wakeDueWorkflowContinuations({
+      listDueWorkflowContinuations: async () => [run],
+      deferWorkflowContinuation: async () => { throw new Error('healthy host deferred'); },
+    }, new Date('2026-08-24T12:00:00Z'), async () => {
+      resumed = true;
+      return { kind: 'accepted', run, settled: Promise.resolve({ success: true, workflowRunId: run.id }) };
+    });
+    if (!resumed || outcomes[0]?.kind !== 'accepted') process.exit(1);
+  `,
+    ],
+    { stdout: 'pipe', stderr: 'pipe', env: { ...process.env, DATABASE_URL: '' } }
+  );
+  expect(await new Response(child.stderr).text()).toBe('');
+  expect(await child.exited).toBe(0);
+});
+
+test('transient failures keep the 60 second retry beyond the structural bound', async () => {
+  const candidate = run('transient-source', 'paused', {
+    wait: {
+      owner: 'node',
+      kind: 'time',
+      nodeId: 'delay',
+      waitingSince: '2026-08-24T10:00:00Z',
+      resumeAt: '2026-08-24T11:00:00Z',
+    },
+  });
+  mockListDueWorkflowContinuations.mockResolvedValue([candidate]);
+  mockDeferWorkflowContinuation.mockClear();
+  const resume = mock(async () => {
+    throw new Error('Workflow source ENOENT');
+  });
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const now = new Date(Date.parse('2026-08-24T11:00:00Z') + attempt * 60_000);
+    await wakeDueWorkflowContinuations(store, now, resume);
+    expect(mockDeferWorkflowContinuation).toHaveBeenLastCalledWith(
+      candidate.id,
+      new Date(now.getTime() + 60_000).toISOString(),
+      { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00Z' }
+    );
+  }
+  expect(resume).toHaveBeenCalledTimes(8);
+});
+
+test('blocked rows do not starve later continuations in the same database', async () => {
+  const candidates = Array.from({ length: 26 }, (_, i) =>
+    run(`queue-${i}`, 'paused', {
+      wait: {
+        owner: 'node',
+        kind: 'time',
+        nodeId: 'delay',
+        waitingSince: '2026-08-24T10:00:00Z',
+        resumeAt: '2026-08-24T11:00:00Z',
+      },
+    })
+  );
+  mockListDueWorkflowContinuations.mockImplementation(async (_now: Date, limit: number) =>
+    candidates.slice(0, limit)
+  );
+  const resume = mock(async (candidate: WorkflowRun) =>
+    candidate.id === 'queue-25'
+      ? {
+          kind: 'accepted' as const,
+          run: candidate,
+          settled: Promise.resolve({ success: true as const, workflowRunId: candidate.id }),
+        }
+      : {
+          kind: 'unavailable' as const,
+          reason: 'source unreadable',
+          sourceError: new WorkflowSourceUnavailableError('/foreign/source', new Error('ENOENT')),
+        }
+  );
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await wakeDueWorkflowContinuations(store, new Date('2026-08-24T11:00:00Z'), resume);
+  }
+  resume.mockClear();
+  const outcomes = await wakeDueWorkflowContinuations(
+    store,
+    new Date('2026-08-24T12:00:00Z'),
+    resume
+  );
+  expect(resume).toHaveBeenCalledTimes(1);
+  expect(outcomes).toEqual([expect.objectContaining({ runId: 'queue-25', kind: 'accepted' })]);
 });

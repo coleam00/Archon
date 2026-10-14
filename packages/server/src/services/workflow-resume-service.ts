@@ -163,7 +163,7 @@ async function admitFromServer(
     cursor,
     actorUserId
   );
-  if (admission.kind === 'unavailable') {
+  if (admission.kind === 'unavailable' && !admission.sourceError) {
     log.warn(
       { runId: run.id, reason: admission.reason },
       'workflow_resume_destination_unavailable'

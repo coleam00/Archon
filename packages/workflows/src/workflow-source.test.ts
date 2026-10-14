@@ -4,7 +4,8 @@
  */
 import { providerRegistry } from '@archon/providers';
 import { readBundleIndex } from './defaults/bundle-inventory';
-import { describe, test, expect, afterAll, mock } from 'bun:test';
+import { describe, test, expect, afterAll, mock, spyOn } from 'bun:test';
+import * as fs from 'fs/promises';
 import { mkdtemp, mkdir, writeFile, rm, readFile, readdir, symlink, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -1060,4 +1061,26 @@ describe('a capture is adopted or reclaimed, whichever way the caller leaves', (
       'no capture taken'
     );
   });
+});
+
+test('an unreadable capture directory remains a typed read failure with its cause', async () => {
+  const { source, runArtifacts } = await createSandbox();
+  const capture = await captureWorkflowSource({
+    sourceRoot: source,
+    captureRoot: captureRootIn(runArtifacts),
+  });
+  const cause = Object.assign(new Error('access denied'), { code: 'EACCES' });
+  const readDirectory = spyOn(fs, 'readdir').mockRejectedValue(cause);
+  try {
+    await expect(loadWorkflowSource(capture.anchor.root)).rejects.toMatchObject({
+      name: 'WorkflowSourceUnavailableError',
+      path: capture.anchor.root,
+      cause,
+    });
+    await expect(loadWorkflowSource(capture.anchor.root)).rejects.toBeInstanceOf(
+      WorkflowSourceIntegrityError
+    );
+  } finally {
+    readDirectory.mockRestore();
+  }
 });

@@ -111,6 +111,7 @@ import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
 // Re-exported so callers driving the capture-first sequence need only this module.
 export {
+  WorkflowSourceUnavailableError,
   recordSelectedWorkflow,
   capturedSourceRoots,
   loadWorkflowSource,

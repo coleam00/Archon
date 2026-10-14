@@ -934,9 +934,11 @@ archon workflow wake --watch --json
 
 A pass scans up to 25 due continuations across the configured install database, regardless of the current directory. It awaits each admitted execution segment. A segment can complete, fail, or pause at another wait or gate; later occurrences belong to another pass. Concurrent CLI and server hosts use the engine's existing occurrence claim, so only one executes a continuation.
 
+If a run's frozen source is unreadable, automatic continuation stops attempting that run on this host after three failures and logs one warning naming the path and the operator actions. Resume it on the owning host with `archon workflow resume <run-id>`, or abandon it with `archon workflow abandon <run-id>`. The run's status stays unchanged, and another host can still resume it. The bound lives in process memory and resets on restart. Other failures keep the 60-second retry. This also applies to the server's continuation scheduler.
+
 `--watch` repeats serial passes, sleeping five seconds between completed passes. Its JSON output is JSONL: one document per pass with `ok`, `action`, `accepted`, and per-run `outcomes`. Outcomes distinguish admission from settlement (`completed`, `paused`, or `failed`). Without `--json`, the command prints a summary and run-specific outcomes.
 
-Exit status is 0 for an empty batch, a concurrent claim loser, a completed segment, or a legitimate pause. Refusals, execution failures, and deferral failures return 1. Watch continues after failures and returns 1 on shutdown if any pass failed. Prerequisite failures defer the exact occurrence for 60 seconds.
+Exit status is 0 for an empty batch, a concurrent claim loser, a completed segment, or a legitimate pause. Refusals, execution failures, and deferral failures return 1. Watch continues after failures and returns 1 on shutdown if any pass failed. Retryable prerequisite failures defer the exact occurrence for 60 seconds.
 
 The CLI preserves the run's recorded source, inputs, configuration, user, conversation, and working path. It accepts local CLI/API conversations. Container execution, missing paths or captured source, and external platform origins are refused with the run ID and reason. Use manual `workflow resume` for a container, or the server hosting the external conversation. A run stays parked if no waker runs; age never marks it failed.
 

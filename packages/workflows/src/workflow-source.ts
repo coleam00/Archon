@@ -463,6 +463,19 @@ export class WorkflowSourceIntegrityError extends Error {
   }
 }
 
+export class WorkflowSourceUnavailableError extends WorkflowSourceIntegrityError {
+  constructor(
+    readonly path: string,
+    cause: unknown
+  ) {
+    super(
+      `Workflow source at ${path} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`
+    );
+    this.name = 'WorkflowSourceUnavailableError';
+    this.cause = cause;
+  }
+}
+
 /** Where a run's executable source came from, and what was frozen. */
 export interface WorkflowSourceCapture {
   /** The authoring directory this was captured from. */
@@ -840,12 +853,7 @@ async function digestEntries(root: string, skipScope?: string): Promise<DigestEn
   const entries: DigestEntry[] = [];
 
   const walk = async (dir: string, rel: string): Promise<void> => {
-    let dirEntries;
-    try {
-      dirEntries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
+    const dirEntries = await readdir(dir, { withFileTypes: true });
     for (const entry of dirEntries) {
       const relPath = rel === '' ? entry.name : join(rel, entry.name);
       if (entry.isDirectory()) {
@@ -1037,9 +1045,7 @@ async function readManifest(captureRoot: string): Promise<WorkflowSourceManifest
   try {
     raw = await readFile(join(captureRoot, MANIFEST_FILE), 'utf-8');
   } catch (error) {
-    throw new WorkflowSourceIntegrityError(
-      `Workflow source capture at ${captureRoot} has no manifest: ${(error as Error).message}`
-    );
+    throw new WorkflowSourceUnavailableError(join(captureRoot, MANIFEST_FILE), error);
   }
   let parsedJson: unknown;
   try {
@@ -1100,7 +1106,12 @@ export async function loadWorkflowSource(
         'run recorded. The capture manifest has changed.'
     );
   }
-  const digest = await digestTree(captureRoot);
+  let digest: string;
+  try {
+    digest = await digestTree(captureRoot);
+  } catch (error) {
+    throw new WorkflowSourceUnavailableError(captureRoot, error);
+  }
   if (digest !== manifest.digest) {
     throw new WorkflowSourceIntegrityError(
       `Workflow source capture at ${captureRoot} does not match its recorded digest ` +
