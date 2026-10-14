@@ -145,7 +145,7 @@ export function invokeForge(
   op: string,
   request: Record<string, unknown>
 ): Record<string, unknown> | null {
-  const command = parseCommand(process.env.ARCHON_CLI_COMMAND);
+  const command = archonCommand();
   const directory = mkdtempSync(join(tmpdir(), 'archon-forge-'));
   const path = join(directory, 'request.json');
   try {
@@ -270,7 +270,9 @@ export function parseQualifiedPr(value: string | undefined): QualifiedPr {
   return { repo: { host: repo.host, path: repo.path }, number: pr.number };
 }
 
-function parseCommand(value: string | undefined): readonly string[] {
+/** The host's `archon` argv, as the CLI and server publish it to every exec node. */
+export function archonCommand(): readonly string[] {
+  const value = process.env.ARCHON_CLI_COMMAND;
   if (value === undefined || value === '') {
     throw new Error(
       'ARCHON_CLI_COMMAND is not set; the host that started this run did not publish its CLI command'
@@ -278,7 +280,7 @@ function parseCommand(value: string | undefined): readonly string[] {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(value ?? '');
+    parsed = JSON.parse(value);
   } catch {
     throw new Error('ARCHON_CLI_COMMAND is not a JSON string array');
   }
@@ -292,22 +294,10 @@ function parseCommand(value: string | undefined): readonly string[] {
   return parsed as string[];
 }
 
-function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
+export function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
   return left.number === right.number && sameRepo(left.repo, right.repo);
 }
 
-export function readWorkItemLabels(ref: QualifiedPr): string[] {
-  const value = invokeForge('workitem.view', { ref });
-  const observed = parseQualifiedPr(JSON.stringify(value?.ref));
-  if (!samePr(ref, observed) || value?.kind !== 'issue' || !Array.isArray(value.labels))
-    throw new Error('forge work item has no verified issue identity and label facts');
-  const labels: unknown[] = value.labels;
-  return labels.map(name => {
-    if (typeof name !== 'string' || name === '')
-      throw new Error('forge returned an invalid issue label');
-    return name;
-  });
-}
 export function readRepositoryLabels(repo: QualifiedPr['repo']): string[] {
   const value = invokeForge('repo.labels.list', { repo });
   const observed = qualifiedRepo(value?.repo);

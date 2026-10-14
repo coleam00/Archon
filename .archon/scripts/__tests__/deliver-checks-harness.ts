@@ -55,6 +55,18 @@ export interface GhFake {
   readonly writeLost?: boolean;
   /** Existing tracker issues; `issue create` appends to them. */
   readonly issues?: readonly GhIssue[];
+  /** The issue `gh api repos/<path>/issues/<n>` reads; number 7 by default. Labels come from `issueLabels`. */
+  readonly issue?: GhApiIssue;
+}
+
+/** The issue facts `gh api .../issues/<n>` reports. */
+export interface GhApiIssue {
+  readonly number?: number;
+  readonly title?: string;
+  readonly body?: string;
+  /** The author's login; null for a deleted account. */
+  readonly author?: string | null;
+  readonly state?: 'open' | 'closed';
 }
 
 /** One tracker issue the fake gh knows. */
@@ -214,7 +226,13 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const apiHost = argv[argv.indexOf('--hostname') + 1];
     const apiPath = endpoint.split('/').slice(1, 3).join('/');
     const url = (id) => 'https://' + apiHost + '/' + apiPath + '/pull/' + String(pr.number) + '#issuecomment-' + String(id);
-    if (endpoint.endsWith('/issues/7')) return result(0, JSON.stringify({ number: 7, html_url: 'https://' + apiHost + '/' + apiPath + '/issues/7', labels: [...new Set(issueLabels)].map(name => ({ name })) }));
+    const issue = { number: 7, title: 'An issue', body: 'An issue body', author: 'someone', state: 'open', ...(fake.issue ?? {}) };
+    if (endpoint.endsWith('/issues/' + String(issue.number))) return result(0, JSON.stringify({
+      number: issue.number, title: issue.title, body: issue.body, state: issue.state,
+      user: issue.author === null ? null : { login: issue.author },
+      html_url: 'https://' + apiHost + '/' + apiPath + '/issues/' + String(issue.number),
+      labels: [...new Set(issueLabels)].map(name => ({ name })),
+    }));
     const method = argv.includes('--method') ? argv[argv.indexOf('--method') + 1] : 'GET';
     if (method === 'GET') {
       const page = Number(new URLSearchParams(endpoint.split('?')[1] ?? '').get('page') ?? '1');
