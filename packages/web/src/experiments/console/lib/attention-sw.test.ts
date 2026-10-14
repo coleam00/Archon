@@ -49,7 +49,7 @@ test('the service worker names the workflow and attention kind and collapses dup
   const sw = worker();
   const bodies: Record<components['schemas']['WebPushPayload']['kind'], string> = {
     gate: 'Waiting for your decision',
-    action_required: 'Waiting for your action',
+    attention: 'Needs attention',
     terminal: 'Run finished',
   };
   for (const kind of Object.keys(bodies))
@@ -63,7 +63,7 @@ test('the service worker names the workflow and attention kind and collapses dup
   ]);
   expect(sw.showNotification.mock.calls.map(call => call[1])).toEqual([
     { body: 'Waiting for your decision', tag: 'run-1', data: { runId: 'run-1' } },
-    { body: 'Waiting for your action', tag: 'run-1', data: { runId: 'run-1' } },
+    { body: 'Needs attention', tag: 'run-1', data: { runId: 'run-1' } },
     { body: 'Run finished', tag: 'run-1', data: { runId: 'run-1' } },
   ]);
 });

@@ -38,6 +38,9 @@ export const cliArgOptions: CliArgOptions = {
   comment: { type: 'string' },
   reason: { type: 'string' },
   text: { type: 'string' },
+  occurrence: { type: 'string' },
+  // Repeatable: `--choose a --choose b` answers a multi_select attention wait with both.
+  choose: { type: 'string', multiple: true },
   port: { type: 'string' },
   'download-only': { type: 'boolean' },
   scope: { type: 'string' },

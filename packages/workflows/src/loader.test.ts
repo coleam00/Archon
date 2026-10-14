@@ -4753,11 +4753,9 @@ nodes:
       expect(result.errors[0].error).toContain('unknown node');
     });
 
-    // --- gate placement inside a loop_group body (#2707 step 3) -------------------
-    // Guidance only (parseWarnings), not a load error — a mid-body/co-terminal gate
-    // predates this pattern (e.g. via the legacy `on_reject` mechanism) and must keep
-    // loading; see the '#2707 step 1 gate/loop deprecation warnings' describe block
-    // below for the equivalent warning-content assertions.
+    // --- gate placement inside a loop_group body (#2707 step 3, #4043) ------------
+    // A gate pauses the loop only as the body's sole terminal sink; anywhere else it
+    // is a load error, like a misplaced wait.
 
     it('should accept the canonical Design A gate-terminated loop_group, with no warning', async () => {
       await writeWorkflowFile(
@@ -4785,6 +4783,35 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
+    });
+
+    it('does not ask until_bash to read a terminal gate that its own when: can skip', async () => {
+      await writeWorkflowFile(
+        testDir,
+        'loop-group-conditional-gate.yaml',
+        `
+name: loop-group-conditional-gate
+description: Ask only when blocked
+interactive: true
+nodes:
+  - id: grp
+    loop_group:
+      until_bash: test $work.output != blocked
+      max_iterations: 3
+      nodes:
+        - id: work
+          bash: "printf done"
+        - id: ask
+          depends_on: [work]
+          when: "$work.output == 'blocked'"
+          approval:
+            message: "Unblock?"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
       expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
     });
 
@@ -4820,52 +4847,18 @@ nodes:
       expect(pw[0]).toContain('$check.output');
     });
 
-    it('does NOT warn about completion-not-referenced when the gate is not the terminal sink (avoids piling on)', async () => {
-      await writeWorkflowFile(
-        testDir,
-        'loop-group-gate-mid-body-no-pileup.yaml',
-        `
-name: loop-group-gate-mid-body-no-pileup
-description: A non-terminal gate — only the placement warning should fire
-interactive: true
-nodes:
-  - id: grp
-    loop_group:
-      until_bash: "exit 0"
-      max_iterations: 3
-      nodes:
-        - id: check
-          approval:
-            message: "Continue?"
-        - id: after
-          depends_on: [check]
-          prompt: "do more work"
-`
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const pw = result.workflows[0].parseWarnings ?? [];
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain('terminal sink');
-      expect(pw.some(w => w.includes('does not reference'))).toBe(false);
-    });
-
-    it('checks EVERY gate in a body, not just the first (review fix)', async () => {
-      // 'first-gate' is not terminal (has a dependent, 'work'). 'second-gate' IS
-      // the body's true terminal sink, but until_bash never references it. Before
-      // the fix, `.find()` stopped at 'first-gate' and 'second-gate' was never
-      // checked at all — its completion-not-referenced footgun went undetected.
+    it('rejects a mid-body gate even when a later gate is the sole terminal sink', async () => {
       await writeWorkflowFile(
         testDir,
         'loop-group-multiple-gates.yaml',
         `
 name: loop-group-multiple-gates
-description: Two gates in one body — each needs its own verdict
+description: Two gates in one body — only the last can pause the loop
 interactive: true
 nodes:
   - id: grp
     loop_group:
-      until_bash: "exit 0"
+      until_bash: '[ "$second-gate.output.decision" = "approve" ]'
       max_iterations: 3
       nodes:
         - id: first-gate
@@ -4882,14 +4875,10 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const pw = result.workflows[0].parseWarnings ?? [];
-      expect(pw).toHaveLength(2);
-      expect(pw.some(w => w.includes("Node 'first-gate'") && w.includes('terminal sink'))).toBe(
-        true
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors[0].error).toContain(
+        "loop_group 'grp' body: approval node 'first-gate' must be the body's sole terminal sink"
       );
-      expect(
-        pw.some(w => w.includes("Node 'second-gate'") && w.includes('does not reference'))
-      ).toBe(true);
     });
 
     it("counts an include: directive's own depends_on when computing terminal-sink status (review fix)", async () => {
@@ -4907,8 +4896,7 @@ nodes:
       // 'check' has a dependent — the included 'review' node — so it is NOT the
       // body's terminal sink. Before the fix, an include directive's own
       // depends_on was excluded from the dependency set, so 'check' was silently
-      // misclassified as terminal (no warning at all, and a factually wrong
-      // "sole terminal sink" verdict).
+      // misclassified as terminal.
       await writeWorkflowFile(
         testDir,
         'loop-group-gate-include-dependent.yaml',
@@ -4932,13 +4920,8 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      // 'block.yaml' is itself a discoverable workflow, so it's also in
-      // result.workflows — select by name rather than assuming index 0.
-      const target = result.workflows.find(
-        w => w.workflow.name === 'loop-group-gate-include-dependent'
-      );
-      const pw = target?.parseWarnings ?? [];
-      expect(pw.some(w => w.includes("Node 'check'") && w.includes('terminal sink'))).toBe(true);
+      const err = result.errors.find(e => e.filename === 'loop-group-gate-include-dependent.yaml');
+      expect(err?.error).toContain("approval node 'check' must be the body's sole terminal sink");
     });
 
     it('counts an include: directive as a co-terminal sink (review fix)', async () => {
@@ -4979,13 +4962,10 @@ nodes:
       );
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      // 'block.yaml' is itself a discoverable workflow, so it's also in
-      // result.workflows — select by name rather than assuming index 0.
-      const target = result.workflows.find(
-        w => w.workflow.name === 'loop-group-gate-include-co-terminal'
+      const err = result.errors.find(
+        e => e.filename === 'loop-group-gate-include-co-terminal.yaml'
       );
-      const pw = target?.parseWarnings ?? [];
-      expect(pw.some(w => w.includes("Node 'check'") && w.includes('terminal sink'))).toBe(true);
+      expect(err?.error).toContain("approval node 'check' must be the body's sole terminal sink");
     });
 
     it('should accept a well-formed loop_group', async () => {
@@ -7990,6 +7970,12 @@ nodes:
       expect(result.workflows.length).toBe(1);
       return [...(result.workflows[0].parseWarnings ?? [])];
     };
+    const loadErrorFor = async (lines: string[]): Promise<string | undefined> => {
+      await writeWorkflowFile(testDir, 'test.yaml', lines.join('\n'));
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(0);
+      return result.errors[0]?.error;
+    };
 
     it('warns on approval.capture_response combined with explicitly authored decisions (R4 fix — only truly ignored there)', async () => {
       const pw = await warningsFor([
@@ -8092,15 +8078,12 @@ nodes:
       expect(pw.some(w => w.includes('#2753'))).toBe(false);
     });
 
-    it('warns on a gate/interactive loop_group nested inside a loop_group body', async () => {
+    it('warns on an interactive loop nested inside a loop_group body', async () => {
       // Exercises the recursion into loop_group.nodes — the outer group's own
-      // body-terminal sink is 'inner-loop' (a plain interactive `loop:` node,
-      // since 'inner-gate' has a dependent and so is NOT the sole terminal
-      // sink). That makes four warnings: the two deprecation notices on
-      // 'inner-gate'/'inner-loop', the terminal-sink placement warning on
-      // 'inner-gate', and — #2753 — 'outer' itself, whose only escalatable
-      // sink is an interactive loop and therefore can't stop on a pause inside
-      // it.
+      // body-terminal sink is 'inner-loop' (a plain interactive `loop:` node).
+      // That makes two warnings: the deprecation notice on 'inner-loop', and —
+      // #2753 — 'outer' itself, whose only escalatable sink is an interactive
+      // loop and therefore can't stop on a pause inside it.
       const pw = await warningsFor([
         'name: test',
         'description: test',
@@ -8111,11 +8094,6 @@ nodes:
         '      until_bash: "exit 0"',
         '      max_iterations: 2',
         '      nodes:',
-        '        - id: inner-gate',
-        '          approval:',
-        '            message: ok?',
-        '            on_reject:',
-        '              prompt: fix it',
         '        - id: inner-loop',
         '          loop:',
         '            prompt: work',
@@ -8123,14 +8101,9 @@ nodes:
         '            max_iterations: 5',
         '            interactive: true',
         '            gate_message: continue?',
-        '          depends_on: [inner-gate]',
       ]);
-      expect(pw).toHaveLength(4);
-      expect(pw.some(w => w.includes("Node 'inner-gate'") && w.includes('on_reject'))).toBe(true);
+      expect(pw).toHaveLength(2);
       expect(pw.some(w => w.includes("Node 'inner-loop'") && w.includes('interactive'))).toBe(true);
-      expect(pw.some(w => w.includes("Node 'inner-gate'") && w.includes('terminal sink'))).toBe(
-        true
-      );
       expect(
         pw.some(w => w.includes("Node 'outer'") && w.includes('inner-loop') && w.includes('#2753'))
       ).toBe(true);
@@ -8273,8 +8246,10 @@ nodes:
         expect(pw[0]).toContain('#2753');
       });
 
-      it("warns when an included gate is not the expanded body's sole terminal sink", async () => {
-        const pw = await parentWarningsFor(
+      it("rejects an included gate that is not the expanded body's sole terminal sink", async () => {
+        await writeWorkflowFile(
+          testDir,
+          'parent.yaml',
           [
             'name: parent',
             'description: composes a gate block mid-body',
@@ -8290,7 +8265,11 @@ nodes:
             '        - id: after',
             '          depends_on: [review]',
             '          bash: "echo more work"',
-          ],
+          ].join('\n')
+        );
+        await writeWorkflowFile(
+          testDir,
+          'block.yaml',
           [
             'name: gate-block',
             'description: reusable approval',
@@ -8299,11 +8278,13 @@ nodes:
             '  - id: check',
             '    approval:',
             '      message: ok?',
-          ]
+          ].join('\n')
         );
-        expect(pw).toHaveLength(1);
-        expect(pw[0]).toContain("Node 'review__check'");
-        expect(pw[0]).toContain('terminal sink');
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.workflows.some(w => w.workflow.name === 'parent')).toBe(false);
+        expect(result.errors.find(e => e.filename === 'parent.yaml')?.error).toContain(
+          "approval node 'review__check' must be the body's sole terminal sink"
+        );
       });
 
       it("accepts a composed gate sink whose decision the group's until_bash reads", async () => {
@@ -8369,8 +8350,8 @@ nodes:
       });
     });
 
-    it('warns on a gate node with a dependent inside a loop_group body (not a terminal sink)', async () => {
-      const pw = await warningsFor([
+    it('rejects a gate node with a dependent inside a loop_group body', async () => {
+      const err = await loadErrorFor([
         'name: test',
         'description: test',
         'interactive: true',
@@ -8387,13 +8368,13 @@ nodes:
         '          depends_on: [check]',
         '          prompt: do more work',
       ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'check'");
-      expect(pw[0]).toContain('terminal sink');
+      expect(err).toContain(
+        "loop_group 'grp' body: approval node 'check' must be the body's sole terminal sink"
+      );
     });
 
-    it('warns on a gate node sharing terminal-sink status with another body node', async () => {
-      const pw = await warningsFor([
+    it('rejects a gate node sharing terminal-sink status with another body node', async () => {
+      const err = await loadErrorFor([
         'name: test',
         'description: test',
         'interactive: true',
@@ -8409,9 +8390,9 @@ nodes:
         '        - id: also-terminal',
         '          prompt: an independent branch',
       ]);
-      expect(pw).toHaveLength(1);
-      expect(pw[0]).toContain("Node 'check'");
-      expect(pw[0]).toContain('terminal sink');
+      expect(err).toContain(
+        "loop_group 'grp' body: approval node 'check' must be the body's sole terminal sink"
+      );
     });
 
     it('warns on the prose until: channel on a loop node', async () => {
@@ -9654,6 +9635,65 @@ describe('loop_group prose completion with structured terminal output (#2998)', 
     }
   );
 
+  it('judges the node a terminal gate reads past to (#4043)', () => {
+    const result = parseWorkflow(
+      Bun.YAML.stringify({
+        name: 'structured-group-gate',
+        description: 'test',
+        interactive: true,
+        nodes: [
+          {
+            id: 'refine',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 3,
+              nodes: [
+                {
+                  id: 'work',
+                  prompt: 'work',
+                  output_format: { type: 'object', properties: { done: { type: 'boolean' } } },
+                },
+                { id: 'ask', depends_on: ['work'], approval: { message: 'ok?' } },
+              ],
+            },
+          },
+        ],
+      }),
+      'structured-group-gate.yaml'
+    );
+    expect(result.error?.error).toContain("node 'work', which the group's output is read from");
+  });
+
+  it('judges every node a terminal gate reads past to (#4043)', () => {
+    const result = parseWorkflow(
+      Bun.YAML.stringify({
+        name: 'structured-group-gate-fan-in',
+        description: 'test',
+        interactive: true,
+        nodes: [
+          {
+            id: 'refine',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 3,
+              nodes: [
+                { id: 'notes', prompt: 'notes' },
+                {
+                  id: 'work',
+                  prompt: 'work',
+                  output_format: { type: 'object', properties: { done: { type: 'boolean' } } },
+                },
+                { id: 'ask', depends_on: ['notes', 'work'], approval: { message: 'ok?' } },
+              ],
+            },
+          },
+        ],
+      }),
+      'structured-group-gate-fan-in.yaml'
+    );
+    expect(result.error?.error).toContain("node 'work', which the group's output is read from");
+  });
+
   it('accepts a terminal node without output_format', () => {
     expect(parseGroup().error).toBeNull();
   });
@@ -9696,7 +9736,7 @@ nodes:
     providers
   );
   expect(result.error?.error).toBe(
-    "Provider 'claude' is not installed. Install it with: archon provider install claude"
+    "Provider 'claude' is not installed. Add it with: archon provider add claude"
   );
 });
 
@@ -9835,5 +9875,63 @@ nodes:
     '$a.output == true',
   ])('loads supported syntax: %s', when => {
     expect(parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml').error).toBeNull();
+  });
+});
+
+describe('attention wait options from an upstream output_format (#4038)', () => {
+  function parseWithOptionsItems(items: Record<string, unknown>): ParseResult {
+    const outputFormat = {
+      type: 'object',
+      properties: { options: { type: 'array', items } },
+      required: ['options'],
+    };
+    return parseWorkflow(
+      `name: referenced-options
+description: Options computed upstream
+nodes:
+  - id: plan
+    prompt: Propose options.
+    output_format: ${JSON.stringify(outputFormat)}
+  - id: ask
+    depends_on: [plan]
+    wait:
+      attention: Which one?
+      form: select
+      options: "$plan.output.options"
+`,
+      'referenced-options.yaml'
+    );
+  }
+
+  it('loads a producer whose items declare { id, label? }', () => {
+    const result = parseWithOptionsItems({
+      type: 'object',
+      properties: { id: { type: 'string' }, label: { type: 'string' } },
+      required: ['id'],
+    });
+    expect(result.error).toBeNull();
+  });
+
+  it.each([
+    ['items that are strings', { type: 'string' }],
+    ['an id that is not required', { type: 'object', properties: { id: { type: 'string' } } }],
+    [
+      'an id that is not a string',
+      { type: 'object', properties: { id: { type: 'number' } }, required: ['id'] },
+    ],
+    [
+      'a property attention options do not have',
+      {
+        type: 'object',
+        properties: { id: { type: 'string' }, score: { type: 'number' } },
+        required: ['id'],
+      },
+    ],
+  ])('rejects a producer with %s, naming the field and the producer', (_case, items) => {
+    const result = parseWithOptionsItems(items);
+    expect(result.error?.error).toContain("Node 'ask' field 'wait.options'");
+    expect(result.error?.error).toContain(
+      "must be an array of objects declaring only { id: string; label?: string } in 'plan's output_format"
+    );
   });
 });

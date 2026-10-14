@@ -7,7 +7,13 @@
  */
 import { hostname } from 'node:os';
 import { createLogger } from '@archon/paths';
-import { readExecutionOwner, runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  isApprovalContext,
+  isFanOutBlockReleased,
+  isTerminalRunStatus,
+  readExecutionOwner,
+  runAttention,
+} from '@archon/workflows/schemas/workflow-run';
 import type {
   ExecutionOwnerRecord,
   RunAttention,
@@ -34,7 +40,8 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 export const DEFAULT_ATTENTION_POLL_INTERVAL_MS = 1000;
-// Persisted child and parent links are not trusted to be acyclic.
+// Persisted child and parent links are not trusted to be acyclic. Bounds the rows one
+// sub-run tree walk visits, and the parent walk toward the process-entry ancestor.
 const MAX_CHAIN_RUNS = 500;
 
 export type NonTerminalWorkflowRunStatus = Exclude<
@@ -146,45 +153,88 @@ async function ownerRequired(
   return { kind: 'owner_required', activeRun, ownerCandidateIds, recordedOwner };
 }
 
-/** Resolve the child chain while retaining whether its current state needs a live process. */
+/**
+ * Resolve the sub-run tree under `run` while retaining whether its current state needs a
+ * live process. A parent blocked on children is never its own item: the walk goes depth
+ * first through the children in item order. The first child that has attention wins;
+ * failing that, the first that needs an owner (any finished child's, once the gate is
+ * released); otherwise nobody is needed.
+ */
 async function resolveRun(store: RunAttentionReadStore, run: WorkflowRun): Promise<RunResolution> {
-  const executionChain = [run];
-  let current = run;
-  let attention = runAttention(current);
-  let steps = 0;
+  return resolveFrom(store, run, [run], new Set([run.id]));
+}
 
-  while (attention?.kind === 'blocked_on_child') {
-    steps += 1;
-    if (steps > MAX_CHAIN_RUNS) {
-      return {
-        kind: 'attention',
-        attention: unreadable(
-          attention.runId,
-          'child_chain_too_deep',
-          `sub-run chain is deeper than ${String(MAX_CHAIN_RUNS)} runs`
-        ),
-      };
+async function resolveFrom(
+  store: RunAttentionReadStore,
+  current: WorkflowRun,
+  executionChain: readonly WorkflowRun[],
+  visited: Set<string>
+): Promise<RunResolution> {
+  const attention = runAttention(current);
+  const isRoot = executionChain.length === 1;
+  if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
+    const childRunIds =
+      attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
+    const children: WorkflowRun[] = [];
+    for (const childRunId of childRunIds) {
+      if (visited.has(childRunId) || visited.size >= MAX_CHAIN_RUNS) {
+        return {
+          kind: 'attention',
+          attention: unreadable(
+            attention.runId,
+            'child_chain_too_deep',
+            `sub-run tree is larger than ${String(MAX_CHAIN_RUNS)} runs or revisits a run`
+          ),
+        };
+      }
+      visited.add(childRunId);
+      const child = await store.getWorkflowRun(childRunId);
+      if (!child) {
+        return {
+          kind: 'attention',
+          attention: unreadable(
+            attention.runId,
+            'child_run_missing',
+            `blocked on sub-run ${childRunId}, which has no row`
+          ),
+        };
+      }
+      children.push(child);
     }
-    const child = await store.getWorkflowRun(attention.childRunId);
-    if (!child) {
-      return {
-        kind: 'attention',
-        attention: unreadable(
-          attention.runId,
-          'child_run_missing',
-          `blocked on sub-run ${attention.childRunId}, which has no row`
-        ),
-      };
+    // A finished fan-out child's hook stands down until the gate is released, so until
+    // then nothing owns that child.
+    const approval = current.metadata?.approval;
+    const released =
+      attention.kind === 'blocked_on_child' ||
+      (isApprovalContext(approval) &&
+        isFanOutBlockReleased(approval, id => children.find(child => child.id === id)?.status));
+    const ownerNeeded: Extract<RunResolution, { kind: 'owner_required' }>[] = [];
+    for (const child of children) {
+      if (!released && isTerminalRunStatus(child.status)) continue;
+      const resolution = await resolveFrom(store, child, [...executionChain, child], visited);
+      if (resolution.kind === 'attention') return resolution;
+      if (resolution.kind === 'owner_required') ownerNeeded.push(resolution);
     }
-    executionChain.push(child);
-    current = child;
-    const childAttention = runAttention(child);
-    if (childAttention?.kind === 'terminal') return ownerRequired(store, child, executionChain);
-    attention = childAttention;
+    const [first] = ownerNeeded;
+    if (!first) return { kind: 'ownerless' };
+    // Once released, whichever child finished last continues the parent and the rows do
+    // not record which one that is, so any of their owners proves the parent owned, and
+    // the parent is proven lost only when every recorded owner is checkable from here.
+    if (!released || ownerNeeded.length === 1) return first;
+    return {
+      ...first,
+      ownerCandidateIds: [...new Set(ownerNeeded.flatMap(r => r.ownerCandidateIds))],
+      recordedOwner: (ownerNeeded.find(r => !isOwnerEndpointLocal(r.recordedOwner)) ?? first)
+        .recordedOwner,
+    };
   }
 
+  // A terminal child's hook is expected to continue its parent, in the child's process.
+  if (attention?.kind === 'terminal' && !isRoot) {
+    return ownerRequired(store, current, executionChain);
+  }
   if (attention) return { kind: 'attention', attention };
-  if (current.status === 'running' || (current !== run && current.status === 'pending')) {
+  if (current.status === 'running' || (!isRoot && current.status === 'pending')) {
     return ownerRequired(store, current, executionChain);
   }
   return { kind: 'ownerless' };

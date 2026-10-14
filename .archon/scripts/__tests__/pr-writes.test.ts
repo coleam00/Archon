@@ -301,6 +301,7 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
         path: 'review/report.md',
       }),
       INPUTS_DISCOVERIES: '[]',
+      INPUTS_CONTRACT_LEFT: '["acceptance: the console shows it"]',
       INPUTS_ROUTE: 'null',
       INPUTS_MODE: JSON.stringify({ seams: false, code: true, tests: false, errors: false, docs: false }),
       ...options.inputs,
@@ -324,7 +325,11 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   it('creates the marked comment on the first round and edits it on the next', () => {
     const first = publishReview({ inputs: report });
     expect(first.code).toBe(0);
-    expect(JSON.parse(first.stdout)).toMatchObject({ ready: true, action: 'none' });
+    expect(JSON.parse(first.stdout)).toMatchObject({
+      ready: true,
+      action: 'none',
+      contract_left: ['acceptance: the console shows it'],
+    });
     expect(first.gh.some(call => call.includes('--method POST'))).toBe(true);
 
     const second = publishReview({

@@ -10,7 +10,7 @@ export function isMaintainedProvider(id: string): id is (typeof MAINTAINED_PROVI
 
 function unknownProviderMessage(id: string, registered: readonly string[]): string {
   return isMaintainedProvider(id)
-    ? `Provider '${id}' is not installed. Install it with: archon provider install ${id}`
+    ? `Provider '${id}' is not installed. Add it with: archon provider add ${id}`
     : `Unknown provider: '${id}'. Available: ${registered.join(', ')}`;
 }
 
@@ -27,9 +27,18 @@ export function missingProviderMessage(registry: ProviderRegistry, id: string): 
 export const NO_DEFAULT_PROVIDER_MESSAGE =
   "No default provider: set 'defaultAssistant' in ~/.archon/config.yaml or run archon setup";
 
+/** Deprecated providers stay bundled in release binaries (#3684); they are not an installed selection. */
+export function installedProviders(registry: ProviderRegistry): ProviderDescriptor[] {
+  return registry.list().filter(provider => provider.deprecationNotice === undefined);
+}
+
+export function hasInstalledProvider(registry: ProviderRegistry): boolean {
+  return installedProviders(registry).length > 0;
+}
+
 export function noDefaultProviderMessage(registry: ProviderRegistry): string {
-  return registry.list().length === 0
-    ? `No providers installed. Run: archon provider install <${MAINTAINED_PROVIDER_IDS.join('|')}>`
+  return !hasInstalledProvider(registry)
+    ? `No providers installed. Run: archon provider add <${MAINTAINED_PROVIDER_IDS.join('|')}>`
     : NO_DEFAULT_PROVIDER_MESSAGE;
 }
 
@@ -45,7 +54,7 @@ export function providerVersionMismatchMessage(
   installed: string,
   current: string
 ): string {
-  return `Provider '${id}' is installed at ${installed} but this CLI is ${current}. Run: archon provider install ${id}`;
+  return `Provider '${id}' is installed at ${installed} but this CLI is ${current}. Run: archon provider add ${id}`;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */
@@ -137,7 +146,7 @@ export interface ProviderRegistration {
   builtIn: boolean;
 
   /**
-   * Set when the provider is deprecated. The registry logs it once per process when a
+   * Set when the provider is deprecated. The registry reports it once per process when a
    * run first uses the provider; `archon doctor` and `archon ai default` show it too.
    */
   deprecationNotice?: string;

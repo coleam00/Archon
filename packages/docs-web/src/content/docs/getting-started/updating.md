@@ -13,6 +13,18 @@ Let active workflows finish and stop any running Archon server before replacing
 its executable or source checkout. Restart the server afterward so the console
 and new runs use the updated version.
 
+A release binary checks that each installed provider matches its own version.
+After a Homebrew or quick-installer update, reinstall the providers you use
+(the quick installer asks; Homebrew does not):
+
+```bash
+archon provider add claude codex   # the providers you use
+```
+
+Until you do, a run that needs one fails before it starts and prints this
+command. `archon doctor` lists each provider's installed version. Docker and
+source installs run providers from source and skip this step.
+
 ## Homebrew
 
 ```bash

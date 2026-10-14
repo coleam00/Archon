@@ -44,8 +44,23 @@ export const providerRegistry: ProviderRegistry = {
   list: () => [...registry.values()],
 };
 
-/** Deprecated providers whose notice this process already logged. */
+/** Deprecated providers whose notice this process already reported. */
 const deprecationNoticed = new Set<string>();
+
+type DeprecationReporter = (provider: string, notice: string) => void;
+
+const logDeprecation: DeprecationReporter = (provider, notice) =>
+  getLog().warn({ provider, notice }, 'provider.deprecated');
+
+let reportDeprecation = logDeprecation;
+
+/**
+ * Replace how a deprecated provider's first use is reported. A host whose user reads a
+ * terminal shows the notice as text; the default logs it.
+ */
+export function setDeprecationReporter(report: DeprecationReporter): void {
+  reportDeprecation = report;
+}
 
 function assertValidCapabilities(entry: ProviderRegistration): void {
   if (entry.capabilities.sessionFork === true && !entry.capabilities.sessionResume) {
@@ -95,7 +110,7 @@ export function getAgentProvider(id: string): IAgentProvider {
   // Every node and turn resolves its provider here, so the notice is gated per process.
   if (entry.deprecationNotice && !deprecationNoticed.has(id)) {
     deprecationNoticed.add(id);
-    getLog().warn({ provider: id, notice: entry.deprecationNotice }, 'provider.deprecated');
+    reportDeprecation(id, entry.deprecationNotice);
   }
   return entry.factory();
 }
@@ -161,4 +176,5 @@ export function clearRegistry(): void {
   registry.clear();
   unavailableProviders.clear();
   deprecationNoticed.clear();
+  reportDeprecation = logDeprecation;
 }

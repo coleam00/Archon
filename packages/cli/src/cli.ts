@@ -50,6 +50,7 @@ if (inheritedInstallContext) {
 import { installPipeSafeConsole } from './utils/safe-console';
 import { exitWithDrain, withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
+import { attachmentUsage, isAttachmentVerb, publicAttachmentEntries } from './attachment-commands';
 import {
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
@@ -131,6 +132,9 @@ function installProviderProcessErrorHandlers(
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
   const { registerHostProviders } = await import('@archon/core/providers/register-host-providers');
+  const { setDeprecationReporter } = await import('@archon/providers');
+  // stderr, like a deprecated workflow's notice: it survives --json's log silencing.
+  setDeprecationReporter((_provider, notice) => console.warn(notice));
   if (BUNDLED_IS_BINARY) {
     const { claimPiExtensionProcessError } =
       await import('@archon/providers/pi/extension-error-broker');
@@ -721,6 +725,7 @@ async function main(): Promise<number> {
           workflowApproveCommand,
           workflowRejectCommand,
           workflowRespondCommand,
+          workflowAnswerCommand,
           workflowCleanupCommand,
           workflowResetSessionsCommand,
           workflowEventEmitCommand,
@@ -732,9 +737,14 @@ async function main(): Promise<number> {
         // The host's deps capture GitHub App auth when built, so commands that can
         // execute a workflow initialize it first. A misconfigured App fails here,
         // before any run row exists; query commands stay usable without it.
-        const executesWorkflow = ['run', 'resume', 'approve', 'reject', 'respond'].includes(
-          subcommand ?? ''
-        );
+        const executesWorkflow = [
+          'run',
+          'resume',
+          'approve',
+          'reject',
+          'respond',
+          'answer',
+        ].includes(subcommand ?? '');
         const workflowHost = await createCliWorkflowHost(executesWorkflow);
         switch (subcommand) {
           case 'list': {
@@ -1064,7 +1074,8 @@ async function main(): Promise<number> {
               approveComment,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
             );
             break;
           }
@@ -1083,7 +1094,8 @@ async function main(): Promise<number> {
               rejectReason,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
             );
             break;
           }
@@ -1109,7 +1121,29 @@ async function main(): Promise<number> {
               respondText,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
+            );
+            break;
+          }
+
+          case 'answer': {
+            const answerRunId = positionals[2];
+            const answerOccurrence = values.occurrence as string | undefined;
+            if (!answerRunId || answerOccurrence === undefined || positionals[3] !== undefined) {
+              return await fail(
+                jsonFlag,
+                'Usage: archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <text>] [--json]'
+              );
+            }
+            await workflowAnswerCommand(
+              workflowHost,
+              answerRunId,
+              answerOccurrence,
+              (values.choose as string[] | undefined) ?? [],
+              values.text as string | undefined,
+              jsonFlag,
+              effectiveCwd
             );
             break;
           }
@@ -1481,25 +1515,30 @@ async function main(): Promise<number> {
       }
 
       case 'skill': {
-        switch (subcommand) {
-          case 'install': {
-            // Optional positional path; otherwise install into the resolved cwd.
-            const targetArg = positionals[2];
-            const targetPath = targetArg ? resolve(targetArg) : cwd;
-            const { skillInstallCommand } = await loadRoute(() => import('./commands/skill'), {
-              providers: false,
-            });
-            return await skillInstallCommand(targetPath);
-          }
-
-          default: {
-            const problem =
-              subcommand === undefined
-                ? 'Missing skill subcommand'
-                : `Unknown skill subcommand: ${subcommand}`;
-            return await fail(jsonFlag, `${problem}\nAvailable: install`);
-          }
+        if (!isAttachmentVerb('skill', subcommand)) {
+          const problem =
+            subcommand === undefined
+              ? 'Missing skill subcommand'
+              : `Unknown skill subcommand: ${subcommand}`;
+          const available = publicAttachmentEntries('skill')
+            .map(([verb]) => verb)
+            .join(', ');
+          return await fail(jsonFlag, `${problem}\nAvailable: ${available}`);
         }
+        if (positionals.length > 3) {
+          return await fail(jsonFlag, attachmentUsage('skill'));
+        }
+        if (subcommand === 'install') {
+          console.warn(
+            'Warning: archon skill install is deprecated. Use archon skill add instead.'
+          );
+        }
+        const targetArg = positionals[2];
+        const targetPath = targetArg ? resolve(targetArg) : cwd;
+        const { skillInstallCommand } = await loadRoute(() => import('./commands/skill'), {
+          providers: false,
+        });
+        return await skillInstallCommand(targetPath);
       }
 
       default: {

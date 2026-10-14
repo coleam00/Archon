@@ -176,8 +176,14 @@ irm https://archon.diy/install.ps1 | iex
 brew install coleam00/archon/archon
 ```
 
-> **Compiled binaries need a `CLAUDE_BIN_PATH`.** The quick-install binaries
-> don't bundle Claude Code. Install it separately, then point Archon at it:
+Release binaries ship without AI providers. The quick installers ask which of
+Claude, Codex and Pi to install; pass `--providers codex` (shell) or
+`-Providers codex` (PowerShell) to skip the question. After a Homebrew install,
+or to add one later, run `archon setup` or `archon provider add <claude|codex|pi>`.
+See [Installation → Providers](https://archon.diy/getting-started/installation/#providers).
+
+> **The Claude provider needs Claude Code.** Compiled binaries don't bundle it.
+> Install it separately; if Archon can't find it, point it there:
 >
 > ```bash
 > # macOS / Linux / WSL

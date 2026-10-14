@@ -129,11 +129,16 @@ export function registerChatInbound(
         action.action === 'respond' ? action.response.decision : action.action,
         response?.text,
         actor,
-        response?.nodeId
-          ? response.pauseId
-            ? { nodeId: response.nodeId, pauseId: response.pauseId }
-            : response.nodeId
-          : undefined
+        {
+          via: descriptor.id,
+          ...(response?.nodeId
+            ? {
+                expectedGate: response.pauseId
+                  ? { nodeId: response.nodeId, pauseId: response.pauseId }
+                  : response.nodeId,
+              }
+            : {}),
+        }
       );
       let resumed = false;
       if (!('cancelled' in result) || !result.cancelled) {

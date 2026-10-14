@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { forgeRequestSchema } from '@archon/forge/operations';
 import { renderHelp } from './help';
+import { attachmentCommands } from './attachment-commands';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 
@@ -84,7 +85,7 @@ describe('CLI help output', () => {
 
   it('documents the unified skill destinations and subscription providers', () => {
     expect(help).toContain(
-      'skill install [path]       Install archon-cli into .claude/skills and .agents/skills'
+      'skill add [path]           Add archon-cli into .claude/skills and .agents/skills'
     );
     expect(help).toContain(
       'ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription'
@@ -204,7 +205,7 @@ Commands:
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
   workflow logs <run-id>     Print or follow a run's JSONL transcript
-  workflow wait <run-id>     Block until the run ends or needs a human decision
+  workflow wait <run-id>     Block until the run ends or needs attention
   workflow resume <run-id>   Resume a failed or paused run from completed nodes
   workflow wake [--watch] [--json] Wake due continuations across this install
   workflow signal <full-run-id> Signal and wake one exact event wait occurrence
@@ -213,6 +214,8 @@ Commands:
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
                              ('approve'/'reject' are sugar for the dedicated commands)
+  workflow answer <run-id> --occurrence <id>
+                             Answer a paused attention wait in its declared form
   workflow test [<name>|<folder>|<path>]
                              Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a
                              workflow, a workflow folder or pack (by name or directory
@@ -225,10 +228,10 @@ Commands:
   isolation cleanup --merged Remove environments with branches merged into the base branch
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (binary installs download server and UI on first run)
-  skill install [path]       Install archon-cli into .claude/skills and .agents/skills
-  provider install <id...>   Install maintained providers matching this Archon release
-  plugin install <owner/repo[/path][@tag]>
-                             Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
+  skill add [path]           Add archon-cli into .claude/skills and .agents/skills
+  provider add <id...>       Add maintained providers matching this Archon release (connects your agent CLI or SDK)
+  plugin add <owner/repo[/path][@tag]>
+                             Add a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)
   plugin update <id>[@tag]   Reinstall an installed plugin at a tag, or its latest release or default branch
   plugin remove <id>         Delete the files an installed plugin wrote
   plugin copy <id>           Copy an installed workflow pack into this project's .archon/workflows/
@@ -277,12 +280,14 @@ Options:
   --default-stubs            Fill missing reached nodes with validated placeholders during --dry-run
   --exec-code                Execute trusted bash/script nodes during --dry-run (default: require stubs)
   --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
-  --providers <ids>          Install comma-separated maintained providers, skipping the setup provider question
+  --providers <ids>          Add comma-separated maintained providers, skipping the setup provider question
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/cancel/abandon/resume)
+  --json                     Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/answer/cancel/abandon/resume)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
+  --occurrence <id>          For 'workflow approve/reject/respond/answer': refuse the answer unless the run is still paused at
+                             this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
@@ -318,14 +323,28 @@ Examples:
   archon workflow cancel <run-id>
   archon workflow runs --open
   archon workflow run archon-review --adopt <run-id> "Review the changes"
-  archon skill install
-  archon skill install /path/to/project
-  archon plugin install coleam00/Archon/plugins/forge-github
+  archon skill add
+  archon skill add /path/to/project
+  archon plugin add coleam00/Archon/plugins/forge-github
 
 `;
 
   it('archon --help matches the supported global index byte-for-byte', () => {
     expect(`${renderHelp()}\n`).toBe(EXPECTED_GLOBAL_HELP);
+  });
+
+  it.each([
+    ['plugin', '<owner/repo[/path][@tag]>'],
+    ['skill', '[path]'],
+  ])('retains scoped help for the %s alias without advertising it globally', (command, args) => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, command, 'install', '--help'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`${command} install ${args}`);
+    expect(result.stdout).toContain(`Deprecated alias for archon ${command} add`);
+    expect(renderHelp()).not.toContain(`${command} install`);
   });
 
   it('archon help <cmd> [<subcmd>] matches archon <cmd> [<subcmd>] --help', () => {
@@ -388,5 +407,27 @@ it('forge work-item and repository-label help exposes file requests', () => {
     const text = renderHelp('forge', operation);
     expect(text).toContain(operation);
     expect(text).toContain('--data-file <path>');
+  }
+});
+
+it('provider and plugin add help exposes the supported commands and plugin example', () => {
+  expect(renderHelp('provider', 'add')).toContain('provider add <id...>');
+  const plugin = renderHelp('plugin', 'add');
+  expect(plugin).toContain('plugin add <owner/repo[/path][@tag]>');
+  expect(plugin).toContain('archon plugin add coleam00/Archon/plugins/forge-github');
+});
+
+it('every supported attachment verb has scoped help, with aliases scoped only', () => {
+  const global = renderHelp();
+  for (const [command, verbs] of Object.entries(attachmentCommands)) {
+    for (const [verb, entry] of Object.entries(verbs)) {
+      const spec = `${command} ${verb} ${entry.args}`.trimEnd();
+      expect(renderHelp(command, verb)).toContain(spec);
+      if ('scopedOnly' in entry) {
+        expect(global).not.toContain(spec);
+      } else {
+        expect(global).toContain(spec);
+      }
+    }
   }
 });

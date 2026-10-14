@@ -29,6 +29,21 @@ export class MissingProjectDirectoryError extends Error {
 }
 
 /**
+ * An existing branch and its remote counterpart both hold commits the other lacks.
+ * Either side may be the only copy of someone's work, so creation stops instead of
+ * choosing one.
+ */
+export class ExistingBranchDivergedError extends Error {
+  constructor(branch: string, remoteRef: string, localOnly: number, remoteOnly: number) {
+    super(
+      `Branch '${branch}' has diverged from '${remoteRef}': the local branch has ${localOnly} commit(s) the remote does not, and the remote has ${remoteOnly} the local branch does not. ` +
+        `Archon will not pick a side. Reconcile them (rebase or merge, then push), or delete the local branch to start from '${remoteRef}', then retry.`
+    );
+    this.name = 'ExistingBranchDivergedError';
+  }
+}
+
+/**
  * Git unregistered a worktree it was removing but left files behind that Archon
  * could not delete. No retry can prove the directory is Archon's again, so the
  * operator must delete it by hand.
@@ -241,7 +256,8 @@ export function classifyIsolationError(err: Error): string {
     const cleanup = (err as ErrorWithCleanupFailure).cleanupFailure;
     return `**Error:** ${err.message}${cleanup ? ` ${cleanup}` : ''}`;
   }
-  if (err instanceof MissingProjectDirectoryError) return `**Error:** ${err.message}`;
+  if (err instanceof MissingProjectDirectoryError || err instanceof ExistingBranchDivergedError)
+    return `**Error:** ${err.message}`;
 
   const stderr = (err as Error & { stderr?: string }).stderr ?? '';
   const errorLower = `${err.message} ${stderr}`.toLowerCase();
@@ -266,7 +282,11 @@ export function classifyIsolationError(err: Error): string {
  * so they are visible as crashes rather than silent workspace failures.
  */
 export function isKnownIsolationError(err: Error): boolean {
-  if (err instanceof WorktreePostCreateError || err instanceof MissingProjectDirectoryError)
+  if (
+    err instanceof WorktreePostCreateError ||
+    err instanceof MissingProjectDirectoryError ||
+    err instanceof ExistingBranchDivergedError
+  )
     return true;
 
   const stderr = (err as Error & { stderr?: string }).stderr ?? '';

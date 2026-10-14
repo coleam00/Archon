@@ -577,7 +577,7 @@ export class SlackWorkflowBridge {
           decision,
           undefined,
           await this.resolveRunActor(actorId),
-          pauseId ? { nodeId, pauseId } : nodeId
+          { via: 'slack', expectedGate: pauseId ? { nodeId, pauseId } : nodeId }
         );
         if (!('cancelled' in result)) {
           const resumed = await this.tryResumeWorkflow(runId, actorId);
@@ -682,7 +682,7 @@ export class SlackWorkflowBridge {
             note += `\n:warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`/archon-workflow status\`.`;
           }
           if (result.blockedParentRunId) {
-            note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+            note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
           }
           await this.postActionNote(body, runId, note);
         } else if (!result.cancelled) {

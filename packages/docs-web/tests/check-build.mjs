@@ -11,7 +11,7 @@ for (const id of [
 ]) {
   const page = readFileSync(new URL(`${id}/index.html`, root), 'utf8');
   for (const html of [index, page]) {
-    assert.ok(html.includes(`archon plugin install ${id}`));
+    assert.ok(html.includes(`archon plugin add ${id}`));
     assert.ok(html.includes(commit));
     assert.ok(html.includes(id.endsWith('/untagged-pack') ? 'No tags published' : 'v1.0.0'));
     assert.ok(html.includes('Read on GitHub'));

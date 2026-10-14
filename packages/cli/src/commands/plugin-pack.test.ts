@@ -206,16 +206,18 @@ async function run(
 ): Promise<{ code: number; out: string; err: string }> {
   const log = spyOn(console, 'log').mockImplementation(() => undefined);
   const error = spyOn(console, 'error').mockImplementation(() => undefined);
+  const warning = spyOn(console, 'warn').mockImplementation(() => undefined);
   try {
     const code = await pluginCommand(subcommand, target ? [target] : [], env);
     return {
       code,
       out: log.mock.calls.map(call => call.join(' ')).join('\n'),
-      err: error.mock.calls.map(call => call.join(' ')).join('\n'),
+      err: [...error.mock.calls, ...warning.mock.calls].map(call => call.join(' ')).join('\n'),
     };
   } finally {
     log.mockRestore();
     error.mockRestore();
+    warning.mockRestore();
   }
 }
 
@@ -243,9 +245,29 @@ async function snapshot(dir: string): Promise<Record<string, string>> {
 const commit = (name: string): string => commits.get(name) ?? '';
 
 describe('archon plugin: workflow packs', () => {
+  test('install remains a deprecated alias with the same tree and receipt as add', async () => {
+    const addedEnv = await environment();
+    const aliasEnv = await environment();
+    const added = await run(addedEnv, 'add', `${ID}@v1`);
+    const alias = await run(aliasEnv, 'install', `${ID}@v1`);
+    expect(added.code).toBe(0);
+    expect(added.err).toBe('');
+    expect(alias.code).toBe(0);
+    expect(alias.err).toBe(
+      'Warning: archon plugin install is deprecated. Use archon plugin add instead.'
+    );
+    expect(alias.out).toBe(added.out);
+    expect(await snapshot(packTreePath(aliasEnv.pluginsDir, ID, commit('v1')))).toEqual(
+      await snapshot(packTreePath(addedEnv.pluginsDir, ID, commit('v1')))
+    );
+    const [addedReceipt] = await readReceipts(addedEnv.pluginsDir);
+    const [aliasReceipt] = await readReceipts(aliasEnv.pluginsDir);
+    expect({ ...aliasReceipt, installedAt: addedReceipt.installedAt }).toEqual(addedReceipt);
+  });
+
   test('installs the default branch head as one complete tree, then updates, lists and removes it', async () => {
     const env = await environment();
-    const installed = await run(env, 'install', ID);
+    const installed = await run(env, 'add', ID);
     expect(installed.err).toBe('');
     expect(installed.out).toContain(`default branch (commit ${commit('head')})`);
     expect(installed.out).toContain('owner/review-kit:review');
@@ -289,7 +311,7 @@ describe('archon plugin: workflow packs', () => {
   // repository at depth 1 costs its whole checkout size, once per idempotent update.
   test('an update that keeps the installed commit never fetches', async () => {
     const env = await environment();
-    expect((await run(env, 'install', `${ID}@v2`)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v2`)).code).toBe(0);
     const trace = join(env.pluginsDir, '..', 'git-trace.log');
     for (const target of [`${ID}@v2`, ID]) {
       await writeFile(trace, '');
@@ -310,7 +332,7 @@ describe('archon plugin: workflow packs', () => {
   test('an update that keeps the installed commit still refuses an incompatible Archon', async () => {
     const env = await environment();
     const newer = { ...env, archonVersion: '99.0.0' };
-    expect((await run(newer, 'install', `${ID}@crafted-compat`)).code).toBe(0);
+    expect((await run(newer, 'add', `${ID}@crafted-compat`)).code).toBe(0);
     const before = await snapshot(env.pluginsDir);
     const result = await run(env, 'update', `${ID}@crafted-compat`);
     expect(result.code).toBe(1);
@@ -320,7 +342,7 @@ describe('archon plugin: workflow packs', () => {
 
   test('an update to another tag on the installed commit keeps the live tree and rewrites the receipt', async () => {
     const env = await environment();
-    expect((await run(env, 'install', ID)).code).toBe(0);
+    expect((await run(env, 'add', ID)).code).toBe(0);
     const tree = packTreePath(env.pluginsDir, ID, commit('head'));
     const files = await snapshot(tree);
     // Replacing the live tree with the same bytes would delete it on the way out,
@@ -343,7 +365,7 @@ describe('archon plugin: workflow packs', () => {
     'a failed receipt write removes the new tree and keeps the previous install',
     async () => {
       const env = await environment();
-      expect((await run(env, 'install', ID)).code).toBe(0);
+      expect((await run(env, 'add', ID)).code).toBe(0);
       const before = await snapshot(env.pluginsDir);
       const receiptDir = dirname(receiptPath(env.pluginsDir, ID));
       await chmod(receiptDir, 0o555);
@@ -361,7 +383,7 @@ describe('archon plugin: workflow packs', () => {
 
   test('copy writes to the repository root when run from a subdirectory', async () => {
     const env = await environment();
-    expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v1`)).code).toBe(0);
     const project = join(env.projectDir, '..', 'repo');
     await mkdir(join(project, 'src', 'deep'), { recursive: true });
     Bun.spawnSync(['git', 'init', '-q'], { cwd: project });
@@ -375,7 +397,7 @@ describe('archon plugin: workflow packs', () => {
 
   test('copy from a registered folder descendant inside Git writes only to that folder', async () => {
     const env = await environment();
-    expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v1`)).code).toBe(0);
     const project = env.projectDir;
     const folder = join(project, 'ops');
     const descendant = join(folder, 'deep');
@@ -395,7 +417,7 @@ describe('archon plugin: workflow packs', () => {
 
   test.each([true, false])('copy works without registration storage (Git: %s)', async initGit => {
     const env = await environment();
-    expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v1`)).code).toBe(0);
     await mkdir(env.projectDir, { recursive: true });
     if (initGit) expect(Bun.spawnSync(['git', 'init', '-q', env.projectDir]).exitCode).toBe(0);
     const home = join(env.projectDir, '..', 'unreadable-home');
@@ -426,7 +448,7 @@ describe('archon plugin: workflow packs', () => {
 
   test('copy makes a project-owned copy and refuses an existing destination', async () => {
     const env = await environment();
-    expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v1`)).code).toBe(0);
     await mkdir(env.projectDir, { recursive: true });
     const copied = await run(env, 'copy', ID);
     expect(copied.err).toBe('');
@@ -445,7 +467,7 @@ describe('archon plugin: workflow packs', () => {
 
   test('repair and removal of unreadable receipts preserve unidentified pack trees', async () => {
     const env = await environment();
-    expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v1`)).code).toBe(0);
     const oldTree = packTreePath(env.pluginsDir, ID, commit('v1'));
     const oldFiles = await snapshot(oldTree);
     await writeFile(receiptPath(env.pluginsDir, ID), '{not json');
@@ -472,9 +494,9 @@ describe('archon plugin: workflow packs', () => {
 
   test('refuses a second pack with the same owner and name', async () => {
     const env = await environment();
-    expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    expect((await run(env, 'add', `${ID}@v1`)).code).toBe(0);
     const before = await snapshot(env.pluginsDir);
-    const clash = await run(env, 'install', 'owner/packs/packs/review-kit-fork@v1');
+    const clash = await run(env, 'add', 'owner/packs/packs/review-kit-fork@v1');
     expect(clash.err).toContain(`are both workflow packs named owner/review-kit`);
     expect(clash.err).toContain(ID);
     expect(await snapshot(env.pluginsDir)).toEqual(before);
@@ -504,7 +526,7 @@ describe('archon plugin: workflow packs', () => {
     ],
   ])('refuses a pack with %s and writes nothing', async (_case, target, message) => {
     const env = await environment();
-    const result = await run(env, 'install', target);
+    const result = await run(env, 'add', target);
     expect(result.code).toBe(1);
     expect(result.err).toContain(message);
     expect(await snapshot(env.pluginsDir)).toEqual({});
@@ -514,7 +536,7 @@ describe('archon plugin: workflow packs', () => {
   // installed tree must hold the committed bytes regardless.
   test("installs the committed bytes even when the pack's own .gitattributes asks otherwise", async () => {
     const env = await environment();
-    const result = await run(env, 'install', `${ID}@crafted-attributes`);
+    const result = await run(env, 'add', `${ID}@crafted-attributes`);
     expect(result.err).toBe('');
     const tree = packTreePath(env.pluginsDir, ID, commit('crafted-attributes'));
     expect(await readFile(join(tree, 'review/review.yaml'), 'utf8')).toBe('name: review\n# $Id$\n');
@@ -530,7 +552,7 @@ describe('archon plugin: workflow packs', () => {
       GIT_CONFIG_VALUE_0: 'true',
     });
     try {
-      expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+      expect((await run(env, 'add', `${ID}@v1`)).code).toBe(0);
     } finally {
       for (const key of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0']) {
         if (saved[key] === undefined) delete process.env[key];
@@ -546,7 +568,7 @@ describe('archon plugin: workflow packs', () => {
 
   test('a file outside the plugin never blocks the install, whatever its name', async () => {
     const env = await environment();
-    const result = await run(env, 'install', `${ID}@crafted-outside`);
+    const result = await run(env, 'add', `${ID}@crafted-outside`);
     expect(result.err).toBe('');
     expect(result.code).toBe(0);
     expect(

@@ -7,7 +7,9 @@ import type {
   WorkflowDefinition,
   WorkflowLoadError,
   DagNode,
+  GateNode,
   IncludeDirective,
+  WaitNode,
   WorkflowNodeHooks,
 } from './schemas';
 import {
@@ -16,6 +18,7 @@ import {
   isLoopNode,
   isLoopGroupNode,
   definedOutputPaths,
+  loopGroupOutputNodes,
   loopGroupSoleTerminalSink,
   isGateNode,
   isWaitNode,
@@ -31,6 +34,7 @@ import { createLogger } from '@archon/paths';
 import { compileOutputSchema } from './structured-output';
 
 import {
+  attentionOptionSchema,
   dagNodeSchema,
   ignoredFieldsForNode,
   isOutputFormatEnforced,
@@ -390,13 +394,11 @@ function collectUnknownNodeKeys(raw: unknown, id: string, label: string, warning
  * transitively (a `loop:` node with `interactive: true`, the legacy mechanism,
  * or a `loop_group:` node that is itself `interactive: true` or whose own sole
  * terminal sink recurses into this same case, following a chain of well-formed
- * sole-terminal-sink nesting to any depth). A gate that is mid-body or
- * co-terminal with another sink breaks the chain here too — the placement
- * check in `collectLoopGroupSinkWarnings` below already warns about that
- * misplacement on its own. Mirrors `findLoopGroupTerminalSuspendNode`'s doc
- * comment (dag-executor.ts): the runtime has no unambiguous way to escalate
- * a pause through a sink that isn't a bare gate, so this only makes that gap
- * visible at load time.
+ * sole-terminal-sink nesting to any depth). A gate anywhere else in a body is a
+ * load error (`validateDagStructure`), so the chain never meets one. Mirrors
+ * `findLoopGroupTerminalSuspendNode`'s doc comment (dag-executor.ts): the runtime
+ * has no unambiguous way to escalate a pause through a sink that isn't a bare gate,
+ * so this only makes that gap visible at load time.
  */
 function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boolean {
   if (isIncludeDirective(node)) return false;
@@ -474,61 +476,43 @@ export function collectLoopGroupSinkWarnings(
       enclosingOwnerSessions ||
       node.loop_group.nodes.some(n => !isIncludeDirective(n) && isNodeContextResume(n.context));
 
-    // A gate node inside a loop_group body only pauses the enclosing loop when it is
-    // the body's SOLE terminal sink (#2707 step 3, target-model decision (b)) — a
-    // mid-body or co-terminal gate has no defined resume semantics and silently does
-    // not stop iteration (mid-body resume-to-node is deferred to #2708). Guidance for
-    // the new authoring pattern, not a rejection: the workflow keeps loading either
-    // way. A gate placed here by the legacy `on_reject` mechanism predates this
-    // pattern and is equally unable to stop the loop from this position, so it gets
-    // the same verdict.
-    //
-    // Every gate in the body, not just the first: a body may legitimately contain
-    // more than one (e.g. an "approve to start" gate followed by work followed by
-    // a "review the result" gate) — only ONE can validly be the sole terminal sink,
-    // but each needs its own placement/completion-reference verdict, not just the
-    // first one found.
-    const gatesInBody = node.loop_group.nodes.filter(n => !isIncludeDirective(n) && isGateNode(n));
-    for (const gate of gatesInBody) {
-      if (gate !== soleSink) {
+    // A gate that is the body's sole terminal sink (any other placement is a load
+    // error in `validateDagStructure`). Design A (#2707 step 3) is deliberately
+    // unopinionated about what a decision means — the group's own 'until_bash' is the
+    // completion channel, and it either reads the gate's '$<gateId>.output.decision'/
+    // '.text' or it doesn't. If it doesn't, the human's answer is captured (every
+    // resolution still writes node_completed) but never consulted for completion — the
+    // loop just runs to max_iterations, silently ignoring every response. Structural
+    // check (does the until_bash string reference the gate's node id), not
+    // prose-sniffing — no judgment about what the check DOES with it, only whether it
+    // looks at it at all. A gate with its own `when:` is exempt: when it skips it has
+    // no output, so an until_bash reading it would fail the group (#4043).
+    if (
+      soleSink !== undefined &&
+      !isIncludeDirective(soleSink) &&
+      isGateNode(soleSink) &&
+      soleSink.when === undefined
+    ) {
+      const untilBash = node.loop_group.until_bash;
+      const untilBashRefsGate =
+        untilBash !== undefined &&
+        Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
+          m => m[1] === soleSink.id
+        );
+      if (!untilBashRefsGate) {
+        const gateRef = `$${soleSink.id}.output`;
         const message =
-          `Node '${gate.id}': a gate node inside a loop_group body must be the ` +
-          "body's sole terminal sink to pause the enclosing loop (#2707 step 3) — this " +
-          'gate is not, so it will not stop loop iteration. Move it to the end of the ' +
-          'body with nothing else depending on it, and no other node left un-depended-on.';
+          `Node '${soleSink.id}': this gate is the loop_group's terminal sink, but ` +
+          `'loop_group.until_bash' does not reference '${gateRef}' — the human's ` +
+          'decision is captured but never consulted for completion, so the loop only ' +
+          `ends via max_iterations. Declare 'until_bash' checking '${gateRef}.decision' ` +
+          `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
+          'drives completion (#2707 step 3).';
         warnings.push(message);
-        getLog().debug({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
-      } else {
-        // Gate is validly the sole terminal sink. Design A (#2707 step 3) is
-        // deliberately unopinionated about what a decision means — the group's own
-        // 'until_bash' is the completion channel, and it either reads the gate's
-        // '$<gateId>.output.decision'/'.text' or it doesn't. If it doesn't, the
-        // human's answer is captured (every resolution still writes node_completed)
-        // but never consulted for completion — the loop just runs to max_iterations,
-        // silently ignoring every response. Structural check (does the until_bash
-        // string reference the gate's node id), not prose-sniffing — no judgment
-        // about what the check DOES with it, only whether it looks at it at all.
-        const untilBash = node.loop_group.until_bash;
-        const untilBashRefsGate =
-          untilBash !== undefined &&
-          Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
-            m => m[1] === gate.id
-          );
-        if (!untilBashRefsGate) {
-          const gateRef = `$${gate.id}.output`;
-          const message =
-            `Node '${gate.id}': this gate is the loop_group's terminal sink, but ` +
-            `'loop_group.until_bash' does not reference '${gateRef}' — the human's ` +
-            'decision is captured but never consulted for completion, so the loop only ' +
-            `ends via max_iterations. Declare 'until_bash' checking '${gateRef}.decision' ` +
-            `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
-            'drives completion (#2707 step 3).';
-          warnings.push(message);
-          getLog().debug(
-            { id: gate.id, warning: message },
-            'loop_group_gate_completion_not_referenced'
-          );
-        }
+        getLog().debug(
+          { id: soleSink.id, warning: message },
+          'loop_group_gate_completion_not_referenced'
+        );
       }
     }
 
@@ -826,6 +810,61 @@ function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'loop-group' 
 const GATE_ON_A_SHELL_NODE =
   "compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead";
 
+/** `attentionOptionSchema` as JSON Schema: the shape a producer's options field must declare. */
+const ATTENTION_OPTION_JSON_SCHEMA = z.toJSONSchema(attentionOptionSchema);
+
+/**
+ * Why a producer's `output_format` cannot yield attention options at `options`'s field,
+ * or undefined when it can or declares no schema (the pause-time check then owns it).
+ * The field must be an array whose items declare only `attentionOptionSchema`'s
+ * properties, with the same types, and require what it requires.
+ */
+function referencedOptionsShapeError(
+  options: string,
+  producerOf: (id: string) => DagNode | IncludeDirective | undefined
+): string | undefined {
+  const ref = parseWholeOutputRef(options);
+  if (ref?.field === undefined) return undefined;
+  const producer = producerOf(ref.nodeId);
+  if (producer === undefined || isIncludeDirective(producer)) return undefined;
+  let schema: unknown = producer.output_format;
+  if (schema === undefined) return undefined;
+  for (const key of ref.field.split('.')) {
+    const properties: unknown = isRecord(schema) ? schema.properties : undefined;
+    schema = isRecord(properties) ? properties[key] : undefined;
+  }
+  const items: unknown = isRecord(schema) && schema.type === 'array' ? schema.items : undefined;
+  const itemProperties: unknown = isRecord(items) ? items.properties : undefined;
+  const itemRequired: unknown = isRecord(items) ? items.required : undefined;
+  const { properties: optionProperties = {}, required: optionRequired = [] } =
+    ATTENTION_OPTION_JSON_SCHEMA;
+  const fits =
+    isRecord(items) &&
+    items.type === 'object' &&
+    isRecord(itemProperties) &&
+    Object.entries(itemProperties).every(([key, property]) => {
+      const optionProperty = optionProperties[key];
+      return (
+        isRecord(property) && isRecord(optionProperty) && property.type === optionProperty.type
+      );
+    }) &&
+    optionRequired.every(
+      key => key in itemProperties && Array.isArray(itemRequired) && itemRequired.includes(key)
+    );
+  if (fits) return undefined;
+  const expected = Object.entries(optionProperties)
+    .map(([key, property]) => {
+      const type = isRecord(property) ? String(property.type) : 'unknown';
+      return optionRequired.includes(key) ? `${key}: ${type}` : `${key}?: ${type}`;
+    })
+    .join('; ');
+  return `'${options}' must be an array of objects declaring only { ${expected} } in '${ref.nodeId}'s output_format`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * The load error for a `when:` that `parseWhenExpression` rejects. The grouping hint is
  * added only when a parenthesis sits outside a quoted literal, so a typo like
@@ -1110,6 +1149,15 @@ export function validateDagStructure(
       if (node.wait.event !== undefined) waitSources.push(['wait.event', node.wait.event]);
       if (node.wait.attention !== undefined)
         waitSources.push(['wait.attention', node.wait.attention]);
+      if (typeof node.wait.options === 'string') {
+        waitSources.push(['wait.options', node.wait.options]);
+        const shapeError = referencedOptionsShapeError(
+          node.wait.options,
+          id => nodesById.get(id) ?? enclosingNodes?.get(id)
+        );
+        if (shapeError !== undefined)
+          return `Node '${node.id}' field 'wait.options': ${shapeError}`;
+      }
       for (const [field, text] of waitSources) {
         outputRefPattern.lastIndex = 0;
         let m: RegExpExecArray | null;
@@ -1333,12 +1381,17 @@ export function validateDagStructure(
       if (workflowInBody) {
         return `loop_group '${node.id}' body: 'workflow' (sub-run) is not supported inside a loop_group body`;
       }
+      // A gate or wait pauses the enclosing loop only as the body's sole terminal sink
+      // (#2707 step 3). Anywhere else its resume would replay or skip sibling work, and a
+      // gate's answer would be silently ignored.
       const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
-      const misplacedWait = node.loop_group.nodes.find(
-        n => !isIncludeDirective(n) && isWaitNode(n) && n !== soleSink
+      const misplacedPause = node.loop_group.nodes.find(
+        (n): n is GateNode | WaitNode =>
+          !isIncludeDirective(n) && (isWaitNode(n) || isGateNode(n)) && n !== soleSink
       );
-      if (misplacedWait) {
-        return `loop_group '${node.id}' body: wait node '${misplacedWait.id}' must be the body's sole terminal sink`;
+      if (misplacedPause) {
+        const kind = misplacedPause.kind === 'gate' ? 'approval' : 'wait';
+        return `loop_group '${node.id}' body: ${kind} node '${misplacedPause.id}' must be the body's sole terminal sink`;
       }
       const nestedWaitGroup = node.loop_group.nodes.find(
         n => !isIncludeDirective(n) && isLoopGroupNode(n) && hasDurableWait(n)
@@ -1385,8 +1438,8 @@ export function validateDagStructure(
  * reports a parse warning, which closes #1991
  * for these workflows immediately: every dispatch surface reads the SAME
  * parsed `interactive` value this function's result feeds
- * (`assertInteractiveClassNotBackgrounded`, the fan-out spawn check, the web
- * console's own background-vs-foreground branch), so the coercion protects
+ * (`assertInteractiveClassNotBackgrounded`, the web console's own
+ * background-vs-foreground branch), so the coercion protects
  * them without waiting for the author to add the declaration. TODO(#2738):
  * once the grace period ends, delete the coercion in `parseWorkflow` and
  * restore the hard error — this function's return value already carries the
@@ -1414,10 +1467,8 @@ export function validateDagStructure(
  * workflow's class, not a class of its own).
  *
  * A `workflow:` node is also deliberately NOT checked here: its target
- * resolves at spawn, not load (#2200), so whether it can pause is unknowable
- * at this point — see `resolveFanOutChildDefinition`'s interactive-class
- * check in dag-executor.ts for the spawn-time equivalent (fan-out only; a 1:1
- * `workflow:` child is unaffected by design, see #2474's acceptance criteria).
+ * resolves at spawn, not load (#2200), and a child that pauses is its own run
+ * with its own gate — 1:1 or fan-out (#4044).
  */
 export function validateWorkflowClassPlacement(
   nodes: readonly (DagNode | IncludeDirective)[],
@@ -1529,17 +1580,17 @@ export function validateLoopGroupProseCompletion(
     if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
     const bodyError = validateLoopGroupProseCompletion(node.loop_group.nodes);
     if (bodyError) return bodyError;
-    const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
-    if (
-      node.loop_group.until !== undefined &&
-      node.loop_group.until_bash === undefined &&
-      soleSink !== undefined &&
-      !isIncludeDirective(soleSink) &&
-      isOutputFormatEnforced(soleSink) &&
-      soleSink.output_format !== undefined &&
-      outputSchemaExcludesStrings(soleSink.output_format)
-    ) {
-      return `loop_group '${node.id}': terminal node '${soleSink.id}' declares a non-string output_format, so the prose until signal cannot be detected in serialized structured output. Use loop_group.until_bash to read the terminal node's structured field instead`;
+    if (node.loop_group.until === undefined || node.loop_group.until_bash !== undefined) continue;
+    // Any candidate can be the one an iteration's output is read from.
+    const outputNode = loopGroupOutputNodes(node.loop_group.nodes).find(
+      candidate =>
+        !isIncludeDirective(candidate) &&
+        isOutputFormatEnforced(candidate) &&
+        candidate.output_format !== undefined &&
+        outputSchemaExcludesStrings(candidate.output_format)
+    );
+    if (outputNode !== undefined) {
+      return `loop_group '${node.id}': node '${outputNode.id}', which the group's output is read from, declares a non-string output_format, so the prose until signal cannot be detected in serialized structured output. Use loop_group.until_bash to read that node's structured field instead`;
     }
   }
   return null;

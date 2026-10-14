@@ -168,7 +168,7 @@ All nodes share these base fields:
 | `isolation` | No | `'inherit' \| 'worktree'` | Which checkout the child runs in. Default (and `'inherit'`) shares the parent's. `'worktree'` gives the child its own worktree + branch — opt-in only, never inferred, and it fails the node rather than falling back to the shared checkout when a worktree can't be created (folder projects, surfaces with no resolver) |
 | `fan_out` | No | object | Run one child per item of a runtime list: `items` (a `$node.output` ref or literal JSON array), `max_parallel` (default `5`, bounds concurrency not total), `join` (default `all_done`), `as` (names the item as `$INPUTS.<as>` and must not collide with `with`). Every child runs to its own terminal state; none cancels another |
 
-`retry` is rejected on `workflow:` nodes, and `workflow:` is rejected inside a `loop_group` body. The child's terminal output threads back as `$nodeId.output`; a child approval gate pauses the whole tree — approve the **child** by run id and the parent auto-resumes. A child gate is the exception: it works for a 1:1 sub-run, but a child that pauses inside a `fan_out:` expansion **fails the node** instead — a parent has one approval slot and cannot hand it to N children, so gate before or after the fan-out node rather than inside a child of it.
+`retry` is rejected on `workflow:` nodes, and `workflow:` is rejected inside a `loop_group` body. The child's terminal output threads back as `$nodeId.output`; a child approval gate pauses the whole tree — approve the **child** by run id and the parent auto-resumes. A child of a `fan_out:` node may pause too: it waits as its own run, keeps its `max_parallel` slot, and the parent continues once every child it waits on finishes.
 
 **Approval-specific fields** (required when `approval:` is set):
 
@@ -229,7 +229,7 @@ per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `nodes` | Yes | node[] | Sub-DAG body re-run in full each iteration. Executable nodes, `include:`, and nested `loop_group` are supported; runtime `workflow:` sub-runs are not. `depends_on` is body-scoped; body ids must not shadow outer ids |
-| `until` | One channel required | string | Deprecated prose signal, checked in the body's terminal-node output. When it is the sole channel, the terminal node's enforced `output_format` must permit strings. Use `until_bash` for structured fields; omit `until` for a deterministic group |
+| `until` | One channel required | string | Deprecated prose signal, checked in the iteration's output (the body's terminal-node output, read past a terminal gate or `attention` wait). When it is the sole channel, every node the output can be read from must have an enforced `output_format` that permits strings, or none. Use `until_bash` for structured fields; omit `until` for a deterministic group |
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | `true` starts fresh body AI sessions each iteration (default: false — sessions continue) |
 | `until_bash` | One channel required | string | Shell script run after each iteration; exit 0 signals completion. Skipped once a cheaper channel already fired |

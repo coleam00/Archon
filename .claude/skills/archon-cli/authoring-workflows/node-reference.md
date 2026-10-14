@@ -285,11 +285,28 @@ inside composed fan-out; put them before or after the fan-out.
     duration_ms: 300000
 ```
 
-A wait declares exactly one bounded condition: `duration_ms`, an ISO timestamp
-under `until`, or `event` plus `deadline_ms`. Archon persists the suspension and
-releases the worker slot. Its fixed structured output includes `status`
-(`satisfied` or `expired`) and `waited_ms`; event waits may also return `event`
+A wait declares exactly one condition: `duration_ms`, an ISO timestamp under
+`until`, `event` plus `deadline_ms`, or `attention`. Archon persists the suspension and
+releases the worker slot. A time or event wait's fixed structured output includes
+`status` (`satisfied` or `expired`) and `waited_ms`; event waits may also return `event`
 and `payload`.
+
+`attention` asks a question that pauses the run until someone answers it in its `form`:
+
+```yaml
+- id: ask
+  depends_on: [plan]
+  wait:
+    attention: "$plan.output.question"
+    form: select              # message (default) | approval | select | multi_select
+    options:                  # select and multi_select only; or one whole "$plan.output.options"
+      - { id: use-main, label: "Base on main" }
+      - { id: use-dev }
+```
+
+The next node reads the answer: `{text}` for `message`, `{decision, text}` for `approval`
+and `select`, `{decisions, text}` for `multi_select`. In the `approval` form `reject` is
+an answer and never cancels the run; branch on `$ask.output.decision` with `when:`.
 
 ## Wiring nodes together
 

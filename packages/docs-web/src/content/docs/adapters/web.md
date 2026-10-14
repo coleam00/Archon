@@ -83,7 +83,7 @@ the run has the project context needed to load its workflow definition.
 
 Turn on **Alerts** in Settings to hear a sound, and see a browser notification
 where the browser allows it, when a run stops at an approval gate or an
-action-required wait, or when it completes, fails, or is cancelled. The setting
+attention wait, or when it completes, fails, or is cancelled. The setting
 is saved in the current browser and is off by default. Runs that were already
 waiting or finished when the console loaded do not alert. Settings shows when
 the browser blocks the sound or notifications.

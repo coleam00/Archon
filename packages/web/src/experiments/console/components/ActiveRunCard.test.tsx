@@ -74,11 +74,13 @@ test('promoting an attention wait replaces its inline actions with the banner po
     ...parallelRun,
     status: 'paused',
     attention: {
-      kind: 'action_required',
+      kind: 'attention',
       runId: parallelRun.id,
       nodeId: 'hold',
       message: 'Rotate the key',
-      occurrence: 'wait:2026-10-12T00:00:00.000Z',
+      occurrence: 'legacy:hold',
+      form: 'message',
+      options: [],
     },
     wait: {
       kind: 'attention',

@@ -38,6 +38,13 @@ import {
 } from './doctor';
 import type { MergedConfig } from '@archon/core';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import {
+  clearRegistry,
+  getRegistration,
+  providerRegistry,
+  registerProvider,
+  setDeprecationReporter,
+} from '@archon/providers';
 
 // doctor creates its logger on first use and keeps it; hand it one this file can observe.
 // Module scope, so the spy is in place before any test makes doctor log.
@@ -855,7 +862,7 @@ describe('checkArchonSkill', () => {
     const result = await checkArchonSkill(tmp);
     expect(result.status).toBe('fail');
     expect(result.message).toContain('retired skill root');
-    expect(result.message).toContain('archon skill install');
+    expect(result.message).toContain('archon skill add');
   });
 
   it('fails when skills exist but archon-cli is missing', async () => {
@@ -1084,16 +1091,36 @@ describe('checkConnectedProviders', () => {
 });
 
 describe('provider diagnostics', () => {
-  it('no registered providers fails and names the install command', async () => {
+  it('no registered providers fails and names the add command', async () => {
     const check = await checkInstalledProviders(
       { get: () => undefined, list: () => [] },
       async () => new Map()
     );
     expect(check.status).toBe('fail');
     expect(check.message).toContain(
-      'No providers installed. Run: archon provider install <claude|codex|pi>'
+      'No providers installed. Run: archon provider add <claude|codex|pi>'
     );
+    expect(check.message).toContain('it does not install that CLI.');
     expect(await doctorCommand([async () => check])).toBe(1);
+  });
+
+  it('only deprecated bundled providers warns and names the add command', async () => {
+    const { registerOpencodeProvider } = await import('@archon/providers/community/opencode');
+    const { providerRegistry } = await import('@archon/providers');
+    registerOpencodeProvider();
+    const opencode = providerRegistry.get('opencode');
+    if (!opencode) throw new Error('OpenCode did not register');
+    const check = await checkInstalledProviders(
+      { get: () => undefined, list: () => [opencode] },
+      async () => new Map()
+    );
+    expect(check).toEqual({
+      label: 'Installed providers',
+      status: 'warn',
+      message:
+        'No providers installed. Run: archon provider add <claude|codex|pi>\n    ' +
+        'Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.',
+    });
   });
 
   it('maps provider statuses, preserves remedies, and forwards its configured defaults', async () => {
@@ -1140,6 +1167,105 @@ describe('provider diagnostics', () => {
     expect(checks).toEqual([
       { label: 'custom diagnostics', status: 'fail', message: 'plugin failed' },
     ]);
+  });
+});
+
+describe('bundled deprecated providers', () => {
+  const diagnose = mock(async () => ({
+    checks: [
+      {
+        id: 'runtime',
+        label: 'Runtime',
+        status: 'fail' as const,
+        message: 'old executable not found on PATH',
+      },
+    ],
+  }));
+  const reportDeprecation = mock((_provider: string, _notice: string) => undefined);
+
+  beforeEach(() => {
+    clearRegistry();
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const copilot = getRegistration('copilot');
+    registerProvider({
+      ...copilot,
+      id: 'old',
+      factory: () => Object.assign(copilot.factory(), { diagnose }),
+    });
+    setDeprecationReporter(reportDeprecation);
+    diagnose.mockClear();
+    reportDeprecation.mockClear();
+  });
+
+  afterEach(() => {
+    clearRegistry();
+  });
+
+  it('a fresh install neither diagnoses one nor reports its notice', async () => {
+    const checks = await checkProviderDiagnostics('old', undefined, async () => ({
+      assistant: 'claude',
+      assistants: { claude: {}, codex: {}, old: {} },
+    }));
+    expect(checks).toEqual([]);
+    expect(diagnose).not.toHaveBeenCalled();
+    expect(reportDeprecation).not.toHaveBeenCalled();
+  });
+
+  it.each(['old', 'copilot'])(
+    'a config that fails to load selects no deprecated provider (%s)',
+    async id => {
+      const checks = await checkProviderDiagnostics(id, undefined, async () => {
+        throw new Error('config.yaml: bad indentation');
+      });
+      expect(checks).toEqual([]);
+      expect(diagnose).not.toHaveBeenCalled();
+    }
+  );
+
+  const selections: {
+    selection: string;
+    config: Pick<MergedConfig, 'assistant' | 'assistants'>;
+  }[] = [
+    {
+      selection: 'selected as the default assistant',
+      config: { assistant: 'old', assistants: { claude: {}, codex: {} } },
+    },
+    {
+      selection: 'configured under assistants',
+      config: {
+        assistant: 'claude',
+        assistants: { claude: {}, codex: {}, old: { model: 'chosen' } },
+      },
+    },
+  ];
+  it.each(selections)(
+    'a provider $selection still reports its missing runtime',
+    async ({ config }) => {
+      const checks = await checkProviderDiagnostics('old', undefined, async () => config);
+      expect(checks).toEqual([
+        { label: 'old: Runtime', status: 'fail', message: 'old executable not found on PATH' },
+      ]);
+      // Provider support shows the notice; a diagnostic is not a run and must not repeat it.
+      expect(reportDeprecation).not.toHaveBeenCalled();
+    }
+  );
+
+  it('the selected one shows its notice as readable text in Provider support', async () => {
+    const check = await checkProviderDeprecation('/repo', async () => ({ assistant: 'opencode' }));
+    expect(check).toEqual({
+      label: 'Provider support',
+      status: 'warn',
+      message: getRegistration('opencode').deprecationNotice ?? '',
+    });
+    expect(check.message).toStartWith('OpenCode is deprecated');
+  });
+
+  it('the installed line names only installed providers', async () => {
+    const check = await checkInstalledProviders(providerRegistry, async () => new Map());
+    expect(check.status).toBe('pass');
+    expect(check.message).toContain('claude');
+    expect(check.message).not.toMatch(/opencode|copilot|old/);
   });
 });
 

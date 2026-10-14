@@ -952,14 +952,14 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
 async function installSetupProviders(ids: readonly string[], repoPath: string): Promise<void> {
   if (!BUNDLED_IS_BINARY) return;
   const pluginsDir = getPluginsPath();
-  const result = await providerCommand('install', ids, {
+  const result = await providerCommand('add', ids, {
     pluginsDir,
     archonVersion: BUNDLED_VERSION,
     projectDir: repoPath,
   });
   if (result !== 0)
     throw new Error(
-      `Provider installation failed. Run: archon provider install <${MAINTAINED_PROVIDER_IDS.join('|')}>`
+      `Provider installation failed. Run: archon provider add <${MAINTAINED_PROVIDER_IDS.join('|')}>`
     );
   const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
   for (const registration of await loadProviderPlugins(pluginsDir, { maintained: 'installed' })) {
@@ -972,7 +972,7 @@ export async function selectSetupProviders(
   install: (ids: readonly string[]) => Promise<void>,
   ask: () => Promise<string[] | symbol> = () =>
     multiselect({
-      message: 'Which AI provider(s) should Archon install?',
+      message: 'Which AI provider(s) should Archon add?',
       options: MAINTAINED_PROVIDER_IDS.map(id => ({
         value: id,
         label: providerRegistry.get(id)?.displayName ?? id,
@@ -996,7 +996,7 @@ export async function selectSetupProviders(
   }
   if (ids.length === 0) {
     log.warning(
-      `No providers selected. Run: archon provider install <${MAINTAINED_PROVIDER_IDS.join('|')}>`
+      `No providers selected. Run: archon provider add <${MAINTAINED_PROVIDER_IDS.join('|')}>`
     );
   } else {
     await install(ids);

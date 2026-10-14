@@ -187,6 +187,10 @@ test('approve and declared response preserve gate occurrence and resume with hos
       sender: { platformUserId: 'starter' },
     })
   ).toEqual({ status: 'done', result: { kind: 'approved', type: 'approval_gate', resumed: true } });
+  // A chat-plugin answer records the plugin's own id as the surface it came through.
+  expect((await getWorkflowRun(paused.id))?.metadata.approval).toMatchObject({
+    answeredVia: descriptor.id,
+  });
   expect(resume.mock.calls[0]?.[2]).toBe(userId);
   expect(resume.mock.calls[0]?.[3]).toBe(target);
   const custom = await run();
@@ -204,6 +208,9 @@ test('approve and declared response preserve gate occurrence and resume with hos
       sender: { platformUserId: 'starter' },
     })
   ).toMatchObject({ status: 'done', result: { kind: 'approved', resumed: true } });
+  expect((await getWorkflowRun(custom.id))?.metadata.approval).toMatchObject({
+    answeredVia: descriptor.id,
+  });
 });
 
 test('a failed resume reports the recorded approval as not resumed, not refused', async () => {

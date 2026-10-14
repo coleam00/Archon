@@ -38,7 +38,11 @@ import type {
   ResolvedWorkflow,
 } from '@archon/workflows/schemas/workflow';
 import { isContainerRun, runAttention } from '@archon/workflows/schemas/workflow-run';
-import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
+import {
+  attentionAnswerLines,
+  spellWorkflowCommand,
+  type WorkflowCommandSurface,
+} from '@archon/workflows/deps';
 import * as workflowDb from '../db/workflows';
 import {
   CancelRefusedError,
@@ -778,7 +782,7 @@ async function handleWorkflowCommand(
           message += `\n⚠️ ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
         }
         if (result.blockedParentRunId) {
-          message += `\n⚠️ Parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+          message += `\n⚠️ Parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
         }
         return { success: true, message };
       } catch (error) {
@@ -821,9 +825,9 @@ async function handleWorkflowCommand(
             msg += '  Tool calls need attention; work remains running.\n';
             for (const call of attention.calls)
               msg += `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)\n`;
-          } else if (attention?.kind === 'action_required') {
-            msg += `  Action required: ${attention.message}\n`;
-            msg += `  Resume: \`${cmd(`resume ${run.id}`)}\`\n`;
+          } else if (attention?.kind === 'attention') {
+            msg += `  Needs attention: ${attention.message}\n`;
+            for (const line of attentionAnswerLines(surface, attention)) msg += `  ${line}\n`;
             msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;
           } else if (attention?.kind === 'awaiting_response') {
             msg += `  Approve: \`${cmd(`approve ${attention.respondTo.runId}`)}\`\n`;
@@ -899,7 +903,7 @@ async function handleWorkflowCommand(
           message += `\n⚠️ ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
         }
         if (blockedParentRunId) {
-          message += `\n⚠️ Parent run ${blockedParentRunId} was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+          message += `\n⚠️ Parent run ${blockedParentRunId} was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
         }
         return { success: true, message };
       } catch (error) {
@@ -956,7 +960,9 @@ async function handleWorkflowCommand(
       const comment = rawComment.length > 0 ? rawComment : undefined;
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await operations.approveWorkflow(runId, comment, actor);
+        const result = await operations.approveWorkflow(runId, comment, actor, {
+          via: conversation.platform_type,
+        });
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
         const headline =
           result.type === 'interactive_loop'
@@ -984,7 +990,9 @@ async function handleWorkflowCommand(
       const reason = args.slice(2).join(' ') || 'Rejected';
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await operations.rejectWorkflow(runId, reason, actor);
+        const result = await operations.rejectWorkflow(runId, reason, actor, {
+          via: conversation.platform_type,
+        });
         if (result.cancelled) {
           const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
           return {
@@ -1038,7 +1046,9 @@ async function handleWorkflowCommand(
       const text = rawText.length > 0 ? rawText : decision === 'reject' ? 'Rejected' : undefined;
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await operations.respondToWorkflow(runId, decision, text, actor);
+        const result = await operations.respondToWorkflow(runId, decision, text, actor, {
+          via: conversation.platform_type,
+        });
         if ('cancelled' in result) {
           if (result.cancelled) {
             const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
@@ -1445,7 +1455,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       parts.push(...describeReleasedWorktrees(releasedWorktrees));
       if (abandonBlockedParentRunId !== null) {
         parts.push(
-          `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`
+          `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`
         );
       }
 

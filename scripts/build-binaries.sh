@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # scripts/build-binaries.sh
-# Build standalone server and CLI binaries for all supported platforms.
+# Build standalone server, CLI and maintained provider plugin binaries for all
+# supported platforms. Every binary embeds the same build-time constants, so a
+# provider plugin reports the CLI's version and resolves its agent binary as a
+# release binary does.
 #
 # Modes:
 #   - Multi-target (local dev): no env vars → builds all 4 local targets into dist/binaries/
@@ -10,7 +13,8 @@
 #   VERSION    - version string (default: from package.json)
 #   GIT_COMMIT - short git commit (default: from `git rev-parse --short HEAD`)
 #   TARGET     - bun target triple (e.g. bun-darwin-arm64); CI mode
-#   OUTFILE    - output path for the CLI binary; CI mode
+#   OUTFILE    - output path for the CLI binary; CI mode. The server and provider
+#                plugin binaries are written beside it under their release asset names.
 
 set -euo pipefail
 
@@ -19,7 +23,7 @@ GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unkn
 TARGET="${TARGET:-}"
 OUTFILE="${OUTFILE:-}"
 
-echo "Building Archon server and CLI v${VERSION} (commit: ${GIT_COMMIT})"
+echo "Building Archon server, CLI and provider plugins v${VERSION} (commit: ${GIT_COMMIT})"
 
 # Regenerate the bundled packs named in bundle-index.json so the
 # compiled binary always embeds the current on-disk contents. CI also runs
@@ -119,9 +123,24 @@ for target_pair in "${TARGETS[@]}"; do
   IFS=':' read -r target outfile <<< "$target_pair"
   server_asset=$(TARGET="$target" bun -e 'import { serverReleaseAsset } from "./packages/paths/src/server-launch.ts"; console.log(serverReleaseAsset(process.env.TARGET));')
   server_outfile="$(dirname "$outfile")/$server_asset"
+  # Provider plugins are named the way `archon provider add` requests them.
+  provider_plugins=$(TARGET="$target" bun -e '
+    const { relative } = await import("node:path");
+    const { MAINTAINED_PROVIDER_IDS } = await import("./packages/provider-contract/src/registration.ts");
+    const { getSourceProviderEntry } = await import("./packages/paths/src/archon-paths.ts");
+    const { pluginReleaseAsset } = await import("./packages/plugin-manifest/src/index.ts");
+    for (const id of MAINTAINED_PROVIDER_IDS) {
+      const manifest = await Bun.file(`plugins/provider-${id}/archon-plugin.json`).json();
+      console.log(relative(process.cwd(), getSourceProviderEntry(id)), pluginReleaseAsset(manifest.executable, process.env.TARGET));
+    }
+  ')
+  entry_outputs=("packages/server/src/bin.ts:$server_outfile" "packages/cli/src/cli.ts:$outfile")
+  while read -r entry asset; do
+    entry_outputs+=("$entry:$(dirname "$outfile")/$asset")
+  done <<< "$provider_plugins"
   SERVER_SHA256=''
   write_constants
-  for entry_output in "packages/server/src/bin.ts:$server_outfile" "packages/cli/src/cli.ts:$outfile"; do
+  for entry_output in "${entry_outputs[@]}"; do
     IFS=':' read -r entry output <<< "$entry_output"
     echo "Building $target → $output"
 
