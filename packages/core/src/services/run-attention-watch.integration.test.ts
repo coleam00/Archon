@@ -4,13 +4,23 @@ import { testTimeout } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { linkSync, renameSync, rmSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
+import { hostname } from 'node:os';
 import { RUN_LIVE_OWNER_IPC_TIMEOUT_MS, runLiveOwnerPath } from './run-live-owner';
 
 const rows = new Map<string, WorkflowRun>();
 const store = { getWorkflowRun: async (id: string) => rows.get(id) ?? null };
 const { waitForRunAttention } = await import('./run-attention-watch');
 
-function runningRun(): WorkflowRun {
+const localUid = process.getuid?.();
+const localOwner = {
+  execution_owner: {
+    host: hostname(),
+    pid: process.pid,
+    ...(localUid === undefined ? {} : { uid: localUid }),
+  },
+};
+
+function runningRun(metadata: Record<string, unknown> = localOwner): WorkflowRun {
   const run: WorkflowRun = {
     origin: { conversationId: 'conv-1' },
     id: crypto.randomUUID(),
@@ -21,7 +31,7 @@ function runningRun(): WorkflowRun {
     status: 'running',
     outcome: null,
     user_message: 'go',
-    metadata: {},
+    metadata,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -164,6 +174,19 @@ describe('attention wait with a real owner endpoint', () => {
     } finally {
       rows.delete(run.id);
       if (process.platform !== 'win32') rmSync(path, { force: true });
+    }
+  });
+
+  test('keeps watching a missing endpoint whose owner ran on another host', async () => {
+    const run = runningRun({ execution_owner: { host: 'other-host.invalid', pid: 4242 } });
+    try {
+      expect(await waitForRunAttention(store, run.id, { deadlineMs: 250 })).toEqual({
+        kind: 'deadline',
+        runId: run.id,
+        observedStatus: 'running',
+      });
+    } finally {
+      rows.delete(run.id);
     }
   });
 });

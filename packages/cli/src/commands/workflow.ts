@@ -106,7 +106,10 @@ import {
   resolveCodebaseForPath,
 } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
-import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
+import type {
+  RunWaitResult,
+  UnknownOwnerLiveness,
+} from '@archon/core/services/run-attention-watch';
 import {
   startRunLiveOwner,
   RunLiveOwnerAlreadyOwnedError,
@@ -181,6 +184,7 @@ import type {
   ContinuationMode,
   RunAttention,
   SkipCause,
+  ExecutionOwnerRecord,
 } from '@archon/workflows/schemas/workflow-run';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from '@archon/workflows/schemas/terminal-record';
 import {
@@ -4491,8 +4495,10 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
 function announceWaitAttached(
   watchedRunId: string,
   observedStatus: WorkflowRunStatus,
-  json?: boolean
+  json?: boolean,
+  ownerLiveness?: UnknownOwnerLiveness
 ): Promise<void> {
+  const recordedOwner = ownerLiveness?.recordedOwner;
   const line = json
     ? JSON.stringify({
         ok: true,
@@ -4500,9 +4506,20 @@ function announceWaitAttached(
         runId: watchedRunId,
         result: 'waiting',
         observedStatus,
+        ...(ownerLiveness ? { ownerLiveness: ownerLiveness.kind } : {}),
+        ...(recordedOwner ? { recordedOwner } : {}),
       })
-    : `Waiting on run ${watchedRunId} — currently ${observedStatus}.`;
+    : `Waiting on run ${watchedRunId} — currently ${observedStatus}.${
+        ownerLiveness ? ` ${describeUnknownOwner(recordedOwner)}` : ''
+      }`;
   return writeStderr(`${line}\n`);
+}
+
+function describeUnknownOwner(owner: ExecutionOwnerRecord | undefined): string {
+  if (!owner)
+    return 'It records no execution owner, so whether its owner is still alive is unknown.';
+  const uid = owner.uid === undefined ? '' : ` (uid ${String(owner.uid)})`;
+  return `Its owner ran on host ${owner.host}${uid}, whose endpoint this host cannot reach, so whether it is still alive is unknown.`;
 }
 
 /**
@@ -4533,7 +4550,8 @@ export async function workflowWaitCommand(
       // No timeout by default: a wait that ends on its own clock would answer a
       // question only the run can answer.
       ...(timeoutSeconds === undefined ? {} : { deadlineMs: timeoutSeconds * 1000 }),
-      onAttached: observedStatus => announceWaitAttached(resolvedId, observedStatus, json),
+      onAttached: (observedStatus, ownerLiveness) =>
+        announceWaitAttached(resolvedId, observedStatus, json, ownerLiveness),
     });
   } catch (error) {
     const err = error as Error;
