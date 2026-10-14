@@ -4,6 +4,7 @@ import { createLogger } from '@archon/paths';
 import {
   isApprovalContext,
   isContainerRun,
+  legacyOccurrenceStep,
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
@@ -258,8 +259,8 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
 
 /** How this tool answers an attention wait of each form. */
 function attentionAnswerAdvice(attention: Extract<RunAttention, { kind: 'attention' }>): string {
-  // Archon's own token for a wait paused before answers existed; only resume moves it.
-  if (attention.occurrence.startsWith('legacy:'))
+  // A wait paused before answers existed; only resume moves it.
+  if (legacyOccurrenceStep(attention.occurrence) !== undefined)
     return `when it is done, run \`archon workflow resume ${attention.runId}\`; abandon it if it should not continue.`;
   switch (attention.form) {
     case 'message':

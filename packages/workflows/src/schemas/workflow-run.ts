@@ -181,12 +181,25 @@ export function attentionOptions(wait: WorkflowAttentionWaitContext): readonly A
   }
 }
 
+const LEGACY_OCCURRENCE_PREFIX = 'legacy:';
+
+/**
+ * The step a `legacy:<step>` occurrence names, or undefined for a pause id. A legacy
+ * occurrence identifies a pause from before pause identities existed, which takes no
+ * typed answer.
+ */
+export function legacyOccurrenceStep(occurrence: string): string | undefined {
+  return occurrence.startsWith(LEGACY_OCCURRENCE_PREFIX)
+    ? occurrence.slice(LEGACY_OCCURRENCE_PREFIX.length)
+    : undefined;
+}
+
 /**
  * The occurrence id of an attention wait, by the same rule as `gateOccurrence`: its
  * `pauseId`, or `legacy:<step>` for a wait paused before pause identities existed.
  */
 export function attentionOccurrence(wait: WorkflowAttentionWaitContext): string {
-  return wait.pauseId ?? `legacy:${workflowWaitStepName(wait)}`;
+  return wait.pauseId ?? `${LEGACY_OCCURRENCE_PREFIX}${workflowWaitStepName(wait)}`;
 }
 
 export const scheduledWorkflowResumeSchema = z
@@ -1172,7 +1185,7 @@ function unreadableAttention(
  * reader can tie an answer to the exact pause it resolved.
  */
 export function gateOccurrence(approval: Pick<ApprovalContext, 'nodeId' | 'pauseId'>): string {
-  return approval.pauseId ?? `legacy:${approval.nodeId}`;
+  return approval.pauseId ?? `${LEGACY_OCCURRENCE_PREFIX}${approval.nodeId}`;
 }
 
 /**

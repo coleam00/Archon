@@ -34,6 +34,7 @@ import {
   readOwnedWorktree,
   runAttention,
   gateOccurrence,
+  legacyOccurrenceStep,
   attentionForm,
   attentionOptions,
   pausedAttentionWait,
@@ -445,7 +446,8 @@ export function expectedGateForOccurrence(
   run: WorkflowRun,
   occurrence: string
 ): ExpectedApprovalGate {
-  if (occurrence.startsWith('legacy:')) return occurrence.slice('legacy:'.length);
+  const legacyStep = legacyOccurrenceStep(occurrence);
+  if (legacyStep !== undefined) return legacyStep;
   const wait = pausedAttentionWait(run);
   const approval = run.metadata.approval;
   const nodeId =

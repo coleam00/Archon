@@ -11,7 +11,7 @@ import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contra
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type { AttentionOption } from './schemas/dag-node';
-import type { RunAttention } from './schemas/workflow-run';
+import { legacyOccurrenceStep, type RunAttention } from './schemas/workflow-run';
 import type {
   IAgentProvider,
   MessageChunk,
@@ -116,7 +116,7 @@ export function spellWorkflowCommand(surface: WorkflowCommandSurface, command: s
  * the `approve`, `reject` and `respond` sugar every surface parses. A `multi_select`
  * answer carries several options at once, which only the CLI's `answer` verb (and its
  * HTTP route) takes, so that line is spelled for the CLI. A wait paused before answers
- * existed (a `legacy:` occurrence, Archon's own token) takes no answer; it resumes.
+ * existed (a legacy occurrence) takes no answer; it resumes.
  */
 export function attentionAnswerLines(
   surface: WorkflowCommandSurface,
@@ -127,7 +127,7 @@ export function attentionAnswerLines(
 ): string[] {
   const { runId, options } = attention;
   const command = (text: string): string => `\`${spellWorkflowCommand(surface, text)}\``;
-  if (attention.occurrence.startsWith('legacy:'))
+  if (legacyOccurrenceStep(attention.occurrence) !== undefined)
     return [`When it is done, resume: ${command(`resume ${runId}`)}`];
   const choice = (option: AttentionOption): string =>
     option.label === undefined ? option.id : `${option.label} (${option.id})`;
