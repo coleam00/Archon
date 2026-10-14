@@ -7710,7 +7710,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       node_output_spill_path: string;
     };
     expect(producerData.node_output_truncated).toBe(true);
-    // This is exactly what getDagResumeSnapshot reads back on resume (packages/core).
+    // This is exactly what foldDagResumeSnapshot (dag-resume-snapshot.ts) reads back on resume.
     const spilledFullOutput = await readFile(producerData.node_output_spill_path, 'utf8');
     expect(JSON.parse(spilledFullOutput)).toEqual({
       status: 'PASS',
