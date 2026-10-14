@@ -398,8 +398,10 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
   -d '{"reason": "Please add error handling first", "expectedGate": {"nodeId": "review", "pauseId": "pause-id"}}'
 ```
 
-Both routes accept optional `expectedGate: { nodeId, pauseId }`. Copy `nodeId` and
-`pauseId` from the gate in the run detail response (`run.metadata.approval`). When
+Both routes accept optional `expectedGate: { nodeId, pauseId }`. For an approval
+gate, copy `nodeId` and `pauseId` from `run.metadata.approval` in the run detail
+response. For an attention wait, use `run.attention.nodeId` as `nodeId` and
+`run.attention.occurrence` as `pauseId`. When
 the run is no longer paused at that gate occurrence, the request returns **409**
 and leaves the current pause unchanged. The identity is checked atomically with
 the answer write. Omitting `expectedGate` answers the current gate as before;
