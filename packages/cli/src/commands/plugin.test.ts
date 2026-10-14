@@ -380,6 +380,14 @@ describe('archon plugin with an unreadable receipt', () => {
     ]);
   });
 
+  test('a receipt outside the owner/repo layout is reported for deletion by hand', async () => {
+    const env = await environment();
+    const stray = await breakReceipt(env, 'acme');
+    expect((await run(env, 'list')).out).toBe(
+      `acme  unreadable  Invalid JSON in plugin receipt ${stray}. It is not where archon plugin writes receipts; delete it by hand`
+    );
+  });
+
   test('remove deletes the broken receipt and leaves every file it might name', async () => {
     const env = await environment();
     await installOther(env);
