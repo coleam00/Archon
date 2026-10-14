@@ -1467,14 +1467,19 @@ Remove a branch's worktree, local branch, and remote branch, and mark its isolat
 
 ```bash
 archon complete feature-auth
-archon complete feature-auth --force  # bypass uncommitted-change, running-workflow, and open-PR checks
+archon complete feature-auth --force  # bypass uncommitted-change, live-run, and open-PR checks
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--force` | Skip uncommitted-change, running-workflow, and open-PR checks; ownership checks still apply |
+| `--force` | Skip uncommitted-change, live-run, and open-PR checks; ownership checks still apply |
+
+Without `--force`, completion refuses an environment a workflow run can still claim, the
+same live-run lock `isolation cleanup` and `/worktree remove` apply: a running, pending or
+paused run, or a failed run that can still be resumed. If that lookup fails, completion
+refuses rather than skipping the check.
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone
