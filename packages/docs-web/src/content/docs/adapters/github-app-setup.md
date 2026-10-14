@@ -84,7 +84,7 @@ Install the App on every org or personal account that holds repos your team oper
 2. Pick the org → grant access to all repos (or selected repos).
 3. Repeat for every org/account.
 
-> **Multi-installation:** Archon resolves `owner/repo → installation_id` via `GET /repos/{owner}/{repo}/installation` automatically. No per-install config needed unless you're a single-install team — see `GITHUB_APP_INSTALLATION_ID` below.
+> **Multi-installation:** Archon resolves `owner/repo → installation_id` via `GET /repos/{owner}/{repo}/installation` automatically. No per-install config is needed. `GITHUB_APP_INSTALLATION_ID` only pins the installation used for adapter API operations — see below.
 
 ## Step 6: Configure Archon
 
