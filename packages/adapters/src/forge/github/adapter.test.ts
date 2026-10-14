@@ -1736,6 +1736,49 @@ describe('GitHubAdapter', () => {
       expect(mockAddSafeDirectory).toHaveBeenCalledWith('/nonexistent/path');
     });
 
+    test('readiness for a different repository completes while the first clone is held', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'github-clone-independent-'));
+      const firstPath = join(root, 'first', 'source');
+      const secondPath = join(root, 'second', 'source');
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      mockCloneRepository.mockImplementation(async (_url, target) => {
+        if (target === firstPath) {
+          entered.resolve();
+          await release.promise;
+        }
+        await mkdir(join(target, '.git'), { recursive: true });
+        return { ok: true, value: undefined };
+      });
+      const first = callEnsureRepoReady('owner', 'first', 'main', firstPath, false);
+      const pending = [first];
+      const deadline = Promise.withResolvers<void>();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await entered.promise;
+        const second = callEnsureRepoReady('owner', 'second', 'main', secondPath, false);
+        pending.push(second);
+        timer = setTimeout(() => {
+          deadline.reject(new Error('Second repository waited behind the held first clone'));
+        }, 2000);
+        await Promise.race([second, deadline.promise]);
+        expect(mockCloneRepository).toHaveBeenCalledTimes(2);
+        expect(mockAddSafeDirectory).toHaveBeenCalledWith(secondPath);
+        await access(join(secondPath, '.git'));
+        await expect(access(join(firstPath, '.git'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+        release.resolve();
+        await first;
+        await access(join(firstPath, '.git'));
+        expect(mockAddSafeDirectory).toHaveBeenCalledWith(firstPath);
+      } finally {
+        clearTimeout(timer);
+        release.resolve();
+        await Promise.allSettled(pending);
+        await removeTempTree(root);
+      }
+    });
+
     test('PAT clone uses the env token as the password', async () => {
       const savedToken = process.env.GITHUB_TOKEN;
       try {
