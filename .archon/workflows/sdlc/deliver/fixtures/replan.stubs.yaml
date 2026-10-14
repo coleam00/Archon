@@ -24,12 +24,14 @@ review__synthesize:
   findings_summary: "stub: replan"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: [{ title: "stub: scope conflict", claim: "stub: claim", evidence: ["a.ts:1"], relation: scope_conflict, source_nodes: [seams] }]
+  contract_left: []
 review__publish:
   ready: false
   action: replan
   findings_summary: "stub: replan"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: [{ title: "stub: scope conflict", claim: "stub: claim", evidence: ["a.ts:1"], relation: scope_conflict, source_nodes: [seams] }]
+  contract_left: []
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   expect: completed

@@ -165,7 +165,7 @@ describe("deliver's terminal outcome", () => {
 
   it("reports the last round's ending with its pull request", () => {
     expect(
-      outcome({ ready: true, reason: 'delivered', pr_url: PR_URL, ci_rerun: 'green', summary: 'Round 1: delivered. all passed' })
+      outcome({ ready: true, reason: 'delivered', pr_url: PR_URL, ci_rerun: 'green', contract_left: [], summary: 'Round 1: delivered. all passed' })
     ).toEqual({
       ready: true,
       reason: 'delivered',
@@ -173,14 +173,28 @@ describe("deliver's terminal outcome", () => {
       ci_rerun: 'green',
       summary: `Ready: Round 1: delivered. all passed\n${PR_URL}`,
     });
-    const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', ci_rerun: 'none', summary: 'Round 1: implement_blocked. x' });
+    const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', ci_rerun: 'none', contract_left: null, summary: 'Round 1: implement_blocked. x' });
     expect(blocked).toMatchObject({ ready: false, reason: 'implement_blocked', pr_url: '' });
     expect(blocked.summary).toBe('Not ready: Round 1: implement_blocked. x');
+  });
+
+  it('lists the contract items the latest review left open', () => {
+    const partial = outcome({
+      ready: true,
+      reason: 'delivered',
+      pr_url: PR_URL,
+      ci_rerun: 'none',
+      contract_left: ['acceptance: the console shows it (deferred)'],
+      summary: 'Round 1: delivered. all passed',
+    });
+    expect(partial.summary).toBe(
+      `Ready: Round 1: delivered. all passed\n${PR_URL}\n\nLeft open, so the pull request does not close its issue:\n- acceptance: the console shows it (deferred)`
+    );
   });
 });
 
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; ci_rerun: string; summary: string }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; ci_rerun: string; contract_left: string[] | null; summary: string }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -195,6 +209,8 @@ describe("deliver's round", () => {
           INPUTS_REVIEW_READY: 'true',
           INPUTS_REVIEW_ACTION: 'none',
           INPUTS_REVIEW_SUMMARY: 'clean',
+          INPUTS_REVIEW_CONTRACT_LEFT: '[]',
+          INPUTS_PREVIOUS_CONTRACT_LEFT: '',
           INPUTS_CI: 'green',
           INPUTS_CI_RERUN: 'none',
           INPUTS_CI_SUMMARY: 'all passed',
@@ -271,6 +287,18 @@ describe("deliver's round", () => {
     expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI: 'null' }).light_review).toBe(
       false
     );
+  });
+
+  it("carries the deciding review's open contract items, or an earlier round's when no review ran", () => {
+    const left = '["acceptance: the console shows it"]';
+    expect(round({ INPUTS_REVIEW_CONTRACT_LEFT: left }).contract_left).toEqual(['acceptance: the console shows it']);
+    expect(
+      round({ INPUTS_REVIEW_CONTRACT_LEFT: left, INPUTS_REREVIEW_READY: 'true', INPUTS_REREVIEW_ACTION: 'none', INPUTS_REREVIEW_CONTRACT_LEFT: '[]' })
+        .contract_left
+    ).toEqual([]);
+    const blocked = { INPUTS_GREEN: 'false', INPUTS_REVIEW_READY: 'null', INPUTS_REVIEW_CONTRACT_LEFT: 'null' };
+    expect(round({ ...blocked, INPUTS_PREVIOUS_CONTRACT_LEFT: left }).contract_left).toEqual(['acceptance: the console shows it']);
+    expect(round(blocked).contract_left).toBeNull();
   });
 
   it('points the next round at the published review report', () => {

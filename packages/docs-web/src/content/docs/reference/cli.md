@@ -121,7 +121,7 @@ archon setup --spawn              # open in a new terminal window
 | `--providers <ids>` | Install comma-separated maintained providers (claude, codex, pi), skipping the provider selection question. Auth and configuration prompts still run. |
 | `--spawn` | Open setup wizard in a new terminal window. |
 
-`--providers` takes precedence over `ARCHON_PROVIDERS`; both accept comma-separated IDs and skip the provider selection question. An explicit empty value selects none. Without either, setup asks which maintained providers to install, installs that selection in release binaries, and renders their diagnostics before collecting native authentication and configuration. Source checkouts run maintained providers from source. Selecting none installs nothing and prints `archon provider install <claude|codex|pi>`; setup never silently selects a provider. With multiple selected providers, it asks which should be the default and saves that choice.
+`--providers` takes precedence over `ARCHON_PROVIDERS`; both accept comma-separated IDs and skip the provider selection question. An explicit empty value selects none. Without either, setup asks which maintained providers to install, installs that selection in release binaries, and renders their diagnostics before collecting native authentication and configuration. Source checkouts run maintained providers from source. Selecting none installs nothing and prints `archon provider add <claude|codex|pi>`; setup never silently selects a provider. With multiple selected providers, it asks which should be the default and saves that choice.
 
 **Write safety**: `archon setup` never writes to `<cwd>/.env` — that file belongs to you. The wizard always targets one archon-owned file chosen by `--scope`, merges into existing content (so user-added keys survive), and writes a timestamped backup before every rewrite (e.g. `~/.archon/.env.archon-backup-2026-04-20T09-28-11-000Z`).
 
@@ -135,44 +135,48 @@ Verify your Archon setup. Runs a checklist of common failure points: installed p
 archon doctor
 ```
 
-With no registered providers, doctor fails and prints `archon provider install <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon. When Archon config names no model (Pi then uses its own default), doctor cannot tell which vendor the run uses, so a missing native login is a warning, not a failure, if you have connected a credential the assistant can use. Pi resolves its configured key during the check, so a key command runs during `archon doctor`; a command that prompts can prompt again at run start. The check builds the runtime a run builds, which runs every provider's `!command` key stored in Pi's `auth.json`, not only the configured provider's. For a model in Pi's catalog, a run resolves a `models.json` key command once when a node starts and uses that key for the whole node, so a short-lived token can expire before a long node ends; a model from an extension provider runs its key command on each request. Pi OAuth checks may refresh through Pi's runtime. Codex reads its native account through app-server and asks it to refresh the sign-in, so a revoked login fails the check (a run does not make this call); an API key is usable once resolved. When Codex is configured for a model provider that needs no OpenAI login, the check is skipped. Claude, Copilot, and OpenCode cannot check their native login without starting a model session, so the check is skipped and reports "not checked". The OpenCode check probes that the embedded runtime SDK module resolves and the `opencode` executable is available on the inherited `PATH` — it never boots the runtime (which spawns a child process and binds a port). OpenCode and Copilot are bundled but [deprecated](/getting-started/ai-assistants/#deprecated-providers): doctor runs their diagnostics only when one is your default assistant or has settings under `assistants`, and does not count them as installed providers. The provider support check warns when the default assistant is a [deprecated provider](/getting-started/ai-assistants/#deprecated-providers).
+With no registered providers, doctor fails and prints `archon provider add <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon. When Archon config names no model (Pi then uses its own default), doctor cannot tell which vendor the run uses, so a missing native login is a warning, not a failure, if you have connected a credential the assistant can use. Pi resolves its configured key during the check, so a key command runs during `archon doctor`; a command that prompts can prompt again at run start. The check builds the runtime a run builds, which runs every provider's `!command` key stored in Pi's `auth.json`, not only the configured provider's. For a model in Pi's catalog, a run resolves a `models.json` key command once when a node starts and uses that key for the whole node, so a short-lived token can expire before a long node ends; a model from an extension provider runs its key command on each request. Pi OAuth checks may refresh through Pi's runtime. Codex reads its native account through app-server and asks it to refresh the sign-in, so a revoked login fails the check (a run does not make this call); an API key is usable once resolved. When Codex is configured for a model provider that needs no OpenAI login, the check is skipped. Claude, Copilot, and OpenCode cannot check their native login without starting a model session, so the check is skipped and reports "not checked". The OpenCode check probes that the embedded runtime SDK module resolves and the `opencode` executable is available on the inherited `PATH` — it never boots the runtime (which spawns a child process and binds a port). OpenCode and Copilot are bundled but [deprecated](/getting-started/ai-assistants/#deprecated-providers): doctor runs their diagnostics only when one is your default assistant or has settings under `assistants`, and does not count them as installed providers. The provider support check warns when the default assistant is a [deprecated provider](/getting-started/ai-assistants/#deprecated-providers).
 
 Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
 
 Also runs automatically at the end of `archon setup` (optional).
 
-### `provider install`
+### `provider add`
 
-Install or replace maintained providers from the matching Archon release:
+Add or replace maintained providers from the matching Archon release:
 
 ```bash
-archon provider install claude codex pi
+archon provider add claude codex pi
 ```
+
+Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.
 
 The command accepts only `claude`, `codex`, and `pi`, pins the first-party repository tag to the CLI version, and uses the plugin installer's checksum verification. Maintained ids cannot be installed from another repository. Remove a receipt with `archon plugin remove coleam00/Archon/plugins/provider-<id>`.
 
-Release binaries ship without Claude, Codex and Pi and load them only from what this command installs. The quick installers run it for the providers you select (`--providers` / `-Providers` / `ARCHON_PROVIDERS`), and `archon setup` runs it for its selection. An installed provider must match the CLI version, so run it again after upgrading Archon. Source checkouts and Docker run these providers from source over the process transport and refuse this install command.
+Release binaries ship without Claude, Codex and Pi and load them only from what this command installs. The quick installers run it for the providers you select (`--providers` / `-Providers` / `ARCHON_PROVIDERS`), and `archon setup` runs it for its selection. An installed provider must match the CLI version, so run it again after upgrading Archon. Source checkouts and Docker run these providers from source over the process transport and refuse this add command.
 
 The default provider comes from explicit configuration (`assistant` in project config or `defaultAssistant` in global config), then `DEFAULT_AI_ASSISTANT`, then the only registered provider. With multiple providers and no configured default, a run needing one fails before creating a worktree. A workflow can select its provider explicitly.
 
 ### `plugin`
 
-Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Forge plugins, provider plugins, chat plugins, and workflow packs install through this command.
+Add and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Forge plugins, provider plugins, chat plugins, and workflow packs install through this command.
 
 ```bash
-archon plugin install coleam00/Archon/plugins/forge-github         # forge: latest release
-archon plugin install coleam00/Archon/plugins/forge-github@<tag>   # a specific release
-archon plugin install owner/repo[/path]                             # workflow pack: default branch head
-archon plugin install owner/repo[/path]@<tag>                       # workflow pack: a tag
+archon plugin add coleam00/Archon/plugins/forge-github         # forge: latest release
+archon plugin add coleam00/Archon/plugins/forge-github@<tag>   # a specific release
+archon plugin add owner/repo[/path]                             # workflow pack: default branch head
+archon plugin add owner/repo[/path]@<tag>                       # workflow pack: a tag
 archon plugin update <id>[@<tag>]
 archon plugin remove <id>
 archon plugin copy <id>                                             # workflow pack into ./.archon/workflows/
 archon plugin list
 ```
 
-`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the manifest's `compatibility.archon` range and a provider or chat plugin's staged handshake, runs before installed files or receipts are replaced. Without `@<tag>`, the manifest at the default branch head decides the kind: a workflow pack installs that commit, and a forge, provider, or chat plugin installs its latest release, because its executables exist only as release assets. See [Forge operations](/reference/forge/#install-the-github-plugin) for what a forge install downloads and where it writes.
+The former plugin `install` verb remains a deprecated alias for `archon plugin add` and prints a warning.
 
-`list` reports every receipt that cannot be read, parsed, or validated with its file path and error. For a receipt at a valid `owner/repo[/path]` location, `remove <id>` deletes that receipt but leaves the files it named, because they can no longer be identified. `update <id>` installs the plugin again and writes a fresh receipt; it replaces an existing executable only when no other receipt, valid or unreadable, could own it. A binary plugin update must still read the old receipt to back it up. If permissions prevent that, restore read access first, or remove the receipt, then inspect its leftover executable and move or delete it if unused before reinstalling. A stray receipt outside a valid plugin-id location cannot be removed or repaired by these commands; delete the receipt file by hand using the path shown by `list`. `copy <id>` requires a readable workflow-pack receipt for that id and rejects a broken one; run `update <id>` to repair it, or `remove <id>` then reinstall it before copying. `install` of any other plugin refuses until every unreadable receipt is repaired or removed, because the files those receipts own are unknown.
+`add` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the manifest's `compatibility.archon` range and a provider or chat plugin's staged handshake, runs before installed files or receipts are replaced. Without `@<tag>`, the manifest at the default branch head decides the kind: a workflow pack installs that commit, and a forge, provider, or chat plugin installs its latest release, because its executables exist only as release assets. See [Forge operations](/reference/forge/#install-the-github-plugin) for what a forge install downloads and where it writes.
+
+`list` reports every receipt that cannot be read, parsed, or validated with its file path and error. For a receipt at a valid `owner/repo[/path]` location, `remove <id>` deletes that receipt but leaves the files it named, because they can no longer be identified. `update <id>` installs the plugin again and writes a fresh receipt; it replaces an existing executable only when no other receipt, valid or unreadable, could own it. A binary plugin update must still read the old receipt to back it up. If permissions prevent that, restore read access first, or remove the receipt, then inspect its leftover executable and move or delete it if unused before reinstalling. A stray receipt outside a valid plugin-id location cannot be removed or repaired by these commands; delete the receipt file by hand using the path shown by `list`. `copy <id>` requires a readable workflow-pack receipt for that id and rejects a broken one; run `update <id>` to repair it, or `remove <id>` then reinstall it before copying. `add` of any other plugin refuses until every unreadable receipt is repaired or removed, because the files those receipts own are unknown.
 
 A provider plugin records its descriptor in the receipt and registers on the next CLI invocation or server restart. A workflow names its descriptor id in `provider:`. See [Provider plugins](/guides/publishing-plugins/#provider-plugins) for executable naming, capabilities, credentials, and the process environment.
 
@@ -1455,7 +1459,9 @@ archon serve --download-only
 
 The server executable is cached at `~/.archon/server/<version>/` and the web UI at `~/.archon/web-dist/<version>/`. Upgrading the CLI downloads matching artifacts on the next `archon serve`. A failed download installs nothing for that asset and exits non-zero with its URL; retry with `archon serve --download-only`. Docker continues to bundle both.
 
-### `skill install [path]`
+### `skill add [path]`
+
+The former skill `install` verb remains a deprecated alias for `archon skill add` and prints a warning.
 
 Install the bundled `archon-cli` skill into both `.claude/skills/archon-cli/`
 (Claude Code) and `.agents/skills/archon-cli/` (Codex). The command overwrites
@@ -1464,10 +1470,10 @@ removes the retired `archon` and `manage-run` skill directories.
 
 ```bash
 # Install into the current directory
-archon skill install
+archon skill add
 
 # Install into a specific project
-archon skill install /path/to/project
+archon skill add /path/to/project
 ```
 
 The unified skill covers workflow execution, run management, setup, configuration,

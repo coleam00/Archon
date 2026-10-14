@@ -44,19 +44,19 @@ installed. No provider is ever picked silently: a run needing a missing one
 fails before it starts and names the command.
 
 ```bash
-archon provider install codex            # or: claude codex pi
+archon provider add codex            # or: claude codex pi
 archon setup --providers codex           # same, then auth prompts
 ```
 
 An installed provider must match the CLI version: after upgrading Archon, rerun
-`archon provider install <ids>`. `archon doctor` shows what is installed and any
+`archon provider add <ids>`. `archon doctor` shows what is installed and any
 stale provider. Source checkouts and Docker run all three from source; there
-`provider install` refuses.
+`provider add` refuses.
 
 ## Credentials — the setup wizard and its pieces
 
 ```bash
-archon setup          # interactive wizard: providers + credentials + config + skill install
+archon setup          # interactive wizard: providers + credentials + config + bundled skill
 ```
 
 The wizard composes these, which also work standalone:

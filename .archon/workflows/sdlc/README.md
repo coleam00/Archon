@@ -67,12 +67,12 @@ that was already true when the node started.
 
 ## Forge source
 
-One switch selects the source for every pull-request read and write this pack
-makes; issue writes go through `gh` either way (see below). CI is read by the
-`ci` agent node, not through this switch.
-[`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected, and
-[`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes, returning
-the same shapes from either source:
+One switch selects the source for every pull-request and issue read and write
+this pack makes. CI is read by the `ci` agent node, not through this switch.
+[`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected,
+[`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes, and
+[`.shared/issue.ts`](.shared/issue.ts) owns the issue read, each returning the same
+shapes from either source:
 
 - **`gh` (default).** The GitHub CLI, acting on the recorded qualified PR. This
   needs only the authenticated `gh` the pack has always used.
@@ -215,6 +215,94 @@ and let only your own authored messages reach the streams. Re-emit a command's
 output when it failed and its words are the diagnostic; drop it when it is just a
 tool narrating itself. Capture a value's stderr separately rather than merging it,
 too — a `gh` update notice merged into a read becomes the value.
+
+## Intake
+
+[`archon-intake`](intake/archon-intake.yaml) is the front of the label-driven pack.
+Trigger bindings start it on issue events; nobody runs it by hand. Each issue has a
+work item, the state document `work/<number>` in the project's scope, owned by
+[`.shared/workitem.ts`](.shared/workitem.ts). The document is the item's state:
+its trust, stage, triage fields, promotion, claim and a short history. The issue's
+pack labels mirror it, and a label a person adds is a request, never the state.
+
+- **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` (a JSON
+  array of forge logins) at the head of the default branch and records once whether
+  the issue's author is on it. No file means an empty list, so every author is
+  outside. A file that is not an array of logins refuses the run.
+- **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
+  runs and nothing is posted.
+- **Promotion.** A listed maintainer promotes an outside item by adding
+  `archon-triage` or a route label. The label binding maps who added it from the
+  forge event (`label.actor.login`); an event without an actor rejects the binding,
+  and an empty or unlisted actor promotes nothing. A promotion pins the body's digest
+  as it was when intake recorded the request. An edit after that demotes the item
+  back to `archon-needs-maintainer`, and the history records both digests.
+- **Requests and echoes.** On a maintainer's item, `archon-triage` asks for
+  re-triage, and a route label that disagrees with the document is removed. A label
+  already in the document's mirror is the pack's own write coming back as an event
+  and is ignored. The outcome also refuses to add a request label to an outside item
+  no maintainer promoted, so the install's own identity cannot promote anything.
+- **Pickup.** Every run records its event as a request on its issue, then claims the
+  waiting item that sorts first by the `order` input (default
+  `["urgency desc","importance desc","size asc","created asc"]`; an untriaged item
+  sorts after triaged ones, oldest first) with a conditional write. A request that
+  arrives while its item is claimed waits for the next intake run. A request label
+  whose request no run has claimed may have a request on its way, so a run leaves
+  it for the run that claims that request. It waits one pickup; the next pickup
+  that still finds no request for it removes it. On a maintainer's item only
+  `archon-triage` waits, since a route label is reconciled away either way. An
+  open, edit or
+  reopen adds no request while another one waits, since the pickup reads the live
+  issue; label requests keep the newest 50. A run clears its
+  claim only after the item's labels are written. The next pickup releases a claim
+  whose run the engine reports completed, failed or cancelled and queues that run's
+  requests again; the item then sorts after every other waiting item until an
+  attempt finishes, so one item that cannot be read or labelled never starves the
+  rest. A claim whose run is pending, running, paused or unknown is never released,
+  and there is no age timeout.
+- **Closed issues.** Intake records the event and changes nothing else: no trust
+  decision, no stage change, no label write.
+- **Inputs.** `label_actor` is the one input that can create a promotion, never
+  trust. Only the binding, or someone with access to the install, can supply it.
+
+The pack installs no binding, and none should be installed on a repository until the
+backlog bench passes. Two bindings in the GitHub source plugin's configuration start
+it; both share one resource so runs queue rather than overlap:
+
+```json
+{
+  "bindingId": "intake-issues",
+  "hostId": "build-host-1",
+  "runAsUserId": "<archon user id>",
+  "resource": "forge:github.com/acme/widgets:intake",
+  "capacity": 2,
+  "overlap": "queue",
+  "launch": {
+    "cwd": "/srv/archon/widgets",
+    "workflowName": "archon-intake",
+    "inputs": {},
+    "isolation": { "kind": "default" }
+  },
+  "selector": {
+    "kind": "issue.lifecycle",
+    "actions": ["opened", "edited", "reopened"],
+    "repository": { "host": "github.com", "path": "acme/widgets" }
+  },
+  "inputMapping": {
+    "repo_host": { "source": "field", "field": "repository.host" },
+    "repo_path": { "source": "field", "field": "repository.path" },
+    "number": { "source": "field", "field": "subject.number" },
+    "kind": { "source": "field", "field": "subject.kind" },
+    "action": { "source": "field", "field": "event.action" }
+  }
+}
+```
+
+The label binding is the same with `"bindingId": "intake-labels"`, a selector of
+`{"kind": "label.changed", "actions": ["added"], "predicates": [{"field": "label.name",
+"in": ["archon-triage", "archon-ready", "archon-plan", "archon-issue"]}]}`, and two
+more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
+The predicate only saves runs; intake ignores any other label.
 
 ## Composition validation
 

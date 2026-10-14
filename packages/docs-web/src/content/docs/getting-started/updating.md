@@ -18,7 +18,7 @@ After a Homebrew or quick-installer update, reinstall the providers you use
 (the quick installer asks; Homebrew does not):
 
 ```bash
-archon provider install claude codex   # the providers you use
+archon provider add claude codex   # the providers you use
 ```
 
 Until you do, a run that needs one fails before it starts and prints this

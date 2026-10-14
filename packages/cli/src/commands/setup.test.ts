@@ -1046,7 +1046,7 @@ describe('setup provider selection', () => {
     try {
       expect(await selectSetupProviders([], install)).toEqual([]);
       expect(install).not.toHaveBeenCalled();
-      expect(warning.mock.calls.flat().join('')).toContain('archon provider install');
+      expect(warning.mock.calls.flat().join('')).toContain('archon provider add');
     } finally {
       warning.mockRestore();
     }

@@ -100,7 +100,7 @@ export const roadmapItems: RoadmapItem[] = [
     version: 'v0.11.0',
     description: 'Install workflow packs and forge plugins straight from GitHub. GitHub is the registry; an archon.diy listing of published plugins is planned.',
     bullets: [
-      'One-command install: archon plugin install owner/repo[/path][@tag]',
+      'One-command install: archon plugin add owner/repo[/path][@tag]',
       'Installed packs pinned to one commit, with update, remove and copy',
       'archon-plugin.json manifest in your own repository — no submission PR',
       'Planned: an archon.diy listing of repositories that publish plugins',

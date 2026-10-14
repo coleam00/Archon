@@ -16,7 +16,7 @@
  *
  * Same-named files at a higher scope override those at lower scopes.
  *
- * Installed workflow packs (`archon plugin install`) are a fourth source outside that
+ * Installed workflow packs (`archon plugin add`) are a fourth source outside that
  * precedence: each pack resolves its includes within itself, and only its manifest
  * entrypoints are dispatchable, as `owner/plugin:<entrypoint>`.
  */

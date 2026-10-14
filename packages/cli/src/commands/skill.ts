@@ -30,7 +30,7 @@ function writeSkillFiles(skillRoot: string, files: Record<string, string>): void
  * and <targetPath>/.agents/skills/ (Codex):
  *   - `archon-cli` — router + capability references (run/manage/setup/author)
  *
- * Pure file-system helper used by both the standalone `skill install` CLI
+ * Pure file-system helper used by both the standalone `skill add` CLI
  * command and the interactive setup wizard.
  *
  * The `bundled-skill` module is dynamically imported here so that its top-level
@@ -38,7 +38,7 @@ function writeSkillFiles(skillRoot: string, files: Record<string, string>): void
  * actually called. Compiled binaries (`bun build --compile`) still statically
  * analyze the literal-string `import()` and embed the chunk; linked-source
  * installs (`bun link`) don't touch the source skill files unless the user runs
- * `archon setup` or `archon skill install`. Without this indirection, every
+ * `archon setup` or `archon skill add`. Without this indirection, every
  * `archon` invocation — including `archon --help` — fails at module load when
  * the source skill files are missing from disk.
  */
@@ -79,7 +79,7 @@ export async function skillInstallCommand(targetPath: string): Promise<number> {
       join(absoluteTarget, '.agents', 'skills'),
     ];
     console.log(
-      `Installing Archon skill (archon-cli, ${fileCount} files per destination) into ${installTargets.join(' and ')}`
+      `Adding Archon skill (archon-cli, ${fileCount} files per destination) into ${installTargets.join(' and ')}`
     );
 
     await copyArchonSkill(absoluteTarget);

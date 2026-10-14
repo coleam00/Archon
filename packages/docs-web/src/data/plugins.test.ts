@@ -39,11 +39,11 @@ test('topic search includes tagged forks and lists root and nested plugins at a 
   expect(plugins.find(plugin => plugin.id === 'test-author/untagged-pack')).toMatchObject({
     latestTag: null,
     manifest: { kind: 'workflow-pack' },
-    installCommand: 'archon plugin install test-author/untagged-pack',
+    installCommand: 'archon plugin add test-author/untagged-pack',
   });
   expect(plugins[2]).toMatchObject({
     commit,
-    installCommand: 'archon plugin install test-author/test-pack/packs/second',
+    installCommand: 'archon plugin add test-author/test-pack/packs/second',
     sourceUrl: `https://github.com/test-author/test-pack/tree/${commit}/packs/second`,
   });
   expect(requests.some(url => url.includes('git/trees/' + commit))).toBe(true);
@@ -181,6 +181,6 @@ test('catalog accepts a chat manifest and supplies its install command', async (
   });
   expect(plugins.find(plugin => plugin.id === 'test-author/archived-forge')).toMatchObject({
     manifest: {kind: 'chat', executable: 'archon-chat-example'},
-    installCommand: 'archon plugin install test-author/archived-forge',
+    installCommand: 'archon plugin add test-author/archived-forge',
   });
 });

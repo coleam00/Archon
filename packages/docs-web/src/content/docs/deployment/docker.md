@@ -590,13 +590,13 @@ When `GH_TOKEN` is set, the container resets the `https://github.com` git creden
 Install plugins inside the running container. The GitHub forge plugin:
 
 ```bash
-docker compose exec -u appuser app bun run cli plugin install coleam00/Archon/plugins/forge-github
+docker compose exec -u appuser app bun run cli plugin add coleam00/Archon/plugins/forge-github
 ```
 
 A workflow pack, from a public GitHub repository that publishes one:
 
 ```bash
-docker compose exec -u appuser app bun run cli plugin install Wirasm/archon-video
+docker compose exec -u appuser app bun run cli plugin add Wirasm/archon-video
 ```
 
 Both land in `/.archon/plugins`, which is on the `archon_data` volume (or your `ARCHON_DATA` bind mount), so they survive restarts and image rebuilds. `-u appuser` keeps the files owned by the user the server runs as. Update, remove and list the same way with `plugin update`, `plugin remove` and `plugin list`. See [Forge operations](/reference/forge/#install-the-github-plugin) and [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs).
