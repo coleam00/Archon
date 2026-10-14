@@ -466,7 +466,7 @@ describe('archon plugin: workflow packs', () => {
     await writeFile(receiptPath(env.pluginsDir, ID), '{not json');
     const beforeRemove = await snapshot(env.pluginsDir);
     expect((await run(env, 'remove', ID)).code).toBe(0);
-    delete beforeRemove[join('installed', ...ID.split('/'), 'receipt.json')];
+    delete beforeRemove[`installed/${ID}/receipt.json`];
     expect(await snapshot(env.pluginsDir)).toEqual(beforeRemove);
   });
 
