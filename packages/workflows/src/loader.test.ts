@@ -9664,6 +9664,36 @@ describe('loop_group prose completion with structured terminal output (#2998)', 
     expect(result.error?.error).toContain("node 'work', which the group's output is read from");
   });
 
+  it('judges every node a terminal gate reads past to (#4043)', () => {
+    const result = parseWorkflow(
+      Bun.YAML.stringify({
+        name: 'structured-group-gate-fan-in',
+        description: 'test',
+        interactive: true,
+        nodes: [
+          {
+            id: 'refine',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 3,
+              nodes: [
+                { id: 'notes', prompt: 'notes' },
+                {
+                  id: 'work',
+                  prompt: 'work',
+                  output_format: { type: 'object', properties: { done: { type: 'boolean' } } },
+                },
+                { id: 'ask', depends_on: ['notes', 'work'], approval: { message: 'ok?' } },
+              ],
+            },
+          },
+        ],
+      }),
+      'structured-group-gate-fan-in.yaml'
+    );
+    expect(result.error?.error).toContain("node 'work', which the group's output is read from");
+  });
+
   it('accepts a terminal node without output_format', () => {
     expect(parseGroup().error).toBeNull();
   });

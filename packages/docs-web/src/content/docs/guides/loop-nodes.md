@@ -685,9 +685,10 @@ nodes:
 
 The legacy prose `until:` channel cannot detect a signal when the node the
 group's output is read from (see below) produces non-string structured output. The
-loader rejects that combination when `until:` is the only completion channel. Use
-`until_bash` to read that node's structured field instead. A terminal node without
-`output_format`, or with a string schema, keeps loading. Declaring `until_bash`
+loader rejects that combination when `until:` is the only completion channel, for
+every node the output can be read from. Use `until_bash` to read that node's
+structured field instead. Nodes without `output_format`, or with a string schema,
+keep loading. Declaring `until_bash`
 alongside `until:` also keeps loading, with the existing prose-channel deprecation
 warning.
 

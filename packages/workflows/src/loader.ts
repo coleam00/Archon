@@ -1582,17 +1582,16 @@ export function validateLoopGroupProseCompletion(
     if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
     const bodyError = validateLoopGroupProseCompletion(node.loop_group.nodes);
     if (bodyError) return bodyError;
-    const outputNodes = loopGroupOutputNodes(node.loop_group.nodes);
-    const outputNode = outputNodes.length === 1 ? outputNodes[0] : undefined;
-    if (
-      node.loop_group.until !== undefined &&
-      node.loop_group.until_bash === undefined &&
-      outputNode !== undefined &&
-      !isIncludeDirective(outputNode) &&
-      isOutputFormatEnforced(outputNode) &&
-      outputNode.output_format !== undefined &&
-      outputSchemaExcludesStrings(outputNode.output_format)
-    ) {
+    if (node.loop_group.until === undefined || node.loop_group.until_bash !== undefined) continue;
+    // Any candidate can be the one an iteration's output is read from.
+    const outputNode = loopGroupOutputNodes(node.loop_group.nodes).find(
+      candidate =>
+        !isIncludeDirective(candidate) &&
+        isOutputFormatEnforced(candidate) &&
+        candidate.output_format !== undefined &&
+        outputSchemaExcludesStrings(candidate.output_format)
+    );
+    if (outputNode !== undefined) {
       return `loop_group '${node.id}': node '${outputNode.id}', which the group's output is read from, declares a non-string output_format, so the prose until signal cannot be detected in serialized structured output. Use loop_group.until_bash to read that node's structured field instead`;
     }
   }
