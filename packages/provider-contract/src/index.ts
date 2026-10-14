@@ -94,6 +94,7 @@ export {
   MAINTAINED_PROVIDER_IDS,
   isMaintainedProvider,
   hasInstalledProvider,
+  installedProviders,
   missingProviderMessage,
   noDefaultProviderMessage,
   NO_DEFAULT_PROVIDER_MESSAGE,

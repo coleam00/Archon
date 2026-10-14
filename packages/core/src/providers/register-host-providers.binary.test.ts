@@ -14,18 +14,26 @@ import {
   getRegisteredProviders,
   providerRegistry,
 } from '@archon/providers';
+import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { ProcessAgentProvider } from './process-provider';
 mock.module('@archon/paths', () => ({ ...paths, BUNDLED_IS_BINARY: true }));
 const { registerHostProviders } = await import('./register-host-providers');
+const { clearConfigCache, loadConfig } = await import('../config/config-loader');
 const roots = trackTempRoots();
 const previousHome = process.env.ARCHON_HOME;
+const previousAssistant = process.env.DEFAULT_AI_ASSISTANT;
 afterEach(() => {
   clearRegistry();
+  clearConfigCache();
+  clearPlatformPolicies();
+  if (previousAssistant === undefined) delete process.env.DEFAULT_AI_ASSISTANT;
+  else process.env.DEFAULT_AI_ASSISTANT = previousAssistant;
   if (previousHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = previousHome;
 });
 
 test('release hosts register maintained providers only from install receipts', async () => {
+  delete process.env.DEFAULT_AI_ASSISTANT;
   const home = roots(await mkdtemp(join(tmpdir(), 'binary-host-providers-')));
   process.env.ARCHON_HOME = home;
   const pluginsDir = join(home, 'plugins');
@@ -64,4 +72,8 @@ test('release hosts register maintained providers only from install receipts', a
   expect(() => requireProvider(providerRegistry, 'codex')).toThrow(
     "Provider 'codex' is not installed. Install it with: archon provider install codex"
   );
+  // OpenCode and Copilot stay bundled but deprecated, so the one installed provider is the default.
+  clearConfigCache();
+  setPlatformPolicies([]);
+  expect((await loadConfig()).assistant).toBe('claude');
 });

@@ -1,5 +1,5 @@
 import { validateWorktreePostCreate } from '@archon/isolation';
-import { missingProviderMessage } from '@archon/provider-contract';
+import { installedProviders, missingProviderMessage } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '@archon/workflows/schemas/run-config';
 /**
@@ -501,6 +501,7 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
  */
 function getDefaults(): MergedConfig {
   const providers = getRegisteredProviders();
+  const installed = installedProviders(providerRegistry);
   const registeredAssistants: AssistantDefaults = { claude: {}, codex: {} };
   for (const provider of providers) {
     if (!(provider.id in registeredAssistants)) {
@@ -515,7 +516,7 @@ function getDefaults(): MergedConfig {
 
   return {
     botName: 'Archon',
-    assistant: providers.length === 1 ? providers[0].id : undefined,
+    assistant: installed.length === 1 ? installed[0].id : undefined,
     assistants: registeredAssistants,
     streaming,
     paths: {
