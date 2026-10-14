@@ -257,6 +257,9 @@ class InMemoryStore implements IWorkflowStore {
   drainResourceStarts: IWorkflowStore['drainResourceStarts'] = async () => {
     throw new Error('Unexpected drainResourceStarts');
   };
+  hasStartReceiptForDelivery: IWorkflowStore['hasStartReceiptForDelivery'] = async () => {
+    throw new Error('Unexpected hasStartReceiptForDelivery');
+  };
   acceptStartReceipt: IWorkflowStore['acceptStartReceipt'] = async () => {
     throw new Error('Unexpected acceptStartReceipt');
   };

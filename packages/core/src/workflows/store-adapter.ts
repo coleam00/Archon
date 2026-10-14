@@ -112,6 +112,7 @@ export function createWorkflowStore(): IWorkflowStore {
     setToolCallAttention: workflowDb.setToolCallAttention,
     admitResourceStart: resourceStarts.admitResourceStart,
     drainResourceStarts: resourceStarts.drainResourceStarts,
+    hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
     acceptStartReceipt: resourceStarts.acceptStartReceipt,
     getStartReceipt: resourceStarts.getStartReceipt,
     listStartReceipts: resourceStarts.listStartReceipts,
