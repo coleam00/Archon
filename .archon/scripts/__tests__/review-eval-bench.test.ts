@@ -1,24 +1,30 @@
 /**
  * The review-lens bench's own invariants, each one whose failure would silently
  * corrupt its numbers: a sample that can read the answer or differs by machine, a
- * mislabelled version, a failed or misbound run counted as a sample, and a stale line.
+ * mislabelled version, a failed, empty or misbound run counted as a sample, a paid run
+ * left unrecorded, a live run's checkout reused, and a stale line.
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { type ModelAliasPreset, TIER_NAMES, modelAliasPresetSchema } from '../../../packages/workflows/src/schemas/model-binding';
 import {
   type ResolvedVersion,
   type RunDetail,
   type RunNode,
+  TIERS,
+  type TierBinding,
   appendLine,
   latestLines,
+  readLines,
   resolveVersion,
 } from '../../workflows/sdlc/.shared/bench';
 import {
   cloneSample,
+  collectItem,
   ensureOrigin,
   hardChecks,
   loadSet,
@@ -184,6 +190,16 @@ describe('resolveVersion refuses', () => {
   });
 });
 
+describe("a version's tiers are the engine's", () => {
+  it('names every tier the engine binds, in a shape its alias preset accepts', () => {
+    expect([...TIERS]).toEqual([...TIER_NAMES]);
+    const binding: TierBinding = { provider: 'claude', model: 'opus', effort: 'high' };
+    expect(modelAliasPresetSchema.parse(binding)).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
+    const fromEngine = (preset: ModelAliasPreset): TierBinding => preset;
+    expect(fromEngine({ provider: 'codex', model: 'gpt' })).toEqual({ provider: 'codex', model: 'gpt' });
+  });
+});
+
 describe('latestLines keeps the newest line per key', () => {
   it('replaces an earlier line with a later one of the same key', () => {
     const out = track(mkdtempSync(join(tmpdir(), 'archon-bench-lines-')));
@@ -286,12 +302,14 @@ describe('hard checks decide whether a sample counts', () => {
     };
   }
 
-  const judge = (detail: RunDetail) => hardChecks(detail, resolved, ['code', 'simplify'], { base_branch: 'dev' });
+  const item = { lenses: ['code', 'simplify'], findings: true };
+  const judge = (detail: RunDetail, output = item) => hardChecks(detail, resolved, output, { base_branch: 'dev' });
 
   it('pass a completed run on the version it names', () => {
     expect(judge(run())).toEqual({
       checks: {
         completed: { ok: true, problems: [] },
+        output: { ok: true, problems: [] },
         sealed: { ok: true, problems: [] },
         version: { ok: true, problems: [] },
       },
@@ -303,6 +321,12 @@ describe('hard checks decide whether a sample counts', () => {
     const verdict = judge(run({ status: 'failed' }));
     expect(verdict.passed).toBe(false);
     expect(verdict.checks.completed.problems).toEqual(['the run is failed']);
+  });
+
+  it('fail a completed run that left no review output', () => {
+    const verdict = judge(run(), { lenses: [], findings: false });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.checks.output.problems).toEqual(['the run left no lens file', 'the run left no review/findings.json']);
   });
 
   it('fail a run whose tier resolved to another model', () => {
@@ -321,13 +345,108 @@ describe('hard checks decide whether a sample counts', () => {
     expect(judge(run({ nodes })).checks.version.problems).toEqual(['lens code has no provider binding']);
   });
 
-  it('total cost over agent nodes, and none when any agent node reported none', () => {
-    expect(runCost(run())).toEqual({ cost_usd: 1.75, tokens: { input: 20, output: 2 } });
+  it('total cost over agent nodes that ran, and none when any of them reported none', () => {
+    const skipped: RunNode = {
+      nodeId: 'review__docs',
+      state: 'skipped',
+      execution: { node: { kind: 'agent' }, binding: {}, spend: { costUsd: { source: 'unavailable', reason: 'not_applicable' } } },
+    };
+    expect(runCost(run({ nodes: [...run().nodes, skipped] }))).toEqual({ cost_usd: 1.75, tokens: { input: 20, output: 2 } });
     const unreported: RunNode = {
       nodeId: 'review__tests',
       state: 'completed',
       execution: { node: { kind: 'agent' }, binding: {}, spend: { costUsd: { source: 'unavailable', reason: 'not reported' } } },
     };
     expect(runCost(run({ nodes: [...run().nodes, unreported] })).cost_usd).toBeNull();
+  });
+});
+
+describe('collectItem', () => {
+  it('names lens files, not the review\'s own files, and sees findings.json', () => {
+    const root = track(mkdtempSync(join(tmpdir(), 'archon-bench-item-')));
+    const artifacts = join(root, 'artifacts', 'runs', 'r1');
+    for (const file of ['code.md', 'scope.md', 'report.md', 'code-round-1.md', 'findings.json']) write(artifacts, `review/${file}`, 'x');
+    write(artifacts, 'shape.md', 'x');
+    const detail: RunDetail = {
+      id: 'r1',
+      status: 'completed',
+      output_root: root,
+      started_at: '2026-10-01T12:00:00Z',
+      completed_at: null,
+      base_branch: 'dev',
+      aliases: {},
+      nodes: [],
+    };
+    const itemDir = join(root, 'item');
+    expect(collectItem(detail, itemDir)).toEqual({ lenses: ['code', 'simplify'], findings: true });
+    expect(existsSync(join(itemDir, 'review', 'code-round-1.md'))).toBe(true);
+    expect(existsSync(join(itemDir, 'shape.md'))).toBe(true);
+  });
+});
+
+describe('bench run', () => {
+  const script = join(import.meta.dir, '../../workflows/sdlc/review-eval/scripts/bench.ts');
+
+  /**
+   * `bench.ts run` over a case with an `archon` stub first on PATH: `run` acknowledges
+   * numbered runs, `wait` answers with `wait`, and `get` returns a run detail missing
+   * every field but id and status.
+   */
+  function benchCase(wait: unknown) {
+    const { repo, set } = caseRepository();
+    write(repo, '.archon/workflows/sdlc/review-eval/archon-review-eval.yaml', 'name: archon-review-eval\n');
+    const packSha = commitAll(repo, 'pack');
+    const out = track(mkdtempSync(join(tmpdir(), 'archon-bench-out-')));
+    const tier = { provider: 'claude', model: 'opus' };
+    writeFileSync(join(out, 'v.yaml'), JSON.stringify({ label: 'v', pack_sha: packSha, tiers: { small: tier, medium: tier, large: tier } }));
+
+    const bin = track(mkdtempSync(join(tmpdir(), 'archon-bench-bin-')));
+    const count = join(bin, 'count');
+    writeFileSync(
+      join(bin, 'archon'),
+      [
+        '#!/bin/sh',
+        'case "$2" in',
+        `  run) n=$(($(cat '${count}' 2>/dev/null || echo 0) + 1)); echo "$n" > '${count}'; echo "{\\"runId\\":\\"run-$n\\"}" ;;`,
+        `  wait) echo '${JSON.stringify(wait)}' ;;`,
+        `  get) echo "{\\"id\\":\\"$3\\",\\"status\\":\\"completed\\"}" ;;`,
+        'esac',
+        '',
+      ].join('\n')
+    );
+    chmodSync(join(bin, 'archon'), 0o755);
+    const run = (...args: string[]) => {
+      const result = spawnSync(
+        process.execPath,
+        [script, 'run', '--set', set, '--batch', 'counting', '--version', join(out, 'v.yaml'), '--out', out, ...args],
+        { cwd: repo, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }
+      );
+      return { status: result.status, stderr: result.stderr, lines: readLines(join(out, 'samples.jsonl')) };
+    };
+    return { out, run };
+  }
+
+  it('records every paid sample after the ones already taken, even when its detail cannot be read', () => {
+    const { run } = benchCase({ attention: { kind: 'terminal', status: 'completed' } });
+    expect(run('--variant', 'v1').status).toBe(1);
+    const { status, lines } = run('--samples', '2');
+    expect(status).toBe(1);
+    expect(lines.map(line => [line.variant, line.sample, line.run_id, line.passed])).toEqual([
+      ['v1', 1, 'run-1', false],
+      ['clean', 1, 'run-2', false],
+      ['clean', 2, 'run-3', false],
+      ['v1', 2, 'run-4', false],
+      ['v1', 3, 'run-5', false],
+    ]);
+    expect(String(lines[0].error)).toContain('the field `output_root` is missing');
+  });
+
+  it('stops the version, keeping the checkout, when a run does not finish', () => {
+    const { out, run } = benchCase({ attention: { kind: 'stalled_tool_calls' } });
+    const { status, stderr, lines } = run('--samples', '2');
+    expect(status).toBe(1);
+    expect(stderr).toContain('run run-1 may still be running');
+    expect(lines.map(line => [line.run_id, line.passed])).toEqual([['run-1', false]]);
+    expect(existsSync(join(out, 'checkouts', 'eval-v', 'counting', 'a.txt'))).toBe(true);
   });
 });

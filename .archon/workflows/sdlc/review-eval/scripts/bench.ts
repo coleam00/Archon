@@ -438,31 +438,41 @@ function versionTruth(run: RunDetail, resolved: ResolvedVersion, lenses: readonl
 }
 
 export interface HardChecks {
-  readonly checks: { readonly completed: Check; readonly sealed: Check; readonly version: Check };
+  readonly checks: { readonly completed: Check; readonly output: Check; readonly sealed: Check; readonly version: Check };
   readonly passed: boolean;
 }
 
 /**
- * Whether a finished sample counts: the run completed, diffed against the case's base
- * branch (the rest of the seal is checked before launch), and every lens ran on the
- * version's tiers.
+ * Whether a finished sample counts: the run completed, left lens files and the
+ * review's `findings.json`, diffed against the case's base branch (the rest of the
+ * seal is checked before launch), and every lens ran on the version's tiers.
  */
 export function hardChecks(
   run: RunDetail,
   resolved: ResolvedVersion,
-  lenses: readonly string[],
+  item: ReviewItem,
   bench: Pick<Case, 'base_branch'>
 ): HardChecks {
+  const output: string[] = [];
+  if (item.lenses.length === 0) output.push('the run left no lens file');
+  if (!item.findings) output.push('the run left no review/findings.json');
   const checks = {
     completed: check(run.status === 'completed' ? [] : [`the run is ${run.status}`]),
+    output: check(output),
     sealed: check(run.base_branch === bench.base_branch ? [] : [`the run's base branch is ${run.base_branch}, not ${bench.base_branch}`]),
-    version: check(versionTruth(run, resolved, lenses)),
+    version: check(versionTruth(run, resolved, item.lenses)),
   };
-  return { checks, passed: checks.completed.ok && checks.sealed.ok && checks.version.ok };
+  return { checks, passed: Object.values(checks).every(entry => entry.ok) };
 }
 
 /** Round copies (`code-round-1.md`) are history of a lens file, not another lens. */
 const NOT_A_LENS = /^(scope|report.*|.+-round-\d+)\.md$/;
+
+export interface ReviewItem {
+  readonly lenses: readonly string[];
+  /** Whether the review wrote its machine-readable `review/findings.json`. */
+  readonly findings: boolean;
+}
 
 /**
  * Copy the sample's review output to `<out>/items/<run_id>/` and name its lenses:
@@ -470,7 +480,7 @@ const NOT_A_LENS = /^(scope|report.*|.+-round-\d+)\.md$/;
  * simplify. Reading files rather than a lens list lets one collector read every
  * pack shape a version can pin.
  */
-function collectItem(run: RunDetail, itemDir: string): string[] {
+export function collectItem(run: RunDetail, itemDir: string): ReviewItem {
   const artifacts = artifactsOf(run);
   mkdirSync(itemDir, { recursive: true });
   const lenses: string[] = [];
@@ -484,7 +494,7 @@ function collectItem(run: RunDetail, itemDir: string): string[] {
     cpSync(join(artifacts, 'shape.md'), join(itemDir, 'shape.md'));
     lenses.push('simplify');
   }
-  return lenses.sort();
+  return { lenses: lenses.sort(), findings: existsSync(join(itemDir, 'review', 'findings.json')) };
 }
 
 const reported = <T>(observation: { source: string; value?: T } | undefined): T | null =>
@@ -504,12 +514,13 @@ function lensRecord(run: RunDetail, lens: string): Record<string, unknown> {
   };
 }
 
-/** The run's total provider cost, or null when any agent node reported none. */
+/** The run's total provider cost, or null when any agent node that ran reported none. */
 export function runCost(run: RunDetail): { cost_usd: number | null; tokens: TokenUsage } {
   let cost: number | null = 0;
   const tokens = { input: 0, output: 0 };
   for (const node of run.nodes) {
-    if (agentBinding(node) === undefined) continue;
+    // A lens the route skipped is still an agent node, with no spend to report.
+    if (node.state === 'skipped' || agentBinding(node) === undefined) continue;
     const nodeCost = reported(node.execution?.spend?.costUsd);
     cost = cost === null || nodeCost === null ? null : cost + nodeCost;
     const used = reported(node.execution?.spend?.tokens);
@@ -560,28 +571,39 @@ async function runVersion(options: RunOptions, resolved: ResolvedVersion): Promi
       const name = `${version.label} ${bench.id}/${variant} #${sample}`;
       console.log(`${name}: run ${runId}`);
       const identity = { case: bench.id, variant, sample, run_id: runId, version };
-      // The run is paid for: whatever fails from here, its line is written and the batch goes on.
+      const fail = (error: unknown, run?: RunDetail): string => {
+        const reason = error instanceof Error ? error.message : String(error);
+        appendLine(samplesFile, { ...identity, ...(run === undefined ? {} : runCost(run)), error: reason, passed: false });
+        return reason;
+      };
+      // A run that did not finish may still be working in the checkout the next sample
+      // would replace, so the version stops here.
       try {
         await waitRun(runId);
+      } catch (error) {
+        throw new Error(`${name}: run ${runId} may still be running in ${checkout}: ${fail(error)}`);
+      }
+      // The run is paid for: whatever fails from here, its line is written and the batch goes on.
+      let fetched: RunDetail | undefined;
+      try {
         const run = await getRun(runId);
+        fetched = run;
         const itemDir = join(outDir, 'items', runId);
-        const lenses = collectItem(run, itemDir);
-        const { checks, passed } = hardChecks(run, resolved, lenses, bench);
+        const item = collectItem(run, itemDir);
+        const { checks, passed } = hardChecks(run, resolved, item, bench);
         appendLine(samplesFile, {
           ...identity,
           status: run.status,
-          lenses: Object.fromEntries(lenses.map(lens => [lens, lensRecord(run, lens)])),
+          lenses: Object.fromEntries(item.lenses.map(lens => [lens, lensRecord(run, lens)])),
           checks,
           passed,
           ...runCost(run),
           duration_ms: run.completed_at === null ? null : Date.parse(run.completed_at) - Date.parse(run.started_at),
           item: relative(outDir, itemDir),
         });
-        console.log(`${name}: ${run.status}, lenses ${lenses.join(', ') || 'none'}, hard checks ${passed ? 'passed' : 'FAILED'}`);
+        console.log(`${name}: ${run.status}, lenses ${item.lenses.join(', ') || 'none'}, hard checks ${passed ? 'passed' : 'FAILED'}`);
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        appendLine(samplesFile, { ...identity, error: reason, passed: false });
-        console.error(`${name}: not recorded: ${reason}`);
+        console.error(`${name}: not recorded: ${fail(error, fetched)}`);
         process.exitCode = 1;
       }
     }
