@@ -5264,29 +5264,15 @@ export function substituteLoopBodyText(
  * command prompts. `when:` conditions remain expressions: runLayers resolves their
  * `$LOOP_PREV` references against this iteration's prior-output snapshot.
  *
- * `knownBodyIds` (transitive body-id set) and `directBodyIds` (this group's immediate body
- * ids) are threaded UNCHANGED into every substitution AND into the nested-loop_group
- * recursion — deliberately not recomputed for the inner group. This keeps
+ * The scope's `knownBodyIds` (transitive body-id set) and `directBodyIds` (this group's
+ * immediate body ids) are threaded UNCHANGED into every substitution AND into the
+ * nested-loop_group recursion — deliberately not recomputed for the inner group. This keeps
  * `$LOOP_PREV.*` refs validated against the OUTER loop's snapshot (whose body they resolve
  * against): a ref to an outer-direct id resolves now, a ref owned by a nested group is left
  * intact for that inner group's own pass, and a ref to nothing is a typo. Both omitted by
  * raw callers, which then skip the typo/nested classification entirely (fully lenient).
  */
-export function applyLoopPrevToBodyNode(
-  node: DagNode,
-  loopPrevOutputs: Map<string, NodeOutput> | undefined,
-  loopUserInput: string,
-  outputFileDir?: string,
-  knownBodyIds?: ReadonlySet<string>,
-  directBodyIds?: ReadonlySet<string>
-): DagNode {
-  const scope: LoopBodyScope = {
-    loopPrevOutputs,
-    loopUserInput,
-    outputFileDir,
-    knownBodyIds,
-    directBodyIds,
-  };
+export function applyLoopPrevToBodyNode(node: DagNode, scope: LoopBodyScope): DagNode {
   // Node-local `with:` bindings (#2637) are per-iteration surfaces like every other
   // body field: string values (whole refs and templates alike) get the same raw
   // `$LOOP_PREV` splice — raw because binding values never touch shell source, the
@@ -5317,16 +5303,7 @@ export function applyLoopPrevToBody(
   bodyNodes: readonly DagNode[],
   scope: LoopBodyScope
 ): DagNode[] {
-  return bodyNodes.map(n =>
-    applyLoopPrevToBodyNode(
-      n,
-      scope.loopPrevOutputs,
-      scope.loopUserInput,
-      scope.outputFileDir,
-      scope.knownBodyIds,
-      scope.directBodyIds
-    )
-  );
+  return bodyNodes.map(n => applyLoopPrevToBodyNode(n, scope));
 }
 
 /**

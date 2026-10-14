@@ -25784,11 +25784,12 @@ describe('executeDagWorkflow -- loop_group node', () => {
           source: { kind: 'inline', prompt: 'act on $LOOP_PREV.reviw.output.verdict' },
           depends_on: [],
         } as DagNode,
-        undefined,
-        '',
-        undefined,
-        knownBodyIds,
-        directBodyIds
+        {
+          loopPrevOutputs: undefined,
+          loopUserInput: '',
+          knownBodyIds,
+          directBodyIds,
+        }
       )
     ).toThrow(OutputRefError);
 
@@ -25815,11 +25816,12 @@ describe('executeDagWorkflow -- loop_group node', () => {
         },
         depends_on: [],
       } as DagNode,
-      undefined,
-      '',
-      undefined,
-      knownBodyIds,
-      directBodyIds
+      {
+        loopPrevOutputs: undefined,
+        loopUserInput: '',
+        knownBodyIds,
+        directBodyIds,
+      }
     );
     if (!('loop_group' in nestedGroup) || nestedGroup.loop_group === undefined)
       throw new Error('expected loop_group node');
@@ -25847,11 +25849,12 @@ describe('executeDagWorkflow -- loop_group node', () => {
         },
         depends_on: [],
       } as DagNode,
-      undefined,
-      '',
-      undefined,
-      knownBodyIds,
-      directBodyIds
+      {
+        loopPrevOutputs: undefined,
+        loopUserInput: '',
+        knownBodyIds,
+        directBodyIds,
+      }
     );
     if (!('loop_group' in nestedReadsOuter) || nestedReadsOuter.loop_group === undefined)
       throw new Error('expected loop_group node');
@@ -25879,11 +25882,12 @@ describe('executeDagWorkflow -- loop_group node', () => {
           },
           depends_on: [],
         } as DagNode,
-        undefined,
-        '',
-        undefined,
-        knownBodyIds,
-        directBodyIds
+        {
+          loopPrevOutputs: undefined,
+          loopUserInput: '',
+          knownBodyIds,
+          directBodyIds,
+        }
       )
     ).toThrow(OutputRefError);
   });
@@ -25980,8 +25984,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         script: 'echo $LOOP_PREV.work.output',
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
     expect(bashScript(bashNode)).toBe("echo 'it'\\''s done'");
 
@@ -25994,8 +25997,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         runtime: 'bun',
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
     expect('script' in scriptNode && scriptNode.script).toBe("console.log(`it's done`)");
 
@@ -26007,8 +26009,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         reason: 'stopping: $LOOP_PREV.work.output',
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
     expect('reason' in cancelNode ? cancelNode.reason : undefined).toBe("stopping: it's done");
   });
@@ -26022,8 +26023,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
         when: "$LOOP_PREV.work.output == 'done'",
         depends_on: [],
       } as DagNode,
-      new Map([['work', makeOutput('completed', 'done', undefined)]]),
-      ''
+      {
+        loopPrevOutputs: new Map([['work', makeOutput('completed', 'done', undefined)]]),
+        loopUserInput: '',
+      }
     );
     expect(node.when).toBe("$LOOP_PREV.work.output == 'done'");
   });
@@ -26099,8 +26102,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         },
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
 
     expect(inlinePrompt(aiNode)).toBe('main=PRIOR');
@@ -26117,7 +26119,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
     (commandLoop.loop as typeof commandLoop.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND] =
       { prompt: `compiled=${ref}` };
 
-    const substitutedLoop = applyLoopPrevToBodyNode(commandLoop, prev, '');
+    const substitutedLoop = applyLoopPrevToBodyNode(commandLoop, {
+      loopPrevOutputs: prev,
+      loopUserInput: '',
+    });
     if (!('loop' in substitutedLoop)) throw new Error('expected substituted loop node');
     const compiled = (
       substitutedLoop.loop as typeof substitutedLoop.loop & LoopWithCompiledCommand
@@ -26133,7 +26138,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
       },
       depends_on: [],
     });
-    const substitutedGate = applyLoopPrevToBodyNode(gate as DagNode, prev, '');
+    const substitutedGate = applyLoopPrevToBodyNode(gate as DagNode, {
+      loopPrevOutputs: prev,
+      loopUserInput: '',
+    });
     if (!('kind' in substitutedGate) || substitutedGate.kind !== 'gate')
       throw new Error('expected gate node');
     expect(substitutedGate.message).toBe('approve=PRIOR');
@@ -26146,7 +26154,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
       wait: { event: ref, deadline_ms: 60_000 },
       depends_on: [],
     });
-    const substitutedWait = applyLoopPrevToBodyNode(wait as DagNode, prev, '');
+    const substitutedWait = applyLoopPrevToBodyNode(wait as DagNode, {
+      loopPrevOutputs: prev,
+      loopUserInput: '',
+    });
     if (!('kind' in substitutedWait) || substitutedWait.kind !== 'wait') {
       throw new Error('expected wait node');
     }
@@ -26162,7 +26173,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
       origin: 'review-block',
       inputs: { previous: ref },
     };
-    const substitutedScript = applyLoopPrevToBodyNode(script as DagNode, prev, '');
+    const substitutedScript = applyLoopPrevToBodyNode(script as DagNode, {
+      loopPrevOutputs: prev,
+      loopUserInput: '',
+    });
     expect(readComposedMeta(substitutedScript)?.inputs).toEqual({ previous: 'PRIOR' });
   });
 
@@ -26180,8 +26194,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         runtime: 'bun',
         depends_on: [],
       } as DagNode,
-      undefined,
-      injection
+      { loopPrevOutputs: undefined, loopUserInput: injection }
     );
     // Literal token preserved; the payload never reaches the executed source.
     expect('script' in scriptNode && scriptNode.script).toBe('console.log("$LOOP_USER_INPUT")');
@@ -26195,8 +26208,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         script: 'echo $LOOP_USER_INPUT',
         depends_on: [],
       } as DagNode,
-      undefined,
-      injection
+      { loopPrevOutputs: undefined, loopUserInput: injection }
     );
     // No single quotes in the payload → shellQuote wraps it verbatim in single quotes.
     expect(bashScript(bashNode)).toBe(`echo '${injection}'`);
@@ -26219,8 +26231,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         },
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
     if (!('loop' in nestedLoop) || nestedLoop.loop === undefined)
       throw new Error('expected loop node');
@@ -26242,8 +26253,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         },
         depends_on: [],
       } as DagNode,
-      prev,
-      ''
+      { loopPrevOutputs: prev, loopUserInput: '' }
     );
     if (!('loop_group' in nestedGroup) || nestedGroup.loop_group === undefined)
       throw new Error('expected loop_group node');
