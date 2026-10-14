@@ -40635,6 +40635,61 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('propagates a loop_group body halt write failure after paid work', async () => {
+    const store = createMockStore();
+    const cause = new Error('cancel record failed');
+    store.cancelWorkflowRun = mock(async () => {
+      throw cause;
+    });
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Paid work.' };
+      yield {
+        type: 'result',
+        sessionId: 'halt-body-session',
+        cost: 0.05,
+        tokens: { input: 100, output: 10 },
+      };
+    });
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    await expect(
+      run(
+        store,
+        createMockPlatform(),
+        [
+          {
+            id: 'grp',
+            kind: 'loop_group',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 2,
+              fresh_context: false,
+              nodes: [
+                { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
+                { id: 'stop', kind: 'halt', reason: 'stop', depends_on: ['work'] },
+              ],
+            },
+          },
+        ],
+        []
+      )
+    ).rejects.toMatchObject({ name: 'TerminalStatusWriteError', cause });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(
+      persistedEvents(store).find(
+        event => event.event_type === 'node_completed' && event.step_name === 'grp.work'
+      )?.data?.cost_usd
+    ).toBe(0.05);
+    expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('awaits committed node lifecycle before the run terminal write', async () => {
     const store = createMockStore();
     const committed: string[] = [];
