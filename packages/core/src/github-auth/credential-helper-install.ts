@@ -3,7 +3,8 @@
  * workflows can refresh installation tokens without rewriting the remote URL.
  *
  * Flow:
- *   1. Atomically replace the managed credential helper in `~/.archon/bin/`.
+ *   1. Atomically replace the managed credential helper in `~/.archon/bin/`
+ *      when its contents are outdated.
  *   2. Register the helper on the worktree's git config:
  *      `credential.https://github.com.helper = ~/.archon/bin/git-credential-archon`
  *      `credential.https://github.com.useHttpPath = true`
@@ -14,7 +15,7 @@
  * use the same helper without depending on the repository's `scripts/` tree.
  */
 import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createLogger, getArchonHome } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
@@ -59,17 +60,19 @@ async function registerCredentialHelper(
   const binDir = resolve(getArchonHome(), 'bin');
   const helperPath = resolve(binDir, 'git-credential-archon');
   const helperCommand = `!'${helperPath.replaceAll("'", "'\"'\"'")}'`;
-  const tempPath = resolve(binDir, `git-credential-archon.${randomUUID()}.tmp`);
   try {
-    mkdirSync(binDir, { recursive: true });
-    try {
-      writeFileSync(tempPath, credentialHelperScript, { flag: 'wx' });
-      chmodSync(tempPath, 0o755);
-      renameSync(tempPath, helperPath);
-    } finally {
-      rmSync(tempPath, { force: true });
+    if (!isCurrentHelper(helperPath)) {
+      mkdirSync(binDir, { recursive: true });
+      const tempPath = resolve(binDir, `git-credential-archon.${randomUUID()}.tmp`);
+      try {
+        writeFileSync(tempPath, credentialHelperScript, { flag: 'wx' });
+        chmodSync(tempPath, 0o755);
+        renameSync(tempPath, helperPath);
+      } finally {
+        rmSync(tempPath, { force: true });
+      }
+      getLog().info({ helperPath }, 'github_auth.credential_helper_updated');
     }
-    getLog().info({ helperPath }, 'github_auth.credential_helper_updated');
     await execFileAsync(
       'git',
       ['-C', worktreePath, 'config', 'credential.https://github.com.helper', helperCommand],
@@ -84,5 +87,19 @@ async function registerCredentialHelper(
     return { kind: 'installed', helperPath };
   } catch (err) {
     return { kind: 'failed', error: err as Error };
+  }
+}
+
+/**
+ * Windows cannot rename over a file another process holds open, and a running
+ * helper keeps its script open. Rewriting only outdated copies keeps routine
+ * setup from failing while another worktree's Git fetches credentials.
+ */
+function isCurrentHelper(helperPath: string): boolean {
+  try {
+    return readFileSync(helperPath, 'utf8') === credentialHelperScript;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
   }
 }

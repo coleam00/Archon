@@ -7,7 +7,7 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { cp, mkdtemp, readFile, writeFile, mkdir, stat, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import * as git from '@archon/git';
 import { skipCompiledBinaryTests, trackTempRoots } from '@archon/paths/test-utils';
 import { installCredentialHelper } from './credential-helper-install';
@@ -78,7 +78,7 @@ describe('installCredentialHelper', () => {
       'git',
       [
         '-C',
-        '/tmp/some-worktree',
+        resolve('/tmp/some-worktree'),
         'config',
         'credential.https://github.com.helper',
         `!'${helperPath}'`,
@@ -115,23 +115,17 @@ describe('installCredentialHelper', () => {
     const helperPath = join(binDir, 'git-credential-archon');
     await writeFile(helperPath, '#!/bin/sh\n# pre-existing\n', { mode: 0o755 });
 
-    const oldReader = await open(helperPath, 'r');
-    try {
-      const result = await installCredentialHelper('/tmp/another-worktree');
-      expect(result.kind).toBe('installed');
-      expect(await oldReader.readFile('utf8')).toBe('#!/bin/sh\n# pre-existing\n');
-    } finally {
-      await oldReader.close();
-    }
+    expect((await installCredentialHelper('/tmp/another-worktree')).kind).toBe('installed');
     expect(await readFile(helperPath, 'utf8')).toBe(credentialHelperScript);
     expect((await installCredentialHelper('/tmp/another-worktree')).kind).toBe('installed');
     expect(await readFile(helperPath, 'utf8')).toBe(credentialHelperScript);
     // Registration still runs — every cloned worktree needs its own config entry.
+    expect(execSpy).toHaveBeenCalledTimes(4);
     expect(execSpy).toHaveBeenCalledWith(
       'git',
       [
         '-C',
-        '/tmp/another-worktree',
+        resolve('/tmp/another-worktree'),
         'config',
         'credential.https://github.com.helper',
         `!'${helperPath}'`,
@@ -139,6 +133,39 @@ describe('installCredentialHelper', () => {
       { timeout: 5000 }
     );
   });
+
+  test('registers a current helper while another process holds it open', async () => {
+    expect((await installCredentialHelper('/tmp/some-worktree')).kind).toBe('installed');
+    const helperPath = join(archonHome, 'bin', 'git-credential-archon');
+    const installedFile = (await stat(helperPath)).ino;
+    const runningHelper = await open(helperPath, 'r');
+    try {
+      expect((await installCredentialHelper('/tmp/another-worktree')).kind).toBe('installed');
+    } finally {
+      await runningHelper.close();
+    }
+    expect((await stat(helperPath)).ino).toBe(installedFile);
+  });
+
+  // Windows refuses to rename over an open file, so only POSIX can upgrade a running helper.
+  test.skipIf(process.platform === 'win32')(
+    'upgrades an outdated helper without changing a running copy (POSIX only)',
+    async () => {
+      const binDir = join(archonHome, 'bin');
+      await mkdir(binDir, { recursive: true });
+      const helperPath = join(binDir, 'git-credential-archon');
+      await writeFile(helperPath, '#!/bin/sh\n# pre-existing\n', { mode: 0o755 });
+
+      const runningHelper = await open(helperPath, 'r');
+      try {
+        expect((await installCredentialHelper('/tmp/another-worktree')).kind).toBe('installed');
+        expect(await runningHelper.readFile('utf8')).toBe('#!/bin/sh\n# pre-existing\n');
+      } finally {
+        await runningHelper.close();
+      }
+      expect(await readFile(helperPath, 'utf8')).toBe(credentialHelperScript);
+    }
+  );
 
   test('concurrent registration shares failure and a later call retries both config writes', async () => {
     let rejectWrite: (error: Error) => void = () => {};
