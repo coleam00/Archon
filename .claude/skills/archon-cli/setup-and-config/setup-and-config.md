@@ -12,7 +12,7 @@ want to work on unless setting up globally.
 
 ```bash
 archon --version      # CLI present?
-archon doctor         # binaries, gh auth, database, adapters
+archon doctor         # installed providers, gh auth, database, adapters
 archon doctor --full  # also probes the OpenCode runtime SDK
 ```
 
@@ -21,9 +21,13 @@ If `doctor` is green, skip to Configuration. Only set up what is actually broken
 ## Install
 
 Prerequisites: `git`, and Bun for source installs (a compiled binary needs only
-itself). Then either:
+itself).
 
 ```bash
+# Compiled binary; asks which providers to install
+curl -fsSL https://archon.diy/install | bash
+curl -fsSL https://archon.diy/install | bash -s -- --providers codex   # no question
+
 # Source install
 git clone <archon-repo> && cd Archon
 bun install
@@ -33,10 +37,26 @@ cd packages/cli && bun link && cd ../..
 bun --cwd packages/cli src/cli.ts --help
 ```
 
+## Providers (compiled binaries)
+
+A compiled binary ships without Claude, Codex and Pi; it runs only the ones
+installed. No provider is ever picked silently: a run needing a missing one
+fails before it starts and names the command.
+
+```bash
+archon provider install codex            # or: claude codex pi
+archon setup --providers codex           # same, then auth prompts
+```
+
+An installed provider must match the CLI version: after upgrading Archon, rerun
+`archon provider install <ids>`. `archon doctor` shows what is installed and any
+stale provider. Source checkouts and Docker run all three from source; there
+`provider install` refuses.
+
 ## Credentials — the setup wizard and its pieces
 
 ```bash
-archon setup          # interactive wizard: credentials + config + skill install
+archon setup          # interactive wizard: providers + credentials + config + skill install
 ```
 
 The wizard composes these, which also work standalone:

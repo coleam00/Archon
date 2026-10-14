@@ -151,7 +151,7 @@ archon provider install claude codex pi
 
 The command accepts only `claude`, `codex`, and `pi`, pins the first-party repository tag to the CLI version, and uses the plugin installer's checksum verification. Maintained ids cannot be installed from another repository. Remove a receipt with `archon plugin remove coleam00/Archon/plugins/provider-<id>`.
 
-Source checkouts and Docker run these providers from source over the process transport and refuse this install command. Release binaries retain their bundled providers until the separate provider release rollout is complete.
+Release binaries ship without Claude, Codex and Pi and load them only from what this command installs. The quick installers run it for the providers you select (`--providers` / `-Providers` / `ARCHON_PROVIDERS`), and `archon setup` runs it for its selection. An installed provider must match the CLI version, so run it again after upgrading Archon. Source checkouts and Docker run these providers from source over the process transport and refuse this install command.
 
 The default provider comes from explicit configuration (`assistant` in project config or `defaultAssistant` in global config), then `DEFAULT_AI_ASSISTANT`, then the only registered provider. With multiple providers and no configured default, a run needing one fails before creating a worktree. A workflow can select its provider explicitly.
 

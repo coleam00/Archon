@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+**Upgrading a release binary (quick installer, Homebrew, GitHub asset): install your providers.** Release binaries no longer include Claude, Codex or Pi. After upgrading, run:
+
+```bash
+archon provider install claude codex pi   # only the ones you use
+```
+
+or `archon setup`, which asks. Until you do, a workflow or chat message that needs a provider fails before it starts and prints this command, and `archon doctor` fails with the same command. Your config, credentials, database and native provider logins are unchanged. Docker images and source checkouts run all three from source and need no step. (#3645)
+
 ### Added
+
+- `archon provider install <claude|codex|pi...>` installs or replaces a maintained provider from the Archon release matching the CLI version, verified against the release's `checksums.txt`. `archon setup` asks which providers to install and installs them; `archon setup --providers codex` (or `ARCHON_PROVIDERS`) skips the question. The quick installers ask the same question after installing the CLI, or take `--providers` (shell), `-Providers` (PowerShell) or `ARCHON_PROVIDERS`; without a selection or a terminal to ask on, they install none and print the command. The Homebrew formula names `archon setup` and `archon provider install` in its caveats. See [Installation → Providers](https://archon.diy/getting-started/installation/#providers). (#3645)
 
 - A workflow node can name its MCP servers as optional with `mcp: { path: <file>, optional: true }`. When the provider cannot load MCP servers (Pi, OpenCode) or the config file does not exist, the node runs without them instead of failing validation or the run, and its lifecycle rows record `mcp_unavailable` with the path and reason. A plain `mcp: <file>` stays required. Codex and Copilot now also report each MCP server's status, so a declared server that fails to start is recorded and warned about as it already was on Claude. See [Optional servers](https://archon.diy/guides/mcp-servers/#optional-servers). (#3994)
 
@@ -25,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
-- Archon no longer falls back to `claude` when no default provider is configured. Every host now registers several providers, so a default is chosen only when you set one. This affects binary installs where `archon setup` never ran and Docker deployments whose `.env` has no `DEFAULT_AI_ASSISTANT` line, unless a project sets `assistant:` in its `.archon/config.yaml`. Workflows fail before they start and chat messages fail with `No default provider: set 'defaultAssistant' in ~/.archon/config.yaml or run archon setup`. To fix it, add `defaultAssistant: claude` (or your provider) to `~/.archon/config.yaml`, or `DEFAULT_AI_ASSISTANT=claude` to the Docker `.env`. (#3645)
+- Release binaries ship without the Claude, Codex and Pi providers and run only the ones installed with `archon provider install`. An installed provider whose version differs from the CLI is refused with the reinstall command, so rerun `archon provider install <ids>` after every upgrade. The binary no longer contains the Claude Agent SDK, Codex or Pi. OpenCode and GitHub Copilot stay bundled. (#3645)
+- Archon no longer falls back to `claude` when no default provider is configured. A default is chosen only when you set one, or when exactly one provider is installed. This affects binary installs where `archon setup` never ran and Docker deployments whose `.env` has no `DEFAULT_AI_ASSISTANT` line, unless a project sets `assistant:` in its `.archon/config.yaml`. Workflows fail before they start and chat messages fail with `No default provider: set 'defaultAssistant' in ~/.archon/config.yaml or run archon setup`. To fix it, add `defaultAssistant: claude` (or your provider) to `~/.archon/config.yaml`, or `DEFAULT_AI_ASSISTANT=claude` to the Docker `.env`. (#3645)
 - A workflow whose `when:` could never be evaluated now fails to load with an error naming the node, instead of loading and skipping that node on every run. This covers grouping parentheses, malformed comparisons, a trailing invalid clause such as `A || <garbage>`, `when: 'false'` used to disable a node, and a numeric operator against a non-numeric literal such as `$score.output > 'high'`. (#3911)
 - The legacy bundled workflows are removed. A fresh install ships only the `sdlc` pack, so `run pr` and `run review` each resolve to one workflow again. The legacy `archon-*` workflows deprecated since v0.10.0 and `archon-assist` no longer ship, and neither do the commands under `.archon/commands/defaults/` or the `archon-review-block` include block. A run paused before the upgrade still resumes from the source it captured. To keep one, copy its YAML from [`.archon/workflows/defaults/legacy/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/workflows/defaults/legacy) into your project or global `.archon/workflows/`, and copy every command it names from [`.archon/commands/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/commands/defaults) into the matching `.archon/commands/`. `archon-idea-to-pr`, `archon-plan-to-pr` and `archon-issue-review-full` also need `archon-review-block.yaml` from the same folder, which they include. A copied workflow whose commands are missing fails with a command-not-found error. (#3526)
 

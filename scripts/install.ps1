@@ -3,10 +3,17 @@
 #
 # Usage: irm https://archon.diy/install.ps1 | iex
 #
+# Options:
+#   -Providers <ids> - Comma-separated providers to install (claude, codex, pi).
+#                      An empty value installs none. Without it, the installer asks.
+#                      Releases up to 0.11.1 bundle their providers and have no
+#                      `archon provider`; pin one with -Providers ''.
+#
 # Options (via environment variables):
-#   $env:VERSION       - Specific version to install (default: latest)
-#   $env:INSTALL_DIR   - Installation directory (default: $env:USERPROFILE\.archon\bin)
-#   $env:SKIP_CHECKSUM - Set to "true" to skip checksum verification (not recommended)
+#   $env:VERSION          - Specific version to install (default: latest)
+#   $env:INSTALL_DIR      - Installation directory (default: $env:USERPROFILE\.archon\bin)
+#   $env:SKIP_CHECKSUM    - Set to "true" to skip checksum verification (not recommended)
+#   $env:ARCHON_PROVIDERS - Same as -Providers; the parameter wins
 #
 # Examples:
 #   # Install latest
@@ -17,8 +24,13 @@
 #
 #   # Install to custom directory
 #   $env:INSTALL_DIR = "C:\tools\archon"; irm https://archon.diy/install.ps1 | iex
+#
+#   # Install with the Codex provider, without asking
+#   & ([scriptblock]::Create((irm https://archon.diy/install.ps1))) -Providers codex
 
 #Requires -Version 5.1
+param([string]$Providers)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -30,6 +42,15 @@ $BINARY_NAME  = "archon"
 $VERSION      = if ($env:VERSION)     { $env:VERSION }     else { "latest" }
 $INSTALL_DIR  = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { "$env:USERPROFILE\.archon\bin" }
 $SKIP_CHECKSUM = ($env:SKIP_CHECKSUM -eq "true")
+# Must match MAINTAINED_PROVIDER_IDS in packages/provider-contract/src/registration.ts;
+# scripts/test-install.sh enforces it.
+$PROVIDER_IDS = @('claude', 'codex', 'pi')
+# An explicit empty -Providers or ARCHON_PROVIDERS installs none; only an absent one asks.
+# Under `irm | iex` the script runs in the caller's scope, where PSBoundParameters is unset.
+$boundParameters = Get-Variable -Name PSBoundParameters -ValueOnly -ErrorAction SilentlyContinue
+$PROVIDER_SELECTION = if ($null -ne $boundParameters -and $boundParameters.ContainsKey('Providers')) { $boundParameters['Providers'] }
+                      elseif (Test-Path Env:ARCHON_PROVIDERS) { $env:ARCHON_PROVIDERS }
+                      else { $null }
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -201,10 +222,73 @@ function Add-ToUserPath {
 }
 
 # ---------------------------------------------------------------------------
+# Provider selection
+# ---------------------------------------------------------------------------
+# Turns a comma- or space-separated selection into provider ids, rejecting anything
+# that is not a maintained provider.
+function ConvertTo-ProviderIds {
+    param([string]$Selection)
+    $ids = @($Selection -split '[,\s]+' | Where-Object { $_ -ne '' })
+    foreach ($id in $ids) {
+        if ($id -notin $PROVIDER_IDS) {
+            throw "Unknown provider '$id'. Choose from: $($PROVIDER_IDS -join ', ')"
+        }
+    }
+    return ,$ids
+}
+
+# Returns $null when there is no console to ask, so the caller installs none.
+function Read-ProviderSelection {
+    if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { return $null }
+    while ($true) {
+        # Read-Host throws in a -NonInteractive session, which UserInteractive does not reveal.
+        try {
+            $answer = Read-Host "Which providers should Archon install? ($($PROVIDER_IDS -join ', '), comma-separated; empty for none)"
+        } catch {
+            return $null
+        }
+        try {
+            return ,(ConvertTo-ProviderIds -Selection $answer)
+        } catch {
+            Write-Err $_.Exception.Message
+        }
+    }
+}
+
+function Install-Providers {
+    param([string]$Archon, [string[]]$Ids)
+    if ($Ids.Count -eq 0) {
+        Write-Warn "No providers installed. AI workflows and chat need one; install it with:"
+        Write-Host "  archon provider install <$($PROVIDER_IDS -join '|')>"
+        Write-Host "  (or run: archon setup)"
+        return
+    }
+    Write-Info "Installing providers: $($Ids -join ' ')"
+    & $Archon provider install @Ids
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Archon is installed, but installing providers failed."
+        Write-Err "Retry with: archon provider install $($Ids -join ' ')"
+        exit 1
+    }
+    Write-Ok "Providers installed: $($Ids -join ' ')"
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 function Main {
     Show-Banner
+
+    # --- Provider selection (validated before anything is downloaded) ---
+    $providerIds = $null
+    if ($null -ne $PROVIDER_SELECTION) {
+        try {
+            $providerIds = ConvertTo-ProviderIds -Selection $PROVIDER_SELECTION
+        } catch {
+            Write-Err $_.Exception.Message
+            exit 1
+        }
+    }
 
     # --- Architecture ---
     Write-Info "Detecting architecture..."
@@ -296,6 +380,16 @@ function Main {
             Write-Warn "The binary may not work correctly in this environment."
             Write-Warn "Verify manually with: $destBinary version"
         }
+
+        # --- Providers ---
+        if ($null -eq $providerIds) {
+            $providerIds = Read-ProviderSelection
+            if ($null -eq $providerIds) {
+                Write-Info "No console to ask which providers to install; installing none."
+                $providerIds = @()
+            }
+        }
+        Install-Providers -Archon $destBinary -Ids $providerIds
 
         # --- Getting started ---
         Write-Host ""
