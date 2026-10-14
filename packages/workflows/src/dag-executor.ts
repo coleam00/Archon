@@ -6806,7 +6806,7 @@ async function executeLoopNode(
         { suspension: serializeNodeStateRecord(suspended) }
       );
       if (!paused) {
-        if (loopTotalCostUsd !== undefined || loopTotalTokens !== undefined) {
+        if (loopTotalCostUsd !== undefined || loopTotalTokens !== undefined || loopTokensUnknown) {
           await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
         }
         return deferredLoopOutput;
@@ -9025,6 +9025,12 @@ async function executeComposeFanOutNode(
         loopBodyScopes: [],
       };
       await runLayers(instanceCtx);
+      // Every instance exit carries the work it already paid for.
+      const instanceUsage: Pick<ComposeInstanceOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> = {
+        ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
+        ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
+        tokensUnknown: instanceCtx.totalTokensUnknown,
+      };
       const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
       if (failed.length > 0) {
         // An instance node's typed provider failure is the instance's, unchanged: quota
@@ -9035,9 +9041,7 @@ async function executeComposeFanOutNode(
           output: '',
           error: failed[0].error ?? 'composed instance node failed',
           ...(providerFailure !== undefined ? { providerFailure } : {}),
-          ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
-          ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
-          tokensUnknown: instanceCtx.totalTokensUnknown,
+          ...instanceUsage,
         };
         try {
           const failedRecord = finishNodeExecution(
@@ -9075,6 +9079,7 @@ async function executeComposeFanOutNode(
         return {
           status: 'ambiguous',
           output: '',
+          ...instanceUsage,
           error:
             `composed instance ${snapshot.identity} stopped without a terminal state; ` +
             'automatic replay is unsafe',
@@ -9086,9 +9091,7 @@ async function executeComposeFanOutNode(
         ...(terminal.structuredOutput !== undefined
           ? { structuredOutput: terminal.structuredOutput }
           : {}),
-        ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
-        ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
-        tokensUnknown: instanceCtx.totalTokensUnknown,
+        ...instanceUsage,
       };
       try {
         const completedRecord = finishNodeExecution(
@@ -9147,6 +9150,7 @@ async function executeComposeFanOutNode(
       ...serializeNodeOutput(execution),
       ...(totalCostUsd !== undefined ? { costUsd: totalCostUsd } : {}),
       ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
+      ...(tokensUnknown ? { tokensUnknown: true } : {}),
     };
   }
 

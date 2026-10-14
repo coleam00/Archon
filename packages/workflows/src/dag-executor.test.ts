@@ -3,6 +3,7 @@ import { isApprovalContext } from './schemas/workflow-run';
 import { settlingProvider } from './test-settling-provider';
 import { readNodeRecordEvent, nodeInvocationKey } from './node-record-reader';
 import { foldDagResumeSnapshot } from './dag-resume-snapshot';
+import { inspectResumableRun } from './executor';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { NodeEventWriteError } from './node-event-write';
 import { buildTerminalRecord } from './terminal-record';
@@ -7270,6 +7271,74 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       { input: 0, output: 0 }
     );
     expect(eventTokenTotal).toEqual({ input: 100, output: 10 });
+  });
+
+  it('keeps a cold-resumed run token total unknown when a prior node could not count', async () => {
+    const store = createMockStore();
+    const deps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('resume-unknown-tokens');
+    const workflow = {
+      name: 'resume-unknown-tokens',
+      nodes: [
+        { id: 'step1', kind: 'agent', source: { kind: 'inline', prompt: 'One.' } },
+        {
+          id: 'step2',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'Two.' },
+          depends_on: ['step1'],
+          retry: { max_attempts: 1, delay_ms: 1 },
+        },
+      ] as DagNode[],
+    };
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      if (calls === 1) {
+        yield { type: 'agent_message_chunk', text: 'first output' };
+        yield { type: 'result', sessionId: 's1', cost: 0.1, tokensUnknown: true };
+      } else {
+        // No assistant output fails step2 after step1's row is durable.
+        yield { type: 'result', sessionId: 's2' };
+      }
+    });
+    await executeDagWorkflow(dagOptions({ deps, cwd: testDir, workflow, workflowRun }));
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+
+    // Cold resume reads the persisted rows through the same handoff the executor uses.
+    const rows = persistedEvents(store);
+    store.getDagResumeSnapshot.mockImplementation(async id => foldDagResumeSnapshot(rows, id));
+    const inspection = await inspectResumableRun(deps, workflowRun);
+    if (!inspection) throw new Error('Expected the failed run to be resumable');
+    (store.updateWorkflowRun as ReturnType<typeof mock>).mockClear();
+
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'second output' };
+      yield {
+        type: 'result',
+        sessionId: 's3',
+        cost: 0.2,
+        tokens: { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 },
+      };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd: testDir,
+        workflow,
+        workflowRun,
+        priorCompletedNodes: inspection.priorCompletedNodes,
+        priorUsage: inspection.priorUsage,
+      })
+    );
+
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    const usage = runUsageWrites(store).at(-1);
+    expect(usage?.total_cost_usd).toBeCloseTo(0.3);
+    expect(usage?.total_tokens_unknown).toBe(true);
+    expect(usage?.total_tokens_in).toBeNull();
+    expect(usage?.total_tokens_out).toBeNull();
+    expect(usage?.total_cache_read_tokens).toBeNull();
+    expect(usage?.total_cache_write_tokens).toBeNull();
   });
 
   it('keeps raw loop_group output schemaless on resume for a present undeclared field', async () => {
@@ -34021,7 +34090,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
    *  'running' until the pause attempt, then the external 'failed'. */
   function createExternallyFailedStore(
     externalStatus: 'failed' | 'cancelled' = 'failed'
-  ): IWorkflowStore {
+  ): MockWorkflowStore {
     const store = createMockStore();
     let pauseAttempted = false;
     store.pauseWorkflowRun = mock(() => {
@@ -34147,6 +34216,47 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     expect(events).not.toContain('node_failed');
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('interactive loop gate that loses the pause CAS keeps unknown-only usage', async () => {
+    // An unknown resume baseline leaves both cost and tokens unreported for the query.
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Here is the plan.' };
+      yield { type: 'result', sessionId: 'loop-session-race', tokensUnknown: true };
+    });
+    const store = createExternallyFailedStore();
+    const workflowRun = makeWorkflowRun();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'pause-race-unknown-loop',
+          nodes: [
+            {
+              id: 'refine',
+              kind: 'loop',
+              loop: {
+                fresh_context: false,
+                prompt: 'Refine the plan.',
+                until: 'APPROVED',
+                max_iterations: 10,
+                interactive: true,
+                gate_message: 'Review the plan.',
+              },
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    expect(
+      persistedEvents(store).filter(event => event.event_type === 'node_deferred_usage')
+    ).toHaveLength(1);
+    const snapshot = await foldDagResumeSnapshot(persistedEvents(store), workflowRun.id);
+    expect(snapshot.tokensUnknown).toBe(true);
+    expect(snapshot.tokens).toBeUndefined();
   });
 
   it('interactive loop-group gate that loses the pause CAS keeps only its started record', async () => {
@@ -38528,6 +38638,70 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
         expect(snapshot.costUsd).toBeCloseTo(0.2);
       });
     }
+  }
+
+  // A cancel after the instance's paid query either stops the instance between its nodes
+  // (no terminal state) or lands after it completed; both exits must keep its usage.
+  for (const instanceStop of ['mid-instance', 'after-instance'] as const) {
+    it(`keeps paid unknown-token work when a composed fan-out is cancelled (${instanceStop})`, async () => {
+      await writeBlock(
+        [
+          'name: compose-blk',
+          'description: Token accounting',
+          'nodes:',
+          '  - id: work',
+          '    prompt: Work.',
+          ...(instanceStop === 'mid-instance'
+            ? ['  - id: more', '    prompt: More.', '    depends_on: [work]']
+            : []),
+        ].join('\n')
+      );
+      let calls = 0;
+      let cancelled = false;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        yield { type: 'agent_message_chunk', text: 'Done.' };
+        yield {
+          type: 'result',
+          sessionId: 's',
+          cost: calls === 1 ? 0.1 : 0.2,
+          ...(calls === 1
+            ? { tokens: { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 } }
+            : { tokensUnknown: true }),
+        };
+        if (calls === 2) cancelled = true;
+      });
+      const store = createMockStore();
+      store.getWorkflowRunStatus.mockImplementation(async () =>
+        cancelled ? 'cancelled' : 'running'
+      );
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'cancelled-compose',
+            nodes: [
+              { id: 'first', kind: 'agent', source: { kind: 'inline', prompt: 'First.' } },
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                depends_on: ['first'],
+                fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_done' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('cancelled-compose-run'),
+        })
+      );
+
+      expect(calls).toBe(2);
+      const usage = runUsageWrites(store).at(-1);
+      expect(usage?.total_cost_usd).toBeCloseTo(0.3);
+      expect(usage?.total_tokens_unknown).toBe(true);
+      expect(usage?.total_tokens_in).toBeNull();
+    });
   }
 
   it('executes one instance per item inside the parent run and aggregates in input order', async () => {
