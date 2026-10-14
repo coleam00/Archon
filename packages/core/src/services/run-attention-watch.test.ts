@@ -764,6 +764,17 @@ describe('waitForRunAttention', () => {
 
         expect(await wait('parent', { deadlineMs: 50 })).toMatchObject({ kind: 'owner_lost' });
       });
+
+      // Only the child that finished last continues the parent, and the rows do not say
+      // which one that was.
+      test('once released, any finished child can be the live owner', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        reachableOwners = new Set(['c2']);
+
+        expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+      });
     });
 
     test('a chain longer than the bound is unreadable, not an assumed state', async () => {

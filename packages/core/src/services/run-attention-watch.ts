@@ -157,7 +157,8 @@ async function ownerRequired(
  * Resolve the sub-run tree under `run` while retaining whether its current state needs a
  * live process. A parent blocked on children is never its own item: the walk goes depth
  * first through the children in item order. The first child that has attention wins;
- * failing that, the first that needs an owner; otherwise nobody is needed.
+ * failing that, the first that needs an owner (any finished child's, once the gate is
+ * released); otherwise nobody is needed.
  */
 async function resolveRun(store: RunAttentionReadStore, run: WorkflowRun): Promise<RunResolution> {
   return resolveFrom(store, run, [run], new Set([run.id]));
@@ -207,14 +208,23 @@ async function resolveFrom(
       attention.kind === 'blocked_on_child' ||
       (isApprovalContext(approval) &&
         isFanOutBlockReleased(approval, id => children.find(child => child.id === id)?.status));
-    let ownerNeeded: RunResolution | undefined;
+    const ownerNeeded: Extract<RunResolution, { kind: 'owner_required' }>[] = [];
     for (const child of children) {
       if (!released && isTerminalRunStatus(child.status)) continue;
       const resolution = await resolveFrom(store, child, [...executionChain, child], visited);
       if (resolution.kind === 'attention') return resolution;
-      if (resolution.kind === 'owner_required') ownerNeeded ??= resolution;
+      if (resolution.kind === 'owner_required') ownerNeeded.push(resolution);
     }
-    return ownerNeeded ?? { kind: 'ownerless' };
+    const [first] = ownerNeeded;
+    if (!first) return { kind: 'ownerless' };
+    // Once released, whichever child finished last continues the parent and the rows do
+    // not record which one that is, so any of their owners proves the parent owned.
+    if (!released || ownerNeeded.length === 1) return first;
+    return {
+      ...first,
+      ownerCandidateIds: [...new Set(ownerNeeded.flatMap(r => r.ownerCandidateIds))],
+      recordedOwner: ownerNeeded.find(r => r.recordedOwner)?.recordedOwner,
+    };
   }
 
   // A terminal child's hook is expected to continue its parent, in the child's process.
