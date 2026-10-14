@@ -7,7 +7,10 @@ import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
 import { WorkflowNotResumableError } from '@archon/workflows/store';
 import type { getConversationById } from '@archon/core/db/conversations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
-import { WorkflowSourceUnavailableError } from '@archon/workflows/executor';
+import {
+  WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
+} from '@archon/workflows/executor';
 import {
   resumeWorkflowContinuation,
   wakeDueWorkflowContinuations,
@@ -613,6 +616,31 @@ describe('workflow continuation scanner', () => {
       logs.restore();
     }
     expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+    expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('manual resume warns for unverifiable source metadata without a path or due cursor', async () => {
+    const paused = run('manual-source-invalid', 'paused', {});
+    const sourceError = new WorkflowSourceIntegrityError('invalid recorded source metadata');
+    mockResumeWorkflow.mockResolvedValue(paused);
+    mockResolveRunWorkflow.mockResolvedValue({
+      ok: false,
+      message: sourceError.message,
+      sourceError,
+    });
+    const logs = captureLogLines();
+    try {
+      expect(await resumeWorkflowRunFromServer(host, paused)).toBe(false);
+      expect(logs.lines).toHaveLength(1);
+      expect(logs.lines[0]).toMatchObject({ level: 40, runId: paused.id });
+      expect(logs.lines[0]?.msg).toContain('path unavailable');
+      expect(logs.lines[0]?.msg).toContain(`archon workflow resume ${paused.id}`);
+      expect(logs.lines[0]?.msg).toContain(`archon workflow abandon ${paused.id}`);
+    } finally {
+      logs.restore();
+    }
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
   });
 

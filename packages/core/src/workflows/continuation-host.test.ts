@@ -421,6 +421,93 @@ for (const read of ['manifest', 'directory', 'file'] as const) {
   });
 }
 
+test('temporary discovery reads keep retrying through resolution and recover', async () => {
+  const root = await sourceFixture();
+  const manifest = { ...(await loadWorkflowSource(root)).manifest };
+  await fs.unlink(join(root, 'source.txt'));
+  const relativePath = 'project/.archon/workflows/deliver.yaml';
+  const workflowPath = join(root, relativePath);
+  const content =
+    'name: deliver\ndescription: Test workflow\nnodes:\n  - id: done\n    bash: echo done\n';
+  await fs.mkdir(join(root, 'project/.archon/workflows'), { recursive: true });
+  await fs.writeFile(workflowPath, content);
+  const manifestPath = join(root, 'manifest.json');
+  const hash = createHash('sha256').update(content).digest('hex');
+  manifest.digest = createHash('sha256').update(`${relativePath}\0${hash}\n`).digest('hex');
+  manifest.byte_count = content.length;
+  manifest.scopes = ['project'];
+  await fs.writeFile(manifestPath, JSON.stringify(manifest));
+  const capture = await loadWorkflowSource(root);
+  const candidate = run('transient-discovery', 'paused', {
+    wait: {
+      owner: 'node',
+      kind: 'time',
+      nodeId: 'delay',
+      waitingSince: '2026-08-24T10:00:00Z',
+      resumeAt: '2026-08-24T11:00:00Z',
+    },
+    workflow_source: { ...capture.manifest, root },
+  });
+  const { resolveRunWorkflow } = await import('./resolve-run-workflow');
+  const { createWorkflowDeps } = await import('./store-adapter');
+  const deps = createWorkflowDeps();
+  mockListDueWorkflowContinuations.mockResolvedValue([candidate]);
+  mockDeferWorkflowContinuation.mockClear();
+  mockWarn.mockClear();
+  const resume = mock(async () => {
+    const result = await resolveRunWorkflow(deps, candidate, root, {});
+    return result.ok
+      ? {
+          kind: 'accepted' as const,
+          run: candidate,
+          settled: Promise.resolve({ success: true as const, workflowRunId: candidate.id }),
+        }
+      : { kind: 'unavailable' as const, reason: result.message, sourceError: result.sourceError };
+  });
+  const cause = Object.assign(new Error('temporary descriptor shortage'), { code: 'EMFILE' });
+  const readFile = fs.readFile;
+  const reader = spyOn(fs, 'readFile').mockImplementation((path, options) => {
+    if (path === workflowPath && options === 'utf-8') return Promise.reject(cause);
+    return readFile(path, options);
+  });
+  try {
+    const { resolveContinuationWorkflow } = await import('@archon/workflows/executor');
+    await expect(resolveContinuationWorkflow(deps, candidate, root)).rejects.toMatchObject({
+      cause: [
+        {
+          filename: 'deliver.yaml',
+          errorType: 'read_error',
+          error: expect.stringContaining('EMFILE'),
+        },
+      ],
+    });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const now = new Date(Date.parse('2026-08-24T11:00:00Z') + attempt * 60_000);
+      const outcomes = await wakeDueWorkflowContinuations(store, now, resume);
+      expect(outcomes[0]?.kind).toBe('unavailable');
+      expect(mockDeferWorkflowContinuation).toHaveBeenLastCalledWith(
+        candidate.id,
+        new Date(now.getTime() + 60_000).toISOString(),
+        { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00Z' }
+      );
+    }
+  } finally {
+    reader.mockRestore();
+  }
+  const outcomes = await wakeDueWorkflowContinuations(
+    store,
+    new Date('2026-08-24T12:00:00Z'),
+    resume
+  );
+  expect(resume).toHaveBeenCalledTimes(6);
+  expect(outcomes[0]?.kind).toBe('accepted');
+  expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(5);
+  expect(
+    mockWarn.mock.calls.filter(([, message]) => message.includes('This host stopped'))
+  ).toHaveLength(0);
+  expect(candidate.status).toBe('paused');
+});
+
 for (const failure of [
   'json',
   'shape',
