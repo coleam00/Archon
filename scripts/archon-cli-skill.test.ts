@@ -134,6 +134,7 @@ nodes:
       type: object
       properties:
         question: {type: string}
+        topic: {type: string}
       required: [question]
 ${indent(ask)}
 `);
