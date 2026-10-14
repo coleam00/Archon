@@ -235,6 +235,11 @@ const ROW_NODE_STATUS: Partial<Record<string, RowNodeStatus>> = {
   node_skipped_prior_success: 'completed',
 } satisfies Partial<Record<WorkflowEventType, RowNodeStatus>>;
 
+const ROW_APPROVAL_STATUS: Partial<Record<string, 'paused' | 'running'>> = {
+  approval_requested: 'paused',
+  approval_received: 'running',
+} satisfies Partial<Record<WorkflowEventType, RowWorkflowStatus>>;
+
 /** SSE payload shapes the console dashboard reacts to — a typed contract for the hand-built JSON. */
 interface WorkflowStatusSsePayload {
   type: 'workflow_status';
@@ -256,11 +261,7 @@ interface WorkflowStatusSsePayload {
  */
 export const DASHBOARD_SOURCE_EVENT_TYPES: readonly WorkflowEventType[] =
   WORKFLOW_EVENT_TYPES.filter(
-    type =>
-      type in ROW_WORKFLOW_STATUS ||
-      type in ROW_NODE_STATUS ||
-      type === 'approval_requested' ||
-      type === 'approval_received'
+    type => type in ROW_WORKFLOW_STATUS || type in ROW_NODE_STATUS || type in ROW_APPROVAL_STATUS
   );
 
 /**
@@ -293,30 +294,21 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
     return JSON.stringify(payload);
   }
 
-  if (row.event_type === 'approval_requested') {
+  const approvalStatus = ROW_APPROVAL_STATUS[row.event_type];
+  if (approvalStatus) {
     const payload: WorkflowStatusSsePayload = {
       type: 'workflow_status',
       runId,
       workflowName: '',
-      status: 'paused',
+      status: approvalStatus,
       timestamp,
-      approval: {
-        nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
-        message: dataStr(data, 'message') ?? '',
-      },
-    };
-    return JSON.stringify(payload);
-  }
-
-  // Decision recorded → the run leaves the paused gate; trigger a refetch so the
-  // approval banner clears. The real next status arrives via the refetch.
-  if (row.event_type === 'approval_received') {
-    const payload: WorkflowStatusSsePayload = {
-      type: 'workflow_status',
-      runId,
-      workflowName: '',
-      status: 'running',
-      timestamp,
+      approval:
+        approvalStatus === 'paused'
+          ? {
+              nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
+              message: dataStr(data, 'message') ?? '',
+            }
+          : undefined,
     };
     return JSON.stringify(payload);
   }
