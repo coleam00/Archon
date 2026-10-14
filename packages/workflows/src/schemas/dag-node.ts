@@ -725,6 +725,90 @@ export const haltNodeSchema = dagNodeBaseSchema.extend({
 /** DAG node that cancels the workflow run with a reason string */
 export type HaltNode = z.infer<typeof haltNodeSchema>;
 
+/**
+ * How an attention wait is answered; it fixes the node's output contract, so it is
+ * always a literal. See `ATTENTION_OUTPUT_FORMATS`.
+ */
+export const attentionFormSchema = z.enum(['message', 'approval', 'select', 'multi_select']);
+export type AttentionForm = z.infer<typeof attentionFormSchema>;
+
+/**
+ * One answer a `select` or `multi_select` attention wait accepts. The id is the wire
+ * value the answer carries and the next node reads; kebab-case keeps it one CLI token.
+ */
+export const attentionOptionSchema = z.strictObject({
+  id: z
+    .string()
+    .regex(
+      AGENT_ID_REGEX,
+      "must be kebab-case (lowercase letters, digits, single hyphens — e.g. 'use-main')"
+    ),
+  label: z.string().min(1).optional(),
+});
+export type AttentionOption = z.infer<typeof attentionOptionSchema>;
+
+/**
+ * The options of an attention wait, literal or resolved at pause time from an upstream
+ * output. Both pass this one schema, so a referenced list obeys the literal rules.
+ */
+export const attentionOptionsSchema = z
+  .array(attentionOptionSchema)
+  .min(1, 'must declare at least one option')
+  .superRefine((options, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, option] of options.entries()) {
+      if (seen.has(option.id))
+        ctx.addIssue({
+          code: 'custom',
+          path: [index, 'id'],
+          message: `'${option.id}' is declared more than once`,
+        });
+      seen.add(option.id);
+    }
+  });
+
+/** The answers an `approval` attention wait accepts. */
+export const APPROVAL_ATTENTION_OPTIONS: readonly AttentionOption[] = [
+  { id: 'approve' },
+  { id: 'reject' },
+];
+
+const attentionTextOutput = { type: 'string' } as const;
+
+/** The output contract each attention form fixes: what the next node reads. */
+export const ATTENTION_OUTPUT_FORMATS = {
+  message: {
+    type: 'object',
+    properties: { text: attentionTextOutput },
+    required: ['text'],
+    additionalProperties: false,
+  },
+  approval: {
+    type: 'object',
+    properties: {
+      decision: { type: 'string', enum: APPROVAL_ATTENTION_OPTIONS.map(option => option.id) },
+      text: attentionTextOutput,
+    },
+    required: ['decision', 'text'],
+    additionalProperties: false,
+  },
+  select: {
+    type: 'object',
+    properties: { decision: { type: 'string' }, text: attentionTextOutput },
+    required: ['decision', 'text'],
+    additionalProperties: false,
+  },
+  multi_select: {
+    type: 'object',
+    properties: {
+      decisions: { type: 'array', items: { type: 'string' } },
+      text: attentionTextOutput,
+    },
+    required: ['decisions', 'text'],
+    additionalProperties: false,
+  },
+} as const satisfies Record<AttentionForm, Record<string, unknown>>;
+
 export const waitUntilTimestampSchema = z.string().datetime();
 const waitUntilValueSchema = z
   .string()
@@ -746,9 +830,38 @@ const waitConfigVariantSchemas = [
     event: z.string().trim().min(1, "'wait.event' must not be empty"),
     deadline_ms: z.number().int().positive().max(MAX_DURABLE_WAIT_MS),
   }),
-  z.strictObject({
-    attention: z.string().trim().min(1, "'wait.attention' must not be empty"),
-  }),
+  z
+    .strictObject({
+      attention: z.string().trim().min(1, "'wait.attention' must not be empty"),
+      form: attentionFormSchema.optional(),
+      options: z
+        .union([
+          attentionOptionsSchema,
+          z
+            .string()
+            .refine(
+              value => parseWholeOutputRef(value)?.field !== undefined,
+              "must be a list of options or one whole '$node.output.<field>' reference"
+            ),
+        ])
+        .optional(),
+    })
+    .superRefine((value, ctx) => {
+      const form = value.form ?? 'message';
+      const takesOptions = form === 'select' || form === 'multi_select';
+      if (takesOptions && value.options === undefined)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['options'],
+          message: `is required for form '${form}'`,
+        });
+      if (!takesOptions && value.options !== undefined)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['options'],
+          message: `is only valid for forms 'select' and 'multi_select', not '${form}'`,
+        });
+    }),
 ] as const;
 const waitConfigKeys = new Set(
   waitConfigVariantSchemas.flatMap(schema => Object.keys(schema.shape))
@@ -770,7 +883,13 @@ export type WaitCondition =
   | { kind: 'duration'; durationMs: number }
   | { kind: 'until'; timestamp: string }
   | { kind: 'event'; event: string; deadlineMs: number }
-  | { kind: 'attention'; message: string };
+  | {
+      kind: 'attention';
+      message: string;
+      form: AttentionForm;
+      /** Literal options, or the whole `$node.output.<field>` reference resolved at pause time. */
+      options?: AttentionOption[] | string;
+    };
 
 export function waitCondition(config: WaitConfig): WaitCondition {
   if (config.duration_ms !== undefined) {
@@ -782,7 +901,12 @@ export function waitCondition(config: WaitConfig): WaitCondition {
   if (config.event !== undefined) {
     return { kind: 'event', event: config.event, deadlineMs: config.deadline_ms };
   }
-  return { kind: 'attention', message: config.attention };
+  return {
+    kind: 'attention',
+    message: config.attention,
+    form: config.form ?? 'message',
+    ...(config.options !== undefined ? { options: config.options } : {}),
+  };
 }
 
 export const workflowWaitResultSchema = z.object({
@@ -804,6 +928,13 @@ export const WAIT_NODE_OUTPUT_FORMAT = {
   required: ['status', 'waited_ms'],
   additionalProperties: false,
 } as const;
+
+/** The output contract a wait fixes: its condition's result, or an attention form's answer. */
+export function waitOutputFormat(wait: WaitConfig): Record<string, unknown> {
+  return wait.attention !== undefined
+    ? ATTENTION_OUTPUT_FORMATS[wait.form ?? 'message']
+    : WAIT_NODE_OUTPUT_FORMAT;
+}
 
 export const waitNodeSchema = dagNodeBaseSchema.extend({
   kind: z.literal('wait'),
@@ -891,7 +1022,8 @@ export type IncludeDirective = z.infer<typeof includeDirectiveSchema>;
  * bounds a sliding-window concurrency pool (default 5 — documented + defeatable, so
  * an author can't trivially create a runaway N-wide layer, #1961). It is also the serial
  * escape from the shared-checkout collision: `max_parallel: 1` runs the children one at a
- * time, so no two of them contend for the parent checkout's path lock. `max_parallel` caps
+ * time, so no two of them contend for the parent checkout's path lock. The window counts
+ * UNFINISHED children: a paused child keeps its slot until it finishes (#4044). `max_parallel` caps
  * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
  * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
  * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/
@@ -1093,8 +1225,8 @@ export const GATE_AND_HALT_IGNORED_FIELDS: readonly string[] = [
 /**
  * Fields a wait cannot consume; its output contract and lifecycle are engine-owned.
  * `output_format` is absent because a wait node REJECTS it outright (the schema's
- * superRefine: the engine fixes the wait's own `{ status, waited_ms, … }` contract),
- * so it never reaches this warn set.
+ * superRefine: the engine fixes the wait's own contract, `waitOutputFormat`), so it
+ * never reaches this warn set.
  */
 export const WAIT_NODE_IGNORED_FIELDS: readonly string[] = [
   ...BASH_NODE_AI_FIELDS,
@@ -1908,7 +2040,7 @@ export const dagNodeSchema = z
         ...base,
         kind: 'wait',
         wait: data.wait,
-        output_format: WAIT_NODE_OUTPUT_FORMAT,
+        output_format: waitOutputFormat(data.wait),
       } as WaitNode;
     }
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {

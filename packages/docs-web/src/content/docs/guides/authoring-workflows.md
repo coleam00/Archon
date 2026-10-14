@@ -61,7 +61,7 @@ Workflows live in `.archon/workflows/` relative to the working directory:
 
 The two directories form a fixed package boundary: `.archon/workflows/<pack>/<workflow>/`. A packaged workflow contains exactly one YAML definition; bare `command:` and named `script:` references resolve only from its own `commands/` and `scripts/` directories, with no shared or cross-scope fallback. Included workflows retain their own resource folder, so two workflows may reuse names such as `review.md` without collisions.
 
-Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules, not workflow definitions or `script:` targets. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
+Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules and `.md` documents, not workflow definitions or `script:` targets. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
 
 The same tree works under `~/.archon/workflows/` for home-scoped workflows. Existing flat `.archon/workflows/foo.yaml`, one-level grouped YAML, shared `.archon/commands/`, and shared `.archon/scripts/` remain supported for compatibility.
 
@@ -213,7 +213,7 @@ nodes:
 | `loop` | object | Iterative AI prompt until a declared completion condition is met. See [Loop Nodes](/guides/loop-nodes/) |
 | `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a declared completion condition is met. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 | `approval` | object | Pauses workflow for human review. See [Approval Nodes](/guides/approval-nodes/) |
-| `wait` | object | Durably pauses the run until a time, bounded external event, or explicit outside action. See [Durable waits](#durable-waits) |
+| `wait` | object | Durably pauses the run until a time, bounded external event, or an answer to an attention wait. See [Durable waits](#durable-waits) |
 | `cancel` | string | Terminates the workflow run with a reason string. Uses existing cancellation plumbing — in-flight parallel nodes are stopped |
 | `include` | string | Name of another workflow whose nodes are inlined into this DAG at load time as a namespaced sub-DAG. Optional `with:` (named inputs → the block's `$INPUTS.<name>`) and, to fan the composed body out over a runtime list **inside this run**, `fan_out` — see [Composing Another Workflow](#composing-another-workflow-with-include) and [Fanning out a composed block](#fanning-out-a-composed-block-inside-the-run-include--fan_out) |
 | `workflow` | string | Name of another workflow to run as a governed **child sub-run** at execution time — its own run record, gates, artifacts, and cost. Optional `input` (untyped data string → child's `$ARGUMENTS`) **or** `with:` (named inputs → child's `$INPUTS.<name>`; mutually exclusive with `input`), `isolation` (`'inherit'` \| `'worktree'`), and `fan_out` (one child per item of a runtime list; optional `as:` names the per-item `$INPUTS` channel). See [Launching a Separate Governed Run](#launching-a-separate-governed-run-with-workflow) and [Workflow Signature](#workflow-signature-inputs-returns-and-inputs) |
@@ -777,7 +777,7 @@ Both sources coexist — inline agents and on-disk agents are both available to 
 
 ## Durable waits
 
-A `wait:` node records its condition in the workflow run, changes the run to `paused`, and returns the worker slot. Time and event waits carry an absolute deadline and resume through the ordinary DAG resume path when it arrives, enforced by the process that owns the run (see below). An action-required wait has no deadline and resumes only when an operator explicitly resumes the run. Restarting Archon preserves either kind.
+A `wait:` node records its condition in the workflow run, changes the run to `paused`, and returns the worker slot. Time and event waits carry an absolute deadline and resume through the ordinary DAG resume path when it arrives, enforced by the process that owns the run (see below). An attention wait has no deadline: it needs attention until someone answers it, and the answered run continues on its own. Restarting Archon preserves every kind.
 
 Declare exactly one condition:
 
@@ -802,16 +802,49 @@ nodes:
     depends_on: [checks]
     wait:
       attention: >-
-        Re-run the failed external check, then resume this run.
+        Re-run the failed external check, then answer with what you found.
 ```
 
 - `duration_ms` starts once, then persists the resulting absolute time. An early manual resume pauses again against the same time; it does not restart the duration.
 - `until` accepts an ISO-8601 timestamp after `$node.output` substitution.
 - `event` requires `deadline_ms`. If no matching signal arrives by the deadline, the node completes with `status: expired`; event waits cannot remain open forever.
-- `attention` is a non-empty message describing an outside action. Archon shows it with the run id and offers Resume and Abandon. It is never selected by the continuation scheduler; after completing the action, run `archon workflow resume <run-id>` or use the Web UI Resume action.
+- `attention` is a non-empty question, with runtime references, that the run needs answered. It takes an optional `form` and, for some forms, `options`; see [Attention waits](#attention-waits).
 - `duration_ms` and `deadline_ms` are capped at 1000 years so their persisted RFC3339 timestamps always remain executable.
 
-A satisfied wait produces the fixed structured output `{ status, waited_ms, event?, payload? }`. `status` is `satisfied` or `expired`; an explicitly resumed `attention` wait is `satisfied`. Downstream `when:` or `until_bash` wiring can branch without parsing prose. `output_format`, `retry`, and `always_run` cannot be set on a wait; the engine owns its output and continuation lifecycle.
+A satisfied time or event wait produces the fixed structured output `{ status, waited_ms, event?, payload? }`. `status` is `satisfied` or `expired`. An attention wait's output is its answer, in the shape its form fixes. Downstream `when:` or `until_bash` wiring can branch without parsing prose. `output_format`, `retry`, and `always_run` cannot be set on a wait; the engine owns its output and continuation lifecycle.
+
+### Attention waits
+
+An attention wait pauses until someone answers it, in the form it declares. Archon does not route the question or care who answers: a person in the console, an agent through the CLI, or a handler workflow all use the same answer channel.
+
+```yaml
+  - id: ask
+    depends_on: [plan]
+    wait:
+      attention: "$plan.output.question"
+      form: select                       # message (default) | approval | select | multi_select
+      options:                           # select and multi_select only
+        - { id: use-main, label: "Base on main" }
+        - { id: use-dev }
+```
+
+| Form | Answer accepted | The next node reads |
+|---|---|---|
+| `message` | free text, which may be empty | `{ text }` |
+| `approval` | `approve` or `reject`, plus optional text | `{ decision, text }` |
+| `select` | exactly one declared option id, plus optional text | `{ decision, text }` |
+| `multi_select` | one or more distinct declared option ids, plus optional text | `{ decisions, text }` |
+
+- `options` is required for `select` and `multi_select` and a load error on the other forms. Option ids are unique and kebab-case; `label` is display text only.
+- `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`. It is read when the wait pauses and must pass the same rules: an array of `{ id, label? }` with unique kebab-case ids and at least one entry. If it does not, the wait node fails with an error naming the producer; it never pauses with options nobody can answer. When the producer declares `output_format`, the loader also checks that the field is an array of `{ id, label? }`.
+- `form` is always a literal, because it fixes the node's output contract, so a strict `$ask.output.decision` reference is checked at load time.
+- An undeclared option is refused on every surface. In the `approval` form `reject` is an answer like any other and never cancels the run; wire `cancel:` with `when: "$ask.output.decision == 'reject'"` if a rejection should end it.
+
+Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /api/workflows/runs/<run-id>/answer`, or the console. `approve`, `reject` and `respond <option>` work as shorthand on every surface: `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses the option of the same id. An answer names the occurrence it was meant for, so an answer to an earlier pause of the same run is refused. The answer is recorded with the surface it came through and the time (`answeredVia`, `answeredAt` on the wait, and a `wait_answered` event). The run stays `paused` until a continuation host (`archon serve`, or `archon workflow wake`) continues it; answering through the CLI without `--json` continues it in that process.
+
+A wait paused before attention waits took answers has no pause id. It reads as a `message` wait, takes no answer, and continues with `archon workflow resume <run-id>`. A bare resume also completes any `message` wait, with empty text; the other forms refuse it until they are answered.
+
+Before forms existed, an attention wait produced `{ status, waited_ms }`. It now produces only its answer, so a workflow that reads `status` or `waited_ms` from an attention wait fails to load; read `text` instead. A run paused at such a wait usually resumes from the workflow source it captured, which still reads the old fields, so it cannot resume: abandon it and start a fresh run of the edited workflow.
 
 Signal one exact run through the authenticated API:
 
@@ -824,11 +857,11 @@ curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/signal \
 
 Use a Better Auth session cookie instead of `X-Archon-User` when browser authentication is enabled. The header is only for a trusted reverse proxy or loopback client; an auth-disabled local install can omit it. The event name must match the run's open wait. The signal and its audit event are committed together; duplicate or wrong-run signals do nothing.
 
-The process that owns the run enforces a `duration_ms`/`until`/`event` deadline itself: a foreground `archon workflow run` and the child started by `--detach` stay alive through the wait and re-execute the run when its deadline arrives, so a CLI-only install needs no server. If the owner has exited, [`archon workflow wake`](/reference/cli/#workflow-wake) resumes due waits without a server; a running `archon serve` performs the same scan automatically. The same scan continues a gate that was answered without being resumed, for example through `--json`. A run can always be advanced by hand with `archon workflow resume <run-id>`. The `/signal` endpoint above requires the server; [`archon workflow signal`](/reference/cli/#workflow-signal) signals the same exact event occurrence from the CLI.
+The process that owns the run enforces a `duration_ms`/`until`/`event` deadline itself: a foreground `archon workflow run` and the child started by `--detach` stay alive through the wait and re-execute the run when its deadline arrives, so a CLI-only install needs no server. If the owner has exited, [`archon workflow wake`](/reference/cli/#workflow-wake) resumes due waits without a server; a running `archon serve` performs the same scan automatically. The same scan continues a gate or attention wait that was answered without being resumed, for example through `--json`. A run can always be advanced by hand with `archon workflow resume <run-id>`. The `/signal` endpoint above requires the server; [`archon workflow signal`](/reference/cli/#workflow-signal) signals the same exact event occurrence from the CLI.
 
 Read `metadata.wait.resumeAt` from the run before sending the signal and pass it back unchanged. It identifies the open wait occurrence, so a delayed retry from an earlier loop iteration cannot satisfy a later wait for the same event.
 
-A wait may be the sole terminal sink in a `loop_group` body. Archon then escalates the persisted cursor to the group and rechecks the group's completion condition after the wait completes. `max_iterations` still bounds uninterrupted autonomous iterations, but an explicit resume from a terminal `attention` wait permits one fresh iteration even after that bound; each further probe requires another operator resume. A non-terminal body wait is rejected because resuming a partial iteration would otherwise require replaying already-completed sibling work. Waits below more than one nested `loop_group` boundary are not supported.
+A wait may be the sole terminal sink in a `loop_group` body. Archon then escalates the persisted cursor to the group and rechecks the group's completion condition after the wait completes. `max_iterations` still bounds uninterrupted autonomous iterations, but continuing past a terminal `attention` wait (an answer, or a resume of a wait from before answers) permits one fresh iteration even after that bound; each further probe needs another answer. The next iteration reads the answer as `$LOOP_PREV.<wait-id>.output`. A non-terminal body wait is rejected because resuming a partial iteration would otherwise require replaying already-completed sibling work. Waits below more than one nested `loop_group` boundary are not supported.
 
 Durable waits are not supported in container-isolated workflows. The server cannot reconstruct the CLI-owned container context needed for an automatic continuation, so Archon rejects this combination before creating the run. Automatic quota-window continuation is likewise skipped for container runs.
 
@@ -1260,8 +1293,10 @@ guess.
 
 The reference is valid only as the whole value of a `command:` or `script:` binding, and
 only for a producer that executes against the checkout. Anything else is a load error.
-Every `bash:` and `script:` node also receives its own execution identity, including this
-attempt's observation, as JSON in the `ARCHON_NODE_EXECUTION` environment variable. The
+Every `bash:` and `script:` node, and the agent's shell in an AI node (see
+[Durable state documents](#durable-state-documents) for the provider exception), also
+receives its own execution identity, including this attempt's observation, as JSON in the
+`ARCHON_NODE_EXECUTION` environment variable. The
 implement workflow compares these two observations to decide whether an invocation
 changed anything since it started.
 
@@ -1459,11 +1494,8 @@ a guarantee; a prompt instructing an AI node to append is a convention it may no
 Use `archon state` for a standing agent's small JSON ledger, cursor or index when updates
 can overlap, need audit history, or run on several hosts. `$STATE_DIR` remains the free-form
 file area for caches and non-JSON data, with its existing concurrency limitations.
-State documents currently require the SQL store (SQLite or PostgreSQL); file-store support
-is separate follow-up work. AI nodes do not yet receive `WORKFLOW_ID`, so a write an agent
-makes by calling `archon state` from its shell is recorded as a CLI write from outside any
-run, not as its run and node. Commit through a bash or script node when the run must
-be recorded. Container runs are not supported because the CLI and store are not delivered there.
+State documents use the selected store: files, SQLite or PostgreSQL. Container runs are
+not supported because the CLI and store are not delivered there.
 
 A document belongs to a project, shared by all its workflows, or to install scope
 (`--install`), shared across projects. A node reaches only its run's project and install
@@ -1532,6 +1564,17 @@ record their run ID and node path. Invoke the JSON argv in `ARCHON_CLI_COMMAND` 
 of assuming `archon` is on PATH. If the nested CLI opens a store that does not know the
 run, it refuses the write (exit `5`) instead of writing to another project. Operators can inspect
 `archon state log review/ledger` and correct a value using `put --if-revision` or `patch --if-revision`.
+
+An AI node's agent can also write state itself, by running `archon state` from its shell.
+On Claude, Codex, Pi and Copilot the agent's shell receives the same `WORKFLOW_ID` and
+`ARCHON_NODE_EXECUTION`, and `ARCHON_CLI_COMMAND` on the host (empty in a container run),
+so the write records the run and the AI node's path. Configured project env cannot override
+these keys. OpenCode runs every node in one shared server that receives no per-node
+environment: an OpenCode agent's shell carries whatever identity the process hosting that
+server had. Its write is recorded as a CLI write from outside any run when Archon was started
+outside a run, and as the launching node when the run was started from another run's node. Commit
+through a script node when the run must be recorded. Any process that sets a run's `WORKFLOW_ID` and matching
+`ARCHON_NODE_EXECUTION` is recorded as that run: the writer is provenance, not access control.
 
 The ledger prevents lost state updates; it does not make an external review/comment and
 the state commit one transaction. Use resource admission to serialize work that must not
@@ -2095,7 +2138,7 @@ uncached input is `input - cacheRead - cacheWrite`. An absent cache field means 
 provider did not report it; `0` means the provider reported zero. Which rows carry the
 field at all depends on the sink: the transcript carries it only on a row that reports its
 own spend, while the persisted row carries it on every `node_completed` row except a
-`loop_group` roll-up. So a sum over `node_completed.data.tokens` counts a composed fan-out's
+`loop_group` roll-up and a row whose token count is incomplete (see below). So a sum over `node_completed.data.tokens` counts a composed fan-out's
 scope once per level, and `data.accounting` names each row's role. Run metadata exposes the
 same totals as `total_tokens_in`, `total_tokens_out`, `total_cache_read_tokens`, and
 `total_cache_write_tokens`. A cache total sums every contributing node that reported that
@@ -2120,14 +2163,35 @@ carry that spend, except a composed-instance terminal, which the resume keeps as
 authoritative source for its scope (#3508). JSONL `workflow_complete`
 carries the successful run's totals as `cost_usd` and `tokens`; a DAG-owned terminal
 `workflow_error` carries the same aggregate when work reported usage before failure. These
-match run metadata `total_cost_usd` and `total_tokens_*`. On a row that reports its own spend,
+match run metadata `total_cost_usd` and `total_tokens_*`, except that an incomplete token
+count leaves `tokens` off both rows (see below). On a row that reports its own spend,
 an absent `cost_usd` means the provider reported no cost — Codex reports none — while `0` means
 it reported zero. On a restatement row an absent `cost_usd` means the scope's spend is on the
 rows that row names. Claude reports a session's running total, so Archon subtracts the source
 session's total from its native session transcript when a node resumes or forks, including
 across Archon processes. If that persisted state is missing or invalid, the earlier total is
-unknown and the node's `cost_usd` is absent rather than over-counted. A run that spent nothing
-on AI, such as a bash-only workflow, carries no `cost_usd` rather than `0`. Governance nodes do not yet have complete terminal
+unknown and the first result's cost is absent rather than over-counted. Later results can
+report incremental cost from the newly known baseline, so the node's `cost_usd` can be a
+partial cost that excludes the first interval. Claude tokens cover the main agent, forked
+skills, and subagents included in that cost: input (including cache reads and writes),
+output, cache read, and cache write. Fresh sessions report the full totals;
+resumes and forks subtract the persisted baseline on all four axes. If the token baseline
+is missing or incomplete (including older transcripts that stored only output tokens or
+positive cost with no model totals), or totals are inconsistent, token usage is absent and
+Archon logs `claude.query_tokens_unknown`. Tokens remain unknown for the rest of that query,
+even if later results supply usable totals. The node's tokens also remain absent across
+structured-output reasks and later loop iterations after an unknown interval; cost
+subtraction continues independently.
+An incomplete count is recorded, not dropped: the node's `execution.spend.tokens` (persisted
+as `data.spend.tokens`) is `{ "source": "unavailable", "reason": "incomplete" }` and the row
+carries no `tokens`. Every total containing that node, through retries, loops, fan-outs,
+composed instances, child runs, and resume, is incomplete too: the containing rows omit
+`tokens`, and run metadata sets `total_tokens_unknown: true` with `total_tokens_in`,
+`total_tokens_out`, `total_cache_read_tokens`, `total_cache_write_tokens`, and
+`total_cache_partial` set to `null`. Cost totals keep summing every reported cost. Do not
+sum `tokens` across rows as a run total when any row is incomplete.
+A run that spent nothing on AI, such as a bash-only workflow, carries no `cost_usd` rather
+than `0`. Governance nodes do not yet have complete terminal
 transcript-row coverage, so read usage from the rows that exist rather than treating
 an absent row as zero spend.
 
@@ -2232,8 +2296,8 @@ cleanly everywhere and then fails at the node when it is run somewhere it can't 
 If a workflow only makes sense against a git repo, say so in its `description:`.
 
 A worktree that fails for an ordinary git reason — no disk space, a permission problem, a
-branch that already exists — fails the node the same way, with the underlying git error
-classified into a readable message.
+branch that has diverged from its remote — fails the node the same way, with a readable
+message.
 
 ### Running sub-runs side by side
 
@@ -2342,6 +2406,9 @@ consequences worth planning for:
 
 - Cost scales with `items.length`, not with `max_parallel`. Bound the list in the producer
   node, not here.
+- A child that pauses keeps its slot until it finishes, so unanswered children can hold
+  the whole window and later items wait. Paused children use no process or provider, so
+  raising `max_parallel` costs nothing while they wait.
 - Abandoning the parent cascade-cancels at most 500 descendant runs (`MAX_CASCADE_RUNS`).
   A fan-out wider than that can leave children uncancelled and still billing; they have to
   be abandoned individually. A run-tree-wide budget ceiling is tracked in
@@ -2487,31 +2554,29 @@ branch, or `max_parallel: 1` when children should run serially. Workflow-level
 still enforces the checkout guard. Neither declaration is required to share a checkout
 within one fan-out.
 
-#### Gates: around a fan-out, never inside one
+#### Children that pause
 
-A fan-out is an **autonomous** stretch of a run. A parent run has a single approval slot, so
-N children cannot each hold it — a child that pauses at a gate fails the fan-out node
-instead of pausing the tree ([#2438](https://github.com/coleam00/Archon/issues/2438)).
+A fan-out child may pause like any run: at an `approval:` gate, an interactive loop, or a
+`wait:`. It stays paused as its own run and its own queue item, and nothing cancels it for
+pausing. Its siblings keep running to their own terminal states.
 
-That is the intended shape, not a missing feature: gates **bracket** the autonomous middle.
+- **The parent waits.** Once no more children can start, the parent pauses on a `fan_out`
+  gate that lists every unfinished child (`item <index>: run <id>`) and how many items have
+  not started yet. `archon workflow wait` on the parent wakes with the first child, in item
+  order, that needs an answer.
+- **Answer each child by its own run id.** Approving or rejecting the parent is refused with
+  a redirect naming its children. When the children it waits on finish, the parent
+  continues on its own, starts any items that were waiting, and joins exactly as above.
+  A child that failed before the pause is reported as failed, not run again.
+- **A paused child keeps its `max_parallel` slot.** With `max_parallel: 1`, items after a
+  paused child wait until it is answered and finishes, so children never overlap in a
+  shared checkout.
+- **Abandoning the parent** cascade-cancels its paused children with the rest of the tree.
+- **Abandoning one child** leaves the parent paused. Resume the parent; it reads that
+  child's outcome as cancelled, and the join treats it like any cancelled child.
 
-- An `approval:` node **before** the fan-out is an ordinary parent gate — approve, then the
-  expansion runs.
-- An `approval:` node **after** it resumes correctly: the completed fan-out node is skipped
-  on resume and `$<id>.output` still holds the full aggregate.
-- A gate **inside a 1:1 sub-run** (no `fan_out:`) also works — the child pauses, the tree
-  pauses, and approving the child by its run id auto-resumes the parent.
-
-The one asymmetry to know about: the *same* child workflow pauses correctly when spawned
-1:1 and hard-fails when fanned out. If you wrap an existing gated workflow in `fan_out:`,
-move the gate into the parent DAG around the node.
-
-A paused child is the single case where a fan-out cancels a run it did not have to. A pause
-is not a terminal state and the parent cannot hand its one approval slot to N children, so
-the child would wait for something it can never be given — cancelling it (tagged
-`fan_out_gate`, so removing the gate and resuming re-drives it) is what makes it terminal.
-The child is cancelled as soon as the pause is seen. Its siblings still run to their own
-terminal states, and the node fails afterwards.
+Gates around the node work as usual: an `approval:` before the fan-out is an ordinary
+parent gate, and one after it resumes with `$<id>.output` holding the full aggregate.
 
 #### Resume, and what `child_index` keys
 
@@ -2519,10 +2584,12 @@ Children are keyed by their position in the item list (`metadata.child_index`), 
 what makes a parent resume cheap and predictable:
 
 - Completed children are threaded from their existing rows — never re-run, never re-billed.
-- Failed children are re-driven in place, in the same row.
-- Children Archon itself cancelled — in practice a gate rejection (below) — are tagged and
-  re-driven too, so *"remove the gate and resume"* actually completes the node. A child
-  **you** cancelled out of band stays cancelled and is never resurrected.
+- When you resume a fan-out node that failed, failed children are re-driven in place, in
+  the same row. Children Archon itself cancelled (for example an orphan whose item
+  disappeared) are tagged and re-driven too. A child **you** cancelled out of band stays
+  cancelled and is never resurrected.
+- When the parent continues after its paused children finish, nothing that already
+  settled is re-driven: a failed child stays failed in the aggregate.
 - A child left `running` or `pending` by an interrupted process is **not** auto-cancelled —
   Archon can't tell a crash orphan from a live run elsewhere. The node fails with the child's
   run id and tells you to wait or abandon it.
@@ -2611,9 +2678,9 @@ Two hard limits, both enforced at load time before any upstream node can spend:
 - **No suspension inside the complete block closure.** The parent has no durable per-item
   pause cursor, so a block containing an `approval:` node, `wait:` node, interactive
   `loop:`/`loop_group:`, or a nested workflow that can pause is rejected. Put the pause in
-  the parent around the node, use governed child runs, or invoke the block 1:1. Durable
-  interactive fan-out instances are a possible future extension tracked in
-  [#2810](https://github.com/coleam00/Archon/issues/2810), not a promise of the current shape.
+  the parent around the node, or invoke the block 1:1. When items may pause, use a
+  `workflow:` node with `fan_out:` instead: each item is its own run and may pause and be
+  answered on its own (see [Children that pause](#children-that-pause)).
 - **No `isolation:`** — a composed block runs inside this run and has no checkout of its own
   to isolate. Instances share the parent's checkout and run concurrently up to
   `max_parallel`, as `workflow:` fan-out children do; instances that write must coordinate

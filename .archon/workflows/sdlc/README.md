@@ -92,9 +92,11 @@ forge source is for host execution: a container execution receives neither
 
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
-request, and `publish-review` upserts the one marked review comment. Triage's
-labels go through `gh` whichever source the run selected, because the forge
-contract has no label operation for issues yet. No node files discoveries: the
+request, and `publish-review` upserts the one marked review comment. Every pack
+label is declared in `.shared/labels.ts`, and every stage writes labels through its
+`writeLabels`, which adds and removes them as a delta so labels another writer adds
+survive. On the `forge` source it still writes the whole label set back, because
+the forge contract has no single-label add or remove yet. No node files discoveries: the
 outcome relays them to the operator. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
 the selected source, and fails unless the result reads back — so "the write
@@ -121,8 +123,9 @@ and the agents never see it.
 Every `script:` node here is TypeScript on Bun, under its own component's
 `scripts/` directory. Logic more than one of them needs lives once in
 [`.shared/`](.shared), imported by relative path with the extension written
-(`../../.shared/report.ts`). That directory is reserved for modules: nothing in it
-is a workflow or a named script target, and a node that names one fails at load.
+(`../../.shared/report.ts`). That directory is reserved for modules and for the
+pack's default policy documents under `.shared/policy/`: nothing in it is a workflow
+or a named script target, and a node that names one fails at load.
 
 The repository validates them where they live. `.archon/workflows/tsconfig.json`
 is the owning configuration — `bun run type-check` compiles that project. Lint
@@ -182,12 +185,26 @@ existing, so the pack stays portable: a repository without one loses nothing. A
 new pack prompt that writes or judges code carries the same sentence.
 
 A project's policy for a decision the pack makes, such as what triage accepts, is
-one more sidecar document, found in the same places. The pack ships a default for
-each policy document a prompt names, and the project's own document replaces it.
-A policy document may be only a pointer to documents the project already has, and
-the agent reads what it points to. A prompt names only the policy documents its
-decision needs, and agents interpret them; anything that must be exact, such as
-label names, stays typed configuration.
+one more sidecar document, kept at `.archon/sdlc/policy/<topic>.md`. The pack ships
+a default for each policy document a prompt names, in
+[`.shared/policy/`](.shared/policy). A project's own file replaces its default
+whole; with no project file, the default applies. To change one, copy the default
+to `.archon/sdlc/policy/` and reword it. A policy document may be only a pointer to
+documents the project already has, and the agent reads what it points to. A prompt
+names only the policy documents its decision needs, through the shared sentence
+ending "the SDLC policy files this decision names, at `.archon/sdlc/policy/`,
+falling back to the pack's defaults"; triage names `triage.md`. Agents interpret
+them; anything that must be exact, such as label names, stays typed configuration.
+
+A node reaches the defaults through its workflow's `policy` script node. A run
+captures its source before it starts, from a binary's embedded bundle as from a
+source checkout, and runs its scripts from that capture, so
+[`triage/scripts/policy.ts`](triage/scripts/policy.ts) finds `.shared/policy/`
+from its own location and the node binds that directory into the prompt with `with:`. The script hands over
+the directory only; the agent chooses between the project's file and the default,
+and no script opens either. The default is a file rather than text in the prompt
+because a prompt carrying the default would hold it even after a project replaced
+it.
 
 ## A node's streams are the operator's channel
 

@@ -6,9 +6,8 @@
  * records which agents consume the vendor, powering the agent → credential
  * matrix in GET /api/auth/providers and the connect-time validation.
  *
- * Requires the provider registry to be bootstrapped
- * (registerBuiltinProviders + registerCommunityProviders) — all process
- * entrypoints do this before serving requests.
+ * Requires the provider registry to be bootstrapped (registerHostProviders) —
+ * all process entrypoints do this before serving requests.
  */
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';

@@ -131,6 +131,9 @@ function installProviderProcessErrorHandlers(
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
   const { registerHostProviders } = await import('@archon/core/providers/register-host-providers');
+  const { setDeprecationReporter } = await import('@archon/providers');
+  // stderr, like a deprecated workflow's notice: it survives --json's log silencing.
+  setDeprecationReporter((_provider, notice) => console.warn(notice));
   if (BUNDLED_IS_BINARY) {
     const { claimPiExtensionProcessError } =
       await import('@archon/providers/pi/extension-error-broker');
@@ -575,14 +578,14 @@ async function main(): Promise<number> {
 
     switch (command) {
       case 'state': {
-        const { stateCommand } = await loadRoute(() => import('./commands/state'), {
-          database: true,
-        });
-        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
-        const { createCliWorkflowDeps } = await import('./utils/workflow-deps');
-        const { getDatabaseType } = await import('@archon/core/db/connection');
+        const database = await usesDatabaseStore();
+        const { stateCommand } = await loadRoute(() => import('./commands/state'), { database });
+        const { createCliWorkflowHost } = await import('./utils/workflow-host');
+        const storeKind = database
+          ? (await import('@archon/core/db/connection')).getDatabaseType()
+          : 'files';
         return await stateCommand(
-          createSqlWorkflowHost(createCliWorkflowDeps()),
+          await createCliWorkflowHost(),
           subcommand,
           positionals.slice(2),
           {
@@ -596,7 +599,7 @@ async function main(): Promise<number> {
             ...(values.install === true ? { install: true } : {}),
             ...(values.raw === true ? { raw: true } : {}),
           },
-          { storeKind: getDatabaseType() }
+          { storeKind }
         );
       }
       case 'trigger': {
@@ -721,6 +724,7 @@ async function main(): Promise<number> {
           workflowApproveCommand,
           workflowRejectCommand,
           workflowRespondCommand,
+          workflowAnswerCommand,
           workflowCleanupCommand,
           workflowResetSessionsCommand,
           workflowEventEmitCommand,
@@ -732,9 +736,14 @@ async function main(): Promise<number> {
         // The host's deps capture GitHub App auth when built, so commands that can
         // execute a workflow initialize it first. A misconfigured App fails here,
         // before any run row exists; query commands stay usable without it.
-        const executesWorkflow = ['run', 'resume', 'approve', 'reject', 'respond'].includes(
-          subcommand ?? ''
-        );
+        const executesWorkflow = [
+          'run',
+          'resume',
+          'approve',
+          'reject',
+          'respond',
+          'answer',
+        ].includes(subcommand ?? '');
         const workflowHost = await createCliWorkflowHost(executesWorkflow);
         switch (subcommand) {
           case 'list': {
@@ -1064,7 +1073,8 @@ async function main(): Promise<number> {
               approveComment,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
             );
             break;
           }
@@ -1083,7 +1093,8 @@ async function main(): Promise<number> {
               rejectReason,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
             );
             break;
           }
@@ -1109,7 +1120,29 @@ async function main(): Promise<number> {
               respondText,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              values.occurrence as string | undefined
+            );
+            break;
+          }
+
+          case 'answer': {
+            const answerRunId = positionals[2];
+            const answerOccurrence = values.occurrence as string | undefined;
+            if (!answerRunId || answerOccurrence === undefined || positionals[3] !== undefined) {
+              return await fail(
+                jsonFlag,
+                'Usage: archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <text>] [--json]'
+              );
+            }
+            await workflowAnswerCommand(
+              workflowHost,
+              answerRunId,
+              answerOccurrence,
+              (values.choose as string[] | undefined) ?? [],
+              values.text as string | undefined,
+              jsonFlag,
+              effectiveCwd
             );
             break;
           }

@@ -1,5 +1,12 @@
 import { DefaultResourceLoader, getAgentDir } from '@earendil-works/pi-coding-agent';
 import type { ProviderConfig } from '@earendil-works/pi-coding-agent';
+import { createLogger } from '@archon/paths';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('provider.pi.resource-loader');
+  return cachedLog;
+}
 
 /**
  * In pi-coding-agent <= 0.67.x, DefaultResourceLoader and PackageManager
@@ -129,6 +136,13 @@ export function createPiResourceLoader(
  * extensions while the first is still live — re-introducing the very deadlock
  * this cache prevents. Time/idle-based reclamation belongs with isolation
  * cleanup (a future cross-package hook), not a blind cap here.
+ *
+ * A reload that never settles is not evicted either, for the same reason, and an
+ * abort cannot tell a wedged reload from a slow one (issue #3769). A retry waits
+ * on the same reload again: it succeeds once a slow reload settles, and times out
+ * again on a wedged one, which only a fresh process clears. Source and Docker
+ * hosts already run each Pi query in its own process, so a wedge persists only
+ * where Pi runs in-process (release binaries).
  */
 const reloadedExtensionLoaderCache = new Map<string, Promise<ReloadedExtensionLoader>>();
 
@@ -195,11 +209,15 @@ function extensionLoaderCacheKey(
  * Concurrency: the cache stores the in-flight Promise (not the resolved entry)
  * so concurrent same-layer nodes await a single shared `reload()` instead of
  * racing into two. A failed reload is evicted so the next call retries cleanly.
+ * `abortSignal` ends only this caller's wait, never the shared reload.
  */
 export async function getOrCreateReloadedExtensionLoader(
   cwd: string,
-  options: Pick<PiResourceLoaderOptions, 'systemPrompt' | 'additionalSkillPaths'> = {}
+  options: Pick<PiResourceLoaderOptions, 'systemPrompt' | 'additionalSkillPaths'> = {},
+  abortSignal?: AbortSignal
 ): Promise<ReloadedExtensionLoader> {
+  // An abort before waiting says nothing about the reload, so it leaves the cache alone.
+  if (abortSignal?.aborted) throw new Error('Query aborted');
   const key = extensionLoaderCacheKey(
     cwd,
     options.systemPrompt,
@@ -241,7 +259,20 @@ export async function getOrCreateReloadedExtensionLoader(
     // Evict on failure so a transient reload error doesn't poison the cache.
     pending.catch(() => reloadedExtensionLoaderCache.delete(key));
   }
-  return pending;
+  if (!abortSignal) return pending;
+  const shared = pending;
+  const waitStartedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      getLog().warn(
+        { cwd, waitedMs: Date.now() - waitStartedAt },
+        'pi.extension_reload_wait_aborted'
+      );
+      reject(new Error('Query aborted'));
+    };
+    abortSignal.addEventListener('abort', onAbort, { once: true });
+    shared.then(resolve, reject).finally(() => abortSignal.removeEventListener('abort', onAbort));
+  });
 }
 
 /**

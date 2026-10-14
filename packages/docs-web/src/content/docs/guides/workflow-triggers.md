@@ -22,7 +22,7 @@ Both hosts use the same admission records, so a server and a scheduled CLI comma
 
 ## Find runs needing your input
 
-The console's **Needs your input** banner lists every run waiting for a human, including triggered runs and runs older than the first page of the feed. Approval gates keep their decision and response controls. A `wait: attention` run shows its message with **Resume** and **Abandon** actions.
+The console's **Needs your input** banner lists every run that needs attention, including triggered runs and runs older than the first page of the feed. Approval gates keep their decision and response controls. A `wait: attention` run shows its question with answer controls for its form and an **Abandon** action; a wait paused before attention waits took answers shows **Resume** instead.
 
 Keep the console open to receive live updates from runs started by another process. **Dismiss** hides an occurrence for this browser session; reloading or a new pause brings it back. Resuming still requires the server to have access to the run's working path.
 
@@ -172,7 +172,7 @@ If an admitted run has ambiguous ownership after a crash, inspect the request an
 
 ## Configure GitHub event starts
 
-Both `/webhooks/github` and `/webhooks/sources/:sourceInstanceId` accept bodies up to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** before authentication, including streamed deliveries without `Content-Length`. Archon stops reading at the first chunk crossing the limit and creates no receipt or workflow start. This webhook-only limit does not change other API routes; signature verification still covers exact received bytes on both routes, and accepted source deliveries still acknowledge after durable receipt intake.
+Every webhook route (`/webhooks/github`, `/webhooks/gitea`, and `/webhooks/sources/:sourceInstanceId`) accepts bodies up to **32 MiB (33,554,432 bytes)**, inclusive. A larger body receives HTTP **413** before its signature is checked, including a streamed delivery without `Content-Length`. Archon stops reading at the limit and creates no receipt or workflow start. Other API routes do not have this limit.
 
 GitHub event starts use an installed source plugin. The maintained plugin is temporarily housed in this repository; it has its own module entrypoint and does not require the GitHub chat adapter or an outbound GitHub token.
 
@@ -242,7 +242,7 @@ The following configuration starts `review-pull-request` when a pull request is 
 }
 ```
 
-The maintained GitHub source plugin supports issue and pull-request lifecycle events, issue or pull-request label changes, check-run changes, and commit-status changes. Selectors match an exact event kind and one of the configured actions. They can also restrict the repository, issue or pull-request number, and the predicates supported for that event kind. Input mappings copy a supported event field or supply a typed JSON literal. A required field that is unavailable rejects that binding instead of inventing a value.
+The maintained GitHub source plugin supports issue and pull-request lifecycle events, issue or pull-request label changes, comments created on an issue or pull request (`comment.changed` with action `created`, from GitHub's `issue_comment` event), check-run changes, and commit-status changes. A label change carries who made it, as the `label.actor.id` and `label.actor.login` fields, and a comment carries `comment.id`, `comment.author.id` and `comment.author.login`; the comment's text is not part of the event. Selectors match an exact event kind and one of the configured actions. They can also restrict the repository, issue or pull-request number, and the predicates supported for that event kind. Input mappings copy a supported event field or supply a typed JSON literal. A required field that is unavailable rejects that binding instead of inventing a value.
 
 The plugin authenticates the raw payload using the configured shared secret. The server validates its resolved receipt, verifies for a new delivery that the configured run-as users exist, and commits the receipt before returning success. Preparing and starting the run happen after the response, so a slow workflow never delays GitHub's delivery. An invalid signature creates no trusted receipt. A signed source event does not select the Archon user who runs the workflow. Every binding must name an authorized `runAsUserId`. The optional GitHub event actor remains provenance and never becomes an Archon credential selector.
 
@@ -251,8 +251,6 @@ On the first verified delivery, Archon records the source instance, delivery ID,
 GitHub does not automatically redeliver every failed webhook. Check delivery status in GitHub and use GitHub's explicit redelivery or your reconciliation process after a transport or processing failure. Archon retains safe receipt and disposition data for inspection; it does not retain the raw webhook body as a trigger archive.
 
 ## Start workflows from any signed webhook
-
-Both `/webhooks/github` and `/webhooks/sources/:sourceInstanceId` accept bodies up to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** before authentication, including streamed deliveries without `Content-Length`. Archon stops reading at the first chunk crossing the limit and creates no receipt or workflow start. This webhook-only limit does not change other API routes; signature verification still covers exact received bytes on both routes, and accepted source deliveries still acknowledge after durable receipt intake.
 
 The Standard Webhooks source plugin accepts the published [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md) `v1` HMAC-SHA256 scheme. It requires `webhook-id`, `webhook-timestamp`, and `webhook-signature`; vendor-specific signatures, `svix-*` aliases, and asymmetric signatures are unsupported. Every authenticated delivery with valid JSON evaluates every configured binding. Configure the sender to send only the events you need.
 

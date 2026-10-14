@@ -60,6 +60,11 @@ const forgeOperationDescriptions = {
   'workitem.view': 'Read a qualified work item',
   'workitem.create': 'Create an issue or recover its canonical marker',
   'workitem.labels.set': 'Set and verify the complete issue label set',
+  'workitem.label.add': 'Add one label to an issue or pull request, keeping the rest',
+  'workitem.label.remove': 'Remove one label from an issue or pull request, keeping the rest',
+  'workitem.list': 'List open issues and pull requests that carry one label',
+  'workitem.comment.upsert': 'Write the one marked comment on an issue or pull request',
+  'workitem.close': 'Close an issue with a reason and verify the result',
   'repo.labels.list': 'List repository label names',
   'repo.label.ensure': 'Explicitly ensure one repository label exists',
   'pr.view': 'Read a pull request by number or by qualified head',
@@ -187,7 +192,7 @@ const commandHelp: HelpEntry[] = [
     command: 'workflow',
     subcommand: 'wait',
     spec: 'workflow wait <run-id>',
-    description: 'Block until the run ends or needs a human decision',
+    description: 'Block until the run ends or needs attention',
   },
   {
     command: 'workflow',
@@ -247,6 +252,20 @@ const commandHelp: HelpEntry[] = [
     spec: 'workflow respond <run-id> <decision> [text]',
     description:
       "Resolve a paused gate with any of its declared decisions\n('approve'/'reject' are sugar for the dedicated commands)",
+  },
+  {
+    command: 'workflow',
+    subcommand: 'answer',
+    spec: 'workflow answer <run-id> --occurrence <id>',
+    description: 'Answer a paused attention wait in its declared form',
+    scopedFlags: [
+      {
+        spec: '--choose <id>',
+        description:
+          'A declared option to choose; repeat for a multi_select (omit for a message form)',
+      },
+      { spec: '--text <text>', description: 'Free text recorded with the answer' },
+    ],
   },
   {
     command: 'workflow',
@@ -817,7 +836,7 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--json',
     description:
-      'Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/cancel/abandon/resume)',
+      'Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/answer/cancel/abandon/resume)',
     owners: [],
   },
   {
@@ -826,6 +845,17 @@ const orderedFlags: FlagHelp[] = [
     owners: [
       { command: 'workflow', subcommand: 'status' },
       { command: 'workflow', subcommand: 'get' },
+    ],
+  },
+  {
+    spec: '--occurrence <id>',
+    description:
+      "For 'workflow approve/reject/respond/answer': refuse the answer unless the run is still paused at\nthis occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer)",
+    owners: [
+      { command: 'workflow', subcommand: 'approve' },
+      { command: 'workflow', subcommand: 'reject' },
+      { command: 'workflow', subcommand: 'respond' },
+      { command: 'workflow', subcommand: 'answer' },
     ],
   },
   {

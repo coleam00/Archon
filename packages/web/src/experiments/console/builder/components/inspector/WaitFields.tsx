@@ -29,7 +29,7 @@ export function WaitFields({
           { value: 'duration', label: 'Duration' },
           { value: 'until', label: 'Timestamp' },
           { value: 'event', label: 'Event' },
-          { value: 'attention', label: 'Outside action' },
+          { value: 'attention', label: 'Attention' },
         ]}
         onChange={(next): void => {
           onChange(
@@ -82,11 +82,16 @@ export function WaitFields({
         </>
       ) : (
         <TextField
-          label="Action message"
+          label="Question"
           value={data.attention ?? ''}
-          placeholder="Rerun the failed check, then resume this run."
+          placeholder="Which base should this branch use?"
           onChange={(attention): void => {
-            onChange({ attention });
+            // Keeps the authored form and options; this field edits only the question.
+            onChange({
+              attention,
+              ...(data.form !== undefined ? { form: data.form } : {}),
+              ...(data.options !== undefined ? { options: data.options } : {}),
+            });
           }}
         />
       )}

@@ -6,13 +6,21 @@ import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import type { ExecutionContext } from '../types';
 import { buildDockerExecTranscriptReadArgs } from './container-spawn';
-import type { SpendBaseline } from './session-spend';
+import type { BaselineModelUsage, SpendBaseline } from './session-spend';
 
 const costStateSchema = z.object({
   type: z.literal('cost-state'),
   sessionId: z.uuid(),
   totalCostUSD: z.number().nonnegative(),
-  modelUsage: z.record(z.string(), z.object({ outputTokens: z.number().int().nonnegative() })),
+  modelUsage: z.record(
+    z.string(),
+    z.object({
+      outputTokens: z.number().int().nonnegative(),
+      inputTokens: z.number().int().nonnegative().optional(),
+      cacheReadInputTokens: z.number().int().nonnegative().optional(),
+      cacheCreationInputTokens: z.number().int().nonnegative().optional(),
+    }) satisfies z.ZodType<BaselineModelUsage>
+  ),
   hasUnknownModelCost: z.literal(false).optional(),
 });
 const recordSchema = z.object({ type: z.string() }).passthrough();

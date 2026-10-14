@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { hostname } from 'node:os';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunLiveOwnerWatchEvent, RunLiveOwnerWatchResult } from './run-live-owner';
 import type { RunDoorbell } from './run-attention-watch';
@@ -55,6 +56,17 @@ const { DETACHED_RUN_STOP_HANDOFF_GRACE_MS, DETACHED_RUN_TERMINATION_MAX_MS } =
 // Fixtures
 // ---------------------------------------------------------------------------
 
+const localUid = process.getuid?.();
+const localOwner = {
+  execution_owner: {
+    host: hostname(),
+    pid: 4242,
+    ...(localUid === undefined ? {} : { uid: localUid }),
+  },
+};
+const foreignOwner = { execution_owner: { host: 'other-host.invalid', pid: 4242 } };
+
+/** Rows carry this host's execution-owner stamp unless a test says otherwise. */
 function putRun(id: string, over: Partial<WorkflowRun> = {}): WorkflowRun {
   const run = {
     origin: { conversationId: 'conv-1' },
@@ -66,7 +78,7 @@ function putRun(id: string, over: Partial<WorkflowRun> = {}): WorkflowRun {
     status: 'running',
     outcome: null,
     user_message: 'go',
-    metadata: {},
+    metadata: localOwner,
     started_at: new Date('2026-08-28T10:00:00.000Z'),
     completed_at: null,
     last_activity_at: null,
@@ -185,6 +197,71 @@ describe('waitForRunAttention', () => {
     });
     expect(mockGetWorkflowRun.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(rows.get('r1')).toEqual(before);
+  });
+
+  test('an owner on another host is unknown, not lost, and the wait keeps watching', async () => {
+    const before = putRun('r1', { status: 'running', metadata: foreignOwner });
+    reachableOwners = new Set();
+    const announced: unknown[] = [];
+
+    const result = await wait('r1', {
+      deadlineMs: 50,
+      onAttached: (...args: unknown[]) => {
+        announced.push(args);
+      },
+    });
+
+    expect(result).toEqual({ kind: 'deadline', runId: 'r1', observedStatus: 'running' });
+    expect(announced).toEqual([
+      ['running', { kind: 'unknown', recordedOwner: foreignOwner.execution_owner }],
+    ]);
+    expect(rows.get('r1')).toEqual(before);
+  });
+
+  test.skipIf(localUid === undefined)(
+    'an owner on this host under another user is unknown, not lost',
+    async () => {
+      putRun('r1', {
+        status: 'running',
+        metadata: { execution_owner: { host: hostname(), pid: 4242, uid: (localUid ?? 0) + 1 } },
+      });
+      reachableOwners = new Set();
+
+      expect(await wait('r1', { deadlineMs: 50 })).toMatchObject({ kind: 'deadline' });
+    }
+  );
+
+  test('a run that records no owner is unknown, not lost', async () => {
+    putRun('r1', { status: 'running', metadata: {} });
+    reachableOwners = new Set();
+    const announced: unknown[] = [];
+
+    expect(
+      await wait('r1', {
+        deadlineMs: 50,
+        onAttached: (...args: unknown[]) => {
+          announced.push(args);
+        },
+      })
+    ).toMatchObject({ kind: 'deadline' });
+    expect(announced).toEqual([['running', { kind: 'unknown', recordedOwner: undefined }]]);
+  });
+
+  test('a wait on an owner on another host still answers from the durable row', async () => {
+    putRun('r1', { status: 'running', metadata: foreignOwner });
+    reachableOwners = new Set();
+
+    expect(
+      await wait('r1', {
+        onAttached: () => {
+          putRun('r1', {
+            status: 'completed',
+            metadata: foreignOwner,
+            completed_at: new Date(),
+          });
+        },
+      })
+    ).toMatchObject({ kind: 'attention', attention: { kind: 'terminal', status: 'completed' } });
   });
 
   test('keeps an unproven ancestor waiting even when the child endpoint is absent', async () => {
@@ -446,7 +523,7 @@ describe('waitForRunAttention', () => {
     expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
   });
 
-  test('an action-required wait wakes with its authored message', async () => {
+  test('an attention wait wakes with its authored message', async () => {
     putRun('r1', {
       status: 'paused',
       metadata: {
@@ -463,11 +540,13 @@ describe('waitForRunAttention', () => {
     expect(await wait('r1')).toEqual({
       kind: 'attention',
       attention: {
-        kind: 'action_required',
+        kind: 'attention',
         runId: 'r1',
         nodeId: 'rerun-ci',
-        occurrence: 'wait:2026-08-28T10:00:00.000Z',
+        occurrence: 'legacy:rerun-ci',
         message: 'Rerun the failed check.',
+        form: 'message',
+        options: [],
       },
     });
   });
@@ -556,6 +635,41 @@ describe('waitForRunAttention', () => {
       });
     });
 
+    test.each([
+      ['another host', foreignOwner, 'deadline'],
+      ['this host', localOwner, 'owner_lost'],
+    ] as const)(
+      'an unclaimed child reads its owner from the parent on %s',
+      async (_where, parentOwner, expected) => {
+        putRun('parent', {
+          status: 'paused',
+          metadata: { ...blockedOn('child'), ...parentOwner },
+        });
+        putRun('child', { status: 'pending', parent_run_id: 'parent', metadata: {} });
+        reachableOwners = new Set();
+
+        expect(await wait('parent', { deadlineMs: 50 })).toMatchObject({ kind: expected });
+      }
+    );
+
+    test.each([
+      ['another host', foreignOwner, 'deadline'],
+      ['this host', localOwner, 'owner_lost'],
+    ] as const)(
+      'a direct wait on an unstamped running child reads its owner from the parent on %s',
+      async (_where, parentOwner, expected) => {
+        // A claimed child is `running` before its own stamp lands; its process is the parent's.
+        putRun('parent', {
+          status: 'paused',
+          metadata: { ...blockedOn('child'), ...parentOwner },
+        });
+        putRun('child', { status: 'running', parent_run_id: 'parent', metadata: {} });
+        reachableOwners = new Set();
+
+        expect(await wait('child', { deadlineMs: 50 })).toMatchObject({ kind: expected });
+      }
+    );
+
     test('a direct child wait can attach to the same ancestor owner', async () => {
       putRun('parent', { status: 'paused', metadata: blockedOn('child') });
       putRun('child', { status: 'running', parent_run_id: 'parent' });
@@ -584,6 +698,98 @@ describe('waitForRunAttention', () => {
       expect(await wait('parent')).toMatchObject({
         kind: 'attention',
         attention: { kind: 'unreadable', runId: 'parent', reason: 'child_run_missing' },
+      });
+    });
+
+    describe('a fan-out parent blocked on several children', () => {
+      const blockedOnAll = (...childRunIds: string[]) =>
+        gate({ type: 'fan_out', nodeId: 'work', childRunIds });
+
+      test('wakes with the first child that needs an answer, never the parent', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', {
+          status: 'paused',
+          parent_run_id: 'parent',
+          metadata: gate({ nodeId: 'c2-gate' }),
+        });
+
+        expect(await wait('parent')).toMatchObject({
+          kind: 'attention',
+          attention: {
+            kind: 'awaiting_response',
+            runId: 'c2',
+            respondTo: { runId: 'c2', nodeId: 'c2-gate' },
+          },
+        });
+      });
+
+      test('with no child needing an answer, watches the running child', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'running', parent_run_id: 'parent' });
+        putRun('c2', {
+          status: 'paused',
+          parent_run_id: 'parent',
+          metadata: {
+            wait: {
+              owner: 'node',
+              nodeId: 'hold',
+              kind: 'time',
+              waitingSince: '2026-08-28T10:00:00.000Z',
+              resumeAt: '2026-08-28T11:00:00.000Z',
+            },
+          },
+        });
+        reachableOwners = new Set(['c1']);
+
+        expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+        expect(mockWatchRunLiveOwner.mock.calls[0]?.[0]).toBe('c1');
+      });
+
+      // A finished child's hook stands down while the gate still waits on a sibling,
+      // so nothing owns that child: it must not be the run the waiter watches.
+      test('a finished child does not need an owner while a sibling is unfinished', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', { status: 'running', parent_run_id: 'parent' });
+        reachableOwners = new Set(['c2']);
+
+        expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+        expect(mockWatchRunLiveOwner.mock.calls.map(call => call[0])).not.toContain('c1');
+      });
+
+      test('the finished child needs an owner once it released the gate', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', { status: 'failed', completed_at: new Date(), parent_run_id: 'parent' });
+        reachableOwners = new Set();
+
+        expect(await wait('parent', { deadlineMs: 50 })).toMatchObject({ kind: 'owner_lost' });
+      });
+
+      // Only the child that finished last continues the parent, and the rows do not say
+      // which one that was.
+      test('once released, any finished child can be the live owner', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        reachableOwners = new Set(['c2']);
+
+        expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+      });
+
+      test('once released, an unreachable child on another host keeps the parent unknown', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', {
+          status: 'completed',
+          completed_at: new Date(),
+          parent_run_id: 'parent',
+          metadata: foreignOwner,
+        });
+        reachableOwners = new Set();
+
+        expect(await wait('parent', { deadlineMs: 50 })).toMatchObject({ kind: 'deadline' });
       });
     });
 

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   currentProcessOwner,
   isOwnerProvablyGone,
+  isSameOwner,
   parseProcessOwner,
   ProcessOwnerRecordError,
   type ProcessOwner,
@@ -12,6 +13,8 @@ import { createLogger } from '@archon/paths/logger';
 
 const log = createLogger('file-store');
 const queues = new Map<string, Promise<void>>();
+/** Tail of the callers still resolving their queue key; see `withFileStoreLock`. */
+let joining: Promise<unknown> = Promise.resolve();
 /** `lock` and `lock.break` paths this module linked but then failed to remove. */
 const stranded = new Set<string>();
 
@@ -156,10 +159,6 @@ async function readOwner(path: string): Promise<ProcessOwner | null> {
   return parseProcessOwner(record, path);
 }
 
-function sameOwner(a: ProcessOwner, b: ProcessOwner): boolean {
-  return a.host === b.host && a.pid === b.pid && a.instance === b.instance;
-}
-
 async function tryLink(source: string, target: string): Promise<boolean> {
   const { value } = await retryFileStoreHandles('link', target, async () => {
     try {
@@ -209,7 +208,7 @@ async function acquire(root: string, timeoutMs: number): Promise<() => Promise<v
         if (Date.now() >= deadline) throw new FileStoreLockHeldError(path, null);
         continue;
       }
-      if (stranded.has(path) && sameOwner(owner, currentProcessOwner)) {
+      if (stranded.has(path) && isSameOwner(owner, currentProcessOwner)) {
         log.warn({ path }, 'file_store.lock_reclaimed');
         await remove(path);
         stranded.delete(path);
@@ -224,14 +223,14 @@ async function acquire(root: string, timeoutMs: number): Promise<() => Promise<v
           stranded.delete(breaker);
           try {
             const now = await readOwner(path);
-            if (now && sameOwner(owner, now) && isOwnerProvablyGone(now)) await remove(path);
+            if (now && isSameOwner(owner, now) && isOwnerProvablyGone(now)) await remove(path);
           } finally {
             if (!(await discard(breaker))) stranded.add(breaker);
           }
           continue;
         }
         const breakOwner = await readOwner(breaker);
-        if (breakOwner && stranded.has(breaker) && sameOwner(breakOwner, currentProcessOwner)) {
+        if (breakOwner && stranded.has(breaker) && isSameOwner(breakOwner, currentProcessOwner)) {
           log.warn({ path: breaker }, 'file_store.lock_reclaimed');
           await remove(breaker);
           stranded.delete(breaker);
@@ -315,11 +314,18 @@ export async function withFileStoreLock<T>(
   operation: () => Promise<T>,
   timeoutMs = 10_000
 ): Promise<T> {
-  const key = await realpath(root);
-  const previous = queues.get(key) ?? Promise.resolve();
   let finish!: () => void;
   const pending = new Promise<void>(resolve => (finish = resolve));
-  queues.set(key, pending);
+  // Concurrent realpath calls settle in any order, so callers resolve their key one at a
+  // time; otherwise a later caller can join the queue first and commit before an earlier one.
+  const joined = joining.then(async () => {
+    const key = await realpath(root);
+    const previous = queues.get(key) ?? Promise.resolve();
+    queues.set(key, pending);
+    return { key, previous };
+  });
+  joining = joined.catch(() => undefined);
+  const { key, previous } = await joined;
   await previous;
   try {
     const release = await acquire(key, timeoutMs);

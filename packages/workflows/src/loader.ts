@@ -31,6 +31,7 @@ import { createLogger } from '@archon/paths';
 import { compileOutputSchema } from './structured-output';
 
 import {
+  attentionOptionSchema,
   dagNodeSchema,
   ignoredFieldsForNode,
   isOutputFormatEnforced,
@@ -826,6 +827,61 @@ function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'loop-group' 
 const GATE_ON_A_SHELL_NODE =
   "compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead";
 
+/** `attentionOptionSchema` as JSON Schema: the shape a producer's options field must declare. */
+const ATTENTION_OPTION_JSON_SCHEMA = z.toJSONSchema(attentionOptionSchema);
+
+/**
+ * Why a producer's `output_format` cannot yield attention options at `options`'s field,
+ * or undefined when it can or declares no schema (the pause-time check then owns it).
+ * The field must be an array whose items declare only `attentionOptionSchema`'s
+ * properties, with the same types, and require what it requires.
+ */
+function referencedOptionsShapeError(
+  options: string,
+  producerOf: (id: string) => DagNode | IncludeDirective | undefined
+): string | undefined {
+  const ref = parseWholeOutputRef(options);
+  if (ref?.field === undefined) return undefined;
+  const producer = producerOf(ref.nodeId);
+  if (producer === undefined || isIncludeDirective(producer)) return undefined;
+  let schema: unknown = producer.output_format;
+  if (schema === undefined) return undefined;
+  for (const key of ref.field.split('.')) {
+    const properties: unknown = isRecord(schema) ? schema.properties : undefined;
+    schema = isRecord(properties) ? properties[key] : undefined;
+  }
+  const items: unknown = isRecord(schema) && schema.type === 'array' ? schema.items : undefined;
+  const itemProperties: unknown = isRecord(items) ? items.properties : undefined;
+  const itemRequired: unknown = isRecord(items) ? items.required : undefined;
+  const { properties: optionProperties = {}, required: optionRequired = [] } =
+    ATTENTION_OPTION_JSON_SCHEMA;
+  const fits =
+    isRecord(items) &&
+    items.type === 'object' &&
+    isRecord(itemProperties) &&
+    Object.entries(itemProperties).every(([key, property]) => {
+      const optionProperty = optionProperties[key];
+      return (
+        isRecord(property) && isRecord(optionProperty) && property.type === optionProperty.type
+      );
+    }) &&
+    optionRequired.every(
+      key => key in itemProperties && Array.isArray(itemRequired) && itemRequired.includes(key)
+    );
+  if (fits) return undefined;
+  const expected = Object.entries(optionProperties)
+    .map(([key, property]) => {
+      const type = isRecord(property) ? String(property.type) : 'unknown';
+      return optionRequired.includes(key) ? `${key}: ${type}` : `${key}?: ${type}`;
+    })
+    .join('; ');
+  return `'${options}' must be an array of objects declaring only { ${expected} } in '${ref.nodeId}'s output_format`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * The load error for a `when:` that `parseWhenExpression` rejects. The grouping hint is
  * added only when a parenthesis sits outside a quoted literal, so a typo like
@@ -1110,6 +1166,15 @@ export function validateDagStructure(
       if (node.wait.event !== undefined) waitSources.push(['wait.event', node.wait.event]);
       if (node.wait.attention !== undefined)
         waitSources.push(['wait.attention', node.wait.attention]);
+      if (typeof node.wait.options === 'string') {
+        waitSources.push(['wait.options', node.wait.options]);
+        const shapeError = referencedOptionsShapeError(
+          node.wait.options,
+          id => nodesById.get(id) ?? enclosingNodes?.get(id)
+        );
+        if (shapeError !== undefined)
+          return `Node '${node.id}' field 'wait.options': ${shapeError}`;
+      }
       for (const [field, text] of waitSources) {
         outputRefPattern.lastIndex = 0;
         let m: RegExpExecArray | null;
@@ -1385,8 +1450,8 @@ export function validateDagStructure(
  * reports a parse warning, which closes #1991
  * for these workflows immediately: every dispatch surface reads the SAME
  * parsed `interactive` value this function's result feeds
- * (`assertInteractiveClassNotBackgrounded`, the fan-out spawn check, the web
- * console's own background-vs-foreground branch), so the coercion protects
+ * (`assertInteractiveClassNotBackgrounded`, the web console's own
+ * background-vs-foreground branch), so the coercion protects
  * them without waiting for the author to add the declaration. TODO(#2738):
  * once the grace period ends, delete the coercion in `parseWorkflow` and
  * restore the hard error — this function's return value already carries the
@@ -1414,10 +1479,8 @@ export function validateDagStructure(
  * workflow's class, not a class of its own).
  *
  * A `workflow:` node is also deliberately NOT checked here: its target
- * resolves at spawn, not load (#2200), so whether it can pause is unknowable
- * at this point — see `resolveFanOutChildDefinition`'s interactive-class
- * check in dag-executor.ts for the spawn-time equivalent (fan-out only; a 1:1
- * `workflow:` child is unaffected by design, see #2474's acceptance criteria).
+ * resolves at spawn, not load (#2200), and a child that pauses is its own run
+ * with its own gate — 1:1 or fan-out (#4044).
  */
 export function validateWorkflowClassPlacement(
   nodes: readonly (DagNode | IncludeDirective)[],

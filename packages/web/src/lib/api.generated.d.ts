@@ -2315,6 +2315,102 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/workflows/runs/{runId}/answer': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Answer a paused attention wait in its declared form */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['AnswerWorkflowRunBody'];
+        };
+      };
+      responses: {
+        /** @description Answered */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['WorkflowRunActionResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Run action forbidden */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The answer names an occurrence the run is no longer paused at */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -3822,7 +3918,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
           };
           /** @enum {string} */
@@ -3858,7 +3960,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           costUsd:
             | {
@@ -3870,7 +3978,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           stopReason:
             | {
@@ -3882,7 +3996,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
           numTurns:
             | {
@@ -3894,7 +4014,13 @@ export interface components {
                 /** @enum {string} */
                 source: 'unavailable';
                 /** @enum {string} */
-                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                reason:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
               };
         };
         /** @enum {string} */
@@ -3984,7 +4110,9 @@ export interface components {
           | {
               /** @enum {string} */
               status: 'suspended';
-              point: ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow') | 'wait';
+              point:
+                | ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out')
+                | 'wait';
             };
       };
       timestamp: number;
@@ -4025,7 +4153,7 @@ export interface components {
       runId: string;
       workflowName: string;
       /** @enum {string} */
-      kind: 'gate' | 'action_required' | 'terminal';
+      kind: 'gate' | 'attention' | 'terminal';
     };
     RunAttention:
       | {
@@ -4065,11 +4193,17 @@ export interface components {
         }
       | {
           /** @enum {string} */
-          kind: 'action_required';
+          kind: 'attention';
           runId: string;
           nodeId: string;
           message: string;
           occurrence: string;
+          /** @enum {string} */
+          form: 'message' | 'approval' | 'select' | 'multi_select';
+          options: {
+            id: string;
+            label?: string;
+          }[];
         }
       | {
           /** @enum {string} */
@@ -4077,6 +4211,13 @@ export interface components {
           runId: string;
           childRunId: string;
           nodeId: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'blocked_on_children';
+          runId: string;
+          nodeId: string;
+          childRunIds: string[];
         }
       | {
           /** @enum {string} */
@@ -4743,6 +4884,14 @@ export interface components {
           }
         | {
             attention: string;
+            /** @enum {string} */
+            form?: 'message' | 'approval' | 'select' | 'multi_select';
+            options?:
+              | {
+                  id: string;
+                  label?: string;
+                }[]
+              | string;
           };
       cancel?: string;
       include?: string;
@@ -4887,8 +5036,10 @@ export interface components {
         pauseId?: string;
         message: string;
         /** @enum {string} */
-        type?: 'approval' | 'interactive_loop' | 'writeback' | 'child_workflow';
+        type?: 'approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out';
         childRunId?: string;
+        childRunIds?: string[];
+        unspawnedItems?: number;
         bodyGateId?: string;
         iteration?: number;
         sessionId?: string | null;
@@ -4912,6 +5063,8 @@ export interface components {
         onRejectMaxAttempts?: number;
         /** @enum {string|null} */
         resolved?: 'approved' | 'rejected' | null;
+        answeredVia?: string;
+        answeredAt?: string;
         completionSignaled?: boolean | null;
         signaledOutput?: string | null;
         signaledStructuredOutput?: unknown;
@@ -5124,7 +5277,8 @@ export interface components {
                       | 'not_reported'
                       | 'unknown'
                       | 'not_applicable'
-                      | 'invalid';
+                      | 'invalid'
+                      | 'incomplete';
                   };
             };
             /** @enum {string} */
@@ -5168,7 +5322,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
             costUsd:
               | {
@@ -5180,7 +5340,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
             stopReason:
               | {
@@ -5192,7 +5358,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
             numTurns:
               | {
@@ -5204,7 +5376,13 @@ export interface components {
                   /** @enum {string} */
                   source: 'unavailable';
                   /** @enum {string} */
-                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
                 };
           };
           /** @enum {string} */
@@ -5294,7 +5472,9 @@ export interface components {
             | {
                 /** @enum {string} */
                 status: 'suspended';
-                point: ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow') | 'wait';
+                point:
+                  | ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out')
+                  | 'wait';
               };
         };
         commandSnapshot?: string | null;
@@ -5357,6 +5537,28 @@ export interface components {
           /** Format: date-time */
           waitingSince: string;
           message: string;
+          pauseId?: string;
+          /** @enum {string} */
+          form?: 'message' | 'approval' | 'select' | 'multi_select';
+          options?: {
+            id: string;
+            label?: string;
+          }[];
+          answer?:
+            | {
+                text: string;
+              }
+            | {
+                decision: string;
+                text: string;
+              }
+            | {
+                decisions: string[];
+                text: string;
+              };
+          answeredVia?: string;
+          /** Format: date-time */
+          answeredAt?: string;
         }
       | {
           /** @enum {string} */
@@ -5447,6 +5649,28 @@ export interface components {
           /** Format: date-time */
           waitingSince: string;
           message: string;
+          pauseId?: string;
+          /** @enum {string} */
+          form?: 'message' | 'approval' | 'select' | 'multi_select';
+          options?: {
+            id: string;
+            label?: string;
+          }[];
+          answer?:
+            | {
+                text: string;
+              }
+            | {
+                decision: string;
+                text: string;
+              }
+            | {
+                decisions: string[];
+                text: string;
+              };
+          answeredVia?: string;
+          /** Format: date-time */
+          answeredAt?: string;
         };
     RunStopReason: {
       /** @enum {string} */
@@ -5500,6 +5724,11 @@ export interface components {
         nodeId: string;
         pauseId: string;
       };
+    };
+    AnswerWorkflowRunBody: {
+      occurrence: string;
+      choose?: string[];
+      text?: string;
     };
     ResetWorkflowNodeSessionsResponse: {
       success: boolean;

@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { getSourceProviderEntry } from '../packages/paths/src/archon-paths';
 import * as bundledBuild from '../packages/paths/src/bundled-build';
+import { MAINTAINED_PROVIDER_IDS } from '../packages/provider-contract/src/registration';
 
 const repoRoot = join(import.meta.dir, '..');
 const CLI_ENTRY = join(repoRoot, 'packages/cli/src/cli.ts');
+const SERVER_ENTRY = join(repoRoot, 'packages/server/src/bin.ts');
+const HOST_PROVIDERS = /packages[/\\]core[/\\]src[/\\]providers[/\\]register-host-providers\.ts$/;
 
 type BuildMetafile = NonNullable<Bun.BuildOutput['metafile']>;
 
@@ -76,15 +80,40 @@ function forbiddenBundleInput(input: string): boolean {
   );
 }
 
-async function serverBundleInputs(restoreServerImport = false): Promise<string[]> {
+// Release binaries load Claude, Codex and Pi from installed provider plugins. OpenCode
+// and Copilot stay bundled in process until community plugins replace them (#3684).
+// Codex has no bundled npm SDK (its provider drives the spawned codex binary), so its
+// in-process provider module is the evidence that Codex was bundled.
+const MAINTAINED_PROVIDER_IMPLEMENTATIONS = MAINTAINED_PROVIDER_IDS.map(id =>
+  relative(repoRoot, join(dirname(getSourceProviderEntry(id)), 'provider.ts')).replaceAll('\\', '/')
+);
+
+function maintainedProviderInput(input: string): boolean {
+  const internal = repositoryInput(input);
+  if (internal !== undefined && MAINTAINED_PROVIDER_IMPLEMENTATIONS.includes(internal)) return true;
+  return /(?:^|[/\\])node_modules[/\\](?:@anthropic-ai[/\\]claude-agent-sdk|@openai[/\\]codex[^/\\]*|@earendil-works[/\\]pi-[^/\\]+)(?:[/\\]|$)/.test(
+    input
+  );
+}
+
+interface BundleRestore {
+  serverImport?: boolean;
+  inProcessProviders?: boolean;
+}
+
+async function forbiddenBundleInputs(
+  entry: string,
+  forbidden: (input: string) => boolean,
+  restore: BundleRestore = {}
+): Promise<string[]> {
   const result = await Bun.build({
-    entrypoints: [CLI_ENTRY],
+    entrypoints: [entry],
     target: 'bun',
     minify: true,
     metafile: true,
     plugins: [
       {
-        name: 'prove-cli-bundle-boundary',
+        name: 'prove-bundle-boundary',
         setup(build): void {
           // Release builds rewrite this module before bundling. Inspect that mode,
           // including branches the source-checkout constants would eliminate.
@@ -94,7 +123,7 @@ async function serverBundleInputs(restoreServerImport = false): Promise<string[]
               .join('\n'),
             loader: 'ts',
           }));
-          if (restoreServerImport) {
+          if (restore.serverImport) {
             build.onLoad(
               { filter: /packages[/\\]cli[/\\]src[/\\]commands[/\\]serve\.ts$/ },
               async args => ({
@@ -103,23 +132,29 @@ async function serverBundleInputs(restoreServerImport = false): Promise<string[]
               })
             );
           }
+          if (restore.inProcessProviders) {
+            build.onLoad({ filter: HOST_PROVIDERS }, async args => ({
+              contents: `${await Bun.file(args.path).text()}\nimport { registerInProcessProviders } from '@archon/providers/in-process';\nregisterInProcessProviders();`,
+              loader: 'ts',
+            }));
+          }
         },
       },
     ],
   });
   if (!result.success || !result.metafile)
     throw new Error(
-      `CLI bundle build failed: ${result.logs.map(message => message.message).join('\n')}`
+      `Bundle build failed for ${entry}: ${result.logs.map(message => message.message).join('\n')}`
     );
-  const forbidden: string[] = [];
+  const inputs: string[] = [];
   for (const output of Object.values(result.metafile.outputs)) {
     for (const [input, contribution] of Object.entries(output.inputs)) {
-      if (contribution.bytesInOutput > 0 && forbiddenBundleInput(input)) {
-        forbidden.push(`${input}: ${contribution.bytesInOutput} bytes`);
+      if (contribution.bytesInOutput > 0 && forbidden(input)) {
+        inputs.push(`${input}: ${contribution.bytesInOutput} bytes`);
       }
     }
   }
-  return forbidden.sort();
+  return inputs.sort();
 }
 
 const buildDir = mkdtempSync(join(tmpdir(), 'archon-cli-import-graph-'));
@@ -183,13 +218,24 @@ try {
   );
   console.log('CLI startup and detached handoff import boundaries pass.');
   if (process.env.CI) {
-    const forbidden = await serverBundleInputs();
+    const cliForbidden = (input: string): boolean =>
+      forbiddenBundleInput(input) || maintainedProviderInput(input);
+    const forbidden = await forbiddenBundleInputs(CLI_ENTRY, cliForbidden);
     assert.deepEqual(
       forbidden,
       [],
-      `CLI bundle contains server or chat code:\n${forbidden.join('\n')}`
+      `CLI bundle contains server, chat or maintained provider code:\n${forbidden.join('\n')}`
     );
-    const restored = await serverBundleInputs(true);
+    const serverForbidden = await forbiddenBundleInputs(SERVER_ENTRY, maintainedProviderInput);
+    assert.deepEqual(
+      serverForbidden,
+      [],
+      `Server bundle contains maintained provider code:\n${serverForbidden.join('\n')}`
+    );
+    const restored = await forbiddenBundleInputs(CLI_ENTRY, cliForbidden, {
+      serverImport: true,
+      inProcessProviders: true,
+    });
     assert.ok(
       restored.some(input => repositoryInput(input)?.startsWith('packages/server/')),
       'Restored server import escaped the bundle check'
@@ -202,10 +248,24 @@ try {
       restored.some(input => input.includes('discord.js')),
       'Negative proof did not include chat'
     );
-    console.log(`Expected rejection with server import restored:\n${restored.join('\n')}`);
-    console.log('CLI server-free bundle boundary passes, including its negative proof.');
+    for (const evidence of [
+      ...MAINTAINED_PROVIDER_IMPLEMENTATIONS,
+      '@anthropic-ai/claude-agent-sdk',
+      '@earendil-works/pi-coding-agent',
+    ]) {
+      assert.ok(
+        restored.some(input => input.replaceAll('\\', '/').includes(evidence)),
+        `Restored in-process providers escaped the bundle check: ${evidence}`
+      );
+    }
+    console.log(
+      `Expected rejection with server import and in-process providers restored:\n${restored.join('\n')}`
+    );
+    console.log(
+      'CLI and server bundles are free of maintained providers, and the CLI of server and chat code, including the negative proof.'
+    );
   } else {
-    console.log('Server-free bundle proof runs in CI; local startup boundaries passed.');
+    console.log('Bundle-content proofs run in CI; local startup boundaries passed.');
   }
 } finally {
   await removeTempTree(buildDir);

@@ -319,6 +319,102 @@ describe('ClaudeProvider', () => {
       });
     });
 
+    test.each(['forked-skill', 'subagent', 'no-handoff'])(
+      'includes every model’s tokens (%s)',
+      async scenario => {
+        const subagent = scenario === 'subagent';
+        mockQuery.mockImplementationOnce(async function* () {
+          yield {
+            type: 'result',
+            session_id: 'forked-skill',
+            total_cost_usd: 0.2384,
+            usage:
+              scenario !== 'forked-skill'
+                ? {
+                    input_tokens: 20,
+                    output_tokens: 5,
+                    cache_read_input_tokens: 70,
+                    cache_creation_input_tokens: 10,
+                  }
+                : {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                  },
+            modelUsage: {
+              main: {
+                inputTokens: 20,
+                outputTokens: 5,
+                cacheReadInputTokens: 70,
+                cacheCreationInputTokens: 10,
+              },
+              ...(subagent
+                ? {
+                    helper: {
+                      inputTokens: 30,
+                      outputTokens: 15,
+                      cacheReadInputTokens: 40,
+                      cacheCreationInputTokens: 20,
+                    },
+                  }
+                : {}),
+            },
+          };
+        });
+        const chunks: MessageChunk[] = [];
+        for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+        expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+          cost: 0.2384,
+          tokens: subagent
+            ? { input: 190, output: 20, cacheRead: 110, cacheWrite: 30 }
+            : { input: 100, output: 5, cacheRead: 70, cacheWrite: 10 },
+        });
+      }
+    );
+
+    test('marks a later unknown token interval after a known result', async () => {
+      mockQuery.mockImplementationOnce(async function* () {
+        for (const [cost, input] of [
+          [0.1, 100],
+          [0.3, 50],
+          [0.4, 60],
+        ]) {
+          yield {
+            type: 'result',
+            session_id: 'reset-totals',
+            total_cost_usd: cost,
+            modelUsage: {
+              main: {
+                inputTokens: input,
+                outputTokens: 20,
+                cacheReadInputTokens: 30,
+                cacheCreationInputTokens: 40,
+              },
+            },
+          };
+        }
+      });
+      const results: MessageChunk[] = [];
+      for await (const chunk of client.sendQuery('test', '/workspace'))
+        if (chunk.type === 'result') results.push(chunk);
+      expect(results).toHaveLength(3);
+      expect(results[0]).toMatchObject({
+        tokens: { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 },
+        cost: 0.1,
+      });
+      expect(results[0]).not.toHaveProperty('tokensUnknown');
+      for (const result of results.slice(1)) {
+        expect(result).not.toHaveProperty('tokens');
+        expect(result).toMatchObject({ tokensUnknown: true });
+      }
+      expect(results[1]).toMatchObject({ cost: expect.closeTo(0.2, 10) });
+      expect(results[2]).toMatchObject({ cost: expect.closeTo(0.1, 10) });
+      expect(
+        mockLogger.warn.mock.calls.filter(call => call[1] === 'claude.query_tokens_unknown')
+      ).toHaveLength(2);
+    });
+
     test('yields result with structuredOutput when SDK result has structured_output', async () => {
       mockQuery.mockImplementation(async function* () {
         yield {
@@ -337,6 +433,7 @@ describe('ClaudeProvider', () => {
       expect(chunks[0]).toEqual({
         type: 'result',
         sessionId: 'sid-structured',
+        tokensUnknown: true,
         structuredOutput: { type: 'BUG', severity: 'high' },
       });
     });
@@ -354,6 +451,7 @@ describe('ClaudeProvider', () => {
               inputTokens: 100,
               outputTokens: 50,
               cacheReadInputTokens: 10,
+              cacheCreationInputTokens: 0,
             },
           },
         };
@@ -446,6 +544,193 @@ describe('ClaudeProvider', () => {
         }
         return cost;
       }
+
+      test.each([false, true])(
+        'differences all token axes for resumes and forks (fork=%s)',
+        async forkSession => {
+          const sessionId = '10000000-0000-4000-8000-000000000097';
+          persist({
+            session_id: sessionId,
+            total_cost_usd: 0.1,
+            modelUsage: {
+              main: {
+                inputTokens: 100,
+                outputTokens: 200,
+                cacheReadInputTokens: 300,
+                cacheCreationInputTokens: 400,
+              },
+            },
+          });
+          mockQuery.mockImplementationOnce(async function* () {
+            yield {
+              type: 'result',
+              session_id: sessionId,
+              total_cost_usd: 0.3,
+              usage: { input_tokens: 1, output_tokens: 2 },
+              modelUsage: {
+                main: {
+                  inputTokens: 110,
+                  outputTokens: 220,
+                  cacheReadInputTokens: 330,
+                  cacheCreationInputTokens: 440,
+                },
+                helper: {
+                  inputTokens: 5,
+                  outputTokens: 0,
+                  cacheReadInputTokens: 6,
+                  cacheCreationInputTokens: 7,
+                },
+              },
+            };
+          });
+          const chunks: MessageChunk[] = [];
+          for await (const chunk of client.sendQuery('test', '/workspace', sessionId, {
+            forkSession,
+            env: { CLAUDE_CONFIG_DIR: configRoot },
+          }))
+            chunks.push(chunk);
+          expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+            cost: expect.closeTo(0.2, 10),
+            tokens: { input: 98, output: 20, cacheRead: 36, cacheWrite: 47 },
+            resolvedModel: { id: 'main' },
+          });
+        }
+      );
+
+      test.each(['legacy', 'backwards', 'missing-model', 'empty'])(
+        'incomplete or inconsistent token baseline omits tokens (%s)',
+        async scenario => {
+          const sessionId = '10000000-0000-4000-8000-000000000096';
+          persist({
+            session_id: sessionId,
+            total_cost_usd: 0.1,
+            modelUsage:
+              scenario === 'empty'
+                ? {}
+                : {
+                    main:
+                      scenario === 'legacy'
+                        ? { outputTokens: 10 }
+                        : {
+                            inputTokens: 100,
+                            outputTokens: 10,
+                            cacheReadInputTokens: 30,
+                            cacheCreationInputTokens: 40,
+                          },
+                  },
+          });
+          mockQuery.mockImplementationOnce(async function* () {
+            yield {
+              type: 'result',
+              session_id: sessionId,
+              total_cost_usd: 0.3,
+              modelUsage:
+                scenario === 'missing-model'
+                  ? {}
+                  : {
+                      main: {
+                        inputTokens: 110,
+                        outputTokens: 20,
+                        cacheReadInputTokens: scenario === 'backwards' ? 20 : 35,
+                        cacheCreationInputTokens: 45,
+                      },
+                    },
+            };
+          });
+          const chunks: MessageChunk[] = [];
+          for await (const chunk of client.sendQuery('test', '/workspace', sessionId, {
+            env: { CLAUDE_CONFIG_DIR: configRoot },
+          }))
+            chunks.push(chunk);
+          const result = chunks.find(chunk => chunk.type === 'result');
+          expect(result).not.toHaveProperty('tokens');
+          expect(result).toMatchObject({ cost: expect.closeTo(0.2, 10) });
+          expect(mockLogger.warn).toHaveBeenCalledWith(
+            expect.objectContaining({ baseline: 'known' }),
+            'claude.query_tokens_unknown'
+          );
+          if (scenario !== 'missing-model')
+            expect(result).toMatchObject({ resolvedModel: { id: 'main' } });
+        }
+      );
+
+      test.each(['missing', 'legacy', 'empty'])(
+        'keeps tokens unknown across later results (%s baseline)',
+        async scenario => {
+          const sessionId = '10000000-0000-4000-8000-000000000095';
+          if (scenario !== 'missing')
+            persist({
+              session_id: sessionId,
+              total_cost_usd: 0.1,
+              modelUsage: scenario === 'empty' ? {} : { main: { outputTokens: 10 } },
+            });
+          mockQuery.mockImplementationOnce(async function* () {
+            for (const { cost, increment } of [
+              { cost: 0.3, increment: 0 },
+              { cost: 0.5, increment: 10 },
+            ]) {
+              yield {
+                type: 'result',
+                session_id: sessionId,
+                total_cost_usd: cost,
+                modelUsage: {
+                  main: {
+                    inputTokens: 100 + increment,
+                    outputTokens: 20 + increment,
+                    cacheReadInputTokens: 30 + increment,
+                    cacheCreationInputTokens: 40 + increment,
+                  },
+                },
+              };
+            }
+          });
+          const results: MessageChunk[] = [];
+          for await (const chunk of client.sendQuery('test', '/workspace', sessionId, {
+            env: { CLAUDE_CONFIG_DIR: configRoot },
+          }))
+            if (chunk.type === 'result') results.push(chunk);
+          expect(results).toHaveLength(2);
+          for (const result of results) expect(result).not.toHaveProperty('tokens');
+          if (scenario === 'missing') expect(results[0]).not.toHaveProperty('cost');
+          else expect(results[0]).toMatchObject({ cost: expect.closeTo(0.2, 10) });
+          expect(results[1]).toMatchObject({ cost: expect.closeTo(0.2, 10) });
+          expect(
+            mockLogger.warn.mock.calls.filter(call => call[1] === 'claude.query_tokens_unknown')
+          ).toHaveLength(2);
+        }
+      );
+
+      test('unknown baseline omits tokens even when main-agent usage is available', async () => {
+        mockQuery.mockImplementationOnce(async function* () {
+          yield {
+            type: 'result',
+            session_id: '20000000-0000-4000-8000-000000000097',
+            total_cost_usd: 0.3,
+            usage: { input_tokens: 1, output_tokens: 2 },
+            modelUsage: {
+              main: {
+                inputTokens: 110,
+                outputTokens: 220,
+                cacheReadInputTokens: 330,
+                cacheCreationInputTokens: 440,
+              },
+            },
+          };
+        });
+        const chunks: MessageChunk[] = [];
+        for await (const chunk of client.sendQuery(
+          'test',
+          '/workspace',
+          '20000000-0000-4000-8000-000000000097',
+          { env: { CLAUDE_CONFIG_DIR: configRoot } }
+        ))
+          chunks.push(chunk);
+        expect(chunks.find(chunk => chunk.type === 'result')).not.toHaveProperty('tokens');
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ baseline: 'unknown' }),
+          'claude.query_tokens_unknown'
+        );
+      });
 
       test('snapshots request-scoped state before eager SDK startup changes it', async () => {
         const sessionId = '10000000-0000-4000-8000-000000000099';
@@ -1875,6 +2160,25 @@ describe('ClaudeProvider', () => {
       // Verify process.env entries are still present (not fully replaced)
       // Windows uses 'Path' instead of 'PATH'
       expect(env.PATH ?? env.Path).toBeDefined();
+    });
+
+    test("a run's identity in the request env reaches the Claude Code process the agent's shell runs in", async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+      const identity = {
+        WORKFLOW_ID: 'run-1',
+        ARCHON_NODE_EXECUTION: '{"runId":"run-1","path":"notes"}',
+        ARCHON_CLI_COMMAND: '["/opt/archon/bin/archon"]',
+      };
+
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, { env: identity })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options.env).toMatchObject(identity);
+      expect(callArgs.options.settingSources).toEqual(['project', 'user']);
     });
 
     test('requestOptions.env overrides buildSubprocessEnv values', async () => {
@@ -4034,6 +4338,14 @@ describe('typed failures (#1797, #3524)', () => {
             subtype: 'success',
             session_id: 's',
             result: 'first',
+            modelUsage: {
+              main: {
+                inputTokens: 100,
+                outputTokens: 20,
+                cacheReadInputTokens: 30,
+                cacheCreationInputTokens: 40,
+              },
+            },
             total_cost_usd: 0.1,
           };
           yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
@@ -4055,6 +4367,14 @@ describe('typed failures (#1797, #3524)', () => {
             subtype: 'success',
             session_id: 's',
             result: 'final',
+            modelUsage: {
+              main: {
+                inputTokens: 110,
+                outputTokens: 25,
+                cacheReadInputTokens: 37,
+                cacheCreationInputTokens: 49,
+              },
+            },
             total_cost_usd: 0.3,
           };
           yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
@@ -4257,10 +4577,10 @@ describe('typed failures (#1797, #3524)', () => {
     expect(
       backgroundStream.chunks
         .filter(chunk => chunk.type === 'result')
-        .map(chunk => [chunk.text, chunk.cost])
+        .map(chunk => [chunk.text, chunk.cost, chunk.tokens])
     ).toEqual([
-      ['first', 0.1],
-      ['final', 0.19999999999999998],
+      ['first', 0.1, { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 }],
+      ['final', 0.19999999999999998, { input: 26, output: 5, cacheRead: 7, cacheWrite: 9 }],
     ]);
     expect(violations).toEqual([]);
   });

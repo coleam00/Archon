@@ -1,5 +1,9 @@
 import type { CloneCredentials } from './repo';
 
+export function githubTokenCredentials(token: string): CloneCredentials {
+  return { username: 'x-access-token', password: token };
+}
+
 const ENV_CREDENTIAL_HELPER =
   '!f() { test "$1" = get || exit 0; printf \'%s\\n\' "username=$ARCHON_GIT_USERNAME" "password=$ARCHON_GIT_PASSWORD"; }; f';
 

@@ -275,6 +275,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
+    answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
+      throw new Error('Unexpected answerAttentionWait');
+    }),
     signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
       throw new Error('Unexpected signalWorkflowWait');
     }),
@@ -854,7 +857,7 @@ describe('executeWorkflow', () => {
           status: 'failed',
           metadata: {
             wait,
-            error: "Wait node 'rerun-ci' could not deliver its action-required notification",
+            error: "Wait node 'rerun-ci' could not deliver its attention notification",
           },
         })
       ),
@@ -1668,7 +1671,7 @@ describe('executeWorkflow', () => {
     );
 
     it.each(['node', 'loop_group'] as const)(
-      'describes a %s attention wait with outside-action and resume guidance',
+      'describes a legacy %s attention wait with answer and resume guidance',
       async owner => {
         const otherRun = makeRun({
           id: 'abc12345-rest-of-uuid',
@@ -1700,7 +1703,7 @@ describe('executeWorkflow', () => {
         expect(result.success).toBe(false);
         expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
         const message = sendMessage.mock.calls[0][1];
-        expect(message).toContain('paused waiting for an outside action');
+        expect(message).toContain('needs attention');
         expect(message).toContain('Restore repository access');
         expect(message).toContain('/workflow resume abc12345');
         expect(message).toContain('/workflow abandon abc12345');
@@ -1736,6 +1739,48 @@ describe('executeWorkflow', () => {
       expect(message).toContain('/workflow abandon abc12345');
       expect(message).toContain('--branch <other>');
     });
+
+    it.each([
+      [
+        'child_workflow',
+        { type: 'child_workflow', nodeId: 'sub', childRunId: 'child-1' },
+        ['child-1'],
+      ],
+      [
+        'fan_out',
+        { type: 'fan_out', nodeId: 'work', childRunIds: ['child-1', 'child-2'] },
+        ['child-1', 'child-2'],
+      ],
+    ] as const)(
+      'names the sub-runs of a %s gate instead of offering approve or reject',
+      async (_type, approval, childRunIds) => {
+        const otherRun = makeRun({
+          id: 'abc12345-rest-of-uuid',
+          status: 'paused',
+          metadata: { approval: { ...approval, message: 'Waiting on sub-runs' } },
+        });
+        const sendMessage = mock<IWorkflowPlatform['sendMessage']>(async () => {});
+        const result = await executeWorkflow(
+          makeDeps(makeStore({ getActiveWorkflowRunByPath: mock(async () => otherRun) })),
+          { ...makePlatform(), sendMessage },
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test message',
+          { conversationId: 'db-conv-1' }
+        );
+
+        expect(result.success).toBe(false);
+        const message = sendMessage.mock.calls[0][1];
+        expect(message).toContain('paused waiting on sub-runs');
+        for (const id of childRunIds) expect(message).toContain(`\`${id}\``);
+        expect(message).toContain('/workflow status`');
+        expect(message).toContain('/workflow abandon abc12345');
+        expect(message).not.toContain('user input');
+        expect(message).not.toContain('/workflow approve');
+        expect(message).not.toContain('/workflow reject');
+      }
+    );
 
     it('skips path-lock check when mutates_checkout is false', async () => {
       const getActiveSpy = mock(async () =>

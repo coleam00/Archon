@@ -39,7 +39,7 @@ Archon refuses to start with **both** modes configured. Pick one set of env vars
    - **Webhook URL** — `https://archon.example.com/webhooks/github`.
    - **Webhook secret** — same value as your `WEBHOOK_SECRET` env var.
 
-   Webhook bodies are limited to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** before authentication; Archon stops reading them and creates no receipt or workflow start. This limit applies only to webhook routes. Accepted deliveries retain exact-byte signature verification and existing acknowledgement behavior.
+   Webhook bodies are limited to **32 MiB (33,554,432 bytes)**, inclusive. Larger bodies receive HTTP **413** before the signature is checked; Archon stops reading them and creates no receipt or workflow start. This limit applies only to webhook routes.
 3. Uncheck **Active** on the user authorisation callback URL — Archon doesn't use OAuth in PR-B.
 
 ## Step 2: Permissions (fine-grained)
@@ -49,10 +49,13 @@ Archon refuses to start with **both** modes configured. Pick one set of env vars
 | Permission       | Access       | Used for                                          |
 | ---------------- | ------------ | ------------------------------------------------- |
 | Checks           | Read         | Waking workflow CI waits when a check concludes   |
-| Contents         | Read         | Cloning + reading repo metadata                   |
+| Contents         | Read & Write | Cloning, reading repo metadata, pushing branches, and merging pull requests |
+| Workflows        | Read & Write | Required only when runs create or change files under `.github/workflows/` |
 | Issues           | Read & Write | `createComment` + `listComments`                  |
 | Pull requests    | Read & Write | `pulls.get` + comment posting                     |
 | Metadata         | Read         | Mandatory (auto-included)                         |
+
+GitHub refuses pushes that create or change files under `.github/workflows/` unless the App has **Workflows: Read & Write**, even when **Contents: Read & Write** is granted. See [GitHub's Git access permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app#choosing-permissions-for-git-access).
 
 **Account permissions:** none.
 
@@ -174,9 +177,9 @@ A 401 from any installation Octokit evicts the cached token and the call is retr
 
 ### Long-running workflow `git push`
 
-Workflows that span >1h need a fresh token to push from the cloned worktree. Archon installs a git credential helper at clone time (App mode only): the worktree's `.git/config` points at `~/.archon/bin/git-credential-archon`, which talks back to Archon's internal endpoint for a fresh installation token on each operation.
+Workflows that span >1h need a fresh token to push from the cloned worktree. In App mode, Archon installs a git credential helper after cloning and refreshes it whenever it sets up an existing repository, including webhook handling: the worktree's `.git/config` points at `~/.archon/bin/git-credential-archon`, which talks back to Archon's internal endpoint for a fresh installation token on each operation. The helper reads the server's port from `ARCHON_PORT`, which Archon sets for the processes it launches. A `git` command run from an independent shell on the Archon host gets no credential unless it exports `ARCHON_PORT` with the server's port.
 
-The helper is embedded in compiled binaries. App-mode repository setup fails if Archon cannot install or register it, rather than leaving later fetches and pushes without a refreshable credential source.
+The helper is embedded in compiled binaries. Each setup replaces an outdated managed script and registers the helper and GitHub path forwarding in the repository's local Git config. Existing repositories are refreshed on their next setup, not swept at server startup. If installation or registration fails, repository setup stops before sync or workflow dispatch; a later setup retries registration and repairs partial config.
 
 ### Internal endpoint security — REQUIRED
 
@@ -283,9 +286,14 @@ If the external POST probe returns anything other than `404` or `403` from the p
 Repeated 401s on outbound API calls (`createComment`, `listComments`, `repos.get`, `pulls.get`) point at installation / token issues, not webhook config. Walk through:
 
 - Verify the App is installed on the target `owner` and has not been suspended or uninstalled. Visit `https://github.com/settings/installations` (or the org equivalent) to confirm.
-- Verify the App's permissions still include the scopes the operation needs (Contents:Read for clone; Issues:RW + Pull requests:RW for comments and reactions). Permission scope changes require operators to **review and accept** the new permissions on every installation; Archon will 401 until that's done.
 - Verify the private key in your env (`GITHUB_APP_PRIVATE_KEY` or `_PATH`) matches the same App that `GITHUB_APP_ID` points at. Mismatched key+ID is a common cause of "401 from JWT" errors at token-issuance time.
 - Verify `GITHUB_APP_INSTALLATION_ID` (if set) still corresponds to a live installation — uninstall + reinstall assigns a new ID.
+
+### GitHub refuses a branch push
+
+An installation token needs Contents write access to push branches. If the branch creates or changes files under `.github/workflows/`, GitHub also requires Workflows write access. Check the App and installation permissions:
+
+Verify the App's permissions against the [permissions table](#step-2-permissions-fine-grained). Permission changes require operators to **review and accept** the new permissions on every installation; until accepted, that installation keeps its old permissions.
 
 ### Webhook deliveries fail signature verification
 

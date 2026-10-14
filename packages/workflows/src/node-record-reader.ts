@@ -28,7 +28,7 @@ export interface ReadNodeRecordEvent {
   eventType: SerializedNodeEvent['event_type'];
   data: SerializedNodeData;
   /** Raw values retained so accounting can diagnose malformed historical usage. */
-  rawUsage: { tokens?: unknown; costUsd?: unknown };
+  rawUsage: { tokens?: unknown; tokensUnknown?: boolean; costUsd?: unknown };
   metadata?: NodeExecutionMetadata;
 }
 
@@ -151,6 +151,10 @@ export function readNodeRecordEvent(
     data,
     rawUsage: {
       ...(Object.hasOwn(raw, 'tokens') ? { tokens: raw.tokens } : {}),
+      ...(metadata?.spend.tokens.source === 'unavailable' &&
+      metadata.spend.tokens.reason === 'incomplete'
+        ? { tokensUnknown: true }
+        : {}),
       ...(Object.hasOwn(raw, 'cost_usd') ? { costUsd: raw.cost_usd } : {}),
     },
     ...(metadata === undefined ? {} : { metadata }),
@@ -169,9 +173,15 @@ export function readDeferredNodeUsageEvent(envelope: NodeRecordEventEnvelope):
   if (!envelope.step_name || envelope.event_type !== DEFERRED_NODE_USAGE_EVENT_TYPE)
     return undefined;
   const raw = readNodeRecordData(envelope.data);
+  const data = serializedDeferredNodeUsageDataSchema.parse(projectSerializedData(raw));
   return {
     path: envelope.step_name,
-    data: serializedDeferredNodeUsageDataSchema.parse(projectSerializedData(raw)),
-    rawUsage: { tokens: raw.tokens, costUsd: raw.cost_usd },
+    data,
+    rawUsage: {
+      tokens: raw.tokens,
+      tokensUnknown:
+        data.spend?.tokens.source === 'unavailable' && data.spend.tokens.reason === 'incomplete',
+      costUsd: raw.cost_usd,
+    },
   };
 }

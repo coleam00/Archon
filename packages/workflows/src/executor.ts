@@ -20,7 +20,11 @@ import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { hostname } from 'os';
 import { dirname, join } from 'path';
-import { MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS, spellWorkflowCommand } from './deps';
+import {
+  MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS,
+  attentionAnswerLines,
+  spellWorkflowCommand,
+} from './deps';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowEnvironment } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -33,6 +37,7 @@ import type {
   IncludeDirective,
   ResolvedWorkflow,
   WorkflowRun,
+  WorkflowRunStatus,
   WorkflowExecutionResult,
   WorkflowSource,
   WorkflowRunNodeSession,
@@ -44,6 +49,7 @@ import {
   isExecNode,
   isApprovalContext,
   isRunBlockedOnChild,
+  isFanOutBlockReleased,
   reRunsOwnNodeOnResume,
   isWorkflowWaitContext,
   pendingWorkflowWaitDeadline,
@@ -1122,6 +1128,7 @@ export async function inspectResumableRun(
     priorCompletedNodes,
     priorUsage: {
       ...(snapshot.tokens !== undefined ? { tokens: snapshot.tokens } : {}),
+      ...(snapshot.tokensUnknown ? { tokensUnknown: true } : {}),
       costUsd: snapshot.costUsd,
     },
   };
@@ -1642,8 +1649,9 @@ async function runChildWorkflow(
  * No-op (guarded) when:
  *  - the parent is not 'paused' (synchronous first-run path: the parent is still
  *    'running' on the call stack — output threads directly from the returned outcome),
- *  - the parent's gate isn't a `child_workflow` gate, or
- *  - a DIFFERENT child of the same parent terminated (childRunId mismatch).
+ *  - the parent's gate isn't a `child_workflow` or `fan_out` gate,
+ *  - a DIFFERENT child of the same parent terminated (childRunId mismatch), or
+ *  - the parent is a fan-out still waiting on other children (`isFanOutBlockReleased`).
  *
  * Failures before the parent resumes leave the child result intact. Once the parent
  * has resumed, a rejected terminal status write propagates because the child cannot
@@ -1716,14 +1724,74 @@ async function maybeResumeParentRun(
     return;
   }
 
+  // A fan-out parent waits on several children. Continuing it on every child's finish
+  // would only re-pause it and send another "waiting" notice.
+  try {
+    if (!(await isFanOutParentReleased(deps, parent))) {
+      getLog().info(
+        { parentRunId, childRunId: childRun.id },
+        'workflow.parent_resume_waiting_on_children'
+      );
+      return;
+    }
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, parentRunId, childRunId: childRun.id },
+      'workflow.parent_resume_children_lookup_failed'
+    );
+    await notifyStuck("the parent's sub-runs could not be looked up");
+    return;
+  }
+
+  await continueBlockedRun(
+    deps,
+    platform,
+    conversationId,
+    parent,
+    notifyStuck,
+    { childRunId: childRun.id, childStatus: childRun.status },
+    resolveChildIsolation
+  );
+}
+
+/**
+ * True unless `run` is paused on a `fan_out` gate whose children have not released it
+ * (`isFanOutBlockReleased`). Every other gate is released by its single child.
+ */
+async function isFanOutParentReleased(deps: WorkflowDeps, run: WorkflowRun): Promise<boolean> {
+  const approval = run.metadata?.approval;
+  if (!isApprovalContext(approval) || approval.type !== 'fan_out') return true;
+  const statusById = new Map(
+    (await deps.store.findChildRuns(run.id)).map(child => [child.id, child.status])
+  );
+  return isFanOutBlockReleased(approval, id => statusById.get(id));
+}
+
+/**
+ * Continue a paused run whose blocking child (or children) released it: resolve its
+ * workflow from the source it started with, claim the resume, and execute it. Returns
+ * the execution result, or undefined when it stood down (the run stays paused and
+ * resumable, and `notifyStuck` has told the user, unless another resume won the claim).
+ * `trigger` is log context only.
+ */
+async function continueBlockedRun(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  parent: WorkflowRun,
+  notifyStuck: (reason: string) => Promise<void>,
+  trigger: { childRunId?: string; childStatus?: WorkflowRunStatus },
+  resolveChildIsolation?: ChildIsolationResolver
+): Promise<WorkflowExecutionResult | undefined> {
+  const parentRunId = parent.id;
   const parentCwd = parent.working_path;
   if (!parentCwd) {
     getLog().warn(
-      { parentRunId, childRunId: childRun.id },
+      { parentRunId, childRunId: trigger.childRunId },
       'workflow.parent_resume_no_working_path'
     );
     await notifyStuck('the parent has no recorded working path');
-    return;
+    return undefined;
   }
 
   let parentWorkflow: ResolvedWorkflow | undefined;
@@ -1755,7 +1823,7 @@ async function maybeResumeParentRun(
   } catch (err) {
     getLog().error({ err: err as Error, parentRunId }, 'workflow.parent_resume_discovery_failed');
     await notifyStuck('workflow discovery failed');
-    return;
+    return undefined;
   }
   if (!parentWorkflow) {
     getLog().warn(
@@ -1763,7 +1831,7 @@ async function maybeResumeParentRun(
       'workflow.parent_resume_workflow_not_found'
     );
     await notifyStuck(`the parent workflow '${parent.workflow_name}' could not be found`);
-    return;
+    return undefined;
   }
 
   let hydrated: Awaited<ReturnType<typeof hydrateResumableRun>>;
@@ -1777,29 +1845,29 @@ async function maybeResumeParentRun(
       // Benign race: a concurrent (manual or duplicate) resume won the CAS and
       // now owns the parent. Not an error — no user-facing message (it IS resuming).
       getLog().info(
-        { parentRunId, childRunId: childRun.id },
+        { parentRunId, childRunId: trigger.childRunId },
         'workflow.parent_auto_resume_lost_race'
       );
     } else {
       getLog().error({ err: err as Error, parentRunId }, 'workflow.parent_resume_hydrate_failed');
       await notifyStuck('preparing the parent for resume failed');
     }
-    return;
+    return undefined;
   }
   if (!hydrated) {
-    // A parent paused on a child_workflow gate is always resumable (see the
-    // child_workflow branch in hydrateResumableRun), so null here is unexpected.
+    // A parent paused on a child_workflow or fan_out gate is always resumable (see
+    // reRunsOwnNodeOnResume), so null here is unexpected.
     getLog().warn({ parentRunId }, 'workflow.parent_resume_nothing_to_resume');
     await notifyStuck('the parent had no resumable state');
-    return;
+    return undefined;
   }
 
   getLog().info(
-    { parentRunId, childRunId: childRun.id, childStatus: childRun.status },
+    { parentRunId, childRunId: trigger.childRunId, childStatus: trigger.childStatus },
     'workflow.parent_auto_resume_started'
   );
   try {
-    await executeWorkflow(
+    return await executeWorkflow(
       deps,
       platform,
       conversationId,
@@ -1823,16 +1891,15 @@ async function maybeResumeParentRun(
     // resumeWorkflow refuses, leaving destructive abandon as the only exit.
     // Land it in 'failed' instead so it stays resumable.
     getLog().error(
-      { err: err as Error, parentRunId, childRunId: childRun.id },
+      { err: err as Error, parentRunId, childRunId: trigger.childRunId },
       'workflow.parent_auto_resume_execute_failed'
     );
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(
-        parentRunId,
-        `Auto-resume after sub-run failed: ${(err as Error).message}`
-      ),
-      { workflowRunId: parentRunId, site: 'workflow.parent_auto_resume_fail_mark_failed' }
-    );
+    const error = `Auto-resume after sub-run failed: ${(err as Error).message}`;
+    await requireTerminalStatusWrite(deps.store.failWorkflowRun(parentRunId, error), {
+      workflowRunId: parentRunId,
+      site: 'workflow.parent_auto_resume_fail_mark_failed',
+    });
+    return { success: false, workflowRunId: parentRunId, error };
   }
 }
 
@@ -2413,11 +2480,14 @@ export async function executeWorkflow(
         if (activeWorkflow.status === 'paused') {
           const attention = runAttention(activeWorkflow);
           const wait = pendingWorkflowWaitDeadline(activeWorkflow);
-          if (attention?.kind === 'action_required') {
-            stateLine = `paused waiting for an outside action (${duration} since started, run \`${shortId}\`)`;
-            actionLines =
-              `• Complete the outside action: ${attention.message}\n` +
-              `• When it is complete, resume it: \`${formatRunCommand(platform, 'resume', shortId)}\`\n`;
+          if (attention?.kind === 'attention') {
+            stateLine = `paused, needs attention (${duration} since started, run \`${shortId}\`)`;
+            actionLines = `• Answer it: ${attention.message}\n${attentionAnswerLines(
+              platform,
+              attention
+            )
+              .map(line => `• ${line}\n`)
+              .join('')}`;
           } else if (wait) {
             const waitingFor =
               wait.kind === 'event' ? `for event \`${wait.event}\` until` : 'until';
@@ -2427,6 +2497,17 @@ export async function executeWorkflow(
                 ? `• Signal event \`${wait.event}\` for run \`${activeWorkflow.id}\`\n`
                 : '') +
               `• Wait until ${wait.resumeAt}: \`${formatRunCommand(platform, 'status')}\`\n`;
+          } else if (
+            attention?.kind === 'blocked_on_child' ||
+            attention?.kind === 'blocked_on_children'
+          ) {
+            // The parent takes no answer of its own; it continues when its sub-runs finish.
+            const childRunIds =
+              attention.kind === 'blocked_on_child'
+                ? [attention.childRunId]
+                : attention.childRunIds;
+            stateLine = `paused waiting on sub-runs (${duration} since started, run \`${shortId}\`)`;
+            actionLines = `• Check sub-runs ${childRunIds.map(id => `\`${id}\``).join(', ')}: \`${formatRunCommand(platform, 'status')}\`\n`;
           } else {
             stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
             actionLines =
@@ -3315,6 +3396,46 @@ export async function executeWorkflow(
         // child shares the parent's codebase.
         resolveChildIsolation
       );
+    }
+    // A fan-out parent builds its gate from a fresh read of its children, then commits
+    // its pause. A child that finished in between saw this run still `running`, so its
+    // hook stood down; check again now that the pause is committed. Whichever side reads
+    // second sees the other, and the resume claim lets only one of them continue.
+    if (finalStatus?.status === 'paused') {
+      const notifyStuck = async (reason: string): Promise<void> => {
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `⚠️ Run \`${workflowRun.id.slice(0, 8)}\`'s sub-runs finished, but it couldn't ` +
+            `continue (${reason}). Resume it manually: ` +
+            `\`${spellWorkflowCommand(platform, `resume ${workflowRun.id}`)}\``
+        );
+      };
+      let released = false;
+      try {
+        released =
+          isApprovalContext(finalStatus.metadata.approval) &&
+          finalStatus.metadata.approval.type === 'fan_out' &&
+          (await isFanOutParentReleased(deps, finalStatus));
+      } catch (err) {
+        getLog().error(
+          { err: err as Error, workflowRunId: workflowRun.id },
+          'workflow.parent_resume_children_lookup_failed'
+        );
+        await notifyStuck('its sub-runs could not be looked up');
+      }
+      if (released) {
+        const continued = await continueBlockedRun(
+          deps,
+          platform,
+          conversationId,
+          finalStatus,
+          notifyStuck,
+          {},
+          resolveChildIsolation
+        );
+        if (continued !== undefined) return continued;
+      }
     }
     if (finalStatus?.status === 'completed') {
       return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };

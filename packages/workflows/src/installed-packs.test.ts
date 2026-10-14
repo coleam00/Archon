@@ -322,17 +322,11 @@ describe('installed pack boundaries', () => {
     ).toContain("support workflow 'helper'");
   });
 
-  test('a composed fan-out body may be a support workflow; a fan-out child run may not', async () => {
+  test('a composed fan-out body may be a support workflow', async () => {
     await install(reviewKit());
-    await expect(
-      resolveFanOutChildDefinition(deps, project, HELPER, 'include')
-    ).resolves.toMatchObject({ definition: { name: HELPER } });
-    await expect(
-      resolveFanOutChildDefinition(deps, project, HELPER, 'workflow')
-    ).resolves.toMatchObject({ unresolved: expect.any(String) });
-    await expect(
-      resolveFanOutChildDefinition(deps, project, REVIEW, 'workflow')
-    ).resolves.toMatchObject({ definition: { name: REVIEW } });
+    await expect(resolveFanOutChildDefinition(deps, project, HELPER)).resolves.toMatchObject({
+      definition: { name: HELPER },
+    });
   });
 
   test('a qualified name never falls through to a longer name or a copy', async () => {

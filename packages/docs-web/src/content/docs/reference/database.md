@@ -38,6 +38,8 @@ runs/<id>/run.json        derived snapshot, rebuilt when missing or behind the l
 archived-runs/<id>/log.jsonl  retained feed log after run deletion
 runs/<id>/node-sessions.json
 node-sessions/<hash>.json
+state/<document-hash>/name.json scope and document name
+state/<document-hash>/<revision>.json immutable state revisions
 host/codebases.json       project records with per-project envVars
 host/isolation.json       isolation records
 host/users.json           trigger run-as identities
@@ -87,9 +89,12 @@ file storage, because files hold no user tokens and a run would otherwise use th
 token. A GitHub App without `TOKEN_ENCRYPTION_KEY` works. Per-user provider credential
 mode does not prevent selecting file storage. Stored per-user provider credentials are refused during run preflight,
 before creating a worktree. Environment credentials and the provider's own login work
-normally. State documents (`archon state`) are not stored in files; the command requires
-database storage, and `workflow cleanup` has no state revisions to prune. Other SQL-only
-CLI commands, including user and stored credential management, require database storage.
+normally. State documents (`archon state`) use the selected store. Files keep immutable
+JSON revisions under `state/<document-hash>/<revision>.json`, with a `name.json` record
+containing the scope and name. Writes publish through the store-wide lock and recovery
+intent. `workflow cleanup` removes old revisions while keeping each document's latest
+revision, including tombstones. User and stored credential management still require
+database storage.
 
 ## SQLite (Default - No Setup Required)
 
@@ -198,6 +203,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Every provider event a workflow node streams, as `provider_event` rows: the engine envelope (`attemptId`, `seq`, `observedAt`, `event`) in `data`, the node in `step_name`. The same envelope is a `provider_event` line in the run's JSONL log. `GET /api/workflows/runs/{runId}/provider-events` serves them; the run-detail route leaves them out
   - Enables workflow run detail views and debugging
   - On PostgreSQL, `event_order` follows commit order: a row committed later always has a higher value. A deferred constraint trigger (`archon_workflow_event_order`) assigns it at commit while holding an advisory lock, so committing event writers draw values one at a time. Both SQL dialects retain the committed head in `remote_agent_workflow_event_sequence`, so event or run deletion never moves it backwards. PostgreSQL draws from its non-reusing sequence; SQLite increments the high-water row under its single writer
+  - Within one process, a run's standalone event writes (those not part of a larger transaction) go to the database one at a time, in the order they are issued, so they commit and read back in that order. Writes for the same run from two processes (for example the CLI and the server) are not ordered against each other
   - The dashboard event poller follows the store's commit-ordered event feed (`event_order`) across all runs. On PostgreSQL an `AFTER INSERT` trigger (`archon_workflow_event_notify`) calls `pg_notify('archon_dashboard_event', …)` so runs started out of process (the `archon` CLI / `--detach`) stream live to the console; on SQLite the poller picks them up within its interval. The trigger is Postgres-only and best-effort (a role without `CREATE TRIGGER` degrades to poll-only, not a boot failure).
   - A `BEFORE DELETE` trigger copies each deleted row into `remote_agent_workflow_event_archive`, which has the same columns and no run foreign keys, so cursors saved before a deletion can still read the payload. Schema apply adds any column the events table gains to the archive as well
 

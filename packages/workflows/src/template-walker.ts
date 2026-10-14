@@ -51,6 +51,7 @@ export type TemplateSlotName =
   | 'wait.until'
   | 'wait.event'
   | 'wait.attention'
+  | 'wait.options'
   | 'workflow.input'
   | 'workflow.with.*'
   | 'workflow.fan_out.items'
@@ -97,6 +98,7 @@ export const SLOT_SPEC = {
   'wait.until': { surface: 'value', outputReference: true },
   'wait.event': { surface: 'value', outputReference: true },
   'wait.attention': { surface: 'prompt', outputReference: true },
+  'wait.options': { surface: 'value', outputReference: true },
   'workflow.input': { surface: 'value', outputReference: true },
   'workflow.with.*': { surface: 'value', outputReference: true, valuePosition: 'workflow_with' },
   'workflow.fan_out.items': { surface: 'value', outputReference: true },
@@ -304,9 +306,16 @@ function walk(
         node.wait.event,
         value => (node.wait = { event: value, deadline_ms: deadlineMs })
       );
+    // Each replace re-reads `node.wait`, so mapping both slots keeps both results.
     if (node.wait.attention !== undefined)
       slot('wait.attention', 'wait.attention', node.wait.attention, value => {
-        node.wait = { attention: value };
+        const wait = node.wait;
+        if (wait.attention !== undefined) node.wait = { ...wait, attention: value };
+      });
+    if (typeof node.wait.options === 'string')
+      slot('wait.options', 'wait.options', node.wait.options, value => {
+        const wait = node.wait;
+        if (wait.attention !== undefined) node.wait = { ...wait, options: value };
       });
   } else if (isWorkflowNode(node) || isComposeFanOutNode(node)) {
     if (isWorkflowNode(node) && node.input !== undefined)

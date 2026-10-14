@@ -230,7 +230,7 @@ describe('watchRunAttention', () => {
     expect(h.alerted).toEqual(['r1:completed']);
   });
 
-  test('an attention wait needs a human; event and scheduled waits do not', async () => {
+  test('an attention wait needs attention; event and scheduled waits do not', async () => {
     const h = harness([run('event'), run('time'), run('action')]);
     await h.seed();
 
@@ -261,11 +261,13 @@ describe('watchRunAttention', () => {
       run('action', {
         status: 'paused',
         attention: {
-          kind: 'action_required',
+          kind: 'attention',
           runId: 'action',
           nodeId: 'w',
           message: 'Rotate key',
-          occurrence: 'wait:2026-10-01T10:00:00.000Z',
+          occurrence: 'legacy:w',
+          form: 'message',
+          options: [],
         },
         wait: {
           kind: 'attention',

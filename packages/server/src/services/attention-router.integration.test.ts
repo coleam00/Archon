@@ -222,14 +222,12 @@ test.each([404, 410])(
       expect(JSON.parse(String(call[1]))).toEqual({
         runId,
         workflowName: 'nightly',
-        kind: 'action_required',
+        kind: 'attention',
       });
     expect((await listWebPushSubscriptions()).map(row => row.endpoint)).toEqual([
       subscription('live').endpoint,
     ]);
-    expect((await listAttentionNotices([runId]))[0]?.data.key).toBe(
-      'hold:wait:2026-10-13T01:00:00.000Z'
-    );
+    expect((await listAttentionNotices([runId]))[0]?.data.key).toBe('hold:legacy:hold');
   }
 );
 

@@ -15,6 +15,8 @@ import {
   repoLabelsListSchema,
   prViewRequestSchema,
   prViewSchema,
+  workItemListRequestSchema,
+  workItemListSchema,
   workItemViewRequestSchema,
   workItemViewSchema,
   type ForgeMutationRequest,
@@ -211,6 +213,7 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
           .nullable(),
       }),
       z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
+      z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
       z.object({
         op: z.literal('pr.reviews'),
         value: prReviewsSchema.extend({

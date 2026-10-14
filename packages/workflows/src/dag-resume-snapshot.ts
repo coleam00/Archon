@@ -138,11 +138,25 @@ export async function foldDagResumeSnapshot(
   const completedExecutions = new Map<string, NodeExecutionMetadata>();
   // Collected and merged once at the end rather than folded pairwise: a pairwise fold
   // cannot tell "one of five contributions reported" from "one of two" (#2662).
-  const usageContributions: { stepName: string; tokens?: TokenUsage; costUsd?: number }[] = [];
+  const usageContributions: {
+    stepName: string;
+    tokens?: TokenUsage;
+    tokensUnknown?: boolean;
+    costUsd?: number;
+  }[] = [];
   const authoritativeInstanceScopes = new Set<string>();
-  function addUsage(stepName: string, rawUsage: { tokens?: unknown; costUsd?: unknown }): void {
-    const contribution: { stepName: string; tokens?: TokenUsage; costUsd?: number } = {
+  function addUsage(
+    stepName: string,
+    rawUsage: { tokens?: unknown; tokensUnknown?: boolean; costUsd?: unknown }
+  ): void {
+    const contribution: {
+      stepName: string;
+      tokens?: TokenUsage;
+      tokensUnknown?: boolean;
+      costUsd?: number;
+    } = {
       stepName,
+      ...(rawUsage.tokensUnknown ? { tokensUnknown: true } : {}),
     };
     if (rawUsage.tokens !== undefined) {
       const eventTokens = rawUsage.tokens;
@@ -201,7 +215,11 @@ export async function foldDagResumeSnapshot(
         );
       }
     }
-    if (contribution.tokens !== undefined || contribution.costUsd !== undefined) {
+    if (
+      contribution.tokensUnknown ||
+      contribution.tokens !== undefined ||
+      contribution.costUsd !== undefined
+    ) {
       usageContributions.push(contribution);
     }
   }
@@ -402,11 +420,14 @@ export async function foldDagResumeSnapshot(
     completedNodeOutputs,
     fanOutSnapshots,
     unresolvedNodeStarts,
-    tokens: mergeTokenUsage(
-      countedUsage.flatMap(contribution =>
-        contribution.tokens === undefined ? [] : [contribution.tokens]
-      )
-    ),
+    tokensUnknown: countedUsage.some(contribution => contribution.tokensUnknown),
+    tokens: countedUsage.some(contribution => contribution.tokensUnknown)
+      ? undefined
+      : mergeTokenUsage(
+          countedUsage.flatMap(contribution =>
+            contribution.tokens === undefined ? [] : [contribution.tokens]
+          )
+        ),
     costUsd: countedUsage.reduce((total, contribution) => total + (contribution.costUsd ?? 0), 0),
   };
 }

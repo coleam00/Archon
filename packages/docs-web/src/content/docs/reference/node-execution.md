@@ -21,7 +21,7 @@ Timing describes the attempt's start and observed duration. Lifecycle describes 
 
 ## Measurements and accounting
 
-A measurement is either a reported value (`source: provider`) or explicitly unavailable. A genuine reported zero is a value; absence never becomes zero. `startNodeExecution` initializes availability from provider capabilities: `unsupported` means the provider declares no support, `not_reported` means support is declared but no value arrived, `unknown` means support is undeclared, and `not_applicable` means there is no provider. `finishNodeExecution` retains availability for omitted observations and marks rejected token or non-finite numeric observations `invalid`.
+A measurement is either a reported value (`source: provider`) or explicitly unavailable. A genuine reported zero is a value; absence never becomes zero. `startNodeExecution` initializes availability from provider capabilities: `unsupported` means the provider declares no support, `not_reported` means support is declared but no value arrived, `unknown` means support is undeclared, and `not_applicable` means there is no provider. `finishNodeExecution` retains availability for omitted observations and marks rejected token or non-finite numeric observations `invalid`. An explicit provider `tokensUnknown` signal marks token accounting `incomplete`: at least one paid interval cannot be counted, so retries, resumed loops, and run or fan-out totals stay unavailable while cost continues to accumulate. Ordinary omitted measurements do not invalidate a token total.
 
 The [provider capability matrix](/reference/provider-capabilities/) is the per-provider reporting reference. Support does not guarantee a value on every result or complete nested-agent usage. Archon does not estimate cost or infer turns from event counts.
 
@@ -210,22 +210,22 @@ Presence is relative to the containing object: a required child of an optional p
 
 #### binding
 
-| Field path                      | Type / values                                                                             | Presence | Alternative                                     |
-| ------------------------------- | ----------------------------------------------------------------------------------------- | -------- | ----------------------------------------------- |
-| `binding`                       | `object`                                                                                  | required | —                                               |
-| `binding.provider`              | `string`                                                                                  | optional | —                                               |
-| `binding.model`                 | `object`                                                                                  | optional | —                                               |
-| `binding.model.requested`       | `string`                                                                                  | optional | —                                               |
-| `binding.model.resolved`        | `object`                                                                                  | required | `binding.model.resolved.source = "provider"`    |
-| `binding.model.resolved.source` | `"provider"`                                                                              | required | `binding.model.resolved.source = "provider"`    |
-| `binding.model.resolved.value`  | `string`                                                                                  | required | `binding.model.resolved.source = "provider"`    |
-| `binding.model.resolved`        | `object`                                                                                  | required | `binding.model.resolved.source = "unavailable"` |
-| `binding.model.resolved.source` | `"unavailable"`                                                                           | required | `binding.model.resolved.source = "unavailable"` |
-| `binding.model.resolved.reason` | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"`           | required | `binding.model.resolved.source = "unavailable"` |
-| `binding.tier`                  | `"small" \| "medium" \| "large"`                                                          | optional | —                                               |
-| `binding.effort`                | `"minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| "persistent"` | optional | —                                               |
-| `binding.sessionPreview`        | `string`                                                                                  | optional | —                                               |
-| `binding.sessionOrigin`         | `"fresh" \| "resumed" \| "resume-failed-cold"`                                            | optional | —                                               |
+| Field path                      | Type / values                                                                                   | Presence | Alternative                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------- |
+| `binding`                       | `object`                                                                                        | required | —                                               |
+| `binding.provider`              | `string`                                                                                        | optional | —                                               |
+| `binding.model`                 | `object`                                                                                        | optional | —                                               |
+| `binding.model.requested`       | `string`                                                                                        | optional | —                                               |
+| `binding.model.resolved`        | `object`                                                                                        | required | `binding.model.resolved.source = "provider"`    |
+| `binding.model.resolved.source` | `"provider"`                                                                                    | required | `binding.model.resolved.source = "provider"`    |
+| `binding.model.resolved.value`  | `string`                                                                                        | required | `binding.model.resolved.source = "provider"`    |
+| `binding.model.resolved`        | `object`                                                                                        | required | `binding.model.resolved.source = "unavailable"` |
+| `binding.model.resolved.source` | `"unavailable"`                                                                                 | required | `binding.model.resolved.source = "unavailable"` |
+| `binding.model.resolved.reason` | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"` | required | `binding.model.resolved.source = "unavailable"` |
+| `binding.tier`                  | `"small" \| "medium" \| "large"`                                                                | optional | —                                               |
+| `binding.effort`                | `"minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| "persistent"`       | optional | —                                               |
+| `binding.sessionPreview`        | `string`                                                                                        | optional | —                                               |
+| `binding.sessionOrigin`         | `"fresh" \| "resumed" \| "resume-failed-cold"`                                                  | optional | —                                               |
 
 #### timing
 
@@ -237,40 +237,40 @@ Presence is relative to the containing object: a required child of an optional p
 
 #### spend
 
-| Field path                        | Type / values                                                                   | Presence | Alternative                               |
-| --------------------------------- | ------------------------------------------------------------------------------- | -------- | ----------------------------------------- |
-| `spend`                           | `object`                                                                        | required | —                                         |
-| `spend.tokens`                    | `object`                                                                        | required | `spend.tokens.source = "provider"`        |
-| `spend.tokens.source`             | `"provider"`                                                                    | required | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value`              | `object`                                                                        | required | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.input`        | `number`                                                                        | required | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.output`       | `number`                                                                        | required | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.cacheRead`    | `number`                                                                        | optional | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.cacheWrite`   | `number`                                                                        | optional | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.cachePartial` | `true`                                                                          | optional | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.total`        | `number`                                                                        | optional | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.cost`         | `number`                                                                        | optional | `spend.tokens.source = "provider"`        |
-| `spend.tokens`                    | `object`                                                                        | required | `spend.tokens.source = "unavailable"`     |
-| `spend.tokens.source`             | `"unavailable"`                                                                 | required | `spend.tokens.source = "unavailable"`     |
-| `spend.tokens.reason`             | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"` | required | `spend.tokens.source = "unavailable"`     |
-| `spend.costUsd`                   | `object`                                                                        | required | `spend.costUsd.source = "provider"`       |
-| `spend.costUsd.source`            | `"provider"`                                                                    | required | `spend.costUsd.source = "provider"`       |
-| `spend.costUsd.value`             | `number`                                                                        | required | `spend.costUsd.source = "provider"`       |
-| `spend.costUsd`                   | `object`                                                                        | required | `spend.costUsd.source = "unavailable"`    |
-| `spend.costUsd.source`            | `"unavailable"`                                                                 | required | `spend.costUsd.source = "unavailable"`    |
-| `spend.costUsd.reason`            | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"` | required | `spend.costUsd.source = "unavailable"`    |
-| `spend.stopReason`                | `object`                                                                        | required | `spend.stopReason.source = "provider"`    |
-| `spend.stopReason.source`         | `"provider"`                                                                    | required | `spend.stopReason.source = "provider"`    |
-| `spend.stopReason.value`          | `string`                                                                        | required | `spend.stopReason.source = "provider"`    |
-| `spend.stopReason`                | `object`                                                                        | required | `spend.stopReason.source = "unavailable"` |
-| `spend.stopReason.source`         | `"unavailable"`                                                                 | required | `spend.stopReason.source = "unavailable"` |
-| `spend.stopReason.reason`         | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"` | required | `spend.stopReason.source = "unavailable"` |
-| `spend.numTurns`                  | `object`                                                                        | required | `spend.numTurns.source = "provider"`      |
-| `spend.numTurns.source`           | `"provider"`                                                                    | required | `spend.numTurns.source = "provider"`      |
-| `spend.numTurns.value`            | `number`                                                                        | required | `spend.numTurns.source = "provider"`      |
-| `spend.numTurns`                  | `object`                                                                        | required | `spend.numTurns.source = "unavailable"`   |
-| `spend.numTurns.source`           | `"unavailable"`                                                                 | required | `spend.numTurns.source = "unavailable"`   |
-| `spend.numTurns.reason`           | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"` | required | `spend.numTurns.source = "unavailable"`   |
+| Field path                        | Type / values                                                                                   | Presence | Alternative                               |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- | -------- | ----------------------------------------- |
+| `spend`                           | `object`                                                                                        | required | —                                         |
+| `spend.tokens`                    | `object`                                                                                        | required | `spend.tokens.source = "provider"`        |
+| `spend.tokens.source`             | `"provider"`                                                                                    | required | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value`              | `object`                                                                                        | required | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.input`        | `number`                                                                                        | required | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.output`       | `number`                                                                                        | required | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.cacheRead`    | `number`                                                                                        | optional | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.cacheWrite`   | `number`                                                                                        | optional | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.cachePartial` | `true`                                                                                          | optional | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.total`        | `number`                                                                                        | optional | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.cost`         | `number`                                                                                        | optional | `spend.tokens.source = "provider"`        |
+| `spend.tokens`                    | `object`                                                                                        | required | `spend.tokens.source = "unavailable"`     |
+| `spend.tokens.source`             | `"unavailable"`                                                                                 | required | `spend.tokens.source = "unavailable"`     |
+| `spend.tokens.reason`             | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"` | required | `spend.tokens.source = "unavailable"`     |
+| `spend.costUsd`                   | `object`                                                                                        | required | `spend.costUsd.source = "provider"`       |
+| `spend.costUsd.source`            | `"provider"`                                                                                    | required | `spend.costUsd.source = "provider"`       |
+| `spend.costUsd.value`             | `number`                                                                                        | required | `spend.costUsd.source = "provider"`       |
+| `spend.costUsd`                   | `object`                                                                                        | required | `spend.costUsd.source = "unavailable"`    |
+| `spend.costUsd.source`            | `"unavailable"`                                                                                 | required | `spend.costUsd.source = "unavailable"`    |
+| `spend.costUsd.reason`            | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"` | required | `spend.costUsd.source = "unavailable"`    |
+| `spend.stopReason`                | `object`                                                                                        | required | `spend.stopReason.source = "provider"`    |
+| `spend.stopReason.source`         | `"provider"`                                                                                    | required | `spend.stopReason.source = "provider"`    |
+| `spend.stopReason.value`          | `string`                                                                                        | required | `spend.stopReason.source = "provider"`    |
+| `spend.stopReason`                | `object`                                                                                        | required | `spend.stopReason.source = "unavailable"` |
+| `spend.stopReason.source`         | `"unavailable"`                                                                                 | required | `spend.stopReason.source = "unavailable"` |
+| `spend.stopReason.reason`         | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"` | required | `spend.stopReason.source = "unavailable"` |
+| `spend.numTurns`                  | `object`                                                                                        | required | `spend.numTurns.source = "provider"`      |
+| `spend.numTurns.source`           | `"provider"`                                                                                    | required | `spend.numTurns.source = "provider"`      |
+| `spend.numTurns.value`            | `number`                                                                                        | required | `spend.numTurns.source = "provider"`      |
+| `spend.numTurns`                  | `object`                                                                                        | required | `spend.numTurns.source = "unavailable"`   |
+| `spend.numTurns.source`           | `"unavailable"`                                                                                 | required | `spend.numTurns.source = "unavailable"`   |
+| `spend.numTurns.reason`           | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"` | required | `spend.numTurns.source = "unavailable"`   |
 
 #### accounting
 
@@ -315,7 +315,7 @@ Presence is relative to the containing object: a required child of an optional p
 | `lifecycle.cause.origin`                 | `string`                                                                                                                                                                                    | required | `lifecycle.status = "skipped"; lifecycle.cause.kind = "upstream_skipped"`      |
 | `lifecycle`                              | `object`                                                                                                                                                                                    | required | `lifecycle.status = "suspended"`                                               |
 | `lifecycle.status`                       | `"suspended"`                                                                                                                                                                               | required | `lifecycle.status = "suspended"`                                               |
-| `lifecycle.point`                        | `"approval" \| "interactive_loop" \| "writeback" \| "child_workflow"`                                                                                                                       | required | `lifecycle.status = "suspended"; lifecycle.point alternative 1`                |
+| `lifecycle.point`                        | `"approval" \| "interactive_loop" \| "writeback" \| "child_workflow" \| "fan_out"`                                                                                                          | required | `lifecycle.status = "suspended"; lifecycle.point alternative 1`                |
 | `lifecycle.point`                        | `"wait"`                                                                                                                                                                                    | required | `lifecycle.status = "suspended"; lifecycle.point alternative 2`                |
 
 #### output
@@ -508,22 +508,22 @@ Presence is relative to the containing object: a required child of an optional p
 
 #### binding
 
-| Field path                      | Type / values                                                                             | Presence | Alternative                                     |
-| ------------------------------- | ----------------------------------------------------------------------------------------- | -------- | ----------------------------------------------- |
-| `binding`                       | `object`                                                                                  | required | —                                               |
-| `binding.provider`              | `string`                                                                                  | optional | —                                               |
-| `binding.model`                 | `object`                                                                                  | optional | —                                               |
-| `binding.model.requested`       | `string`                                                                                  | optional | —                                               |
-| `binding.model.resolved`        | `object`                                                                                  | required | `binding.model.resolved.source = "provider"`    |
-| `binding.model.resolved.source` | `"provider"`                                                                              | required | `binding.model.resolved.source = "provider"`    |
-| `binding.model.resolved.value`  | `string`                                                                                  | required | `binding.model.resolved.source = "provider"`    |
-| `binding.model.resolved`        | `object`                                                                                  | required | `binding.model.resolved.source = "unavailable"` |
-| `binding.model.resolved.source` | `"unavailable"`                                                                           | required | `binding.model.resolved.source = "unavailable"` |
-| `binding.model.resolved.reason` | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"`           | required | `binding.model.resolved.source = "unavailable"` |
-| `binding.tier`                  | `"small" \| "medium" \| "large"`                                                          | optional | —                                               |
-| `binding.effort`                | `"minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| "persistent"` | optional | —                                               |
-| `binding.sessionPreview`        | `string`                                                                                  | optional | —                                               |
-| `binding.sessionOrigin`         | `"fresh" \| "resumed" \| "resume-failed-cold"`                                            | optional | —                                               |
+| Field path                      | Type / values                                                                                   | Presence | Alternative                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------- |
+| `binding`                       | `object`                                                                                        | required | —                                               |
+| `binding.provider`              | `string`                                                                                        | optional | —                                               |
+| `binding.model`                 | `object`                                                                                        | optional | —                                               |
+| `binding.model.requested`       | `string`                                                                                        | optional | —                                               |
+| `binding.model.resolved`        | `object`                                                                                        | required | `binding.model.resolved.source = "provider"`    |
+| `binding.model.resolved.source` | `"provider"`                                                                                    | required | `binding.model.resolved.source = "provider"`    |
+| `binding.model.resolved.value`  | `string`                                                                                        | required | `binding.model.resolved.source = "provider"`    |
+| `binding.model.resolved`        | `object`                                                                                        | required | `binding.model.resolved.source = "unavailable"` |
+| `binding.model.resolved.source` | `"unavailable"`                                                                                 | required | `binding.model.resolved.source = "unavailable"` |
+| `binding.model.resolved.reason` | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"` | required | `binding.model.resolved.source = "unavailable"` |
+| `binding.tier`                  | `"small" \| "medium" \| "large"`                                                                | optional | —                                               |
+| `binding.effort`                | `"minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| "persistent"`       | optional | —                                               |
+| `binding.sessionPreview`        | `string`                                                                                        | optional | —                                               |
+| `binding.sessionOrigin`         | `"fresh" \| "resumed" \| "resume-failed-cold"`                                                  | optional | —                                               |
 
 #### timing
 
@@ -535,40 +535,40 @@ Presence is relative to the containing object: a required child of an optional p
 
 #### spend
 
-| Field path                        | Type / values                                                                   | Presence | Alternative                               |
-| --------------------------------- | ------------------------------------------------------------------------------- | -------- | ----------------------------------------- |
-| `spend`                           | `object`                                                                        | required | —                                         |
-| `spend.tokens`                    | `object`                                                                        | required | `spend.tokens.source = "provider"`        |
-| `spend.tokens.source`             | `"provider"`                                                                    | required | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value`              | `object`                                                                        | required | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.input`        | `number`                                                                        | required | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.output`       | `number`                                                                        | required | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.cacheRead`    | `number`                                                                        | optional | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.cacheWrite`   | `number`                                                                        | optional | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.cachePartial` | `true`                                                                          | optional | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.total`        | `number`                                                                        | optional | `spend.tokens.source = "provider"`        |
-| `spend.tokens.value.cost`         | `number`                                                                        | optional | `spend.tokens.source = "provider"`        |
-| `spend.tokens`                    | `object`                                                                        | required | `spend.tokens.source = "unavailable"`     |
-| `spend.tokens.source`             | `"unavailable"`                                                                 | required | `spend.tokens.source = "unavailable"`     |
-| `spend.tokens.reason`             | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"` | required | `spend.tokens.source = "unavailable"`     |
-| `spend.costUsd`                   | `object`                                                                        | required | `spend.costUsd.source = "provider"`       |
-| `spend.costUsd.source`            | `"provider"`                                                                    | required | `spend.costUsd.source = "provider"`       |
-| `spend.costUsd.value`             | `number`                                                                        | required | `spend.costUsd.source = "provider"`       |
-| `spend.costUsd`                   | `object`                                                                        | required | `spend.costUsd.source = "unavailable"`    |
-| `spend.costUsd.source`            | `"unavailable"`                                                                 | required | `spend.costUsd.source = "unavailable"`    |
-| `spend.costUsd.reason`            | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"` | required | `spend.costUsd.source = "unavailable"`    |
-| `spend.stopReason`                | `object`                                                                        | required | `spend.stopReason.source = "provider"`    |
-| `spend.stopReason.source`         | `"provider"`                                                                    | required | `spend.stopReason.source = "provider"`    |
-| `spend.stopReason.value`          | `string`                                                                        | required | `spend.stopReason.source = "provider"`    |
-| `spend.stopReason`                | `object`                                                                        | required | `spend.stopReason.source = "unavailable"` |
-| `spend.stopReason.source`         | `"unavailable"`                                                                 | required | `spend.stopReason.source = "unavailable"` |
-| `spend.stopReason.reason`         | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"` | required | `spend.stopReason.source = "unavailable"` |
-| `spend.numTurns`                  | `object`                                                                        | required | `spend.numTurns.source = "provider"`      |
-| `spend.numTurns.source`           | `"provider"`                                                                    | required | `spend.numTurns.source = "provider"`      |
-| `spend.numTurns.value`            | `number`                                                                        | required | `spend.numTurns.source = "provider"`      |
-| `spend.numTurns`                  | `object`                                                                        | required | `spend.numTurns.source = "unavailable"`   |
-| `spend.numTurns.source`           | `"unavailable"`                                                                 | required | `spend.numTurns.source = "unavailable"`   |
-| `spend.numTurns.reason`           | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"` | required | `spend.numTurns.source = "unavailable"`   |
+| Field path                        | Type / values                                                                                   | Presence | Alternative                               |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- | -------- | ----------------------------------------- |
+| `spend`                           | `object`                                                                                        | required | —                                         |
+| `spend.tokens`                    | `object`                                                                                        | required | `spend.tokens.source = "provider"`        |
+| `spend.tokens.source`             | `"provider"`                                                                                    | required | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value`              | `object`                                                                                        | required | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.input`        | `number`                                                                                        | required | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.output`       | `number`                                                                                        | required | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.cacheRead`    | `number`                                                                                        | optional | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.cacheWrite`   | `number`                                                                                        | optional | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.cachePartial` | `true`                                                                                          | optional | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.total`        | `number`                                                                                        | optional | `spend.tokens.source = "provider"`        |
+| `spend.tokens.value.cost`         | `number`                                                                                        | optional | `spend.tokens.source = "provider"`        |
+| `spend.tokens`                    | `object`                                                                                        | required | `spend.tokens.source = "unavailable"`     |
+| `spend.tokens.source`             | `"unavailable"`                                                                                 | required | `spend.tokens.source = "unavailable"`     |
+| `spend.tokens.reason`             | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"` | required | `spend.tokens.source = "unavailable"`     |
+| `spend.costUsd`                   | `object`                                                                                        | required | `spend.costUsd.source = "provider"`       |
+| `spend.costUsd.source`            | `"provider"`                                                                                    | required | `spend.costUsd.source = "provider"`       |
+| `spend.costUsd.value`             | `number`                                                                                        | required | `spend.costUsd.source = "provider"`       |
+| `spend.costUsd`                   | `object`                                                                                        | required | `spend.costUsd.source = "unavailable"`    |
+| `spend.costUsd.source`            | `"unavailable"`                                                                                 | required | `spend.costUsd.source = "unavailable"`    |
+| `spend.costUsd.reason`            | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"` | required | `spend.costUsd.source = "unavailable"`    |
+| `spend.stopReason`                | `object`                                                                                        | required | `spend.stopReason.source = "provider"`    |
+| `spend.stopReason.source`         | `"provider"`                                                                                    | required | `spend.stopReason.source = "provider"`    |
+| `spend.stopReason.value`          | `string`                                                                                        | required | `spend.stopReason.source = "provider"`    |
+| `spend.stopReason`                | `object`                                                                                        | required | `spend.stopReason.source = "unavailable"` |
+| `spend.stopReason.source`         | `"unavailable"`                                                                                 | required | `spend.stopReason.source = "unavailable"` |
+| `spend.stopReason.reason`         | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"` | required | `spend.stopReason.source = "unavailable"` |
+| `spend.numTurns`                  | `object`                                                                                        | required | `spend.numTurns.source = "provider"`      |
+| `spend.numTurns.source`           | `"provider"`                                                                                    | required | `spend.numTurns.source = "provider"`      |
+| `spend.numTurns.value`            | `number`                                                                                        | required | `spend.numTurns.source = "provider"`      |
+| `spend.numTurns`                  | `object`                                                                                        | required | `spend.numTurns.source = "unavailable"`   |
+| `spend.numTurns.source`           | `"unavailable"`                                                                                 | required | `spend.numTurns.source = "unavailable"`   |
+| `spend.numTurns.reason`           | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"` | required | `spend.numTurns.source = "unavailable"`   |
 
 #### accounting
 
@@ -613,7 +613,7 @@ Presence is relative to the containing object: a required child of an optional p
 | `lifecycle.cause.origin`                 | `string`                                                                                                                                                                                    | required | `lifecycle.status = "skipped"; lifecycle.cause.kind = "upstream_skipped"`      |
 | `lifecycle`                              | `object`                                                                                                                                                                                    | required | `lifecycle.status = "suspended"`                                               |
 | `lifecycle.status`                       | `"suspended"`                                                                                                                                                                               | required | `lifecycle.status = "suspended"`                                               |
-| `lifecycle.point`                        | `"approval" \| "interactive_loop" \| "writeback" \| "child_workflow"`                                                                                                                       | required | `lifecycle.status = "suspended"; lifecycle.point alternative 1`                |
+| `lifecycle.point`                        | `"approval" \| "interactive_loop" \| "writeback" \| "child_workflow" \| "fan_out"`                                                                                                          | required | `lifecycle.status = "suspended"; lifecycle.point alternative 1`                |
 | `lifecycle.point`                        | `"wait"`                                                                                                                                                                                    | required | `lifecycle.status = "suspended"; lifecycle.point alternative 2`                |
 
 ### Cache record
@@ -823,7 +823,7 @@ Presence is relative to the containing object: a required child of an optional p
 | `binding.model.resolved.value`                              | `string`                                                                                                                                                                                    | required | `binding.model.resolved.source = "provider"`                                                |
 | `binding.model.resolved`                                    | `object`                                                                                                                                                                                    | required | `binding.model.resolved.source = "unavailable"`                                             |
 | `binding.model.resolved.source`                             | `"unavailable"`                                                                                                                                                                             | required | `binding.model.resolved.source = "unavailable"`                                             |
-| `binding.model.resolved.reason`                             | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"`                                                                                                             | required | `binding.model.resolved.source = "unavailable"`                                             |
+| `binding.model.resolved.reason`                             | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"`                                                                                             | required | `binding.model.resolved.source = "unavailable"`                                             |
 | `binding.tier`                                              | `"small" \| "medium" \| "large"`                                                                                                                                                            | optional | —                                                                                           |
 | `binding.effort`                                            | `"minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| "persistent"`                                                                                                   | optional | —                                                                                           |
 | `binding.sessionPreview`                                    | `string`                                                                                                                                                                                    | optional | —                                                                                           |
@@ -844,25 +844,25 @@ Presence is relative to the containing object: a required child of an optional p
 | `spend.tokens.value.cost`                                   | `number`                                                                                                                                                                                    | optional | `spend.tokens.source = "provider"`                                                          |
 | `spend.tokens`                                              | `object`                                                                                                                                                                                    | required | `spend.tokens.source = "unavailable"`                                                       |
 | `spend.tokens.source`                                       | `"unavailable"`                                                                                                                                                                             | required | `spend.tokens.source = "unavailable"`                                                       |
-| `spend.tokens.reason`                                       | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"`                                                                                                             | required | `spend.tokens.source = "unavailable"`                                                       |
+| `spend.tokens.reason`                                       | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"`                                                                                             | required | `spend.tokens.source = "unavailable"`                                                       |
 | `spend.costUsd`                                             | `object`                                                                                                                                                                                    | required | `spend.costUsd.source = "provider"`                                                         |
 | `spend.costUsd.source`                                      | `"provider"`                                                                                                                                                                                | required | `spend.costUsd.source = "provider"`                                                         |
 | `spend.costUsd.value`                                       | `number`                                                                                                                                                                                    | required | `spend.costUsd.source = "provider"`                                                         |
 | `spend.costUsd`                                             | `object`                                                                                                                                                                                    | required | `spend.costUsd.source = "unavailable"`                                                      |
 | `spend.costUsd.source`                                      | `"unavailable"`                                                                                                                                                                             | required | `spend.costUsd.source = "unavailable"`                                                      |
-| `spend.costUsd.reason`                                      | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"`                                                                                                             | required | `spend.costUsd.source = "unavailable"`                                                      |
+| `spend.costUsd.reason`                                      | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"`                                                                                             | required | `spend.costUsd.source = "unavailable"`                                                      |
 | `spend.stopReason`                                          | `object`                                                                                                                                                                                    | required | `spend.stopReason.source = "provider"`                                                      |
 | `spend.stopReason.source`                                   | `"provider"`                                                                                                                                                                                | required | `spend.stopReason.source = "provider"`                                                      |
 | `spend.stopReason.value`                                    | `string`                                                                                                                                                                                    | required | `spend.stopReason.source = "provider"`                                                      |
 | `spend.stopReason`                                          | `object`                                                                                                                                                                                    | required | `spend.stopReason.source = "unavailable"`                                                   |
 | `spend.stopReason.source`                                   | `"unavailable"`                                                                                                                                                                             | required | `spend.stopReason.source = "unavailable"`                                                   |
-| `spend.stopReason.reason`                                   | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"`                                                                                                             | required | `spend.stopReason.source = "unavailable"`                                                   |
+| `spend.stopReason.reason`                                   | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"`                                                                                             | required | `spend.stopReason.source = "unavailable"`                                                   |
 | `spend.numTurns`                                            | `object`                                                                                                                                                                                    | required | `spend.numTurns.source = "provider"`                                                        |
 | `spend.numTurns.source`                                     | `"provider"`                                                                                                                                                                                | required | `spend.numTurns.source = "provider"`                                                        |
 | `spend.numTurns.value`                                      | `number`                                                                                                                                                                                    | required | `spend.numTurns.source = "provider"`                                                        |
 | `spend.numTurns`                                            | `object`                                                                                                                                                                                    | required | `spend.numTurns.source = "unavailable"`                                                     |
 | `spend.numTurns.source`                                     | `"unavailable"`                                                                                                                                                                             | required | `spend.numTurns.source = "unavailable"`                                                     |
-| `spend.numTurns.reason`                                     | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid"`                                                                                                             | required | `spend.numTurns.source = "unavailable"`                                                     |
+| `spend.numTurns.reason`                                     | `"unsupported" \| "not_reported" \| "unknown" \| "not_applicable" \| "invalid" \| "incomplete"`                                                                                             | required | `spend.numTurns.source = "unavailable"`                                                     |
 | `accounting`                                                | `"node" \| "aggregate" \| "instance" \| "amendment"`                                                                                                                                        | optional | —                                                                                           |
 | `type`                                                      | `string`                                                                                                                                                                                    | optional | —                                                                                           |
 | `command`                                                   | `string`                                                                                                                                                                                    | optional | `command alternative 1`                                                                     |

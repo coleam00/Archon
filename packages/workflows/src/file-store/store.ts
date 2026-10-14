@@ -1,6 +1,6 @@
 import { createFileAdmissionStore, createAdmissionTransaction } from './admission';
 import { NODE_LIFECYCLE_EVENT_TYPES, foldActiveNodeIds } from '../store';
-import { FileStoreUnsupportedError } from './errors';
+import { createFileStateDocumentStore } from './state-documents';
 import { createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -37,9 +37,6 @@ import {
 } from './commit';
 
 const log = createLogger('file-store');
-const unsupportedStateDocuments = async (): Promise<never> => {
-  throw new FileStoreUnsupportedError('state documents');
-};
 export interface FileWorkflowStoreOptions {
   root: string;
   getCodebase?: IWorkflowStore['getCodebase'];
@@ -312,6 +309,8 @@ export async function createFileWorkflowStore(
       query('all', view => view.listDueWorkflowContinuations(now, limit)),
     deferWorkflowContinuation: (id, retry, cursor) =>
       write([id], view => view.deferWorkflowContinuation(id, retry, cursor)),
+    answerAttentionWait: (id, answered) =>
+      write([id], view => view.answerAttentionWait(id, answered)),
     signalWorkflowWait: (id, wait, payload) =>
       write([id], view => view.signalWorkflowWait(id, wait, payload)),
     // Cleanup archives logs without hydrating current-state events.
@@ -416,14 +415,7 @@ export async function createFileWorkflowStore(
         };
       }),
     ...createFileAdmissionStore(root),
-    getStateDocument: unsupportedStateDocuments,
-    putStateDocument: unsupportedStateDocuments,
-    patchStateDocument: unsupportedStateDocuments,
-    deleteStateDocument: unsupportedStateDocuments,
-    listStateRevisions: unsupportedStateDocuments,
-    listStateDocuments: unsupportedStateDocuments,
-    // The file store can never hold a state revision, so `workflow cleanup` has none to prune.
-    pruneStateRevisions: async () => ({ count: 0 }),
+    ...createFileStateDocumentStore(root),
   };
   return store;
 }

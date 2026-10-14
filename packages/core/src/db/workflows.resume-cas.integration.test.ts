@@ -302,7 +302,7 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
       resolved: null,
     });
 
-    await approveWorkflow('gate-1', 'ship it', { kind: 'operator' });
+    await approveWorkflow('gate-1', 'ship it', { kind: 'operator' }, { via: 'cli' });
 
     // Status is honest: still paused, not a fake failure; no completion stamp.
     const staged = await getWorkflowRun('gate-1');
@@ -313,9 +313,9 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
     expect(staged?.metadata.approval_response).toBe('approved');
 
     // Double-approve guard (the status check alone no longer blocks it).
-    await expect(approveWorkflow('gate-1', 'again', { kind: 'operator' })).rejects.toThrow(
-      'already approved and is awaiting resume'
-    );
+    await expect(
+      approveWorkflow('gate-1', 'again', { kind: 'operator' }, { via: 'cli' })
+    ).rejects.toThrow('already approved and is awaiting resume');
 
     // Both resumable pickups find the staged run: the orchestrator's
     // parent-conversation query and the CLI's working-path query
@@ -350,7 +350,7 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
     expect(approval.resolved ?? null).toBeNull();
 
     // And the second gate is approvable again.
-    await approveWorkflow('gate-1', 'step 2 fine', { kind: 'operator' });
+    await approveWorkflow('gate-1', 'step 2 fine', { kind: 'operator' }, { via: 'cli' });
     const staged = await getWorkflowRun('gate-1');
     expect((staged?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
     expect(staged?.status).toBe('paused');
@@ -507,7 +507,12 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
       { rejection_count: 0 }
     );
 
-    const result = await rejectWorkflow('gate-reject', 'needs tests', { kind: 'operator' });
+    const result = await rejectWorkflow(
+      'gate-reject',
+      'needs tests',
+      { kind: 'operator' },
+      { via: 'cli' }
+    );
     expect(result.cancelled).toBe(false);
 
     const staged = await getWorkflowRun('gate-reject');
@@ -519,9 +524,9 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
     expect(staged?.metadata.rejection_count).toBe(1);
 
     // Double-reject guard.
-    await expect(rejectWorkflow('gate-reject', 'again', { kind: 'operator' })).rejects.toThrow(
-      'already rejected and is awaiting resume'
-    );
+    await expect(
+      rejectWorkflow('gate-reject', 'again', { kind: 'operator' }, { via: 'cli' })
+    ).rejects.toThrow('already rejected and is awaiting resume');
 
     // The staged rework is resumable.
     const byParent = await findResumableRunByParentConversation('wf-gate-reject', 'conv-1', 'cb-1');
@@ -537,7 +542,7 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
       resolved: null,
     });
 
-    const result = await rejectWorkflow('gate-cancel', 'no', { kind: 'operator' });
+    const result = await rejectWorkflow('gate-cancel', 'no', { kind: 'operator' }, { via: 'cli' });
     expect(result.cancelled).toBe(true);
     expect((await getWorkflowRun('gate-cancel'))?.status).toBe('cancelled');
 
@@ -826,7 +831,7 @@ describe('fan-out cancellation recovery — real SQLite', () => {
 
     await db.query('ALTER TABLE remote_agent_workflow_events RENAME TO events_stash', []);
     try {
-      await expect(cancelFanOutRun('fan-out-cancel-atomic', 'fan_out_gate')).rejects.toThrow(
+      await expect(cancelFanOutRun('fan-out-cancel-atomic', 'fan_out_orphan')).rejects.toThrow(
         'Failed to cancel fan-out run'
       );
     } finally {
@@ -932,7 +937,7 @@ describe('durable wait continuation races — real SQLite', () => {
     });
   });
 
-  test('never schedules an action-required wait and consumes it only after explicit resume', async () => {
+  test('never schedules an attention wait and consumes it only after explicit resume', async () => {
     const attentionA = {
       owner: 'node' as const,
       nodeId: 'rerun-ci',
@@ -975,7 +980,7 @@ describe('durable wait continuation races — real SQLite', () => {
     expect((await getWorkflowRun('attention-explicit-resume'))?.metadata.wait).toEqual(attentionB);
   });
 
-  test('makes an undeliverable action-required pause visibly failed', async () => {
+  test('makes an undeliverable attention pause visibly failed', async () => {
     const attention = {
       owner: 'node' as const,
       nodeId: 'rerun-ci',
@@ -989,7 +994,7 @@ describe('durable wait continuation races — real SQLite', () => {
       failPausedAttentionWait(
         'attention-notification-failed',
         attention,
-        'action-required notification was not delivered'
+        'attention notification was not delivered'
       )
     ).resolves.toEqual({ failed: true });
 
@@ -998,7 +1003,7 @@ describe('durable wait continuation races — real SQLite', () => {
     expect(failed?.completed_at).not.toBeNull();
     expect(failed?.metadata).toMatchObject({
       wait: attention,
-      error: 'action-required notification was not delivered',
+      error: 'attention notification was not delivered',
     });
     expect(await countEvents('attention-notification-failed', 'workflow_failed')).toBe(1);
     expect((await terminalRecord('attention-notification-failed')).status).toBe('failed');
@@ -1192,10 +1197,7 @@ describe('stale gate actions — real SQLite', () => {
           decision,
           'feedback',
           { kind: 'operator' },
-          {
-            nodeId: 'earlier',
-            pauseId: 'pause-one',
-          }
+          { via: 'cli', expectedGate: { nodeId: 'earlier', pauseId: 'pause-one' } }
         )
       ).rejects.toThrow('no longer paused at the expected gate');
       const current = await getWorkflowRun(runId);

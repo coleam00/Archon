@@ -120,6 +120,15 @@ The root output must still be a JSON object. For schemaless `bash:`/`script:` pr
 every nested key must exist and intermediate values must be objects; a missing key or
 non-object intermediate fails the consuming node.
 
+A `wait:` node's contract is fixed by the engine. A time or event wait declares
+`status`, `waited_ms`, `event` and `payload`. An [attention wait](/guides/authoring-workflows/#attention-waits)
+declares its answer by form: `message` declares `text`; `approval` and `select` declare
+`decision` and `text`; `multi_select` declares `decisions` (an array of option ids) and
+`text`. So `$ask.output.decision` is checked at load time, and in a `loop_group` whose body
+ends in the wait, the next iteration reads the answer as `$LOOP_PREV.ask.output.text`.
+A wait's `options` may be one whole `$node.output.<field>` reference; it is read as a
+logical value when the wait pauses, not substituted as text.
+
 For `workflow:` results, the selected child producer owns the contract. Its declared
 paths travel with the result and survive resume; the parent cannot declare an
 `output_format` on the `workflow:` node. A child result recorded before nested paths
@@ -174,8 +183,9 @@ nodes:
 
 ### Node-local `with:` bindings on `command:` and `script:` nodes
 
-A command file and a named script are opaque to inline text substitution — the engine never
-rewrites their bodies. `with:` on a `command:` or `script:` node binds upstream values **by
+A command file and a named script live in their own files, outside the workflow YAML. A
+command body gets the same variable substitution as an inline `prompt:`; a named script body
+is never rewritten. `with:` on a `command:` or `script:` node binds upstream values **by
 name** through the channels those bodies already read: `$INPUTS.<name>` in a command file,
 `INPUTS_<UPPER_SNAKE>` env vars in a script.
 

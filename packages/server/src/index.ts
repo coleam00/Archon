@@ -925,6 +925,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     port,
     idleTimeout: 255, // Max value (seconds) - prevents SSE connections from being killed
   });
+  // Children must use the bound socket, including explicit overrides and worktree ports.
+  process.env.ARCHON_PORT = String(server.port);
   getLog().info({ port: server.port, hostname }, 'server_listening');
 
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)

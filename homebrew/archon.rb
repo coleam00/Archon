@@ -47,6 +47,18 @@ class Archon < Formula
     bin.install binary_name => "archon"
   end
 
+  def caveats
+    <<~EOS
+      Archon ships without AI providers. Install the ones you use:
+        archon setup
+      or directly:
+        archon provider install <claude|codex|pi>
+
+      After `brew upgrade archon`, run `archon provider install` again for each
+      provider you use; installed providers must match the CLI version.
+    EOS
+  end
+
   test do
     # Basic version check - archon version should exit with 0 on success
     assert_match version.to_s, shell_output("#{bin}/archon version")

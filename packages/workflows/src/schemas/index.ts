@@ -236,6 +236,7 @@ export {
   workflowWaitStepName,
   isScheduledWorkflowResume,
   isRunBlockedOnChild,
+  isFanOutBlockReleased,
   suspendReasonSchema,
   isRecognizedSuspendReason,
   reRunsOwnNodeOnResume,

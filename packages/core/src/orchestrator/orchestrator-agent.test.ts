@@ -3150,7 +3150,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(opts.priorCompletedNodes?.size).toBeGreaterThan(0);
   });
 
-  test('a plain workflow run does not consume an action-required pause', async () => {
+  test('a plain workflow run does not consume an attention pause', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
@@ -3179,7 +3179,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
   });
 
-  test('an explicit workflow resume consumes an action-required pause', async () => {
+  test('an explicit workflow resume consumes an attention pause', async () => {
     const requestedRun = makeResumableRun({
       status: 'paused',
       metadata: {
@@ -4414,18 +4414,19 @@ describe('paused approval gate routing', () => {
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
 
-  test('a paused run with a malformed approval context sends the user to inspect it, not resolve it', async () => {
+  test('a paused run with a malformed legacy approval context sends the user to inspect or reject it', async () => {
     arrangeGatedChat({ metadata: {} });
 
     await handleMessage(makePlatform(), 'conv-1', 'looks good', { actor: operator });
 
-    // approve refuses an unreadable gate, so naming it would hand the user a command that fails.
+    // approve refuses an unreadable gate, so naming it would hand the user a command that
+    // fails; reject still accepts a legacy gate whose metadata is unreadable.
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
     expect(prompt).toContain('missing or malformed');
     expect(prompt).toContain('/workflow status run-1');
     expect(prompt).not.toContain('/workflow approve run-1');
-    expect(prompt).not.toContain('/workflow reject run-1');
+    expect(prompt).toContain('/workflow reject run-1 <reason>');
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
 
@@ -4462,6 +4463,8 @@ describe('paused approval gate routing', () => {
           nodeId: 'gate-1',
           message: 'Please review the plan',
           resolved: 'approved',
+          answeredVia: 'manage_run',
+          answeredAt: expect.any(String),
         },
         approval_response: 'approved',
         rejection_reason: '',

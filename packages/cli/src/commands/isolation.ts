@@ -15,7 +15,11 @@ import {
   getUniqueCommitCount,
   isPatchEquivalent,
 } from '@archon/git';
-import { getIsolationProvider, readWorktreeCreationId } from '@archon/isolation';
+import {
+  getIsolationProvider,
+  readWorktreeBranchCreated,
+  readWorktreeCreationId,
+} from '@archon/isolation';
 import {
   removeEnvironment,
   listContainerEnvironments,
@@ -149,7 +153,12 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
 
     try {
       const result = await provider.destroy(env.working_path, {
-        branchName: env.branch_name ? toBranchName(env.branch_name) : undefined,
+        // A stale environment's branch is deleted only when the environment created it;
+        // an existing branch it checked out may hold commits that exist nowhere else.
+        branchName:
+          env.branch_name && readWorktreeBranchCreated(env.metadata)
+            ? toBranchName(env.branch_name)
+            : undefined,
         canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
         creationId: readWorktreeCreationId(env.metadata) ?? undefined,
       });

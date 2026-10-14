@@ -1,10 +1,8 @@
-import { relative } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import {
   canonicalizeProjectPath,
-  getArchonWorkspacesPath,
-  getProjectStoragePaths,
-  resolveProjectStorageKey,
+  projectKeyForCodebase,
+  projectKeyForStorageRoot,
   resolveRunStorageRoot,
 } from '@archon/paths';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -108,8 +106,6 @@ export async function stateCommand(
       options.limit === undefined
         ? undefined
         : z.number().int().positive().parse(integer(options.limit));
-    const workspaceKey = (root: string): string =>
-      relative(getArchonWorkspacesPath(), root).split('\\').join('/');
     let projectKey: string | undefined;
     let writer: StateWriter;
     if (env.WORKFLOW_ID) {
@@ -123,7 +119,7 @@ export async function stateCommand(
         );
       const codebase = run.codebase_id ? await store.getCodebase(run.codebase_id) : null;
       const resolved = resolveRunStorageRoot(run, codebase);
-      if (resolved) projectKey = workspaceKey(resolved);
+      if (resolved) projectKey = projectKeyForStorageRoot(resolved);
       else if (!options.install)
         throw new StateProjectResolutionError('The run has no resolvable project root');
       let supplied: unknown = null;
@@ -157,9 +153,7 @@ export async function stateCommand(
         if (!codebase)
           throw new StateProjectResolutionError('Registered project is missing from the store');
       }
-      projectKey = workspaceKey(
-        getProjectStoragePaths(resolveProjectStorageKey(codebase, repoRoot ?? cwd)).root
-      );
+      projectKey = projectKeyForCodebase(codebase, repoRoot ?? cwd);
       writer = { kind: 'surface', via: 'cli' };
     }
     const scope: StateScope = options.install

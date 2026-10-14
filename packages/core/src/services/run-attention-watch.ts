@@ -5,9 +5,17 @@
  * endpoint only wake a re-read or prove that active execution no longer has a process.
  * This service never mutates run lifecycle state.
  */
+import { hostname } from 'node:os';
 import { createLogger } from '@archon/paths';
-import { runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  isApprovalContext,
+  isFanOutBlockReleased,
+  isTerminalRunStatus,
+  readExecutionOwner,
+  runAttention,
+} from '@archon/workflows/schemas/workflow-run';
 import type {
+  ExecutionOwnerRecord,
   RunAttention,
   WorkflowRun,
   WorkflowRunStatus,
@@ -32,7 +40,8 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 export const DEFAULT_ATTENTION_POLL_INTERVAL_MS = 1000;
-// Persisted child and parent links are not trusted to be acyclic.
+// Persisted child and parent links are not trusted to be acyclic. Bounds the rows one
+// sub-run tree walk visits, and the parent walk toward the process-entry ancestor.
 const MAX_CHAIN_RUNS = 500;
 
 export type NonTerminalWorkflowRunStatus = Exclude<
@@ -55,13 +64,33 @@ export interface RunAttentionWaitOptions {
   deadlineMs?: number;
   /** Backstop re-read cadence. Defaults to `DEFAULT_ATTENTION_POLL_INTERVAL_MS`. */
   pollIntervalMs?: number;
-  /** Called once after the required durable and live watches are attached. */
-  onAttached?: (observedStatus: WorkflowRunStatus) => void | Promise<void>;
+  /**
+   * Called once after the required durable and live watches are attached. `ownerLiveness`
+   * is set when the run needs an owner whose endpoint this host and user cannot reach, so
+   * the wait watches only the durable row.
+   */
+  onAttached?: (
+    observedStatus: WorkflowRunStatus,
+    ownerLiveness?: UnknownOwnerLiveness
+  ) => void | Promise<void>;
+}
+
+export interface UnknownOwnerLiveness {
+  kind: 'unknown';
+  /** The run's `execution_owner` record; undefined on runs that predate it. */
+  recordedOwner: ExecutionOwnerRecord | undefined;
 }
 
 type RunResolution =
   | { kind: 'attention'; attention: RunAttention }
-  | { kind: 'owner_required'; activeRun: WorkflowRun; executionChainIds: readonly string[] }
+  | {
+      kind: 'owner_required';
+      activeRun: WorkflowRun;
+      /** Endpoints to try: the active child first, then toward the process-entry ancestor. */
+      ownerCandidateIds: readonly string[];
+      /** Nearest stamp in candidate order; an unclaimed child runs in its parent's process. */
+      recordedOwner: ExecutionOwnerRecord | undefined;
+    }
   | { kind: 'ownerless' };
 
 type WakeSource =
@@ -85,68 +114,28 @@ function isNonTerminalStatus(status: WorkflowRunStatus): status is NonTerminalWo
   return status !== 'completed' && status !== 'failed' && status !== 'cancelled';
 }
 
-/** Resolve the child chain while retaining whether its current state needs a live process. */
-async function resolveRun(store: RunAttentionReadStore, run: WorkflowRun): Promise<RunResolution> {
-  const executionChain = [run];
-  let current = run;
-  let attention = runAttention(current);
-  let steps = 0;
-
-  while (attention?.kind === 'blocked_on_child') {
-    steps += 1;
-    if (steps > MAX_CHAIN_RUNS) {
-      return {
-        kind: 'attention',
-        attention: unreadable(
-          attention.runId,
-          'child_chain_too_deep',
-          `sub-run chain is deeper than ${String(MAX_CHAIN_RUNS)} runs`
-        ),
-      };
-    }
-    const child = await store.getWorkflowRun(attention.childRunId);
-    if (!child) {
-      return {
-        kind: 'attention',
-        attention: unreadable(
-          attention.runId,
-          'child_run_missing',
-          `blocked on sub-run ${attention.childRunId}, which has no row`
-        ),
-      };
-    }
-    executionChain.push(child);
-    current = child;
-    const childAttention = runAttention(child);
-    if (childAttention?.kind === 'terminal') {
-      return {
-        kind: 'owner_required',
-        activeRun: child,
-        executionChainIds: executionChain.map(candidate => candidate.id).reverse(),
-      };
-    }
-    attention = childAttention;
-  }
-
-  if (attention) return { kind: 'attention', attention };
-  if (current.status === 'running' || (current !== run && current.status === 'pending')) {
-    return {
-      kind: 'owner_required',
-      activeRun: current,
-      executionChainIds: executionChain.map(candidate => candidate.id).reverse(),
-    };
-  }
-  return { kind: 'ownerless' };
+/**
+ * The live-owner endpoint sits in a host-local, per-uid directory, so a missing endpoint
+ * proves the owner gone only when the recorded owner shares this host and user.
+ */
+function isOwnerEndpointLocal(owner: ExecutionOwnerRecord | undefined): boolean {
+  if (!owner || owner.host !== hostname()) return false;
+  const uid = process.getuid?.();
+  return uid === undefined || owner.uid === uid;
 }
 
-/** Prefer the active child, then walk toward the process-entry ancestor. */
-async function ownerCandidates(
+async function ownerRequired(
   store: RunAttentionReadStore,
-  resolution: Extract<RunResolution, { kind: 'owner_required' }>
-): Promise<string[]> {
-  const candidates = [...resolution.executionChainIds];
-  const seen = new Set(candidates);
-  let current = resolution.activeRun;
+  activeRun: WorkflowRun,
+  executionChain: readonly WorkflowRun[]
+): Promise<Extract<RunResolution, { kind: 'owner_required' }>> {
+  const newestFirst = [...executionChain].reverse();
+  const ownerCandidateIds = newestFirst.map(candidate => candidate.id);
+  let recordedOwner = newestFirst
+    .map(candidate => readExecutionOwner(candidate.metadata))
+    .find(owner => owner !== undefined);
+  const seen = new Set(ownerCandidateIds);
+  let current = activeRun;
   let steps = 0;
   while (current.parent_run_id) {
     steps += 1;
@@ -154,13 +143,101 @@ async function ownerCandidates(
     const parentId = current.parent_run_id;
     if (!seen.has(parentId)) {
       seen.add(parentId);
-      candidates.push(parentId);
+      ownerCandidateIds.push(parentId);
     }
     const parent = await store.getWorkflowRun(parentId);
     if (!parent) break;
+    recordedOwner ??= readExecutionOwner(parent.metadata);
     current = parent;
   }
-  return candidates;
+  return { kind: 'owner_required', activeRun, ownerCandidateIds, recordedOwner };
+}
+
+/**
+ * Resolve the sub-run tree under `run` while retaining whether its current state needs a
+ * live process. A parent blocked on children is never its own item: the walk goes depth
+ * first through the children in item order. The first child that has attention wins;
+ * failing that, the first that needs an owner (any finished child's, once the gate is
+ * released); otherwise nobody is needed.
+ */
+async function resolveRun(store: RunAttentionReadStore, run: WorkflowRun): Promise<RunResolution> {
+  return resolveFrom(store, run, [run], new Set([run.id]));
+}
+
+async function resolveFrom(
+  store: RunAttentionReadStore,
+  current: WorkflowRun,
+  executionChain: readonly WorkflowRun[],
+  visited: Set<string>
+): Promise<RunResolution> {
+  const attention = runAttention(current);
+  const isRoot = executionChain.length === 1;
+  if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
+    const childRunIds =
+      attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
+    const children: WorkflowRun[] = [];
+    for (const childRunId of childRunIds) {
+      if (visited.has(childRunId) || visited.size >= MAX_CHAIN_RUNS) {
+        return {
+          kind: 'attention',
+          attention: unreadable(
+            attention.runId,
+            'child_chain_too_deep',
+            `sub-run tree is larger than ${String(MAX_CHAIN_RUNS)} runs or revisits a run`
+          ),
+        };
+      }
+      visited.add(childRunId);
+      const child = await store.getWorkflowRun(childRunId);
+      if (!child) {
+        return {
+          kind: 'attention',
+          attention: unreadable(
+            attention.runId,
+            'child_run_missing',
+            `blocked on sub-run ${childRunId}, which has no row`
+          ),
+        };
+      }
+      children.push(child);
+    }
+    // A finished fan-out child's hook stands down until the gate is released, so until
+    // then nothing owns that child.
+    const approval = current.metadata?.approval;
+    const released =
+      attention.kind === 'blocked_on_child' ||
+      (isApprovalContext(approval) &&
+        isFanOutBlockReleased(approval, id => children.find(child => child.id === id)?.status));
+    const ownerNeeded: Extract<RunResolution, { kind: 'owner_required' }>[] = [];
+    for (const child of children) {
+      if (!released && isTerminalRunStatus(child.status)) continue;
+      const resolution = await resolveFrom(store, child, [...executionChain, child], visited);
+      if (resolution.kind === 'attention') return resolution;
+      if (resolution.kind === 'owner_required') ownerNeeded.push(resolution);
+    }
+    const [first] = ownerNeeded;
+    if (!first) return { kind: 'ownerless' };
+    // Once released, whichever child finished last continues the parent and the rows do
+    // not record which one that is, so any of their owners proves the parent owned, and
+    // the parent is proven lost only when every recorded owner is checkable from here.
+    if (!released || ownerNeeded.length === 1) return first;
+    return {
+      ...first,
+      ownerCandidateIds: [...new Set(ownerNeeded.flatMap(r => r.ownerCandidateIds))],
+      recordedOwner: (ownerNeeded.find(r => !isOwnerEndpointLocal(r.recordedOwner)) ?? first)
+        .recordedOwner,
+    };
+  }
+
+  // A terminal child's hook is expected to continue its parent, in the child's process.
+  if (attention?.kind === 'terminal' && !isRoot) {
+    return ownerRequired(store, current, executionChain);
+  }
+  if (attention) return { kind: 'attention', attention };
+  if (current.status === 'running' || (!isRoot && current.status === 'pending')) {
+    return ownerRequired(store, current, executionChain);
+  }
+  return { kind: 'ownerless' };
 }
 
 /** Block until durable attention, owner loss, deadline, or caller abort. */
@@ -250,8 +327,8 @@ export async function waitForRunAttention(
 
   const attachOwner = async (
     resolution: Extract<RunResolution, { kind: 'owner_required' }>
-  ): Promise<RunLiveOwnerWatchResult['kind']> => {
-    const candidates = await ownerCandidates(store, resolution);
+  ): Promise<RunLiveOwnerWatchResult['kind'] | 'unknown'> => {
+    const candidates = resolution.ownerCandidateIds;
     if (ownerWatch && !ownerWatchEnded && candidates.includes(ownerWatch.runId)) return 'attached';
     discardOwnerWatch();
     let attachment: Exclude<RunLiveOwnerWatchResult['kind'], 'attached'> = 'unreachable';
@@ -264,7 +341,9 @@ export async function waitForRunAttention(
       }
       if (result.kind === 'unproven') attachment = 'unproven';
     }
-    return attachment;
+    return attachment === 'unreachable' && !isOwnerEndpointLocal(resolution.recordedOwner)
+      ? 'unknown'
+      : attachment;
   };
 
   try {
@@ -315,6 +394,13 @@ export async function waitForRunAttention(
           } else {
             discardOwnerWatch();
           }
+        }
+        if (ownerAttachment === 'unknown' && resolution.kind === 'owner_required' && !attached) {
+          attached = true;
+          await opts.onAttached?.(observedStatus, {
+            kind: 'unknown',
+            recordedOwner: resolution.recordedOwner,
+          });
         }
         if (ownerAttachment === 'attached' && !attached) {
           const verifiedRun = await store.getWorkflowRun(runId);

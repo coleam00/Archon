@@ -77,8 +77,8 @@ type EventInsertQuery = (sql: string, params?: unknown[]) => Promise<QueryResult
 
 /**
  * Insert one workflow-event row via `query` and THROW on failure. This is the
- * single source of truth for the event columns and dialect UUID; the
- * fire-and-forget createWorkflowEvent wraps it in try/catch, while callers that
+ * single source of truth for the event columns and dialect UUID; the autocommit
+ * writers below queue it in run order, while callers that
  * need the write to be atomic with another mutation (the approval-gate CAS in
  * db/workflows.ts, #2146) pass a transaction-scoped query so a failed event
  * write rolls back the enclosing UPDATE instead of stranding a resolved gate
@@ -109,7 +109,7 @@ export async function insertWorkflowEvent(
  */
 export async function createWorkflowEvent(data: ObservabilityEventInput): Promise<void> {
   try {
-    await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
+    await persistWorkflowEvent(data);
   } catch (error) {
     getLog().error(
       {
@@ -128,9 +128,33 @@ export async function createWorkflowEvent(data: ObservabilityEventInput): Promis
   }
 }
 
+/**
+ * Tail of each run's pending autocommit event writes. On PostgreSQL each `pool.query`
+ * can run on its own connection, so two writes issued back to back commit, and draw
+ * `created_at` and `event_order`, in whichever order their backends finish. Chaining a
+ * run's writes makes them commit in the order they were issued. The tail is taken when
+ * the writer is called, not after an await, or the race moves into the queue.
+ * Ordering holds within one process. Transactional `insertWorkflowEvent` callers
+ * commit with their own mutation and do not join the chain.
+ */
+const runWriteTails = new Map<string, Promise<unknown>>();
+
+function inRunOrder<T>(runId: string, write: () => Promise<T>): Promise<T> {
+  const result = (runWriteTails.get(runId) ?? Promise.resolve()).then(write);
+  const release = (): void => {
+    if (runWriteTails.get(runId) === tail) runWriteTails.delete(runId);
+  };
+  // A failed write rejects its own caller but must not block the run's later writes.
+  const tail = result.then(release, release);
+  runWriteTails.set(runId, tail);
+  return result;
+}
+
 /** Persist a correctness-critical event and propagate storage errors to the caller. */
-export async function persistWorkflowEvent(data: WorkflowEventInput): Promise<void> {
-  await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
+export function persistWorkflowEvent(data: WorkflowEventInput): Promise<void> {
+  return inRunOrder(data.workflow_run_id, () =>
+    insertWorkflowEvent((sql, params) => pool.query(sql, params), data)
+  );
 }
 
 /**
@@ -148,19 +172,21 @@ export async function persistWorkflowEventIfRunning(
   const lockClause = getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
   const statusPredicate =
     options?.allowPaused === true ? "status IN ('running', 'paused')" : "status = 'running'";
-  const result = await pool.query(
-    `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
+  const result = await inRunOrder(data.workflow_run_id, () =>
+    pool.query(
+      `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
      SELECT $1, $2, $3, $4, $5, $6
      FROM remote_agent_workflow_runs
      WHERE id = $2 AND ${statusPredicate}${lockClause}`,
-    [
-      getDialect().generateUuid(),
-      data.workflow_run_id,
-      data.event_type,
-      data.step_index ?? null,
-      data.step_name ?? null,
-      JSON.stringify(data.data ?? {}),
-    ]
+      [
+        getDialect().generateUuid(),
+        data.workflow_run_id,
+        data.event_type,
+        data.step_index ?? null,
+        data.step_name ?? null,
+        JSON.stringify(data.data ?? {}),
+      ]
+    )
   );
   return { persisted: result.rowCount > 0 };
 }

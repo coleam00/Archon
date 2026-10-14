@@ -56,10 +56,10 @@ export interface NodeTransitionEvent extends RunEventBase {
   /** Only populated for `skipped` — the evaluated expression that gated it. */
   skipExpr: string | null;
   /**
-   * Enrichment read straight from the persisted event payload; null when the row
-   * doesn't carry a field. `foldNodeRuns` takes these from the `completed` transition.
+   * Completion enrichment from the persisted row; null when a field is absent.
+   * `foldNodeRuns` copies costUsd, costScope, stopReason, numTurns, and tokens from
+   * the latest `completed` transition only when the engine's node state is `completed`.
    */
-  outputPreview: string | null;
   costUsd: number | null;
   /** The server's scope for `costUsd`; null when the row carries no cost. */
   costScope: CostScope | null;
@@ -185,7 +185,6 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     // Guard above restricts `et` to the map's keys; `?? 'skipped'` is only a
     // defensive default if a new node_* type is added to the guard but not the map.
     const transition = NODE_TRANSITION_BY_EVENT[et] ?? 'skipped';
-    const output = readStringOrNull(data, 'node_output');
     return {
       ...base,
       kind: 'node_transition',
@@ -196,7 +195,6 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       durationMs: readNumberOrNull(data, 'duration_ms'),
       skipReason: transition === 'skipped' ? readStringOrNull(data, 'reason') : null,
       skipExpr: transition === 'skipped' ? readStringOrNull(data, 'expr') : null,
-      outputPreview: output === null ? null : output.slice(0, 300),
       costUsd: readNumberOrNull(data, 'cost_usd'),
       costScope: raw.cost_scope ?? null,
       stopReason: readStringOrNull(data, 'stop_reason'),
