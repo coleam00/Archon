@@ -37,8 +37,23 @@ export type CredentialHelperInstallResult =
   | { kind: 'installed'; helperPath: string }
   | { kind: 'failed'; error: Error };
 
-/** Idempotent — safe to call on every repository setup. Never throws. */
-export async function installCredentialHelper(
+const pendingInstalls = new Map<string, Promise<CredentialHelperInstallResult>>();
+
+/** Concurrent setup shares registration; completed attempts can be retried. Never throws. */
+export function installCredentialHelper(
+  worktreePath: string
+): Promise<CredentialHelperInstallResult> {
+  const repoPath = resolve(worktreePath);
+  const pending = pendingInstalls.get(repoPath);
+  if (pending) return pending;
+  const installation = registerCredentialHelper(repoPath).finally(() => {
+    pendingInstalls.delete(repoPath);
+  });
+  pendingInstalls.set(repoPath, installation);
+  return installation;
+}
+
+async function registerCredentialHelper(
   worktreePath: string
 ): Promise<CredentialHelperInstallResult> {
   const binDir = resolve(getArchonHome(), 'bin');

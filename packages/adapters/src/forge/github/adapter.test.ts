@@ -1,22 +1,7 @@
 /**
- * Unit tests for GitHub adapter
- *
- * Note: Database modules are mocked to prevent self-filtering tests from
- * writing phantom records (e.g., testuser/testrepo) to the real SQLite DB.
- *
- * ARCHON_HOME INVARIANT (#2305): this file must create nothing under
- * `$ARCHON_HOME`. `mock.module()` MERGES over the real module rather than
- * replacing it, so every export a factory below omits keeps its REAL
- * implementation and quietly does real I/O. Two such gaps produced a real
- * `archon.db` and `bin/git-credential-archon`:
- *
- *   - `installCredentialHelper` (step 8, App-mode clone)
- *     → writes the bundled helper script into ~/.archon/bin/
- *   - `handleMessage`           (step 13, orchestrator)
- *     → opens the real SQLite database and creates ~/.archon/workspaces/
- *
- * Both are stubbed below. The package-cwd test preload checks its own
- * temporary ARCHON_HOME after each test (src/test/no-archon-home-writes.ts).
+ * Database and workflow dispatch are mocked to keep adapter tests isolated.
+ * Helper installation is stubbed except in the concurrency test, which uses
+ * real Git and a scratch ARCHON_HOME restored before test cleanup.
  */
 import { providerRegistry } from '@archon/providers';
 import {
@@ -146,10 +131,11 @@ const mockIsWorktreePath = mock(async () => false);
 
 // execFileAsync is exported by @archon/git and must exist on the mocked
 // namespace rather than be `undefined` (which would TypeError if reached).
-// Nothing in this file asserts against it: installCredentialHelper, its only
-// caller on this path, is stubbed at file scope (see below), and its use of
-// execFileAsync is covered in @archon/core instead.
-const mockExecFileAsync = mock(async () => ({ stdout: '', stderr: '' }));
+// The concurrency test temporarily uses real Git in a scratch ARCHON_HOME.
+const mockExecFileAsync = mock<(typeof import('@archon/git'))['execFileAsync']>(async () => ({
+  stdout: '',
+  stderr: '',
+}));
 
 mock.module('@archon/git', () => ({
   cloneRepository: mockCloneRepository,
@@ -169,6 +155,8 @@ import type { WebhookEvent } from './types';
 // orchestrator entry point the adapter calls after webhook setup succeeds.
 import * as core from '@archon/core';
 import * as workflowDb from '@archon/core/db/workflows';
+
+const realInstallCredentialHelper = core.installCredentialHelper;
 
 // Create a mock lock manager that immediately executes handlers
 const mockAcquireLock = mock(async (_id: string, handler: () => Promise<void>) => {
@@ -2198,6 +2186,51 @@ describe('GitHubAdapter', () => {
 
       await expect(setup).rejects.toThrow('git config rejected the helper');
       expect(mockCloneRepository).toHaveBeenCalled();
+    });
+
+    test('simultaneous existing App-mode repository setup shares real Git registration', async () => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-helper-concurrent-')));
+      const repoPath = join(root, 'repo');
+      const originalHome = process.env.ARCHON_HOME;
+      process.env.ARCHON_HOME = root;
+      try {
+        const init = Bun.spawnSync(['git', 'init', repoPath]);
+        expect(init.exitCode).toBe(0);
+        installCredentialHelperSpy.mockImplementation(realInstallCredentialHelper);
+        mockExecFileAsync.mockClear();
+        mockExecFileAsync.mockImplementation(async (file: string, args: readonly string[]) => {
+          const child = Bun.spawn([file, ...args], { stdout: 'pipe', stderr: 'pipe' });
+          const [exitCode, stdout, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+          ]);
+          if (exitCode !== 0) throw new Error(stderr);
+          return { stdout, stderr };
+        });
+        const { adapter } = createAppModeAdapter();
+        await Promise.all(
+          Array.from({ length: 16 }, async () => {
+            // @ts-expect-error - calling private method
+            await adapter.ensureRepoReady('owner', 'repo', 'main', repoPath, false);
+          })
+        );
+        expect(mockExecFileAsync).toHaveBeenCalledTimes(2);
+        const config = Bun.spawnSync(['git', '-C', repoPath, 'config', '--local', '--list']);
+        expect(config.exitCode).toBe(0);
+        expect(config.stdout.toString()).toContain('credential.https://github.com.helper=');
+        expect(config.stdout.toString()).toContain(
+          'credential.https://github.com.usehttppath=true'
+        );
+      } finally {
+        if (originalHome === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = originalHome;
+        installCredentialHelperSpy.mockImplementation(async () => ({
+          kind: 'installed',
+          helperPath: '/stub/.archon/bin/git-credential-archon',
+        }));
+        mockExecFileAsync.mockImplementation(async () => ({ stdout: '', stderr: '' }));
+      }
     });
 
     test('App-mode retries helper setup on a clone left by a failed config write', async () => {

@@ -8,7 +8,7 @@ import {
   getRegisteredPlatformPolicies,
 } from '@archon/core/platforms/registry';
 import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
-import type { OpenAPIHono } from '@hono/zod-openapi';
+import type { IGitHubAppAuthProvider, GitHubAuth } from '@archon/core';
 import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
@@ -228,9 +228,7 @@ mock.module('@archon/core', () => ({
   },
   logConfig: (): void => undefined,
   getPort: async (): Promise<number> => 12345,
-  initializeWorkflowGitHubAppAuth: (): never => {
-    throw new Error('Unexpected App bootstrap');
-  },
+  initializeWorkflowGitHubAppAuth: (): IGitHubAppAuthProvider => installationTokenProvider,
   isPerUserGitHubEnabled: (): boolean => false,
   isPerUserProviderKeysEnabled: (): boolean => false,
   getDatabaseType: (): string => 'sqlite',
@@ -248,9 +246,42 @@ mock.module('@archon/core/config/store-selection', () => ({
   loadStoreSelection: async (): Promise<'database'> => 'database',
 }));
 
+const mockInstallationToken = mock(async (_owner: string, _repo: string) => 'inherited-port-token');
+const installationTokenProvider = {
+  slug: 'test-app',
+  getInstallationToken: mockInstallationToken,
+  getInstallationTokenById: async () => {
+    throw new Error('Unexpected token by id');
+  },
+  getOctokitForInstallation: async () => {
+    throw new Error('Unexpected Octokit');
+  },
+  primeInstallationLookup: () => {},
+  resolveInstallationId: async () => {
+    throw new Error('Unexpected installation lookup');
+  },
+  invalidateToken: () => {},
+  invalidateRepo: () => {},
+} satisfies IGitHubAppAuthProvider;
+
+class MockGitHubAdapter {
+  constructor(private readonly auth: GitHubAuth) {}
+  async start(): Promise<void> {}
+  getPlatformType(): string {
+    return 'github';
+  }
+  getAuthMode(): GitHubAuth['kind'] {
+    return this.auth.kind;
+  }
+  async getInstallationToken(owner: string, repo: string): Promise<string> {
+    if (this.auth.kind !== 'app') throw new Error('Expected App mode');
+    return this.auth.provider.getInstallationToken(owner, repo);
+  }
+}
+
 mock.module('@archon/adapters', () => ({
   TelegramAdapter: DisabledAdapter,
-  GitHubAdapter: DisabledAdapter,
+  GitHubAdapter: MockGitHubAdapter,
   DiscordAdapter: DisabledAdapter,
   SlackAdapter: MockSlackAdapter,
   SlackWorkflowBridge: MockSlackWorkflowBridge,
@@ -320,17 +351,7 @@ mock.module('./adapters/web/pg-notify-listener', () => ({
 }));
 mock.module('./static-cache', () => ({ serveWebUi: (): void => undefined }));
 mock.module('./routes/openapi-defaults', () => ({ validationErrorHook: (): void => undefined }));
-let credentialRequests: unknown[] | undefined;
-mock.module('./routes/api', () => ({
-  registerApiRoutes: (app: OpenAPIHono): void => {
-    if (credentialRequests) {
-      app.post('/internal/git-credential', async c => {
-        credentialRequests?.push(await c.req.json());
-        return c.json({ token: 'inherited-port-token' });
-      });
-    }
-  },
-}));
+mock.module('./routes/api', () => ({ registerApiRoutes: (): void => undefined }));
 mock.module('./routes/webhooks', () => ({
   registerGiteaWebhookRoute: (): void => undefined,
   registerGithubWebhookRoute: (): void => undefined,
@@ -364,10 +385,6 @@ mock.module('./services/workflow-resume-service', () => ({
   stopWorkflowContinuationScheduler: (): void => undefined,
   workflowResumeTargetForRun: mockWorkflowResumeTargetForRun,
 }));
-mock.module('./github-auth-bootstrap', () => ({
-  selectGitHubAuthMode: (): { kind: 'none' } => ({ kind: 'none' }),
-  parseGitCredentialPath: (): undefined => undefined,
-}));
 mock.module('./discord-mention', () => ({ isDiscordMentionRequired: (): boolean => false }));
 mock.module('./auth', () => ({
   getAuth: (): null => null,
@@ -396,6 +413,9 @@ const envKeys = [
   'GITEA_URL',
   'GITEA_WEBHOOK_SECRET',
   'GITHUB_APP_ID',
+  'GITHUB_APP_PRIVATE_KEY',
+  'GITHUB_APP_PRIVATE_KEY_PATH',
+  'WEBHOOK_SECRET',
   'GITHUB_TOKEN',
   'GITLAB_TOKEN',
   'GITLAB_WEBHOOK_SECRET',
@@ -493,10 +513,13 @@ describe('Slack workflow resume composition', () => {
       }) as typeof Bun.serve);
       process.env.ARCHON_PORT = '3090';
       process.env.PORT = '3000';
-      credentialRequests = [];
+      process.env.GITHUB_APP_ID = '123';
+      process.env.GITHUB_APP_PRIVATE_KEY = 'test-key';
+      process.env.WEBHOOK_SECRET = 'test-secret';
+      mockInstallationToken.mockClear();
       try {
         const { startServer } = await import('./index');
-        await startServer({ port: 0, skipPlatformAdapters: true });
+        await startServer({ port: 0 });
         expect(listener?.port).not.toBe(3090);
         const child = Bun.spawn(['git', '-C', repoPath, 'credential', 'fill'], {
           env: {
@@ -520,11 +543,14 @@ describe('Slack workflow resume composition', () => {
         expect(exitCode, stderr).toBe(0);
         expect(stdout).toContain('password=inherited-port-token');
         expect(stderr).toBe('');
-        expect(credentialRequests).toEqual([{ host: 'github.com', path: 'owner/repo.git' }]);
+        expect(mockInstallationToken).toHaveBeenCalledTimes(1);
+        expect(mockInstallationToken).toHaveBeenCalledWith('owner', 'repo');
       } finally {
         serveSpy.mockRestore();
         listener?.stop(true);
-        credentialRequests = undefined;
+        delete process.env.GITHUB_APP_ID;
+        delete process.env.GITHUB_APP_PRIVATE_KEY;
+        delete process.env.WEBHOOK_SECRET;
         delete process.env.ARCHON_PORT;
         delete process.env.PORT;
       }

@@ -140,6 +140,47 @@ describe('installCredentialHelper', () => {
     );
   });
 
+  test('concurrent registration shares failure and a later call retries both config writes', async () => {
+    let rejectWrite: (error: Error) => void = () => {};
+    execSpy.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectWrite = reject;
+        })
+    );
+    const first = installCredentialHelper('/tmp/concurrent-worktree');
+    const second = installCredentialHelper('/tmp/concurrent-worktree');
+    expect(execSpy).toHaveBeenCalledTimes(1);
+    rejectWrite(new Error('config rejected'));
+    const results = await Promise.all([first, second]);
+    expect(results.map(result => result.kind)).toEqual(['failed', 'failed']);
+    execSpy.mockClear();
+    expect((await installCredentialHelper('/tmp/concurrent-worktree')).kind).toBe('installed');
+    expect(execSpy.mock.calls.map(([, args]) => args[3])).toEqual([
+      'credential.https://github.com.helper',
+      'credential.https://github.com.useHttpPath',
+    ]);
+  });
+
+  test('simultaneous installs register both settings without competing Git config writers', async () => {
+    execSpy.mockRestore();
+    const repoPath = join(archonHome, 'repo');
+    await git.execFileAsync('git', ['init', repoPath]);
+    const results = await Promise.all(
+      Array.from({ length: 16 }, () => installCredentialHelper(repoPath))
+    );
+    expect(results.map(result => result.kind)).toEqual(Array(16).fill('installed'));
+    const { stdout } = await git.execFileAsync('git', [
+      '-C',
+      repoPath,
+      'config',
+      '--local',
+      '--list',
+    ]);
+    expect(stdout).toContain('credential.https://github.com.helper=');
+    expect(stdout).toContain('credential.https://github.com.usehttppath=true');
+  });
+
   test('returns failed instead of throwing when the git config write fails', async () => {
     execSpy.mockImplementation(() => Promise.reject(new Error('not a git repository')));
 
@@ -189,7 +230,7 @@ describe('installCredentialHelper', () => {
   );
 
   test.skipIf(process.platform === 'win32')(
-    'registered helper supplies a refreshed token to a later Git credential operation',
+    'retry repairs partial local config and supplies a refreshed token to Git',
     async () => {
       execSpy.mockRestore();
       archonHome = join(archonHome, "with space and 'quote");
@@ -203,6 +244,31 @@ describe('installCredentialHelper', () => {
         { mode: 0o755 }
       );
       await git.execFileAsync('git', ['init', repoPath], { timeout: 5_000 });
+
+      const helperPath = join(archonHome, 'bin', 'git-credential-archon');
+      await mkdir(join(archonHome, 'bin'));
+      await writeFile(helperPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      await git.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'config',
+        'credential.https://github.com.helper',
+        `!'${helperPath.replaceAll("'", "'\"'\"'")}'`,
+      ]);
+      const missingPathConfig = await runHelper(
+        [
+          'git',
+          '-C',
+          repoPath,
+          'config',
+          '--local',
+          '--get',
+          'credential.https://github.com.useHttpPath',
+        ],
+        '',
+        { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
+      );
+      expect(missingPathConfig.exitCode).toBe(1);
 
       for (let attempt = 0; attempt < 2; attempt++) {
         expect((await installCredentialHelper(repoPath)).kind).toBe('installed');
