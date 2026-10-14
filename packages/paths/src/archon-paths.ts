@@ -897,10 +897,10 @@ export function resolveRunStorageRoot(
  * no key and throws rather than yielding a `..` path.
  */
 export function projectKeyForStorageRoot(root: string): string {
-  const key = relative(getArchonWorkspacesPath(), root);
-  if (!key || key.startsWith('..') || isAbsolute(key))
+  const workspaces = getArchonWorkspacesPath();
+  if (!isPathInside(workspaces, root))
     throw new Error(`Project storage root is not inside the workspaces directory: ${root}`);
-  return key.split('\\').join('/');
+  return relative(resolve(workspaces), resolve(root)).split('\\').join('/');
 }
 
 /** {@link projectKeyForStorageRoot} for a codebase row, or for an unregistered `cwd`. */

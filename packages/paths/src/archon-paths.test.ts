@@ -693,6 +693,12 @@ describe('archon-paths', () => {
       );
     });
 
+    test('a first segment that merely starts with two dots is still a key', () => {
+      expect(projectKeyForStorageRoot(join('/custom/archon', 'workspaces', '..foo', 'bar'))).toBe(
+        '..foo/bar'
+      );
+    });
+
     test('a root outside the workspaces directory has no key', () => {
       for (const root of ['/elsewhere/acme/widget', join('/custom/archon', 'workspaces')])
         expect(() => projectKeyForStorageRoot(root)).toThrow('not inside the workspaces directory');
