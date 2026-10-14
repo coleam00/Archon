@@ -650,6 +650,24 @@ describe('waitForRunAttention', () => {
       }
     );
 
+    test.each([
+      ['another host', foreignOwner, 'deadline'],
+      ['this host', localOwner, 'owner_lost'],
+    ] as const)(
+      'a direct wait on an unstamped running child reads its owner from the parent on %s',
+      async (_where, parentOwner, expected) => {
+        // A claimed child is `running` before its own stamp lands; its process is the parent's.
+        putRun('parent', {
+          status: 'paused',
+          metadata: { ...blockedOn('child'), ...parentOwner },
+        });
+        putRun('child', { status: 'running', parent_run_id: 'parent', metadata: {} });
+        reachableOwners = new Set();
+
+        expect(await wait('child', { deadlineMs: 50 })).toMatchObject({ kind: expected });
+      }
+    );
+
     test('a direct child wait can attach to the same ancestor owner', async () => {
       putRun('parent', { status: 'paused', metadata: blockedOn('child') });
       putRun('child', { status: 'running', parent_run_id: 'parent' });

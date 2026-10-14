@@ -79,8 +79,9 @@ type RunResolution =
   | {
       kind: 'owner_required';
       activeRun: WorkflowRun;
-      executionChainIds: readonly string[];
-      /** Nearest stamp from the active run back; an unclaimed child runs in its parent's process. */
+      /** Endpoints to try: the active child first, then toward the process-entry ancestor. */
+      ownerCandidateIds: readonly string[];
+      /** Nearest stamp in candidate order; an unclaimed child runs in its parent's process. */
       recordedOwner: ExecutionOwnerRecord | undefined;
     }
   | { kind: 'ownerless' };
@@ -116,19 +117,33 @@ function isOwnerEndpointLocal(owner: ExecutionOwnerRecord | undefined): boolean 
   return uid === undefined || owner.uid === uid;
 }
 
-function ownerRequired(
+async function ownerRequired(
+  store: RunAttentionReadStore,
   activeRun: WorkflowRun,
   executionChain: readonly WorkflowRun[]
-): Extract<RunResolution, { kind: 'owner_required' }> {
+): Promise<Extract<RunResolution, { kind: 'owner_required' }>> {
   const newestFirst = [...executionChain].reverse();
-  return {
-    kind: 'owner_required',
-    activeRun,
-    executionChainIds: newestFirst.map(candidate => candidate.id),
-    recordedOwner: newestFirst
-      .map(candidate => readExecutionOwner(candidate.metadata))
-      .find(owner => owner !== undefined),
-  };
+  const ownerCandidateIds = newestFirst.map(candidate => candidate.id);
+  let recordedOwner = newestFirst
+    .map(candidate => readExecutionOwner(candidate.metadata))
+    .find(owner => owner !== undefined);
+  const seen = new Set(ownerCandidateIds);
+  let current = activeRun;
+  let steps = 0;
+  while (current.parent_run_id) {
+    steps += 1;
+    if (steps > MAX_CHAIN_RUNS) break;
+    const parentId = current.parent_run_id;
+    if (!seen.has(parentId)) {
+      seen.add(parentId);
+      ownerCandidateIds.push(parentId);
+    }
+    const parent = await store.getWorkflowRun(parentId);
+    if (!parent) break;
+    recordedOwner ??= readExecutionOwner(parent.metadata);
+    current = parent;
+  }
+  return { kind: 'owner_required', activeRun, ownerCandidateIds, recordedOwner };
 }
 
 /** Resolve the child chain while retaining whether its current state needs a live process. */
@@ -164,39 +179,15 @@ async function resolveRun(store: RunAttentionReadStore, run: WorkflowRun): Promi
     executionChain.push(child);
     current = child;
     const childAttention = runAttention(child);
-    if (childAttention?.kind === 'terminal') return ownerRequired(child, executionChain);
+    if (childAttention?.kind === 'terminal') return ownerRequired(store, child, executionChain);
     attention = childAttention;
   }
 
   if (attention) return { kind: 'attention', attention };
   if (current.status === 'running' || (current !== run && current.status === 'pending')) {
-    return ownerRequired(current, executionChain);
+    return ownerRequired(store, current, executionChain);
   }
   return { kind: 'ownerless' };
-}
-
-/** Prefer the active child, then walk toward the process-entry ancestor. */
-async function ownerCandidates(
-  store: RunAttentionReadStore,
-  resolution: Extract<RunResolution, { kind: 'owner_required' }>
-): Promise<string[]> {
-  const candidates = [...resolution.executionChainIds];
-  const seen = new Set(candidates);
-  let current = resolution.activeRun;
-  let steps = 0;
-  while (current.parent_run_id) {
-    steps += 1;
-    if (steps > MAX_CHAIN_RUNS) break;
-    const parentId = current.parent_run_id;
-    if (!seen.has(parentId)) {
-      seen.add(parentId);
-      candidates.push(parentId);
-    }
-    const parent = await store.getWorkflowRun(parentId);
-    if (!parent) break;
-    current = parent;
-  }
-  return candidates;
 }
 
 /** Block until durable attention, owner loss, deadline, or caller abort. */
@@ -287,7 +278,7 @@ export async function waitForRunAttention(
   const attachOwner = async (
     resolution: Extract<RunResolution, { kind: 'owner_required' }>
   ): Promise<RunLiveOwnerWatchResult['kind'] | 'unknown'> => {
-    const candidates = await ownerCandidates(store, resolution);
+    const candidates = resolution.ownerCandidateIds;
     if (ownerWatch && !ownerWatchEnded && candidates.includes(ownerWatch.runId)) return 'attached';
     discardOwnerWatch();
     let attachment: Exclude<RunLiveOwnerWatchResult['kind'], 'attached'> = 'unreachable';
