@@ -3855,15 +3855,17 @@ async function buildWaitResumeAttempt(
 /**
  * True when a resume attempt lost the run to another owner rather than failing.
  *
- * Both signals mean the row already moved — another host claimed it (the
- * compare-and-swap) or still holds its endpoint — so the winner finishes it and
- * this process should stop quietly instead of reporting a failure.
+ * Both signals mean another process is executing the run — it won the claim (the
+ * compare-and-swap left the row `running`) or still holds its endpoint — so this
+ * process should say so and stop instead of reporting a failure. A claim lost to a
+ * cancel, failure or completion is not that: nothing continues the run, so it stays
+ * an error.
  */
 function isResumeSuperseded(error: unknown): boolean {
   const MAX_CAUSE_DEPTH = 5;
   for (let current: unknown = error, depth = 0; current instanceof Error; depth += 1) {
     if (
-      current instanceof WorkflowNotResumableError ||
+      (current instanceof WorkflowNotResumableError && current.currentStatus === 'running') ||
       current instanceof RunLiveOwnerAlreadyOwnedError
     ) {
       return true;
@@ -3932,6 +3934,12 @@ export async function workflowRunCommand(
           { runId: attempt.options.continuationRun?.id, workflowName: attempt.workflowName },
           'cli.wait_continuation_superseded'
         );
+        // Without this line an approve that lost the claim to `archon serve` reads as a
+        // resume that stopped mid-dispatch. The --json contract owns its own stdout.
+        const runId = attempt.options.continuationRun?.id;
+        if (runId !== undefined && !options.json) {
+          console.log(`Run ${runId} is already continuing in another process.`);
+        }
         return;
       }
       throw error;
@@ -6028,9 +6036,9 @@ export async function workflowCancelCommand(
  * Human mode records the approval on the still-'paused' run (the resolution
  * lives in metadata.approval.resolved, #2075) and then auto-resumes the run
  * inline. `--json` mode records the approval and returns a structured ack
- * WITHOUT resuming — the run stays paused-and-staged, resumable by a
- * backgrounded `resume`/`run --resume` (inline resume would stream output and
- * break the JSON).
+ * WITHOUT resuming (inline resume would stream output and break the JSON); the
+ * answered gate is then a due continuation that `archon serve` or `workflow wake`
+ * continues.
  *
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
@@ -6074,8 +6082,8 @@ export async function workflowApproveCommand(
 
   // JSON mode records the approval and returns a structured ack WITHOUT the
   // inline auto-resume (resuming executes the workflow and streams output to
-  // stdout, which would corrupt the JSON contract). The run becomes resumable
-  // — drive it to completion with a backgrounded `resume`/`run --resume`.
+  // stdout, which would corrupt the JSON contract). The answered gate is a due
+  // continuation, so a continuation host (`archon serve`, `workflow wake`) continues it.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6212,8 +6220,9 @@ export async function workflowRejectCommand(
 
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
-  // to stdout, corrupting the JSON contract). When `cancelled` is false the run
-  // is resumable for the rework pass — drive it with a backgrounded `resume`.
+  // to stdout, corrupting the JSON contract). When `cancelled` is false the answered
+  // gate is a due continuation that a continuation host picks up, except on a container
+  // run (including its write-back gate), which needs a manual `resume`.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
@@ -6366,8 +6375,7 @@ export async function workflowRespondCommand(
   }
 
   // JSON mode records the decision and returns a structured ack WITHOUT the inline
-  // auto-resume, mirroring approve/reject — drive it onward with a backgrounded
-  // `resume`/`run --resume`.
+  // auto-resume, mirroring approve/reject; a continuation host continues the answered gate.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);

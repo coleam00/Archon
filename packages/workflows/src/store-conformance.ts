@@ -989,6 +989,100 @@ export function describeWorkflowStoreConformance(
         later.id,
       ]);
     });
+    test('an answered gate is due once, at its exact occurrence, and an open one never is', async () => {
+      const due = async (): Promise<string[]> =>
+        (await store.listDueWorkflowContinuations(new Date(), 10)).map(run => run.id);
+      const answer = (id: string, gate: ApprovalContext): Promise<{ resolved: boolean }> =>
+        store.resolveApprovalGate(id, { approval: { ...gate, resolved: 'approved' } }, []);
+      const cursor = { kind: 'gate' as const, nodeId: approval.nodeId, pauseId: 'first' };
+      const run = await running(store);
+      await store.pauseWorkflowRun(run.id, approval);
+      expect(await due()).not.toContain(run.id);
+      expect(await answer(run.id, approval)).toEqual({ resolved: true });
+      expect(await due()).toContain(run.id);
+
+      const retryAt = new Date(Date.now() + 3_600_000).toISOString();
+      await store.deferWorkflowContinuation(run.id, retryAt, { ...cursor, pauseId: 'other' });
+      expect(await due()).toContain(run.id);
+      await store.deferWorkflowContinuation(run.id, retryAt, cursor);
+      expect(await due()).not.toContain(run.id);
+      const afterRetry = new Date(Date.parse(retryAt) + 1000);
+      expect(
+        (await store.listDueWorkflowContinuations(afterRetry, 10)).map(due => due.id)
+      ).toContain(run.id);
+
+      expect(
+        await rejection(store.resumeWorkflowRun(run.id, { ...cursor, pauseId: 'other' }))
+      ).toBeInstanceOf(WorkflowNotResumableError);
+      expect((await store.resumeWorkflowRun(run.id, cursor)).status).toBe('running');
+      expect(await rejection(store.resumeWorkflowRun(run.id, cursor))).toBeInstanceOf(
+        WorkflowNotResumableError
+      );
+
+      // A wait replaces the answered gate, so the run is due only when its wait is.
+      await store.pauseWorkflowRunForWait(run.id, wait, { kind: 'started', stepName: 'wait' });
+      expect((await store.getWorkflowRun(run.id))?.metadata).not.toHaveProperty('approval');
+      expect(
+        (
+          await store.listDueWorkflowContinuations(new Date(Date.parse(wait.resumeAt) - 1000), 10)
+        ).map(due => due.id)
+      ).not.toContain(run.id);
+    });
+    test('answered gates the host cannot continue are never due', async () => {
+      const cases: [ApprovalContext, Record<string, unknown>][] = [
+        [{ ...approval, type: 'child_workflow', childRunId: 'child' }, {}],
+        [{ ...approval, type: 'writeback', nodeId: '__writeback__' }, {}],
+        [{ nodeId: approval.nodeId, message: approval.message, type: 'approval' }, {}],
+        [approval, { isolation: 'container' }],
+      ];
+      const ids: string[] = [];
+      for (const [gate, metadata] of cases) {
+        const run = await running(store, { metadata });
+        await store.pauseWorkflowRun(run.id, gate);
+        expect(
+          await store.resolveApprovalGate(
+            run.id,
+            { approval: { ...gate, resolved: 'approved' } },
+            []
+          )
+        ).toEqual({
+          resolved: true,
+        });
+        ids.push(run.id);
+      }
+      const due = (await store.listDueWorkflowContinuations(new Date(), 10)).map(run => run.id);
+      for (const id of ids) expect(due).not.toContain(id);
+    });
+    test('answered gates are listed after every timed continuation', async () => {
+      // This gate's run was resumed from a quota schedule first; the triggered schedule it
+      // keeps must not sort it among the timed rows.
+      const gate = await running(store);
+      await store.failWorkflowRun(gate.id, 'quota', { scheduledResume: schedule });
+      await store.resumeWorkflowRun(gate.id, {
+        kind: 'quota',
+        attempt: schedule.attempt,
+        resumeAt: schedule.resumeAt,
+      });
+      await store.pauseWorkflowRun(gate.id, approval);
+      await store.resolveApprovalGate(
+        gate.id,
+        { approval: { ...approval, resolved: 'rejected' } },
+        []
+      );
+      // Due later than that stale schedule, so only the gate rule puts it first.
+      const timedAt = new Date(Date.parse(schedule.resumeAt) + 60_000).toISOString();
+      const timed = await running(store);
+      await store.pauseWorkflowRunForWait(
+        timed.id,
+        { ...wait, resumeAt: timedAt },
+        { kind: 'started', stepName: 'wait' }
+      );
+      const now = new Date(Date.parse(timedAt) + 1000);
+      expect((await store.listDueWorkflowContinuations(now, 10)).map(run => run.id)).toEqual([
+        timed.id,
+        gate.id,
+      ]);
+    });
     test('attention failure matches its exact owner and reports only the winner', async () => {
       const run = await running(store);
       const attention = {
