@@ -177,7 +177,7 @@ A 401 from any installation Octokit evicts the cached token and the call is retr
 
 ### Long-running workflow `git push`
 
-Workflows that span >1h need a fresh token to push from the cloned worktree. In App mode, Archon installs a git credential helper after cloning and refreshes it whenever it sets up an existing repository, including webhook handling: the worktree's `.git/config` points at `~/.archon/bin/git-credential-archon`, which talks back to Archon's internal endpoint for a fresh installation token on each operation. The helper reads the server's port from `ARCHON_PORT`, which Archon sets for the processes it launches. A `git` command run from an independent shell on the Archon host gets no credential unless it exports `ARCHON_PORT` with the server's port.
+Workflows that span >1h need a fresh token to push from the cloned worktree. In App mode, Archon installs a git credential helper after cloning and refreshes it whenever it sets up an existing repository, including webhook handling: the worktree's `.git/config` points at `~/.archon/bin/git-credential-archon`, which talks back to Archon's internal endpoint for a fresh installation token on each operation. Git skips credential helpers when a remote URL carries credentials, so the same setup removes any token embedded in the repository's `https://github.com` remote URLs, such as one left by an older PAT-mode clone. The helper reads the server's port from `ARCHON_PORT`, which Archon sets for the processes it launches. A `git` command run from an independent shell on the Archon host gets no credential unless it exports `ARCHON_PORT` with the server's port.
 
 The helper is embedded in compiled binaries. Each setup replaces an outdated managed script and registers the helper and GitHub path forwarding in the repository's local Git config. Existing repositories are refreshed on their next setup, not swept at server startup. If installation or registration fails, repository setup stops before sync or workflow dispatch; a later setup retries registration and repairs partial config.
 
@@ -267,8 +267,9 @@ If the external POST probe returns anything other than `404` or `403` from the p
 1. Register the App and install on your orgs (Steps 1–5 above).
 2. Add `GITHUB_APP_*` env vars (Step 6).
 3. **Remove** `GITHUB_TOKEN` from your env (or comment it out). Archon refuses to start if both are set.
-4. Restart Archon.
-5. Webhook URLs configured per-repo against the PAT-mode setup can stay or be removed — the App's single webhook URL covers everything once it's installed. New repos auto-join via App installation. While both webhooks are active, a comment delivered by each is deduplicated at ingest, so the bot still responds once.
+4. **Remove** `GH_TOKEN` if you set it to the same PAT. Archon starts with it set, but the GitHub CLI in the container keeps using the old PAT.
+5. Restart Archon.
+6. Webhook URLs configured per-repo against the PAT-mode setup can stay or be removed — the App's single webhook URL covers everything once it's installed. New repos auto-join via App installation. While both webhooks are active, a comment delivered by each is deduplicated at ingest, so the bot still responds once.
 
 ## Troubleshooting
 
