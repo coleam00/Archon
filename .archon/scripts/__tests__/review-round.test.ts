@@ -119,11 +119,11 @@ describe('review-round', () => {
 
   it('refuses a part assignment that is not JSON without echoing it', () => {
     const { cwd, newer } = history();
-    const run = round(cwd, newer, undefined, { part: 'part 1 of #42' });
+    const run = round(cwd, newer, undefined, { part: 'deliver chunk 1 of #42' });
     expect(run.code).not.toBe(0);
     expect(run.stdout).toBe('');
     expect(run.stderr).toContain('the part input is not JSON');
-    expect(run.stderr).not.toContain('#42');
+    for (const fragment of ['deliver', 'chunk', '#42']) expect(run.stderr).not.toContain(fragment);
   });
 
   it('runs the code lens alone on a light continuation', () => {

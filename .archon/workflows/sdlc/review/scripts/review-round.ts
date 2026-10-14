@@ -39,14 +39,15 @@ import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
 import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 
-/** The bound part assignment, refused without echoing it when it is not JSON. */
+/**
+ * The bound part assignment. The refusal drops the parser's message, which quotes
+ * a token of the operator's text.
+ */
 function partAssignment(value: string | undefined): unknown {
   try {
     return nullableJson(value);
-  } catch (error) {
-    throw new Error(
-      `the part input is not JSON: ${error instanceof Error ? error.message : String(error)}`
-    );
+  } catch {
+    throw new Error('the part input is not JSON');
   }
 }
 
