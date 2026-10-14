@@ -206,6 +206,10 @@ Commands:
   workflow get <run-id>      Show detail for a single run (any status)
   workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs attention
+  workflow attention [<run-id>] List the attention queue, count it, or read the item one run stands for
+                             (defaults to the current project)
+  workflow attention label <run-id> --occurrence <id>
+                             Set or remove labels on the attention wait a run is paused at
   workflow resume <run-id>   Resume a failed or paused run from completed nodes
   workflow wake [--watch] [--json] Wake due continuations across this install
   workflow signal <full-run-id> Signal and wake one exact event wait occurrence
@@ -284,10 +288,11 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/answer/cancel/abandon/resume)
+  --json                     Output machine-readable JSON (list/status/get/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
-  --occurrence <id>          For 'workflow approve/reject/respond/answer': refuse the answer unless the run is still paused at
-                             this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer)
+  --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
+                             paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
+                             and attention label)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)

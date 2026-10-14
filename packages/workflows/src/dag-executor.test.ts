@@ -301,6 +301,12 @@ function createMockStore(): MockWorkflowStore {
     answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
       throw new Error('Unexpected answerAttentionWait');
     }),
+    labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
+      throw new Error('Unexpected labelAttentionWait');
+    }),
+    listAttentionQueueRows: mock<IWorkflowStore['listAttentionQueueRows']>(() => {
+      throw new Error('Unexpected listAttentionQueueRows');
+    }),
     signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
       throw new Error('Unexpected signalWorkflowWait');
     }),
@@ -17698,6 +17704,54 @@ describe('executeDagWorkflow -- durable wait node', () => {
         kind: 'attention',
         form: 'select',
         options: [{ id: 'use-main', label: 'Main' }, { id: 'use-dev' }],
+      }),
+      { kind: 'started', stepName: 'ask' }
+    );
+  });
+
+  it('resolves label values when the wait pauses', async () => {
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        conversationId: 'conv-attention-labels',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-labels-test',
+          nodes: [
+            {
+              id: 'plan',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `printf '%s' '{"cause":"other"}'`,
+              output_format: {
+                type: 'object',
+                properties: { cause: { type: 'string' } },
+                required: ['cause'],
+              },
+            },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['plan'],
+              wait: {
+                attention: 'CI is red. Retry?',
+                labels: { ci: '$plan.output.cause', area: 'delivery' },
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('attention-labels'),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'attention-labels',
+      expect.objectContaining({
+        kind: 'attention',
+        labels: { ci: 'other', area: 'delivery' },
       }),
       { kind: 'started', stepName: 'ask' }
     );
