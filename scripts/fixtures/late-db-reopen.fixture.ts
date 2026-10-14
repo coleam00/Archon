@@ -3,6 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDatabase, getDatabase, getSqliteDbPath } from '@archon/core/db/connection';
+import { getArchonHome } from '@archon/paths/archon-paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 
 // The per-test home shape suites use: a scratch ARCHON_HOME in beforeEach, then close
@@ -34,7 +35,12 @@ test('leaves work running past its cleanup', () => {
   lateWork = (async (): Promise<void> => {
     await cleanedUp.promise;
     console.log(
-      JSON.stringify({ lateDbPath: getSqliteDbPath(), lateDbUrl: process.env.DATABASE_URL })
+      JSON.stringify({
+        lateDbPath: getSqliteDbPath(),
+        lateDbUrl: process.env.DATABASE_URL,
+        lateHome: getArchonHome(),
+        lateEnvHome: process.env.ARCHON_HOME,
+      })
     );
     await getDatabase().query('SELECT 1');
   })();
