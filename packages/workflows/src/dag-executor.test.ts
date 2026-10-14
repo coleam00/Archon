@@ -19340,6 +19340,117 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     ]);
   });
 
+  it.each(['post-body cancel', 'between-iteration cancel', 'undelivered gate'] as const)(
+    'loop_group retains paid usage on %s',
+    async exit => {
+      const store = createMockStore();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+      let status: 'running' | 'cancelled' = 'running';
+      let calls = 0;
+      let gatePaused = false;
+      store.getWorkflowRunStatus.mockImplementation(async () => status);
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        yield { type: 'agent_message_chunk', text: 'Paid work.' };
+        yield {
+          type: 'result',
+          sessionId: `paid-${calls}`,
+          cost: 0.05,
+          tokens: { input: 100, output: 10, cacheRead: 40, cacheWrite: 5 },
+        };
+        if (exit === 'post-body cancel' && calls === 2) status = 'cancelled';
+      });
+      store.createWorkflowEvent.mockImplementation(async event => {
+        if (
+          exit === 'between-iteration cancel' &&
+          event.event_type === 'loop_iteration_completed' &&
+          event.step_name === 'grp' &&
+          event.data?.iteration === 2
+        )
+          status = 'cancelled';
+      });
+      store.pauseWorkflowRun.mockImplementation(async (_id, _approval, _metadata, suspension) => {
+        gatePaused = true;
+        if (suspension) await store.createWorkflowEvent(suspension);
+      });
+      platform.sendMessage.mockImplementation(async () => {
+        if (exit === 'undelivered gate' && gatePaused) throw new Error('Transport unavailable');
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          logDir: join(testDir, 'logs'),
+          workflowRun,
+          workflow: {
+            name: 'loop-group-early-exit-usage',
+            nodes: [
+              {
+                id: 'grp',
+                kind: 'loop_group',
+                loop_group: {
+                  until: 'DONE',
+                  max_iterations: 4,
+                  fresh_context: false,
+                  interactive: exit === 'undelivered gate',
+                  gate_message: 'Review paid work.',
+                  nodes: [{ id: 'b', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } }],
+                },
+              },
+            ],
+          },
+        })
+      );
+      expect(calls).toBe(exit === 'undelivered gate' ? 1 : 2);
+      if (exit === 'undelivered gate') {
+        expect(store.failPausedApproval).toHaveBeenCalledTimes(1);
+        expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(
+          store.pauseWorkflowRun.mock.calls[0]?.[1]
+        );
+      }
+      const groupFailure = persistedEvents(store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'grp'
+      );
+      expect(groupFailure?.data?.failure_kind).toBe(
+        exit === 'undelivered gate' ? 'unknown' : 'cancelled'
+      );
+      expect(groupFailure?.data?.cost_usd).toBe(0.05 * calls);
+      expect(groupFailure?.data?.spend).toMatchObject({
+        costUsd: { source: 'provider', value: 0.05 * calls },
+        tokens: {
+          source: 'provider',
+          value: {
+            input: 100 * calls,
+            output: 10 * calls,
+            cacheRead: 40 * calls,
+            cacheWrite: 5 * calls,
+          },
+        },
+      });
+      expect(runUsageWrites(store)).toEqual([
+        {
+          total_cost_usd: 0.05 * calls,
+          total_tokens_in: 100 * calls,
+          total_tokens_out: 10 * calls,
+          total_cache_read_tokens: 40 * calls,
+          total_cache_write_tokens: 5 * calls,
+        },
+      ]);
+      const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+      const groupRow = rows.find(row => row.type === 'node_error' && row.step === 'grp');
+      expect(groupRow).toBeDefined();
+      expect(groupRow).not.toHaveProperty('cost_usd');
+      expect(groupRow).not.toHaveProperty('tokens');
+      expect(
+        rows
+          .filter(row => row.type === 'node_complete' || row.type === 'node_error')
+          .reduce((total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0), 0)
+      ).toBeCloseTo(0.05 * calls, 5);
+    }
+  );
+
   it('a node cancelled by the user leaves its spend in the transcript', async () => {
     // The abort branch called no logNodeError at all, so a cancelled node produced no
     // transcript row whatsoever — not even one without usage (#2693). It is the only

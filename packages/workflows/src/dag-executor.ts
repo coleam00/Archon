@@ -4584,6 +4584,8 @@ async function executeLoopGroupBody(
         output: '',
         error: `Workflow ${effectiveStatus}`,
         failureKind: 'cancelled',
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
       };
     }
 
@@ -4713,6 +4715,17 @@ async function executeLoopGroupBody(
     };
     await runLayers(iterCtx);
 
+    // Accumulate usage across iterations (charged on the failure path below too).
+    if (iterCtx.totalCostUsd !== undefined) {
+      loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
+    }
+    if (iterCtx.totalTokens !== undefined) {
+      loopTotalTokens = sumTokenUsage(
+        [...(loopTotalTokens !== undefined ? [loopTotalTokens] : []), iterCtx.totalTokens],
+        { nodeId: node.id, iteration: i }
+      );
+    }
+
     // A body approval/cancel node may have paused or cancelled the run mid-iteration.
     // `paused` is tolerated (a sibling gate in the same iteration layer) — mirror
     // executeLoopNode's between-iteration tolerance — but a terminal/cancelled state
@@ -4731,19 +4744,10 @@ async function executeLoopGroupBody(
         output: lastIterationOutput,
         error: `Workflow ${effectiveStatus}`,
         failureKind: 'cancelled',
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
       };
     }
-    // Accumulate usage across iterations (charged on the failure path below too).
-    if (iterCtx.totalCostUsd !== undefined) {
-      loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
-    }
-    if (iterCtx.totalTokens !== undefined) {
-      loopTotalTokens = sumTokenUsage(
-        [...(loopTotalTokens !== undefined ? [loopTotalTokens] : []), iterCtx.totalTokens],
-        { nodeId: node.id, iteration: i }
-      );
-    }
-
     // Carry the body's final sequential session into the next iteration (unless
     // fresh_context forces a reset, handled above by seeding undefined). Taken
     // before handling the terminal gate below: its pause persists this
@@ -5140,6 +5144,8 @@ async function executeLoopGroupBody(
           output: lastIterationOutput,
           failureKind: 'unknown',
           error: undeliveredGatePromptError('Loop-group gate', node.id),
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
         };
       }
       deps.store
