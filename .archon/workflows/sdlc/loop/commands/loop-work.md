@@ -33,6 +33,7 @@ If the move turns out to be wrong (the pull request was already merged, the issu
 
 - Edit the files that judge the work or set the direction: the harness and its scenarios, the CI workflows, the mission, the product document, and any path `engineering.md` or the harness config lists as protected. If the work truly needs one changed, label the issue `needs-owner` and explain.
 - Read files outside this repository other than the runtime instructions above.
+- Edit or delete a `Loop claim` comment. Other runs of this loop may be working this repository right now; the claim keeps them off this item until the loop releases it after review.
 - Kill processes by name. Stop only processes you started, by the process ID you recorded, and stop all of them before you finish. Give every wait a timeout.
 - Move the mouse, type into, focus or show windows on the owner's desktop.
 

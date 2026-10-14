@@ -55,6 +55,7 @@ Leave exactly one comment on the pull request (or the work item, when there is n
 
 ## Never
 
+- Edit or delete a `Loop claim` comment; the loop releases this run's claim after you finish.
 - Kill processes by name. Stop only processes you started, by the process ID you recorded, and stop all of them before you finish. Give every wait a timeout.
 - Move the mouse, type into, focus or show windows on the owner's desktop.
 
