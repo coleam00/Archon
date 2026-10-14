@@ -15,7 +15,13 @@ import { type Conversation, type CommandResult, ConversationNotFoundError } from
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
-import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
+import {
+  listWorktrees,
+  execFileAsync,
+  listChildRepos,
+  toRepoPath,
+  addSafeDirectory,
+} from '@archon/git';
 import {
   classifyIsolationError,
   getIsolationProvider,
@@ -357,14 +363,7 @@ async function handleWorktreeCommand(
           description: `Manual worktree: ${branchName}`,
         });
 
-        // Add to git safe.directory
-        await execFileAsync('git', [
-          'config',
-          '--global',
-          '--add',
-          'safe.directory',
-          env.workingPath,
-        ]);
+        await addSafeDirectory(env.workingPath);
 
         // Create database record for isolation environment
         const dbEnv = await isolationEnvDb.create({

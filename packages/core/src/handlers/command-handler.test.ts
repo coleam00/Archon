@@ -268,6 +268,7 @@ const mockCreateWorkflowEvent = mock<typeof WorkflowEventDb.createWorkflowEvent>
 );
 
 // Spies for internal modules (use spyOn instead of mock.module to avoid global pollution)
+let spyAddSafeDirectory: ReturnType<typeof spyOn>;
 let spyExecFileAsync: ReturnType<typeof spyOn>;
 let spyWorktreeExists: ReturnType<typeof spyOn>;
 let spyListWorktrees: ReturnType<typeof spyOn>;
@@ -538,6 +539,7 @@ function clearAllMocks(): void {
 // Setup spies for internal modules
 function setupSpies(): void {
   // Git utility spies
+  spyAddSafeDirectory = spyOn(gitUtils, 'addSafeDirectory').mockResolvedValue(undefined);
   spyExecFileAsync = spyOn(gitUtils, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
   spyWorktreeExists = spyOn(gitUtils, 'worktreeExists').mockResolvedValue(false);
   spyListWorktrees = spyOn(gitUtils, 'listWorktrees').mockResolvedValue([]);
@@ -573,6 +575,7 @@ function setupSpies(): void {
 
 // Restore all spies
 function restoreSpies(): void {
+  spyAddSafeDirectory?.mockRestore();
   spyExecFileAsync?.mockRestore();
   spyWorktreeExists?.mockRestore();
   spyListWorktrees?.mockRestore();
@@ -1544,6 +1547,9 @@ describe('CommandHandler', () => {
           );
 
           expect(result.success).toBe(true);
+          expect(spyAddSafeDirectory).toHaveBeenCalledWith(
+            '/workspace/my-repo/worktrees/task-feat-auth'
+          );
           expect(result.message).toContain('Worktree created');
           expect(result.message).toContain('task-feat-auth');
           expect(result.message).toMatch(/worktrees[\\\/]task-feat-auth/);
@@ -1557,6 +1563,21 @@ describe('CommandHandler', () => {
               },
             })
           );
+        });
+
+        test('fails before registration when safe.directory configuration fails', async () => {
+          spyAddSafeDirectory.mockRejectedValueOnce(new Error('config locked'));
+
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree create feat-auth',
+            operator
+          );
+
+          expect(result.success).toBe(false);
+          expect(mockIsolationCreate).toHaveBeenCalled();
+          expect(mockIsolationEnvDbCreate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
         });
 
         test.each([

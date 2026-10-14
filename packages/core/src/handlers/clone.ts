@@ -15,6 +15,7 @@ import type { Codebase } from '../types';
 import {
   cloneRepository as cloneGitRepository,
   execFileAsync,
+  addSafeDirectory,
   toRepoPath,
   validateCloneUrl,
   type CloneCredentials,
@@ -525,8 +526,7 @@ export async function cloneRepository(
     throw error;
   }
 
-  // Add to git safe.directory
-  await execFileAsync('git', ['config', '--global', '--add', 'safe.directory', targetPath]);
+  await addSafeDirectory(toRepoPath(targetPath));
   getLog().debug({ path: targetPath }, 'safe_directory_added');
 
   const result = await registerRepoAtPath(

@@ -24,6 +24,9 @@ import {
 } from '../services/codebase-checkout-resolver';
 import { createMockLogger } from '../test/mocks/logger';
 
+const realExecFileAsync = gitUtils.execFileAsync;
+const realAddSafeDirectory = gitUtils.addSafeDirectory;
+
 // Capture the real functions before the re-export is replaced by the module mock.
 const { findCommandFiles: discoverCommandFiles, isPathInside } =
   await import('@archon/paths/archon-paths');
@@ -139,6 +142,7 @@ let spyFsRm: ReturnType<typeof spyOn>;
 let spyFsStat: ReturnType<typeof spyOn>;
 let spyFsRealpath: ReturnType<typeof spyOn>;
 let spyExecFileAsync: ReturnType<typeof spyOn>;
+let spyAddSafeDirectory: ReturnType<typeof spyOn>;
 let spyCloneGitRepository: ReturnType<typeof spyOn>;
 let spyGetCanonicalRepoPath: ReturnType<typeof spyOn>;
 
@@ -160,6 +164,7 @@ function setupSpies(): void {
     stdout: '',
     stderr: '',
   });
+  spyAddSafeDirectory = spyOn(gitUtils, 'addSafeDirectory').mockResolvedValue(undefined);
   spyCloneGitRepository = spyOn(gitUtils, 'cloneRepository').mockResolvedValue({
     ok: true,
     value: undefined,
@@ -176,6 +181,7 @@ function restoreSpies(): void {
   spyFsRealpath?.mockRestore();
   spyFsStat?.mockRestore();
   spyExecFileAsync?.mockRestore();
+  spyAddSafeDirectory?.mockRestore();
   spyCloneGitRepository?.mockRestore();
   spyGetCanonicalRepoPath?.mockRestore();
 }
@@ -498,15 +504,59 @@ describe('cloneRepository', () => {
       expect(result.name).toBe('owner/repo');
     });
 
-    test('adds safe.directory after a successful clone', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+    test('re-cloning the same path writes one safe.directory value in a scratch HOME', async () => {
+      const home = await fsPromises.mkdtemp(join(tmpdir(), 'archon-clone-safe-'));
+      const env = {
+        HOME: home,
+        XDG_CONFIG_HOME: home,
+        GIT_CONFIG_GLOBAL: join(home, '.gitconfig'),
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_COUNT: '0',
+      };
+      const previousEnv = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+      try {
+        Object.assign(process.env, env);
+        spyExecFileAsync.mockImplementation(realExecFileAsync);
+        spyAddSafeDirectory.mockImplementation(realAddSafeDirectory);
+        await realExecFileAsync('git', [
+          'config',
+          '--global',
+          '--add',
+          'safe.directory',
+          '/workspace/other',
+        ]);
+        mockCreateCodebase.mockResolvedValue(makeCodebase());
 
-      await cloneRepository('https://github.com/owner/repo');
+        // The filesystem mock models a removed clone, so each invocation sets up the same path.
+        await cloneRepository('https://github.com/owner/repo');
+        await cloneRepository('https://github.com/owner/repo');
 
-      const safeDir = (spyExecFileAsync.mock.calls as string[][]).find(args =>
-        args[1]?.includes('safe.directory')
+        const target = getGitCloneCall()?.[1];
+        expect(target).toBeDefined();
+        expect(spyCloneGitRepository).toHaveBeenCalledTimes(2);
+        const { stdout } = await realExecFileAsync('git', [
+          'config',
+          '--global',
+          '--get-all',
+          'safe.directory',
+        ]);
+        expect(stdout.trim().split('\n')).toEqual(['/workspace/other', target]);
+      } finally {
+        for (const [key, value] of Object.entries(previousEnv)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        spyFsRm.mockRestore();
+        await removeTempTree(home);
+      }
+    });
+
+    test('adds safe.directory before registration and propagates config failures', async () => {
+      spyAddSafeDirectory.mockRejectedValueOnce(new Error('config locked'));
+      await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
+        'config locked'
       );
-      expect(safeDir).toBeDefined();
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
     });
   });
 
