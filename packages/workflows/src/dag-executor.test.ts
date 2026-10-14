@@ -25201,6 +25201,10 @@ describe('executeDagWorkflow -- loop_group node', () => {
       'Check CI for [$pr.output]'
     );
     await writeFile(join(testDir, '.archon', 'commands', 'fix-ci.md'), 'Fix CI for [$pr.output]');
+    await writeFile(
+      join(testDir, '.archon', 'commands', 'retry-ci.md'),
+      'Retry CI for [$pr.output]'
+    );
     mockSendQueryDag.mockImplementation(async function* (prompt: string) {
       yield {
         type: 'agent_message_chunk',
@@ -25228,6 +25232,11 @@ describe('executeDagWorkflow -- loop_group node', () => {
             nodes: [{ id: 'ci', command: 'fix-ci' }],
           },
         },
+        {
+          id: 'retry',
+          depends_on: ['pr'],
+          loop: { command: 'retry-ci', until: 'DONE', max_iterations: 1 },
+        },
       ],
     });
     const { workflows, errors } = expandWorkflowIncludes(
@@ -25254,6 +25263,9 @@ describe('executeDagWorkflow -- loop_group node', () => {
       'Check CI for [PR-42]'
     );
     expect(prompts.find(prompt => prompt.includes('Fix CI for'))).toContain('Fix CI for [PR-42]');
+    expect(prompts.find(prompt => prompt.includes('Retry CI for'))).toContain(
+      'Retry CI for [PR-42]'
+    );
   });
 
   it('resolves an included loop-body command own with: binding at run time (#3972)', async () => {

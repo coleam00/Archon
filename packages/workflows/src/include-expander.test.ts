@@ -2920,19 +2920,31 @@ describe('expandWorkflowIncludes — command bodies read include aliases and own
       { id: 'open', bash: 'echo 42', depends_on: ['prep'] },
     ]);
 
-  test('names the include primary sink in a top-level command body', () => {
+  test('names the include primary sink in top-level command and loop.command bodies', () => {
     const block = wf('deliver', [
       { id: 'pr', include: 'open-pr' },
       { id: 'check', command: 'check-ci', depends_on: ['pr'] },
+      {
+        id: 'retry',
+        depends_on: ['pr'],
+        loop: { command: 'retry-ci', until: 'DONE', max_iterations: 1 },
+      },
     ]);
     const parent = wf('ship', [{ id: 'deliver', include: 'deliver' }]);
     const { workflows, errors } = expandWorkflowIncludes(
       mapOf(leaf(), block, parent),
-      new Map([['check-ci', 'Check CI for $pr.output and PR $pr.output.number.']])
+      new Map([
+        ['check-ci', 'Check CI for $pr.output and PR $pr.output.number.'],
+        ['retry-ci', 'Retry CI for $pr.output.'],
+      ])
     );
     expect(errors).toEqual([]);
-    expect(inlinePrompt(nodeById(workflows.get('ship')!, 'deliver__check'))).toBe(
+    const ship = workflows.get('ship')!;
+    expect(inlinePrompt(nodeById(ship, 'deliver__check'))).toBe(
       'Check CI for $deliver__pr__open.output and PR $deliver__pr__open.output.number.'
+    );
+    expect(compiledLoopPrompt(nodeById(ship, 'deliver__retry'))).toBe(
+      'Retry CI for $deliver__pr__open.output.'
     );
   });
 
