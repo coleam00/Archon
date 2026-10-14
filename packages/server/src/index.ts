@@ -90,7 +90,11 @@ import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
 import { AttentionRouter } from './services/attention-router';
 import { WebPushDestination } from './services/web-push';
-import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
+import {
+  registerGiteaWebhookRoute,
+  registerGithubWebhookRoute,
+  registerWebhookSourceRoutes,
+} from './routes/webhooks';
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import { hasStartReceiptForDelivery } from '@archon/core/db/resource-starts';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
@@ -799,29 +803,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Gitea webhook endpoint
   if (gitea) {
-    app.post('/webhooks/gitea', async c => {
-      const eventType = c.req.header('x-gitea-event');
-
-      try {
-        const signature = c.req.header('x-gitea-signature');
-        if (!signature) {
-          return c.json({ error: 'Missing signature header' }, 400);
-        }
-
-        // CRITICAL: Use c.req.text() for raw body (signature verification)
-        const payload = await c.req.text();
-
-        // Process async (fire-and-forget for fast webhook response)
-        gitea.handleWebhook(payload, signature).catch((error: unknown) => {
-          getLog().error({ err: error, eventType }, 'gitea_webhook_processing_error');
-        });
-
-        return c.text('OK', 200);
-      } catch (error) {
-        getLog().error({ err: error, eventType }, 'gitea_webhook_endpoint_error');
-        return c.json({ error: 'Internal server error' }, 500);
-      }
-    });
+    registerGiteaWebhookRoute(app, gitea);
     getLog().info('gitea_webhook_registered');
   }
 
