@@ -109,6 +109,25 @@ export async function respondRun(
   });
 }
 
+type AnswerWorkflowRunBody = components['schemas']['AnswerWorkflowRunBody'];
+
+/**
+ * Answer a paused attention wait in its declared form. `occurrence` is the one the run's
+ * attention reports; the server refuses an answer meant for any other pause.
+ */
+export async function answerRun(
+  id: string,
+  occurrence: string,
+  choose: string[],
+  text?: string
+): Promise<void> {
+  const body: AnswerWorkflowRunBody = { occurrence, choose, text };
+  await requestJson(`/api/workflows/runs/${encodeURIComponent(id)}/answer`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
 export async function resumeRun(id: string): Promise<void> {
   await requestJson(`/api/workflows/runs/${encodeURIComponent(id)}/resume`, {
     method: 'POST',

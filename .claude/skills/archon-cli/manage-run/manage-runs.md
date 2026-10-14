@@ -53,8 +53,9 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | One run with raw event rows | `archon workflow get <run-id> --verbose --events --json` |
 | Active runs (this project) | `archon workflow status --json` |
 | Active runs (all projects) | `archon workflow status --all --json` |
-| Block until the run ends or needs a human decision | `archon workflow wait <run-id> --json` |
+| Block until the run ends or needs attention | `archon workflow wait <run-id> --json` |
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
+| Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <t>]` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
 | Stop a running run (its live owner first) | `archon workflow cancel <run-id>` |
@@ -74,6 +75,21 @@ To record AND continue in this process:
 ```bash
 archon workflow approve <run-id> "ship it"   # no --json: records + auto-resumes; background task!
 ```
+
+A `wait: attention` pause (`attention.kind: "attention"`) is answered in the `form` it
+reports, with one of the `options` ids it lists:
+
+```bash
+archon workflow answer <run-id> --occurrence <id> --text "done" --json            # message
+archon workflow answer <run-id> --occurrence <id> --choose use-dev --json         # approval/select
+archon workflow answer <run-id> --occurrence <id> --choose a --choose b --json    # multi_select
+```
+
+`approve`/`reject`/`respond <option>` are shorthand for the same answer. In the
+`approval` form `reject` is an answer and does not cancel the run. Like a gate answer,
+the answered wait is a due continuation. Answer only what the user actually decided; an
+undeclared option is refused. A `legacy:` occurrence is a wait paused before answers
+existed: it takes no answer, so `workflow resume` it once its action is done.
 
 When you answer from a run you saw paused earlier, pass the occurrence that
 `workflow wait --json` reported (`attention.occurrence`) as `--occurrence <id>`. If the

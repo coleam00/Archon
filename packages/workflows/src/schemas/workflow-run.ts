@@ -7,7 +7,14 @@ import {
   type DeclaredOutputPaths,
 } from '../output-ref';
 import { z } from '@hono/zod-openapi';
-import { approvalDecisionConfigSchema } from './dag-node';
+import {
+  APPROVAL_ATTENTION_OPTIONS,
+  approvalDecisionConfigSchema,
+  attentionFormSchema,
+  attentionOptionSchema,
+  type AttentionForm,
+  type AttentionOption,
+} from './dag-node';
 import { skipCauseSchema, suspendReasonSchema, type NodeState } from './node-state';
 import { tokenUsageSchema } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';
@@ -67,10 +74,33 @@ const workflowWaitEventFields = {
   signaledAt: z.string().datetime().optional(),
   payload: z.unknown().optional(),
 } as const;
+/**
+ * The answer an attention wait received, as the next node reads it. Its shape is the
+ * wait's form's output contract (`ATTENTION_OUTPUT_FORMATS`).
+ */
+export const attentionAnswerSchema = z.union([
+  z.strictObject({ text: z.string() }),
+  z.strictObject({ decision: z.string().min(1), text: z.string() }),
+  z.strictObject({ decisions: z.array(z.string().min(1)).min(1), text: z.string() }),
+]);
+export type AttentionAnswer = z.infer<typeof attentionAnswerSchema>;
+
+/**
+ * An attention wait paused before answers existed has only `waitingSince` and `message`:
+ * no `pauseId`, it reads as the `message` form, and only `resume` continues it. A newer
+ * wait carries its occurrence, its form and resolved options, and once answered, the
+ * answer with the surface it came through and when.
+ */
 const workflowWaitAttentionFields = {
   kind: z.literal('attention'),
   waitingSince: z.string().datetime(),
   message: z.string().trim().min(1),
+  pauseId: z.string().min(1).optional(),
+  form: attentionFormSchema.optional(),
+  options: z.array(attentionOptionSchema).optional(),
+  answer: attentionAnswerSchema.optional(),
+  answeredVia: recordSurfaceSchema.optional(),
+  answeredAt: z.string().datetime().optional(),
 } as const;
 const workflowWaitNodeOwnerFields = {
   owner: z.literal('node'),
@@ -122,6 +152,53 @@ export function isWorkflowWaitContext(value: unknown): value is WorkflowWaitCont
 
 export function workflowWaitStepName(wait: WorkflowWaitContext): string {
   return wait.owner === 'loop_group' ? `${wait.nodeId}.${wait.bodyWaitId}` : wait.nodeId;
+}
+
+/** The attention wait a paused run sits at, answered or not, if it sits at one. */
+export function pausedAttentionWait(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): WorkflowAttentionWaitContext | undefined {
+  if (run.status !== 'paused') return undefined;
+  const wait = run.metadata.wait;
+  return isWorkflowWaitContext(wait) && wait.kind === 'attention' ? wait : undefined;
+}
+
+/** The form an attention wait is answered in; a wait from before forms is a message. */
+export function attentionForm(wait: WorkflowAttentionWaitContext): AttentionForm {
+  return wait.form ?? 'message';
+}
+
+/** The ids an attention wait's answer may choose from: none for a message. */
+export function attentionOptions(wait: WorkflowAttentionWaitContext): readonly AttentionOption[] {
+  switch (attentionForm(wait)) {
+    case 'message':
+      return [];
+    case 'approval':
+      return APPROVAL_ATTENTION_OPTIONS;
+    case 'select':
+    case 'multi_select':
+      return wait.options ?? [];
+  }
+}
+
+const LEGACY_OCCURRENCE_PREFIX = 'legacy:';
+
+/**
+ * The step a `legacy:<step>` occurrence names, or undefined for a pause id. A legacy
+ * occurrence identifies a pause from before pause identities existed.
+ */
+export function legacyOccurrenceStep(occurrence: string): string | undefined {
+  return occurrence.startsWith(LEGACY_OCCURRENCE_PREFIX)
+    ? occurrence.slice(LEGACY_OCCURRENCE_PREFIX.length)
+    : undefined;
+}
+
+/**
+ * The occurrence id of an attention wait, by the same rule as `gateOccurrence`: its
+ * `pauseId`, or `legacy:<step>` for a wait paused before pause identities existed.
+ */
+export function attentionOccurrence(wait: WorkflowAttentionWaitContext): string {
+  return wait.pauseId ?? `${LEGACY_OCCURRENCE_PREFIX}${workflowWaitStepName(wait)}`;
 }
 
 export const scheduledWorkflowResumeSchema = z
@@ -351,30 +428,38 @@ export function pendingWorkflowWaitDeadline(
   return wait;
 }
 
-/** The pause a continuation host may continue because someone already answered it. */
-export interface AnsweredGateContinuation {
+/** The identity a continuation host claims an answered pause by. */
+export interface PauseContinuation {
   nodeId: string;
   pauseId: string;
 }
 
 /**
- * The answered gate a paused run is waiting to be continued past, if it has one.
+ * The answerable pause a paused run sits at, if the continuation host continues it once
+ * it is answered: a gate, or an attention wait. `answered` says whether that has
+ * happened. This is the one place that decides which answerable pauses the engine
+ * continues by itself.
  *
- * Answering only records the decision; continuing is the continuation host's job, so an
- * answer given through any surface moves the run on. Excluded: a parent blocked on a
- * child (it continues through the child), a container write-back (only a CLI holding the
- * container can apply it), any container run (the host cannot resume one), a gate from
- * before `pauseId` existed (no identity to claim against), and a run parked on a `wait:`,
- * which owns its own continuation. That last case also covers file-store rows written
- * before a wait pause began removing the previous gate's answer.
+ * Excluded: a parent blocked on a child (it continues through the child), a container
+ * write-back (only a CLI holding the container can apply it), any container run (the
+ * host cannot resume one), and a gate or attention wait from before `pauseId` existed
+ * (no identity to claim against). A gate beside a `wait:` is a leftover the wait
+ * replaced; that also covers file-store rows written before a wait pause began removing
+ * the previous gate's answer. Time and event waits continue on their deadline instead
+ * (`pendingWorkflowWaitDeadline`).
  */
-export function answeredGateContinuation(
+export function continuablePause(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
-): AnsweredGateContinuation | undefined {
-  if (run.status !== 'paused' || run.metadata.wait !== undefined) return undefined;
-  if (run.metadata.isolation === 'container') return undefined;
+): (PauseContinuation & { answered: boolean }) | undefined {
+  if (run.status !== 'paused' || run.metadata.isolation === 'container') return undefined;
+  const wait = run.metadata.wait;
+  if (wait !== undefined) {
+    if (!isWorkflowWaitContext(wait) || wait.kind !== 'attention' || wait.pauseId === undefined)
+      return undefined;
+    return { nodeId: wait.nodeId, pauseId: wait.pauseId, answered: wait.answer !== undefined };
+  }
   const approval = run.metadata.approval;
-  if (!isApprovalContext(approval) || !isGateResolved(approval)) return undefined;
+  if (!isApprovalContext(approval)) return undefined;
   if (
     approval.type === 'child_workflow' ||
     approval.type === 'fan_out' ||
@@ -382,7 +467,19 @@ export function answeredGateContinuation(
   )
     return undefined;
   if (approval.pauseId === undefined || approval.nodeId === '') return undefined;
-  return { nodeId: approval.nodeId, pauseId: approval.pauseId };
+  return { nodeId: approval.nodeId, pauseId: approval.pauseId, answered: isGateResolved(approval) };
+}
+
+/**
+ * The answered pause a paused run is waiting to be continued past, if it has one.
+ * Answering only records the answer; continuing is the continuation host's job, so an
+ * answer given through any surface moves the run on.
+ */
+export function answeredPauseContinuation(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): PauseContinuation | undefined {
+  const pause = continuablePause(run);
+  return pause?.answered === true ? { nodeId: pause.nodeId, pauseId: pause.pauseId } : undefined;
 }
 
 /**
@@ -1031,11 +1128,13 @@ const nonTerminalRunAttentionSchemas = [
     occurrence: z.string(),
   }),
   z.object({
-    kind: z.literal('action_required'),
+    kind: z.literal('attention'),
     runId: z.string(),
     nodeId: z.string(),
     message: z.string(),
     occurrence: z.string(),
+    form: attentionFormSchema,
+    options: z.array(attentionOptionSchema),
   }),
   z.object({
     kind: z.literal('blocked_on_child'),
@@ -1114,7 +1213,7 @@ function unreadableAttention(
  * reader can tie an answer to the exact pause it resolved.
  */
 export function gateOccurrence(approval: Pick<ApprovalContext, 'nodeId' | 'pauseId'>): string {
-  return approval.pauseId ?? `legacy:${approval.nodeId}`;
+  return approval.pauseId ?? `${LEGACY_OCCURRENCE_PREFIX}${approval.nodeId}`;
 }
 
 /**
@@ -1163,12 +1262,16 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
 
   const wait = run.metadata?.wait;
   if (isWorkflowWaitContext(wait) && wait.kind === 'attention') {
+    // Answered: like a resolved gate, it waits on the machine, not on an answer.
+    if (wait.answer !== undefined) return null;
     return {
-      kind: 'action_required',
+      kind: 'attention',
       runId: run.id,
       nodeId: workflowWaitStepName(wait),
       message: wait.message,
-      occurrence: `wait:${wait.waitingSince}`,
+      occurrence: attentionOccurrence(wait),
+      form: attentionForm(wait),
+      options: [...attentionOptions(wait)],
     };
   }
 

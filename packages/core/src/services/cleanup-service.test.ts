@@ -452,7 +452,7 @@ describe('cleanup-service', () => {
           status: 'active',
           created_at: new Date(),
           created_by_platform: 'github',
-          metadata: {},
+          metadata: { worktree_branch_created: true },
         })
       );
 
@@ -660,7 +660,7 @@ describe('cleanup-service', () => {
           status: 'active',
           created_at: new Date(),
           created_by_platform: 'github',
-          metadata: {},
+          metadata: { worktree_branch_created: true },
         })
       );
 
@@ -682,6 +682,39 @@ describe('cleanup-service', () => {
         canonicalRepoPath: '/workspace/repo',
         deleteRemoteBranch: undefined,
       });
+    });
+
+    test.each([
+      {
+        label: 'says the environment did not create it',
+        metadata: { worktree_branch_created: false },
+      },
+      { label: 'predates the branch-created key', metadata: {} },
+    ])('keeps the branch when the record $label', async ({ metadata }) => {
+      const envId = 'env-existing-branch';
+
+      mockGetById.mockResolvedValueOnce(
+        makeEnvironment({
+          id: envId,
+          codebase_id: 'codebase-123',
+          working_path: '/workspace/worktrees/operator-branch',
+          branch_name: 'operator-branch',
+          status: 'active',
+          metadata,
+        })
+      );
+      mockGetCodebase.mockResolvedValueOnce(
+        makeCodebase({ id: 'codebase-123', name: 'test-repo', default_cwd: '/workspace/repo' })
+      );
+
+      await removeEnvironment(envId);
+
+      expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/operator-branch', {
+        force: undefined,
+        canonicalRepoPath: '/workspace/repo',
+        deleteRemoteBranch: undefined,
+      });
+      expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
     });
 
     test('returns skippedReason when worktree has uncommitted changes without force', async () => {
@@ -924,6 +957,8 @@ describe('runScheduledCleanup', () => {
           working_path: '/nonexistent/path',
           branch_name: 'issue-42',
           status: 'active',
+
+          metadata: { worktree_branch_created: true },
         })
       );
       // removeEnvironment: getCodebase for canonical repo path
@@ -2898,6 +2933,8 @@ describe('onConversationClosed', () => {
         working_path: '/workspace/worktrees/pr-101',
         branch_name: 'feature-y',
         status: 'active',
+
+        metadata: { worktree_branch_created: true },
       })
     );
 

@@ -437,6 +437,9 @@ const mockFindChildRuns = mock(async (_parentRunId: string): Promise<unknown[]> 
 const mockSignalWorkflowWait = mock(async (_id: string, _wait: unknown, _payload?: unknown) => ({
   signaled: true,
 }));
+const mockAnswerAttentionWait = mock<
+  (typeof import('@archon/core/db/workflows'))['answerAttentionWait']
+>(async () => ({ answered: true }));
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
@@ -450,6 +453,7 @@ mock.module('@archon/core/db/workflows', () => ({
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
   signalWorkflowWait: mockSignalWorkflowWait,
+  answerAttentionWait: mockAnswerAttentionWait,
   getWorkflowRunByWorkerPlatformId: mockGetWorkflowRunByWorkerPlatformId,
 }));
 
@@ -2784,7 +2788,7 @@ const MOCK_PAUSED_RUN: MockWorkflowRun = {
   },
 };
 
-describe('action-required pause gate routes', () => {
+describe('gate routes at an attention wait from before answers', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockResolveApprovalGate.mockClear();
@@ -2825,6 +2829,100 @@ describe('action-required pause gate routes', () => {
       expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
     });
   }
+});
+
+describe('POST /api/workflows/runs/:runId/answer', () => {
+  const askRun = (answered = false): MockWorkflowRun => ({
+    ...MOCK_PAUSED_RUN,
+    id: 'run-ask',
+    metadata: {
+      wait: {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: '2026-10-14T10:00:00.000Z',
+        message: 'Which base?',
+        pauseId: 'pause-1',
+        form: 'select',
+        options: [{ id: 'use-main' }, { id: 'use-dev' }],
+        ...(answered
+          ? {
+              answer: { decision: 'use-main', text: '' },
+              answeredVia: 'cli',
+              answeredAt: '2026-10-14T10:01:00.000Z',
+            }
+          : {}),
+      },
+    },
+  });
+  const post = async (path: string, body: unknown): Promise<Response> =>
+    makeApp().app.request(path, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    });
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockAnswerAttentionWait.mockClear();
+    mockResolveApprovalGate.mockClear();
+  });
+
+  test('records a declared option with the api surface', async () => {
+    mockGetWorkflowRun.mockResolvedValue(askRun());
+    const response = await post('/api/workflows/runs/run-ask/answer', {
+      occurrence: 'pause-1',
+      choose: ['use-dev'],
+      text: 'dev is ahead',
+    });
+    expect(response.status).toBe(200);
+    expect(mockAnswerAttentionWait).toHaveBeenCalledTimes(1);
+    expect(mockAnswerAttentionWait.mock.calls[0]?.[1]).toMatchObject({
+      pauseId: 'pause-1',
+      answer: { decision: 'use-dev', text: 'dev is ahead' },
+      answeredVia: 'api',
+    });
+  });
+
+  test('refuses an undeclared option with 400 and a stale occurrence with 409', async () => {
+    mockGetWorkflowRun.mockResolvedValue(askRun());
+    const undeclared = await post('/api/workflows/runs/run-ask/answer', {
+      occurrence: 'pause-1',
+      choose: ['use-prod'],
+    });
+    expect(undeclared.status).toBe(400);
+    expect(((await undeclared.json()) as { error: string }).error).toContain(
+      "does not declare option 'use-prod'"
+    );
+    const stale = await post('/api/workflows/runs/run-ask/answer', {
+      occurrence: 'pause-0',
+      choose: ['use-dev'],
+    });
+    expect(stale.status).toBe(409);
+    expect(((await stale.json()) as { error: string }).error).toContain(
+      "It is now awaiting occurrence 'pause-1'"
+    );
+    mockGetWorkflowRun.mockResolvedValue(askRun(true));
+    const again = await post('/api/workflows/runs/run-ask/answer', {
+      occurrence: 'pause-1',
+      choose: ['use-dev'],
+    });
+    expect(again.status).toBe(409);
+    expect(mockAnswerAttentionWait).not.toHaveBeenCalled();
+  });
+
+  test('respond answers an attention wait as sugar and refuses an undeclared option', async () => {
+    mockGetWorkflowRun.mockResolvedValue(askRun());
+    expect(
+      (await post('/api/workflows/runs/run-ask/respond', { decision: 'use-prod' })).status
+    ).toBe(400);
+    expect(mockAnswerAttentionWait).not.toHaveBeenCalled();
+    const response = await post('/api/workflows/runs/run-ask/respond', { decision: 'use-main' });
+    expect(response.status).toBe(200);
+    expect(mockAnswerAttentionWait.mock.calls[0]?.[1]).toMatchObject({
+      answer: { decision: 'use-main', text: '' },
+    });
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/workflows/runs/:runId/approve', () => {
@@ -4820,11 +4918,13 @@ test('the attention endpoint and detail expose the shared projection with wire d
   expect(list.status).toBe(200);
   const body = runsNeedingAttentionResponseSchema.parse(await list.json());
   expect(body.runs[0]?.attention).toEqual({
-    kind: 'action_required',
+    kind: 'attention',
     runId: run.id,
     nodeId: 'hold',
-    occurrence: 'wait:2026-10-12T00:00:00.000Z',
+    occurrence: 'legacy:hold',
     message: 'Rotate key',
+    form: 'message',
+    options: [],
   });
   mockListWorkflowEvents.mockResolvedValueOnce([]);
   mockGetConversationById.mockResolvedValueOnce(null);

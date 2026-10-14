@@ -297,6 +297,9 @@ class InMemoryStore implements IWorkflowStore {
   deferWorkflowContinuation: IWorkflowStore['deferWorkflowContinuation'] = () => {
     throw new Error('Unexpected deferWorkflowContinuation');
   };
+  answerAttentionWait: IWorkflowStore['answerAttentionWait'] = () => {
+    throw new Error('Unexpected answerAttentionWait');
+  };
   signalWorkflowWait: IWorkflowStore['signalWorkflowWait'] = () => {
     throw new Error('Unexpected signalWorkflowWait');
   };

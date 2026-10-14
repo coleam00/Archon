@@ -1,6 +1,6 @@
 const attentionBodies = {
   gate: 'Waiting for your decision',
-  action_required: 'Waiting for your action',
+  attention: 'Needs attention',
   terminal: 'Run finished',
 };
 

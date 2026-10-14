@@ -226,6 +226,81 @@ describe('cold CLI continuation host', () => {
     expect(JSON.parse(again.stdout).accepted).toBe(0);
   }, 30_000);
 
+  for (const { form, options, refused, choose, reads, recorded } of [
+    {
+      form: 'message',
+      options: '',
+      refused: ['--choose', 'approve'],
+      choose: [],
+      reads: 'text',
+      recorded: 'ship it',
+    },
+    {
+      form: 'approval',
+      options: '',
+      refused: ['--choose', 'maybe'],
+      choose: ['--choose', 'reject'],
+      reads: 'decision',
+      recorded: 'reject',
+    },
+    {
+      form: 'select',
+      options: '\n      options:\n        - { id: use-main }\n        - { id: use-dev }',
+      refused: ['--choose', 'use-main', '--choose', 'use-dev'],
+      choose: ['--choose', 'use-dev'],
+      reads: 'decision',
+      recorded: 'use-dev',
+    },
+    {
+      form: 'multi_select',
+      options: '\n      options:\n        - { id: lint }\n        - { id: test }',
+      refused: ['--choose', 'build'],
+      choose: ['--choose', 'lint', '--choose', 'test'],
+      reads: 'decisions',
+      recorded: '["lint","test"]',
+    },
+  ]) {
+    test(`a ${form} attention answer is refused when undeclared, then continued by the next wake`, async () => {
+      const f = await seed(
+        `    wait:\n      attention: Decide\n      form: ${form}${options}`,
+        `  - id: second\n    depends_on: [first]\n    bash: answer=$first.output.${reads}; printf '%s\\n' "$answer" >> answer\n`
+      );
+      const id = row(f).id;
+      const occurrence = (JSON.parse(row(f).metadata) as { wait: { pauseId: string } }).wait
+        .pauseId;
+      const answer = (args: string[]): Promise<{ exitCode: number; stdout: string }> =>
+        runProcess(
+          f,
+          [cli, 'workflow', 'answer', id, '--occurrence', occurrence, ...args, '--json'],
+          f.project
+        );
+      // A refused `--json` answer reports `ok: false`, like every answering command.
+      const bad = await answer(refused);
+      expect(JSON.parse(bad.stdout)).toMatchObject({ ok: false });
+      const stale = await runProcess(
+        f,
+        [cli, 'workflow', 'answer', id, '--occurrence', 'stale', ...choose, '--json'],
+        f.project
+      );
+      expect(JSON.parse(stale.stdout)).toMatchObject({
+        ok: false,
+        error: expect.stringContaining(`It is now awaiting occurrence '${occurrence}'`),
+      });
+      expect(row(f).status).toBe('paused');
+      expect(events(f, 'wait_answered')).toBe(0);
+
+      const answered = await answer([...choose, '--text', 'ship it']);
+      expect(answered.exitCode, answered.stdout).toBe(0);
+      expect(row(f).status).toBe('paused');
+      expect(events(f, 'wait_answered')).toBe(1);
+      const woken = await runProcess(f, [cli, 'workflow', 'wake', '--json']);
+      expect(woken.exitCode, woken.stderr || woken.stdout).toBe(0);
+      expect(JSON.parse(woken.stdout).accepted).toBe(1);
+      expect(row(f).status).toBe('completed');
+      expect(readFileSync(join(f.project, 'answer'), 'utf8')).toBe(`${recorded}\n`);
+    }, 60_000);
+  }
+
   test('signals an exact event, rejects its stale occurrence, then completes the next one', async () => {
     const f = await seed(
       '    wait:\n      event: ready\n      deadline_ms: 60000',

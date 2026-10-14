@@ -818,21 +818,37 @@ describe('isolationCleanupCommand', () => {
     expect(consoleLogSpy.mock.calls.flat().join(' ')).not.toContain('Status: Cleaned');
   });
 
-  it('destroys a stale environment with no live owning run', async () => {
-    mockFindStaleEnvironments.mockResolvedValueOnce([
-      { ...mockEnv, id: 'env-stale-1', branch_name: 'stale-branch' },
-    ]);
+  // A record written before worktree_branch_created was persisted has no key.
+  it.each([
+    { branchCreated: true, branchName: 'stale-branch' },
+    { branchCreated: false, branchName: undefined },
+    { branchCreated: 'absent', branchName: undefined },
+  ])(
+    'destroys a stale environment with no live owning run (branch created: $branchCreated)',
+    async ({ branchCreated, branchName }) => {
+      mockFindStaleEnvironments.mockResolvedValueOnce([
+        {
+          ...mockEnv,
+          id: 'env-stale-1',
+          branch_name: 'stale-branch',
+          metadata:
+            branchCreated === 'absent'
+              ? mockEnv.metadata
+              : { ...mockEnv.metadata, worktree_branch_created: branchCreated },
+        },
+      ]);
 
-    await isolationCleanupCommand(7);
+      await isolationCleanupCommand(7);
 
-    expect(mockDestroyWorktree).toHaveBeenCalledWith('/test/worktree', {
-      branchName: 'stale-branch',
-      canonicalRepoPath: '/test/repo',
-      creationId: 'checkout-proof',
-    });
-    expect(mockUpdateStatus).toHaveBeenCalledWith('env-stale-1', 'destroyed');
-    expect(consoleLogSpy).toHaveBeenCalledWith('  Status: Cleaned');
-  });
+      expect(mockDestroyWorktree).toHaveBeenCalledWith('/test/worktree', {
+        branchName,
+        canonicalRepoPath: '/test/repo',
+        creationId: 'checkout-proof',
+      });
+      expect(mockUpdateStatus).toHaveBeenCalledWith('env-stale-1', 'destroyed');
+      expect(consoleLogSpy).toHaveBeenCalledWith('  Status: Cleaned');
+    }
+  );
 
   it.each(['refusal', 'partial'])(
     'reports %s without marking the stale environment destroyed',

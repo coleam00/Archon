@@ -38,7 +38,11 @@ import type {
   ResolvedWorkflow,
 } from '@archon/workflows/schemas/workflow';
 import { isContainerRun, runAttention } from '@archon/workflows/schemas/workflow-run';
-import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
+import {
+  attentionAnswerLines,
+  spellWorkflowCommand,
+  type WorkflowCommandSurface,
+} from '@archon/workflows/deps';
 import * as workflowDb from '../db/workflows';
 import {
   CancelRefusedError,
@@ -821,9 +825,9 @@ async function handleWorkflowCommand(
             msg += '  Tool calls need attention; work remains running.\n';
             for (const call of attention.calls)
               msg += `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)\n`;
-          } else if (attention?.kind === 'action_required') {
-            msg += `  Action required: ${attention.message}\n`;
-            msg += `  Resume: \`${cmd(`resume ${run.id}`)}\`\n`;
+          } else if (attention?.kind === 'attention') {
+            msg += `  Needs attention: ${attention.message}\n`;
+            for (const line of attentionAnswerLines(surface, attention)) msg += `  ${line}\n`;
             msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;
           } else if (attention?.kind === 'awaiting_response') {
             msg += `  Approve: \`${cmd(`approve ${attention.respondTo.runId}`)}\`\n`;

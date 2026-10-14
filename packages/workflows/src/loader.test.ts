@@ -9837,3 +9837,61 @@ nodes:
     expect(parseWorkflow(workflowWithWhen(when), 'when-syntax.yaml').error).toBeNull();
   });
 });
+
+describe('attention wait options from an upstream output_format (#4038)', () => {
+  function parseWithOptionsItems(items: Record<string, unknown>): ParseResult {
+    const outputFormat = {
+      type: 'object',
+      properties: { options: { type: 'array', items } },
+      required: ['options'],
+    };
+    return parseWorkflow(
+      `name: referenced-options
+description: Options computed upstream
+nodes:
+  - id: plan
+    prompt: Propose options.
+    output_format: ${JSON.stringify(outputFormat)}
+  - id: ask
+    depends_on: [plan]
+    wait:
+      attention: Which one?
+      form: select
+      options: "$plan.output.options"
+`,
+      'referenced-options.yaml'
+    );
+  }
+
+  it('loads a producer whose items declare { id, label? }', () => {
+    const result = parseWithOptionsItems({
+      type: 'object',
+      properties: { id: { type: 'string' }, label: { type: 'string' } },
+      required: ['id'],
+    });
+    expect(result.error).toBeNull();
+  });
+
+  it.each([
+    ['items that are strings', { type: 'string' }],
+    ['an id that is not required', { type: 'object', properties: { id: { type: 'string' } } }],
+    [
+      'an id that is not a string',
+      { type: 'object', properties: { id: { type: 'number' } }, required: ['id'] },
+    ],
+    [
+      'a property attention options do not have',
+      {
+        type: 'object',
+        properties: { id: { type: 'string' }, score: { type: 'number' } },
+        required: ['id'],
+      },
+    ],
+  ])('rejects a producer with %s, naming the field and the producer', (_case, items) => {
+    const result = parseWithOptionsItems(items);
+    expect(result.error?.error).toContain("Node 'ask' field 'wait.options'");
+    expect(result.error?.error).toContain(
+      "must be an array of objects declaring only { id: string; label?: string } in 'plan's output_format"
+    );
+  });
+});

@@ -33,11 +33,13 @@ const action = toRun({
   status: 'paused',
   started_at: '2026-10-12T00:00:00.000Z',
   attention: {
-    kind: 'action_required',
+    kind: 'attention',
     runId: 'action-run',
     nodeId: 'hold',
     message: 'Rotate the key, then resume',
-    occurrence: 'wait:2026-10-12T00:00:00.000Z',
+    occurrence: 'legacy:hold',
+    form: 'message',
+    options: [],
   },
 });
 

@@ -58,14 +58,34 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
     // project env and node bindings spread before this bag, so neither can shadow it.
     TYPED_ARTIFACTS_FILE: context.typedArtifactsFile,
     ARCHON_NODE_EXECUTION:
-      context.nodeExecution === null
-        ? ''
-        : JSON.stringify({
-            runId: context.nodeExecution.runId,
-            path: context.nodeExecution.path,
-            invocation: context.nodeExecution.invocation,
-            attempt: context.nodeExecution.attempt,
-          }),
+      context.nodeExecution === null ? '' : nodeExecutionEnvValue(context.nodeExecution),
+  };
+}
+
+function nodeExecutionEnvValue(execution: NodeExecutionIdentity): string {
+  return JSON.stringify({
+    runId: execution.runId,
+    path: execution.path,
+    invocation: execution.invocation,
+    attempt: execution.attempt,
+  });
+}
+
+/**
+ * The run identity an AI node's provider subprocess carries, so an `archon state`
+ * write from the agent's shell records this run and node (#4059). Spread after the
+ * configured project env so none of these keys can be shadowed by it. `ARCHON_CLI_COMMAND`
+ * is always owned here, empty when the host has none to give (a container does not have the
+ * host executable), so a project-env value never stands in for it.
+ */
+export function buildAiNodeEnvironment(
+  execution: NodeExecutionIdentity,
+  cliCommand: string | undefined
+): Record<string, string> {
+  return {
+    WORKFLOW_ID: execution.runId,
+    ARCHON_NODE_EXECUTION: nodeExecutionEnvValue(execution),
+    ARCHON_CLI_COMMAND: cliCommand ?? '',
   };
 }
 

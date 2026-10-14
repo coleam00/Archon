@@ -721,6 +721,7 @@ async function main(): Promise<number> {
           workflowApproveCommand,
           workflowRejectCommand,
           workflowRespondCommand,
+          workflowAnswerCommand,
           workflowCleanupCommand,
           workflowResetSessionsCommand,
           workflowEventEmitCommand,
@@ -732,9 +733,14 @@ async function main(): Promise<number> {
         // The host's deps capture GitHub App auth when built, so commands that can
         // execute a workflow initialize it first. A misconfigured App fails here,
         // before any run row exists; query commands stay usable without it.
-        const executesWorkflow = ['run', 'resume', 'approve', 'reject', 'respond'].includes(
-          subcommand ?? ''
-        );
+        const executesWorkflow = [
+          'run',
+          'resume',
+          'approve',
+          'reject',
+          'respond',
+          'answer',
+        ].includes(subcommand ?? '');
         const workflowHost = await createCliWorkflowHost(executesWorkflow);
         switch (subcommand) {
           case 'list': {
@@ -1113,6 +1119,27 @@ async function main(): Promise<number> {
               effectiveCwd,
               detachFlag,
               values.occurrence as string | undefined
+            );
+            break;
+          }
+
+          case 'answer': {
+            const answerRunId = positionals[2];
+            const answerOccurrence = values.occurrence as string | undefined;
+            if (!answerRunId || answerOccurrence === undefined || positionals[3] !== undefined) {
+              return await fail(
+                jsonFlag,
+                'Usage: archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <text>] [--json]'
+              );
+            }
+            await workflowAnswerCommand(
+              workflowHost,
+              answerRunId,
+              answerOccurrence,
+              (values.choose as string[] | undefined) ?? [],
+              values.text as string | undefined,
+              jsonFlag,
+              effectiveCwd
             );
             break;
           }

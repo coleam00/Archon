@@ -21,6 +21,7 @@ import {
 import {
   TERMINAL_WORKFLOW_STATUSES,
   approvalContextSchema,
+  continuablePause,
   workflowWaitContextSchema,
   isTerminalRunStatus,
   type ApprovalContext,
@@ -57,6 +58,25 @@ const wait: Extract<WorkflowWaitContext, { kind: 'time' }> = {
   waitingSince: '2026-01-01T00:00:00.000Z',
   resumeAt: '2026-01-02T00:00:00.000Z',
 };
+const attentionWait: Extract<WorkflowWaitContext, { kind: 'attention' }> = {
+  owner: 'node',
+  nodeId: 'ask',
+  kind: 'attention',
+  waitingSince: '2026-01-01T00:00:00.000Z',
+  message: 'Which base?',
+  pauseId: 'ask-1',
+  form: 'select',
+  options: [{ id: 'use-main' }, { id: 'use-dev' }],
+};
+const answeredAttention = (
+  answer: string,
+  pause: Extract<WorkflowWaitContext, { kind: 'attention' }> = attentionWait
+): Extract<WorkflowWaitContext, { kind: 'attention' }> => ({
+  ...pause,
+  answer: { decision: answer, text: '' },
+  answeredVia: 'cli',
+  answeredAt: '2026-01-01T00:05:00.000Z',
+});
 const schedule = {
   reason: 'quota' as const,
   attempt: 1,
@@ -994,7 +1014,7 @@ export function describeWorkflowStoreConformance(
         (await store.listDueWorkflowContinuations(new Date(), 10)).map(run => run.id);
       const answer = (id: string, gate: ApprovalContext): Promise<{ resolved: boolean }> =>
         store.resolveApprovalGate(id, { approval: { ...gate, resolved: 'approved' } }, []);
-      const cursor = { kind: 'gate' as const, nodeId: approval.nodeId, pauseId: 'first' };
+      const cursor = { kind: 'answered' as const, nodeId: approval.nodeId, pauseId: 'first' };
       const run = await running(store);
       await store.pauseWorkflowRun(run.id, approval);
       expect(await due()).not.toContain(run.id);
@@ -1083,6 +1103,137 @@ export function describeWorkflowStoreConformance(
         timed.id,
         gate.id,
       ]);
+    });
+    test('an attention answer has one winner, is audited, and is due once at its exact occurrence', async () => {
+      const due = async (): Promise<string[]> =>
+        (await store.listDueWorkflowContinuations(new Date(), 10)).map(run => run.id);
+      const cursor = { kind: 'answered' as const, nodeId: 'ask', pauseId: 'ask-1' };
+      const run = await running(store);
+      await store.pauseWorkflowRunForWait(run.id, attentionWait, {
+        kind: 'started',
+        stepName: 'ask',
+      });
+      expect(await due()).not.toContain(run.id);
+      expect(
+        await store.answerAttentionWait(
+          run.id,
+          answeredAttention('use-main', { ...attentionWait, pauseId: 'stale' })
+        )
+      ).toEqual({ answered: false });
+
+      const results = await eight(index =>
+        store.answerAttentionWait(run.id, answeredAttention(index === 0 ? 'use-main' : 'use-dev'))
+      );
+      expect(results.filter(result => result.answered)).toHaveLength(1);
+      const stored = (await store.getWorkflowRun(run.id))?.metadata.wait;
+      expect(stored).toMatchObject({ pauseId: 'ask-1', answeredVia: 'cli' });
+      const answered = (await store.listWorkflowEvents(run.id)).filter(
+        event => event.event_type === 'wait_answered'
+      );
+      expect(answered).toHaveLength(1);
+      expect(answered[0]?.step_name).toBe('ask');
+      expect(answered[0]?.data).toMatchObject({ via: 'cli', occurrence: 'ask-1' });
+      expect(await due()).toContain(run.id);
+
+      const retryAt = new Date(Date.now() + 3_600_000).toISOString();
+      await store.deferWorkflowContinuation(run.id, retryAt, { ...cursor, pauseId: 'other' });
+      expect(await due()).toContain(run.id);
+      await store.deferWorkflowContinuation(run.id, retryAt, cursor);
+      expect(await due()).not.toContain(run.id);
+
+      expect(
+        await rejection(store.resumeWorkflowRun(run.id, { ...cursor, pauseId: 'other' }))
+      ).toBeInstanceOf(WorkflowNotResumableError);
+      expect((await store.resumeWorkflowRun(run.id, cursor)).status).toBe('running');
+      expect(await store.answerAttentionWait(run.id, answeredAttention('use-dev'))).toEqual({
+        answered: false,
+      });
+    });
+    test('a pause is due once answered exactly when continuablePause says the host continues it', async () => {
+      const gate = (
+        extra: Partial<Pick<ApprovalContext, 'type' | 'childRunId' | 'nodeId' | 'resolved'>>
+      ): ApprovalContext => ({ ...approval, ...extra });
+      const shapes: {
+        name: string;
+        metadata?: Record<string, unknown>;
+        pause: (id: string) => Promise<unknown>;
+      }[] = [
+        {
+          name: 'gate with a pauseId',
+          pause: id => store.pauseWorkflowRun(id, gate({ resolved: 'approved' })),
+        },
+        {
+          name: 'child_workflow gate',
+          pause: id =>
+            store.pauseWorkflowRun(
+              id,
+              gate({ type: 'child_workflow', childRunId: 'child', resolved: 'approved' })
+            ),
+        },
+        {
+          name: 'fan_out gate',
+          pause: id =>
+            store.pauseWorkflowRun(id, {
+              ...approval,
+              type: 'fan_out',
+              childRunIds: ['child'],
+              unspawnedItems: 0,
+              resolved: 'approved',
+            }),
+        },
+        {
+          name: 'writeback gate',
+          pause: id =>
+            store.pauseWorkflowRun(
+              id,
+              gate({ type: 'writeback', nodeId: '__writeback__', resolved: 'approved' })
+            ),
+        },
+        {
+          name: 'container gate',
+          metadata: { isolation: 'container' },
+          pause: id => store.pauseWorkflowRun(id, gate({ resolved: 'approved' })),
+        },
+        {
+          name: 'attention wait',
+          pause: id =>
+            store.pauseWorkflowRunForWait(id, answeredAttention('use-main'), {
+              kind: 'started',
+              stepName: 'ask',
+            }),
+        },
+        {
+          name: 'attention wait from before pause identities',
+          pause: id =>
+            store.pauseWorkflowRunForWait(
+              id,
+              { ...answeredAttention('use-main'), pauseId: undefined },
+              { kind: 'started', stepName: 'ask' }
+            ),
+        },
+        {
+          name: 'container attention wait',
+          metadata: { isolation: 'container' },
+          pause: id =>
+            store.pauseWorkflowRunForWait(id, answeredAttention('use-main'), {
+              kind: 'started',
+              stepName: 'ask',
+            }),
+        },
+      ];
+      for (const shape of shapes) {
+        const run = await running(store, { metadata: shape.metadata ?? {} });
+        await shape.pause(run.id);
+        const stored = await store.getWorkflowRun(run.id);
+        if (!stored) throw new Error(`missing run for ${shape.name}`);
+        const listed = (await store.listDueWorkflowContinuations(new Date(), 50)).some(
+          due => due.id === run.id
+        );
+        expect({ shape: shape.name, listed }).toEqual({
+          shape: shape.name,
+          listed: continuablePause(stored) !== undefined,
+        });
+      }
     });
     test('attention failure matches its exact owner and reports only the winner', async () => {
       const run = await running(store);

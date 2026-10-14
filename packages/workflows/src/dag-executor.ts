@@ -66,7 +66,7 @@ import type {
   WorkflowDeps,
   WorkflowCommandSurface,
 } from './deps';
-import { spellWorkflowCommand } from './deps';
+import { attentionAnswerLines, spellWorkflowCommand } from './deps';
 import type {
   SendQueryOptions,
   NodeConfig,
@@ -80,7 +80,14 @@ import type { OverlayChangeSummary } from './container-context';
 import { mcpServerMap, mergeTokenUsage } from '@archon/provider-contract';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
-import { approvalContextSchema } from './schemas/workflow-run';
+import {
+  approvalContextSchema,
+  attentionForm,
+  attentionOccurrence,
+  attentionOptions,
+  type WorkflowAttentionWaitContext,
+} from './schemas/workflow-run';
+import { attentionOptionsSchema, waitOutputFormat, type AttentionOption } from './schemas/dag-node';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import { findStrictSchemaIssues, type StrictSchemaIssue } from '@archon/provider-contract';
 import { validateStructuredOutput } from './structured-output';
@@ -147,13 +154,12 @@ import {
   mcpDeclaration,
   isBindingDirective,
   SUBRUN_METADATA_KEYS,
-  WAIT_NODE_OUTPUT_FORMAT,
   waitUntilTimestampSchema,
   waitCondition,
   persistScopeKey,
 } from './schemas';
 import type { BindingDirective } from './schemas';
-import { buildExecNodeEnvironment } from './exec-environment';
+import { buildAiNodeEnvironment, buildExecNodeEnvironment } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import {
   FAN_OUT_CANCEL_REASONS,
@@ -2224,6 +2230,16 @@ function observeNodeCheckout(ctx: RunLayersContext): Promise<CheckoutObservation
   });
 }
 
+function aiNodeEnvironment(
+  ctx: RunLayersContext,
+  execution: NodeExecutionRecord
+): Record<string, string> {
+  return buildAiNodeEnvironment(
+    execution,
+    ctx.execContext.kind === 'host' ? process.env.ARCHON_CLI_COMMAND : undefined
+  );
+}
+
 async function executeNodeInternal(
   ctx: RunLayersContext,
   node: AgentNode,
@@ -2456,6 +2472,7 @@ async function executeNodeInternal(
   const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
+    env: { ...nodeOptions?.env, ...aiNodeEnvironment(ctx, execution) },
     ...(nodeMcp.kind === 'load'
       ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
       : {}),
@@ -2518,7 +2535,10 @@ async function executeNodeInternal(
         reportedBackgroundWork: aiClient.getCapabilities().backgroundWork === 'reported',
         provider: provider,
         thresholdMs: ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
-        env: { ...(ctx.execContext.kind === 'host' ? process.env : {}), ...nodeOptions?.env },
+        env: {
+          ...(ctx.execContext.kind === 'host' ? process.env : {}),
+          ...nodeOptionsWithAbort.env,
+        },
         protectedEnvKeys: ctx.config.protectedEnvKeys,
         protectedCredentialValues: ctx.config.protectedCredentialValues,
       }),
@@ -5551,6 +5571,7 @@ async function executeLoopNode(
     }
   }
   ctx.currentExecution = execution;
+  const iterationEnv = { ...resolvedOptions?.env, ...aiNodeEnvironment(ctx, execution) };
   loopFinalStopReason = undefined;
   // Iterations share the loop's attempt, so they share its provider-event sequence.
   const attemptEvents = createAttemptEventSequence(execution.attempt.id);
@@ -5833,7 +5854,7 @@ async function executeLoopNode(
               ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
             env: {
               ...(ctx.execContext.kind === 'host' ? process.env : {}),
-              ...resolvedOptions?.env,
+              ...iterationEnv,
             },
             protectedEnvKeys: ctx.config.protectedEnvKeys,
             protectedCredentialValues: ctx.config.protectedCredentialValues,
@@ -5958,6 +5979,7 @@ async function executeLoopNode(
 
           const iterationOptions: SendQueryOptions | undefined = {
             ...resolvedOptions,
+            env: iterationEnv,
             abortSignal: iterationAbortController.signal,
           };
 
@@ -7082,18 +7104,28 @@ async function executeWaitNode(
     if (message === '') {
       throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
     }
+    const options = resolveAttentionOptions(node.id, condition.options, ctx);
     context = {
       ...owner,
       kind: 'attention',
       waitingSince: now.toISOString(),
       message,
+      pauseId: randomUUID(),
+      form: condition.form,
+      ...(options !== undefined ? { options } : {}),
     };
   }
 
   const resumeAtMs = context.kind === 'attention' ? undefined : Date.parse(context.resumeAt);
   const isSignaled = context.kind === 'event' && context.signaledAt !== undefined;
   const isDue = resumeAtMs !== undefined && now.getTime() >= resumeAtMs;
-  const isAttentionResume = context.kind === 'attention' && persisted !== undefined;
+  // An answered attention wait completes with its answer. A bare `resume` completes only a
+  // message-form wait, with empty text, which keeps waits paused before answers existed
+  // continuable; any other form pauses again until it is answered.
+  const isAttentionResume =
+    context.kind === 'attention' &&
+    persisted !== undefined &&
+    (context.answer !== undefined || attentionForm(context) === 'message');
   if (!isSignaled && !isDue && !isAttentionResume) {
     let paused = false;
     try {
@@ -7117,11 +7149,11 @@ async function executeWaitNode(
       const delivered = await safeSendMessage(
         platform,
         conversationId,
-        `⏸️ **Action required for workflow run \`${workflowRun.id}\`**\n\n${context.message}\n\nResume this run after the action is complete, or abandon it if it should not continue.`,
+        attentionNotification(platform, workflowRun.id, context),
         { workflowId: workflowRun.id, nodeName: node.id }
       );
       if (!delivered) {
-        const deliveryError = `Wait node '${node.id}' could not deliver its action-required notification`;
+        const deliveryError = `Wait node '${node.id}' could not deliver its attention notification`;
         const { failed } = await requireTerminalStatusWrite(
           deps.store.failPausedAttentionWait(workflowRun.id, context, deliveryError),
           {
@@ -7157,7 +7189,11 @@ async function executeWaitNode(
         }
       : {}),
   } as const;
-  const output = JSON.stringify(result);
+  // An attention wait's node output is its answer; the wait outcome row keeps `result`.
+  const answer = context.kind === 'attention' ? (context.answer ?? { text: '' }) : undefined;
+  const nodeValue = answer ?? result;
+  const output = JSON.stringify(nodeValue);
+  const declaredOutputPaths = declaredOutputPathsFromSchema(waitOutputFormat(node.wait));
   const stepName = stepNamePrefix + node.id;
   const completed =
     execution === undefined
@@ -7167,17 +7203,14 @@ async function executeWaitNode(
           { status: 'completed' },
           {
             durationMs: result.waited_ms,
-            output: {
-              text: output,
-              structured: result,
-              declaredOutputPaths: declaredOutputPathsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
-            },
+            output: { text: output, structured: nodeValue, declaredOutputPaths },
           }
         );
   if (persisted !== undefined) {
     const outcome = await deps.store.clearWorkflowWaitContext(workflowRun.id, context, {
       stepName,
       result,
+      ...(answer !== undefined ? { answer } : {}),
       execution: completed,
     });
     if (!outcome.cleared) {
@@ -7187,18 +7220,70 @@ async function executeWaitNode(
     // handed it back; the transcript and emitter derive from that row, not a rebuilt one.
     await recordDerivedNodeState({ logDir }, node, outcome.nodeEvent);
   } else {
-    const rows = waitCompletionEvents(workflowRun.id, { stepName, result, execution: completed });
+    const rows = waitCompletionEvents(workflowRun.id, {
+      stepName,
+      result,
+      ...(answer !== undefined ? { answer } : {}),
+      execution: completed,
+    });
     await deps.store.createWorkflowEvent(rows.outcome);
     await persistNodeEvent(deps.store, rows.node);
     await recordDerivedNodeState({ logDir }, node, rows.node);
   }
   if (completed !== undefined) return serializeNodeOutput(completed);
-  return {
-    state: 'completed',
-    output,
-    structuredOutput: result,
-    declaredOutputPaths: declaredOutputPathsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
-  };
+  return { state: 'completed', output, structuredOutput: nodeValue, declaredOutputPaths };
+}
+
+/**
+ * Resolve an attention wait's options when it pauses. A whole `$node.output.<field>`
+ * reference is read here and must pass the same rules as literal options; the node fails,
+ * naming the producer, rather than pausing with options nobody can answer.
+ */
+function resolveAttentionOptions(
+  nodeId: string,
+  options: AttentionOption[] | string | undefined,
+  ctx: RunLayersContext
+): AttentionOption[] | undefined {
+  if (typeof options !== 'string') return options;
+  const ref = parseWholeOutputRef(options);
+  const producer = ref === undefined ? undefined : ctx.nodeOutputs.get(ref.nodeId);
+  if (ref === undefined || producer === undefined) {
+    throw new Error(
+      `Wait node '${nodeId}' options '${options}' name no node that has produced output`
+    );
+  }
+  const parsed = attentionOptionsSchema.safeParse(
+    wholeRefLogicalValue(producer, ref.nodeId, ref.field, options.trim())
+  );
+  if (!parsed.success) {
+    const problems = parsed.error.issues
+      .map(issue => (issue.path.length > 0 ? `${issue.path.join('.')}: ` : '') + issue.message)
+      .join('; ');
+    throw new Error(
+      `Wait node '${nodeId}' options '${options}' from '${ref.nodeId}' are not a valid option list ` +
+        `(an array of { id, label? } with unique kebab-case ids and at least one entry): ${problems}`
+    );
+  }
+  return parsed.data;
+}
+
+/** The message an attention wait sends when it pauses: the question and how to answer it. */
+function attentionNotification(
+  surface: IWorkflowPlatform,
+  runId: string,
+  wait: WorkflowAttentionWaitContext
+): string {
+  const answer = attentionAnswerLines(surface, {
+    runId,
+    form: attentionForm(wait),
+    options: [...attentionOptions(wait)],
+    occurrence: attentionOccurrence(wait),
+  });
+  return [
+    `⏸️ **Workflow run \`${runId}\` needs attention**`,
+    wait.message,
+    [...answer, `Abandon: \`${spellWorkflowCommand(surface, `abandon ${runId}`)}\``].join('\n'),
+  ].join('\n\n');
 }
 
 /**

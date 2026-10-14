@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   approvalContextSchema,
+  continuablePause,
   isApprovalContext,
   bodySessionCursorsSchema,
   bodySessionCursorAncestrySchema,
@@ -2469,7 +2470,7 @@ describe('runAttention', () => {
       expect(runAttention(run)).toBeNull();
     });
 
-    test('reports an attention wait as an explicit resume action', () => {
+    test('reads a legacy attention wait as the message form at its legacy occurrence', () => {
       const run = {
         id: 'run-1',
         status: 'paused' as const,
@@ -2488,12 +2489,51 @@ describe('runAttention', () => {
         },
       };
       expect(runAttention(run)).toEqual({
-        kind: 'action_required',
+        kind: 'attention',
         runId: 'run-1',
         nodeId: 'recover-ci.operator-action',
-        occurrence: 'wait:2026-08-28T10:00:00.000Z',
+        occurrence: 'legacy:recover-ci.operator-action',
         message: 'Rerun the failing check, then resume.',
+        form: 'message',
+        options: [],
       });
+    });
+
+    test('reports an attention wait with its form, options and pause occurrence', () => {
+      const wait = {
+        owner: 'node' as const,
+        nodeId: 'ask',
+        kind: 'attention' as const,
+        waitingSince: '2026-08-28T10:00:00.000Z',
+        message: 'Which base?',
+        pauseId: 'pause-1',
+      };
+      const attentionOf = (extra: Record<string, unknown>) =>
+        runAttention({ id: 'run-1', status: 'paused', metadata: { wait: { ...wait, ...extra } } });
+      expect(attentionOf({ form: 'select', options: [{ id: 'use-main', label: 'Main' }] })).toEqual(
+        {
+          kind: 'attention',
+          runId: 'run-1',
+          nodeId: 'ask',
+          occurrence: 'pause-1',
+          message: 'Which base?',
+          form: 'select',
+          options: [{ id: 'use-main', label: 'Main' }],
+        }
+      );
+      expect(attentionOf({ form: 'approval' })).toMatchObject({
+        form: 'approval',
+        options: [{ id: 'approve' }, { id: 'reject' }],
+      });
+      // Answered, it waits on the continuation host, not on anyone.
+      expect(
+        attentionOf({
+          form: 'approval',
+          answer: { decision: 'reject', text: '' },
+          answeredVia: 'cli',
+          answeredAt: '2026-08-28T10:05:00.000Z',
+        })
+      ).toBeNull();
     });
 
     test('a resolved child_workflow gate is still nobody’s decision', () => {
@@ -2687,7 +2727,7 @@ describe('runAttention', () => {
         },
       },
     });
-    expect(attention?.kind).toBe('action_required');
+    expect(attention?.kind).toBe('attention');
   });
 
   test('an absent metadata bag on a paused run is unreadable, not silence', () => {
@@ -2820,5 +2860,84 @@ describe('fan-out block predicates (#4044)', () => {
       childRunId: 'a',
     });
     expect(isFanOutBlockReleased(gate, statuses({ a: 'completed' }))).toBe(false);
+  });
+});
+
+describe('continuablePause', () => {
+  const attentionWait = {
+    owner: 'node' as const,
+    nodeId: 'ask',
+    kind: 'attention' as const,
+    waitingSince: '2026-08-28T10:00:00.000Z',
+    message: 'Which base?',
+  };
+  const gate = {
+    nodeId: 'review',
+    message: 'Review',
+    type: 'approval' as const,
+    pauseId: 'gate-1',
+  };
+  const paused = (metadata: Record<string, unknown>) => ({
+    status: 'paused' as const,
+    metadata,
+  });
+
+  test('covers gates and attention waits, answered or not', () => {
+    expect(continuablePause(paused({ approval: gate }))).toEqual({
+      nodeId: 'review',
+      pauseId: 'gate-1',
+      answered: false,
+    });
+    expect(continuablePause(paused({ approval: { ...gate, resolved: 'rejected' } }))).toEqual({
+      nodeId: 'review',
+      pauseId: 'gate-1',
+      answered: true,
+    });
+    expect(continuablePause(paused({ wait: { ...attentionWait, pauseId: 'wait-1' } }))).toEqual({
+      nodeId: 'ask',
+      pauseId: 'wait-1',
+      answered: false,
+    });
+    expect(
+      continuablePause(
+        paused({
+          wait: {
+            ...attentionWait,
+            pauseId: 'wait-1',
+            form: 'message',
+            answer: { text: 'done' },
+            answeredVia: 'api',
+            answeredAt: '2026-08-28T10:05:00.000Z',
+          },
+        })
+      )
+    ).toEqual({ nodeId: 'ask', pauseId: 'wait-1', answered: true });
+  });
+
+  test('leaves out pauses the host cannot continue by itself', () => {
+    // A wait from before pause identities has nothing to claim against; `resume` moves it.
+    expect(continuablePause(paused({ wait: attentionWait }))).toBeUndefined();
+    expect(
+      continuablePause(
+        paused({ isolation: 'container', wait: { ...attentionWait, pauseId: 'wait-1' } })
+      )
+    ).toBeUndefined();
+    expect(
+      continuablePause(paused({ approval: { ...gate, type: 'child_workflow', childRunId: 'c' } }))
+    ).toBeUndefined();
+    expect(
+      continuablePause(
+        paused({
+          wait: {
+            owner: 'node',
+            nodeId: 'hold',
+            kind: 'time',
+            waitingSince: '2026-08-28T10:00:00.000Z',
+            resumeAt: '2026-08-28T11:00:00.000Z',
+          },
+          approval: gate,
+        })
+      )
+    ).toBeUndefined();
   });
 });

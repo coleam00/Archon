@@ -750,7 +750,7 @@ describe('workflows database', () => {
       expect(mockQuery.mock.calls[1]?.[0]).toContain('INSERT INTO remote_agent_workflow_events');
     });
 
-    test('records an action-required pause without inventing a deadline', async () => {
+    test('records an attention pause without inventing a deadline', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       const attentionWait = {
@@ -1000,7 +1000,7 @@ describe('workflows database', () => {
       expect(mockQuery.mock.calls[2]?.[0]).toContain('INSERT INTO remote_agent_workflow_events');
     });
 
-    test('keys action-required wait consumption to its waiting timestamp', async () => {
+    test('keys attention wait consumption to its waiting timestamp', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));

@@ -102,6 +102,7 @@ const {
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
   describeAbandonOwner,
+  assertAnswerable,
   assertApprovable,
   assertRejectable,
   ChildRunRedirectError,
@@ -135,6 +136,9 @@ const store: WorkflowOperationsDeps['store'] = {
   getRunAncestry: mockGetRunAncestry,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
+  answerAttentionWait: async () => {
+    throw new Error('Unexpected answerAttentionWait');
+  },
   deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
 };
 const {
@@ -1811,7 +1815,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
     }
   });
 
-  test('a fan-out parent redirects both verbs to every child it waits on', () => {
+  test('a fan-out parent redirects approve, reject and answer to every child it waits on', () => {
     const fanOut = withMeta({
       approval: {
         nodeId: 'work',
@@ -1821,7 +1825,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
         unspawnedItems: 0,
       },
     });
-    for (const assertFn of [assertApprovable, assertRejectable]) {
+    for (const assertFn of [assertApprovable, assertRejectable, assertAnswerable]) {
       let error: unknown;
       try {
         assertFn(fanOut);
@@ -1877,7 +1881,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
     expect(assertRejectable(withMeta(waiting))).toBeUndefined();
   });
 
-  test('an action-required wait is neither approvable nor rejectable', () => {
+  test('an attention wait is not a gate decision', () => {
     const waiting = {
       wait: {
         owner: 'node',
@@ -1888,8 +1892,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
       },
     };
     for (const assertFn of [assertApprovable, assertRejectable]) {
-      expect(() => assertFn(withMeta(waiting))).toThrow('Complete it, then resume the run');
-      expect(() => assertFn(withMeta(waiting))).toThrow('abandon it');
+      expect(() => assertFn(withMeta(waiting))).toThrow('paused at an attention wait');
     }
   });
 });
