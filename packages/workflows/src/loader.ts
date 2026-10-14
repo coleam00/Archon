@@ -87,7 +87,7 @@ import { isBindingDirective } from './schemas/dag-node';
 import { readComposedBindings } from './compiled-command';
 import { visitNodeTemplateSlots, type TemplateSurface } from './template-walker';
 import { validateInlineExecInputs } from './exec-input-validation';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

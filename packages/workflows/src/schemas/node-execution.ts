@@ -1,5 +1,5 @@
 import { declaredOutputPathsSchema } from '../output-ref';
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import {
   providerFailureSchema,
   SESSION_PREVIEW_LENGTH,

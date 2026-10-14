@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { sourceReceiptAcceptanceSchema } from './schemas/resource-start';
 
 export interface WebhookSourceRequest {

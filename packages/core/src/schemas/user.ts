@@ -1,7 +1,7 @@
 /**
  * Zod schemas for user and user identity row types.
  */
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { identityPlatformSchema } from '@archon/chat-contract';
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { z } from '@hono/zod-openapi';
+import { z } from 'zod';
 
 /**
  * Why a failed run ended. Recorded by the caller that knows (in the terminal
