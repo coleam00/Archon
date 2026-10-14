@@ -859,7 +859,7 @@ async function dispatchOrchestratorWorkflowOwned(
   // `/workflow resume <id>` (which carries one run), and an
   // IMPLICIT auto-detection that fires for a plain `/workflow run <name>` on every
   // platform — the lookup that used to live further down, next to the dispatch. An
-  // action-required wait is excluded from that implicit path: only the explicit form
+  // attention wait is excluded from that implicit path: only the explicit form
   // may consume it. The gate below still has to know about both continuation forms:
   // gating only against the explicit form wrongly refused a required-input workflow
   // that was merely being continued (the run row already holds its validated inputs,
@@ -1343,7 +1343,7 @@ async function dispatchOrchestratorWorkflowOwned(
     // `resumableRun` was resolved above the signature gate (see the comment there):
     // resume detection runs for ALL platforms, so a prior run for this workflow in a
     // resumable state (paused — including approved-awaiting-resume, but excluding an
-    // action-required wait unless explicitly resumed — or failed) in this conversation+
+    // attention wait unless explicitly resumed — or failed) in this conversation+
     // codebase is continued rather than dispatched fresh. This ensures chat platforms
     // (slack, telegram, discord, github) resume after approval gates just like web does.
     if (resumableRun?.working_path) {

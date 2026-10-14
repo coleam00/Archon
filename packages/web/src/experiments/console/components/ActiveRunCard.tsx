@@ -5,6 +5,7 @@ import { StatusStrip } from './StatusStrip';
 import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import { ApprovalPanel } from './ApprovalPanel';
+import { AttentionAnswerPanel, isLegacyAttention } from './AttentionAnswerPanel';
 import { ApprovalContext } from './ApprovalContext';
 import { runDetailPath, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
@@ -220,37 +221,42 @@ export function ActiveRunCard({
                 <span className="font-mono text-text-primary">{run.wait.event}</span>
               </>
             ) : null}
-            {run.attention?.kind === 'action_required' ? (
+            {run.attention?.kind === 'attention' ? (
               <>
-                <span className="font-mono text-text-tertiary">action</span>
+                <span className="font-mono text-text-tertiary">needs</span>
                 <span className="text-text-secondary">{run.attention.message}</span>
-                <span className="font-mono text-text-tertiary">then</span>
-                <span className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={event => {
-                      event.stopPropagation();
-                      void resolveAttention('resume');
-                    }}
-                    disabled={attentionBusy !== null}
-                    className="rounded bg-warning/15 px-2 py-1 font-semibold text-warning hover:bg-warning/25 disabled:opacity-50"
-                  >
-                    {attentionBusy === 'resume' ? 'Resuming…' : 'Resume'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={event => {
-                      event.stopPropagation();
-                      void resolveAttention('abandon');
-                    }}
-                    disabled={attentionBusy !== null}
-                    className="rounded px-2 py-1 text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
-                  >
-                    {attentionBusy === 'abandon' ? 'Abandoning…' : 'Abandon'}
-                  </button>
-                  {attentionError !== null ? (
-                    <span className="font-mono text-error">{attentionError}</span>
-                  ) : null}
+                <span className="font-mono text-text-tertiary">answer</span>
+                <span className="flex flex-col gap-1">
+                  <AttentionAnswerPanel run={run} attention={run.attention} />
+                  <span className="flex flex-wrap items-center gap-2">
+                    {isLegacyAttention(run.attention) ? (
+                      <button
+                        type="button"
+                        onClick={event => {
+                          event.stopPropagation();
+                          void resolveAttention('resume');
+                        }}
+                        disabled={attentionBusy !== null}
+                        className="rounded bg-warning/15 px-2 py-1 font-semibold text-warning hover:bg-warning/25 disabled:opacity-50"
+                      >
+                        {attentionBusy === 'resume' ? 'Resuming…' : 'Resume'}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={event => {
+                        event.stopPropagation();
+                        void resolveAttention('abandon');
+                      }}
+                      disabled={attentionBusy !== null}
+                      className="rounded px-2 py-1 text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+                    >
+                      {attentionBusy === 'abandon' ? 'Abandoning…' : 'Abandon'}
+                    </button>
+                    {attentionError !== null ? (
+                      <span className="font-mono text-error">{attentionError}</span>
+                    ) : null}
+                  </span>
                 </span>
               </>
             ) : run.wait.kind !== 'attention' ? (

@@ -9,7 +9,7 @@ import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
-  answeredGateContinuation,
+  answeredPauseContinuation,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
   type WorkflowRun,
@@ -111,8 +111,8 @@ export async function resumeWorkflowContinuation(
 function continuationCursor(run: WorkflowRun): WorkflowResumeCursor | undefined {
   const wait = pendingWorkflowWaitDeadline(run);
   if (wait) return { kind: 'wait', nodeId: wait.nodeId, resumeAt: wait.resumeAt };
-  const gate = answeredGateContinuation(run);
-  if (gate) return { kind: 'gate', ...gate };
+  const answered = answeredPauseContinuation(run);
+  if (answered) return { kind: 'answered', ...answered };
   if (run.status === 'failed' && isScheduledWorkflowResume(run.metadata.scheduled_resume)) {
     return {
       kind: 'quota',

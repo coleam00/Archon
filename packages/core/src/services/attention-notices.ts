@@ -29,8 +29,7 @@ export function selectAttentionNotices(input: {
       const platform = input.conversationPlatforms.get(run.id);
       if (platform !== undefined && input.inlinePlatforms.has(platform)) continue;
       const attention = runAttention(run);
-      if (attention?.kind !== 'awaiting_response' && attention?.kind !== 'action_required')
-        continue;
+      if (attention?.kind !== 'awaiting_response' && attention?.kind !== 'attention') continue;
       const nodeId =
         attention.kind === 'awaiting_response' ? attention.respondTo.nodeId : attention.nodeId;
       const key = `${nodeId}:${attention.occurrence}`;
@@ -46,7 +45,7 @@ export function selectAttentionNotices(input: {
       } else {
         pushes.push({
           run,
-          kind: attention.kind === 'awaiting_response' ? 'gate' : 'action_required',
+          kind: attention.kind === 'awaiting_response' ? 'gate' : 'attention',
           destination,
           key,
         });

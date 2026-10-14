@@ -11,9 +11,10 @@ import {
   waitCompletionEvents,
   FAN_OUT_CANCEL_REASONS,
   resumeCursorMatches,
+  waitAnsweredEvent,
 } from '../store';
 import {
-  answeredGateContinuation,
+  answeredPauseContinuation,
   isApprovalContext,
   isTerminalRunStatus,
   workflowRunStatusSchema,
@@ -197,7 +198,7 @@ export function createTransactionView(
                 Date.parse(wait.resumeAt) <= now.getTime() ||
                 (wait.kind === 'event' && wait.signaledAt !== undefined)
               );
-            if (answeredGateContinuation(run)) return true;
+            if (answeredPauseContinuation(run)) return true;
             const scheduled = run.metadata.scheduled_resume;
             return (
               run.status === 'failed' &&
@@ -215,6 +216,24 @@ export function createTransactionView(
     deferWorkflowContinuation: async (id, retryAt, cursor) => {
       const run = runs.get(id);
       if (run && resumeCursorMatches(run, cursor)) run.metadata.continuation_retry_at = retryAt;
+    },
+    answerAttentionWait: async (id, answered) => {
+      const run = runs.get(id);
+      const wait = run?.metadata.wait;
+      if (
+        run?.status !== 'paused' ||
+        !isWorkflowWaitContext(wait) ||
+        wait.kind !== 'attention' ||
+        wait.pauseId === undefined ||
+        wait.pauseId !== answered.pauseId ||
+        wait.answer !== undefined
+      )
+        return { answered: false };
+      const stored = workflowWaitContextSchema.parse(answered);
+      if (stored.kind !== 'attention') return { answered: false };
+      run.metadata.wait = stored;
+      record(waitAnsweredEvent(id, stored));
+      return { answered: true };
     },
     signalWorkflowWait: async (id, expected, payload) => {
       const run = runs.get(id);

@@ -20,7 +20,11 @@ import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { hostname } from 'os';
 import { dirname, join } from 'path';
-import { MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS, spellWorkflowCommand } from './deps';
+import {
+  MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS,
+  attentionAnswerLines,
+  spellWorkflowCommand,
+} from './deps';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowEnvironment } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -2414,11 +2418,14 @@ export async function executeWorkflow(
         if (activeWorkflow.status === 'paused') {
           const attention = runAttention(activeWorkflow);
           const wait = pendingWorkflowWaitDeadline(activeWorkflow);
-          if (attention?.kind === 'action_required') {
-            stateLine = `paused waiting for an outside action (${duration} since started, run \`${shortId}\`)`;
-            actionLines =
-              `• Complete the outside action: ${attention.message}\n` +
-              `• When it is complete, resume it: \`${formatRunCommand(platform, 'resume', shortId)}\`\n`;
+          if (attention?.kind === 'attention') {
+            stateLine = `paused, needs attention (${duration} since started, run \`${shortId}\`)`;
+            actionLines = `• Answer it: ${attention.message}\n${attentionAnswerLines(
+              platform,
+              attention
+            )
+              .map(line => `• ${line}\n`)
+              .join('')}`;
           } else if (wait) {
             const waitingFor =
               wait.kind === 'event' ? `for event \`${wait.event}\` until` : 'until';

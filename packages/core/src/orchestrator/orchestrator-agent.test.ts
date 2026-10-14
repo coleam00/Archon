@@ -3150,7 +3150,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(opts.priorCompletedNodes?.size).toBeGreaterThan(0);
   });
 
-  test('a plain workflow run does not consume an action-required pause', async () => {
+  test('a plain workflow run does not consume an attention pause', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
@@ -3179,7 +3179,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
   });
 
-  test('an explicit workflow resume consumes an action-required pause', async () => {
+  test('an explicit workflow resume consumes an attention pause', async () => {
     const requestedRun = makeResumableRun({
       status: 'paused',
       metadata: {

@@ -135,6 +135,9 @@ const store: WorkflowOperationsDeps['store'] = {
   getRunAncestry: mockGetRunAncestry,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
+  answerAttentionWait: async () => {
+    throw new Error('Unexpected answerAttentionWait');
+  },
   deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
 };
 const {
@@ -1851,7 +1854,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
     expect(assertRejectable(withMeta(waiting))).toBeUndefined();
   });
 
-  test('an action-required wait is neither approvable nor rejectable', () => {
+  test('an attention wait is not a gate decision', () => {
     const waiting = {
       wait: {
         owner: 'node',
@@ -1862,8 +1865,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
       },
     };
     for (const assertFn of [assertApprovable, assertRejectable]) {
-      expect(() => assertFn(withMeta(waiting))).toThrow('Complete it, then resume the run');
-      expect(() => assertFn(withMeta(waiting))).toThrow('abandon it');
+      expect(() => assertFn(withMeta(waiting))).toThrow('paused at an attention wait');
     }
   });
 });

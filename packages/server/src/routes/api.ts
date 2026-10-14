@@ -327,7 +327,10 @@ import {
   describeReleasedWorktrees,
   AbandonRefusedError,
   assertAnswerAdmissible,
-  assertRespondable,
+  assertAnswerable,
+  assertResponseAccepted,
+  attentionAnswerFor,
+  expectedGateForOccurrence,
   StaleGateAnswerError,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
@@ -356,6 +359,7 @@ import {
   approveWorkflowRunBodySchema,
   rejectWorkflowRunBodySchema,
   respondWorkflowRunBodySchema,
+  answerWorkflowRunBodySchema,
   resetWorkflowNodeSessionsParamsSchema,
   resetWorkflowNodeSessionsQuerySchema,
   resetWorkflowNodeSessionsResponseSchema,
@@ -1223,6 +1227,28 @@ const respondWorkflowRunRoute = createRoute({
   },
 });
 
+const answerWorkflowRunRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/answer',
+  tags: ['Workflows'],
+  summary: 'Answer a paused attention wait in its declared form',
+  request: {
+    params: z.object({ runId: z.string() }),
+    body: { content: { 'application/json': { schema: answerWorkflowRunBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowRunActionResponseSchema } },
+      description: 'Answered',
+    },
+    400: jsonError('Bad request'),
+    403: jsonError('Run action forbidden'),
+    404: jsonError('Not found'),
+    409: jsonError('The answer names an occurrence the run is no longer paused at'),
+    500: jsonError('Server error'),
+  },
+});
+
 const deleteWorkflowRunRoute = createRoute({
   method: 'delete',
   path: '/api/workflows/runs/{runId}',
@@ -1933,6 +1959,7 @@ export function registerApiRoutes(
     approveWorkflow,
     rejectWorkflow,
     respondToWorkflow,
+    answerWorkflow,
     resetWorkflowNodeSessions,
   } = createSqlWorkflowOperations();
 
@@ -4132,11 +4159,9 @@ export function registerApiRoutes(
     const approvalRaw = run.metadata.approval;
     const approval = isApprovalContext(approvalRaw) ? approvalRaw : undefined;
     switch (attention?.kind) {
-      case 'action_required':
-        return {
-          error:
-            'Run is paused for an outside action. Complete it, then resume the run; abandon it if it should not continue.',
-        };
+      case 'attention':
+        // The route answers it as sugar; `answerRefusal` judges the answer.
+        return null;
       case 'blocked_on_child':
         // Not an approvable gate — the parent resumes automatically when the child
         // completes. Send the caller to the run where the decision actually lives.
@@ -4186,6 +4211,16 @@ export function registerApiRoutes(
     }
   }
 
+  /** Why `decision` cannot answer the run's open pause, or null when it can. */
+  function answerRefusal(run: WorkflowRun, decision: string): string | null {
+    try {
+      assertResponseAccepted(run, decision);
+      return null;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }
+
   // POST /api/workflows/runs/:runId/approve - Approve a paused workflow run
   registerOpenApiRoute(approveWorkflowRunRoute, async c => {
     const runId = c.req.param('runId') ?? '';
@@ -4207,11 +4242,8 @@ export function registerApiRoutes(
       if (approveBlocker) {
         return c.json(approveBlocker, 400);
       }
-      try {
-        assertRespondable(run, 'approve');
-      } catch (validationError) {
-        return apiError(c, 400, (validationError as Error).message);
-      }
+      const approveRefusal = answerRefusal(run, 'approve');
+      if (approveRefusal !== null) return apiError(c, 400, approveRefusal);
       // Distinguish "no body sent" (legitimate bare approve) from "body sent but
       // unparseable" (client bug). Since #2074 a bare approve FINALIZES a
       // signal-bearing loop gate, so silently coercing a malformed body to {}
@@ -4282,11 +4314,8 @@ export function registerApiRoutes(
       if (rejectBlocker) {
         return c.json(rejectBlocker, 400);
       }
-      try {
-        assertRespondable(run, 'reject');
-      } catch (validationError) {
-        return apiError(c, 400, (validationError as Error).message);
-      }
+      const rejectRefusal = answerRefusal(run, 'reject');
+      if (rejectRefusal !== null) return apiError(c, 400, rejectRefusal);
       // Mirror of the approve route's malformed-body guard: a swallowed parse
       // failure would silently drop the reviewer's reason.
       const rawBody = await c.req.text();
@@ -4383,11 +4412,8 @@ export function registerApiRoutes(
         throw staleError;
       }
 
-      try {
-        assertRespondable(run, decision);
-      } catch (validationError) {
-        return apiError(c, 400, (validationError as Error).message);
-      }
+      const respondRefusal = answerRefusal(run, decision);
+      if (respondRefusal !== null) return apiError(c, 400, respondRefusal);
 
       // Mirrors the dedicated /reject route's default: an empty/omitted text becomes
       // 'Rejected' rather than reaching a new-mode gate's structured output as ''.
@@ -4423,6 +4449,49 @@ export function registerApiRoutes(
       if (error instanceof StaleGateAnswerError) return apiError(c, 409, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_respond_failed');
       return apiError(c, 500, 'Failed to respond to workflow run');
+    }
+  });
+
+  // POST /api/workflows/runs/:runId/answer - Answer a paused attention wait. The answer is
+  // a due continuation; the run continues here when this server can resume it, and
+  // otherwise through any continuation host.
+  registerOpenApiRoute(answerWorkflowRunRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) return apiError(c, 404, 'Workflow run not found');
+      const actor = await resolveRunActor(c);
+      await assertRunActionAllowed(run, actor, 'respond');
+      const body = getValidatedBody(c, answerWorkflowRunBodySchema);
+      const origin: GateAnswerOrigin = {
+        via: 'api',
+        expectedGate: expectedGateForOccurrence(run, body.occurrence),
+      };
+      const request = {
+        choose: body.choose ?? [],
+        ...(body.text !== undefined ? { text: body.text } : {}),
+      };
+      try {
+        assertAnswerAdmissible(run, origin);
+        attentionAnswerFor(run, assertAnswerable(run), request);
+      } catch (refusal) {
+        if (refusal instanceof StaleGateAnswerError) return apiError(c, 409, refusal.message);
+        return apiError(c, 400, (refusal as Error).message);
+      }
+      await answerWorkflow(runId, request, actor, origin);
+      const autoResumed = await tryAutoResumeAfterGate(run, 'respond', actor);
+      return c.json({
+        success: true,
+        message: autoResumed
+          ? `Workflow answered: ${run.workflow_name}. Continuing.`
+          : `Workflow answered: ${run.workflow_name}. A continuation host (archon serve or workflow wake) continues it.`,
+      });
+    } catch (error) {
+      if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
+      // A race lost after the pre-check above: the run moved to another pause meanwhile.
+      if (error instanceof StaleGateAnswerError) return apiError(c, 409, error.message);
+      getLog().error({ err: error, runId }, 'api.workflow_run_answer_failed');
+      return apiError(c, 500, 'Failed to answer workflow run');
     }
   });
 
