@@ -399,8 +399,10 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
 ```
 
 Both routes accept optional `expectedGate: { nodeId, pauseId }`. For an approval
-gate, copy `nodeId` and `pauseId` from `run.metadata.approval` in the run detail
-response. For an attention wait, use `run.attention.nodeId` as `nodeId` and
+gate with a `pauseId`, copy `nodeId` and `pauseId` from `run.metadata.approval`
+in the run detail response. For a legacy gate without `pauseId`, send its node ID
+as a string instead, for example `expectedGate: "review"`. This legacy identity
+can answer only a gate without a pause ID; it cannot answer a later gate with one. For an attention wait, use `run.attention.nodeId` as `nodeId` and
 `run.attention.occurrence` as `pauseId`. When
 the run is no longer paused at that gate occurrence, the request returns **409**
 and leaves the current pause unchanged. The identity is checked atomically with

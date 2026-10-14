@@ -2945,6 +2945,164 @@ describe('dedicated gate answers with expectedGate', () => {
     mockHandleMessage.mockClear();
   });
 
+  test.each(['approve', 'reject', 'respond'])(
+    '/%s can guard a legacy gate and refuses its identity at a later pause',
+    async route => {
+      const post = () =>
+        makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expectedGate: 'review-gate', decision: 'approve' }),
+        });
+      mockGetWorkflowRun.mockResolvedValue(MOCK_PAUSED_RUN);
+      expect((await post()).status).toBe(200);
+      const resolver =
+        route === 'reject' ? mockResolveAndCancelApprovalGate : mockResolveApprovalGate;
+      expect(resolver.mock.calls[0]?.[3]).toBe('review-gate');
+      mockResolveApprovalGate.mockClear();
+      mockResolveAndCancelApprovalGate.mockClear();
+      mockGetWorkflowRun.mockResolvedValue({
+        ...MOCK_PAUSED_RUN,
+        metadata: {
+          approval: {
+            type: 'approval',
+            message: 'Review again',
+            nodeId: 'review-gate',
+            pauseId: 'new-pause',
+          },
+        },
+      });
+      expect((await post()).status).toBe(409);
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+    }
+  );
+
+  const attentionRun = (pauseId: string): MockWorkflowRun => ({
+    ...MOCK_PAUSED_RUN,
+    metadata: {
+      wait: {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: '2026-10-14T10:00:00.000Z',
+        message: 'Review?',
+        pauseId,
+        form: 'select',
+        options: [{ id: 'approve' }, { id: 'reject' }],
+      },
+    },
+  });
+
+  test.each(['approve', 'reject'])(
+    '/%s refuses an attention wait that changes between route and operation reads',
+    async route => {
+      const earlier = attentionRun('attention-before');
+      const later = attentionRun('attention-after');
+      mockAnswerAttentionWait.mockClear();
+      mockGetWorkflowRun.mockResolvedValueOnce(earlier).mockResolvedValue(later);
+      const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedGate: { nodeId: 'ask', pauseId: 'attention-before' } }),
+      });
+      expect(response.status).toBe(409);
+      expect(mockAnswerAttentionWait).not.toHaveBeenCalled();
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(later.status).toBe('paused');
+      expect(later.metadata.wait).not.toHaveProperty('answer');
+    }
+  );
+
+  test.each([
+    'approve',
+    'terminal reject',
+    'writeback reject',
+    'rework reject',
+    'declared reject',
+    'custom response',
+    'attention approve',
+    'attention reject',
+  ])('%s preserves conflict after a lost write even if the diagnostic read fails', async mode => {
+    const attention = mode.startsWith('attention');
+    const route =
+      mode === 'custom response' ? 'respond' : mode.endsWith('reject') ? 'reject' : 'approve';
+    const expectedGate = { nodeId: attention ? 'ask' : 'review-gate', pauseId: 'pause-current' };
+    const run = attention
+      ? attentionRun(expectedGate.pauseId)
+      : {
+          ...MOCK_PAUSED_RUN,
+          metadata: {
+            approval: {
+              type: mode === 'writeback reject' ? 'writeback' : 'approval',
+              message: 'Review',
+              ...expectedGate,
+              ...(mode === 'rework reject' ? { onRejectPrompt: 'Try again' } : {}),
+              ...(['declared reject', 'custom response'].includes(mode)
+                ? {
+                    decisionsAuthored: true,
+                    decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+                  }
+                : {}),
+            },
+          },
+        };
+    mockAnswerAttentionWait.mockClear();
+    mockGetWorkflowRun
+      .mockResolvedValueOnce(run)
+      .mockResolvedValueOnce(run)
+      .mockRejectedValueOnce(new Error('diagnostic lookup unavailable'));
+    const resolver =
+      mode === 'terminal reject' ? mockResolveAndCancelApprovalGate : mockResolveApprovalGate;
+    if (attention) mockAnswerAttentionWait.mockResolvedValueOnce({ answered: false });
+    else resolver.mockResolvedValueOnce({ resolved: false });
+    const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedGate, decision: 'revise' }),
+    });
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toContain(
+      'no longer paused at the expected gate'
+    );
+    if (attention) expect(mockAnswerAttentionWait).toHaveBeenCalledTimes(1);
+    else expect(resolver).toHaveBeenCalledTimes(1);
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+  });
+
+  test.each(['approve', 'reject', 'attention approve', 'attention reject'])(
+    '%s still reports an actual write failure as 500',
+    async mode => {
+      const attention = mode.startsWith('attention');
+      const route = mode.endsWith('reject') ? 'reject' : 'approve';
+      const expectedGate = { nodeId: attention ? 'ask' : 'review-gate', pauseId: 'pause-current' };
+      mockGetWorkflowRun.mockResolvedValue(
+        attention
+          ? attentionRun(expectedGate.pauseId)
+          : {
+              ...MOCK_PAUSED_RUN,
+              metadata: { approval: { type: 'approval', message: 'Review', ...expectedGate } },
+            }
+      );
+      const failure = new Error('answer write failed');
+      if (attention) mockAnswerAttentionWait.mockRejectedValueOnce(failure);
+      else if (route === 'approve') mockResolveApprovalGate.mockRejectedValueOnce(failure);
+      else mockResolveAndCancelApprovalGate.mockRejectedValueOnce(failure);
+      const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedGate }),
+      });
+      expect(response.status).toBe(500);
+      expect(mockGetWorkflowRun).toHaveBeenCalledTimes(2);
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+    }
+  );
+
   test.each(['approve', 'reject'])(
     '/%s refuses an answer prepared before the run pauses again',
     async route => {

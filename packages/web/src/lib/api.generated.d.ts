@@ -6157,25 +6157,31 @@ export interface components {
     };
     ApproveWorkflowRunBody: {
       comment?: string;
-      expectedGate?: {
-        nodeId: string;
-        pauseId: string;
-      };
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     RejectWorkflowRunBody: {
       reason?: string;
-      expectedGate?: {
-        nodeId: string;
-        pauseId: string;
-      };
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     RespondWorkflowRunBody: {
       decision: string;
       text?: string;
-      expectedGate?: {
-        nodeId: string;
-        pauseId: string;
-      };
+      expectedGate?:
+        | string
+        | {
+            nodeId: string;
+            pauseId: string;
+          };
     };
     AnswerWorkflowRunBody: {
       occurrence: string;
