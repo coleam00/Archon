@@ -146,6 +146,26 @@ describe('review head boundary', () => {
   }
 
   for (const source of ['gh', 'forge']) {
+    it(`does not let scope erase an explicit PR target through ${source}`, () => {
+      const cwd = gitCheckout({}, track);
+      const run = check({
+        cwd,
+        source,
+        gh: { noOpenPr: true, pr: { headRefOid: 'anotherhead' } },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+        inputs: { INPUTS_SCOPE: PR_URL, INPUTS_SELECTOR: '', INPUTS_PR: 'null' },
+      });
+      expect(run.code).toBe(1);
+      if (source === 'gh') {
+        expect(run.stderr).toContain('does not match');
+        expect(run.stderr).toContain(`--from 'anotherhead' --input 'scope=${PR_URL}'`);
+      } else {
+        expect(run.stderr).toContain('forge pr.view returned no result');
+        expect(JSON.parse(run.forgeRequests[0]).selector).toEqual({ kind: 'number', ref: PR });
+      }
+      expect(run.stdout).not.toContain('working diff');
+    });
+
     for (const scope of ['42', PR_URL, 'feature', '']) {
       for (const declaration of ['matching', 'null', 'wrong', 'mismatch']) {
         it(`resolves standalone scope ${JSON.stringify(scope)} through ${source} with ${declaration} declaration`, () => {
@@ -313,6 +333,7 @@ describe('PR review scheduling with the real head check', () => {
       'mismatch',
       'null',
       'wrong',
+      'erased-selector',
       'message-pr',
       'message-pr-no-ambient',
       'message-pr-ambient-declaration',
@@ -335,7 +356,7 @@ if (argv[0] !== 'forge' || argv[1] !== 'pr.view') throw new Error('unexpected op
 const request = JSON.parse(readFileSync(argv[argv.indexOf('--data-file') + 1], 'utf8'));
 const response = request.selector.kind === 'number' && request.selector.ref.number === ${target.number}
   ? ${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ number: target.number, url: selector, head_revision: matching ? head : 'anotherhead' }) }))}
-  : ${JSON.stringify(forgeOperation('pr.view', scenario.startsWith('message-pr-no-ambient') ? null : { pr: forgePrRecord({ head_revision: head }) }))};
+  : ${JSON.stringify(forgeOperation('pr.view', scenario === 'erased-selector' || scenario.startsWith('message-pr-no-ambient') ? null : { pr: forgePrRecord({ head_revision: head }) }))};
 console.log(response);
 `
         );
@@ -380,9 +401,11 @@ console.log(response);
             docs: continuation,
           };
           stubs.scope = {
-            selector,
+            selector: scenario === 'erased-selector' ? '' : selector,
             pr:
-              scenario === 'null' || scenario === 'message-pr-no-ambient-null'
+              scenario === 'null' ||
+              scenario === 'message-pr-no-ambient-null' ||
+              scenario === 'erased-selector'
                 ? null
                 : scenario === 'message-pr-ambient-declaration'
                   ? PR
@@ -397,7 +420,7 @@ console.log(response);
             execWorkspace: cwd,
             execCode: true,
             userMessage: override ? 'Review PR 99 instead' : 'Review this PR',
-            inputs: { scope: override ? '' : PR_URL },
+            inputs: { scope: PR_URL },
             stubs,
           });
           const states = new Map(result.trace.map(entry => [entry.nodeId, entry.state]));
@@ -493,7 +516,7 @@ console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ hea
           cursor: 'before-reshape',
           risks: 'fixture',
           execution: {},
-            part: null,
+          part: null,
           seams: false,
           code: true,
           tests: false,

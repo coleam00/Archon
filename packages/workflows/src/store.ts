@@ -13,7 +13,11 @@ import {
   type AttentionAnswer,
   type ExpectedApprovalGate,
 } from './schemas/workflow-run';
-import type { AttentionLabels } from './schemas/dag-node';
+import {
+  attentionLabelKeySchema,
+  attentionLabelsSchema,
+  type AttentionLabels,
+} from './schemas/dag-node';
 import type { RecordSurface } from './schemas/record-surface';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
@@ -377,6 +381,8 @@ export function labeledAttentionWait(
   const wait = pausedAttentionWait(run);
   if (wait === undefined || wait.answer !== undefined || wait.pauseId !== write.pauseId)
     return undefined;
+  attentionLabelsSchema.parse(write.set);
+  for (const key of write.unset) attentionLabelKeySchema.parse(key);
   const merged = { ...attentionLabels(wait), ...write.set };
   const labels = Object.fromEntries(
     Object.entries(merged).filter(([key]) => !write.unset.includes(key))

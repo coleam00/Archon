@@ -245,6 +245,27 @@ describe('persisted workflow continuation schemas', () => {
 });
 
 describe('dagNodeSchema — durable wait', () => {
+  test('rejects reserved label keys in authored and persisted attention waits', () => {
+    const labels = Object.fromEntries([['__proto__', 'value']]);
+    expect(waitConfigSchema.safeParse({ attention: 'Choose', labels }).success).toBe(false);
+    expect(
+      workflowWaitContextSchema.safeParse({
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: '2026-10-01T00:00:00.000Z',
+        message: 'Choose',
+        labels,
+      }).success
+    ).toBe(false);
+    expect(
+      waitConfigSchema.safeParse({
+        attention: 'Choose',
+        labels: { constructor: 'value', toString: 'value' },
+      }).success
+    ).toBe(true);
+  });
+
   test('normalizes duration, until, bounded event, and attention waits', () => {
     const duration = dagNodeSchema.parse({ id: 'later', wait: { duration_ms: 5000 } });
     const until = dagNodeSchema.parse({

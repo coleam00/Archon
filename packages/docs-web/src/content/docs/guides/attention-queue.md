@@ -41,6 +41,9 @@ disagree about what a run needs.
 
 ## Queue items
 
+Malformed stored run data makes the list read fail with the affected run's ID instead
+of returning a partial queue. Inspect and repair that run's stored data before retrying.
+
 ```json
 {
   "kind": "attention",
@@ -68,8 +71,8 @@ disagree about what a run needs.
 - **`kind`** says how to answer. `attention` is a `wait: attention` pause: answer it in
   its `form` with `answer`, or the `respond`/`approve`/`reject` shorthand. `awaiting_response`
   is an approval gate: answer it with `approve`, `reject` or `respond`. `unreadable` is a
-  paused run Archon cannot describe, or a parent whose sub-run tree it cannot read: a
-  sub-run with no row, or a tree that revisits a run or exceeds 500 runs; `reason` and
+  paused run with unreadable attention metadata, or a parent whose sub-run tree it cannot
+  read: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs; `reason` and
   `detail` say why, and the action is to look at it and resume or abandon it.
 - **`occurrence`** identifies the pause. Pass it back with `--occurrence`; an answer or
   label write for a pause the run has left is refused, naming the current occurrence.
@@ -108,8 +111,9 @@ resolved when the wait pauses.
 ```
 
 Labels are a flat map from string to string. A key is one token with no `=` or
-whitespace. Anything else that classifies an item, such as a handler, writes labels with
-`attention label`. The write merges into the map: a key it sets replaces the same key, a
+whitespace; `__proto__` is reserved. Anything else that classifies an item, such as a
+handler, writes labels with `attention label`. The write merges into the map: a key it
+sets replaces the same key, a
 key it unsets is removed, and nothing else changes. Only attention waits carry labels; a
 gate's item always has none.
 
