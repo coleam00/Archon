@@ -676,8 +676,8 @@ that resumed and then completed does not keep reporting an interrupt. Runs that 
 before this field existed carry no `stop_reason`.
 
 After recording why the run stopped, the owner ends the process tree of every `bash:` or
-`script:` node still running, including an `until_bash` check, so a resume never overlaps the
-interrupted attempt. This applies to foreground `workflow run`, `workflow resume` and
+`script:` node still running, including an `until_bash` check, so a resume does not overlap the
+interrupted attempt, apart from the escapes below. This applies to foreground `workflow run`, `workflow resume` and
 `trigger execute`. A node counts as running until its output closes, so a background job that
 still writes to the node's output ends with it. On macOS and Linux those subprocesses run in
 their own session during a foreground run, so they have no controlling terminal. If the owner
