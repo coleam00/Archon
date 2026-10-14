@@ -204,7 +204,7 @@ describe('InProcessWorkflowEngine.subscribe', () => {
       } else {
         await completeNode(deps.store, workflowRun.id, 'inner');
       }
-      await deps.store.completeWorkflowRun(workflowRun.id);
+      await deps.store.completeWorkflowRun(workflowRun.id, { duration_ms: 1 });
       return undefined;
     };
     const unrelated = await store.createWorkflowRun({ workflow_name: 'other', user_message: '' });
@@ -249,7 +249,7 @@ describe('InProcessWorkflowEngine.subscribe', () => {
     dagBody = async ({ deps, workflowRun, priorCompletedNodes }) => {
       if (priorCompletedNodes?.has('first')) {
         await completeNode(deps.store, workflowRun.id, 'child');
-        await deps.store.completeWorkflowRun(workflowRun.id);
+        await deps.store.completeWorkflowRun(workflowRun.id, { duration_ms: 1 });
       } else {
         await completeNode(deps.store, workflowRun.id, 'first');
         await deps.store.failWorkflowRun(workflowRun.id, 'interrupted');
