@@ -8,7 +8,8 @@ How we decide what a workflow should be, agents first, is in
 
 ## Guards
 
-A guard here must protect an action the node it lives in takes.
+A guard protects a concrete boundary: an action its node takes, or the review
+object downstream lenses will judge.
 
 **Keep** a guard when it:
 
@@ -16,18 +17,16 @@ A guard here must protect an action the node it lives in takes.
   forge can accept a write and silently not apply it; or
 - refuses to proceed on a question it asked and could not get an answer to, where
   guessing is irreversible. `archon complete` blocking a branch delete it could not
-  prove safe is the shape.
+  prove safe is the shape; or
+- establishes the resolved review object before lenses run, where a later
+  publication refusal cannot recover the review spent on the wrong checkout.
 
-**Cut** a guard when it re-asserts an invariant something else already established.
-That belongs where it is established, once — not at each node that depends on it.
+**Cut** a guard when it re-asserts an invariant already established whose facts
+cannot change before this boundary. That belongs where it is established, once.
 
-**The test: if this pack's fixture suite cannot exercise the guard, it is not a
-guard. It is a comment — write it as one.**
-
-That test is mechanical and settles most arguments without debating threat models.
-A node the dry run cannot execute — a composed `bash:` node, for instance, which
-never receives its caller's `with:` values — can only ever be stubbed, so no
-fixture can show the guard working or catch it breaking.
+Prove a guard with executed code. Topology fixtures may stub it, but a focused
+script or graph test must exercise its deciding inputs and failure path. Composed
+review tests must execute the check with the caller's actual `with:` bindings.
 
 PR review has two checks at different times. After scope resolves the qualified
 PR, `head-check` compares its live head with the commit fixed by `mode`, before
@@ -68,10 +67,11 @@ CI runs again. A flake or infrastructure failure outside the change gets one re-
 of its failed jobs before the agent answers, recorded as `rerun`; any other red ends
 the run not ready, and a defect outside the change becomes a discovery.
 
-The rule is not "never defend against what has not happened" — the two Keep cases
-above have not happened either, and both are worth their few lines. The question is
-whether the guard is protecting *this node's own action*, or restating something
-that was already true when the node started.
+The rule is not "never defend against what has not happened". Verification of a
+write and refusal on unresolved safety questions can justify guards before an
+observed failure. The question is
+whether the guard protects a distinct action or review-object boundary, or
+restates something already established and still true when the node starts.
 
 ## Forge source
 

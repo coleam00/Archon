@@ -33,6 +33,8 @@ export interface GhPr {
   readonly state?: 'OPEN' | 'CLOSED' | 'MERGED';
   readonly headRefName?: string;
   readonly headRefOid?: string;
+  readonly headRepository?: { readonly name: string };
+  readonly headRepositoryOwner?: { readonly login: string };
   readonly baseRefName?: string;
 }
 
@@ -133,10 +135,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   const project = () => {
     const fields = argv[argv.indexOf('--json') + 1].split(',');
     const row = {
-      ...pr,
       url: 'https://' + host + '/' + path + '/pull/' + String(pr.number),
       headRepository: { name },
       headRepositoryOwner: { login: owner },
+      ...pr,
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));
   };

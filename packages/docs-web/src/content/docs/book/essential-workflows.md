@@ -156,8 +156,10 @@ Reviews a change through specialist lenses and produces one evidence-based verdi
 **When to use it**: A PR or your working diff needs judging. It is read-only and never edits code.
 
 ```bash
-archon workflow run archon-review --input scope=87
+archon workflow run archon-review --branch <PR-head-branch> --input scope=87
 ```
+
+Use the PR's head branch for a same-repository PR. The review checks the live PR head before any lens runs. If the checkout differs, it stops and prints retry commands. For a fork, use the displayed fetch command and pinned `--from` retry to review its head in a fresh worktree. Retain any other non-default review inputs when retrying.
 
 **What it produces**: A synthesized review report. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Leave `scope` empty to review the current branch's PR or the working diff.
 

@@ -21,10 +21,16 @@ function retry(pr: PrRecord): string {
   const branch = sameRepo(pr.repo, pr.head_repo)
     ? `Retry on the PR branch:\narchon workflow run archon-review --branch ${quote(pr.head)} ${scope}\n`
     : '';
-  const remote =
-    findRemote(pr.head_repo) ?? `https://${pr.head_repo.host}/${pr.head_repo.path}.git`;
+  let remote = `https://${pr.head_repo.host}/${pr.head_repo.path}.git`;
+  let diagnostic = '';
+  try {
+    remote = findRemote(pr.head_repo) ?? remote;
+  } catch (error) {
+    diagnostic = `Remote discovery failed; the fetch uses the head repository URL: ${error instanceof Error ? error.message : String(error)}\n`;
+  }
   return (
     branch +
+    diagnostic +
     `Or fetch the PR head and start an isolated review pinned to this commit:\n` +
     `git fetch -- ${quote(remote)} ${quote(`refs/heads/${pr.head}`)}\n` +
     `archon workflow run archon-review --from ${quote(pr.head_revision)} ${scope}\n${retained}`

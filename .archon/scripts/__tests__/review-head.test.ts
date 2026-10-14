@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -67,6 +67,55 @@ describe('review head boundary', () => {
       expect(run.stderr).toContain(`--from 'newhead' --input 'scope=${PR_URL}'`);
       expect(run.stderr).toContain('No review lenses ran');
     });
+  }
+
+  for (const source of ['gh', 'forge']) {
+    for (const fork of [false, true]) {
+      for (const failure of ['ambiguous', 'config']) {
+        it(`retains the mismatch and pinned retry for ${source}, ${fork ? 'fork' : 'same-repository'} head, and ${failure} remotes`, () => {
+          const cwd = gitCheckout({}, track);
+          const headRepo = fork ? { ...PR.repo, path: 'contributor/repo' } : PR.repo;
+          if (failure === 'ambiguous') {
+            git(cwd, 'remote', 'add', 'alias', `https://${headRepo.host}/${headRepo.path}.git`);
+            if (fork)
+              git(
+                cwd,
+                'remote',
+                'add',
+                'contributor',
+                `https://${headRepo.host}/${headRepo.path}.git`
+              );
+          } else {
+            writeFileSync(join(cwd, '.git/config'), '[broken');
+          }
+          const run = check({
+            cwd,
+            source,
+            gh: {
+              pr: {
+                headRefOid: 'newhead',
+                headRepository: { name: 'repo' },
+                headRepositoryOwner: { login: fork ? 'contributor' : 'example' },
+              },
+            },
+            forge: view({ head_revision: 'newhead', head_repo: headRepo }),
+          });
+          expect(run.code).toBe(1);
+          expect(run.stderr).toContain(`${PR.repo.host}/${PR.repo.path}#42`);
+          expect(run.stderr).toContain(HEAD);
+          expect(run.stderr).toContain('newhead');
+          expect(run.stderr).toContain(
+            `git fetch -- 'https://${headRepo.host}/${headRepo.path}.git' 'refs/heads/feature'`
+          );
+          expect(run.stderr).toContain(
+            `archon workflow run archon-review --from 'newhead' --input 'scope=${PR_URL}'`
+          );
+          expect(run.stderr).toContain(
+            failure === 'ambiguous' ? 'several git remotes' : 'git config --get-regexp failed'
+          );
+        });
+      }
+    }
   }
 
   it('checks the live revision instead of the stale recorded revision', () => {
@@ -285,5 +334,106 @@ describe('PR review scheduling with the real head check', () => {
         }
       });
     }
+  }
+});
+
+describe('delivery rereview checks the recorded PR after reshape', () => {
+  for (const scenario of ['matching', 'mismatch', 'missing declaration']) {
+    it(`gates rereview lenses, publication and CI with ${scenario}`, async () => {
+      const cwd = gitCheckout({}, track);
+      const head = git(cwd, 'rev-parse', 'HEAD');
+      const root = track(mkdtempSync(join(tmpdir(), 'archon-rereview-graph-')));
+      const cli = join(root, 'forge.ts');
+      const log = join(root, 'forge.log');
+      writeFileSync(
+        cli,
+        `import { appendFileSync } from 'node:fs';
+const argv = process.argv.slice(2);
+appendFileSync(${JSON.stringify(log)}, argv.join(' ') + '\\n');
+if (argv[0] !== 'forge' || argv[1] !== 'pr.view') throw new Error('unexpected operation');
+console.log(${JSON.stringify(forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: scenario === 'mismatch' ? 'anotherhead' : head }) }))});
+`
+      );
+      const priorEnv = {
+        ARCHON_HOME: process.env.ARCHON_HOME,
+        ARCHON_SDLC_FORGE: process.env.ARCHON_SDLC_FORGE,
+        ARCHON_CLI_COMMAND: process.env.ARCHON_CLI_COMMAND,
+      };
+      Object.assign(process.env, {
+        ARCHON_HOME: join(root, 'home'),
+        ARCHON_SDLC_FORGE: 'forge',
+        ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, cli]),
+      });
+      try {
+        const discovered = await discoverWorkflows(REPO, {
+          providers: { get: () => undefined, list: () => [] },
+        });
+        const workflow = discovered.workflows.find(
+          entry => entry.workflow.name === 'archon-deliver'
+        )?.workflow;
+        if (!workflow) throw new Error(JSON.stringify(discovered.errors));
+        const stubs = dryRunStubsSchema.parse(
+          Bun.YAML.parse(
+            readFileSync(
+              join(REPO, '.archon/workflows/sdlc/deliver/fixtures/ready.stubs.yaml'),
+              'utf8'
+            )
+          )
+        );
+        delete stubs.fixture;
+        delete stubs['rereview__head-check'];
+        stubs['pr__publish'] = forgePrRecord({ head_revision: 'before-reshape' });
+        stubs['rereview__mode'] = {
+          continuation: true,
+          head,
+          cursor: 'before-reshape',
+          risks: 'fixture',
+          execution: {},
+          seams: false,
+          code: true,
+          tests: false,
+          errors: false,
+          docs: false,
+        };
+        stubs['rereview__scope'] = {
+          pr: scenario === 'missing declaration' ? null : PR,
+          report: { type: 'archon_artifact', run_id: 'fixture-run', path: 'review/scope.md' },
+        };
+        const result = await dryRunWorkflow({
+          workflow,
+          cwd: REPO,
+          execWorkspace: cwd,
+          execCode: true,
+          userMessage: 'Deliver this work',
+          stubs,
+        });
+        const states = new Map(result.trace.map(entry => [entry.nodeId, entry.state]));
+        expect(states.get('reshape__implement')).toBe('stubbed');
+        expect(states.get('rereview__head-check')).toBe(
+          scenario === 'matching' ? 'completed' : 'failed'
+        );
+        for (const node of ['rereview__code', 'rereview__synthesize', 'rereview__publish', 'ci'])
+          expect(states.get(node)).toBe(scenario === 'matching' ? 'stubbed' : 'skipped');
+        for (const lens of ['seams', 'tests', 'errors', 'docs'])
+          expect(states.get(`rereview__${lens}`)).toBe('skipped');
+        if (scenario === 'missing declaration') {
+          expect(
+            result.trace.find(entry => entry.nodeId === 'rereview__head-check')?.reason
+          ).toContain('does not match the recorded pull request');
+          expect(existsSync(log)).toBe(false);
+        } else {
+          expect(readFileSync(log, 'utf8')).toContain('pr.view');
+          if (scenario === 'mismatch')
+            expect(
+              result.trace.find(entry => entry.nodeId === 'rereview__head-check')?.reason
+            ).toContain('anotherhead');
+        }
+      } finally {
+        for (const [key, value] of Object.entries(priorEnv)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    });
   }
 });

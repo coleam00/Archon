@@ -12,7 +12,7 @@ A script node, a guard, a wait or a retry is added only after a real run failed 
 
 ## 3. One check at the boundary, not one per step
 
-If a later step already proves something went wrong, don't add a step to prove it earlier. Example: the agent that writes a correction pushes it, and the review's check that the PR head matches the reviewed commit catches a skipped push.
+Check each distinct boundary once. PR review checks the review object before lenses so a mismatched checkout cannot consume a review. Publication checks again before writing because the PR head can move during review. The earlier check protects review work; the later check protects the public report. Do not repeat a check between steps when its facts and purpose have not changed.
 
 ## 4. Typed outputs, small
 
