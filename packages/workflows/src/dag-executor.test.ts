@@ -14145,25 +14145,19 @@ describe('executeDagWorkflow -- break at settled (no hang on subprocess exit)', 
     const workflowRun = makeWorkflowRun();
 
     // Should complete promptly (not hang for 30 min)
-    const result = await Promise.race([
-      executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          cwd: testDir,
-          workflow: {
-            name: 'break-test',
-            nodes: [{ id: 'n1', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
-          },
-          workflowRun,
-        })
-      ).then(() => 'completed'),
-      new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error('Timed out — break at settled not working')), 5000)
-      ),
-    ]);
-
-    expect(result).toBe('completed');
+    // A regression hangs until the test's own budget fails it.
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'break-test',
+          nodes: [{ id: 'n1', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
+        },
+        workflowRun,
+      })
+    );
   });
 
   it('loop node completes at settled — does not block on a subprocess that never exits', async () => {
@@ -14179,36 +14173,30 @@ describe('executeDagWorkflow -- break at settled (no hang on subprocess exit)', 
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
 
-    const result = await Promise.race([
-      executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          cwd: testDir,
-          workflow: {
-            name: 'loop-break-test',
-            nodes: [
-              {
-                id: 'loop1',
-                kind: 'loop',
-                loop: {
-                  fresh_context: false,
-                  prompt: 'Do the thing. Say COMPLETE when done.',
-                  until: 'COMPLETE',
-                  max_iterations: 3,
-                },
+    // A regression hangs until the test's own budget fails it.
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'loop-break-test',
+          nodes: [
+            {
+              id: 'loop1',
+              kind: 'loop',
+              loop: {
+                fresh_context: false,
+                prompt: 'Do the thing. Say COMPLETE when done.',
+                until: 'COMPLETE',
+                max_iterations: 3,
               },
-            ],
-          },
-          workflowRun,
-        })
-      ).then(() => 'completed'),
-      new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error('Timed out — break at settled not working')), 5000)
-      ),
-    ]);
-
-    expect(result).toBe('completed');
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
   });
 });
 
@@ -14649,18 +14637,15 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       })
     );
     try {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          thresholdMs === 0
-            ? workOpen.then(() => new Promise(resolve => setTimeout(resolve, 80)))
-            : publication,
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => reject(new Error('Tool attention was never published')), 1000);
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
+      // Reaching the open work is bounded by the test's own budget, not a fixed timer:
+      // startup took 110-190 ms here and over a second on a loaded Windows runner. With
+      // attention disabled, the 80 ms after the work opens is the window in which it must
+      // stay quiet.
+      if (thresholdMs === 0) {
+        await workOpen;
+        await Bun.sleep(80);
+      } else {
+        await publication;
       }
       expect(signal?.aborted).toBe(false);
       expect(workflowRun.status).toBe('running');
@@ -14793,21 +14778,14 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
           },
         })
       );
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          secondStarted,
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => reject(new Error('Successor never started')), 1000);
-          }),
-        ]);
+        await secondStarted;
         expect(failures).toBe(4);
         expect(snapshots.get(firstStream!)).toEqual([]);
         expect(workflowRun.status).toBe('running');
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
         expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
       } finally {
-        clearTimeout(timer);
         finishFirst();
         finishSecond();
         await execution;

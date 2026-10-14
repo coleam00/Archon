@@ -62,6 +62,32 @@ async function retryWhileBusy<T>(
 }
 
 /**
+ * `retryWhileBusy` for the synchronous open path. Switching a fresh file to WAL takes
+ * a lock that SQLite does not wait for through busy_timeout, so a process opening the
+ * same new database as another one gets SQLITE_BUSY there instead of waiting.
+ */
+function retryWhileBusySync(attempt: () => void): void {
+  const startedAt = Date.now();
+  let delayMs = 10;
+  let nextWarnAtMs = 0;
+  for (;;) {
+    try {
+      attempt();
+      return;
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      const waitedMs = Date.now() - startedAt;
+      if (waitedMs >= nextWarnAtMs) {
+        getLog().warn({ operation: 'open', code: error.code, waitedMs }, 'db.sqlite_busy_waiting');
+        nextWarnAtMs = waitedMs + BUSY_WARN_INTERVAL_MS;
+      }
+      Bun.sleepSync(delayMs);
+      delayMs = Math.min(delayMs * 2, BUSY_RETRY_MAX_DELAY_MS);
+    }
+  }
+}
+
+/**
  * The resource slot holders table. One definition serves fresh creation and the
  * one-time rebuild that widens a dev database's narrow holder-kind CHECK.
  * `owner_*` name the process that owns an 'attempt' holder and are NULL for 'run'.
@@ -108,7 +134,7 @@ export class SqliteAdapter implements IDatabase {
     this.db.run('PRAGMA busy_timeout = 5000');
 
     // Enable WAL mode for better concurrent performance
-    this.db.run('PRAGMA journal_mode = WAL');
+    retryWhileBusySync(() => this.db.run('PRAGMA journal_mode = WAL'));
 
     // Enable foreign keys
     this.db.run('PRAGMA foreign_keys = ON');
@@ -339,7 +365,26 @@ export class SqliteAdapter implements IDatabase {
     // Probe BEFORE createSchema(): once CREATE TABLE IF NOT EXISTS has run there is
     // no way left to tell a fresh database from one that predates version tracking.
     const preExisting = this.hasAnyArchonTable();
-    this.createSchema();
+    if (preExisting) {
+      // Every statement is an IF NOT EXISTS no-op on an existing database, so this takes
+      // no write lock beside a running server.
+      this.createSchema();
+    } else {
+      // A fresh database gets its schema in one commit instead of one per statement:
+      // each commit is an fsync, and on a slow disk dozens of them took seconds. IMMEDIATE
+      // makes a second process creating the same fresh file wait (busy_timeout) and then
+      // find every table present, instead of failing to upgrade a stale read.
+      this.db.run('BEGIN IMMEDIATE');
+      try {
+        this.createSchema();
+        this.db.run('COMMIT');
+      } catch (error) {
+        // SQLite may already have rolled back (SQLITE_FULL, SQLITE_IOERR); a ROLLBACK
+        // then would throw and hide the error that explains the failure.
+        if (this.db.inTransaction) this.db.run('ROLLBACK');
+        throw error;
+      }
+    }
     const allApplied = this.migrateColumns();
     this.recordSchemaVersion(preExisting, allApplied);
   }

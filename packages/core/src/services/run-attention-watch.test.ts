@@ -3,6 +3,7 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunLiveOwnerWatchEvent, RunLiveOwnerWatchResult } from './run-live-owner';
 import type { RunDoorbell } from './run-attention-watch';
+import { DEFAULT_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
 
 /**
  * The rows the waiter can see, keyed by run id. Mutating this between reads is how a
@@ -89,7 +90,7 @@ const wait = (runId: string, over: Record<string, unknown> = {}) =>
   waitForRunAttention(store, runId, { doorbell, pollIntervalMs: 5, deadlineMs: 3000, ...over });
 
 async function waitForOwner(runId: string): Promise<void> {
-  const deadline = Date.now() + 1000;
+  const deadline = Date.now() + DEFAULT_TEST_TIMEOUT_MS;
   while (!ownerEvents.has(runId)) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for owner ${runId}`);
     await Bun.sleep(5);

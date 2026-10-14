@@ -11,7 +11,7 @@ import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION, readSchemaVersion } from '../schema-version';
 import { webPushSubscriptionRowSchema } from '../../schemas/web-push';
 import { Database, SQLiteError, type Statement } from 'bun:sqlite';
-import { unlinkSync } from 'fs';
+import { readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { mkdtemp } from 'fs/promises';
@@ -1310,7 +1310,7 @@ function splitTopLevelCommas(body: string): string[] {
 function raw_pragma(dbPath: string, table: string): string[] {
   const raw = new Database(dbPath, { readonly: true });
   try {
-    const rows = raw.prepare(`PRAGMA table_info('${table}')`).all() as { name: string }[];
+    const rows = raw.query(`PRAGMA table_info('${table}')`).all() as { name: string }[];
     return rows.map(r => r.name);
   } finally {
     raw.close();
@@ -1320,7 +1320,7 @@ function raw_pragma(dbPath: string, table: string): string[] {
 function raw_indexes(dbPath: string): string[] {
   const raw = new Database(dbPath, { readonly: true });
   try {
-    const rows = raw.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as {
+    const rows = raw.query("SELECT name FROM sqlite_master WHERE type='index'").all() as {
       name: string;
     }[];
     return rows.map(r => r.name);
@@ -1332,7 +1332,9 @@ function raw_indexes(dbPath: string): string[] {
 function raw_query(dbPath: string, sql: string): unknown[] {
   const raw = new Database(dbPath, { readonly: true });
   try {
-    return raw.prepare(sql).all();
+    // query(), not prepare(): close() finalizes query() statements, while a prepared one
+    // keeps the file open and Windows then refuses to remove the temp root.
+    return raw.query(sql).all();
   } finally {
     raw.close();
   }
@@ -1603,5 +1605,114 @@ describe('SqliteAdapter busy locks', () => {
       })
     ).rejects.toMatchObject({ code: 'SQLITE_CONSTRAINT_PRIMARYKEY' });
     expect(attempts).toBe(1);
+  });
+});
+
+/** Read a child's stdout line by line until `done` accepts one; the stream may split lines. */
+async function readUntil(
+  stream: ReadableStream<Uint8Array>,
+  done: (line: string) => boolean
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffered = '';
+  for await (const chunk of stream) {
+    buffered += decoder.decode(chunk, { stream: true });
+    const lines = buffered.split('\n');
+    buffered = lines.pop() ?? '';
+    if (lines.some(line => done(line.trim()))) return;
+  }
+  throw new Error('stream ended before the expected line');
+}
+
+describe('SqliteAdapter fresh schema', () => {
+  /** Commit frames in the WAL: one per committed write transaction since the last checkpoint. */
+  function walCommits(path: string): number {
+    const wal = readFileSync(`${path}-wal`);
+    const pageSize = wal.readUInt32BE(8);
+    let commits = 0;
+    for (let offset = 32; offset + 24 <= wal.length; offset += 24 + pageSize) {
+      if (wal.readUInt32BE(offset + 4) !== 0) commits++;
+    }
+    return commits;
+  }
+
+  test('a fresh database receives its tables in one commit, not one per table', async () => {
+    // Each commit is an fsync; per-statement commits made a first open cost seconds on
+    // a slow disk.
+    const path = await upgradeFixturePath();
+    const adapter = new SqliteAdapter(path);
+    try {
+      const tables = raw_query(
+        path,
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'"
+      ) as { n: number }[];
+      expect(walCommits(path)).toBeLessThan(Number(tables[0]?.n) / 2);
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  test('opening waits out another process that holds a fresh file instead of failing', async () => {
+    // Switching a file to WAL fails with SQLITE_BUSY at once, without busy_timeout,
+    // while another connection holds a write lock on it. The holder releases only after
+    // the opener has reported waiting, so the test always exercises the contention.
+    const path = await upgradeFixturePath();
+    const holder = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `const { Database } = require('bun:sqlite');
+const db = new Database(${JSON.stringify(path)});
+db.run('CREATE TABLE IF NOT EXISTS held (a)');
+db.run('BEGIN IMMEDIATE');
+db.run('INSERT INTO held VALUES (1)');
+console.log('held');
+for await (const _ of console) break;
+db.run('COMMIT');`,
+      ],
+      { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' }
+    );
+    await readUntil(holder.stdout, line => line === 'held');
+    const opener = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `const { SqliteAdapter } = await import(${JSON.stringify(join(import.meta.dir, 'sqlite.ts'))});
+const adapter = new SqliteAdapter(${JSON.stringify(path)});
+await adapter.query('SELECT COUNT(*) FROM remote_agent_codebases');
+await adapter.close();`,
+      ],
+      { stdout: 'pipe', stderr: 'inherit', env: { ...process.env, LOG_LEVEL: 'warn' } }
+    );
+    try {
+      await readUntil(opener.stdout, line => line.includes('db.sqlite_busy_waiting'));
+    } finally {
+      holder.stdin.write('release\n');
+      await holder.stdin.end();
+    }
+    expect(await holder.exited).toBe(0);
+    expect(await opener.exited).toBe(0);
+  });
+
+  test('processes opening the same fresh file at once all get the full schema', async () => {
+    const path = await upgradeFixturePath();
+    const source = `const { SqliteAdapter } = await import(${JSON.stringify(join(import.meta.dir, 'sqlite.ts'))});
+await new SqliteAdapter(${JSON.stringify(path)}).close();`;
+    const children = Array.from({ length: 4 }, () =>
+      Bun.spawn([process.execPath, '-e', source], { stdout: 'ignore', stderr: 'pipe' })
+    );
+    const results = await Promise.all(
+      children.map(async child => ({
+        code: await child.exited,
+        stderr: await new Response(child.stderr).text(),
+      }))
+    );
+    expect(results.filter(result => result.code !== 0)).toEqual([]);
+    const reopened = new SqliteAdapter(path);
+    try {
+      await reopened.query('SELECT COUNT(*) FROM remote_agent_codebases');
+    } finally {
+      await reopened.close();
+    }
   });
 });

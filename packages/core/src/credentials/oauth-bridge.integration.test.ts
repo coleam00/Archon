@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { afterEach, expect, mock, test } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
+import { DEFAULT_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
 
 const paths = await import('@archon/paths');
 const logger = createMockLogger();
@@ -72,7 +73,7 @@ test('Copilot policy failure connects with a visible safe warning', async () => 
     { preconnect: realFetch.preconnect }
   );
   const start = await startOAuth('alice', 'github-copilot');
-  const deadline = Date.now() + 3000;
+  const deadline = Date.now() + DEFAULT_TEST_TIMEOUT_MS;
   let result = pollOAuth(start.sessionId, 'alice');
   while (result.status === 'pending' && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 10));

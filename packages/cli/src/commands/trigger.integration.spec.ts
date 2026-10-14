@@ -1461,7 +1461,12 @@ function processAlive(pid: number): boolean {
   }
 }
 
-test('poll-style CLI fires deduplicate event inputs and preserve unkeyed starts', async () => {
+/**
+ * A project with one input-declaring workflow, a registered actor and a poll-style
+ * timer binding for it. Two tests share it because each fire is a full CLI process,
+ * which costs most of a second on Windows: one test holding every case ran at its budget.
+ */
+async function pollFixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-poll-')));
   tempRoots.push(root);
   const archonHome = join(root, 'home');
@@ -1518,19 +1523,33 @@ nodes:
     schedule: { intervalSeconds: 60, runAtLoad: false },
   };
   writeFileSync(configPath, JSON.stringify(config));
-  writeFileSync(inputsPath, JSON.stringify({ order_id: 'order-123' }));
   const fire = ['trigger', 'fire', '--config', configPath, '--inputs', inputsPath];
+  return {
+    config,
+    configPath,
+    inputsPath,
+    workflowPath,
+    databasePath,
+    fire,
+    cli: (args: string[], expectSuccess = true) =>
+      runCli(cliPath, projectRoot, archonHome, args, expectSuccess),
+    runs: (): RunRow[] =>
+      readRows<RunRow>(
+        databasePath,
+        'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs'
+      ),
+  };
+}
+
+test('poll-style CLI fires deduplicate keyed event inputs and reject bad ones', async () => {
+  const { config, configPath, inputsPath, databasePath, fire, cli, runs } = await pollFixture();
+  writeFileSync(inputsPath, JSON.stringify({ order_id: 'order-123' }));
   const keyed = [...fire, '--delivery-id', 'order-123@1'];
   for (let tick = 0; tick < 2; tick++) {
-    await runCli(cliPath, projectRoot, archonHome, keyed);
+    await cli(keyed);
     config.binding.launch.inputs.mode = 'edited-after-acceptance';
     writeFileSync(configPath, JSON.stringify(config));
   }
-  const runs = (): RunRow[] =>
-    readRows<RunRow>(
-      databasePath,
-      'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs'
-    );
   const completed = await waitFor(() => {
     const rows = runs();
     return rows.length === 1 && rows[0]?.status === 'completed' ? rows[0] : undefined;
@@ -1551,7 +1570,7 @@ nodes:
   expect(JSON.parse(stored.event_input_names)).toEqual(['order_id']);
 
   writeFileSync(inputsPath, JSON.stringify({ order_id: 'changed-order' }));
-  const conflict = await runCli(cliPath, projectRoot, archonHome, keyed, false);
+  const conflict = await cli(keyed, false);
   expect(conflict.exitCode).not.toBe(0);
   expect(conflict.stderr).toContain(
     "Delivery ID 'order-123@1' was already used with different inputs"
@@ -1560,20 +1579,14 @@ nodes:
 
   for (const invalid of ['[]', 'null', '{bad json', '{"":1}']) {
     writeFileSync(inputsPath, invalid);
-    const result = await runCli(cliPath, projectRoot, archonHome, fire, false);
+    const result = await cli(fire, false);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain('--inputs');
   }
   expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(1);
 
   writeFileSync(inputsPath, JSON.stringify({ undeclared: 'event' }));
-  const rejected = await runCli(
-    cliPath,
-    projectRoot,
-    archonHome,
-    [...fire, '--delivery-id', 'undeclared@1'],
-    false
-  );
+  const rejected = await cli([...fire, '--delivery-id', 'undeclared@1'], false);
   expect(rejected.exitCode).not.toBe(0);
   expect(
     readRows<{ preparation_status: string }>(
@@ -1582,14 +1595,17 @@ nodes:
     )
   ).toHaveLength(1);
   expect(runs()).toHaveLength(1);
+});
+
+test('poll-style CLI fires preserve unkeyed starts', async () => {
+  const { configPath, inputsPath, workflowPath, databasePath, fire, cli, runs } =
+    await pollFixture();
   writeFileSync(inputsPath, JSON.stringify({ order_id: 'unkeyed-event' }));
-  await runCli(cliPath, projectRoot, archonHome, fire);
-  await waitFor(
-    () => (runs().filter(row => row.status === 'completed').length === 2 ? true : undefined),
-    'inputs-only run completion'
-  );
-  const inputsOnlyRun = runs().find(row => row.id !== completed.id);
-  if (!inputsOnlyRun) throw new Error('Missing inputs-only run');
+  await cli(fire);
+  const inputsOnlyRun = await waitFor(() => {
+    const rows = runs();
+    return rows.length === 1 && rows[0]?.status === 'completed' ? rows[0] : undefined;
+  }, 'inputs-only run completion');
   expect(JSON.parse(inputsOnlyRun.metadata)).toMatchObject({
     inputs: { order_id: 'unkeyed-event' },
   });
@@ -1598,26 +1614,20 @@ nodes:
     'name: process-order\ndescription: No declared inputs\nnodes:\n  - id: record\n    bash: echo done\n'
   );
   writeFileSync(inputsPath, JSON.stringify({ order_id: 'event' }));
-  const noDeclaration = await runCli(
-    cliPath,
-    projectRoot,
-    archonHome,
-    [...fire, '--delivery-id', 'undeclared@2'],
-    false
-  );
+  const noDeclaration = await cli([...fire, '--delivery-id', 'undeclared@2'], false);
   expect(noDeclaration.exitCode).not.toBe(0);
-  expect(runs()).toHaveLength(2);
+  expect(runs()).toHaveLength(1);
 
   for (let tick = 0; tick < 2; tick++) {
-    await runCli(cliPath, projectRoot, archonHome, ['trigger', 'fire', '--config', configPath]);
+    await cli(['trigger', 'fire', '--config', configPath]);
     await waitFor(
       () =>
-        runs().filter(row => row.status === 'completed').length === tick + 3 ? true : undefined,
+        runs().filter(row => row.status === 'completed').length === tick + 2 ? true : undefined,
       'unkeyed run completion'
     );
   }
   expect(
     readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts WHERE delivery_id IS NULL')
   ).toHaveLength(3);
-  expect(runs()).toHaveLength(4);
+  expect(runs()).toHaveLength(3);
 });
