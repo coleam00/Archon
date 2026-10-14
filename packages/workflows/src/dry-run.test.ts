@@ -1778,7 +1778,12 @@ describe('dryRunWorkflow', () => {
       name: 'attention-answer',
       nodes: [
         { id: 'review', wait: { attention: 'Post it?', form: 'approval' } },
-        { id: 'post', bash: 'echo $review.output.text', depends_on: ['review'] },
+        {
+          id: 'post',
+          bash: 'echo $review.output.text',
+          depends_on: ['review'],
+          when: "$review.output.decision == 'approve'",
+        },
         {
           id: 'stop',
           cancel: 'rejected',
@@ -1804,11 +1809,45 @@ describe('dryRunWorkflow', () => {
       resolvedText: 'Post it?',
     });
 
-    expect((await run({ decision: 'reject', text: '' })).outcome).toBe('cancelled');
+    const rejected = await run({ decision: 'reject', text: '' });
+    expect(rejected.outcome).toBe('cancelled');
+    expect(rejected.trace.find(step => step.nodeId === 'post')?.state).toBe('skipped');
 
     // The answer owes the form's output contract, like any authored stub.
     const invalid = await run({ decision: 'maybe', text: '' });
     expect(invalid.outcome).toBe('failed');
+  });
+
+  test('a stub answer chooses only the options its wait declares', async () => {
+    const options = [{ id: 'use-main' }, { id: 'use-dev' }];
+    const outcome = async (form: 'select' | 'multi_select', answer: DryRunStubValue) => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'attention-options',
+          nodes: [{ id: 'ask', wait: { attention: 'Which base?', form, options } }],
+        }),
+        userMessage: '',
+        cwd: process.cwd(),
+        stubs: { ask: answer },
+      });
+      return { outcome: result.outcome, reason: result.trace[0]?.reason };
+    };
+
+    expect((await outcome('select', { decision: 'use-dev', text: '' })).outcome).toBe('completed');
+    expect(await outcome('select', { decision: 'unknown', text: '' })).toMatchObject({
+      outcome: 'failed',
+      reason: expect.stringContaining("does not declare option 'unknown'"),
+    });
+    expect(
+      (await outcome('multi_select', { decisions: ['use-main', 'use-dev'], text: '' })).outcome
+    ).toBe('completed');
+    expect(await outcome('multi_select', { decisions: [], text: '' })).toMatchObject({
+      outcome: 'failed',
+      reason: expect.stringContaining('needs at least one option'),
+    });
+    expect(
+      await outcome('multi_select', { decisions: ['use-main', 'use-main'], text: '' })
+    ).toMatchObject({ outcome: 'failed', reason: expect.stringContaining('at most once') });
   });
 
   test('simulates loop completion and max-iteration failure', async () => {

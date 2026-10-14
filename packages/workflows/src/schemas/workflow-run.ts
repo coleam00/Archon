@@ -187,6 +187,31 @@ export function attentionOptions(wait: WorkflowAttentionWaitContext): readonly A
   }
 }
 
+/**
+ * Why choosing `choose` does not answer a wait in `form` that declares the option ids
+ * `declared`, or undefined when it does: a message takes only text; approval and select
+ * take exactly one declared option; multi_select takes one or more distinct declared
+ * options. Every answer surface, and a dry run's authored answer, holds this one rule.
+ */
+export function attentionChoiceProblem(
+  form: AttentionForm,
+  declared: readonly string[],
+  choose: readonly string[]
+): string | undefined {
+  if (form === 'message') return choose.length > 0 ? 'takes only text, not an option.' : undefined;
+  const undeclared = choose.filter(id => !declared.includes(id));
+  if (undeclared.length > 0)
+    return `does not declare option '${undeclared.join("', '")}'. Declared options: ${declared.join(', ')}.`;
+  if (form === 'multi_select') {
+    if (choose.length === 0) return 'needs at least one option.';
+    if (new Set(choose).size !== choose.length) return 'takes each option at most once.';
+    return undefined;
+  }
+  return choose.length === 1
+    ? undefined
+    : `takes exactly one option. Declared options: ${declared.join(', ')}.`;
+}
+
 /** An attention wait's current labels. */
 export function attentionLabels(wait: WorkflowAttentionWaitContext): AttentionLabels {
   return wait.labels ?? {};
