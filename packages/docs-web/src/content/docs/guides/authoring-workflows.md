@@ -2362,6 +2362,9 @@ consequences worth planning for:
 
 - Cost scales with `items.length`, not with `max_parallel`. Bound the list in the producer
   node, not here.
+- A child that pauses keeps its slot until it finishes, so unanswered children can hold
+  the whole window and later items wait. Paused children use no process or provider, so
+  raising `max_parallel` costs nothing while they wait.
 - Abandoning the parent cascade-cancels at most 500 descendant runs (`MAX_CASCADE_RUNS`).
   A fan-out wider than that can leave children uncancelled and still billing; they have to
   be abandoned individually. A run-tree-wide budget ceiling is tracked in
@@ -2507,31 +2510,29 @@ branch, or `max_parallel: 1` when children should run serially. Workflow-level
 still enforces the checkout guard. Neither declaration is required to share a checkout
 within one fan-out.
 
-#### Gates: around a fan-out, never inside one
+#### Children that pause
 
-A fan-out is an **autonomous** stretch of a run. A parent run has a single approval slot, so
-N children cannot each hold it — a child that pauses at a gate fails the fan-out node
-instead of pausing the tree ([#2438](https://github.com/coleam00/Archon/issues/2438)).
+A fan-out child may pause like any run: at an `approval:` gate, an interactive loop, or a
+`wait:`. It stays paused as its own run and its own queue item, and nothing cancels it for
+pausing. Its siblings keep running to their own terminal states.
 
-That is the intended shape, not a missing feature: gates **bracket** the autonomous middle.
+- **The parent waits.** Once no more children can start, the parent pauses on a `fan_out`
+  gate that lists every unfinished child (`item <index>: run <id>`) and how many items have
+  not started yet. `archon workflow wait` on the parent wakes with the first child, in item
+  order, that needs an answer.
+- **Answer each child by its own run id.** Approving or rejecting the parent is refused with
+  a redirect naming its children. When the children it waits on finish, the parent
+  continues on its own, starts any items that were waiting, and joins exactly as above.
+  A child that failed before the pause is reported as failed, not run again.
+- **A paused child keeps its `max_parallel` slot.** With `max_parallel: 1`, items after a
+  paused child wait until it is answered and finishes, so children never overlap in a
+  shared checkout.
+- **Abandoning the parent** cascade-cancels its paused children with the rest of the tree.
+- **Abandoning one child** leaves the parent paused. Resume the parent; it reads that
+  child's outcome as cancelled, and the join treats it like any cancelled child.
 
-- An `approval:` node **before** the fan-out is an ordinary parent gate — approve, then the
-  expansion runs.
-- An `approval:` node **after** it resumes correctly: the completed fan-out node is skipped
-  on resume and `$<id>.output` still holds the full aggregate.
-- A gate **inside a 1:1 sub-run** (no `fan_out:`) also works — the child pauses, the tree
-  pauses, and approving the child by its run id auto-resumes the parent.
-
-The one asymmetry to know about: the *same* child workflow pauses correctly when spawned
-1:1 and hard-fails when fanned out. If you wrap an existing gated workflow in `fan_out:`,
-move the gate into the parent DAG around the node.
-
-A paused child is the single case where a fan-out cancels a run it did not have to. A pause
-is not a terminal state and the parent cannot hand its one approval slot to N children, so
-the child would wait for something it can never be given — cancelling it (tagged
-`fan_out_gate`, so removing the gate and resuming re-drives it) is what makes it terminal.
-The child is cancelled as soon as the pause is seen. Its siblings still run to their own
-terminal states, and the node fails afterwards.
+Gates around the node work as usual: an `approval:` before the fan-out is an ordinary
+parent gate, and one after it resumes with `$<id>.output` holding the full aggregate.
 
 #### Resume, and what `child_index` keys
 
@@ -2539,10 +2540,12 @@ Children are keyed by their position in the item list (`metadata.child_index`), 
 what makes a parent resume cheap and predictable:
 
 - Completed children are threaded from their existing rows — never re-run, never re-billed.
-- Failed children are re-driven in place, in the same row.
-- Children Archon itself cancelled — in practice a gate rejection (below) — are tagged and
-  re-driven too, so *"remove the gate and resume"* actually completes the node. A child
-  **you** cancelled out of band stays cancelled and is never resurrected.
+- When you resume a fan-out node that failed, failed children are re-driven in place, in
+  the same row. Children Archon itself cancelled (for example an orphan whose item
+  disappeared) are tagged and re-driven too. A child **you** cancelled out of band stays
+  cancelled and is never resurrected.
+- When the parent continues after its paused children finish, nothing that already
+  settled is re-driven: a failed child stays failed in the aggregate.
 - A child left `running` or `pending` by an interrupted process is **not** auto-cancelled —
   Archon can't tell a crash orphan from a live run elsewhere. The node fails with the child's
   run id and tells you to wait or abandon it.
@@ -2631,9 +2634,9 @@ Two hard limits, both enforced at load time before any upstream node can spend:
 - **No suspension inside the complete block closure.** The parent has no durable per-item
   pause cursor, so a block containing an `approval:` node, `wait:` node, interactive
   `loop:`/`loop_group:`, or a nested workflow that can pause is rejected. Put the pause in
-  the parent around the node, use governed child runs, or invoke the block 1:1. Durable
-  interactive fan-out instances are a possible future extension tracked in
-  [#2810](https://github.com/coleam00/Archon/issues/2810), not a promise of the current shape.
+  the parent around the node, or invoke the block 1:1. When items may pause, use a
+  `workflow:` node with `fan_out:` instead: each item is its own run and may pause and be
+  answered on its own (see [Children that pause](#children-that-pause)).
 - **No `isolation:`** — a composed block runs inside this run and has no checkout of its own
   to isolate. Instances share the parent's checkout and run concurrently up to
   `max_parallel`, as `workflow:` fan-out children do; instances that write must coordinate
