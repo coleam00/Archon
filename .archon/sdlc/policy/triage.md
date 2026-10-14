@@ -9,7 +9,9 @@ direction and engineering values.
   [`.archon/engineering.md`](../../engineering.md).
 - **Closing without a person.** Only two kinds of item may be closed without a
   maintainer: a duplicate of an item that is still open, and an item whose outcome a
-  merged change already delivered. Name that open item or that merged change.
+  merged change already delivered. Name that open item or that merged change, and the
+  close leaves a comment on the closed item linking to it, so a reader can follow the
+  work from there.
 - **Everything else goes to a maintainer, with a recommendation.** An item that looks
   closable for any other reason (out of scope, obsolete, superseded, rejected by
   direction, or a duplicate of a closed item) waits for a maintainer's decision. Give
