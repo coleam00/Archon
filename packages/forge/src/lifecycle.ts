@@ -87,12 +87,24 @@ export const prDraftRequestSchema = requestBase.extend({
   op: z.literal('pr.draft'),
   ref: prRefSchema,
 });
+// The marker identifies the one canonical comment, so it has to survive a
+// first-line comparison against a body the forge may have re-wrapped.
+const commentMarker = text.refine(
+  value => !/[\r\n]/.test(value),
+  'comment marker must be one line'
+);
+/** The pull-request form, kept for callers and installed plugins that predate subjects. */
 export const commentUpsertRequestSchema = requestBase.extend({
   op: z.literal('comment.upsert'),
   ref: prRefSchema,
-  // The marker identifies the one canonical comment, so it has to survive a
-  // first-line comparison against a body the forge may have re-wrapped.
-  marker: text.refine(value => !/[\r\n]/.test(value), 'comment marker must be one line'),
+  marker: commentMarker,
+  body: text,
+});
+/** The canonical marked comment on an issue or a pull request. */
+export const workItemCommentUpsertRequestSchema = requestBase.extend({
+  op: z.literal('workitem.comment.upsert'),
+  subject: forgeSubjectRefSchema,
+  marker: commentMarker,
   body: text,
 });
 
@@ -138,6 +150,13 @@ export const workItemLabelRemoveRequestSchema = requestBase.extend({
   op: z.literal('workitem.label.remove'),
   subject: forgeSubjectRefSchema,
   name: text,
+});
+export const closeReasonSchema = z.enum(['completed', 'not_planned', 'duplicate']);
+/** Close an issue, recording why. An issue already closed for another reason is refused. */
+export const workItemCloseRequestSchema = requestBase.extend({
+  op: z.literal('workitem.close'),
+  ref: workItemRefSchema,
+  reason: closeReasonSchema,
 });
 /** Open issues and pull requests that carry one label. */
 export const workItemListRequestSchema = requestBase.extend({
@@ -231,7 +250,9 @@ export const mutationRequestSchemas = [
   prReadyRequestSchema,
   prDraftRequestSchema,
   commentUpsertRequestSchema,
+  workItemCommentUpsertRequestSchema,
   workItemCreateRequestSchema,
+  workItemCloseRequestSchema,
   workItemLabelsSetRequestSchema,
   workItemLabelAddRequestSchema,
   workItemLabelRemoveRequestSchema,
@@ -390,6 +411,15 @@ export const mutationResultSchemas = [
   z.object({
     op: commentUpsertRequestSchema.shape.op,
     value: appliedSchema.extend({ comment: commentRecordSchema }),
+  }),
+  z.object({
+    op: workItemCommentUpsertRequestSchema.shape.op,
+    value: appliedSchema.extend({ workitem: subjectRecordSchema, comment: commentRecordSchema }),
+  }),
+  // `reason` is the close reason as read back after the write.
+  z.object({
+    op: workItemCloseRequestSchema.shape.op,
+    value: appliedSchema.extend({ workitem: workItemRecordSchema, reason: closeReasonSchema }),
   }),
 ] as const;
 

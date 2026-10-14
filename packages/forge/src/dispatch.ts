@@ -203,9 +203,11 @@ export function matchesForgeOperationResponse(
       evidence.workitem &&
       !(request.op === 'workitem.create'
         ? evidence.workitem.kind === 'issue' && sameRepo(evidence.workitem.ref.repo, request.repo)
-        : request.op === 'workitem.labels.set'
+        : request.op === 'workitem.labels.set' || request.op === 'workitem.close'
           ? evidence.workitem.kind === 'issue' && sameRef(evidence.workitem.ref, request.ref)
-          : (request.op === 'workitem.label.add' || request.op === 'workitem.label.remove') &&
+          : (request.op === 'workitem.label.add' ||
+              request.op === 'workitem.label.remove' ||
+              request.op === 'workitem.comment.upsert') &&
             sameSubject(evidence.workitem, request.subject))
     )
       return false;
@@ -289,6 +291,14 @@ export function matchesForgeOperationResponse(
         sameSubject(result.value.workitem, request.subject) &&
         result.value.labels.includes(request.name) === (request.op === 'workitem.label.add')
       );
+    case 'workitem.close':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, request.ref) &&
+        sameRef(result.value.workitem.ref, request.ref) &&
+        result.value.workitem.state === 'closed' &&
+        result.value.reason === request.reason
+      );
     case 'repo.label.ensure':
       return (
         request.op === result.op &&
@@ -336,6 +346,14 @@ export function matchesForgeOperationResponse(
         request.op === result.op &&
         sameTarget(result.value.target, mutationTarget(request)) &&
         sameRef(result.value.comment.ref, request.ref) &&
+        result.value.comment.bodyDigest === contentDigest(request.body)
+      );
+    case 'workitem.comment.upsert':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, request.subject.ref) &&
+        sameSubject(result.value.workitem, request.subject) &&
+        sameRef(result.value.comment.ref, request.subject.ref) &&
         result.value.comment.bodyDigest === contentDigest(request.body)
       );
     case 'pr.create':

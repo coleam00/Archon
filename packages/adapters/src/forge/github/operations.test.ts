@@ -29,6 +29,8 @@ describe('GitHub outbound producer', () => {
         'workitem.labels.set',
         'workitem.label.add',
         'workitem.label.remove',
+        'workitem.comment.upsert',
+        'workitem.close',
         'workitem.list',
         'repo.labels.list',
         'repo.label.ensure',

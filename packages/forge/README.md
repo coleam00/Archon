@@ -10,12 +10,12 @@ Authored selectors match exact event actions, repository and subject identity, p
 const bindingSchema = createForgeBindingSchema(jsonValueSchema);
 ```
 
-A missing direct field rejects that binding. Source actors record forge provenance only; the trigger host separately resolves and authorizes the binding's Archon run-as identity.
+A missing direct field rejects that binding. Source actors record forge provenance only; the trigger host separately resolves and authorizes the binding's Archon run-as identity. A label event's `actor` and a comment event's `author` are event facts a binding may map into inputs (`label.actor.id`, `label.actor.login`, `comment.author.id`, `comment.author.login`), so a workflow can check who acted against its own list; they never select an Archon identity.
 
 ## Outbound operations
 
 `@archon/forge/operations` owns operation requests, results, metadata and audit payloads, re-exporting the work-item and pull-request lifecycle contract from `./lifecycle`. `@archon/forge/dispatch` executes optional plugins; generic workflow execution imports neither. The independently executable GitHub plugin in `packages/adapters/src/forge/github/plugin.ts` implements every operation through the same handshake as installed plugins.
 
-Writes carry evidence rather than a bare failure. `workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `repo.label.ensure`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft` and `comment.upsert` each resolve to exactly one of four outcomes — applied and read back, refused before anything was written, applied but unverified, or unknown — so a caller can tell a refusal from a write whose fate it does not know, and never retries blindly past the last one. Dispatch checks an applied result against the request that asked for it instead of trusting the plugin's claim.
+Writes carry evidence rather than a bare failure. `workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `workitem.comment.upsert`, `workitem.close`, `repo.label.ensure`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft` and `comment.upsert` each resolve to exactly one of four outcomes — applied and read back, refused before anything was written, applied but unverified, or unknown — so a caller can tell a refusal from a write whose fate it does not know, and never retries blindly past the last one. Dispatch checks an applied result against the request that asked for it instead of trusting the plugin's claim.
 
 See the [forge reference](../docs-web/src/content/docs/reference/forge.md) for the CLI, trusted configuration, UTF-8 process protocol, credentials and check semantics. Run `bun run test` and `bun run type-check` from this package to exercise contract, mapping and process conformance.

@@ -274,7 +274,20 @@ const labelRemove = {
   subject: { kind: 'issue', ref },
   name: 'queued',
 } satisfies ForgeRequest;
-test.each([issueCreate, labelsSet, labelEnsure, labelAdd, labelRemove])(
+const issueComment = {
+  operationId: 'issue-comment',
+  op: 'workitem.comment.upsert',
+  subject: { kind: 'issue', ref },
+  marker,
+  body: `${marker}\nsecret body`,
+} satisfies ForgeRequest;
+const issueClose = {
+  operationId: 'close',
+  op: 'workitem.close',
+  ref,
+  reason: 'duplicate',
+} satisfies ForgeRequest;
+test.each([issueCreate, labelsSet, labelEnsure, labelAdd, labelRemove, issueComment, issueClose])(
   'new mutation dispatch verifies proof and preserves unknown failures: $op',
   async request => {
     const result = await dispatch(request);
@@ -297,8 +310,8 @@ test.each([issueCreate, labelsSet, labelEnsure, labelAdd, labelRemove])(
       expect(audit).not.toContain(secret);
   }
 );
-test.each([labelAdd, labelRemove])(
-  'a single-label result must name the requested item kind: $op',
+test.each([labelAdd, labelRemove, issueComment])(
+  'a subject result must name the requested item kind: $op',
   async request => {
     expect((await dispatch(request, 'wrong-kind')).response).toMatchObject({
       ok: false,
