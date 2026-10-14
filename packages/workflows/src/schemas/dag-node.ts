@@ -601,8 +601,7 @@ export type ApprovalOnReject = z.infer<typeof approvalOnRejectSchema>;
  * step 1). `id` is an author-chosen identifier — reachable from every drive
  * surface via `workflow respond <run-id> <decision> [text]` (#2707 step 2);
  * `approve`/`reject` remain the default-vocabulary sugar every surface's
- * dedicated approve/reject path still speaks. `decisions` must still include
- * an `approve` entry (enforced in `dagNodeSchema`'s `superRefine`). `label` is
+ * dedicated approve/reject path still speaks when those ids are declared. `label` is
  * purely cosmetic display text; the wire value the gate outputs as
  * `$<id>.output.decision` is always the `id`, never the label.
  *
@@ -1329,20 +1328,6 @@ export const dagNodeSchema = z
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: "'approval.decisions' ids must be unique",
-            path: ['approval', 'decisions'],
-          });
-        }
-        // 'reject' is optional (an approve-only "acknowledge" gate is valid —
-        // rejectWorkflow falls back to cancelling when no 'reject' id is
-        // declared), but 'approve' must always be reachable: without it,
-        // `workflow approve <id>` would still "succeed" and write a permanent
-        // approval_decision:'approved' audit event for an outcome the gate's
-        // own declared vocabulary says can never occur. Fail at load time
-        // instead of leaving that as a silent runtime footgun.
-        if (!ids.includes('approve')) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "'approval.decisions' must include an 'approve' entry",
             path: ['approval', 'decisions'],
           });
         }

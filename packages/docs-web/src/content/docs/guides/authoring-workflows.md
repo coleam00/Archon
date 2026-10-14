@@ -3350,6 +3350,12 @@ If the workflow fails at `batch-2`, run `archon workflow run large-migration --r
 
 ### Pattern: Human-in-the-Loop
 
+When a gate authors `approval.decisions`, the console offers exactly those choices
+with their labels, and every response must use a declared id. This includes
+`archon workflow respond`, `approve`, `reject`, and the HTTP routes. An undeclared
+id is refused with the allowed ids without resolving or resuming the run. Gates
+without authored decisions keep the default approve/reject controls.
+
 Use an `approval` node to pause for human review before continuing:
 
 ```yaml
@@ -3385,8 +3391,10 @@ When the workflow reaches `review-gate`, it pauses and notifies you. Approve or 
 
 Every path applies the gate's approval or rejection rules. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Cross-platform caveat: Web UI decisions on runs with Slack, Telegram, or GitHub parents record the decision but do not auto-resume when the gate continues execution. Use `archon workflow resume <run-id>` or resume it from the originating conversation to continue the same run.
 
-Without `on_reject`: rejecting cancels the workflow.
-With `on_reject`: rejecting triggers an AI rework prompt and re-pauses for re-review.
+For gates without authored decisions, rejecting cancels the workflow unless
+`on_reject` is configured, which triggers an AI rework prompt and re-pauses for
+re-review. Authored decisions instead produce `$review-gate.output.decision` and
+`.text`; the graph determines what happens next.
 See [Approval Nodes](/guides/approval-nodes/) for full details.
 
 ### Pattern: Early Termination with Cancel

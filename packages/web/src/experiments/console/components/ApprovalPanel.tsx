@@ -61,7 +61,15 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
   // finalize-vs-iterate from comment presence.
   const signalBearing = run.approval?.completionSignaled === true;
 
-  const decisions = run.approval?.decisions ?? [{ id: 'approve' }, { id: 'reject' }];
+  const authored = run.approval?.decisionsAuthored === true;
+  const decisions = run.approval?.decisions ?? [];
+  const approveDecision = decisions.find(d => d.id === 'approve');
+  const canApprove = !authored || approveDecision !== undefined;
+  const approveLabel = authored
+    ? decisionLabel('approve', approveDecision?.label)
+    : signalBearing && comment.trim().length === 0
+      ? 'Accept & complete'
+      : 'Continue';
   const secondaryDecisions = decisions.filter(d => d.id !== 'approve');
 
   const stopPropagation = (e: MouseEvent | ReactKeyboardEvent): void => {
@@ -102,7 +110,7 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
     // Don't submit while an IME composition is in progress (Japanese,
     // Chinese, Korean, etc. — the first Enter accepts a candidate).
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (canApprove && e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void respond('approve', comment);
     }
@@ -154,23 +162,21 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
             autoFocus
             className="min-w-0 flex-1 rounded border border-border bg-surface-inset px-3 py-1.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none disabled:opacity-50"
           />
-          <button
-            type="button"
-            data-keymap-approve
-            onClick={() => void respond('approve', comment)}
-            disabled={busy}
-            className="flex shrink-0 items-center gap-1 rounded border border-success/40 bg-success/15 px-3 text-[12px] font-medium text-success transition-colors hover:bg-success/25 disabled:opacity-50"
-            title={
-              signalBearing && comment.trim().length === 0
-                ? 'Accept & complete · Enter'
-                : 'Continue · Enter'
-            }
-          >
-            {signalBearing && comment.trim().length === 0 ? 'Accept & complete' : 'Continue'}
-            <span aria-hidden className="font-mono text-[10px] opacity-70">
-              ↵
-            </span>
-          </button>
+          {canApprove && (
+            <button
+              type="button"
+              data-keymap-approve
+              onClick={() => void respond('approve', comment)}
+              disabled={busy}
+              className="flex shrink-0 items-center gap-1 rounded border border-success/40 bg-success/15 px-3 text-[12px] font-medium text-success transition-colors hover:bg-success/25 disabled:opacity-50"
+              title={`${approveLabel} · Enter`}
+            >
+              {approveLabel}
+              <span aria-hidden className="font-mono text-[10px] opacity-70">
+                ↵
+              </span>
+            </button>
+          )}
           {secondaryDecisions.map(d => (
             <button
               key={d.id}

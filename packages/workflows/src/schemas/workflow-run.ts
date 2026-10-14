@@ -703,7 +703,7 @@ export function isRecognizedSuspendReason(type: string | undefined): boolean {
 }
 
 /** Approval context stored in workflow run metadata when paused for human review. */
-export const approvalContextSchema = z.object({
+const approvalContextBaseSchema = z.object({
   nodeId: z.string(),
   /** Unique occurrence identity; absent only on pauses created by older builds. */
   pauseId: z.string().optional(),
@@ -774,30 +774,6 @@ export const approvalContextSchema = z.object({
   /** Max rejection attempts before cancellation (default 3). */
   onRejectMaxAttempts: z.number().optional(),
   /**
-   * The gate's declared decisions (#2707 step 1), snapshotted at pause time so
-   * approve/reject handlers don't need the workflow def to know the vocabulary
-   * — mirrors why `onRejectPrompt` is snapshotted rather than looked up.
-   * Always populated (synthesized default pair, `on_reject`-translated pair,
-   * or the authored array) regardless of mode — see `decisionsAuthored` for
-   * the actual mode signal. Absent on gates paused by builds that predate
-   * this field.
-   */
-  decisions: z.array(approvalDecisionConfigSchema).optional(),
-  /**
-   * True only when the author wrote `approval.decisions:` explicitly in YAML
-   * (mirrors `GateNode.decisionsAuthored` — see its doc for the full
-   * rationale). THIS, not `onRejectPrompt`'s absence, is the signal
-   * `approveWorkflow`/`rejectWorkflow` use to pick the new structured-output
-   * resolution path: no workflow authored before #2707 step 1 can have
-   * written `decisions:`, so keying the new behavior on it — rather than on
-   * "no on_reject configured" — guarantees every already-authored gate
-   * (bare, or `capture_response`-only) keeps its exact pre-PR output shape
-   * AND reject-always-cancels behavior, unaffected by this PR. Absent (falsy)
-   * on gates paused by builds that predate this field, which resolves to
-   * legacy behavior — the safe default.
-   */
-  decisionsAuthored: z.boolean().optional(),
-  /**
    * Gate resolution marker. Set by approve/reject handlers while the run STAYS
    * 'paused' awaiting auto-resume (#2075): 'approved' = approval recorded,
    * 'rejected' = rejection recorded with an on_reject rework staged.
@@ -858,6 +834,23 @@ export const approvalContextSchema = z.object({
   commandSnapshot: z.string().nullable().optional(),
 });
 
+/** Authored vocabularies are required and nonempty; older default gates may omit both fields. */
+const approvalDecisionsSchema = z.union([
+  z.object({
+    decisionsAuthored: z.literal(true),
+    decisions: z.array(approvalDecisionConfigSchema).min(1),
+  }),
+  z.object({
+    decisionsAuthored: z.literal(false).optional(),
+    decisions: z.array(approvalDecisionConfigSchema).optional(),
+  }),
+]);
+
+export const approvalContextSchema = approvalContextBaseSchema.and(approvalDecisionsSchema);
+export const expectedApprovalGateSchema = approvalContextBaseSchema
+  .pick({ nodeId: true, pauseId: true })
+  .required();
+
 export type ApprovalContext = z.infer<typeof approvalContextSchema>;
 
 /** Old node-only buttons may resolve only contexts without a pause identity. */
@@ -893,7 +886,7 @@ export function isGateResolved(approval: ApprovalContext): boolean {
 
 /**
  * Type guard for ApprovalContext.
- * Validates that the value is an object with the required nodeId and message fields.
+ * Validates the gate identity, message and decision vocabulary.
  * Use before accessing `workflowRun.metadata.approval` to prevent runtime throws on
  * malformed metadata (e.g., stale data from older runs where metadata shape differs).
  */
@@ -902,7 +895,8 @@ export function isApprovalContext(val: unknown): val is ApprovalContext {
     typeof val === 'object' &&
     val !== null &&
     typeof (val as Record<string, unknown>).nodeId === 'string' &&
-    typeof (val as Record<string, unknown>).message === 'string'
+    typeof (val as Record<string, unknown>).message === 'string' &&
+    approvalDecisionsSchema.safeParse(val).success
   );
 }
 

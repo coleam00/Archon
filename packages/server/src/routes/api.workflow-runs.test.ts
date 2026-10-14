@@ -1,3 +1,4 @@
+import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { RUN_ACTIONS } from '@archon/core/operations/run-authorization';
 import { providerRegistry } from '@archon/providers';
 import {
@@ -21,12 +22,12 @@ import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'fs/promises';
 import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
-import { OpenAPIHono } from '@hono/zod-openapi';
+import { OpenAPIHono, z } from '@hono/zod-openapi';
 import type { ConversationLockManager, RunActor, User } from '@archon/core';
 import * as sqlHost from '@archon/core/workflows/sql-host';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type {
   ProviderEventQuery,
   ProviderEventRecord,
@@ -1618,6 +1619,35 @@ describe('GET /api/workflows/runs/:runId', () => {
     mockGetConversationById.mockReset();
   });
 
+  const approvalContexts: ApprovalContext[] = [
+    { nodeId: 'gate', message: 'Choose' },
+    {
+      nodeId: 'gate',
+      message: 'Choose',
+      decisionsAuthored: true,
+      decisions: [
+        { id: 'accept', label: 'Accept plan' },
+        { id: 'revise', label: 'Revise plan' },
+      ],
+    },
+  ];
+
+  test.each(approvalContexts)(
+    'projects engine-owned decisions without changing persisted metadata: %j',
+    async approval => {
+      const run = { ...MOCK_RUNNING_RUN, status: 'paused' as const, metadata: { approval } };
+      mockGetWorkflowRun.mockImplementationOnce(async () => run);
+      mockListWorkflowEvents.mockImplementationOnce(async () => []);
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${run.id}`);
+      expect(response.status).toBe(200);
+      const body = z.object({ run: apiWorkflowRunSchema }).parse(await response.json());
+      expect(body.run.metadata.approval?.decisions).toEqual(getApprovalDecisions(approval));
+      expect(run.metadata.approval).toEqual(approval);
+      if (!('decisions' in approval)) expect(run.metadata.approval).not.toHaveProperty('decisions');
+    }
+  );
+
   test('returns run with events for a known runId', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
     mockListWorkflowEvents.mockImplementationOnce(async () => MOCK_EVENTS);
@@ -1964,6 +1994,29 @@ describe('GET /api/workflows/runs/:runId', () => {
 describe('GET /api/dashboard/runs', () => {
   beforeEach(() => {
     mockListDashboardRuns.mockReset();
+  });
+
+  test('projects legacy decisions on dashboard runs from the engine owner', async () => {
+    const approval = { nodeId: 'gate', message: 'Choose' };
+    mockListDashboardRuns.mockImplementationOnce(async () =>
+      makeDashboardRunsResult({
+        runs: [
+          makeDashboardWorkflowRun({
+            ...MOCK_RUNNING_RUN,
+            status: 'paused',
+            metadata: { approval },
+          }),
+        ],
+      })
+    );
+    const { app } = makeApp();
+    const response = await app.request('/api/dashboard/runs');
+    expect(response.status).toBe(200);
+    const body = z
+      .object({ runs: z.array(apiDashboardWorkflowRunSchema) })
+      .parse(await response.json());
+    expect(body.runs[0]?.metadata.approval?.decisions).toEqual(getApprovalDecisions({}));
+    expect(approval).not.toHaveProperty('decisions');
   });
 
   test('returns paginated runs with total and counts', async () => {
@@ -3317,6 +3370,47 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
     mockResolveAndCancelApprovalGate.mockClear();
     mockCreateWorkflowEvent.mockReset();
   });
+
+  test.each([
+    ['approve', 'approve'],
+    ['reject', 'reject'],
+    ['respond', 'approve'],
+    ['respond', 'reject'],
+  ])(
+    'refuses an undeclared decision at /%s (%s) without writes or resume',
+    async (route, decision) => {
+      mockHandleMessage.mockClear();
+      const run = {
+        ...MOCK_PAUSED_RUN,
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: 'review-gate',
+            message: 'Choose',
+            decisionsAuthored: true,
+            decisions: [{ id: 'accept' }, { id: 'revise' }],
+          },
+        },
+      };
+      mockGetWorkflowRun.mockResolvedValue(run);
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${run.id}/${route}`, {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toContain(`does not declare decision '${decision}'`);
+      expect(body.error).toContain('accept, revise');
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(run.status).toBe('paused');
+      expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+    }
+  );
 
   test('returns 404 when run not found', async () => {
     mockGetWorkflowRun.mockResolvedValue(null);
