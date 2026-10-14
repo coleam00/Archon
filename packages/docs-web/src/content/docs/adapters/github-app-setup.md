@@ -49,10 +49,13 @@ Archon refuses to start with **both** modes configured. Pick one set of env vars
 | Permission       | Access       | Used for                                          |
 | ---------------- | ------------ | ------------------------------------------------- |
 | Checks           | Read         | Waking workflow CI waits when a check concludes   |
-| Contents         | Read         | Cloning + reading repo metadata                   |
+| Contents         | Read & Write | Cloning, reading repo metadata, pushing branches, and merging pull requests |
+| Workflows        | Read & Write | Required only when runs create or change files under `.github/workflows/` |
 | Issues           | Read & Write | `createComment` + `listComments`                  |
 | Pull requests    | Read & Write | `pulls.get` + comment posting                     |
 | Metadata         | Read         | Mandatory (auto-included)                         |
+
+GitHub refuses pushes that create or change files under `.github/workflows/` unless the App has **Workflows: Read & Write**, even when **Contents: Read & Write** is granted. See [GitHub's Git access permissions](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app#choosing-permissions-for-git-access).
 
 **Account permissions:** none.
 
@@ -283,7 +286,7 @@ If the external POST probe returns anything other than `404` or `403` from the p
 Repeated 401s on outbound API calls (`createComment`, `listComments`, `repos.get`, `pulls.get`) point at installation / token issues, not webhook config. Walk through:
 
 - Verify the App is installed on the target `owner` and has not been suspended or uninstalled. Visit `https://github.com/settings/installations` (or the org equivalent) to confirm.
-- Verify the App's permissions still include the scopes the operation needs (Contents:Read for clone; Issues:RW + Pull requests:RW for comments and reactions). Permission scope changes require operators to **review and accept** the new permissions on every installation; Archon will 401 until that's done.
+- Verify the App's permissions still include the scopes the operation needs (Contents:RW for cloning, pushing branches, and merging pull requests; Workflows:RW only when runs create or change `.github/workflows/` files; Issues:RW + Pull requests:RW for comments and reactions; Checks:Read for CI wake-ups; Metadata:Read is auto-included). Permission changes require operators to **review and accept** the new permissions on every installation; until accepted, that installation keeps its old permissions.
 - Verify the private key in your env (`GITHUB_APP_PRIVATE_KEY` or `_PATH`) matches the same App that `GITHUB_APP_ID` points at. Mismatched key+ID is a common cause of "401 from JWT" errors at token-issuance time.
 - Verify `GITHUB_APP_INSTALLATION_ID` (if set) still corresponds to a live installation — uninstall + reinstall assigns a new ID.
 
