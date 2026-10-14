@@ -114,7 +114,9 @@ archon version
 If GitHub Actions can't run (billing issues, private repo limits), create the release manually:
 
 ```bash
-# 1. Build binaries locally (every target in the script's local TARGETS list)
+# 1. Build binaries locally (every target in the script's local TARGETS list).
+#    TARGET or OUTFILE left set in the shell switches the script to single-target mode.
+unset TARGET OUTFILE
 ./scripts/build-binaries.sh
 
 # 2. Generate checksums.txt, which the install scripts verify against
@@ -144,6 +146,7 @@ To build binaries locally without creating a release:
 
 ```bash
 # Build every target in the script's local TARGETS list (no Windows)
+unset TARGET OUTFILE
 ./scripts/build-binaries.sh
 
 # Binaries are in dist/binaries/
