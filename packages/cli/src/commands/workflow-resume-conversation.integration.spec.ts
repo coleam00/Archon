@@ -385,7 +385,7 @@ describe('thread state snapshots', () => {
     expect(wroteDispatch).toBe(true);
     expect(snapshot.dispatchMessages).toBe(1);
     expect(snapshot.dispatchMessagesAnywhere).toBe(1);
-    expectResumedInPlace(await waitForDetachedDispatch(fixture), before);
+    expectResumedInPlace(readThreadState(fixture), before);
   });
 
   test('a dispatch into another conversation fails the same-thread assertion', async () => {
@@ -408,7 +408,7 @@ describe('thread state snapshots', () => {
     } finally {
       writer.close();
     }
-    const after = await waitForDetachedDispatch(fixture);
+    const after = readThreadState(fixture);
     expect(after.conversationIds).toEqual(before.conversationIds);
     expect(after.dispatchMessagesAnywhere).toBe(2);
     expect(after.dispatchMessages).toBe(1);
