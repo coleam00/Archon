@@ -29,6 +29,7 @@ import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { sealWorkflowRunConfig } from '@archon/core/config';
 import {
+  isContinueSubcommand,
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
   rejectModelOnContinue,
@@ -412,17 +413,90 @@ describe('workflow model arguments', () => {
     ['workflow', 'approve', 'run-1'],
     ['workflow', 'reject', 'run-1'],
     ['workflow', 'respond', 'run-1', 'approve'],
+    ['workflow', 'answer', 'run-1', '--occurrence', 'x'],
   ]) {
     it(`rejects --model on ${args[0]} ${args[1]}`, () => {
       // Pure pre-dispatch argv guard — no I/O, so asserted in-process instead
       // of through a full interpreter startup. A defined message is what makes
       // main() print to stderr and exit 1.
       const message = rejectModelOnContinue(args[1], 'large=opus');
+      expect(isContinueSubcommand(args[1])).toBe(true);
       expect(message).toBeDefined();
       expect(message).toContain('--model cannot be used when continuing an existing workflow run');
       expect(message).toContain('keeps the model bindings it started with');
     });
   }
+
+  it('does not classify fresh runs or queries as continuations', () => {
+    for (const subcommand of ['run', 'list', 'attention', undefined]) {
+      expect(isContinueSubcommand(subcommand)).toBe(false);
+      expect(rejectModelOnContinue(subcommand, 'large=foo')).toBeUndefined();
+    }
+  });
+});
+
+describe('workflow answer flag rejection and command discovery', () => {
+  let home: string;
+  beforeAll(() => {
+    home = mkdtempSync(join(tmpdir(), 'archon-cli-answer-flags-'));
+  });
+  afterAll(async () => {
+    await removeTempTree(home);
+  });
+
+  const invoke = (args: string[]) =>
+    spawnSync(process.execPath, [CLI_ENTRY, 'workflow', ...args], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ARCHON_HOME: home,
+        ARCHON_TELEMETRY_DISABLED: '1',
+        DATABASE_URL: '',
+        GITHUB_APP_ID: '',
+        TOKEN_ENCRYPTION_KEY: '',
+      },
+    });
+
+  it('refuses --model on answer with the continuation error before run lookup', () => {
+    const result = invoke(['answer', 'missing-run', '--occurrence', 'x', '--model', 'large=foo']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      '--model cannot be used when continuing an existing workflow run'
+    );
+    expect(result.stderr).toContain('keeps the model bindings it started with');
+  });
+
+  for (const json of [false, true]) {
+    it(`refuses --detach on answer before recording an answer (json=${json})`, () => {
+      const result = invoke([
+        'answer',
+        'missing-run',
+        '--occurrence',
+        'x',
+        '--detach',
+        ...(json ? ['--json'] : []),
+      ]);
+      expect(result.status).toBe(1);
+      if (json) {
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: 'Error: --detach cannot be used with workflow answer.',
+        });
+      } else {
+        expect(result.stderr).toContain('Error: --detach cannot be used with workflow answer.');
+      }
+    });
+  }
+
+  it('lists answer and attention when a workflow subcommand is unknown', () => {
+    const result = invoke(['unknown-command']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Unknown workflow subcommand: unknown-command');
+    const available = result.stderr.split('Available: ')[1]?.split('\n')[0]?.split(', ');
+    expect(available).toContain('answer');
+    expect(available).toContain('attention');
+  });
 });
 
 describe('workflow run config argument', () => {

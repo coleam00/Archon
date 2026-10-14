@@ -121,6 +121,11 @@ describe('CLI help output', () => {
     expect(scoped).toContain('--workflow-source');
   });
 
+  it('documents --container in workflow run options', () => {
+    expect(scopedHelpOptions(['workflow', 'run'])).toContain('--container');
+    expect(scopedHelpOptions(['workflow', 'answer'])).not.toContain('--container');
+  });
+
   it('scopes workflow logs --help to its own flags and excludes run-only flags', () => {
     // Proves the partition is not a one-off for workflow run: another
     // subcommand gets only its own flags, while a run-only flag drops out.
@@ -272,6 +277,7 @@ Options:
                              instead of --cwd (which stays the workspace the run acts on)
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current directory (with or without git) as a folder project and run in place
+  --container                Run a folder project in container isolation
   --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run
