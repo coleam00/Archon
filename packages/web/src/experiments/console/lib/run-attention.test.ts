@@ -230,7 +230,7 @@ describe('watchRunAttention', () => {
     expect(h.alerted).toEqual(['r1:completed']);
   });
 
-  test('an attention wait needs a human; event and scheduled waits do not', async () => {
+  test('an attention wait needs attention; event and scheduled waits do not', async () => {
     const h = harness([run('event'), run('time'), run('action')]);
     await h.seed();
 

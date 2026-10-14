@@ -1782,7 +1782,7 @@ export async function failPausedAttentionWait(
 ): Promise<{ failed: boolean }> {
   const parsedWaitContext = workflowWaitContextSchema.parse(waitContext);
   if (parsedWaitContext.kind !== 'attention') {
-    throw new Error('Only an action-required wait can fail through notification delivery');
+    throw new Error('Only an attention wait can fail through notification delivery');
   }
   const dialect = getDialect();
   const postgres = getDatabaseType() === 'postgresql';

@@ -37818,7 +37818,7 @@ function attentionTerminatedLoopGroupWorkflow(
 ): WorkflowDefinition {
   return {
     name: 'attention-terminated-loop-group',
-    description: 'action-required wait escalation shape',
+    description: 'attention wait escalation shape',
     nodes: [
       dagNodeSchema.parse({
         id: 'grp',
@@ -38219,7 +38219,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     });
   });
 
-  it('keeps an action-required loop resumable beyond its autonomous iteration bound', async () => {
+  it('keeps an attention loop resumable beyond its autonomous iteration bound', async () => {
     const probeCountPath = join(testDir, 'attention-unbounded-probe-count');
     const greenMarkerPath = join(testDir, 'attention-unbounded-green-marker');
     const workflow = ready(
@@ -38268,7 +38268,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     });
   });
 
-  it('completes an action-required loop when the explicit-resume probe turns green', async () => {
+  it('completes an attention loop when the explicit-resume probe turns green', async () => {
     const probeCountPath = join(testDir, 'attention-green-probe-count');
     const greenMarkerPath = join(testDir, 'attention-green-marker');
     const workflow = ready(attentionTerminatedLoopGroupWorkflow(probeCountPath, greenMarkerPath));

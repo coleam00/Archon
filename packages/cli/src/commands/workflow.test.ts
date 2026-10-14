@@ -6673,7 +6673,7 @@ describe('workflowGetCommand', () => {
     );
   });
 
-  it('prints an action-required wait with its explicit resume command', async (): Promise<void> => {
+  it('prints an attention wait with its explicit resume command', async (): Promise<void> => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-action-human',
@@ -6702,7 +6702,10 @@ describe('workflowGetCommand', () => {
     await workflowGetCommand(createTestWorkflowHost(), 'run-action-human');
 
     expect(consoleSpy).toHaveBeenCalledWith(
-      '  Wait:   action required — Re-run CI, then resume. (resume with: archon workflow resume run-action-human)'
+      '  Wait:   needs attention — Re-run CI, then resume. (occurrence legacy:rerun-ci)'
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '    When it is done, resume: `archon workflow resume run-action-human`'
     );
     expect(consoleSpy.mock.calls.flat().join(' ')).not.toContain('Gate:');
   });

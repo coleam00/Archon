@@ -668,7 +668,7 @@ export interface IWorkflowStore
     pause: WorkflowWaitPause
   ): Promise<void>;
   /**
-   * Fail the exact paused action-required cursor after its required notification is lost.
+   * Fail the exact paused attention cursor after its required notification is lost.
    * Reports terminal telemetry after a won commit (see completeWorkflowRun).
    */
   failPausedAttentionWait(

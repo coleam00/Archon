@@ -857,7 +857,7 @@ describe('executeWorkflow', () => {
           status: 'failed',
           metadata: {
             wait,
-            error: "Wait node 'rerun-ci' could not deliver its action-required notification",
+            error: "Wait node 'rerun-ci' could not deliver its attention notification",
           },
         })
       ),

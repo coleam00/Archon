@@ -5168,13 +5168,23 @@ export async function workflowGetCommand(
     }
   }
   if (run.status === 'paused' && isWorkflowWaitContext(waitMeta)) {
-    console.log(
-      waitMeta.kind === 'attention'
-        ? `  Wait:   action required — ${waitMeta.message} (resume with: archon workflow resume ${run.id})`
-        : waitMeta.kind === 'event'
+    if (waitMeta.kind === 'attention') {
+      const attention = runAttention(run);
+      console.log(
+        attention?.kind === 'attention'
+          ? `  Wait:   needs attention — ${waitMeta.message} (occurrence ${attention.occurrence})`
+          : `  Wait:   answered via ${String(waitMeta.answeredVia)} at ${String(waitMeta.answeredAt)}; awaiting continuation`
+      );
+      if (attention?.kind === 'attention')
+        for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, attention))
+          console.log(`    ${line}`);
+    } else {
+      console.log(
+        waitMeta.kind === 'event'
           ? `  Wait:   event '${waitMeta.event ?? '?'}' until ${waitMeta.resumeAt}`
           : `  Wait:   until ${waitMeta.resumeAt}`
-    );
+      );
+    }
   }
   const scheduledResume = run.metadata.scheduled_resume;
   if (
