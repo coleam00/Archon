@@ -3298,11 +3298,30 @@ branch refs/heads/feature/auth
     });
 
     test('returns null for non-git directory', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: not a git repository'));
+      execSpy.mockRejectedValue(
+        Object.assign(new Error('Command failed'), {
+          stderr: 'fatal: not a git repository (or any of the parent directories): .git\n',
+        })
+      );
 
       const result = await git.findRepoRoot('/tmp/not-a-repo');
       expect(result).toBeNull();
     });
+
+    for (const stderr of [
+      'fatal: bad config line 1',
+      'fatal: not a git repository: /missing/gitdir',
+    ]) {
+      test(`preserves ${stderr} even when the path mentions non-repository detection`, async () => {
+        const failure = Object.assign(new Error('git -C /not a git repository rev-parse failed'), {
+          stderr,
+        });
+        execSpy.mockRejectedValue(failure);
+        const error = await git.findRepoRoot('/not a git repository').catch(error => error);
+        expect(error).toBeInstanceOf(Error);
+        expect(error.cause).toBe(failure);
+      });
+    }
 
     test('throws for unexpected errors', async () => {
       execSpy.mockRejectedValue(new Error('fatal: permission denied'));

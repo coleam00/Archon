@@ -39,6 +39,20 @@ test('SQLite rejects legacy paths and preserves registration identity on explici
       project.id,
     ]);
     const platform = createMockPlatform();
+    const brokenRepo = join(root, 'broken-repo');
+    await mkdir(brokenRepo);
+    await writeFile(join(brokenRepo, '.git'), `gitdir: ${join(root, 'missing-gitdir')}\n`);
+    await handleMessage(
+      platform,
+      'legacy-repair',
+      `/register-project ${quoteCommandArg(project.name)} ${quoteCommandArg(brokenRepo)}`,
+      { actor: { kind: 'operator' } }
+    );
+    expect(platform.sendMessage.mock.calls[0]?.[1]).toContain('Nothing was registered');
+    expect(await codebases.listCodebaseRegistrations()).toEqual([
+      { id: project.id, name: project.name, kind: 'folder', stored_default_cwd: 'projects/repo' },
+    ]);
+    platform.sendMessage.mockClear();
     const replacement = await canonicalizeProjectPath(import.meta.dir);
     await handleMessage(
       platform,
@@ -49,6 +63,7 @@ test('SQLite rejects legacy paths and preserves registration identity on explici
     expect(platform.sendMessage.mock.calls[0]?.[1]).toContain('re-registered successfully');
     expect(await codebases.getCodebase(project.id)).toMatchObject({
       ...project,
+      kind: 'repo',
       default_cwd: replacement,
       updated_at: expect.anything(),
     });

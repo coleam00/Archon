@@ -7403,6 +7403,7 @@ describe('handleMessage — legacy registration recovery', () => {
       expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
       {
         default_cwd: await canonicalizeProjectPath('/'),
+        kind: 'repo',
       }
     );
     expect(mockCreateCodebase).not.toHaveBeenCalled();

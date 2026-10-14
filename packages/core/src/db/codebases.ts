@@ -206,6 +206,11 @@ export async function updateCodebase(
     values.push(data.default_branch);
   }
 
+  if (data.kind !== undefined) {
+    updates.push(`kind = $${paramIndex++}`);
+    values.push(data.kind);
+  }
+
   if (updates.length === 0) return;
 
   updates.push(`updated_at = ${dialect.now()}`);

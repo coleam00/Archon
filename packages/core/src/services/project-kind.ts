@@ -1,6 +1,7 @@
 import { existsSync } from 'fs';
 import { findRepoRoot } from '@archon/git';
 import type { Codebase } from '../types';
+import { ProjectRegistrationError } from '../handlers/clone';
 
 export class ProjectKindDetectionError extends Error {
   constructor(cause: unknown) {
@@ -16,8 +17,7 @@ export async function detectProjectKind(path: string): Promise<Codebase['kind']>
   try {
     return (await findRepoRoot(path)) ? 'repo' : 'folder';
   } catch (error) {
-    // Missing paths reach registration's existence check for its path-specific error.
-    if (!existsSync(path)) return 'folder';
+    if (!existsSync(path)) throw new ProjectRegistrationError(`Path does not exist: ${path}`);
     throw new ProjectKindDetectionError(error);
   }
 }

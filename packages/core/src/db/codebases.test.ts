@@ -540,6 +540,15 @@ describe('codebases', () => {
       );
     });
 
+    test('updates repaired path and kind in one write', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      await updateCodebase(mockCodebase, { default_cwd: '/new/path', kind: 'folder' });
+      expect(mockQuery).toHaveBeenCalledWith(
+        'UPDATE remote_agent_codebases SET default_cwd = $1, kind = $2, updated_at = NOW() WHERE id = $3',
+        ['/new/path', 'folder', 'codebase-123']
+      );
+    });
+
     test('updates repository_url only', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 

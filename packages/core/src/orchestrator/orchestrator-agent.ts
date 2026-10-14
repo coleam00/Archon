@@ -3539,16 +3539,11 @@ async function registerProject({
     return `Project "${projectName}" is already registered as a repo; cannot register it as a folder project.`;
   }
 
-  if (alreadyExists && !isAbsolute(alreadyExists.stored_default_cwd)) {
-    await codebaseDb.updateCodebase(alreadyExists, { default_cwd: canonicalPath });
-    return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
-  }
-
-  if (alreadyExists) {
+  if (alreadyExists && isAbsolute(alreadyExists.stored_default_cwd)) {
     return `Project "${projectName}" is already registered (path: ${alreadyExists.stored_default_cwd}).`;
   }
 
-  if (folder) {
+  if (folder && !alreadyExists) {
     try {
       const result = await registerFolder(canonicalPath, projectName);
       return `Project "${result.name}" ${result.alreadyExisted ? 'is already registered' : 'registered successfully!'}
@@ -3562,7 +3557,7 @@ Kind: folder project (runs in place)`;
 
   let kind: Codebase['kind'];
   try {
-    kind = await detectProjectKind(canonicalPath);
+    kind = folder ? 'folder' : await detectProjectKind(canonicalPath);
   } catch (err) {
     getLog().warn(
       { err: err as Error, projectPath: canonicalPath },
@@ -3570,6 +3565,11 @@ Kind: folder project (runs in place)`;
     );
     return toError(err).message;
   }
+  if (alreadyExists) {
+    await codebaseDb.updateCodebase(alreadyExists, { default_cwd: canonicalPath, kind });
+    return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
+  }
+
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: canonicalPath,

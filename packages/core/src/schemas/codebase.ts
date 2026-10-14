@@ -60,5 +60,5 @@ export type CreateCodebaseInput = Pick<Codebase, 'name' | 'default_cwd'> &
     repository_url?: string;
   };
 export type UpdateCodebaseInput = Partial<
-  Pick<Codebase, 'default_cwd' | 'repository_url' | 'default_branch'>
+  Pick<Codebase, 'default_cwd' | 'repository_url' | 'default_branch' | 'kind'>
 >;

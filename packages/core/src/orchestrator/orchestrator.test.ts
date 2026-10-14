@@ -1839,31 +1839,135 @@ describe('orchestrator-agent handleMessage', () => {
   // ─── Project Registration ──────────────────────────────────────────────
 
   describe('project registration', () => {
-    test('/register-project refuses a genuine git detection failure without persisting a project', async () => {
-      const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-git-failure-'));
+    for (const failure of [
+      'invalid gitfile',
+      'missing gitdir',
+      'not a git repository-bad-config',
+    ]) {
+      for (const repair of [false, true]) {
+        test(`/register-project refuses ${failure} during ${repair ? 'repair' : 'creation'}`, async () => {
+          const projectPath = await mkdtemp(join(tmpdir(), `archon-${failure}-`));
+          try {
+            if (failure.endsWith('bad-config')) {
+              const init = Bun.spawn(['git', '-C', projectPath, 'init'], {
+                stdout: 'ignore',
+                stderr: 'pipe',
+              });
+              expect(await init.exited).toBe(0);
+              await writeFile(join(projectPath, '.git', 'config'), 'invalid config line\n');
+            } else {
+              await writeFile(
+                join(projectPath, '.git'),
+                failure === 'missing gitdir'
+                  ? `gitdir: ${join(projectPath, 'missing')}\n`
+                  : 'invalid gitfile\n'
+              );
+            }
+            mockExistsSync.mockReturnValue(true);
+            mockListCodebases.mockResolvedValue(
+              repair
+                ? [{ ...mockCodebase, name: 'my-app', default_cwd: 'legacy/path', kind: 'folder' }]
+                : []
+            );
+            await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+              actor: operator,
+            });
+            expect(platform.sendMessage).toHaveBeenCalledWith(
+              'chat-456',
+              expect.stringContaining('Nothing was registered')
+            );
+            expect(mockCreateCodebase).not.toHaveBeenCalled();
+            expect(mockUpdateCodebase).not.toHaveBeenCalled();
+          } finally {
+            await removeTempTree(projectPath);
+          }
+        });
+      }
+    }
+
+    for (const mode of ['stream', 'batch'] as const) {
+      test(`agent ${mode} project registration reports detection failure without persistence`, async () => {
+        const projectPath = await mkdtemp(join(tmpdir(), 'archon-agent-registration-failure-'));
+        try {
+          await writeFile(join(projectPath, '.git'), `gitdir: ${join(projectPath, 'missing')}\n`);
+          mockExistsSync.mockReturnValue(true);
+          mockListCodebases.mockResolvedValue([]);
+          platform.getStreamingMode.mockReturnValue(mode);
+          mockClient.sendQuery.mockImplementation(async function* () {
+            yield {
+              type: 'agent_message_chunk',
+              text: `/register-project my-app ${projectPath}\n`,
+            };
+            yield { type: 'result', sessionId: 'session-id' };
+          });
+          await handleMessage(platform, 'chat-456', 'Register my app', { actor: operator });
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'chat-456',
+            expect.stringContaining('Nothing was registered')
+          );
+          expect(mockCreateCodebase).not.toHaveBeenCalled();
+          expect(mockUpdateCodebase).not.toHaveBeenCalled();
+        } finally {
+          await removeTempTree(projectPath);
+        }
+      });
+    }
+
+    test('/register-project refuses a path that disappears during detection', async () => {
+      const repoSpy = spyOn(git, 'findRepoRoot').mockImplementation(async () => {
+        mockExistsSync.mockReturnValue(false);
+        throw new Error('git: cannot change directory');
+      });
       try {
-        await writeFile(join(projectPath, '.git'), 'invalid gitfile\n');
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
-
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+        await handleMessage(platform, 'chat-456', '/register-project my-app /vanished/path', {
           actor: operator,
         });
-
         expect(platform.sendMessage).toHaveBeenCalledWith(
           'chat-456',
-          expect.stringContaining('Could not determine whether the path is a git repository')
-        );
-        expect(platform.sendMessage).toHaveBeenCalledWith(
-          'chat-456',
-          expect.stringContaining('Nothing was registered')
+          'Path does not exist: /vanished/path'
         );
         expect(mockCreateCodebase).not.toHaveBeenCalled();
         expect(mockUpdateCodebase).not.toHaveBeenCalled();
       } finally {
-        await removeTempTree(projectPath);
+        repoSpy.mockRestore();
+        mockExistsSync.mockReturnValue(true);
       }
     });
+
+    for (const kind of ['repo', 'folder'] as const) {
+      test(`/register-project repairs the path and detected ${kind} kind together`, async () => {
+        const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(
+          kind === 'repo' ? git.toRepoPath('/new/path') : null
+        );
+        try {
+          mockExistsSync.mockReturnValue(true);
+          mockListCodebases.mockResolvedValue([
+            {
+              ...mockCodebase,
+              name: 'my-app',
+              default_cwd: 'legacy/path',
+              kind: kind === 'repo' ? 'folder' : 'repo',
+            },
+          ]);
+          await handleMessage(platform, 'chat-456', '/register-project my-app /new/path', {
+            actor: operator,
+          });
+          expect(mockUpdateCodebase).toHaveBeenCalledWith(
+            expect.objectContaining({ id: mockCodebase.id }),
+            { default_cwd: '/new/path', kind }
+          );
+          expect(mockCreateCodebase).not.toHaveBeenCalled();
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'chat-456',
+            expect.stringContaining('re-registered successfully')
+          );
+        } finally {
+          repoSpy.mockRestore();
+        }
+      });
+    }
 
     test('/register-project on a real non-git dir creates a folder project (clean null path)', async () => {
       // Use a REAL non-git temp dir so findRepoRoot returns null via the
