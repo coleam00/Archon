@@ -2252,8 +2252,8 @@ cleanly everywhere and then fails at the node when it is run somewhere it can't 
 If a workflow only makes sense against a git repo, say so in its `description:`.
 
 A worktree that fails for an ordinary git reason — no disk space, a permission problem, a
-branch that already exists — fails the node the same way, with the underlying git error
-classified into a readable message.
+branch that has diverged from its remote — fails the node the same way, with a readable
+message.
 
 ### Running sub-runs side by side
 

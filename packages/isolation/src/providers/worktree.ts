@@ -1904,8 +1904,7 @@ export class WorktreeProvider implements IIsolationProvider {
     const { stdout } = await execFileAsync('git', ['-C', repoPath, 'ls-remote', remote, ref], {
       timeout: GIT_OPERATION_TIMEOUT_MS,
     });
-    // ls-remote patterns match ref tails, so `feature/pr` also lists `refs/heads/x/feature/pr`.
-    return stdout.split('\n').some(line => line.split('\t')[1] === ref);
+    return stdout.trim() !== '';
   }
 
   /** Exit 1 from `merge-base --is-ancestor` means "not an ancestor"; any other failure throws. */
