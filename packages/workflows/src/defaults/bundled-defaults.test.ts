@@ -208,7 +208,7 @@ describe('bundled-defaults', () => {
         '__archon_pack__bundled:sdlc:review::review-code': all,
         '__archon_pack__bundled:sdlc:simplify::simplify': all,
         '__archon_pack__bundled:sdlc:review::review-synthesize': all,
-        '__archon_pack__bundled:sdlc:review::review-seams': lens,
+        '__archon_pack__bundled:sdlc:review::review-seams': all,
         '__archon_pack__bundled:sdlc:review::review-tests': lens,
         '__archon_pack__bundled:sdlc:review::review-errors': lens,
         '__archon_pack__bundled:sdlc:review::review-docs': lens,
