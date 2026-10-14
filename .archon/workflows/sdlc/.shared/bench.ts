@@ -271,12 +271,19 @@ export interface RunNode {
   readonly nodeId: string;
   readonly state: string;
   readonly execution?: {
-    readonly binding?: NodeBinding;
+    readonly node?: { readonly kind: string };
+    /** A `NodeBinding` on an agent node; other kinds record an empty object. */
+    readonly binding?: unknown;
     readonly spend?: {
       readonly costUsd?: Observation<number>;
       readonly tokens?: Observation<TokenUsage>;
     };
   };
+}
+
+/** The model binding an agent node ran on; any other node has none. */
+export function agentBinding(node: RunNode | undefined): NodeBinding | undefined {
+  return node?.execution?.node?.kind === 'agent' ? (node.execution.binding as NodeBinding) : undefined;
 }
 
 /** The part of `archon workflow get --json --verbose` a bench reads. */

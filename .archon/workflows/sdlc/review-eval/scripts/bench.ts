@@ -27,6 +27,7 @@ import {
   type RunDetail,
   type RunNode,
   type TokenUsage,
+  agentBinding,
   appendLine,
   artifactsOf,
   getRun,
@@ -410,9 +411,9 @@ function versionTruth(run: RunDetail, resolved: ResolvedVersion, lenses: readonl
     }
   }
   for (const lens of lenses) {
-    const binding = lensNode(run, lens)?.execution?.binding;
+    const binding = agentBinding(lensNode(run, lens));
     if (binding === undefined) {
-      problems.push(`lens ${lens} has no single node binding`);
+      problems.push(`lens ${lens} has no single agent node`);
       continue;
     }
     const tier = TIERS.find(name => name === binding.tier);
@@ -458,7 +459,7 @@ const reported = <T>(observation: { source: string; value?: T } | undefined): T 
 
 function lensRecord(run: RunDetail, lens: string): Record<string, unknown> {
   const node = lensNode(run, lens);
-  const binding = node?.execution?.binding;
+  const binding = agentBinding(node);
   return {
     node: node?.nodeId ?? null,
     tier: binding?.tier ?? null,
@@ -475,10 +476,10 @@ function runCost(run: RunDetail): { cost_usd: number | null; tokens: TokenUsage 
   let cost: number | null = 0;
   const tokens = { input: 0, output: 0 };
   for (const node of run.nodes) {
-    if (node.execution?.binding === undefined) continue;
-    const nodeCost = reported(node.execution.spend?.costUsd);
+    if (agentBinding(node) === undefined) continue;
+    const nodeCost = reported(node.execution?.spend?.costUsd);
     cost = cost === null || nodeCost === null ? null : cost + nodeCost;
-    const used = reported(node.execution.spend?.tokens);
+    const used = reported(node.execution?.spend?.tokens);
     tokens.input += used?.input ?? 0;
     tokens.output += used?.output ?? 0;
   }
