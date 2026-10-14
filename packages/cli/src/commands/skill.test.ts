@@ -180,6 +180,49 @@ describe('skillInstallCommand', () => {
 });
 
 describe('skill CLI verbs', () => {
+  for (const verb of ['add', 'install']) {
+    it(`${verb} rejects extra paths without replacing existing skill files`, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-skill-cli-arity-'));
+      const target = join(root, 'target');
+      const extra = join(root, 'extra');
+      try {
+        for (const destination of ['.claude', '.agents']) {
+          const skillRoot = join(target, destination, 'skills', 'archon-cli');
+          mkdirSync(skillRoot, { recursive: true });
+          writeFileSync(join(skillRoot, 'SKILL.md'), 'User-owned skill content');
+          writeFileSync(join(skillRoot, 'custom.md'), 'Keep this file');
+        }
+        const child = Bun.spawn(
+          [process.execPath, join(import.meta.dir, '../cli.ts'), 'skill', verb, target, extra],
+          {
+            cwd: root,
+            env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: root },
+            stdout: 'pipe',
+            stderr: 'pipe',
+          }
+        );
+        const [out, err, code] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]);
+        expect(code).toBe(1);
+        expect(err.trim()).toBe('Usage: archon skill add [path]');
+        expect(out).toBe('');
+        for (const destination of ['.claude', '.agents']) {
+          const skillRoot = join(target, destination, 'skills', 'archon-cli');
+          expect(readFileSync(join(skillRoot, 'SKILL.md'), 'utf8')).toBe(
+            'User-owned skill content'
+          );
+          expect(readFileSync(join(skillRoot, 'custom.md'), 'utf8')).toBe('Keep this file');
+        }
+        expect(existsSync(extra)).toBe(false);
+      } finally {
+        await removeTempTree(root);
+      }
+    });
+  }
+
   it('rejects an unknown verb without replacing existing skill files', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-skill-cli-reject-'));
     try {

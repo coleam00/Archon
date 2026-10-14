@@ -50,7 +50,7 @@ if (inheritedInstallContext) {
 import { installPipeSafeConsole } from './utils/safe-console';
 import { exitWithDrain, withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
-import { isAttachmentVerb, publicAttachmentEntries } from './attachment-commands';
+import { attachmentUsage, isAttachmentVerb, publicAttachmentEntries } from './attachment-commands';
 import {
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
@@ -1524,6 +1524,9 @@ async function main(): Promise<number> {
             .map(([verb]) => verb)
             .join(', ');
           return await fail(jsonFlag, `${problem}\nAvailable: ${available}`);
+        }
+        if (positionals.length > 3) {
+          return await fail(jsonFlag, attachmentUsage('skill'));
         }
         if (subcommand === 'install') {
           console.warn(
