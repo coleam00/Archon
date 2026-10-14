@@ -13,6 +13,7 @@ facts:
     promoted: null
     stage: new
     body_digest: "sha256:stub"
+    labels: []
     notes: []
 triage__triage:
   decision: { contract: READY, route: deliver }

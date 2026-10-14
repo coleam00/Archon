@@ -117,6 +117,8 @@ export interface IntakeDecision {
   readonly promoted: Promotion | null;
   readonly stage: Stage;
   readonly body_digest: string;
+  /** The issue's labels at pickup; the outcome removes only owned labels among them. */
+  readonly labels: readonly string[];
   readonly notes: readonly HistoryEntry[];
 }
 
@@ -391,6 +393,7 @@ export function decideIntake(
     promoted,
     stage,
     body_digest: issue.digest,
+    labels: issue.labels,
     notes,
   });
   if (issue.state === 'closed') {

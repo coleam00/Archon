@@ -79,8 +79,9 @@ nodes:
             promoted: { type: [object, 'null'] }
             stage: { type: string }
             body_digest: { type: string }
+            labels: { type: array, items: { type: string } }
             notes: { type: array, items: { type: object } }
-          required: [path, trust, promoted, stage, body_digest, notes]
+          required: [path, trust, promoted, stage, body_digest, labels, notes]
       required: [path, item, target, decision]
 
   # Only a maintainer's item, or an outside item a maintainer promoted at its

@@ -11,6 +11,7 @@ facts:
     promoted: null
     stage: needs_maintainer
     body_digest: "sha256:stub"
+    labels: []
     notes: []
 outcome:
   path: outside
