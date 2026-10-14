@@ -530,7 +530,8 @@ export function readContinuationMode(
  * local to one host and one user, so when no owner answers, this record is what
  * `abandon` shows the operator, including whether the owner ran on another host or
  * as another user. It is a report, never a liveness signal: nothing decides a run is
- * dead from it.
+ * dead from it. `workflow wait` reads its host and uid only to refuse reporting owner
+ * loss when this host and user could not reach that owner's endpoint.
  */
 export const EXECUTION_OWNER_METADATA_KEY = 'execution_owner';
 

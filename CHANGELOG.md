@@ -73,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- On a database shared by several machines, `archon workflow wait` no longer reports `owner_lost` for a run that another machine, or another user on this machine, is executing. It reports on its `waiting` line that the owner's liveness is unknown and keeps waiting on the run's stored state. (#4079)
 - The console's per-node cost no longer counts a composed fan-out, a loop group or a retried node twice. A node whose cost restates spend other nodes already show now reads `total $X` instead of looking like its own spend, so the per-node costs that are not marked as totals add up to the run total. (#3657)
 - Codex title generation now starts with no ambient skills catalog, plugins, apps or MCP servers and a read-only sandbox. Native guidance and provider settings still load; failures still fall back to a truncated message title. (#3626)
 - Workflow nodes whose output only mentions a credit balance or session limit no longer fail as out of credit. Quota failures now come only from the provider's typed failure, and the node error includes the reset time when reported and tells the operator to resume once the limit reopens. (#3619)

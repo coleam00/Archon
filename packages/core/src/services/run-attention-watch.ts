@@ -5,9 +5,11 @@
  * endpoint only wake a re-read or prove that active execution no longer has a process.
  * This service never mutates run lifecycle state.
  */
+import { hostname } from 'node:os';
 import { createLogger } from '@archon/paths';
-import { runAttention } from '@archon/workflows/schemas/workflow-run';
+import { readExecutionOwner, runAttention } from '@archon/workflows/schemas/workflow-run';
 import type {
+  ExecutionOwnerRecord,
   RunAttention,
   WorkflowRun,
   WorkflowRunStatus,
@@ -55,13 +57,32 @@ export interface RunAttentionWaitOptions {
   deadlineMs?: number;
   /** Backstop re-read cadence. Defaults to `DEFAULT_ATTENTION_POLL_INTERVAL_MS`. */
   pollIntervalMs?: number;
-  /** Called once after the required durable and live watches are attached. */
-  onAttached?: (observedStatus: WorkflowRunStatus) => void | Promise<void>;
+  /**
+   * Called once after the required durable and live watches are attached. `ownerLiveness`
+   * is set when the run needs an owner whose endpoint this host and user cannot reach, so
+   * the wait watches only the durable row.
+   */
+  onAttached?: (
+    observedStatus: WorkflowRunStatus,
+    ownerLiveness?: UnknownOwnerLiveness
+  ) => void | Promise<void>;
+}
+
+export interface UnknownOwnerLiveness {
+  kind: 'unknown';
+  /** The run's `execution_owner` record; undefined on runs that predate it. */
+  recordedOwner: ExecutionOwnerRecord | undefined;
 }
 
 type RunResolution =
   | { kind: 'attention'; attention: RunAttention }
-  | { kind: 'owner_required'; activeRun: WorkflowRun; executionChainIds: readonly string[] }
+  | {
+      kind: 'owner_required';
+      activeRun: WorkflowRun;
+      executionChainIds: readonly string[];
+      /** Nearest stamp from the active run back; an unclaimed child runs in its parent's process. */
+      recordedOwner: ExecutionOwnerRecord | undefined;
+    }
   | { kind: 'ownerless' };
 
 type WakeSource =
@@ -83,6 +104,31 @@ function unreadable(
 
 function isNonTerminalStatus(status: WorkflowRunStatus): status is NonTerminalWorkflowRunStatus {
   return status !== 'completed' && status !== 'failed' && status !== 'cancelled';
+}
+
+/**
+ * The live-owner endpoint sits in a host-local, per-uid directory, so a missing endpoint
+ * proves the owner gone only when the recorded owner shares this host and user.
+ */
+function isOwnerEndpointLocal(owner: ExecutionOwnerRecord | undefined): boolean {
+  if (!owner || owner.host !== hostname()) return false;
+  const uid = process.getuid?.();
+  return uid === undefined || owner.uid === uid;
+}
+
+function ownerRequired(
+  activeRun: WorkflowRun,
+  executionChain: readonly WorkflowRun[]
+): Extract<RunResolution, { kind: 'owner_required' }> {
+  const newestFirst = [...executionChain].reverse();
+  return {
+    kind: 'owner_required',
+    activeRun,
+    executionChainIds: newestFirst.map(candidate => candidate.id),
+    recordedOwner: newestFirst
+      .map(candidate => readExecutionOwner(candidate.metadata))
+      .find(owner => owner !== undefined),
+  };
 }
 
 /** Resolve the child chain while retaining whether its current state needs a live process. */
@@ -118,23 +164,13 @@ async function resolveRun(store: RunAttentionReadStore, run: WorkflowRun): Promi
     executionChain.push(child);
     current = child;
     const childAttention = runAttention(child);
-    if (childAttention?.kind === 'terminal') {
-      return {
-        kind: 'owner_required',
-        activeRun: child,
-        executionChainIds: executionChain.map(candidate => candidate.id).reverse(),
-      };
-    }
+    if (childAttention?.kind === 'terminal') return ownerRequired(child, executionChain);
     attention = childAttention;
   }
 
   if (attention) return { kind: 'attention', attention };
   if (current.status === 'running' || (current !== run && current.status === 'pending')) {
-    return {
-      kind: 'owner_required',
-      activeRun: current,
-      executionChainIds: executionChain.map(candidate => candidate.id).reverse(),
-    };
+    return ownerRequired(current, executionChain);
   }
   return { kind: 'ownerless' };
 }
@@ -250,7 +286,7 @@ export async function waitForRunAttention(
 
   const attachOwner = async (
     resolution: Extract<RunResolution, { kind: 'owner_required' }>
-  ): Promise<RunLiveOwnerWatchResult['kind']> => {
+  ): Promise<RunLiveOwnerWatchResult['kind'] | 'unknown'> => {
     const candidates = await ownerCandidates(store, resolution);
     if (ownerWatch && !ownerWatchEnded && candidates.includes(ownerWatch.runId)) return 'attached';
     discardOwnerWatch();
@@ -264,7 +300,9 @@ export async function waitForRunAttention(
       }
       if (result.kind === 'unproven') attachment = 'unproven';
     }
-    return attachment;
+    return attachment === 'unreachable' && !isOwnerEndpointLocal(resolution.recordedOwner)
+      ? 'unknown'
+      : attachment;
   };
 
   try {
@@ -315,6 +353,13 @@ export async function waitForRunAttention(
           } else {
             discardOwnerWatch();
           }
+        }
+        if (ownerAttachment === 'unknown' && resolution.kind === 'owner_required' && !attached) {
+          attached = true;
+          await opts.onAttached?.(observedStatus, {
+            kind: 'unknown',
+            recordedOwner: resolution.recordedOwner,
+          });
         }
         if (ownerAttachment === 'attached' && !attached) {
           const verifiedRun = await store.getWorkflowRun(runId);

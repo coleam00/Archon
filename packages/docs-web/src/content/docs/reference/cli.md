@@ -827,10 +827,13 @@ it can attach, observe attention, or reach an explicit timeout.
 After verifying that the run's work has stopped, release its persisted state with
 `archon workflow abandon <run-id>`.
 
-Live-owner detection is local to the host running `workflow wait`. With a shared remote
-PostgreSQL database, `owner_lost` means no owner endpoint is reachable on this host; the
-run may still be executing on another host. Check the owning host before abandoning it;
-`abandon` prints the host the run recorded and says when it is not this one.
+The owner endpoint is local to one host and, on POSIX, one user. `owner_lost` is
+reported only when the run's recorded execution owner is on this host and user and its
+endpoint is gone. When the owner ran on another host or as another user, as with a
+PostgreSQL database shared by several machines, or the run records no owner, the wait
+cannot tell whether the owner is alive. It says so on its `waiting` line and keeps
+watching the run's stored state until it changes or `--timeout` passes. `abandon` prints
+the host the run recorded and says when it is not this one.
 
 `--json` emits one document. On a wake it carries the attention value:
 
@@ -861,6 +864,14 @@ same envelope with `"result": "waiting"` and the status it attached on under `--
 
 ```json
 { "ok": true, "action": "wait", "runId": "…", "result": "waiting", "observedStatus": "running" }
+```
+
+When the owner cannot be checked from this host, the line adds `"ownerLiveness":
+"unknown"` and, if the run recorded one, the owner it names:
+
+```json
+{ "ok": true, "action": "wait", "runId": "…", "result": "waiting", "observedStatus": "running",
+  "ownerLiveness": "unknown", "recordedOwner": { "host": "build-2", "pid": 4242, "uid": 501 } }
 ```
 
 Until that line the command is completely silent, so a host cannot tell a watch that
