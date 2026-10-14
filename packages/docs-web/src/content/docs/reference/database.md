@@ -296,9 +296,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 
 ## Schema initialization and upgrades
 
-Archon applies `migrations/000_combined.sql` idempotently on startup for both fresh
-installs and upgrades. Its table definitions and additive column sections own the
-schema; there is no numbered migration runner or migration ledger.
+The PostgreSQL adapter applies `migrations/000_combined.sql` idempotently on startup
+for both fresh installs and upgrades. SQLite initializes and upgrades its schema
+in `packages/core/src/db/adapters/sqlite.ts`. Neither adapter uses a numbered
+migration runner or migration ledger.
 
 ### Workflow origin compatibility
 

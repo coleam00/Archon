@@ -587,9 +587,6 @@ function applyEnvOverrides(
     if (mode === 'stream' || mode === 'batch') config.streaming[policy.id] = mode;
   }
 
-  // Path overrides (these come from archon-paths.ts which already checks env vars)
-  // No need to re-apply here since getDefaults() uses those functions
-
   // Concurrency override
   const maxConcurrent = process.env.MAX_CONCURRENT_CONVERSATIONS;
   if (maxConcurrent) {

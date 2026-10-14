@@ -365,10 +365,7 @@ export interface SafeConfig {
   concurrency: {
     maxConversations: number;
   };
-  defaults: {
-    loadDefaultCommands: boolean;
-    loadDefaultWorkflows: boolean;
-  };
+  defaults: MergedConfig['defaults'];
   /** Configured small/medium/large tier presets (merged repo > global). */
   tiers?: RawTiersConfig;
   /**
