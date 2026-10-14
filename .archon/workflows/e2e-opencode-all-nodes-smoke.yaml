@@ -2,7 +2,7 @@
 # Covers: prompt, command, loop, hooks (AI node types) + bash, script bun/uv
 #   (deterministic node types) + depends_on / when / trigger_rule / $nodeId.output
 #   (DAG features).
-# Skipped: `approval:` — pauses for human input, incompatible with CI.
+# Skipped: `wait: attention` — pauses until answered, incompatible with CI.
 # Auth: OpenCode uses your local opencode.jsonc config.
 # Expected runtime: ~12s on haiku (4 AI round-trips + deterministic nodes).
 name: e2e-opencode-all-nodes-smoke
