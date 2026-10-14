@@ -51,6 +51,11 @@ inputs:
   health:
     default: ""
     description: Trusted health command for archon-deploy; required with deploy.
+  claim_hours:
+    default: "6"
+    description: >-
+      How long a run's claim on a work item holds when the run never releases it
+      (it died). Longer than the longest lap; a run that ends releases its claim.
 
 nodes:
   # Choose one move and how to build it. `none` is a real route, so every later
@@ -63,6 +68,7 @@ nodes:
       runtime: "$INPUTS.runtime"
       attempts: "$INPUTS.attempts"
       rejections: "$INPUTS.rejections"
+      claim_hours: "$INPUTS.claim_hours"
     output_format:
       type: object
       properties:
@@ -70,16 +76,39 @@ nodes:
         target: { type: string }
         pr: { type: string }
         confidence: { type: string, enum: [high, medium, low] }
+        area: { type: string }
         reason: { type: string }
-      required: [route, target, pr, confidence, reason]
+      required: [route, target, pr, confidence, area, reason]
+
+  # Several runs of this loop may work one repository at once. The claim is the
+  # one hard fact between them: the oldest live claim comment on a work item
+  # holds it, and a run that lost the race does no work this lap.
+  - id: claim
+    script: claim
+    runtime: bun
+    depends_on: [pick]
+    when: "$pick.output.route != 'none'"
+    with:
+      target: "$pick.output.target"
+      pr: "$pick.output.pr"
+      route: "$pick.output.route"
+      area: "$pick.output.area"
+      claim_hours: "$INPUTS.claim_hours"
+    output_format:
+      type: object
+      properties:
+        held: { type: string, enum: ["true", "false"] }
+        holder: { type: string }
+        reason: { type: string }
+      required: [held, holder, reason]
 
   # Contained work and finishing an open pull request: the in-loop builder.
   - id: build
     command: loop-work
     context: fresh
     idle_timeout: 2700000
-    depends_on: [pick]
-    when: "$pick.output.route == 'continue' || $pick.output.route == 'simple'"
+    depends_on: [claim]
+    when: "$claim.output.held == 'true' && $pick.output.route == 'continue' || $claim.output.held == 'true' && $pick.output.route == 'simple'"
     with:
       route: "$pick.output.route"
       target: "$pick.output.target"
@@ -92,9 +121,9 @@ nodes:
   # build only so the two never run together; pick makes them exclusive.
   - id: ship
     include: archon-ship
-    depends_on: [pick, build]
+    depends_on: [claim, build]
     trigger_rule: none_failed_min_one_success
-    when: "$pick.output.route == 'complex'"
+    when: "$claim.output.held == 'true' && $pick.output.route == 'complex'"
     with:
       target: "$pick.output.target"
       publish: "false"
@@ -106,9 +135,9 @@ nodes:
     command: loop-check-app
     context: fresh
     idle_timeout: 2700000
-    depends_on: [pick, build, ship]
+    depends_on: [claim, build, ship]
     trigger_rule: all_done
-    when: "$pick.output.route != 'none'"
+    when: "$pick.output.route != 'none' && $claim.output.held == 'true'"
     with:
       route: "$pick.output.route"
       target: "$pick.output.target"
@@ -150,3 +179,15 @@ nodes:
       deploy: "$INPUTS.deploy"
       health: "$INPUTS.health"
       identity: ""
+
+  # Free the work item for the next lap however this run ended: after review and
+  # deploy finished, failed or were skipped.
+  - id: release
+    script: release
+    runtime: bun
+    depends_on: [claim, review, deploy]
+    trigger_rule: all_done
+    when: "$pick.output.route != 'none' && $claim.output.held == 'true'"
+    with:
+      target: "$pick.output.target"
+      pr: "$pick.output.pr"

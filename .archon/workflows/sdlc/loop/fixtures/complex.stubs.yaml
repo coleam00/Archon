@@ -7,6 +7,7 @@ pick:
   target: https://github.com/example/app/issues/6
   pr: ''
   confidence: high
+  area: app/
   reason: 'stub: tags need a migration and search across modules'
 ship__triage__triage:
   contract: READY
@@ -120,15 +121,22 @@ review:
   outcome: sent-back
   pr: https://github.com/example/app/pull/11
   reason: 'stub: holdout H1 failed'
+claim:
+  held: "true"
+  holder: fixture-run
+  reason: "stub: this run holds the work item"
+release: "released 1 claim(s)"
 fixture:
   expect: completed
   reached:
   - pick
+  - claim
   - ship__triage__triage
   - ship__deliver__impl__implement
   - ship__outcome
   - check-app
   - review
+  - release
   resolved-text-contains:
     ship__triage__triage: https://github.com/example/app/issues/6
     review: H1 FAIL

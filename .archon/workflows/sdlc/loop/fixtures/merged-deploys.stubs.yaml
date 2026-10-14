@@ -4,6 +4,7 @@ pick:
   target: https://github.com/example/app/issues/5
   pr: ''
   confidence: high
+  area: app/
   reason: 'stub: tags need a migration and search across modules'
 build: 'Built it.
 
@@ -28,14 +29,21 @@ deploy__verify:
   revision: 0123456789abcdef0123456789abcdef01234567
   observed: 0123456789abcdef0123456789abcdef01234567
   summary: stub
+claim:
+  held: "true"
+  holder: fixture-run
+  reason: "stub: this run holds the work item"
+release: "released 1 claim(s)"
 fixture:
   expect: completed
   reached:
   - pick
+  - claim
   - build
   - check-app
   - review
   - deploy__verify
+  - release
   inputs:
     deploy: 'true'
     health: 'true'
