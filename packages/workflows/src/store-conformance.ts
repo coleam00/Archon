@@ -519,6 +519,18 @@ export function describeWorkflowStoreConformance(
       });
       expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
     });
+    test('delivery lookup answers only for the recorded source and delivery', async () => {
+      const input = acceptance();
+      expect(await store.hasStartReceiptForDelivery('source', 'delivery')).toBe(false);
+      await store.acceptStartReceipt(input);
+      await store.acceptStartReceipt({
+        ...input,
+        receipt: { ...input.receipt, id: crypto.randomUUID(), deliveryId: null },
+      });
+      expect(await store.hasStartReceiptForDelivery('source', 'delivery')).toBe(true);
+      expect(await store.hasStartReceiptForDelivery('source', 'other-delivery')).toBe(false);
+      expect(await store.hasStartReceiptForDelivery('other-source', 'delivery')).toBe(false);
+    });
     test('preparation failure and reset require the exact current owner', async () => {
       const store = harness.store,
         input = acceptance();
