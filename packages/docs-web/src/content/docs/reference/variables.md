@@ -14,7 +14,7 @@ Archon substitutes variables in command files, inline prompts, bash scripts, and
 
 These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`, and a `workflow:` node's `input:` field — which behaves like a `prompt:` body, not a bash-escaped one).
 
-They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they receive the same two passes a `prompt:` does: workflow variables first, then `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt.
+They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they resolve exactly as a `prompt:` does: workflow variables and `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt.
 
 | Variable | Resolves to | Notes |
 |----------|-------------|-------|
@@ -95,7 +95,7 @@ prompt body.
 
 ## Node Output References
 
-In DAG workflows, nodes can reference the output of any completed upstream node. These are substituted after workflow variables.
+In DAG workflows, nodes can reference the output of any completed upstream node. They resolve in the same pass as workflow variables (see [Substitution Order](#substitution-order)).
 
 | Pattern | Resolves to | Notes |
 |---------|-------------|-------|
@@ -203,7 +203,7 @@ Three value forms, resolved per binding:
 |-------|-------------|
 | A non-string literal (`true`, `42`, `[a, b]`) | The value itself, with its logical type |
 | A string that is **exactly one** whole `$node.output`, `$node.output.field`, or `$INPUTS.<name>` reference | The **logical value** — a boolean field arrives as a boolean, an object as an object (env delivery uses its canonical text: strings raw, everything else JSON) |
-| Any other string | A text template, substituted like `input:` (workflow vars, then `$node.output` refs) |
+| Any other string | A text template, substituted like `input:` (workflow vars and `$node.output` refs) |
 
 An object value is reserved for the **binding directive** `{ from, if_skipped }`: `from` is
 one whole `$node.output[.field]` reference, and when that producer was **skipped** (a
@@ -279,15 +279,21 @@ is for machine readers, and a prompt inside the producing run keeps the
 
 ## Substitution Order
 
-Variables are substituted in a defined order:
+A template is substituted in one left-to-right pass. Each reference the template itself
+contains resolves once, from its own source, and the value is inserted exactly as it is.
+A substituted value is never scanned again: a trigger message, issue context, loop reply,
+rejection reason, previous output, or input value that contains `$nodeId.output`,
+`$INPUTS.<name>`, a variable name, or `$&` reaches the node as written.
 
-1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$TYPED_ARTIFACTS_FILE`, `$STATE_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
-2. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
+Where two grammars could match at the same `$`, the earlier group in this list wins:
+
+1. **Loop references** (inside a `loop_group` body) -- `$LOOP_PREV.<nodeId>.output`, and the
+   group's `$LOOP_USER_INPUT` reply
+2. **Workflow variables** -- `$WORKFLOW_ID`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$ADOPTED_RUN_DIR`, `$TYPED_ARTIFACTS_FILE`, `$BASE_BRANCH`, `$DOCS_DIR`, `$USER_MESSAGE`, `$ARGUMENTS`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`, `$INPUTS.<name>`, then the context variables `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
-Inside a `loop_group` body, `$LOOP_PREV.<nodeId>.output` refs are resolved
-first (before `$LOOP_USER_INPUT` is spliced in, so user-provided text is never
-re-processed as a workflow ref), then the node's normal substitution runs.
+Issue context that is appended because the template names no context variable is added after
+substitution, so it is never scanned either.
 
 Positional arguments (`$1` through `$9`) are **not** supported in any context — `$ARGUMENTS` / `$USER_MESSAGE` deliver the whole trigger message instead.
 
