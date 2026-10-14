@@ -283,8 +283,8 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow: a run this server executes stops at its next status check; a run another process owns has that owner stopped first. Returns **409** with the reason, and leaves the run unchanged, when no owner answers (abandon it once its process is gone) or the owner cannot be stopped; **400** for a run that is not running |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed or paused workflow |
 | POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); stops a live detached owner first, cascade-cancels non-terminal `workflow:` sub-run descendants, and removes the worktrees those runs created, keeping their branches. A cancelled run with a worktree still to remove can be abandoned again to retry. Returns **409** with the reason, and leaves the run unchanged, when an owner answers but cannot be stopped or the run cannot be abandoned |
-| POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |
-| POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
+| POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — approve the child) |
+| POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — reject the child) |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
 
 Run responses expose `status` and `outcome` as separate fields. `status` is the execution
@@ -390,13 +390,20 @@ Resumes the workflow from where it left off, skipping already-completed nodes. E
 # Approve (optionally with a comment)
 curl -X POST http://localhost:3090/api/workflows/runs/{runId}/approve \
   -H "Content-Type: application/json" \
-  -d '{"comment": "Looks good, proceed"}'
+  -d '{"comment": "Looks good, proceed", "expectedGate": {"nodeId": "review", "pauseId": "pause-id"}}'
 
 # Reject (optionally with a reason)
 curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
   -H "Content-Type: application/json" \
-  -d '{"reason": "Please add error handling first"}'
+  -d '{"reason": "Please add error handling first", "expectedGate": {"nodeId": "review", "pauseId": "pause-id"}}'
 ```
+
+Both routes accept optional `expectedGate: { nodeId, pauseId }`. Copy `nodeId` and
+`pauseId` from the gate in the run detail response (`run.metadata.approval`). When
+the run is no longer paused at that gate occurrence, the request returns **409**
+and leaves the current pause unchanged. The identity is checked atomically with
+the answer write. Omitting `expectedGate` answers the current gate as before;
+`comment` and `reason` remain optional, and a request without a body is supported.
 
 **Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, its parent run pauses "blocked on child". Approve/reject the **child** run (its id is in the parent's block message) — the parent auto-resumes when the child completes. A child inside a `fan_out:` expansion pauses the same way: it stays paused as its own run, and the parent pauses on a `fan_out` gate listing every unfinished child, then continues once they finish. Calling approve/reject on the *parent's* id while it is blocked on a child returns **400** with a redirect to the child id (a fan-out parent's error names every child it waits on). `abandon` on a parent cascade-cancels its non-terminal sub-run descendants; the response's `cascadeFailures` is non-zero if part of the tree could not be reached, and `blockedParentRunId` is set when the abandoned run was itself a child stranding a paused parent.
 

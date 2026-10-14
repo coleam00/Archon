@@ -273,12 +273,12 @@ export const workflowRunActionResponseSchema = z
 
 /** POST /api/workflows/runs/:runId/approve request body. */
 export const approveWorkflowRunBodySchema = z
-  .object({ comment: z.string().optional() })
+  .object({ comment: z.string().optional(), expectedGate: expectedApprovalGateSchema.optional() })
   .openapi('ApproveWorkflowRunBody');
 
 /** POST /api/workflows/runs/:runId/reject request body. */
 export const rejectWorkflowRunBodySchema = z
-  .object({ reason: z.string().optional() })
+  .object({ reason: z.string().optional(), expectedGate: expectedApprovalGateSchema.optional() })
   .openapi('RejectWorkflowRunBody');
 
 /**

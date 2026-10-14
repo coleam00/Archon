@@ -436,9 +436,9 @@ const mockUpdateWorkflowRun = mock(async (_id: string, _update: unknown) => {});
 const mockResolveApprovalGate = mock<
   (typeof import('@archon/core/db/workflows'))['resolveApprovalGate']
 >(async () => ({ resolved: true }));
-const mockResolveAndCancelApprovalGate = mock(async (_id: string, _events?: unknown) => ({
-  resolved: true,
-}));
+const mockResolveAndCancelApprovalGate = mock<
+  (typeof import('@archon/core/db/workflows'))['resolveAndCancelApprovalGate']
+>(async () => ({ resolved: true }));
 const mockFindChildRuns = mock(async (_parentRunId: string): Promise<unknown[]> => []);
 const mockSignalWorkflowWait = mock(async (_id: string, _wait: unknown, _payload?: unknown) => ({
   signaled: true,
@@ -2932,6 +2932,195 @@ describe('POST /api/workflows/runs/:runId/answer', () => {
       answer: { decision: 'use-main', text: '' },
     });
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
+});
+
+describe('dedicated gate answers with expectedGate', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockResolveApprovalGate.mockClear();
+    mockResolveAndCancelApprovalGate.mockClear();
+    mockUpdateWorkflowRun.mockReset();
+    mockCreateWorkflowEvent.mockReset();
+    mockHandleMessage.mockClear();
+  });
+
+  test.each(['approve', 'reject'])(
+    '/%s refuses an answer prepared before the run pauses again',
+    async route => {
+      const earlier = {
+        ...MOCK_PAUSED_RUN,
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: 'review-gate',
+            pauseId: 'pause-before',
+            message: 'Review',
+            decisionsAuthored: true,
+            decisions: [{ id: 'approve' }, { id: 'reject' }],
+          },
+        },
+      };
+      const expectedGate = {
+        nodeId: earlier.metadata.approval.nodeId,
+        pauseId: earlier.metadata.approval.pauseId,
+      };
+      const later = {
+        ...earlier,
+        metadata: { approval: { ...earlier.metadata.approval, pauseId: 'pause-after' } },
+      };
+      mockGetWorkflowRun.mockResolvedValue(later);
+      const response = await makeApp().app.request(`/api/workflows/runs/${later.id}/${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedGate }),
+      });
+      expect(response.status).toBe(409);
+      expect(((await response.json()) as { error: string }).error).toContain(
+        "It is now awaiting occurrence 'pause-after'."
+      );
+      expect(later.status).toBe('paused');
+      expect(later.metadata.approval).not.toHaveProperty('resolved');
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+      expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each(['approve', 'reject'])(
+    '/%s passes the matching identity to the atomic write',
+    async route => {
+      const expectedGate = { nodeId: 'review-gate', pauseId: 'pause-current' };
+      mockGetWorkflowRun.mockResolvedValue({
+        ...MOCK_PAUSED_RUN,
+        metadata: { approval: { ...MOCK_PAUSED_RUN.metadata.approval, ...expectedGate } },
+      });
+      const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedGate }),
+      });
+      expect(response.status).toBe(200);
+      const resolver =
+        route === 'approve' ? mockResolveApprovalGate : mockResolveAndCancelApprovalGate;
+      expect(resolver.mock.calls[0]?.[3]).toEqual(expectedGate);
+    }
+  );
+
+  test.each(['approve', 'reject'])(
+    '/%s reads JSON sent without a JSON content type',
+    async route => {
+      const expectedGate = { nodeId: 'review-gate', pauseId: 'pause-current' };
+      mockGetWorkflowRun.mockResolvedValue({
+        ...MOCK_PAUSED_RUN,
+        metadata: { approval: { ...MOCK_PAUSED_RUN.metadata.approval, ...expectedGate } },
+      });
+      const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
+        method: 'POST',
+        body: JSON.stringify({ comment: 'feedback', reason: 'feedback', expectedGate }),
+      });
+      expect(response.status).toBe(200);
+      const resolver =
+        route === 'approve' ? mockResolveApprovalGate : mockResolveAndCancelApprovalGate;
+      expect(resolver.mock.calls[0]?.[3]).toEqual(expectedGate);
+      const events =
+        route === 'approve'
+          ? mockResolveApprovalGate.mock.calls[0]?.[2]
+          : mockResolveAndCancelApprovalGate.mock.calls[0]?.[1];
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event_type: 'approval_received',
+          data: expect.objectContaining(
+            route === 'approve' ? { comment: 'feedback' } : { reason: 'feedback' }
+          ),
+        })
+      );
+    }
+  );
+
+  test.each(['approve', 'reject'])(
+    '/%s maps an atomic write lost after the read to 409',
+    async route => {
+      const expectedGate = { nodeId: 'review-gate', pauseId: 'pause-current' };
+      mockGetWorkflowRun.mockResolvedValue({
+        ...MOCK_PAUSED_RUN,
+        metadata: { approval: { ...MOCK_PAUSED_RUN.metadata.approval, ...expectedGate } },
+      });
+      if (route === 'approve') mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+      else mockResolveAndCancelApprovalGate.mockResolvedValueOnce({ resolved: false });
+      const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedGate }),
+      });
+      expect(response.status).toBe(409);
+      const resolver =
+        route === 'approve' ? mockResolveApprovalGate : mockResolveAndCancelApprovalGate;
+      expect(resolver.mock.calls[0]?.[3]).toEqual(expectedGate);
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each(['approve', 'reject'])(
+    '/%s refuses a partial gate identity without writes',
+    async route => {
+      mockGetWorkflowRun.mockResolvedValue(MOCK_PAUSED_RUN);
+      const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedGate: { nodeId: 'review-gate' } }),
+      });
+      expect(response.status).toBe(400);
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each(['approve', 'reject'])(
+    '/%s reports stale identity before status or decision refusal',
+    async route => {
+      for (const run of [
+        MOCK_RUNNING_RUN,
+        {
+          ...MOCK_PAUSED_RUN,
+          metadata: {
+            approval: {
+              type: 'approval',
+              nodeId: 'next-gate',
+              pauseId: 'pause-next',
+              message: 'Choose',
+              decisionsAuthored: true,
+              decisions: [{ id: 'accept' }],
+            },
+          },
+        },
+      ]) {
+        mockGetWorkflowRun.mockResolvedValue(run);
+        const response = await makeApp().app.request(`/api/workflows/runs/${run.id}/${route}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expectedGate: { nodeId: 'review-gate', pauseId: 'pause-old' } }),
+        });
+        expect(response.status).toBe(409);
+        expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+        expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  test.each(['approve', 'reject'])('/%s still accepts a request without a body', async route => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_PAUSED_RUN);
+    const response = await makeApp().app.request(`/api/workflows/runs/run-paused-1/${route}`, {
+      method: 'POST',
+    });
+    expect(response.status).toBe(200);
+    const resolver =
+      route === 'approve' ? mockResolveApprovalGate : mockResolveAndCancelApprovalGate;
+    expect(resolver.mock.calls[0]?.[3]).toBeUndefined();
   });
 });
 
