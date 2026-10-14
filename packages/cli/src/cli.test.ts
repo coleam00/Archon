@@ -259,6 +259,75 @@ if (process.argv[3] === 'metadata') {
   });
 });
 
+describe('deprecated provider notice', () => {
+  // The CLI installs the registry's deprecation reporter at startup; only a real
+  // process shows which channel the notice reaches.
+  async function runCli(config: string | undefined, args: string[][]): Promise<string[]> {
+    const root = mkdtempSync(join(tmpdir(), 'archon-deprecated-provider-'));
+    const home = join(root, 'home');
+    const repo = join(root, 'repo');
+    mkdirSync(home);
+    mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+    if (config !== undefined) writeFileSync(join(home, 'config.yaml'), config);
+    writeFileSync(
+      join(repo, '.archon', 'workflows', 'greet.yaml'),
+      'name: greet\ndescription: greet\nnodes:\n  - id: greet\n    prompt: say hi\n'
+    );
+    spawnSync('git', ['init', '-q', '.'], { cwd: repo });
+    spawnSync('git', ['commit', '-q', '--allow-empty', '-m', 'init'], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    });
+    try {
+      return args.map(
+        argv =>
+          spawnSync(process.execPath, [CLI_ENTRY, ...argv], {
+            cwd: repo,
+            encoding: 'utf8',
+            env: {
+              PATH: process.env.PATH,
+              HOME: root,
+              USERPROFILE: root,
+              ARCHON_HOME: home,
+              ARCHON_TELEMETRY_DISABLED: '1',
+              DATABASE_URL: '',
+            },
+          }).stderr
+      );
+    } finally {
+      await removeTempTree(root);
+    }
+  }
+
+  it(
+    'stays silent on a fresh install',
+    async () => {
+      const stderrs = await runCli(undefined, [['version'], ['workflow', 'list']]);
+      for (const stderr of stderrs) expect(stderr).not.toContain('deprecated');
+    },
+    testTimeout(30_000)
+  );
+
+  it(
+    'reaches a user who selected the provider once, as readable text',
+    async () => {
+      // OpenCode without a model fails the node before spawning its runtime.
+      const [stderr] = await runCli('defaultAssistant: opencode\n', [
+        ['workflow', 'run', 'greet', '--no-worktree', 'hello'],
+      ]);
+      expect(stderr.split('OpenCode is deprecated').length - 1).toBe(1);
+      expect(stderr).not.toContain('provider.deprecated');
+    },
+    testTimeout(30_000)
+  );
+});
+
 describe('removed continue command', () => {
   // Full interpreter startup: the rejection lives in main()'s dispatch, not in
   // a pure guard, so a subprocess is the only way to pin the actual outcome.

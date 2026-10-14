@@ -3,11 +3,12 @@ import {
   registerCommunityProviders,
   registerInProcessProviders,
 } from './in-process';
-import { describe, test, expect, beforeEach, spyOn } from 'bun:test';
+import { describe, test, expect, beforeEach, mock, spyOn } from 'bun:test';
 import * as paths from '@archon/paths';
 import {
   providerRegistry,
   getAgentProvider,
+  setDeprecationReporter,
   getProviderCapabilities,
   registerProvider,
   getRegistration,
@@ -165,6 +166,21 @@ describe('registry', () => {
           { provider: 'old', notice: 'old is deprecated' },
           'provider.deprecated'
         );
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    test("a host's deprecation reporter replaces the log line, once per process", () => {
+      registerProvider(makeMockRegistration('old', { deprecationNotice: 'old is deprecated' }));
+      const report = mock((_provider: string, _notice: string) => undefined);
+      const warn = spyOn(registryLog, 'warn').mockImplementation(() => undefined);
+      try {
+        setDeprecationReporter(report);
+        getAgentProvider('old');
+        getAgentProvider('old');
+        expect(report.mock.calls).toEqual([['old', 'old is deprecated']]);
+        expect(warn).not.toHaveBeenCalled();
       } finally {
         warn.mockRestore();
       }

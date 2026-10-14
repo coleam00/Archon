@@ -131,6 +131,9 @@ function installProviderProcessErrorHandlers(
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
   const { registerHostProviders } = await import('@archon/core/providers/register-host-providers');
+  const { setDeprecationReporter } = await import('@archon/providers');
+  // stderr, like a deprecated workflow's notice: it survives --json's log silencing.
+  setDeprecationReporter((_provider, notice) => console.warn(notice));
   if (BUNDLED_IS_BINARY) {
     const { claimPiExtensionProcessError } =
       await import('@archon/providers/pi/extension-error-broker');

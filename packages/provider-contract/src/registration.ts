@@ -146,7 +146,7 @@ export interface ProviderRegistration {
   builtIn: boolean;
 
   /**
-   * Set when the provider is deprecated. The registry logs it once per process when a
+   * Set when the provider is deprecated. The registry reports it once per process when a
    * run first uses the provider; `archon doctor` and `archon ai default` show it too.
    */
   deprecationNotice?: string;
