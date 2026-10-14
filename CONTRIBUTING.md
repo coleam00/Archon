@@ -31,9 +31,17 @@ Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
 `generated-files`, `type-check`, `lint`, `installer` (POSIX only), and `tests`.
 The generated group checks bundled defaults, the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
-platform. Lint runs Biome (`biome.jsonc`) after two TypeScript-API checks Biome cannot
-express: test-cleanup drift and the workflow persistence boundary. Install the Biome
+platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup
+drift, the workflow persistence boundary, and SDK type restatements. Install the Biome
 extension for in-editor diagnostics; ESLint extensions no longer find a config.
+
+The SDK check reads exported types from installed provider SDK declarations and scans
+tracked and untracked TypeScript sources outside `packages/providers/`. Import SDK
+types instead of declaring copies. Independent same-name types and necessary SDK-free
+boundary copies belong in `scripts/sdk-type-exceptions.ts`, one named type per entry
+with a reason. Boundary entries also name their conformance test. Removed collisions
+must lose their ledger entries; stale entries fail lint. The generated Codex protocol
+is excluded with the provider package; `generate:codex-protocol` owns it.
 
 ```bash
 bun run validate                            # optional local checks
