@@ -68,8 +68,8 @@ export type AssistantDefaultsConfig = ProviderDefaultsMap & {
  * `getDefaults()` seeds every registered provider (built-in + community)
  * with `{}`, so community providers appear in the map too — just typed as
  * `ProviderDefaults` via the generic index rather than a specific shape.
- * `registerBuiltinProviders()` is called before `loadConfig()` at every
- * process entrypoint, so claude/codex are guaranteed present.
+ * `getDefaults()` also seeds claude and codex, so their slots exist even when
+ * a release binary has not installed those providers.
  */
 export type AssistantDefaults = ProviderDefaultsMap & {
   claude: ClaudeProviderDefaults;

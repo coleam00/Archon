@@ -168,7 +168,7 @@ export async function discoverPlugins(
     timeoutMs?: number;
     maxOutputBytes?: number;
     /**
-     * The installed plugins directory to scan, the one `archon plugin install` writes.
+     * The installed plugins directory to scan, the one `archon plugin add` writes.
      * The host owns where that is (the CLI passes `getPluginsPath()` from
      * `@archon/paths`); forge stays a leaf package and has no rule of its own for it.
      * Omitted, only configured plugins, `pluginDirs` and PATH are scanned.

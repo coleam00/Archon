@@ -8,7 +8,7 @@ How to discover, select, and invoke Archon workflows against real work.
 archon workflow list                 # human-readable compact descriptions and errors
 archon workflow list --json          # compact descriptions + descriptionTruncated state
 archon workflow list <name> --full   # exact description for one candidate
-archon plugin install owner/repo     # install a workflow pack published on GitHub
+archon plugin add owner/repo     # install a workflow pack published on GitHub
 ```
 
 The live list is authoritative. Bundled workflows ship under the `archon-` prefix
@@ -114,7 +114,7 @@ Rules:
 ## Monitoring
 
 ```bash
-archon workflow wait <run-id> --json        # block until the run ends or needs a human decision
+archon workflow wait <run-id> --json        # block until the run ends or needs attention
 archon workflow runs --json                 # recent runs for this project
 archon workflow status --json               # active only for this project (running/paused)
 archon workflow status --all --json         # active across all projects

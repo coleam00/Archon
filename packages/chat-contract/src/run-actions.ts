@@ -27,7 +27,7 @@ export type ChatRunAction = z.infer<typeof chatRunActionSchema>;
 export const runActionResultSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('approved'),
-    type: z.enum(['interactive_loop', 'approval_gate']),
+    type: z.enum(['interactive_loop', 'approval_gate', 'attention']),
     resumed: z.boolean(),
   }),
   z.object({

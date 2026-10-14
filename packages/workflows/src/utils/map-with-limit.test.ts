@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { mapWithLimit } from './map-with-limit';
+import { mapWithHeldSlots, mapWithLimit } from './map-with-limit';
 
 /** Resolve after a microtask-ish delay so concurrency is actually observable. */
 function delay(ms: number): Promise<void> {
@@ -99,5 +99,70 @@ describe('mapWithLimit', () => {
     });
     expect(maxInFlight).toBe(1);
     expect(results.map(r => (r.status === 'fulfilled' ? r.value : null))).toEqual([0, 1, 2]);
+  });
+});
+
+describe('mapWithHeldSlots', () => {
+  it('a worker whose value holds its slot claims no further item', async () => {
+    let inFlight = 0;
+    const inFlightAtStart: number[] = [];
+    const results = await mapWithHeldSlots(
+      [0, 1, 2, 3],
+      2,
+      async n => {
+        inFlightAtStart[n] = ++inFlight;
+        await delay(n === 0 ? 1 : 5);
+        inFlight--;
+        return n;
+      },
+      n => n === 0
+    );
+    // Item 0 settles first and holds its slot, so items 2 and 3 wait for item 1's worker
+    // instead of starting beside it.
+    expect(inFlightAtStart).toEqual([1, 2, 1, 1]);
+    expect(results.map(r => (r?.status === 'fulfilled' ? r.value : null))).toEqual([0, 1, 2, 3]);
+
+    const held = await mapWithHeldSlots(
+      [0, 1, 2, 3],
+      2,
+      async n => n,
+      () => true
+    );
+    // Both workers hold after their first item; indices 2 and 3 are never claimed.
+    expect(held.map(r => (r?.status === 'fulfilled' ? r.value : r))).toEqual([
+      0,
+      1,
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it('starts no worker with no free slot', async () => {
+    let calls = 0;
+    const results = await mapWithHeldSlots(
+      [0, 1],
+      0,
+      async n => {
+        calls++;
+        return n;
+      },
+      () => false
+    );
+    expect(calls).toBe(0);
+    expect(results).toEqual([undefined, undefined]);
+  });
+
+  it('a rejection does not hold the slot', async () => {
+    const results = await mapWithHeldSlots(
+      [0, 1],
+      1,
+      async n => {
+        if (n === 0) throw new Error('boom');
+        return n;
+      },
+      () => true
+    );
+    expect(results[0]?.status).toBe('rejected');
+    expect(results[1]).toEqual({ status: 'fulfilled', value: 1 });
   });
 });

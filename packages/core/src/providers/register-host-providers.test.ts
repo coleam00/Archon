@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getSourceProviderEntry } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { MAINTAINED_PROVIDER_IDS } from '@archon/provider-contract';
 import { clearRegistry, getRegisteredProviders } from '@archon/providers';
 import { ProcessAgentProvider } from './process-provider';
 import { registerHostProviders } from './register-host-providers';
@@ -18,12 +17,13 @@ afterEach(() => {
   else process.env.ARCHON_HOME = previousHome;
 });
 
-test('source hosts register maintained process providers and bundled community providers', async () => {
+// Docker runs from source, so this is also what the image registers.
+test('source hosts register claude, codex and pi as process providers beside the bundled community providers', async () => {
   process.env.ARCHON_HOME = roots(await mkdtemp(join(tmpdir(), 'host-providers-')));
   clearRegistry();
   await registerHostProviders();
   const providers = getRegisteredProviders();
-  for (const id of MAINTAINED_PROVIDER_IDS) {
+  for (const id of ['claude', 'codex', 'pi'] as const) {
     const entry = providers.find(provider => provider.id === id);
     expect(entry?.builtIn).toBe(true);
     const runtime = entry?.factory();

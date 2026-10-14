@@ -1110,7 +1110,8 @@ export class PiProvider implements IAgentProvider {
       if (enableExtensions) {
         const { loader, providerRegistrations } = await getOrCreateReloadedExtensionLoader(
           cwd,
-          loaderOptions
+          loaderOptions,
+          requestOptions?.abortSignal
         );
         resourceLoader = loader;
         extensionPaths = loader

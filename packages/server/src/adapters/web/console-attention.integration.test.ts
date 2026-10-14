@@ -58,7 +58,7 @@ test(
           const inbox = runsNeedingAttentionResponseSchema.parse(await response.json());
           for (const run of inbox.runs) {
             const attention = run.attention;
-            if (attention?.kind === 'action_required' || attention?.kind === 'awaiting_response') {
+            if (attention?.kind === 'attention' || attention?.kind === 'awaiting_response') {
               if (!observed.has(run.workflow_name))
                 observed.set(run.workflow_name, {
                   kind: attention.kind,
@@ -124,7 +124,7 @@ test(
         while (!observed.has(name) && observerErrors.length === 0 && Date.now() < deadline)
           await Bun.sleep(20);
         expect(observerErrors).toEqual([]);
-        expect(observed.get(name)?.kind).toBe(detached ? 'action_required' : 'awaiting_response');
+        expect(observed.get(name)?.kind).toBe(detached ? 'attention' : 'awaiting_response');
         if (detached && !observed.get(name)?.occurrence)
           throw new Error('No wait occurrence observed');
       }

@@ -1,12 +1,12 @@
 import {
+  installedProviders,
   noDefaultProviderMessage,
   MAINTAINED_PROVIDER_IDS,
   isMaintainedProvider,
   type ProviderRegistry,
 } from '@archon/provider-contract';
-import { providerRegistry } from '@archon/providers';
+import { getRegistration, providerRegistry } from '@archon/providers';
 import { PluginRemoteError } from '@archon/provider-contract/plugin';
-import { getAgentProvider } from '@archon/core/services/provider-admission';
 import { isProviderReceipt } from '@archon/plugin-manifest';
 import { readReceipts } from '@archon/plugin-manifest/store';
 /**
@@ -84,7 +84,6 @@ export async function checkProviderDeprecation(
   }
   if (assistant === undefined)
     return { label, status: 'skip', message: 'no default provider configured' };
-  const { getRegistration } = await import('@archon/providers');
   const notice = getRegistration(assistant).deprecationNotice;
   return notice
     ? { label, status: 'warn', message: notice }
@@ -110,7 +109,7 @@ export async function checkInstalledProviders(
   const label = 'Installed providers';
   try {
     const versions = await loadVersions();
-    const installed = registry.list();
+    const installed = installedProviders(registry);
     const unavailable = [...new Set([...MAINTAINED_PROVIDER_IDS, ...versions.keys()])]
       .map(id => registry.unavailable?.(id))
       .filter((reason): reason is string => reason !== undefined);
@@ -119,17 +118,28 @@ export async function checkInstalledProviders(
         !BUNDLED_IS_BINARY && isMaintainedProvider(provider.id)
           ? BUNDLED_VERSION
           : (versions.get(provider.id) ??
-            (provider.builtIn || provider.deprecationNotice
-              ? BUNDLED_VERSION
-              : 'version not reported'));
+            (provider.builtIn ? BUNDLED_VERSION : 'version not reported'));
       return `${provider.id} (${version})`;
     });
+    // Only deprecated bundled providers remain: they can still run when configured, so
+    // the missing selection is a warning rather than a failure.
+    const status =
+      registry.list().length === 0 || unavailable.length > 0
+        ? 'fail'
+        : installed.length > 0
+          ? 'pass'
+          : 'warn';
     return {
       label,
-      status: installed.length === 0 || unavailable.length > 0 ? 'fail' : 'pass',
+      status,
       message: [
-        installed.length === 0 ? noDefaultProviderMessage(registry) : lines.join(', '),
+        installed.length > 0 ? lines.join(', ') : noDefaultProviderMessage(registry),
         ...unavailable,
+        ...(installed.length > 0 && unavailable.length === 0
+          ? []
+          : [
+              'Adding a provider connects Archon to your agent CLI or SDK; it does not install that CLI.',
+            ]),
       ].join('\n    '),
     };
   } catch (error) {
@@ -141,18 +151,38 @@ export async function checkInstalledProviders(
   }
 }
 
+type ProviderSelection = Pick<MergedConfig, 'assistants'> &
+  Partial<Pick<MergedConfig, 'assistant'>>;
+
+/** The default assistant, or an `assistants.<id>` entry with settings in it. */
+function selectsProvider(config: ProviderSelection, id: string): boolean {
+  return config.assistant === id || Object.keys(config.assistants[id] ?? {}).length > 0;
+}
+
 export async function checkProviderDiagnostics(
   id: string,
   provider?: Pick<IAgentProvider, 'diagnose'>,
-  load: () => Promise<Pick<MergedConfig, 'assistants'>> = () =>
-    defaultLoadMergedConfig(process.cwd()),
+  load: () => Promise<ProviderSelection> = () => defaultLoadMergedConfig(process.cwd()),
   signal: AbortSignal = AbortSignal.timeout(20_000)
 ): Promise<CheckResult[]> {
   const label = `${id} diagnostics`;
   try {
-    provider ??= getAgentProvider(id);
+    let config: ProviderSelection | undefined;
+    if (!provider) {
+      const registration = getRegistration(id);
+      // A deprecated provider stays bundled whether or not anyone uses it, so its
+      // runtime is only worth checking for a user who selected or configured it.
+      // A config that fails to load selects nothing; the Config files check reports it.
+      if (registration.deprecationNotice) {
+        config = await load().catch(() => undefined);
+        if (!config || !selectsProvider(config, id)) return [];
+      }
+      // The factory, not getAgentProvider: a diagnostic is not a run, so it must not
+      // report the deprecation notice the Provider support check already shows.
+      provider = registration.factory();
+    }
     if (!provider.diagnose) return [{ label, status: 'skip', message: 'no diagnostics hook' }];
-    const config = await load();
+    config ??= await load();
     const diagnostics = await provider.diagnose({ assistantConfig: config.assistants[id], signal });
     return diagnostics.checks.map(check => ({
       label: `${id}: ${check.label}`,
@@ -278,9 +308,8 @@ export async function checkAssistantLogin(
 
 async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<AssistantLoginDeps> {
   const config = await defaultLoadMergedConfig(process.cwd());
-  if (config.assistant === undefined)
-    throw new Error(noDefaultProviderMessage((await import('@archon/providers')).providerRegistry));
-  const { getRegistration, normalizeCredentialVendor } = await import('@archon/providers');
+  if (config.assistant === undefined) throw new Error(noDefaultProviderMessage(providerRegistry));
+  const { normalizeCredentialVendor } = await import('@archon/providers');
   const configuredModel = config.assistants[config.assistant]?.model;
   const model = typeof configuredModel === 'string' ? configuredModel : undefined;
   const registration = getRegistration(config.assistant);
@@ -710,7 +739,7 @@ function skillTreeMatches(skillRoot: string, bundledFiles: Record<string, string
 }
 
 /**
- * Catch the v0.10.0 skill migration that `archon skill install` performs but
+ * Catch the v0.10.0 skill migration that `archon skill add` performs but
  * upgrades never run: leftover `archon` / `manage-run` roots, or a missing
  * `archon-cli` replacement. Skip when this project has never installed skills.
  */
@@ -742,7 +771,7 @@ export async function checkArchonSkill(
     return {
       label,
       status: 'fail',
-      message: `retired skill root(s) still present. Run \`archon skill install .\` to replace them with ${CURRENT_SKILL_ROOT}.`,
+      message: `retired skill root(s) still present. Run \`archon skill add .\` to replace them with ${CURRENT_SKILL_ROOT}.`,
     };
   }
 
@@ -750,7 +779,7 @@ export async function checkArchonSkill(
     return {
       label,
       status: 'fail',
-      message: `${CURRENT_SKILL_ROOT} is missing from ${missingRoots.join(', ')}. Run \`archon skill install .\` to install the current skill in this project.`,
+      message: `${CURRENT_SKILL_ROOT} is missing from ${missingRoots.join(', ')}. Run \`archon skill add .\` to install the current skill in this project.`,
     };
   }
 
@@ -758,8 +787,7 @@ export async function checkArchonSkill(
     return {
       label,
       status: 'skip',
-      message:
-        'not installed (run `archon skill install .` if you use Claude Code or Codex skills)',
+      message: 'not installed (run `archon skill add .` if you use Claude Code or Codex skills)',
     };
   }
 
@@ -770,7 +798,7 @@ export async function checkArchonSkill(
       return {
         label,
         status: 'fail',
-        message: `${currentRoot} differs from the skill bundled with this Archon build. Run \`archon skill install .\` to update it.`,
+        message: `${currentRoot} differs from the skill bundled with this Archon build. Run \`archon skill add .\` to update it.`,
       };
     }
   }

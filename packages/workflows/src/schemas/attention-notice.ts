@@ -8,5 +8,5 @@ export const attentionNoticeDataSchema = z.object({
 });
 export type AttentionNoticeData = z.infer<typeof attentionNoticeDataSchema>;
 
-export const attentionNoticeKindSchema = z.enum(['gate', 'action_required', 'terminal']);
+export const attentionNoticeKindSchema = z.enum(['gate', 'attention', 'terminal']);
 export type AttentionNoticeKind = z.infer<typeof attentionNoticeKindSchema>;

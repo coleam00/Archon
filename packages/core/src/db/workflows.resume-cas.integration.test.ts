@@ -831,7 +831,7 @@ describe('fan-out cancellation recovery — real SQLite', () => {
 
     await db.query('ALTER TABLE remote_agent_workflow_events RENAME TO events_stash', []);
     try {
-      await expect(cancelFanOutRun('fan-out-cancel-atomic', 'fan_out_gate')).rejects.toThrow(
+      await expect(cancelFanOutRun('fan-out-cancel-atomic', 'fan_out_orphan')).rejects.toThrow(
         'Failed to cancel fan-out run'
       );
     } finally {
@@ -937,7 +937,7 @@ describe('durable wait continuation races — real SQLite', () => {
     });
   });
 
-  test('never schedules an action-required wait and consumes it only after explicit resume', async () => {
+  test('never schedules an attention wait and consumes it only after explicit resume', async () => {
     const attentionA = {
       owner: 'node' as const,
       nodeId: 'rerun-ci',
@@ -980,7 +980,7 @@ describe('durable wait continuation races — real SQLite', () => {
     expect((await getWorkflowRun('attention-explicit-resume'))?.metadata.wait).toEqual(attentionB);
   });
 
-  test('makes an undeliverable action-required pause visibly failed', async () => {
+  test('makes an undeliverable attention pause visibly failed', async () => {
     const attention = {
       owner: 'node' as const,
       nodeId: 'rerun-ci',
@@ -994,7 +994,7 @@ describe('durable wait continuation races — real SQLite', () => {
       failPausedAttentionWait(
         'attention-notification-failed',
         attention,
-        'action-required notification was not delivered'
+        'attention notification was not delivered'
       )
     ).resolves.toEqual({ failed: true });
 
@@ -1003,7 +1003,7 @@ describe('durable wait continuation races — real SQLite', () => {
     expect(failed?.completed_at).not.toBeNull();
     expect(failed?.metadata).toMatchObject({
       wait: attention,
-      error: 'action-required notification was not delivered',
+      error: 'attention notification was not delivered',
     });
     expect(await countEvents('attention-notification-failed', 'workflow_failed')).toBe(1);
     expect((await terminalRecord('attention-notification-failed')).status).toBe('failed');

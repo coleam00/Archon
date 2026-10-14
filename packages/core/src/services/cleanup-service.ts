@@ -5,6 +5,7 @@
 import { lstat } from 'node:fs/promises';
 import { readOwnedWorktree, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
+  readWorktreeBranchCreated,
   readWorktreeCreationId,
   WorktreeLeftoverError,
   type IIsolationStore,
@@ -433,12 +434,16 @@ export async function removeEnvironment(
       }
     }
 
-    // Remove the worktree (and branch if provided)
+    // A branch this environment did not create (an existing branch it checked out)
+    // may hold the only copy of someone's commits, so it is deleted only together
+    // with its remote branch. Callers request that only when the branch is finished:
+    // merged, or an operator's explicit `--include-closed` or `archon complete`.
+    const deleteBranch = readWorktreeBranchCreated(env.metadata) || options?.deleteRemoteBranch;
     // Call destroy even if path doesn't exist - branch cleanup may still be needed
     const destroyResult = await provider.destroy(env.working_path, {
       force: options?.force,
       creationId: readWorktreeCreationId(env.metadata) ?? undefined,
-      branchName: toBranchName(env.branch_name),
+      ...(deleteBranch ? { branchName: toBranchName(env.branch_name) } : {}),
       canonicalRepoPath,
       deleteRemoteBranch: options?.deleteRemoteBranch,
       remote: configuredRemote,

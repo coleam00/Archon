@@ -606,7 +606,7 @@ describe('formatPausedGateSection', () => {
     expect(section).toBe('');
   });
 
-  test('describes an action-required wait without offering approval verbs', () => {
+  test('sends an attention wait from before answers to resume, without approval verbs', () => {
     const section = formatPausedGateSection({
       run: {
         id: 'run-abc',
@@ -624,11 +624,37 @@ describe('formatPausedGateSection', () => {
       },
     });
 
-    expect(section).toContain('## Paused action required');
+    expect(section).toContain('## Paused, needs attention');
     expect(section).toContain('Re-run the windows check, then resume.');
-    expect(section).toContain('archon workflow resume run-abc');
+    expect(section).toContain('/workflow resume run-abc');
     expect(section).toContain('Abandon it');
     expect(section).not.toContain('Paused Approval Gate');
     expect(section).not.toContain('/workflow approve');
+  });
+
+  test('tells the agent how to answer an attention wait in its form', () => {
+    const section = formatPausedGateSection({
+      run: {
+        id: 'run-abc',
+        workflow_name: 'deliver',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'ask',
+            kind: 'attention',
+            waitingSince: '2026-08-28T10:00:00.000Z',
+            message: 'Ship it?',
+            pauseId: 'pause-1',
+            form: 'approval',
+          },
+        },
+      },
+    });
+
+    expect(section).toContain("in the 'approval' form");
+    expect(section).toContain('Approve: `/workflow approve run-abc [text]`');
+    expect(section).toContain('Reject: `/workflow reject run-abc [text]`');
+    expect(section).not.toContain('/workflow resume');
   });
 });

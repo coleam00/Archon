@@ -19,7 +19,7 @@ RUN find packages -mindepth 2 -maxdepth 2 ! -name package.json -exec rm -r {} +
 # without -f fails the build if an excluded package is renamed or removed.
 #   docs-web   - static site deployed separately (.github/workflows/deploy-docs.yml)
 #   web        - ships only as the pre-built dist from the web-build stage
-#   chat-slack - compiled plugin binary installed with `archon plugin install`;
+#   chat-slack - compiled plugin binary installed with `archon plugin add`;
 #                the server never imports it
 FROM oven/bun:${BUN_VERSION}-slim AS sources
 WORKDIR /app

@@ -913,7 +913,8 @@
               "type": "string",
               "enum": [
                 "interactive_loop",
-                "approval_gate"
+                "approval_gate",
+                "attention"
               ]
             },
             "resumed": {

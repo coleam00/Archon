@@ -16,6 +16,7 @@
 
 import { userRoleSchema } from '@archon/core/schemas/user';
 import type { ForgeRequest } from '@archon/forge/operations';
+import { attachmentCommands } from './attachment-commands';
 
 interface FlagOwner {
   command: string;
@@ -52,6 +53,17 @@ interface HelpEntry {
   // Options block stays byte-identical to the pre-refactor text while
   // scoped help can still surface every flag the entry actually accepts.
   scopedFlags?: FlagHelp[];
+}
+
+function attachmentHelp(command: keyof typeof attachmentCommands, scopedOnly = false): HelpEntry[] {
+  return Object.entries(attachmentCommands[command])
+    .filter(([, entry]) => Object.hasOwn(entry, 'scopedOnly') === scopedOnly)
+    .map(([subcommand, entry]) => ({
+      command,
+      subcommand,
+      spec: `${command} ${subcommand} ${entry.args}`.trimEnd(),
+      description: entry.description,
+    }));
 }
 
 const forgeOperationDescriptions = {
@@ -192,7 +204,7 @@ const commandHelp: HelpEntry[] = [
     command: 'workflow',
     subcommand: 'wait',
     spec: 'workflow wait <run-id>',
-    description: 'Block until the run ends or needs a human decision',
+    description: 'Block until the run ends or needs attention',
   },
   {
     command: 'workflow',
@@ -255,6 +267,20 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'workflow',
+    subcommand: 'answer',
+    spec: 'workflow answer <run-id> --occurrence <id>',
+    description: 'Answer a paused attention wait in its declared form',
+    scopedFlags: [
+      {
+        spec: '--choose <id>',
+        description:
+          'A declared option to choose; repeat for a multi_select (omit for a message form)',
+      },
+      { spec: '--text <text>', description: 'Free text recorded with the answer' },
+    ],
+  },
+  {
+    command: 'workflow',
     subcommand: 'test',
     spec: 'workflow test [<name>|<folder>|<path>]',
     description:
@@ -302,49 +328,9 @@ const commandHelp: HelpEntry[] = [
     spec: 'serve',
     description: 'Start the web UI server (binary installs download server and UI on first run)',
   },
-  {
-    command: 'skill',
-    subcommand: 'install',
-    spec: 'skill install [path]',
-    description: 'Install archon-cli into .claude/skills and .agents/skills',
-  },
-  {
-    command: 'provider',
-    subcommand: 'install',
-    spec: 'provider install <id...>',
-    description: 'Install maintained providers matching this Archon release',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'install',
-    spec: 'plugin install <owner/repo[/path][@tag]>',
-    description:
-      'Install a plugin from GitHub (default: binary plugins the latest release, workflow packs the default branch)',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'update',
-    spec: 'plugin update <id>[@tag]',
-    description: 'Reinstall an installed plugin at a tag, or its latest release or default branch',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'remove',
-    spec: 'plugin remove <id>',
-    description: 'Delete the files an installed plugin wrote',
-  },
-  {
-    command: 'plugin',
-    subcommand: 'copy',
-    spec: 'plugin copy <id>',
-    description: "Copy an installed workflow pack into this project's .archon/workflows/",
-  },
-  {
-    command: 'plugin',
-    subcommand: 'list',
-    spec: 'plugin list',
-    description: 'Show installed plugins with tag and commit',
-  },
+  ...attachmentHelp('skill'),
+  ...attachmentHelp('provider'),
+  ...attachmentHelp('plugin'),
   {
     command: 'doctor',
     spec: 'doctor',
@@ -476,6 +462,8 @@ const commandHelp: HelpEntry[] = [
 // "no flag documentation is lost" invariant honest — nothing here ships in
 // global help that was not in the original.
 const scopedOnlyHelp: HelpEntry[] = [
+  ...attachmentHelp('plugin', true),
+  ...attachmentHelp('skill', true),
   {
     command: 'state',
     subcommand: 'get',
@@ -800,8 +788,7 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--providers <ids>',
-    description:
-      'Install comma-separated maintained providers, skipping the setup provider question',
+    description: 'Add comma-separated maintained providers, skipping the setup provider question',
     owners: [{ command: 'setup' }],
   },
   {
@@ -822,7 +809,7 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--json',
     description:
-      'Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/cancel/abandon/resume)',
+      'Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/answer/cancel/abandon/resume)',
     owners: [],
   },
   {
@@ -836,11 +823,12 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--occurrence <id>',
     description:
-      "For 'workflow approve/reject/respond': refuse the answer unless the run is still paused at\nthis occurrence (the 'occurrence' that 'workflow wait --json' reports)",
+      "For 'workflow approve/reject/respond/answer': refuse the answer unless the run is still paused at\nthis occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer)",
     owners: [
       { command: 'workflow', subcommand: 'approve' },
       { command: 'workflow', subcommand: 'reject' },
       { command: 'workflow', subcommand: 'respond' },
+      { command: 'workflow', subcommand: 'answer' },
     ],
   },
   {
@@ -978,14 +966,14 @@ const orderedExamples: ExampleHelp[] = [
     text: 'archon workflow run archon-review --adopt <run-id> "Review the changes"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
-  { text: 'archon skill install', owner: { command: 'skill', subcommand: 'install' } },
+  { text: 'archon skill add', owner: { command: 'skill', subcommand: 'add' } },
   {
-    text: 'archon skill install /path/to/project',
-    owner: { command: 'skill', subcommand: 'install' },
+    text: 'archon skill add /path/to/project',
+    owner: { command: 'skill', subcommand: 'add' },
   },
   {
-    text: 'archon plugin install coleam00/Archon/plugins/forge-github',
-    owner: { command: 'plugin', subcommand: 'install' },
+    text: 'archon plugin add coleam00/Archon/plugins/forge-github',
+    owner: { command: 'plugin', subcommand: 'add' },
   },
 ];
 

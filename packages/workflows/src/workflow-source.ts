@@ -1188,11 +1188,10 @@ export async function resolveRunSourceCapture(
  * has not started yet is not a run, so it must not be frozen into its parent.
  *
  * Two behaviors depend on reading the live origin here rather than the parent's capture:
- * a parent may author a workflow mid-flight and then execute it as a child, and — the
- * case with a test on it — a fan-out child cancelled at a gate is recovered by removing
- * the gate from the child workflow and resuming the parent. Resolving that child from the
- * parent's frozen copy would re-drive the OLD gated definition forever, so the fix could
- * never take. The child's own run captures at its own start, which is where its
+ * a parent may author a workflow mid-flight and then execute it as a child, and a failed
+ * fan-out child is recovered by fixing the child workflow and resuming the parent, which
+ * re-drives that child. Resolving it from the parent's frozen copy would re-drive the OLD
+ * broken definition forever, so the fix could never take. The child's own run captures at its own start, which is where its
  * determinism begins.
  *
  * Returns `undefined` only for a historical parent with no source record. Once a parent

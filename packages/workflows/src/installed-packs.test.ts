@@ -3,7 +3,7 @@
  * `discoverWorkflowsWithConfig`, only manifest entrypoints are dispatchable, and a run
  * keeps the pack bytes it captured.
  *
- * Packs are written the way `archon plugin install` leaves them (a receipt under
+ * Packs are written the way `archon plugin add` leaves them (a receipt under
  * `plugins/installed/` and a tree under `plugins/packs/`) into a temp ARCHON_HOME.
  */
 import { providerRegistry } from '@archon/providers';
@@ -52,7 +52,7 @@ interface PackFixture {
   files: Record<string, string>;
 }
 
-/** Write a pack exactly where `archon plugin install` puts one. */
+/** Write a pack exactly where `archon plugin add` puts one. */
 async function install(pack: PackFixture): Promise<void> {
   const pluginsDir = join(home, 'plugins');
   const manifest = {
@@ -322,17 +322,11 @@ describe('installed pack boundaries', () => {
     ).toContain("support workflow 'helper'");
   });
 
-  test('a composed fan-out body may be a support workflow; a fan-out child run may not', async () => {
+  test('a composed fan-out body may be a support workflow', async () => {
     await install(reviewKit());
-    await expect(
-      resolveFanOutChildDefinition(deps, project, HELPER, 'include')
-    ).resolves.toMatchObject({ definition: { name: HELPER } });
-    await expect(
-      resolveFanOutChildDefinition(deps, project, HELPER, 'workflow')
-    ).resolves.toMatchObject({ unresolved: expect.any(String) });
-    await expect(
-      resolveFanOutChildDefinition(deps, project, REVIEW, 'workflow')
-    ).resolves.toMatchObject({ definition: { name: REVIEW } });
+    await expect(resolveFanOutChildDefinition(deps, project, HELPER)).resolves.toMatchObject({
+      definition: { name: HELPER },
+    });
   });
 
   test('a qualified name never falls through to a longer name or a copy', async () => {
