@@ -33,7 +33,9 @@ afterAll(async () => {
 test('leaves work running past its cleanup', () => {
   lateWork = (async (): Promise<void> => {
     await cleanedUp.promise;
-    console.log(JSON.stringify({ lateDbPath: getSqliteDbPath() }));
+    console.log(
+      JSON.stringify({ lateDbPath: getSqliteDbPath(), lateDbUrl: process.env.DATABASE_URL })
+    );
     await getDatabase().query('SELECT 1');
   })();
 });

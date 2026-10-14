@@ -17,9 +17,12 @@ process.env.ARCHON_TELEMETRY_DISABLED ??= '1';
  * its cleanup, so work still running after that cleanup (a timed-out test's, say) and
  * reopening the database lands here, never in the operator's real home (#3979).
  * Children a test spawns inherit it too, unless the test gives them a home of its own.
+ * An inherited DATABASE_URL would send that reopen to the operator's PostgreSQL instead;
+ * a test that needs PostgreSQL sets its own scratch URL.
  */
 const testArchonHome = mkdtempSync(join(tmpdir(), 'archon-test-home-'));
 process.env.ARCHON_HOME = testArchonHome;
+process.env.DATABASE_URL = '';
 // getArchonHome() lets Docker detection override ARCHON_HOME, which would point a test
 // run inside the Archon container at the container's real /.archon.
 process.env.ARCHON_DOCKER = '';
