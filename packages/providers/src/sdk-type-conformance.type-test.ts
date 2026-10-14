@@ -30,35 +30,49 @@ type SameValue<L, S> = [L] extends [S]
     : 'different value'
   : 'different value';
 
-// Boundary schemas expose a supported subset. Ignore upstream additions and passthrough
-// index signatures, but compare every explicitly declared field, including nested fields.
+// Boundary schemas expose a supported subset. Upstream additions and schema passthrough
+// keys are intentional; dictionaries, nullability, and every declared field must agree.
 type FieldDrift<L, S> =
-  | Exclude<keyof KnownFields<L>, keyof KnownFields<S>>
-  | {
-      [K in keyof KnownFields<L> & keyof KnownFields<S>]:
-        | SameValue<undefined extends L[K] ? true : false, undefined extends S[K] ? true : false>
-        | (NonNullable<L[K]> extends readonly unknown[]
-            ? SameValue<L[K], S[K]>
-            : NonNullable<L[K]> extends object
-              ? FieldDrift<NonNullable<L[K]>, NonNullable<S[K]>>
-              : SameValue<L[K], S[K]>);
-    }[keyof KnownFields<L> & keyof KnownFields<S>];
+  | SameValue<Extract<L, null | undefined>, Extract<S, null | undefined>>
+  | ValueDrift<NonNullable<L>, NonNullable<S>>;
 
-export type AgentFieldsConform = AssertNever<FieldDrift<AgentDefinition, ClaudeAgentDefinition>>;
-export type SandboxFieldsConform = AssertNever<FieldDrift<SandboxSettings, ClaudeSandboxSettings>>;
-export type ClaudeEffortIsPortable = AssertNever<Exclude<ClaudeEffortLevel, EffortLevel>>;
-export type AuthInfoConforms = AssertNever<FieldDrift<OAuthAuthInfo, PiOAuthAuthInfo>>;
-export type DeviceCodeConforms = AssertNever<
-  FieldDrift<OAuthDeviceCodeInfo, PiOAuthDeviceCodeInfo>
->;
-export type CoreCallbacksAcceptPi = AssertNever<
-  OAuthLoginCallbacks extends PiOAuthLoginCallbacks ? never : 'incompatible OAuth callbacks'
->;
-export type DeliveryAcceptsPiTokens = AssertNever<
-  PiOAuthCredentials extends OAuthCredentials ? never : 'incompatible stored credentials'
->;
-export type SubscriptionTokensConform = AssertNever<
-  SubscriptionOAuthCredentials extends PiOAuthCredentials
-    ? never
-    : 'incompatible subscription tokens'
->;
+type ValueDrift<L, S> = [L] extends [readonly unknown[]]
+  ? SameValue<L, S>
+  : [L] extends [object]
+    ? string extends keyof L
+      ? SameValue<L, S>
+      : [S] extends [object]
+        ?
+            | Exclude<keyof KnownFields<L>, keyof KnownFields<S>>
+            | {
+                [K in keyof KnownFields<L> & keyof KnownFields<S>]: FieldDrift<L[K], S[K]>;
+              }[keyof KnownFields<L> & keyof KnownFields<S>]
+        : 'different value'
+    : SameValue<L, S>;
+
+export type BoundaryConformance = {
+  'packages/provider-contract/src/agent-provider.ts:AgentDefinition': AssertNever<
+    FieldDrift<AgentDefinition, ClaudeAgentDefinition>
+  >;
+  'packages/workflows/src/schemas/dag-node.ts:SandboxSettings': AssertNever<
+    FieldDrift<SandboxSettings, ClaudeSandboxSettings>
+  >;
+  'packages/workflows/src/schemas/effort.ts:EffortLevel': AssertNever<
+    Exclude<ClaudeEffortLevel, EffortLevel>
+  >;
+  'packages/core/src/credentials/subscription-oauth.ts:OAuthAuthInfo': AssertNever<
+    FieldDrift<OAuthAuthInfo, PiOAuthAuthInfo>
+  >;
+  'packages/core/src/credentials/subscription-oauth.ts:OAuthDeviceCodeInfo': AssertNever<
+    FieldDrift<OAuthDeviceCodeInfo, PiOAuthDeviceCodeInfo>
+  >;
+  'packages/core/src/credentials/subscription-oauth.ts:OAuthLoginCallbacks': AssertNever<
+    OAuthLoginCallbacks extends PiOAuthLoginCallbacks ? never : 'incompatible OAuth callbacks'
+  >;
+  'packages/core/src/credentials/delivery.ts:OAuthCredentials': AssertNever<
+    | (PiOAuthCredentials extends OAuthCredentials ? never : 'incompatible stored credentials')
+    | (SubscriptionOAuthCredentials extends PiOAuthCredentials
+        ? never
+        : 'incompatible subscription tokens')
+  >;
+};

@@ -4,7 +4,7 @@ export type SdkTypeException = {
   reason: string;
 } & ({ kind: 'independent' } | { kind: 'boundary'; conformanceTest: string });
 
-const CONFORMANCE = 'scripts/sdk-type-conformance.test.ts';
+export const CONFORMANCE = 'packages/providers/src/sdk-type-conformance.type-test.ts';
 
 export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
   {

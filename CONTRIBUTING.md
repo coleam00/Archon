@@ -39,7 +39,10 @@ The SDK check reads exported types from installed provider SDK declarations and 
 tracked and untracked TypeScript sources outside `packages/providers/`. Import SDK
 types instead of declaring copies. Independent same-name types and necessary SDK-free
 boundary copies belong in `scripts/sdk-type-exceptions.ts`, one named type per entry
-with a reason. Boundary entries also name their conformance test. Removed collisions
+with a reason. Boundary entries name a TypeScript conformance test whose exported
+`BoundaryConformance` type contains an assertion keyed by the copy's `file:TypeName`.
+The SDK conformance test driver compiles every boundary test named in the ledger.
+An unrelated test or another copy's assertion cannot cover the entry. Removed collisions
 must lose their ledger entries; stale entries fail lint. The generated Codex protocol
 is excluded with the provider package; `generate:codex-protocol` owns it.
 

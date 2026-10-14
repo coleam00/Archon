@@ -1,5 +1,10 @@
 import { expect, test } from 'bun:test';
-import { checkSources, installedSdkTypes } from './check-sdk-type-drift';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { gitOutput } from './check-test-cleanup-drift';
+import { checkRepository, checkSources, installedSdkTypes } from './check-sdk-type-drift';
 import type { SdkTypeException } from './sdk-type-exceptions';
 
 const sdkTypes = installedSdkTypes();
@@ -84,4 +89,48 @@ test('checks nested interfaces, aliases, TSX and declarations but allows imports
       []
     )
   ).toEqual([]);
+});
+
+const trackTempRoot = trackTempRoots();
+
+test("boundary entries cannot use an unrelated existing test or another copy's proof", () => {
+  const proof = 'scripts/existing.type-test.ts';
+  const boundary = { ...entry, kind: 'boundary' as const, conformanceTest: proof };
+  for (const text of [
+    "test('unrelated', () => {});",
+    "export type BoundaryConformance = { 'another/file.ts:OAuthAuthInfo': never };",
+  ]) {
+    expect(checkSources(new Map([...sources, [proof, text]]), sdkTypes, [boundary])).toEqual([
+      expect.stringContaining('missing conformance proof for'),
+    ]);
+  }
+  expect(
+    checkSources(
+      new Map([
+        ...sources,
+        [proof, `export type BoundaryConformance = { '${file}:OAuthAuthInfo': never };`],
+      ]),
+      sdkTypes,
+      [boundary]
+    )
+  ).toEqual([]);
+});
+
+test('repository scan detects an untracked collision before staging', () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'sdk-type-git-')));
+  const actual = resolve(import.meta.dir, '..');
+  gitOutput(['init', '--quiet'], root);
+  mkdirSync(join(root, 'packages/providers'), { recursive: true });
+  symlinkSync(join(actual, 'node_modules'), join(root, 'node_modules'), 'junction');
+  symlinkSync(
+    join(actual, 'packages/providers/node_modules'),
+    join(root, 'packages/providers/node_modules'),
+    'junction'
+  );
+  writeFileSync(join(root, '.gitignore'), 'node_modules/\n');
+  writeFileSync(join(root, 'copy.ts'), 'export interface SDKMessage {}');
+  expect(gitOutput(['ls-files', '--cached'], root)).toBe('');
+  expect(checkRepository(root)).toContainEqual(
+    expect.stringContaining('copy.ts:1 SDKMessage matches an exported type')
+  );
 });
