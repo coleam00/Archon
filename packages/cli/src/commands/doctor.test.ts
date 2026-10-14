@@ -100,11 +100,10 @@ describe('checkAssistantLogin', () => {
     assistant: 'claude',
     assistants: { claude: {}, codex: {}, pi: { model: 'anthropic/claude-sonnet-4-6' } },
     streaming: { telegram: 'batch', discord: 'batch', slack: 'batch' },
-    paths: { workspaces: '/unused', worktrees: '/unused' },
     concurrency: { maxConversations: 1 },
     workflows: { autoResumeOnQuotaReset: false, quotaMaxAttempts: 1, quotaDeadlineMs: 1 },
     commands: { autoLoad: false },
-    defaults: { copyDefaults: false, loadDefaultCommands: false, loadDefaultWorkflows: false },
+    defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
   };
 
   const deps = (

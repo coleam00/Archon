@@ -13,6 +13,14 @@ describe('credential-sanitizer', () => {
   });
 
   describe('sanitizeCredentials', () => {
+    it('redacts regex metacharacters literally without matching lookalikes', () => {
+      process.env.GH_TOKEN = 'token.a+[b](c)${d}^|?\\end';
+      const lookalike = 'tokenXaabcccc';
+      expect(sanitizeCredentials(`${process.env.GH_TOKEN} ${lookalike}`)).toBe(
+        `[REDACTED] ${lookalike}`
+      );
+    });
+
     it('should replace GH_TOKEN in string', () => {
       const input = 'fatal: https://ghp_test123456789@github.com/user/repo';
       const result = sanitizeCredentials(input);

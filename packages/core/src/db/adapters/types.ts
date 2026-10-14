@@ -106,14 +106,6 @@ export interface SqlDialect {
   jsonMerge(column: string, paramIndex: number): string;
 
   /**
-   * SQL expression to check if JSON array contains value
-   * @param column - Column name containing JSON
-   * @param path - JSON path to array (e.g., 'related_issues')
-   * @param paramIndex - Parameter placeholder index for value
-   */
-  jsonArrayContains(column: string, path: string, paramIndex: number): string;
-
-  /**
    * SQL expression for interval subtraction from now
    * @param paramIndex - Parameter placeholder index for days
    */

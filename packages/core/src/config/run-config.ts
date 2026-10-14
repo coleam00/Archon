@@ -60,10 +60,6 @@ const keyClassifications = {
     kind: 'unavailable',
     reason: 'platform response streaming is process-scoped and has no per-run consumer',
   },
-  paths: {
-    kind: 'unavailable',
-    reason: 'workspace and worktree paths are resolved before run dispatch',
-  },
   concurrency: {
     kind: 'unavailable',
     reason: 'conversation concurrency is process-scoped and has no per-run consumer',

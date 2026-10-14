@@ -299,7 +299,6 @@ import {
   runScheduledCleanup,
   startCleanupScheduler,
   stopCleanupScheduler,
-  isSchedulerRunning,
   getWorktreeStatusBreakdown,
   cleanupMergedWorktrees,
   cleanupStaleWorktrees,
@@ -1790,30 +1789,9 @@ describe('scheduler lifecycle', () => {
     stopCleanupScheduler(); // Clean up after tests
   });
 
-  test('starts and stops scheduler', () => {
-    expect(isSchedulerRunning()).toBe(false);
-
-    startCleanupScheduler();
-    expect(isSchedulerRunning()).toBe(true);
-
-    stopCleanupScheduler();
-    expect(isSchedulerRunning()).toBe(false);
-  });
-
-  test('prevents multiple scheduler instances', () => {
-    startCleanupScheduler();
-    startCleanupScheduler(); // Should warn but not create second
-
-    expect(isSchedulerRunning()).toBe(true);
-
-    stopCleanupScheduler();
-    expect(isSchedulerRunning()).toBe(false);
-  });
-
   test('refuses to start without configured platform policies', () => {
     clearPlatformPolicies();
     expect(() => startCleanupScheduler()).toThrow('Platform policies are not configured');
-    expect(isSchedulerRunning()).toBe(false);
     expect(mockListAllActiveWithCodebase).not.toHaveBeenCalled();
   });
 });

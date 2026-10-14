@@ -158,19 +158,16 @@ AI call completes → tryPersistSessionId(session.id, sdkSessionId)
 Next message → getActiveSession() returns existing
   → sendQuery(..., session.assistant_session_id) — SDK resumes
 
-/reset → transitionSession('reset-requested')
+/reset → safeDeactivateSession(session.id, 'reset')
   → Deactivates current session (ended_reason = 'reset-requested')
   → Does NOT create new session immediately
   → Next message triggers 'first-message' → new session
-
-Plan → Execute transition:
-  → detectPlanToExecuteTransition() checks commandName === 'execute' && lastCommand === 'plan-feature'
-  → transitionSession('plan-to-execute') — ONLY trigger that immediately creates new session
-  → Old session deactivated + new session created atomically in one DB transaction
 ```
 
-**TransitionTrigger values:**
-`'first-message'`, `'plan-to-execute'`, `'isolation-changed'`, `'codebase-changed'`, `'codebase-cloned'`, `'cwd-changed'`, `'reset-requested'`, `'context-reset'`, `'repo-removed'`, `'worktree-removed'`, `'conversation-closed'`
+**Session reasons:** `SESSION_TRANSITION_REASONS` in
+`packages/core/src/schemas/session.ts` owns the validated vocabulary, including
+historical `plan-to-execute` and `cwd-changed` values. There is no automatic
+plan-to-execute transition.
 
 **Audit trail:** `getSessionChain(sessionId)` walks `parent_session_id` links via recursive CTE.
 

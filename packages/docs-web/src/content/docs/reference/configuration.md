@@ -110,11 +110,6 @@ streaming:
   slack: batch
   github: batch
 
-# Custom paths (usually not needed)
-paths:
-  workspaces: ~/.archon/workspaces
-  worktrees: ~/.archon/worktrees
-
 # Concurrency limits
 concurrency:
   maxConversations: 10

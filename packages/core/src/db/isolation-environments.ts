@@ -232,26 +232,6 @@ export async function updateMetadata(id: string, metadata: Record<string, unknow
 }
 
 /**
- * Find environments by related issue (from metadata)
- */
-export async function findByRelatedIssue(
-  codebaseId: string,
-  issueNumber: number
-): Promise<IsolationEnvironmentRow | null> {
-  const dialect = getDialect();
-  const result = await pool.query<IsolationEnvironmentRow>(
-    `SELECT * FROM remote_agent_isolation_environments
-     WHERE codebase_id = $1
-       AND status = 'active'
-       AND ${dialect.jsonArrayContains('metadata', 'related_issues', 2)}
-     LIMIT 1`,
-    [codebaseId, String(issueNumber)]
-  );
-  const row = result.rows[0];
-  return row ? normalizeEnvironmentRow(row) : null;
-}
-
-/**
  * Count active environments for a codebase (for limit checks)
  */
 export async function countActiveByCodebase(codebaseId: string): Promise<number> {

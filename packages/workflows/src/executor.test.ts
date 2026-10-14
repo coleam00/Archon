@@ -1577,7 +1577,7 @@ describe('executeWorkflow', () => {
       const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
       expect(sentMessage).toContain('archon-implement');
       expect(sentMessage).toContain('abc12345');
-      expect(sentMessage).toContain('2m 5s');
+      expect(sentMessage).toContain('2m5s');
       // Concrete next actions — every line tells the user something to do.
       expect(sentMessage).toContain('/workflow status');
       expect(sentMessage).toContain('/workflow cancel abc12345');
@@ -4348,6 +4348,28 @@ describe('executeWorkflow', () => {
   // -------------------------------------------------------------------------
 
   describe('blocking message status awareness', () => {
+    it.each([
+      [500, '500ms'],
+      [1500, '1.5s'],
+      [90000, '1m30s'],
+    ])('shows the shared duration policy for a blocker at %s ms', async (elapsed, expected) => {
+      const now = Date.UTC(2026, 9, 15, 12);
+      const clock = spyOn(Date, 'now').mockReturnValue(now);
+      const platform = makePlatform();
+      const sendMessage = spyOn(platform, 'sendMessage').mockResolvedValue(undefined);
+      try {
+        const run = makeRun({ status: 'running', started_at: new Date(now - elapsed) });
+        const deps = makeDeps(makeStore({ getActiveWorkflowRunByPath: mock(async () => run) }));
+        await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', {
+          conversationId: 'db-conv-1',
+        });
+        expect(sendMessage.mock.calls[0]?.[1]).toContain(`running ${expected},`);
+      } finally {
+        clock.mockRestore();
+        sendMessage.mockRestore();
+      }
+    });
+
     it('uses paused-specific copy when blocker is paused', async () => {
       const pausedRun = makeRun({
         id: 'paused-run-id',

@@ -481,28 +481,14 @@ YOUR_ASSISTANT_MODEL=<model-name>
 - **State machine**: Explicit `TransitionTrigger` types define all transition reasons
 - **Session ID persistence**: Store `assistant_session_id` in database to resume context
 
-**Transition triggers** (`packages/core/src/state/session-transitions.ts`):
-- `first-message` - No existing session
-- `plan-to-execute` - Plan phase completed, starting execution (creates new session immediately)
-- `isolation-changed`, `project-changed`, `reset-requested`, etc. - Deactivate current session
+**Session reasons** are defined by `SESSION_TRANSITION_REASONS` in
+`packages/core/src/schemas/session.ts`. `first-message` records session creation;
+command handling maps reset, project changes and worktree removal to deactivation
+reasons through `safeDeactivateSession`. `plan-to-execute` and `cwd-changed` remain
+valid historical audit values; no automatic plan-to-execute detector runs.
 
-**Orchestrator logic** (`packages/core/src/orchestrator/orchestrator.ts`):
-
-```typescript
-// Detect plan-to-execute transition
-const trigger = detectPlanToExecuteTransition(commandName, session?.metadata?.lastCommand);
-
-if (trigger && shouldCreateNewSession(trigger)) {
-  // Transition to new session (links to previous via parent_session_id)
-  session = await sessionDb.transitionSession(conversationId, trigger, {...});
-} else if (!session) {
-  // No session exists - create one
-  session = await sessionDb.transitionSession(conversationId, 'first-message', {...});
-} else {
-  // Resume existing session
-  log.info({ sessionId: session.id }, 'session_resumed');
-}
-```
+The orchestrator creates a session when none is active and otherwise resumes the
+stored provider session ID.
 
 ### Streaming Event Mapping
 
@@ -1196,7 +1182,6 @@ remote_agent_user_identities
 - `createCodebase()` - Create codebase record
 - `getCodebase(id)` - Get by ID
 - `findCodebaseByRepoUrl(url)` - Find by repository URL
-- `registerCommand(id, name, def)` - Add single command
 - `updateCodebaseCommands(id, commands)` - Bulk update commands
 - `getCodebaseCommands(id)` - Get all commands
 
@@ -1249,20 +1234,6 @@ await updateConversation(id, { codebase_id: '...' });
 5. User sends /reset
    -> deactivateSession(session.id) // Sets ended_at timestamp
    -> Next message creates new session via transitionSession()
-```
-
-**Plan-to-Execute transition (immutable sessions):**
-
-```
-1. User: "Plan adding dark mode" -> routed to plan-feature workflow
-   -> transitionSession() or resumeSession()
-   -> updateSessionMetadata({ lastCommand: 'plan-feature' })
-
-2. User: "Execute the plan" -> routed to execute workflow
-   -> detectPlanToExecuteTransition() // Returns 'plan-to-execute' trigger
-   -> transitionSession(conversationId, 'plan-to-execute', {...})
-   -> New session created, parent_session_id points to planning session
-   -> Fresh context for implementation with full audit trail
 ```
 
 **Reference:** `packages/core/src/orchestrator/orchestrator.ts`, `packages/core/src/state/session-transitions.ts`
@@ -1372,7 +1343,7 @@ This checklist is for **built-in** providers only. For community providers (`bui
 - [ ] Register in `@archon/providers/in-process`, with an SDK-free descriptor and an executable plugin entry
 - [ ] Add environment variables to `.env.example`
 - [ ] Test session persistence across restarts
-- [ ] Test plan-to-execute transition (new session)
+- [ ] Test session creation, resumption and reset
 
 ### Adding a New Isolation Provider
 
@@ -1482,7 +1453,7 @@ The adapter supplies its resolved Archon user ID as `archonUserId`, or `undefine
 
 5. **Commands are file-based**: Store only paths in database, actual commands in Git-versioned files
 
-6. **Plan-to-execute is special**: Only transition requiring new session (prevents token bloat during implementation)
+6. **Session history persists**: Linked sessions retain their transition and end reasons for auditing
 
 7. **Factory pattern**: `getAgentProvider()` and `getIsolationProvider()` instantiate correct implementations based on configuration
 

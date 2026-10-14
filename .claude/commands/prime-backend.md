@@ -34,8 +34,8 @@ dispatch (no AI). Note the full list of supported slash commands.
 
 ### 4. Understand Session State Machine
 
-Read `packages/core/src/state/session-transitions.ts` in full — `TransitionTrigger` union type,
-`TRIGGER_BEHAVIOR` record (creates / deactivates / none), and session lifecycle rules.
+Read `packages/core/src/state/session-transitions.ts` for command-trigger mapping and safe
+deactivation, and `packages/core/src/schemas/session.ts` for the validated session reasons.
 
 ### 5. Understand AI Client Patterns
 

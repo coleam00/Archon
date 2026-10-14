@@ -3750,6 +3750,9 @@ describe('WorktreeProvider', () => {
       expect(() =>
         provider.getWorktreePath(baseRequest, branch, { path: '/tmp/worktrees' })
       ).toThrow(/must be relative to the repo root/);
+      expect(() =>
+        provider.getWorktreePath(baseRequest, branch, { path: '/tmp/worktrees' })
+      ).toThrow(/omit worktree.path/);
     });
 
     test('rejects a worktree.path that escapes the repo root via `..`', () => {

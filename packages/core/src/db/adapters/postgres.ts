@@ -297,10 +297,6 @@ export const postgresDialect: SqlDialect = {
     return `(${column} || ${patch}) - ARRAY(SELECT key FROM jsonb_each(${patch}) WHERE jsonb_typeof(value) = 'null')`;
   },
 
-  jsonArrayContains(column: string, path: string, paramIndex: number): string {
-    return `${column}->'${path}' ? $${String(paramIndex)}`;
-  },
-
   nowMinusDays(paramIndex: number): string {
     return `NOW() - ($${String(paramIndex)} || ' days')::INTERVAL`;
   },

@@ -294,36 +294,11 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - **PostgreSQL only.** Always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled (`DATABASE_URL` + `BETTER_AUTH_SECRET`)
   - Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 
-## Migration List
+## Schema initialization and upgrades
 
-| Migration | Description |
-|-----------|-------------|
-| `000_combined.sql` | Combined initial schema (use for fresh installs) |
-| `001_initial_schema.sql` | Initial schema (codebases, conversations, sessions) |
-| `002_command_templates.sql` | Command templates table |
-| `003_add_worktree.sql` | Add worktree columns |
-| `004_worktree_sharing.sql` | Worktree sharing support |
-| `005_isolation_abstraction.sql` | Isolation abstraction layer |
-| `006_isolation_environments.sql` | Isolation environments table |
-| `007_drop_legacy_columns.sql` | Drop legacy worktree columns |
-| `008_workflow_runs.sql` | Workflow runs table |
-| `009_workflow_last_activity.sql` | Workflow last activity tracking |
-| `010_immutable_sessions.sql` | Immutable session model |
-| `011_partial_unique_constraint.sql` | Partial unique constraint |
-| `012_workflow_events.sql` | Workflow events table |
-| `013_conversation_titles.sql` | Conversation titles |
-| `014_message_history.sql` | Message history table |
-| `015_background_dispatch.sql` | Background dispatch support |
-| `016_session_ended_reason.sql` | Session ended reason field |
-| `017_drop_command_templates.sql` | Drop command templates table |
-| `018_fix_workflow_status_default.sql` | Fix workflow status default value |
-| `019_workflow_resume_path.sql` | Workflow resume path support |
-| `020_codebase_env_vars.sql` | Per-project environment variables |
-| `021_add_allow_env_keys_to_codebases.sql` | Allow-listed env keys per codebase |
-| `022_workflow_node_sessions.sql` | Per-node provider session persistence |
-| `023_add_default_branch_to_codebases.sql` | Detected default branch on codebases |
-
-> The `remote_agent_codebases.kind` column (project `'repo'` | `'folder'` discriminator, commented "From migration 024"), the `remote_agent_users.role` column, and the four `remote_agent_auth_*` Better Auth tables (opt-in web login) are applied inline in `000_combined.sql` rather than as numbered migrations, and converge on startup via the idempotent schema apply.
+Archon applies `migrations/000_combined.sql` idempotently on startup for both fresh
+installs and upgrades. Its table definitions and additive column sections own the
+schema; there is no numbered migration runner or migration ledger.
 
 ### Workflow origin compatibility
 

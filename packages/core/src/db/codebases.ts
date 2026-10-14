@@ -106,16 +106,6 @@ export async function getCodebaseCommands(
   return { ...parsed };
 }
 
-export async function registerCommand(
-  id: string,
-  name: string,
-  command: { path: string; description: string }
-): Promise<void> {
-  const commands = await getCodebaseCommands(id);
-  commands[name] = command;
-  await updateCodebaseCommands(id, commands);
-}
-
 export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>(
     'SELECT * FROM remote_agent_codebases WHERE repository_url = $1',
