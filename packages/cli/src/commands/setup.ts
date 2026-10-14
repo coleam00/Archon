@@ -18,7 +18,8 @@
  *
  * Writes are merge-only by default: existing non-empty values are preserved,
  * user-added custom keys survive, and a timestamped backup is written before
- * every rewrite. `--force` skips the merge (proposed wins) but still backs up.
+ * every rewrite. A confirmed GitHub mode switch replaces only its auth keys.
+ * `--force` skips the merge (proposed wins) but still backs up.
  */
 import {
   intro,
@@ -36,11 +37,11 @@ import {
 } from '@clack/prompts';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
 import { parse as parseDotenv } from 'dotenv';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { copyArchonSkill } from './skill';
 import { setInstallDefault } from './ai';
 import { homedir } from 'os';
-import { randomBytes } from 'crypto';
+import { randomBytes, createPrivateKey } from 'crypto';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
 import { execFileAsync } from '@archon/git';
 import { getRegisteredProviders, registerProvider, providerRegistry } from '@archon/providers';
@@ -188,12 +189,28 @@ interface SetupConfig {
   botDisplayName: string;
 }
 
-interface GitHubConfig {
-  token: string;
+type GitHubConfig = {
   webhookSecret: string;
   allowedUsers: string;
   botMention?: string;
-}
+} & (
+  | { mode: 'pat'; token: string }
+  | {
+      mode: 'app';
+      appId: string;
+      slug?: string;
+      privateKey: { source: 'path' | 'inline'; value: string };
+    }
+);
+
+const GITHUB_PAT_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN'] as const;
+const GITHUB_APP_KEYS = [
+  'GITHUB_APP_ID',
+  'GITHUB_APP_PRIVATE_KEY',
+  'GITHUB_APP_PRIVATE_KEY_PATH',
+  'GITHUB_APP_SLUG',
+  'GITHUB_APP_INSTALLATION_ID',
+] as const;
 
 interface TelegramConfig {
   botToken: string;
@@ -381,7 +398,7 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
     // env vars never get a Pi login check.
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
     platforms: {
-      github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),
+      github: [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS].some(key => hasEnvValue(content, key)),
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
       slack: hasEnvValue(content, 'SLACK_BOT_TOKEN') && hasEnvValue(content, 'SLACK_APP_TOKEN'),
     },
@@ -1137,6 +1154,98 @@ async function collectPlatforms(): Promise<SetupConfig['platforms']> {
  * Collect GitHub credentials
  */
 async function collectGitHubConfig(): Promise<GitHubConfig> {
+  const mode = await select({
+    message: 'GitHub authentication mode?',
+    initialValue: 'pat',
+    options: [
+      { value: 'pat', label: 'Personal access token', hint: 'Default for solo use' },
+      { value: 'app', label: 'GitHub App', hint: 'Recommended for teams' },
+    ],
+  });
+  if (isCancel(mode)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  return mode === 'app' ? collectGitHubAppConfig() : collectGitHubPatConfig();
+}
+
+async function collectGitHubAppConfig(): Promise<GitHubConfig> {
+  note(
+    'Follow the GitHub App guide for registration, permissions, webhook events, and installation:\n' +
+      'https://archon.diy/adapters/github-app-setup/',
+    'GitHub App Setup'
+  );
+  const appId = await text({
+    message: 'GitHub App ID:',
+    validate: value =>
+      value && /^[0-9]+$/.test(value.trim()) && /[1-9]/.test(value)
+        ? undefined
+        : 'Enter a positive decimal App ID',
+  });
+  if (isCancel(appId)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  const source = await select({
+    message: 'GitHub App private key source?',
+    options: [
+      { value: 'path', label: 'Path to a PEM file' },
+      { value: 'inline', label: 'Inline PEM', hint: 'Use literal \\n for line breaks' },
+    ],
+  });
+  if (isCancel(source)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  const validateKey = (value: string | undefined): string | undefined => {
+    if (!value?.trim()) return 'A private key is required';
+    try {
+      const pem =
+        source === 'path'
+          ? readFileSync(resolve(value.trim()), 'utf8')
+          : value.replace(/\\r\\n|\\n/g, '\n');
+      if (createPrivateKey(pem).asymmetricKeyType !== 'rsa') return 'Use an RSA PEM private key';
+    } catch {
+      return 'Enter a readable RSA PEM private key';
+    }
+    return undefined;
+  };
+  const key =
+    source === 'path'
+      ? await text({ message: 'GitHub App private key path:', validate: validateKey })
+      : await password({ message: 'GitHub App private key (PEM):', validate: validateKey });
+  if (isCancel(key)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  const webhookSecret = await password({
+    message: 'GitHub webhook secret:',
+    validate: value =>
+      value?.trim() ? undefined : 'Enter the secret configured on your GitHub App',
+  });
+  if (isCancel(webhookSecret)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  const slug = await text({ message: 'GitHub App slug (optional):' });
+  if (isCancel(slug)) {
+    cancel('Setup cancelled.');
+    exitSetup(0);
+  }
+  return {
+    mode: 'app',
+    appId: appId.trim(),
+    privateKey:
+      source === 'path'
+        ? { source: 'path', value: resolve(key.trim()) }
+        : { source: 'inline', value: key.replace(/\\r\\n|\\n/g, '\n') },
+    webhookSecret,
+    slug: slug.trim() || undefined,
+    allowedUsers: '',
+  };
+}
+
+async function collectGitHubPatConfig(): Promise<GitHubConfig> {
   note(
     'GitHub Personal Access Token Setup\n\n' +
       '1. Go to github.com/settings/tokens\n' +
@@ -1261,9 +1370,10 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
 
   // Auto-generate webhook secret
   const webhookSecret = generateWebhookSecret();
-  log.success('Generated webhook secret (save this for GitHub webhook config)');
+  log.success('Generated webhook secret (will be saved as WEBHOOK_SECRET in the env file)');
 
   return {
+    mode: 'pat',
     token,
     webhookSecret,
     allowedUsers: allowedUsers || '',
@@ -1514,9 +1624,22 @@ export function generateEnvContent(config: SetupConfig): string {
   // GitHub
   if (config.platforms.github && config.github) {
     lines.push('# GitHub');
-    lines.push(`GH_TOKEN=${config.github.token}`);
-    lines.push(`GITHUB_TOKEN=${config.github.token}`);
-    lines.push(`WEBHOOK_SECRET=${config.github.webhookSecret}`);
+    if (config.github.mode === 'pat') {
+      lines.push(`GH_TOKEN=${config.github.token}`);
+      lines.push(`GITHUB_TOKEN=${config.github.token}`);
+    } else {
+      const app = config.github;
+      lines.push(
+        serializeEnv({
+          GITHUB_APP_ID: app.appId,
+          [app.privateKey.source === 'path'
+            ? 'GITHUB_APP_PRIVATE_KEY_PATH'
+            : 'GITHUB_APP_PRIVATE_KEY']: app.privateKey.value,
+          ...(app.slug ? { GITHUB_APP_SLUG: app.slug } : {}),
+        }).trimEnd()
+      );
+    }
+    lines.push(serializeEnv({ WEBHOOK_SECRET: config.github.webhookSecret }).trimEnd());
     if (config.github.allowedUsers) {
       lines.push(`GITHUB_ALLOWED_USERS=${config.github.allowedUsers}`);
     }
@@ -1682,24 +1805,23 @@ export function writeHomePiModelConfig(model: string): void {
 }
 
 /**
- * Serialize a key/value map back to `KEY=value` lines. Values with whitespace,
- * `#`, `"`, `'`, `\n`, or `\r` are double-quoted with `\\`, `"`, `\n`, `\r`
- * escaped so round-tripping through dotenv.parse is stable.
+ * dotenv does not unescape quotes or backslashes. Choose a representation its
+ * parser can round-trip rather than applying JavaScript string escaping.
  */
 export function serializeEnv(entries: Record<string, string>): string {
   const lines: string[] = [];
   for (const [key, value] of Object.entries(entries)) {
-    const needsQuoting = /[\s#"'\n\r]/.test(value) || value === '';
-    if (needsQuoting) {
-      const escaped = value
-        .replace(/\\/g, '\\\\')
-        .replace(/"/g, '\\"')
-        .replace(/\n/g, '\\n')
-        .replace(/\r/g, '\\r');
-      lines.push(`${key}="${escaped}"`);
-    } else {
-      lines.push(`${key}=${value}`);
-    }
+    const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+    const candidates = [
+      `${key}=${value}`,
+      `${key}="${encodedLineBreaks}"`,
+      `${key}='${value}'`,
+      `${key}=\`${value}\``,
+    ];
+    const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
+    if (line === undefined)
+      throw new Error(`Cannot serialize env key ${key} without changing its value`);
+    lines.push(line);
   }
   return lines.join('\n') + (lines.length > 0 ? '\n' : '');
 }
@@ -1724,11 +1846,17 @@ interface WriteScopedEnvResult {
  * Write env content to exactly one archon-owned file, selected by scope.
  * Merge-only by default (existing non-empty values win, user-added keys
  * survive). Backs up the existing file (if any) before every rewrite, even
- * when `--force` is set.
+ * when `--force` is set. A confirmed GitHub mode switch replaces auth keys
+ * while keeping shared webhook settings and unrelated values.
  */
 export function writeScopedEnv(
   content: string,
-  options: { scope: 'home' | 'project'; repoPath: string; force: boolean }
+  options: {
+    scope: 'home' | 'project';
+    repoPath: string;
+    force: boolean;
+    replaceGitHubAuth?: boolean;
+  }
 ): WriteScopedEnvResult {
   const targetPath = resolveScopedEnvPath(options.scope, options.repoPath);
   const parentDir = dirname(targetPath);
@@ -1762,6 +1890,9 @@ export function writeScopedEnv(
     const existingRaw = readFileSync(targetPath, 'utf-8');
     const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
     const proposed = parseDotenv(content);
+    if (options.replaceGitHubAuth) {
+      for (const key of [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS]) delete existing[key];
+    }
     const merged: Record<string, string> = { ...existing };
     for (const [key, value] of Object.entries(proposed)) {
       const prior = existing[key];
@@ -2120,6 +2251,23 @@ async function runSetup(options: SetupOptions): Promise<void> {
     config.botDisplayName = await collectBotDisplayName();
   }
 
+  let replaceGitHubAuth = false;
+  if (config.github && existsSync(targetEnvPath)) {
+    const saved = parseDotenv(readFileSync(targetEnvPath, 'utf8'));
+    const oppositeKeys = config.github.mode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_KEYS;
+    if (oppositeKeys.some(key => key in saved)) {
+      const approved = await confirm({
+        message: `Replace existing GitHub authentication with ${config.github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
+        initialValue: false,
+      });
+      if (isCancel(approved) || !approved) {
+        cancel('Setup cancelled. Existing configuration was not changed.');
+        exitSetup(0);
+      }
+      replaceGitHubAuth = true;
+    }
+  }
+
   // Generate and write configuration. Wrap in try/catch so any fs exception
   // (permission denied, read-only FS, backup copy failure, etc.) stops the
   // spinner cleanly and surfaces an actionable error instead of a raw stack
@@ -2133,6 +2281,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
       scope,
       repoPath: options.repoPath,
       force,
+      replaceGitHubAuth,
     });
   } catch (error) {
     s.stop('Failed to write configuration');
@@ -2302,8 +2451,9 @@ async function runSetup(options: SetupOptions): Promise<void> {
   if (config.platforms.github && config.github) {
     summaryLines.push('');
     summaryLines.push('GitHub Webhook Setup:');
-    summaryLines.push(`  Secret: ${config.github.webhookSecret}`);
-    summaryLines.push('  Add this secret to your GitHub webhook configuration');
+    summaryLines.push(
+      `  Use WEBHOOK_SECRET from ${writeResult.targetPath} in your GitHub webhook configuration.`
+    );
   }
 
   if (skillInstalledPath && skillInstalledBase) {
