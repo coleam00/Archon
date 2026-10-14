@@ -4917,6 +4917,8 @@ export interface components {
         decisionsAuthored?: boolean;
         /** @enum {string|null} */
         resolved?: 'approved' | 'rejected' | null;
+        answeredVia?: string;
+        answeredAt?: string;
         completionSignaled?: boolean | null;
         signaledOutput?: string | null;
         signaledStructuredOutput?: unknown;
