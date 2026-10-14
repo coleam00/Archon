@@ -84,6 +84,23 @@ describe('settleRunBudgetAttempt', () => {
     expect(ledger.usage).toEqual({ workUnits: 0, spendUsd: 0.25 });
   });
 
+  it('charges nothing for an attempt that failed before any provider was bound', () => {
+    const ledger = createRunBudgetLedger({ max_spend_usd: 1 }, emptyRunBudgetUsage());
+    const preProvider = executionMetadata(
+      finishNodeExecution(
+        startNodeExecution({
+          runId: 'run-1',
+          path: 'a',
+          node: { id: 'a', kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+          invocation: newNodeInvocation(),
+        }),
+        { status: 'failed', error: 'unknown provider', failureKind: 'config' }
+      )
+    );
+    expect(settleRunBudgetAttempt(ledger, 'agent', 'a', preProvider)).toBeUndefined();
+    expect(ledger.usage).toEqual({ workUnits: 0, spendUsd: 0 });
+  });
+
   it.each([
     ['unreported', agentAttempt({}), 'unknown'],
     ['unsupported', unsupportedCostAttempt(), 'unsupported'],

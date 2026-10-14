@@ -32,12 +32,12 @@ export function runBudgetWorkUnitEvent(runId: string, path: string): RunBudgetWo
   };
 }
 
+/** Why an `agent` attempt's cost is unknown: the measurement's own reason, or the budget's. */
 export type CostUnavailableReason =
-  | 'not_reported'
-  | 'unsupported'
-  | 'unknown'
-  | 'invalid'
-  | 'incomplete'
+  | Exclude<
+      Extract<NodeExecutionMetadata['spend']['costUsd'], { source: 'unavailable' }>['reason'],
+      'not_applicable'
+    >
   | 'partial'
   | 'interrupted';
 
@@ -61,11 +61,11 @@ export function attemptSpend(execution: NodeExecutionMetadata | undefined): Atte
   if (execution === undefined) return { kind: 'unavailable', reason: 'unknown' };
   const cost = execution.spend.costUsd;
   if (cost.source === 'unavailable') {
-    // An agent attempt always has a provider, so "not applicable" means unknown here.
-    return {
-      kind: 'unavailable',
-      reason: cost.reason === 'not_applicable' ? 'unknown' : cost.reason,
-    };
+    // Only an attempt that failed before a provider was bound records no provider, so it
+    // made no provider call: its cost is a known zero.
+    return cost.reason === 'not_applicable'
+      ? { kind: 'known', usd: 0 }
+      : { kind: 'unavailable', reason: cost.reason };
   }
   if (!Number.isFinite(cost.value) || cost.value < 0) {
     return { kind: 'unavailable', reason: 'invalid' };
