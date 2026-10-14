@@ -904,6 +904,62 @@ first read, and never prints it.
 The run id may be the short prefix printed by `workflow runs`. Once the wait returns,
 inspect the run normally with `workflow get <run-id>`.
 
+### `workflow attention`
+
+List, count or read the [attention queue](/guides/attention-queue/): every paused run that
+needs someone, as typed items an answerer can act on without parsing prose. Read-only.
+
+```bash
+archon workflow attention --json                                   # this project
+archon workflow attention --json --all                             # the whole install
+archon workflow attention --json --project acme/web --label ci=other
+archon workflow attention --json --sort label:urgency
+archon workflow attention --json --all --count-by label:class
+archon workflow attention <run-id> --json                          # one item
+```
+
+- **Scope.** The default is the current project, resolved from the working directory as
+  [`state`](#state) resolves it. `--project` takes a codebase id, a codebase name, or a
+  project key such as `_cwd/scratch`; `--all` covers the install. A run is in scope when
+  its codebase id matches, when both sides have one, and otherwise when its project key
+  matches, so a run paused before its codebase was renamed is still listed under the new
+  name.
+- **`--label k=v`** is an exact match; repeat it and every filter must match.
+- **`--sort`** is `age` (oldest pause first, the default) or `label:<key>` (by that
+  label's value as a plain string; items without it last).
+- **`--count-by`** is `project` or `label:<key>`, and replaces the list with counts.
+
+`--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
+`items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
+`item` is null when the run needs no one now; a parent blocked on sub-runs resolves to the
+item of the child that holds the pause. An unknown run id prints `error: "not_found"` and
+exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
+
+HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sort` and
+`countBy`, and returns `items` beside the console's `runs`, or `{ counts }`. A server has
+no working directory, so without `project` it covers the whole install.
+`GET /api/runs/<run-id>/attention` reads one item.
+
+### `workflow attention label`
+
+Set or remove labels on the attention wait a run is paused at, without answering it.
+
+```bash
+archon workflow attention label <run-id> --occurrence <id> --set class=ci-other --set urgency=high --json
+archon workflow attention label <run-id> --occurrence <id> --unset urgency --json
+```
+
+A set key replaces the same key; every other label stays. The write is refused, naming
+the current occurrence, when the run has moved to another pause, and refused for a gate or
+an answered wait: only `wait: attention` pauses carry labels. Each write bumps the item's
+`revision` and commits an `attention_labeled` event, in the same transaction, carrying the
+occurrence, the keys set and unset, the surface as `via`, and the new revision. Who may
+write is the same as who may answer.
+
+`--json` prints `{ ok, action: "attention_label", runId, occurrence, revision, labels }`.
+HTTP: `POST /api/runs/<run-id>/attention/labels` with `{ occurrence, set?, unset? }`. Chat
+agents use the `manage_run` action `label`.
+
 ### `workflow resume`
 
 Resume a failed or paused workflow run. Re-executes the workflow, automatically skipping nodes that completed in the prior run.

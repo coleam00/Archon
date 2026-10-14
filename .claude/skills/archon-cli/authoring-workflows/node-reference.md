@@ -302,11 +302,15 @@ and `payload`.
     options:                  # select and multi_select only; or one whole "$plan.output.options"
       - { id: use-main, label: "Base on main" }
       - { id: use-dev }
+    labels:                   # optional; plain strings, runtime refs resolved at pause
+      about: "$plan.output.topic"
 ```
 
 The next node reads the answer: `{text}` for `message`, `{decision, text}` for `approval`
 and `select`, `{decisions, text}` for `multi_select`. In the `approval` form `reject` is
 an answer and never cancels the run; branch on `$ask.output.decision` with `when:`.
+`labels` mean nothing to the engine; they let the user's handler workflows pick the
+pause out of `archon workflow attention --label k=v`.
 
 ## Wiring nodes together
 
