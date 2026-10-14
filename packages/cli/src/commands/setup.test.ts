@@ -1313,7 +1313,7 @@ describe('GitHub setup wizard', () => {
       const source = readFileSync(join(authDir, file), 'utf8');
       for (const match of source.matchAll(/\benv\.(GITHUB_APP_[A-Z_]+)\b/g)) readKeys.add(match[1]);
     }
-    expect([...GITHUB_APP_KEYS].sort()).toEqual([...readKeys].sort());
+    expect([...readKeys].sort()).toEqual([...GITHUB_APP_KEYS].sort());
   });
 
   it.each(['path', 'inline'] as const)(
