@@ -610,9 +610,10 @@ nodes:
     # The command file can use $classify.output or $classify.output.field
 ```
 
-Variable substitution order:
-1. Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.)
-2. Node output references (`$nodeId.output`, `$nodeId.output.field`)
+Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.) and node output
+references resolve in one pass over the template. A substituted value is inserted as written
+and never scanned again, so a message or an upstream output that quotes `$nodeId.output`
+reaches the node unchanged. See [Substitution Order](/reference/variables/#substitution-order).
 
 Output references can follow nested object fields. For example, this gate receives
 `Proposed: add` when `review` emits `{"proposal":{"action":"add"}}`:

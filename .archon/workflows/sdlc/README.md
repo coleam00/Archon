@@ -166,14 +166,18 @@ the transcript now holds for free.
 
 ## The engineering-conventions sidecar
 
-A repository may declare its engineering conventions in an `engineering.md`
-(root, or a config directory such as `.archon/`), and its product direction in a
-direction document. Prompts that write code read both before coding, and every
-review prompt reads them before judging: they are the project's own values, so a
-taste finding cites one of them or is left out, and an owner declines a finding
-by the same standard. The check is conditional on the file existing, so the pack
-stays portable: a repository without one loses nothing. A new pack workflow that
-writes or judges code carries the same line.
+A repository may declare its architecture in an `architecture.md`, its
+engineering conventions in an `engineering.md`, and its product direction in a
+direction document, at the root, in a config directory such as `.archon/`, or
+wherever its steering files point. The steering files themselves (`AGENTS.md` or
+its equivalent) reach every node through the provider's own context, so no
+prompt tells a node to read them. Each prompt that judges reads the sidecar
+documents its judgment needs, in one shared sentence; the direction document
+only where the node decides or judges scope. They are the project's
+own values, so a taste finding cites one of them or is left out, and an owner
+declines a finding by the same standard. Each read is conditional on the file
+existing, so the pack stays portable: a repository without one loses nothing. A
+new pack prompt that writes or judges code carries the same sentence.
 
 ## A node's streams are the operator's channel
 

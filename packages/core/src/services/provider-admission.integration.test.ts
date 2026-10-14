@@ -26,7 +26,7 @@ import {
   releaseProviderAttemptHolder,
   tryAdmitProviderAttempt,
 } from '../db/provider-attempts';
-import { currentProcessOwner } from '@archon/paths/process-owner';
+import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/process-owner';
 import { ProviderConcurrencyConfigError } from '../config/provider-concurrency';
 import { processProviderRegistration } from '../providers/process-registration';
 import { getAgentProvider, ProviderAdmissionAbortedError } from './provider-admission';
@@ -425,11 +425,34 @@ describe('attempt holder liveness', () => {
     ).toEqual({ admitted: false, live: 2 });
 
     const holders = await listProviderAttemptHolders();
-    expect(holders.find(h => h.attemptId === remote)?.ownerOnThisHost).toBe(false);
+    expect(holders.find(h => h.attemptId === remote)).toMatchObject({ ownerOnThisHost: false });
     expect(await releaseProviderAttemptHolder(local)).toBe('owner_running');
     expect(await releaseProviderAttemptHolder(remote)).toBe('released');
     expect(await releaseProviderAttemptHolder(remote)).toBe('not_found');
     expect((await listProviderAttemptHolders()).map(h => h.attemptId)).toEqual([local]);
+  });
+
+  test('a holder row with a non-positive pid blocks admission but is listed and released on its own', async () => {
+    const live = await insertAttempt(currentProcessOwner);
+    const corrupt = await insertAttempt({ ...currentProcessOwner, pid: -999999 });
+    const source = `resource slot '${providerResourceKey(PROVIDER)}' holder '${corrupt}'`;
+    const error = await tryAdmitProviderAttempt({
+      provider: PROVIDER,
+      capacity: 99,
+      attemptId: crypto.randomUUID(),
+    }).catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(ProcessOwnerRecordError);
+    expect((error as ProcessOwnerRecordError).source).toBe(source);
+
+    const holders = await listProviderAttemptHolders();
+    expect(holders.find(h => h.attemptId === live)?.owner).toEqual(currentProcessOwner);
+    const listed = holders.find(h => h.attemptId === corrupt);
+    expect(listed?.owner).toBeNull();
+    expect(listed && listed.owner === null ? listed.invalidOwner : undefined).toContain(source);
+
+    expect(await releaseProviderAttemptHolder(live)).toBe('owner_running');
+    expect(await releaseProviderAttemptHolder(corrupt)).toBe('released');
+    expect((await listProviderAttemptHolders()).map(h => h.attemptId)).toEqual([live]);
   });
 });
 

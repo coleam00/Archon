@@ -7,7 +7,11 @@ import {
   type WorkflowEngineSubmitInput,
   type WorkflowResumeInput,
   type WorkflowResumeAdmission,
+  type WorkflowRunDelivery,
+  type WorkflowRunSubscription,
+  type WorkflowRunSubscriptionOptions,
 } from './engine-port';
+import { subscribeToRunTree } from './run-subscription';
 import type { WorkflowDeps } from './deps';
 import type { WorkflowExecutionResult } from './schemas';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
@@ -91,5 +95,13 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       throw error;
     });
     return { accepted: true, runId: hydrated.preCreatedRun.id, settled };
+  }
+
+  subscribe(
+    runId: string,
+    listener: (delivery: WorkflowRunDelivery) => void,
+    options?: WorkflowRunSubscriptionOptions
+  ): Promise<WorkflowRunSubscription> {
+    return subscribeToRunTree(this.deps.store, runId, listener, options);
   }
 }

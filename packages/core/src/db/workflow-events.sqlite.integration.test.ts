@@ -1,17 +1,12 @@
 // @archon-test-isolated
 /**
- * Integration test: listWorkflowEventsSince against a REAL bun:sqlite database.
- *
- * The mock-based poller tests stub the query, so they pass while the real SQLite
- * path is dead: SQLite stores `created_at` as `datetime('now')` →
- * "YYYY-MM-DD HH:MM:SS" and compares TEXT lexicographically, but an ISO cursor
- * ("…T…Z") sorts wrong (space at index 10 < 'T'), so `created_at >= cursor` matched
- * nothing. This runs the actual function end-to-end to lock the fix (C1).
+ * Workflow event reads and writes against a REAL bun:sqlite database.
  *
  * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with other db tests' fakes.
  */
 import { describe, test, expect, mock } from 'bun:test';
+import type { WorkflowEventRow } from './workflow-events';
 
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
@@ -38,12 +33,10 @@ mock.module('./connection', () => ({
 }));
 
 const {
-  listWorkflowEventsSince,
-  createWorkflowEvent,
   persistWorkflowEvent,
   listWorkflowEvents,
-  listRecentEvents,
   persistWorkflowEventIfRunning,
+  readWorkflowEventsAfter,
 } = await import('./workflow-events');
 const { cancelWorkflowRun } = await import('./workflows');
 
@@ -60,9 +53,7 @@ await db.query(
   []
 );
 
-const minuteAgo = (): Date => new Date(Date.now() - 60_000);
-
-describe('listWorkflowEventsSince — real SQLite (catches the C1 datetime mismatch)', () => {
+describe('workflow events — real SQLite', () => {
   test('cancellation cannot interleave between an instance claim check and its insert', async () => {
     await db.query(
       `INSERT INTO remote_agent_workflow_runs
@@ -142,69 +133,11 @@ describe('listWorkflowEventsSince — real SQLite (catches the C1 datetime misma
       []
     );
 
-    const first = await listWorkflowEventsSince(new Date('2026-01-01T00:00:00.000Z'), 100);
-    const second = await listWorkflowEventsSince(new Date('2026-01-01T00:00:00.000Z'), 100);
-    const lifecycleTypes = (rows: typeof first): string[] =>
+    const lifecycleTypes = (rows: WorkflowEventRow[]): string[] =>
       rows.filter(row => row.step_name === 'build').map(row => row.event_type);
-
-    expect(lifecycleTypes(first)).toEqual(['node_started', 'node_completed']);
-    expect(lifecycleTypes(second)).toEqual(lifecycleTypes(first));
 
     const stored = await listWorkflowEvents('run-1');
     expect(lifecycleTypes(stored)).toEqual(['node_started', 'node_completed']);
-  });
-
-  test('returns an event stored via datetime() when queried with an ISO Date cursor', async () => {
-    await persistWorkflowEvent({
-      workflow_run_id: 'run-1',
-      event_type: 'node_completed',
-      step_name: 'build',
-      data: { node_output: 'x' },
-    });
-
-    const rows = await listWorkflowEventsSince(minuteAgo(), 100);
-
-    // Without the dialect-aware cursor, an ISO param ("…T…Z") vs the stored
-    // "YYYY-MM-DD HH:MM:SS" returns zero rows — the bug this test prevents.
-    const ev = rows.find(r => r.event_type === 'node_completed');
-    expect(ev).toBeDefined();
-    expect(ev?.workflow_run_id).toBe('run-1');
-    expect(ev?.data).toEqual({ node_output: 'x' }); // parsed object, not a string
-  });
-
-  test('filters by eventTypes in SQL (keeps provider_event out)', async () => {
-    await createWorkflowEvent({ workflow_run_id: 'run-1', event_type: 'provider_event', data: {} });
-
-    const onlyNodes = await listWorkflowEventsSince(minuteAgo(), 100, [
-      'node_completed',
-      'node_started',
-    ]);
-
-    expect(onlyNodes.some(r => r.event_type === 'provider_event')).toBe(false);
-    expect(onlyNodes.some(r => r.event_type === 'node_completed')).toBe(true);
-  });
-
-  test('a future cursor returns nothing (comparison direction is correct)', async () => {
-    const rows = await listWorkflowEventsSince(new Date(Date.now() + 60_000), 100);
-    expect(rows).toHaveLength(0);
-  });
-
-  test('listRecentEvents returns same-day SQLite events (dialect-aware since cursor)', async () => {
-    const id = 'recent-same-day';
-    await db.query(
-      `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_name, data, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, 'run-1', 'node_started', 'recent', '{}', '2026-01-01 00:00:30']
-    );
-
-    // An ISO param ("…T…Z") sorts ABOVE the stored "YYYY-MM-DD HH:MM:SS" shape
-    // (T > space), so every same-day event was silently dropped before the
-    // cursor switched to the dialect-aware conversion.
-    const rows = await listRecentEvents('run-1', new Date('2026-01-01T00:00:00.000Z'));
-    expect(rows.map(r => r.id)).toContain(id);
-
-    const none = await listRecentEvents('run-1', new Date(Date.now() + 60_000));
-    expect(none).toHaveLength(0);
   });
 
   test('malformed data degrades to {} instead of throwing the whole batch (I2)', async () => {
@@ -214,7 +147,7 @@ describe('listWorkflowEventsSince — real SQLite (catches the C1 datetime misma
       []
     );
 
-    const rows = await listWorkflowEventsSince(minuteAgo(), 100);
+    const rows = await readWorkflowEventsAfter('0', 100);
     const bad = rows.find(r => r.id === 'bad-evt');
     expect(bad).toBeDefined();
     expect(bad?.data).toEqual({});

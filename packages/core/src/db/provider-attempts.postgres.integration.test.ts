@@ -135,7 +135,7 @@ describe.skipIf(!baseUrl)('provider-attempt holders — real Postgres behavior',
     });
     expect(next).toEqual({ admitted: true, live: 2 });
     const held = (await attempts.listProviderAttemptHolders()).filter(h => h.provider === provider);
-    expect(held.map(h => h.owner.host).sort()).toEqual(
+    expect(held.map(h => h.owner?.host).sort()).toEqual(
       ['another-host', owner.currentProcessOwner.host].sort()
     );
   });
