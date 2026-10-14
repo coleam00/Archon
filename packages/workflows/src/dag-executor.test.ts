@@ -25193,6 +25193,120 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(polishPrompts[3]).toContain('outer: [A1] inner: [C1]');
   });
 
+  // #3972 — a command body is loaded only when its node runs, after expansion replaced
+  // the include node, so its `$<include>.output` must still name the include's sink.
+  it('gives a standalone command body the output of an include it reads (#3972)', async () => {
+    await writeFile(
+      join(testDir, '.archon', 'commands', 'check-ci.md'),
+      'Check CI for [$pr.output]'
+    );
+    await writeFile(join(testDir, '.archon', 'commands', 'fix-ci.md'), 'Fix CI for [$pr.output]');
+    mockSendQueryDag.mockImplementation(async function* (prompt: string) {
+      yield {
+        type: 'agent_message_chunk',
+        text: prompt.includes('open the pr') ? 'PR-42' : 'DONE',
+      };
+      yield { type: 'result', sessionId: 'include-alias-sess' };
+    });
+    const leaf = workflowDefinitionSchema.parse({
+      name: 'open-pr',
+      description: 'Opens a PR',
+      nodes: [{ id: 'open', prompt: 'open the pr' }],
+    });
+    const deliver = workflowDefinitionSchema.parse({
+      name: 'deliver',
+      description: 'Reads an include from command bodies',
+      nodes: [
+        { id: 'pr', include: 'open-pr' },
+        { id: 'check', command: 'check-ci', depends_on: ['pr'] },
+        {
+          id: 'fix',
+          depends_on: ['pr'],
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 1,
+            nodes: [{ id: 'ci', command: 'fix-ci' }],
+          },
+        },
+      ],
+    });
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        [leaf.name, leaf],
+        [deliver.name, deliver],
+      ])
+    );
+    expect(errors).toHaveLength(0);
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-include-alias',
+        cwd: testDir,
+        workflow: workflows.get('deliver')!,
+        workflowRun: makeWorkflowRun('include-alias'),
+      })
+    );
+
+    const prompts = mockSendQueryDag.mock.calls.map(call => call[0] as string);
+    expect(prompts.find(prompt => prompt.includes('Check CI for'))).toContain(
+      'Check CI for [PR-42]'
+    );
+    expect(prompts.find(prompt => prompt.includes('Fix CI for'))).toContain('Fix CI for [PR-42]');
+  });
+
+  it('resolves an included loop-body command own with: binding at run time (#3972)', async () => {
+    mockSendQueryDag.mockImplementation(async function* (prompt: string) {
+      yield { type: 'agent_message_chunk', text: prompt.includes('produce') ? 'PR-7' : 'DONE' };
+      yield { type: 'result', sessionId: 'included-binding-sess' };
+    });
+    const block = workflowDefinitionSchema.parse({
+      name: 'fix-loop',
+      description: 'A loop-body command binds its sibling output',
+      nodes: [
+        {
+          id: 'fix',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 1,
+            nodes: [
+              { id: 'p', prompt: 'produce' },
+              { id: 'ci', command: 'check-pr', depends_on: ['p'], with: { bound: '$p.output' } },
+            ],
+          },
+        },
+      ],
+    });
+    const parent = workflowDefinitionSchema.parse({
+      name: 'ship',
+      description: 'Includes the loop',
+      nodes: [{ id: 'deliver', include: 'fix-loop' }],
+    });
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        [block.name, block],
+        [parent.name, parent],
+      ]),
+      new Map([['check-pr', 'Check PR [$INPUTS.bound]']])
+    );
+    expect(errors).toHaveLength(0);
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-included-binding',
+        cwd: testDir,
+        workflow: workflows.get('ship')!,
+        workflowRun: makeWorkflowRun('included-binding'),
+      })
+    );
+
+    const prompts = mockSendQueryDag.mock.calls.map(call => call[0] as string);
+    expect(prompts.find(prompt => prompt.includes('Check PR'))).toContain('Check PR [PR-7]');
+  });
+
   it('exhausts loop_group iterations after a negated final until signal', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {

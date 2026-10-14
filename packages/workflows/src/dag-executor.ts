@@ -200,6 +200,7 @@ import { validateArtifactPointers } from './artifact-pointer';
 import {
   COMPILED_LOOP_COMMAND,
   readComposedBindings,
+  resolveIncludeOutputAliases,
   readComposedMeta,
   type LoopWithCompiledCommand,
   type IncludeCommandContent,
@@ -2373,7 +2374,7 @@ async function executeNodeInternal(
       getLog().error({ nodeId: node.id, error: errMsg }, 'dag_node_command_load_failed');
       return failAgentNode(errMsg, 'config');
     }
-    rawPrompt = promptResult.content;
+    rawPrompt = resolveIncludeOutputAliases(node, promptResult.content);
   } else {
     // commandName undefined implies node.source.kind === 'inline' by construction
     // (AgentBody.source is a two-member union) — but the compiler can't correlate
@@ -5576,7 +5577,7 @@ async function executeLoopNode(
           data: { command: loop.command },
         });
       }
-      loopPromptTemplate = promptResult.content;
+      loopPromptTemplate = resolveIncludeOutputAliases(node, promptResult.content);
     }
   } else if (typeof loop.prompt === 'string') {
     loopPromptTemplate = loop.prompt;
