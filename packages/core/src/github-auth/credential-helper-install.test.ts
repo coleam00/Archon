@@ -189,8 +189,9 @@ describe('installCredentialHelper', () => {
       ]);
 
       expect(exitCode, stderr).toBe(0);
-      expect(stdout).toContain('username=x-access-token');
-      expect(stdout).toContain('password=fresh-installation-token');
+      const credentials = git.githubTokenCredentials('fresh-installation-token');
+      expect(stdout).toContain(`username=${credentials.username}\n`);
+      expect(stdout).toContain(`password=${credentials.password}\n`);
     }
   );
 });
