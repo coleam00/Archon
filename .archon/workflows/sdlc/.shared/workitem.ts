@@ -127,9 +127,9 @@ export interface TriageResult extends Omit<TriageFacts, 'at' | 'run_id'> {
 }
 
 export const MAINTAINERS_PATH = '.archon/sdlc/policy/maintainers.json';
-// History and run links are capped so a label-spamming account cannot push the
-// document past the state store's 64 KiB limit and wedge the item. `archon state log`
-// keeps every revision.
+// History, run links and label requests are capped so a label-spamming account cannot
+// push the document past the state store's 64 KiB limit and wedge the item. `archon
+// state log` keeps every revision.
 const KEPT = 50;
 
 const STAGES = {
@@ -154,6 +154,20 @@ export function bodyDigest(body: string): string {
 
 function newest<T>(entries: readonly T[]): T[] {
   return entries.slice(-KEPT);
+}
+
+function isLabelRequest(request: IntakeRequest): boolean {
+  return request.action === 'added';
+}
+
+/**
+ * Only label requests carry anything a decision reads; any other request just makes
+ * the item a candidate, and the pickup reads the live issue. So one of those is kept,
+ * however often an author edits.
+ */
+function queued(requests: readonly IntakeRequest[]): IntakeRequest[] {
+  const other = requests.filter(request => !isLabelRequest(request)).at(-1);
+  return newest(requests.filter(request => isLabelRequest(request) || request === other));
 }
 
 export function newWorkItem(subject: QualifiedPr, at: string): WorkItem {
@@ -576,6 +590,8 @@ const STATE_CONFLICT = 3;
 
 function archon(args: readonly string[], input?: string): { code: number; value: unknown } {
   const result = Bun.spawnSync([...archonCommand(), ...args], {
+    // Bun spawns with the environment as the process started unless given the live one.
+    env: process.env,
     stdin: input === undefined ? 'ignore' : Buffer.from(input),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -647,7 +663,10 @@ export function runStatus(runId: string): string | null {
 
 // --- pickup ---------------------------------------------------------------------
 
-/** Record a request on the item that sent it, creating the item's document if needed. */
+/**
+ * Record a request on the item that sent it, creating the item's document if needed.
+ * A request that is not a label adds nothing while another such request waits.
+ */
 export function enqueue(subject: QualifiedPr, request: IntakeRequest): void {
   const name = workItemName(subject.number);
   const stored = stateGet(name);
@@ -655,6 +674,13 @@ export function enqueue(subject: QualifiedPr, request: IntakeRequest): void {
     const created = { ...newWorkItem(subject, request.at), requests: [request] };
     if (statePut(name, created, stored.revision) === 'ok') return;
   }
+  const waiting = record(stored.value)?.requests;
+  if (
+    !isLabelRequest(request) &&
+    Array.isArray(waiting) &&
+    waiting.some(entry => record(entry)?.action !== 'added')
+  )
+    return;
   stateAppend(name, '/requests', request);
 }
 
@@ -695,7 +721,7 @@ function releaseIfTerminal(item: Read, at: string, runId: string): Read {
   const doc: WorkItem = {
     ...item.doc,
     claim: null,
-    requests: [...claim.requests, ...item.doc.requests],
+    requests: queued([...claim.requests, ...item.doc.requests]),
     history: newest([
       ...item.doc.history,
       {
@@ -713,7 +739,11 @@ function releaseIfTerminal(item: Read, at: string, runId: string): Read {
 }
 
 function claimed(item: Read, at: string, runId: string): WorkItem {
-  return { ...item.doc, claim: { run_id: runId, at, requests: item.doc.requests }, requests: [] };
+  return {
+    ...item.doc,
+    claim: { run_id: runId, at, requests: queued(item.doc.requests) },
+    requests: [],
+  };
 }
 
 function claimable(item: Read | undefined): item is Read {
@@ -762,7 +792,8 @@ export function updateClaimed(
     const stored = stateGet(name);
     const doc = parseWorkItem(stored.value);
     if (doc.claim?.run_id !== runId) throw new Error(`${name} is no longer claimed by this run`);
-    const next = change(doc);
+    const changed = change(doc);
+    const next = { ...changed, requests: queued(changed.requests) };
     if (statePut(name, next, stored.revision) === 'ok') return next;
   }
   throw new Error(`${name} kept changing: three conditional writes conflicted`);

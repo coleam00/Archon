@@ -478,6 +478,20 @@ function stored(at: Install): { revision: number; value: WorkItem } {
   return { revision: parsed.revision, value: parseWorkItem(parsed.value) };
 }
 
+/** Run pack code in this process against the install's state store. */
+function inProcess<T>(at: Install, body: () => T): T {
+  const saved = { ...process.env };
+  Object.assign(process.env, at.env, {
+    ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, FAKE_ARCHON]),
+  });
+  try {
+    return body();
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+}
+
 describe('the intake scripts', () => {
   test('a trusted item is triaged, its work item holds the five fields, and it carries the route label', () => {
     const at = install();
@@ -644,18 +658,11 @@ describe('the intake scripts', () => {
       claim: null,
       requests: [labelRequest('archon-triage', 'maintainer')],
     };
-    const saved = { ...process.env };
-    Object.assign(process.env, at.env, {
-      ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, FAKE_ARCHON]),
-    });
-    try {
-      expect(
+    expect(
+      inProcess(at, () =>
         claimItem({ name: 'work/7', revision: claimedRevision - 1, doc: unclaimed }, AT, 'run-3')
-      ).toBeNull();
-    } finally {
-      for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
-      Object.assign(process.env, saved);
-    }
+      )
+    ).toBeNull();
     expect(stored(at).value.claim?.run_id).toBe('run-1');
   }, 60_000);
 
@@ -678,6 +685,41 @@ describe('the intake scripts', () => {
       summary: expect.stringContaining('run-1, which ended failed'),
     });
   }, 60_000);
+  test('edits while an item is claimed queue one request, and a release keeps only the newest', () => {
+    const at = install();
+    facts(at, { runId: 'run-1' });
+    for (const runId of ['run-2', 'run-3']) {
+      facts(at, { runId, action: 'edited', statuses: { 'run-1': 'running' } });
+    }
+    expect(stored(at).value.requests).toEqual([
+      expect.objectContaining({ run_id: 'run-2', action: 'edited' }),
+    ]);
+
+    facts(at, { runId: 'run-4', kind: 'pr', statuses: { 'run-1': 'failed' } });
+    expect(stored(at).value.claim?.requests).toEqual([
+      expect.objectContaining({ run_id: 'run-2', action: 'edited' }),
+    ]);
+  }, 60_000);
+
+  test('a claim keeps the newest label requests and one other request', () => {
+    const at = install();
+    facts(at, { runId: 'run-1' });
+    const labels = Array.from({ length: 60 }, (_, index) =>
+      labelRequest('archon-triage', `account-${String(index)}`)
+    );
+    const edit = (runId: string): IntakeRequest => ({
+      ...labelRequest('', null),
+      run_id: runId,
+      action: 'edited',
+      label: null,
+      body_digest: null,
+    });
+    const waiting = { ...newWorkItem(SUBJECT, AT), requests: [edit('a'), ...labels, edit('b')] };
+    const { revision } = stored(at);
+    const doc = inProcess(at, () => claimItem({ name: 'work/7', revision, doc: waiting }, AT, 'r'));
+    expect(doc?.claim?.requests).toEqual([...labels.slice(-49), edit('b')]);
+  }, 60_000);
+
   test('labels that fail to write leave the stage stored and the claim held, and the next pickup writes them', () => {
     const at = install();
     const decided = facts(at, { runId: 'run-1' }).output;
