@@ -162,6 +162,9 @@
       "src/script-discovery.test.ts"
     ],
     [
+      "src/script-discovery-links.test.ts"
+    ],
+    [
       "src/bundle-live-selection.test.ts"
     ],
     [

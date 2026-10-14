@@ -87,7 +87,7 @@ async function scanScriptDir(
           .filter(
             entry =>
               entry.isDirectory() ||
-              entry.isSymbolicLink() ||
+              (entry.isSymbolicLink() && !extname(entry.name)) ||
               requestedNames.has(basename(entry.name, extname(entry.name)))
           )
           .map(entry => entry.name)
@@ -110,6 +110,7 @@ async function scanScriptDir(
       entryStat = await stat(entryPath);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') continue;
       getLog().warn({ err, entryPath }, 'script_file_stat_error');
       throw error;
     }
