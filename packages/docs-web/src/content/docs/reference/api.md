@@ -398,6 +398,8 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
   -d '{"reason": "Please add error handling first"}'
 ```
 
+These routes record the decision and return. The server's continuation scheduler then continues the run on the platform that started it, whichever surface answered; a container run is the exception and needs `archon workflow resume <run-id>`.
+
 **Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, its parent run pauses "blocked on child". Approve/reject the **child** run (its id is in the parent's block message) — the parent auto-resumes when the child completes. A child inside a `fan_out:` expansion pauses the same way: it stays paused as its own run, and the parent pauses on a `fan_out` gate listing every unfinished child, then continues once they finish. Calling approve/reject on the *parent's* id while it is blocked on a child returns **400** with a redirect to the child id (a fan-out parent's error names every child it waits on). `abandon` on a parent cascade-cancels its non-terminal sub-run descendants; the response's `cascadeFailures` is non-zero if part of the tree could not be reached, and `blockedParentRunId` is set when the abandoned run was itself a child stranding a paused parent.
 
 ---
