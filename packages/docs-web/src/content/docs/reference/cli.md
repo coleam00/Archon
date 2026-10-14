@@ -618,7 +618,8 @@ for each choice. JSON exposes these choices in `metadata.approval.decisions`.
 
 Once answered, `metadata.approval` also records the surface the answer came through as
 `answeredVia` (`cli`, `api`, `manage_run`, or a chat platform id such as `slack`) and the
-time as `answeredAt`. The `approval_received` event carries the same surface as `via`.
+time as `answeredAt`. The `approval_received` event carries the same surface as `via`, and
+the `occurrence` it answered.
 These are audit facts. They never name who answered, and nothing routes on them.
 
 `workflow status`, `workflow runs`, and `workflow get` report two independent facts:

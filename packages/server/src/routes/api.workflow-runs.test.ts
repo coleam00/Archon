@@ -3193,7 +3193,12 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { via: 'api', decision: 'rejected', reason: 'needs work' },
+          data: {
+            via: 'api',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs work',
+          },
         },
       ],
       { step_name: 'review-gate', reason: 'approval_rejected' },
@@ -3255,7 +3260,12 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { via: 'api', decision: 'rejected', reason: 'needs more tests' },
+          data: {
+            via: 'api',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs more tests',
+          },
         },
       ],
       undefined
@@ -3296,7 +3306,12 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { via: 'api', decision: 'rejected', reason: 'still bad' },
+          data: {
+            via: 'api',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'still bad',
+          },
         },
       ],
       { step_name: 'review-gate', reason: 'approval_rejected' },
@@ -3867,7 +3882,7 @@ describe('approve/reject auto-resume', () => {
         {
           event_type: 'approval_received',
           step_name: 'review-gate',
-          data: { via: 'api', decision: 'rejected', reason: 'no' },
+          data: { via: 'api', occurrence: expect.any(String), decision: 'rejected', reason: 'no' },
         },
       ],
       { step_name: 'review-gate', reason: 'approval_rejected' },

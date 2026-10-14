@@ -11618,7 +11618,12 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { via: 'cli', decision: 'rejected', reason: 'not good' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'not good',
+          },
         },
       ],
       { step_name: 'gate', reason: 'approval_rejected' },
@@ -11688,7 +11693,12 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { via: 'cli', decision: 'rejected', reason: 'Rejected' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'Rejected',
+          },
         },
       ],
       undefined
@@ -11791,7 +11801,12 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { via: 'cli', decision: 'rejected', reason: 'needs work' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs work',
+          },
         },
       ],
       undefined
@@ -11891,7 +11906,12 @@ describe('workflowRejectCommand', () => {
         {
           event_type: 'approval_received',
           step_name: 'gate',
-          data: { via: 'cli', decision: 'rejected', reason: 'still bad' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'still bad',
+          },
         },
       ],
       { step_name: 'gate', reason: 'approval_rejected' },

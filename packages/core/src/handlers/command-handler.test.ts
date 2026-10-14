@@ -3288,6 +3288,7 @@ describe('CommandHandler', () => {
               step_name: 'refine',
               data: {
                 via: 'telegram',
+                occurrence: expect.any(String),
                 decision: 'approved',
                 comment: 'Add error handling',
                 iteration: 2,
@@ -3965,7 +3966,12 @@ describe('CommandHandler', () => {
             {
               event_type: 'approval_received',
               step_name: 'review',
-              data: { via: 'telegram', decision: 'rejected', reason: 'needs work' },
+              data: {
+                via: 'telegram',
+                occurrence: expect.any(String),
+                decision: 'rejected',
+                reason: 'needs work',
+              },
             },
           ],
           undefined
@@ -4012,7 +4018,12 @@ describe('CommandHandler', () => {
             {
               event_type: 'approval_received',
               step_name: 'review',
-              data: { via: 'telegram', decision: 'rejected', reason: 'bad' },
+              data: {
+                via: 'telegram',
+                occurrence: expect.any(String),
+                decision: 'rejected',
+                reason: 'bad',
+              },
             },
           ],
           { step_name: 'review', reason: 'approval_rejected' },
@@ -4057,7 +4068,12 @@ describe('CommandHandler', () => {
             {
               event_type: 'approval_received',
               step_name: 'gate',
-              data: { via: 'telegram', decision: 'rejected', reason: 'reason' },
+              data: {
+                via: 'telegram',
+                occurrence: expect.any(String),
+                decision: 'rejected',
+                reason: 'reason',
+              },
             },
           ],
           { step_name: 'gate', reason: 'approval_rejected' },

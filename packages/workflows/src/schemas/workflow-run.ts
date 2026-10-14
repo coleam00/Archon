@@ -1056,6 +1056,15 @@ function unreadableAttention(
 }
 
 /**
+ * The occurrence id of a gate pause: its `pauseId`, or `legacy:<nodeId>` for a gate paused
+ * before pause identities existed. Run-attention reports it and answers record it, so a
+ * reader can tie an answer to the exact pause it resolved.
+ */
+export function gateOccurrence(approval: Pick<ApprovalContext, 'nodeId' | 'pauseId'>): string {
+  return approval.pauseId ?? `legacy:${approval.nodeId}`;
+}
+
+/**
  * The single derivation of "what does this run need from outside, if anything".
  *
  * No database or I/O. The clock computes display durations only. The run row is
@@ -1170,7 +1179,7 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
     runId: run.id,
     respondTo: { runId: run.id, nodeId: raw.nodeId },
     message: raw.message,
-    occurrence: raw.pauseId ?? `legacy:${raw.nodeId}`,
+    occurrence: gateOccurrence(raw),
   };
 }
 

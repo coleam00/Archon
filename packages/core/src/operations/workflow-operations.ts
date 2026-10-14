@@ -33,6 +33,7 @@ import {
   readExecutionOwner,
   readOwnedWorktree,
   runAttention,
+  gateOccurrence,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
   WorkflowRun,
@@ -353,6 +354,11 @@ function answeredGate(
     answeredVia: recordSurfaceSchema.parse(origin.via),
     answeredAt: new Date().toISOString(),
   };
+}
+
+/** The occurrence an answer resolved, recorded on its audit event; absent when the gate is unreadable. */
+function answerOccurrence(approval: ApprovalContext | undefined): { occurrence?: string } {
+  return approval === undefined ? {} : { occurrence: gateOccurrence(approval) };
 }
 
 /**
@@ -1478,6 +1484,7 @@ export function createWorkflowOperations({
             step_name: approval.nodeId,
             data: {
               via: origin.via,
+              ...answerOccurrence(approval),
               decision: 'approved',
               comment: approvalComment,
               gate: 'writeback',
@@ -1515,6 +1522,7 @@ export function createWorkflowOperations({
             step_name: approval.nodeId,
             data: {
               via: origin.via,
+              ...answerOccurrence(approval),
               decision: 'approved',
               comment: approvalComment,
               iteration: approval.iteration,
@@ -1555,7 +1563,12 @@ export function createWorkflowOperations({
           {
             event_type: 'approval_received',
             step_name: approval.nodeId,
-            data: { via: origin.via, decision: 'approved', comment: approvalComment },
+            data: {
+              via: origin.via,
+              ...answerOccurrence(approval),
+              decision: 'approved',
+              comment: approvalComment,
+            },
           },
         ];
         break;
@@ -1642,7 +1655,12 @@ export function createWorkflowOperations({
           const rejectionEvent: GateResolutionEvent = {
             event_type: 'approval_received',
             step_name: approval.nodeId,
-            data: { via: origin.via, decision: 'rejected', gate: 'writeback' },
+            data: {
+              via: origin.via,
+              ...answerOccurrence(approval),
+              decision: 'rejected',
+              gate: 'writeback',
+            },
           };
           const { resolved: won } = await store.resolveApprovalGate(
             runId,
@@ -1722,7 +1740,12 @@ export function createWorkflowOperations({
     const rejectionEvent: GateResolutionEvent = {
       event_type: 'approval_received',
       step_name: approval?.nodeId ?? 'unknown',
-      data: { via: origin.via, decision: 'rejected', reason: rejectReason },
+      data: {
+        via: origin.via,
+        ...answerOccurrence(approval),
+        decision: 'rejected',
+        reason: rejectReason,
+      },
     };
 
     // Compare-and-swap resolution guard — a concurrent second reject loses here
@@ -1841,6 +1864,7 @@ export function createWorkflowOperations({
         step_name: approval.nodeId,
         data: {
           via: origin.via,
+          ...answerOccurrence(approval),
           decision,
           comment: text !== undefined && text.trim().length > 0 ? text : decision,
         },

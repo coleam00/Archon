@@ -267,7 +267,12 @@ describe('approveWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'review',
-          data: { via: 'cli', decision: 'approved', comment: 'Looks good' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'approved',
+            comment: 'Looks good',
+          },
         },
       ],
       undefined
@@ -477,7 +482,13 @@ describe('approveWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'iterate',
-          data: { via: 'cli', decision: 'approved', comment: 'fix the tests', iteration: 2 },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'approved',
+            comment: 'fix the tests',
+            iteration: 2,
+          },
         },
       ],
       undefined
@@ -524,7 +535,13 @@ describe('approveWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'iterate',
-          data: { via: 'cli', decision: 'approved', comment: 'Approved', iteration: 1 },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'approved',
+            comment: 'Approved',
+            iteration: 1,
+          },
         },
       ],
       undefined
@@ -716,7 +733,13 @@ describe('approveWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: '__writeback__',
-          data: { via: 'cli', decision: 'approved', comment: 'Approved', gate: 'writeback' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'approved',
+            comment: 'Approved',
+            gate: 'writeback',
+          },
         },
       ],
       undefined
@@ -820,7 +843,12 @@ describe('rejectWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'review',
-          data: { via: 'cli', decision: 'rejected', reason: 'needs more tests' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs more tests',
+          },
         },
       ],
       undefined
@@ -905,7 +933,12 @@ describe('rejectWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'review',
-          data: { via: 'cli', decision: 'rejected', reason: 'still broken' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'still broken',
+          },
         },
       ],
       { step_name: 'review', reason: 'approval_rejected' },
@@ -930,7 +963,12 @@ describe('rejectWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'review',
-          data: { via: 'cli', decision: 'rejected', reason: 'no good' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'no good',
+          },
         },
       ],
       { step_name: 'review', reason: 'approval_rejected' },
@@ -1017,7 +1055,12 @@ describe('rejectWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: 'review',
-          data: { via: 'cli', decision: 'rejected', reason: 'needs changes' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            reason: 'needs changes',
+          },
         },
       ],
       undefined
@@ -1144,7 +1187,12 @@ describe('rejectWorkflow', () => {
         {
           event_type: 'approval_received',
           step_name: '__writeback__',
-          data: { via: 'cli', decision: 'rejected', gate: 'writeback' },
+          data: {
+            via: 'cli',
+            occurrence: expect.any(String),
+            decision: 'rejected',
+            gate: 'writeback',
+          },
         },
       ],
       undefined
@@ -1452,6 +1500,7 @@ describe('respondToWorkflow', () => {
       expect(Date.parse(String(approval.answeredAt))).not.toBeNaN();
       expect(events?.find(e => e.event_type === 'approval_received')?.data).toMatchObject({
         via: 'slack',
+        occurrence: 'pause-one',
       });
       expect(JSON.stringify([metadata, events])).not.toContain('user-who-answered');
     }
