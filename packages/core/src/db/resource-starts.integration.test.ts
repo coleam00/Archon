@@ -54,7 +54,7 @@ function launch(id: string): PreparedWorkflowLaunch {
       metadata: {},
     },
     execution: {
-      cwd: '/tmp/test',
+      cwd: `/tmp/test/${id}`,
       conversationId: 'conversation',
       isolation: { kind: 'in-place' },
     },

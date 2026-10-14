@@ -23,7 +23,7 @@ import {
   SourceReceiptDigestConflictError,
   capacityWaiters,
   drainableStarts,
-  pausedCheckouts,
+  heldCheckouts,
   resourceResumeBlocker,
   resourceStartBlocker,
   type QueuedStart,
@@ -179,12 +179,12 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
   // the due scan does.
   async function occupancy(resource: string): Promise<ResourceSlotOccupancy> {
     const row = await live(resource);
-    const paused: (WorkflowRun & { launch: Request['launch'] })[] = [];
+    const admittedRuns: (WorkflowRun & { launch: Request['launch'] })[] = [];
     for (const run of await listRunSnapshots(root)) {
-      if (run.status !== 'paused') continue;
+      if (isTerminalRunStatus(run.status)) continue;
       const admitted = await request(run.id);
       if (admitted?.status === 'admitted' && admitted.resource === resource)
-        paused.push({ ...run, launch: admitted.launch });
+        admittedRuns.push({ ...run, launch: admitted.launch });
     }
     const queue: QueuedStart[] = [];
     for (const id of row.queue) {
@@ -196,10 +196,10 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
       capacity: row.capacity,
       holders: row.holders,
       waiters: capacityWaiters(
-        paused.filter(run => !row.holders.some(h => h.kind === 'run' && h.id === run.id))
+        admittedRuns.filter(run => !row.holders.some(h => h.kind === 'run' && h.id === run.id))
       ),
       queue,
-      pausedCheckouts: pausedCheckouts(paused),
+      heldCheckouts: heldCheckouts(admittedRuns),
     };
   }
   async function admitExisting(

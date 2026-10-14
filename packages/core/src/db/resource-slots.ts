@@ -1,7 +1,7 @@
 import {
   ResourceSlotCapacityConflictError,
   capacityWaiters,
-  pausedCheckouts,
+  heldCheckouts,
   type ResourceSlotOccupancy,
 } from '@archon/workflows/resource-start-store';
 import {
@@ -26,7 +26,10 @@ import {
  * - `attempt`: one provider attempt, released by its owner when the provider stream
  *   has closed, or here when its owner process is provably gone (`@archon/paths/process-owner`).
  */
-import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import {
+  TERMINAL_WORKFLOW_STATUSES,
+  type WorkflowRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType } from './connection';
 import { parseJsonObject } from './workflow-run-normalization';
 import {
@@ -201,7 +204,7 @@ export async function removeResourceSlotHolder(
 
 /**
  * What a run-start slot holds, read under its lock (`lockResourceSlot`): live holders,
- * capacity waiters, the checkouts paused runs hold, and the queued start requests. The
+ * capacity waiters, the checkouts live admitted runs hold, and the queued start requests. The
  * queued rows are locked too, so a concurrent withdrawal cannot race their admission.
  */
 export async function resourceStartOccupancy(
@@ -211,15 +214,17 @@ export async function resourceStartOccupancy(
 ): Promise<ResourceSlotOccupancy> {
   const holders = await liveResourceSlotHolders(query, resource);
   const holding = new Set(holders.map(holder => holder.id));
-  const paused = await query<{
+  const live = await query<{
     id: string;
+    status: WorkflowRunStatus;
     metadata: unknown;
     working_path: string | null;
     launch: unknown;
   }>(
-    `SELECT w.id, w.metadata, w.working_path, q.launch FROM remote_agent_workflow_runs w
+    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch FROM remote_agent_workflow_runs w
        JOIN remote_agent_resource_start_requests q ON q.id = w.id
-      WHERE q.resource_key = $1 AND q.status = 'admitted' AND w.status = 'paused'`,
+      WHERE q.resource_key = $1 AND q.status = 'admitted'
+        AND w.status NOT IN (${terminalList})`,
     [resource]
   );
   const queued = await query<{ id: string; host_id: string; launch: unknown }>(
@@ -228,9 +233,9 @@ export async function resourceStartOccupancy(
       ORDER BY queue_position${getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : ''}`,
     [resource]
   );
-  const pausedRuns = paused.rows.map(row => ({
+  const liveRuns = live.rows.map(row => ({
     id: String(row.id),
-    status: 'paused' as const,
+    status: row.status,
     metadata: parseJsonObject(row.metadata) ?? {},
     working_path: row.working_path,
     launch: parseLaunch(row.launch),
@@ -238,13 +243,13 @@ export async function resourceStartOccupancy(
   return {
     capacity,
     holders,
-    waiters: capacityWaiters(pausedRuns.filter(run => !holding.has(run.id))),
+    waiters: capacityWaiters(liveRuns.filter(run => !holding.has(run.id))),
     queue: queued.rows.map(row => ({
       id: String(row.id),
       hostId: String(row.host_id),
       launch: parseLaunch(row.launch),
     })),
-    pausedCheckouts: pausedCheckouts(pausedRuns),
+    heldCheckouts: heldCheckouts(liveRuns),
   };
 }
 

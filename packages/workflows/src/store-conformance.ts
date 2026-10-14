@@ -536,6 +536,30 @@ export function describeWorkflowStoreConformance(
         { id: later.launch.run.id },
       ]);
     });
+    test('a start waits for its checkout until the run holding it ends, at any capacity', async () => {
+      const shared = { cwd: '/conformance/shared' };
+      const paused = await admitPaused(start('queue', 'host', 2, shared));
+      expect(await store.releasePausedRunSlot(paused, gateCursor)).toEqual({ released: true });
+      const first = start('queue', 'host', 2, shared);
+      expect(await store.admitResourceStart(first)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: paused },
+      });
+      expect((await claimAnswered(paused)).status).toBe('running');
+      const second = start('queue', 'host', 2, shared);
+      expect(await store.admitResourceStart(second)).toMatchObject({ status: 'queued' });
+      // A slot is free, but the continued run still holds the checkout.
+      expect(await drain()).toEqual([]);
+      await end(paused);
+      // One drain admits one start per checkout.
+      expect(await drain()).toEqual([
+        { status: 'admitted', requestId: first.launch.run.id, runId: first.launch.run.id },
+      ]);
+      await end(first.launch.run.id);
+      expect(await drain()).toEqual([
+        { status: 'admitted', requestId: second.launch.run.id, runId: second.launch.run.id },
+      ]);
+    });
     test('an explicit worktree branch is one checkout; a lane without one never shares', async () => {
       const lane = { isolation: { kind: 'worktree' as const, branch: 'lane' } };
       const paused = await admitPaused(start('queue', 'host', 1, lane));

@@ -3,7 +3,7 @@ import {
   compareStartReceipts,
   capacityWaiters,
   drainableStarts,
-  pausedCheckouts,
+  heldCheckouts,
   resourceResumeBlocker,
   resourceStartBlocker,
   ResourceSlotCapacityConflictError,
@@ -56,12 +56,12 @@ export function createInMemoryResourceStartStore(
   const occupancy = async (resource: string): Promise<ResourceSlotOccupancy> => {
     const holders: { id: string }[] = [];
     const candidates: WorkflowRun[] = [];
-    const paused: (WorkflowRun & { launch: PreparedWorkflowLaunch })[] = [];
+    const live: (WorkflowRun & { launch: PreparedWorkflowLaunch })[] = [];
     for (const request of requests.values()) {
       if (request.resource !== resource || request.status !== 'admitted') continue;
       const run = await getRun(request.id);
       if (!run || isTerminalRunStatus(run.status)) continue;
-      if (run.status === 'paused') paused.push({ ...run, launch: request.launch });
+      live.push({ ...run, launch: request.launch });
       if (released.has(run.id)) candidates.push(run);
       else holders.push({ id: run.id });
     }
@@ -72,7 +72,7 @@ export function createInMemoryResourceStartStore(
       queue: [...requests.values()].filter(
         request => request.resource === resource && request.status === 'queued'
       ),
-      pausedCheckouts: pausedCheckouts(paused),
+      heldCheckouts: heldCheckouts(live),
     };
   };
   const admit = async (intent: ResourceStartIntent): Promise<ResourceStartDisposition> => {
