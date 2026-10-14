@@ -54,7 +54,7 @@ test('absent bot configuration does not construct a provider or change dependenc
   };
   expect(loadGitHubAppConfig(env)).toBeNull();
   expect(initializeWorkflowGitHubAppAuth(env)).toBeNull();
-  expect(createWorkflowDeps().resolveBotGitHubToken).toBeUndefined();
+  expect(createWorkflowDeps().githubApp).toBeUndefined();
   expect(construct).not.toHaveBeenCalled();
 });
 
@@ -123,7 +123,7 @@ test('partial, malformed and conflicting local configuration fails without crede
         message.includes(badPem) ||
         message.includes('stub-pat-sentinel')
     ).toBe(false);
-    expect(createWorkflowDeps().resolveBotGitHubToken).toBeUndefined();
+    expect(createWorkflowDeps().githubApp).toBeUndefined();
   }
   expect(construct).not.toHaveBeenCalled();
 });
@@ -132,13 +132,14 @@ test('initialization precedes dependency snapshots, reuses the provider and mint
   const before = createWorkflowDeps();
   const provider = initializeWorkflowGitHubAppAuth(config);
   expect(initializeWorkflowGitHubAppAuth({})).toBe(provider);
-  expect(before.resolveBotGitHubToken).toBeUndefined();
+  expect(before.githubApp).toBeUndefined();
   expect(construct).toHaveBeenCalledTimes(1);
   expect(mint).not.toHaveBeenCalled();
   const deps = createWorkflowDeps();
-  expect(typeof deps.resolveBotGitHubToken).toBe('function');
+  expect(typeof deps.githubApp?.resolveInstallationToken).toBe('function');
   expect(
-    (await deps.resolveBotGitHubToken?.('owner', 'repo')) === 'stub-installation-credential'
+    (await deps.githubApp?.resolveInstallationToken('owner', 'repo')) ===
+      'stub-installation-credential'
   ).toBe(true);
   expect(mint).toHaveBeenCalledTimes(1);
 });
@@ -148,6 +149,6 @@ test('provider construction failure leaves registration empty and allows a corre
     throw new Error('Stub construction failure');
   });
   expect(() => initializeWorkflowGitHubAppAuth(config)).toThrow('Stub construction failure');
-  expect(createWorkflowDeps().resolveBotGitHubToken).toBeUndefined();
+  expect(createWorkflowDeps().githubApp).toBeUndefined();
   expect(initializeWorkflowGitHubAppAuth(config)).not.toBeNull();
 });
