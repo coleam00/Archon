@@ -29,7 +29,11 @@ import {
   skillSearchRoots,
 } from '@archon/paths/skills';
 import { compileOutputSchema } from './structured-output';
-import { findStrictSchemaIssues, isObjectSchemaNode } from '@archon/provider-contract';
+import {
+  findStrictSchemaIssues,
+  isObjectSchemaNode,
+  mcpServerMap,
+} from '@archon/provider-contract';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -46,6 +50,7 @@ import {
   isOutputFormatEnforced,
   isWaitNode,
   isWorkflowNode,
+  mcpDeclaration,
 } from './schemas';
 import { parseWorkflow, workflowNodeOutputFormatError } from './loader';
 import { PRIOR_OUTPUT_PATH_SOURCE, CURRENT_OUTPUT_PATH_SOURCE } from './output-ref';
@@ -647,29 +652,34 @@ export async function validateWorkflowResources(
     }
 
     // --- MCP nodes: check config file exists and is valid JSON ---
-    if ('mcp' in node && typeof node.mcp === 'string') {
-      const mcpPath = isAbsolute(node.mcp) ? node.mcp : resolve(cwd, node.mcp);
+    // An optional declaration is expected to be absent for most users of a portable
+    // workflow, so only a file that exists and is broken is an issue; the run records
+    // the absence instead.
+    const mcp = 'mcp' in node ? mcpDeclaration(node.mcp) : undefined;
+    if (mcp !== undefined) {
+      const mcpPath = isAbsolute(mcp.path) ? mcp.path : resolve(cwd, mcp.path);
 
       if (!(await fileExists(mcpPath))) {
-        issues.push({
-          level: 'error',
-          nodeId: node.id,
-          field: 'mcp',
-          message: `MCP config file not found: '${node.mcp}'`,
-          hint: `Create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
-        });
+        if (!mcp.optional) {
+          issues.push({
+            level: 'error',
+            nodeId: node.id,
+            field: 'mcp',
+            message: `MCP config file not found: '${mcp.path}'`,
+            hint: `Create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
+          });
+        }
       } else {
-        // File exists — check it's valid JSON
         try {
           const content = await readFile(mcpPath, 'utf-8');
-          const parsed = JSON.parse(content);
-          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          const serverMap = mcpServerMap(JSON.parse(content));
+          if (!serverMap.ok) {
             issues.push({
               level: 'error',
               nodeId: node.id,
               field: 'mcp',
-              message: `MCP config file '${node.mcp}' must be a JSON object (Record<string, ServerConfig>)`,
-              hint: 'The file should contain a JSON object where each key is a server name',
+              message: `${serverMap.error}: '${mcp.path}'`,
+              hint: 'The file should contain a JSON object where each key is a server name, optionally wrapped as { "mcpServers": { ... } }',
             });
           }
         } catch (e) {
@@ -678,19 +688,19 @@ export async function validateWorkflowResources(
             level: 'error',
             nodeId: node.id,
             field: 'mcp',
-            message: `MCP config file '${node.mcp}' contains invalid JSON: ${err.message}`,
+            message: `MCP config file '${mcp.path}' contains invalid JSON: ${err.message}`,
             hint: 'Fix the JSON syntax in the MCP config file',
           });
         }
       }
 
-      if (providerCaps?.mcp === false) {
+      if (providerCaps?.mcp === false && !mcp.optional) {
         issues.push({
           level: 'error',
           nodeId: node.id,
           field: 'mcp',
           message: `Provider '${provider}' cannot load MCP servers — the run would fail before any node starts`,
-          hint: 'Remove the mcp field or switch to a provider whose mcp capability is true',
+          hint: `Remove the mcp field, declare it optional (mcp: { path: '${mcp.path}', optional: true }), or switch to a provider whose mcp capability is true`,
         });
       }
     }

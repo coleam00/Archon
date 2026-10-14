@@ -166,6 +166,38 @@ export function isNodeContextResume(
   return typeof context === 'object' && context !== null && 'resume' in context;
 }
 
+/**
+ * A node's `mcp:` declaration: a config-file path the node requires, or
+ * `{ path, optional: true }` for a server the node runs without when its provider
+ * cannot load MCP servers or the file does not exist. Strict so a misspelled
+ * `optional` fails the load instead of silently meaning required.
+ */
+export const nodeMcpSchema = z.union([
+  z.string().min(1, "'mcp' must be a non-empty string path"),
+  z.strictObject({
+    path: z.string().min(1, "'mcp.path' must be a non-empty string path"),
+    optional: z.boolean().optional(),
+  }),
+]);
+
+export type NodeMcp = z.infer<typeof nodeMcpSchema>;
+
+export interface McpDeclaration {
+  path: string;
+  optional: boolean;
+}
+
+export function mcpDeclaration(mcp: NodeMcp | undefined): McpDeclaration | undefined {
+  if (mcp === undefined) return undefined;
+  return typeof mcp === 'string'
+    ? { path: mcp, optional: false }
+    : { path: mcp.path, optional: mcp.optional === true };
+}
+
+function trimNodeMcp(mcp: NodeMcp): NodeMcp {
+  return typeof mcp === 'string' ? mcp.trim() : { ...mcp, path: mcp.path.trim() };
+}
+
 // Kebab-case: no leading/trailing/double hyphens (e.g. `brief-gen`, not `-brief`, `brief-`, `brief--gen`).
 const AGENT_ID_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -191,7 +223,7 @@ export const dagNodeBaseSchema = z.object({
   idle_timeout: z.number().optional(),
   retry: stepRetryConfigSchema.optional(),
   hooks: workflowNodeHooksSchema.optional(),
-  mcp: z.string().min(1, "'mcp' must be a non-empty string path").optional(),
+  mcp: nodeMcpSchema.optional(),
   skills: z.array(z.string().min(1, 'each skill must be a non-empty string')).optional(),
   // Exact provider plugin ids (Claude: `name@marketplace`). A workflow node loads
   // only the plugins it names; the provider fails the node when it cannot.
@@ -1787,7 +1819,7 @@ export const dagNodeSchema = z
       ...(data.allowed_tools !== undefined ? { allowed_tools: data.allowed_tools } : {}),
       ...(data.denied_tools !== undefined ? { denied_tools: data.denied_tools } : {}),
       ...(data.hooks !== undefined ? { hooks: data.hooks } : {}),
-      ...(data.mcp !== undefined ? { mcp: data.mcp.trim() } : {}),
+      ...(data.mcp !== undefined ? { mcp: trimNodeMcp(data.mcp) } : {}),
       ...(data.skills !== undefined ? { skills: data.skills.map(s => s.trim()) } : {}),
       ...(data.plugins !== undefined ? { plugins: data.plugins } : {}),
       ...(data.agents !== undefined ? { agents: data.agents } : {}),

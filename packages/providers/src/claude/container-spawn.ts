@@ -99,7 +99,46 @@ export function buildDockerExecCommandArgs(
   return [...dockerExecPrefix(execContext, cwd, env), CONTAINER_CLAUDE_BIN, ...cliArgs];
 }
 
-/** `exec -i [-u user] [-w cwd] -e K=V... <container>`, shared by both builders. */
+export function buildDockerExecTranscriptReadArgs(
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  sessionId: string
+): string[] {
+  const script = [
+    'config="${CLAUDE_CONFIG_DIR-${HOME}/.claude}"',
+    'root="${config:+$config/}projects"',
+    'found=""',
+    'for project in "$root"/*; do',
+    '  [ -d "$project" ] || continue',
+    '  file="$project/$1.jsonl"',
+    '  [ -f "$file" ] || continue',
+    '  [ -z "$found" ] || exit 2',
+    '  found="$file"',
+    'done',
+    '[ -n "$found" ] || exit 1',
+    'cat "$found"',
+  ].join('\n');
+  return [
+    ...dockerExecPrefix(
+      execContext,
+      cwd,
+      env.CLAUDE_CONFIG_DIR === undefined
+        ? env
+        : {
+            ...env,
+            CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR.normalize('NFC'),
+          }
+    ),
+    'sh',
+    '-c',
+    script,
+    'read-cost-state',
+    sessionId,
+  ];
+}
+
+/** `exec -i [-u user] [-w cwd] -e K=V... <container>`, shared by container commands. */
 function dockerExecPrefix(
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
   cwd: string | undefined,

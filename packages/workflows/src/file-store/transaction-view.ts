@@ -32,6 +32,7 @@ import type { DashboardWorkflowRun } from '../schemas/workflow-run-listing';
 
 export type TransactionView = Omit<
   IWorkflowStore,
+  | keyof import('../store').IWorkflowEventFeed
   | keyof import('../resource-start-store').IResourceStartStore
   | keyof import('../state-document-store').IStateDocumentStore
   | 'listWorkflowNodeSessions'
@@ -58,6 +59,7 @@ export function createTransactionView(
     if (!run) throw new Error(`Run missing: ${id}`);
     return run;
   };
+  let eventOrder = events.reduce((max, event) => Math.max(max, event.event_order ?? 0), 0);
   const record = (input: WorkflowEventInput): void => {
     row(input.workflow_run_id);
     events.push({
@@ -68,7 +70,7 @@ export function createTransactionView(
       step_index: input.step_index ?? null,
       data: structuredClone(input.data ?? {}),
       created_at: new Date().toISOString(),
-      event_order: events.length,
+      event_order: ++eventOrder,
     });
   };
   const listEvents = (id: string): WorkflowEventRow[] =>

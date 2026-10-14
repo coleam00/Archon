@@ -243,7 +243,7 @@ nodes:
 | `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. All providers except Codex |
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
-| `mcp` | string | — | Path to MCP server config JSON file. Claude/Codex/Copilot. Any other provider fails the run before it starts. See [MCP Servers](/guides/mcp-servers/) |
+| `mcp` | string \| `{ path, optional }` | — | Path to MCP server config JSON file. Claude/Codex/Copilot. Any other provider fails the run before it starts, unless the declaration is `{ path: ..., optional: true }`, which runs the node without the servers when the provider lacks MCP or the file is missing. See [MCP Servers](/guides/mcp-servers/#optional-servers) |
 | `skills` | string[] | — | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name` instead; a non-empty list on Codex or OpenCode fails the run before it starts. See [Skills](/guides/skills/) |
 | `plugins` | string[] | — | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
@@ -396,7 +396,7 @@ The node fails before its first model turn when a named plugin is not installed,
 
 A Codex workflow node works the same way. It loads none of the user's Codex plugins and no ChatGPT apps, while the user's `config.toml` settings, hooks and `AGENTS.md` still load. A node names a plugin by the id `codex plugin list` prints, such as `github@openai-curated`. A named Codex plugin brings its skills, which the node body invokes as `$<plugin>:<skill>`, and its hooks. Its MCP servers reach the node only through `mcp:` (see [MCP Servers](/guides/mcp-servers/#servers-that-ship-in-a-codex-plugin)), and its apps stay off. A named plugin is turned on for the node even if you turned plugins off globally in Codex. The node fails before its turn starts when a named plugin is not installed in the Codex home in use.
 
-`plugins:` on a provider that cannot load exactly the named plugins fails the run before any node starts, and `archon validate workflows` reports it as an error. `mcp:` and a non-empty `skills:` follow the same rule on a provider without that capability.
+`plugins:` on a provider that cannot load exactly the named plugins fails the run before any node starts, and `archon validate workflows` reports it as an error. A required `mcp:` and a non-empty `skills:` follow the same rule on a provider without that capability. An `mcp:` declared `optional: true` runs the node without its servers instead and records why (see [Optional Servers](/guides/mcp-servers/#optional-servers)).
 
 **Workflow-level defaults** (inherited by all Claude nodes unless overridden per-node):
 
@@ -2107,12 +2107,11 @@ carries the successful run's totals as `cost_usd` and `tokens`; a DAG-owned term
 match run metadata `total_cost_usd` and `total_tokens_*`. On a row that reports its own spend,
 an absent `cost_usd` means the provider reported no cost — Codex reports none — while `0` means
 it reported zero. On a restatement row an absent `cost_usd` means the scope's spend is on the
-rows that row names. Claude reports a session's running total, so Archon subtracts the total it
-last saw for the session a node resumes or forks. When that session was created by an earlier
-Archon process, for example before `archon workflow resume` or across `persist_session`
-invocations, the earlier total is unknown and the node's `cost_usd` is absent rather than
-over-counted. A run that spent nothing on AI, such as a bash-only workflow, carries no
-`cost_usd` rather than `0`. Governance nodes do not yet have complete terminal
+rows that row names. Claude reports a session's running total, so Archon subtracts the source
+session's total from its native session transcript when a node resumes or forks, including
+across Archon processes. If that persisted state is missing or invalid, the earlier total is
+unknown and the node's `cost_usd` is absent rather than over-counted. A run that spent nothing
+on AI, such as a bash-only workflow, carries no `cost_usd` rather than `0`. Governance nodes do not yet have complete terminal
 transcript-row coverage, so read usage from the rows that exist rather than treating
 an absent row as zero spend.
 

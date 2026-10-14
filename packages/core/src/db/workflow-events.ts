@@ -1,4 +1,10 @@
 import { readProviderEventRows } from '@archon/workflows/provider-event-reader';
+import { WORKFLOW_ORIGIN_ANCHOR_ID } from './workflow-origin-anchor';
+import {
+  attentionNoticeDataSchema,
+  type AttentionNoticeData,
+} from '@archon/workflows/schemas/attention-notice';
+import type { IDatabase } from './adapters/types';
 /**
  * Database operations for workflow events (lean UI-relevant events).
  *
@@ -408,4 +414,93 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
     [workflowRunId, ...DURABLE_WORKFLOW_EVENT_TYPES, 'fan_out_instances']
   );
   return foldDagResumeSnapshot(result.rows, workflowRunId);
+}
+
+export interface AttentionNoticeRecord {
+  runId: string;
+  data: AttentionNoticeData;
+}
+
+export async function listAttentionNotices(
+  runIds: readonly string[],
+  query: IDatabase['query'] = pool.query
+): Promise<AttentionNoticeRecord[]> {
+  if (runIds.length === 0) return [];
+  const result = await query<WorkflowEventRow>(
+    `SELECT * FROM remote_agent_workflow_events
+    WHERE event_type = 'attention_notice_sent' AND workflow_run_id IN (${runIds.map((_, i) => `$${String(i + 1)}`).join(', ')})
+    ORDER BY created_at, event_order, id`,
+    [...runIds]
+  );
+  return result.rows.map(row => ({
+    runId: row.workflow_run_id,
+    data: attentionNoticeDataSchema.parse(parseEventRow(row).data),
+  }));
+}
+
+export async function hasAnyAttentionNotice(
+  destination: string,
+  query: IDatabase['query'] = pool.query
+): Promise<boolean> {
+  const extract =
+    getDatabaseType() === 'postgresql'
+      ? "data->>'destination'"
+      : "json_extract(data, '$.destination')";
+  const result = await query(
+    `SELECT id FROM remote_agent_workflow_events WHERE event_type = 'attention_notice_sent' AND ${extract} = $1 LIMIT 1`,
+    [destination]
+  );
+  return result.rows.length > 0;
+}
+
+export async function attentionConversationPlatforms(
+  runIds: readonly string[],
+  query: IDatabase['query'] = pool.query
+): Promise<Map<string, string>> {
+  if (runIds.length === 0) return new Map();
+  const result = await query<{ run_id: string; platform_type: string }>(
+    `
+    WITH RECURSIVE ancestors AS (
+      SELECT id AS run_id, id, parent_run_id, COALESCE(parent_conversation_id, NULLIF(conversation_id, '${WORKFLOW_ORIGIN_ANCHOR_ID}')) AS conversation_id
+      FROM remote_agent_workflow_runs WHERE id IN (${runIds.map((_, i) => `$${String(i + 1)}`).join(', ')})
+      UNION
+      SELECT a.run_id, r.id, r.parent_run_id, COALESCE(r.parent_conversation_id, NULLIF(r.conversation_id, '${WORKFLOW_ORIGIN_ANCHOR_ID}'))
+      FROM ancestors a JOIN remote_agent_workflow_runs r ON r.id = a.parent_run_id
+      WHERE a.conversation_id IS NULL
+    )
+    SELECT a.run_id, c.platform_type FROM ancestors a
+    JOIN remote_agent_conversations c ON c.id = a.conversation_id`,
+    [...runIds]
+  );
+  return new Map(result.rows.map(row => [row.run_id, row.platform_type]));
+}
+
+export async function getWorkflowEventHead(): Promise<string> {
+  const result = await pool.query<{ head: string | number | null }>(
+    `SELECT MAX(head) AS head FROM (
+       SELECT value AS head FROM remote_agent_workflow_event_sequence WHERE id = 1
+       UNION ALL
+       SELECT MAX(event_order) AS head FROM remote_agent_workflow_events
+       UNION ALL
+       SELECT MAX(event_order) AS head FROM remote_agent_workflow_event_archive
+     ) committed`
+  );
+  const row = result.rows[0];
+  if (row?.head == null) throw new Error('Workflow event head is missing');
+  return String(row.head);
+}
+
+export async function readWorkflowEventsAfter(
+  after: string,
+  limit: number
+): Promise<WorkflowEventRow[]> {
+  const result = await pool.query<WorkflowEventRow>(
+    `SELECT * FROM (
+       SELECT * FROM remote_agent_workflow_events WHERE event_order > $1
+       UNION ALL
+       SELECT * FROM remote_agent_workflow_event_archive WHERE event_order > $1
+     ) feed ORDER BY event_order LIMIT $2`,
+    [after, limit]
+  );
+  return result.rows.map(parseEventRow);
 }

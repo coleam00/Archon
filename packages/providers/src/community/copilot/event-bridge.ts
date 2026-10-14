@@ -153,6 +153,36 @@ export interface EventMapperContext {
   markErrored: (errorMsg: string) => void;
 }
 
+type CopilotMcpStatus = Extract<
+  SessionEvent,
+  { type: 'session.mcp_server_status_changed' }
+>['data']['status'];
+type McpServerStatusChunk = Extract<MessageChunk, { type: 'mcp_server_status' }>;
+
+const MCP_STATUS = {
+  connected: 'connected',
+  failed: 'failed',
+  'needs-auth': 'needs_auth',
+  pending: 'pending',
+  disabled: 'disabled',
+  stopped: 'disabled',
+  // A server the session did not configure is unavailable to it.
+  not_configured: 'failed',
+} as const satisfies Record<CopilotMcpStatus, McpServerStatusChunk['status']>;
+
+function mcpServerStatusOf(
+  server: string,
+  status: CopilotMcpStatus,
+  error: string | undefined
+): McpServerStatusChunk {
+  return {
+    type: 'mcp_server_status',
+    server,
+    status: MCP_STATUS[status],
+    ...(error !== undefined ? { error } : {}),
+  };
+}
+
 /**
  * Translate one Copilot SDK `SessionEvent` into zero or more Archon
  * `MessageChunk`s, mutating the supplied context (captured usage, terminal
@@ -214,6 +244,14 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
       ctx.markErrored(msg);
       return [];
     }
+    case 'session.mcp_server_status_changed': {
+      const { serverName, status, error } = event.data;
+      return [mcpServerStatusOf(serverName, status, error)];
+    }
+    case 'session.mcp_servers_loaded':
+      return event.data.servers.map(server =>
+        mcpServerStatusOf(server.name, server.status, server.error)
+      );
     case 'session.compaction_start':
       return [{ type: 'compaction', phase: 'started' }];
     case 'session.compaction_complete': {

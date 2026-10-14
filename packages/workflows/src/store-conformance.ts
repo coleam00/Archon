@@ -1,7 +1,19 @@
+import {
+  ResourceSlotCapacityConflictError,
+  SourceReceiptDigestConflictError,
+} from './resource-start-store';
+import type {
+  PreparedWorkflowLaunch,
+  ResourceStartBindingIntent,
+  ResourceStartIntent,
+  SourceReceiptAcceptance,
+} from './schemas/resource-start';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   FAN_OUT_CANCEL_REASONS,
   WorkflowNotResumableError,
+  WorkflowEventCursorError,
+  type WorkflowEventCursor,
   WorkflowRunPauseConflictError,
   type GateResolutionEvent,
   type IWorkflowStore,
@@ -21,7 +33,10 @@ import { terminalRecordSchema } from './schemas/terminal-record';
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
-  backdate(runId: string, dates: { started_at?: Date; last_activity_at?: Date }): Promise<void>;
+  backdate(
+    runId: string,
+    dates: { started_at?: Date; last_activity_at?: Date | null }
+  ): Promise<void>;
   terminalReports(): string[];
   close(): Promise<void>;
 }
@@ -141,6 +156,47 @@ export async function assertWorkflowGateRace(
   expect(rows[1]?.data).toEqual({ node_output: String(winner) });
 }
 
+export async function assertWorkflowEventFeedRace(
+  store: Pick<
+    IWorkflowStore,
+    | 'createWorkflowRun'
+    | 'createWorkflowEvent'
+    | 'listWorkflowEvents'
+    | 'getWorkflowEventHead'
+    | 'readWorkflowEventsAfter'
+  >
+): Promise<void> {
+  const run = await create(store);
+  let cursor = await store.getWorkflowEventHead();
+  const seen: string[] = [];
+  let finished = false;
+  const writes = eight(index =>
+    store.createWorkflowEvent({
+      workflow_run_id: run.id,
+      event_type: 'workflow_started',
+      data: { index },
+    })
+  ).finally(() => {
+    finished = true;
+  });
+  do {
+    const page = await store.readWorkflowEventsAfter(cursor, { limit: 1 });
+    seen.push(...page.events.map(({ event }) => event.id));
+    cursor = page.next;
+    await new Promise(resolve => setTimeout(resolve, 0));
+  } while (!finished);
+  await writes;
+  for (;;) {
+    const page = await store.readWorkflowEventsAfter(cursor, { limit: 1 });
+    if (page.next === cursor) break;
+    seen.push(...page.events.map(({ event }) => event.id));
+    cursor = page.next;
+  }
+  const committed = await store.listWorkflowEvents(run.id);
+  expect(committed).toHaveLength(8);
+  expect(seen.sort()).toEqual(committed.map(event => event.id).sort());
+}
+
 export function describeWorkflowStoreConformance(
   label: string,
   makeHarness: () => Promise<WorkflowStoreHarness>
@@ -154,6 +210,483 @@ export function describeWorkflowStoreConformance(
     });
     afterEach(async () => {
       await harness?.close();
+    });
+
+    const launch = (id = crypto.randomUUID()): PreparedWorkflowLaunch => ({
+      version: 2,
+      run: {
+        id,
+        workflow_name: 'conformance',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+        user_message: '',
+        metadata: {},
+      },
+      execution: {
+        cwd: '/conformance',
+        conversationId: CONFORMANCE_CONVERSATION_ID,
+        isolation: { kind: 'in-place' },
+      },
+    });
+    const start = (
+      overlap: 'queue' | 'skip' = 'queue',
+      hostId = 'host',
+      capacity = 1
+    ): ResourceStartIntent => ({
+      resource: 'resource',
+      capacity,
+      hostId,
+      overlap,
+      launch: launch(),
+    });
+    const binding: ResourceStartBindingIntent = {
+      bindingId: 'binding',
+      bindingRevision: 'v1',
+      hostId: 'host',
+      runAsUserId: 'operator',
+      resource: 'resource',
+      capacity: 1,
+      overlap: 'queue',
+      launch: {
+        cwd: '/conformance',
+        workflowName: 'conformance',
+        inputs: {},
+        isolation: { kind: 'in-place' },
+      },
+    };
+    const acceptance = (): SourceReceiptAcceptance => ({
+      receipt: {
+        id: crypto.randomUUID(),
+        sourceInstanceId: 'source',
+        deliveryId: 'delivery',
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched' as const,
+      bindings: [binding] as [ResourceStartBindingIntent],
+    });
+    test('admission races keep capacity and persist only admitted runs', async () => {
+      const intents = Array.from({ length: 8 }, () => start());
+      const decisions = await Promise.all(
+        intents.map(intent => harness.store.admitResourceStart(intent))
+      );
+      expect(decisions.filter(row => row.status === 'admitted')).toHaveLength(1);
+      expect(decisions.filter(row => row.status === 'queued')).toHaveLength(7);
+      for (const [index, intent] of intents.entries()) {
+        expect((await harness.store.getWorkflowRun(intent.launch.run.id))?.status ?? null).toBe(
+          decisions[index]?.status === 'admitted' ? 'pending' : null
+        );
+        expect(await harness.store.admitResourceStart(intent)).toEqual(decisions[index]);
+      }
+      expect(
+        await rejection(harness.store.admitResourceStart(start('queue', 'host', 2)))
+      ).toBeInstanceOf(ResourceSlotCapacityConflictError);
+    });
+    for (const activity of ['null', 'stale'] as const) {
+      test(`admitted running runs cannot resume with ${activity} activity`, async () => {
+        const intent = start();
+        const id = intent.launch.run.id;
+        await store.admitResourceStart(intent);
+        await store.updateWorkflowRun(id, { status: 'running' });
+        await harness.backdate(id, {
+          last_activity_at: activity === 'null' ? null : new Date('2020-01-01T00:00:00Z'),
+        });
+        const before = await store.getWorkflowRun(id);
+        expect(before?.last_activity_at).toEqual(
+          activity === 'null' ? null : new Date('2020-01-01T00:00:00Z')
+        );
+        const events = await store.listWorkflowEvents(id);
+        expect(await rejection(store.resumeWorkflowRun(id))).toBeInstanceOf(
+          WorkflowNotResumableError
+        );
+        expect(await store.getWorkflowRun(id)).toEqual(before);
+        expect(await store.listWorkflowEvents(id)).toEqual(events);
+      });
+    }
+    test('a failed admitted run cannot resume past a new holder or a queued promise', async () => {
+      const first = start(),
+        holder = start(),
+        queued = start();
+      const id = first.launch.run.id;
+      await store.admitResourceStart(first);
+      await store.updateWorkflowRun(id, { status: 'running' });
+      await store.failWorkflowRun(id, 'failed');
+      // The failed run released its slot; a queued promise is ahead of its resume.
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      expect(await store.admitResourceStart(queued)).toMatchObject({ status: 'queued' });
+      expect(await rejection(store.resumeWorkflowRun(id))).toMatchObject({
+        blocker: { kind: 'run', id: holder.launch.run.id },
+      });
+      await store.updateWorkflowRun(holder.launch.run.id, { status: 'running' });
+      await store.failWorkflowRun(holder.launch.run.id, 'failed');
+      expect(await rejection(store.resumeWorkflowRun(id))).toMatchObject({
+        blocker: { kind: 'request', id: queued.launch.run.id },
+      });
+      expect((await store.getWorkflowRun(id))?.status).toBe('failed');
+    });
+    for (const { name, timestamps } of [
+      {
+        name: 'mixed fractional precision',
+        timestamps: ['2026-01-02T00:00:00.500Z', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00.5Z'],
+      },
+      {
+        name: 'submillisecond precision',
+        timestamps: [
+          '2026-01-02T00:00:00.0002Z',
+          '2026-01-02T00:00:00.0001Z',
+          '2026-01-02T00:00:00.000200Z',
+        ],
+      },
+      {
+        name: 'optional seconds',
+        timestamps: [
+          '2026-01-02T00:00:00.001Z',
+          '2026-01-02T00:00Z',
+          '2026-01-02T00:00:00.001000Z',
+        ],
+      },
+      {
+        name: 'equal zero fractions',
+        timestamps: ['2026-01-02T00:00Z', '2026-01-01T23:59:59.9999Z', '2026-01-02T00:00:00.0000Z'],
+      },
+    ]) {
+      test(`receipt listing orders ${name} by newest instant then ID before limiting`, async () => {
+        const receipts = timestamps.map((receivedAt, index) => ({
+          id: `00000000-0000-4000-8000-00000000000${String([2, 3, 1][index])}`,
+          receivedAt,
+        }));
+        for (const receipt of receipts) {
+          const input = acceptance();
+          await store.acceptStartReceipt({
+            ...input,
+            receipt: { ...input.receipt, ...receipt, deliveryId: receipt.id },
+          });
+        }
+        expect((await store.listStartReceipts()).map(row => row.id)).toEqual([
+          receipts[0].id,
+          receipts[2].id,
+          receipts[1].id,
+        ]);
+        expect((await store.listStartReceipts(2)).map(row => row.id)).toEqual([
+          receipts[0].id,
+          receipts[2].id,
+        ]);
+      });
+    }
+    test('capacity admits multiple holders and drain fills every released slot in FIFO order', async () => {
+      const intents = Array.from({ length: 5 }, () => start('queue', 'host', 2));
+      const decisions = [];
+      for (const intent of intents) decisions.push(await store.admitResourceStart(intent));
+      expect(decisions.map(row => row.status)).toEqual([
+        'admitted',
+        'admitted',
+        'queued',
+        'queued',
+        'queued',
+      ]);
+      for (const input of intents.slice(0, 2)) await store.cancelWorkflowRun(input.launch.run.id);
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual(
+        intents.slice(2, 4).map(input => ({
+          status: 'admitted',
+          requestId: input.launch.run.id,
+          runId: input.launch.run.id,
+        }))
+      );
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
+      expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+        { id: intents[4].launch.run.id },
+      ]);
+    });
+    test('admission keeps FIFO across hosts, skips overlap and withdraws queued work', async () => {
+      const store = harness.store;
+      const owner = start(),
+        queued = start('queue', 'other'),
+        later = start(),
+        skipped = start('skip');
+      await store.admitResourceStart(owner);
+      expect(await store.admitResourceStart(queued)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: owner.launch.run.id },
+      });
+      expect(await store.admitResourceStart(later)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'request', id: queued.launch.run.id },
+      });
+      expect(await store.admitResourceStart(skipped)).toMatchObject({
+        status: 'skipped',
+        blocker: { kind: 'request', id: queued.launch.run.id },
+      });
+      expect(await store.getWorkflowRun(skipped.launch.run.id)).toBeNull();
+      await store.claimPendingWorkflowRun(owner.launch.run.id);
+      await store.completeWorkflowRun(owner.launch.run.id, { duration_ms: 1 });
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toEqual(queued.launch);
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toBeNull();
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([
+        { status: 'admitted', requestId: later.launch.run.id, runId: later.launch.run.id },
+      ]);
+      expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+    });
+    test('receipt deduplication compares verified content and preparation has one owner', async () => {
+      const store = harness.store,
+        input = acceptance();
+      expect(await store.acceptStartReceipt(input)).toEqual({
+        receiptId: input.receipt.id,
+        replay: false,
+      });
+      expect(
+        await store.acceptStartReceipt({
+          ...input,
+          receipt: { ...input.receipt, id: crypto.randomUUID() },
+        })
+      ).toEqual({ receiptId: input.receipt.id, replay: true });
+      expect(
+        await rejection(
+          store.acceptStartReceipt({
+            ...input,
+            receipt: { ...input.receipt, id: crypto.randomUUID(), contentDigest: 'different' },
+          })
+        )
+      ).toBeInstanceOf(SourceReceiptDigestConflictError);
+      const owners = await eight(index =>
+        store.claimStartBindingPreparation({
+          receiptId: input.receipt.id,
+          bindingId: binding.bindingId,
+          ownerId: String(index),
+        })
+      );
+      expect(owners.filter(Boolean)).toHaveLength(1);
+      const ownerId = String(owners.indexOf(true));
+      const identity = { receiptId: input.receipt.id, bindingId: binding.bindingId, ownerId };
+      const prepared = launch();
+      expect(
+        await store.completeStartBindingPreparation({
+          ...identity,
+          ownerId: 'stale',
+          launch: prepared,
+        })
+      ).toBeNull();
+      const result = await store.completeStartBindingPreparation({ ...identity, launch: prepared });
+      expect(result).toEqual({
+        status: 'admitted',
+        requestId: prepared.run.id,
+        runId: prepared.run.id,
+      });
+      expect(
+        await store.completeStartBindingPreparation({ ...identity, launch: launch() })
+      ).toBeNull();
+      expect(await store.getStartReceipt(input.receipt.id)).toMatchObject({
+        bindings: [{ status: 'complete', requestStatus: 'admitted', disposition: result }],
+      });
+      expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
+    });
+    test('preparation failure and reset require the exact current owner', async () => {
+      const store = harness.store,
+        input = acceptance();
+      await store.acceptStartReceipt(input);
+      const identity = {
+        receiptId: input.receipt.id,
+        bindingId: binding.bindingId,
+        ownerId: 'owner',
+      };
+      expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+      expect(await store.resetStartBindingPreparation({ ...identity, ownerId: 'stale' })).toBe(
+        false
+      );
+      expect(
+        await store.failStartBindingPreparation({ ...identity, retryable: true, error: 'retry' })
+      ).toBe(true);
+      expect(await store.listPendingStartBindings({ hostId: 'host' })).toMatchObject([
+        { status: 'failed', error: 'retry' },
+      ]);
+      expect(await store.claimStartBindingPreparation({ ...identity, ownerId: 'next' })).toBe(true);
+      expect(await store.resetStartBindingPreparation(identity)).toBe(false);
+      expect(await store.resetStartBindingPreparation({ ...identity, ownerId: 'next' })).toBe(true);
+      expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+      expect(
+        await store.failStartBindingPreparation({
+          ...identity,
+          retryable: false,
+          error: 'rejected',
+        })
+      ).toBe(true);
+      expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
+    });
+
+    test('feed starts at the head and pages interleaved runs once in commit order', async () => {
+      const empty = await store.getWorkflowEventHead();
+      expect(await store.readWorkflowEventsAfter(empty, { limit: 1 })).toEqual({
+        events: [],
+        next: empty,
+      });
+      const a = await create(store),
+        b = await create(store);
+      const writes = [a, b, a, b];
+      for (const [index, run] of writes.entries())
+        await store.persistWorkflowEvent({
+          workflow_run_id: run.id,
+          event_type: 'workflow_started',
+          data: { index },
+        });
+      const full = await store.readWorkflowEventsAfter(empty, { limit: 10 });
+      expect(full.events.map(({ event }) => event.data.index)).toEqual([0, 1, 2, 3]);
+      const persisted = [
+        ...(await store.listWorkflowEvents(a.id)),
+        ...(await store.listWorkflowEvents(b.id)),
+      ].sort((a, b) => Number(a.data.index) - Number(b.data.index));
+      expect(full.events.map(({ event }) => event)).toEqual(persisted);
+      let cursor = empty;
+      const ids: string[] = [];
+      for (let index = 0; index < 4; index++) {
+        const page = await store.readWorkflowEventsAfter(cursor, { limit: 1 });
+        expect(page.events).toHaveLength(1);
+        ids.push(...page.events.map(({ event }) => event.id));
+        cursor = page.next;
+      }
+      expect(ids).toEqual(full.events.map(({ event }) => event.id));
+      expect((await store.readWorkflowEventsAfter(cursor, { limit: 1 })).events).toEqual([]);
+      expect(
+        (await store.readWorkflowEventsAfter(await store.getWorkflowEventHead(), { limit: 1 }))
+          .events
+      ).toEqual([]);
+    });
+    test('feed keeps gate events adjacent and advances past filtered rows', async () => {
+      const run = await running(store);
+      const head = await store.getWorkflowEventHead();
+      for (let index = 0; index < 3; index++)
+        await store.persistWorkflowEvent({
+          workflow_run_id: run.id,
+          event_type: 'workflow_started',
+        });
+      await store.pauseWorkflowRun(run.id, approval);
+      await store.resolveApprovalGate(
+        run.id,
+        { approval: { ...approval, resolved: 'approved' } },
+        gateEvents(0)
+      );
+      const page = await store.readWorkflowEventsAfter(head, {
+        limit: 10,
+        eventTypes: ['approval_received', 'node_completed'],
+      });
+      expect(page.events.map(({ event }) => event.event_type)).toEqual([
+        'approval_received',
+        'node_completed',
+      ]);
+      expect((await store.readWorkflowEventsAfter(page.next, { limit: 10 })).events).toEqual([]);
+      const skipped = await store.readWorkflowEventsAfter(head, {
+        limit: 3,
+        eventTypes: ['node_completed'],
+      });
+      expect(skipped.events).toEqual([]);
+      expect(skipped.next).not.toBe(head);
+      expect(
+        (await store.readWorkflowEventsAfter(skipped.next, { limit: 10 })).events.map(
+          ({ event }) => event.event_type
+        )
+      ).toEqual(['approval_received', 'node_completed']);
+    });
+    test('feed pages a single commit spanning multiple runs without overlapping positions', async () => {
+      const first = await running(store, {
+        origin: { conversationId: CONFORMANCE_CONVERSATION_ID },
+      });
+      const second = await running(store, {
+        origin: { conversationId: CONFORMANCE_CONVERSATION_ID },
+      });
+      await store.pauseWorkflowRun(first.id, approval);
+      await store.pauseWorkflowRun(second.id, approval);
+      const head = await store.getWorkflowEventHead();
+      await store.cancelResumableRunsForConversation(CONFORMANCE_CONVERSATION_ID);
+      const a = await store.readWorkflowEventsAfter(head, { limit: 1 });
+      const b = await store.readWorkflowEventsAfter(a.next, { limit: 1 });
+      expect(a.events).toHaveLength(1);
+      expect(b.events).toHaveLength(1);
+      expect(a.events[0]?.cursor).not.toBe(b.events[0]?.cursor);
+      expect(
+        [a.events[0]?.event.workflow_run_id, b.events[0]?.event.workflow_run_id].sort()
+      ).toEqual([first.id, second.id].sort());
+      expect((await store.readWorkflowEventsAfter(b.next, { limit: 1 })).events).toEqual([]);
+    });
+
+    test.each([...FAN_OUT_CANCEL_REASONS])(
+      'feed retains cancellations after recovery of %s',
+      async reason => {
+        const run = await running(store);
+        const head = await store.getWorkflowEventHead();
+        await store.cancelFanOutRun(run.id, reason);
+        const committed = await store.listWorkflowEvents(run.id);
+        await store.recoverCancelledFanOutRun(run.id);
+        expect(await store.listWorkflowEvents(run.id)).toEqual([]);
+        expect(
+          (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event)
+        ).toEqual(committed);
+      }
+    );
+    test('feed retains terminal events after cleanup from an earlier cursor', async () => {
+      const run = await running(store);
+      const head = await store.getWorkflowEventHead();
+      await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+      const committed = await store.listWorkflowEvents(run.id);
+      await harness.backdate(run.id, {
+        started_at: new Date('2000-01-01'),
+        last_activity_at: new Date('2000-01-01'),
+      });
+      await store.deleteOldWorkflowRuns(1);
+      expect(await store.getWorkflowRun(run.id)).toBeNull();
+      expect(
+        (await store.readWorkflowEventsAfter(head, { limit: 1 })).events.map(row => row.event)
+      ).toEqual(committed);
+    });
+    test('feed never reuses a position after fan-out recovery deletes the newest event', async () => {
+      const run = await running(store);
+      await store.cancelFanOutRun(run.id, 'fan_out_gate');
+      const head = await store.getWorkflowEventHead();
+      await store.recoverCancelledFanOutRun(run.id);
+      await store.persistWorkflowEvent({ workflow_run_id: run.id, event_type: 'workflow_started' });
+      expect(
+        (await store.readWorkflowEventsAfter(head, { limit: 10 })).events.map(
+          ({ event }) => event.event_type
+        )
+      ).toEqual(['workflow_started']);
+    });
+    test('feed never reuses a position after run cleanup deletes the newest event', async () => {
+      const run = await running(store);
+      await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+      const head = await store.getWorkflowEventHead();
+      await harness.backdate(run.id, {
+        started_at: new Date('2000-01-01'),
+        last_activity_at: new Date('2000-01-01'),
+      });
+      await store.deleteOldWorkflowRuns(1);
+      expect(await store.getWorkflowRun(run.id)).toBeNull();
+      const next = await create(store);
+      await store.persistWorkflowEvent({
+        workflow_run_id: next.id,
+        event_type: 'workflow_started',
+      });
+      expect(
+        (await store.readWorkflowEventsAfter(head, { limit: 10 })).events.map(
+          ({ event }) => event.workflow_run_id
+        )
+      ).toEqual([next.id]);
+    });
+    test('feed rejects malformed and foreign cursors and invalid page limits', async () => {
+      for (const cursor of ['foreign:1', 'sql:-1', 'file:NaN.0', 'memory:1.5']) {
+        expect(
+          await rejection(
+            store.readWorkflowEventsAfter(cursor as WorkflowEventCursor, { limit: 1 })
+          )
+        ).toBeInstanceOf(WorkflowEventCursorError);
+      }
+      for (const limit of [0, -1, 1.5, Infinity])
+        expect(
+          await rejection(
+            store.readWorkflowEventsAfter(await store.getWorkflowEventHead(), { limit })
+          )
+        ).toBeInstanceOf(RangeError);
+    });
+    test('feed has no gaps while eight writers commit', async () => {
+      await assertWorkflowEventFeedRace(store);
     });
 
     test('preserves private loop owner cursors through durable pause storage', async () => {
