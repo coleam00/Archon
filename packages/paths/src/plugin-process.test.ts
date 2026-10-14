@@ -6,11 +6,13 @@ const taskkillExit = (code: number) => (): Promise<never> =>
 
 describe('terminateWindowsTree', () => {
   test('resolves when taskkill exits 255 and the root is gone', async () => {
-    await terminateWindowsTree(3652, taskkillExit(255), () => true);
+    const child = Bun.spawn([process.execPath, '-e', '']);
+    await child.exited;
+    await terminateWindowsTree(child.pid, taskkillExit(255));
   });
 
   test('rejects with the taskkill error when the root is still alive', async () => {
-    await expect(terminateWindowsTree(3652, taskkillExit(255), () => false)).rejects.toThrow(
+    await expect(terminateWindowsTree(process.pid, taskkillExit(255))).rejects.toThrow(
       'taskkill exited 255'
     );
   });

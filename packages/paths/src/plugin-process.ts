@@ -28,8 +28,7 @@ export async function terminateTree(pid: number): Promise<void> {
 
 export async function terminateWindowsTree(
   pid: number,
-  taskkill: (pid: number) => Promise<unknown> = runTaskkill,
-  isGone: (pid: number) => boolean = isProcessGone
+  taskkill: (pid: number) => Promise<unknown> = runTaskkill
 ): Promise<void> {
   try {
     await taskkill(pid);
@@ -37,7 +36,7 @@ export async function terminateWindowsTree(
     // taskkill's exit code does not say whether the tree survived: 128 means the root was
     // already gone, and 255 can mean the root exited while its children were being ended.
     // A root that no longer exists is the only proof that is not taskkill's prose.
-    if (!isGone(pid)) throw error;
+    if (!isProcessGone(pid)) throw error;
   }
 }
 
