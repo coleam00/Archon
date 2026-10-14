@@ -55,13 +55,9 @@ Applying the rule to a proposed behaviour:
 
 The corollary for joins: the engine's job is to report *all terminal outcomes*, with failures represented as data. Deciding **how many successes are enough** is judgement, and belongs in a downstream script or prompt node reading the aggregate — not in a YAML enum. That is what stops a join rule growing into a policy language.
 
-#### The one exception, and why it is not a loophole
+#### Children that pause
 
-A fan-out child that **pauses at an approval gate** is cancelled by the engine, and the node fails — regardless of `join`. That is the single place a fan-out ends a run it was not asked to end, so it has to be named here rather than left to the authoring guide.
-
-It is not a coupling, because nothing about a *sibling* decides it. A pause is not a terminal state, and a parent run has exactly one approval slot, so a fanned-out child that pauses is waiting for something it can never be given — the cancel is what makes its own state terminal, decided entirely by that child. Its siblings run to their own terminal states either way.
-
-The test the rule actually applies is *"does one child's outcome end another's?"*, and the answer here is no. What ends the child is the impossibility of its own situation. The distinction matters: an exception that could not be stated this precisely would be a loophole, and the reason a fan-out is autonomous is documented as the intended shape — gates belong before or after the fan-out node, not inside a child of it ([#2438](https://github.com/coleam00/Archon/issues/2438)).
+A fan-out child that pauses stays paused as its own run, waiting for an answer like any other paused run. The engine never ends it for pausing. The fan-out node waits until every child is terminal, then reports all terminal outcomes as above. A paused child keeps its place in the `max_parallel` window, because it is unfinished work that may hold edits in a shared checkout. That is a declared concurrency bound, not a coupling: a paused child can delay when a sibling starts, never how it ends.
 
 ## Case law
 

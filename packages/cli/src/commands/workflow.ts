@@ -4480,6 +4480,9 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
     case 'blocked_on_child':
       // Unreachable through the waiter, which resolves the chain before returning.
       return `Run ${watchedRunId} is blocked on sub-run ${attention.childRunId}.`;
+    case 'blocked_on_children':
+      // Unreachable through the waiter, which resolves every child before returning.
+      return `Run ${watchedRunId} is blocked on sub-runs ${attention.childRunIds.join(', ')}.`;
     case 'unreadable':
       return `Run ${watchedRunId} needs a look: ${attention.detail}.`;
   }
@@ -5168,6 +5171,7 @@ export async function workflowGetCommand(
     !isWorkflowWaitContext(waitMeta) &&
     isApprovalContext(gateMeta) &&
     gateMeta.type !== 'child_workflow' &&
+    gateMeta.type !== 'fan_out' &&
     !gateMeta.resolved
   ) {
     console.log(`  Choices: ${gateMeta.message}`);
@@ -5991,7 +5995,7 @@ function printRunTreeCancellationWarnings(
       `Warning: parent run ${blockedParentRunId} was blocked on this sub-run and stays paused.`
     );
     console.log(
-      `  Resume it to fail the node cleanly (archon workflow resume ${blockedParentRunId}) or abandon it too.`
+      `  Resume it so it reads this sub-run's outcome (archon workflow resume ${blockedParentRunId}) or abandon it too.`
     );
   }
 }

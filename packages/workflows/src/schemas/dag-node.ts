@@ -1022,7 +1022,8 @@ export type IncludeDirective = z.infer<typeof includeDirectiveSchema>;
  * bounds a sliding-window concurrency pool (default 5 — documented + defeatable, so
  * an author can't trivially create a runaway N-wide layer, #1961). It is also the serial
  * escape from the shared-checkout collision: `max_parallel: 1` runs the children one at a
- * time, so no two of them contend for the parent checkout's path lock. `max_parallel` caps
+ * time, so no two of them contend for the parent checkout's path lock. The window counts
+ * UNFINISHED children: a paused child keeps its slot until it finishes (#4044). `max_parallel` caps
  * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
  * large list (≳ the abandon-time cascade bound `MAX_CASCADE_RUNS`, currently 500) can
  * leave some children uncancelled when the parent is abandoned; a run-tree-wide count/
@@ -2184,12 +2185,11 @@ export function definedOutputPaths(node: DagNode): DeclaredOutputPaths | undefin
 
 /**
  * A loop_group body's terminal sinks: the entries no other body entry depends on,
- * in body order. The executor reads an iteration's output from these, and a gate or
- * wait only pauses the enclosing loop when it is the SOLE one (#2707 step 3) — see
- * `loopGroupSoleTerminalSink`. Load-time checks and the runtime share this so the
- * two can never disagree about which node a body ends on.
+ * in body order. A gate or wait only pauses the enclosing loop when it is the SOLE
+ * one (#2707 step 3) — see `loopGroupSoleTerminalSink`. Load-time checks and the
+ * runtime share this so the two can never disagree about which node a body ends on.
  */
-export function loopGroupBodySinks<T extends { id: string; depends_on?: readonly string[] }>(
+function loopGroupBodySinks<T extends { id: string; depends_on?: readonly string[] }>(
   body: readonly T[]
 ): T[] {
   const dependedOn = new Set(body.flatMap(n => n.depends_on ?? []));
@@ -2202,6 +2202,25 @@ export function loopGroupSoleTerminalSink<T extends { id: string; depends_on?: r
 ): T | undefined {
   const sinks = loopGroupBodySinks(body);
   return sinks.length === 1 ? sinks[0] : undefined;
+}
+
+/**
+ * The body entries an iteration's output is read from, in body order: the terminal
+ * sinks, with a sink that asks a human (an approval gate or an attention wait) read
+ * past to the entries it depends on. A pause asks about the work; it is not the work,
+ * so the group's output is the same whether the pause was skipped or answered (#4043).
+ * The answer stays on the pause's own output, where `until_bash` and
+ * `$LOOP_PREV.<pause>.output` read it.
+ */
+export function loopGroupOutputNodes<T extends DagNode | IncludeDirective>(
+  body: readonly T[]
+): T[] {
+  return loopGroupBodySinks(body).flatMap(sink =>
+    !isIncludeDirective(sink) &&
+    (isGateNode(sink) || (isWaitNode(sink) && sink.wait.attention !== undefined))
+      ? body.filter(n => sink.depends_on?.includes(n.id))
+      : [sink]
+  );
 }
 
 /** Type guard: check if a DAG node is a workflow (runtime sub-run) node */

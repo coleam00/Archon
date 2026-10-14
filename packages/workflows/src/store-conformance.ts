@@ -867,7 +867,7 @@ export function describeWorkflowStoreConformance(
     });
     test('feed never reuses a position after fan-out recovery deletes the newest event', async () => {
       const run = await running(store);
-      await store.cancelFanOutRun(run.id, 'fan_out_gate');
+      await store.cancelFanOutRun(run.id, 'fan_out_orphan');
       const head = await store.getWorkflowEventHead();
       await store.recoverCancelledFanOutRun(run.id);
       await store.persistWorkflowEvent({ workflow_run_id: run.id, event_type: 'workflow_started' });
@@ -1259,6 +1259,7 @@ export function describeWorkflowStoreConformance(
     test('answered gates the host cannot continue are never due', async () => {
       const cases: [ApprovalContext, Record<string, unknown>][] = [
         [{ ...approval, type: 'child_workflow', childRunId: 'child' }, {}],
+        [{ ...approval, type: 'fan_out', childRunIds: ['child'], unspawnedItems: 0 }, {}],
         [{ ...approval, type: 'writeback', nodeId: '__writeback__' }, {}],
         [{ nodeId: approval.nodeId, message: approval.message, type: 'approval' }, {}],
         [approval, { isolation: 'container' }],
@@ -1381,6 +1382,17 @@ export function describeWorkflowStoreConformance(
               id,
               gate({ type: 'child_workflow', childRunId: 'child', resolved: 'approved' })
             ),
+        },
+        {
+          name: 'fan_out gate',
+          pause: id =>
+            store.pauseWorkflowRun(id, {
+              ...approval,
+              type: 'fan_out',
+              childRunIds: ['child'],
+              unspawnedItems: 0,
+              resolved: 'approved',
+            }),
         },
         {
           name: 'writeback gate',
@@ -1687,7 +1699,7 @@ export function describeWorkflowStoreConformance(
       const completed = await running(store);
       await store.completeWorkflowRun(completed.id, { duration_ms: 1 });
       expect(await store.cancelWorkflowRun(completed.id)).toEqual({ cancelled: false });
-      expect(await store.cancelFanOutRun(completed.id, 'fan_out_gate')).toEqual({
+      expect(await store.cancelFanOutRun(completed.id, 'fan_out_orphan')).toEqual({
         cancelled: false,
       });
       expect(harness.terminalReports()).toEqual([pending.id, pending.id, paused.id, completed.id]);
@@ -1700,7 +1712,7 @@ export function describeWorkflowStoreConformance(
         expect(await types(store, recovered.id)).toEqual([]);
       }
       const run = await running(store);
-      await store.cancelFanOutRun(run.id, 'fan_out_gate');
+      await store.cancelFanOutRun(run.id, 'fan_out_orphan');
       expect((await store.recoverCancelledFanOutRun(run.id)).status).toBe('running');
       await store.cancelWorkflowRun(run.id);
       expect(await rejection(store.recoverCancelledFanOutRun(run.id))).toBeInstanceOf(Error);
