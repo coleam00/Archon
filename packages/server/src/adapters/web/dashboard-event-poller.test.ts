@@ -53,10 +53,12 @@ function makeFeed(): DashboardEventFeed & {
   rows: WorkflowEventRow[];
   write(...rows: WorkflowEventRow[]): void;
   reads: number;
+  requestedTypes: unknown[];
 } {
   const feed = {
     rows: [] as WorkflowEventRow[],
     reads: 0,
+    requestedTypes: [] as unknown[],
     write(...rows: WorkflowEventRow[]): void {
       feed.rows.push(...rows);
     },
@@ -66,6 +68,7 @@ function makeFeed(): DashboardEventFeed & {
       { limit, eventTypes }: Parameters<DashboardEventFeed['readWorkflowEventsAfter']>[1]
     ): Promise<WorkflowEventPage> => {
       feed.reads += 1;
+      feed.requestedTypes.push(eventTypes);
       const from = orderOf(after);
       const scanned = feed.rows.slice(from, from + limit).map((event, i) => ({
         cursor: cursorAt(from + i + 1),
@@ -259,6 +262,8 @@ describe('DashboardEventPoller', () => {
 
     expect(t.emitted.every(({ conv }) => conv === '__dashboard__')).toBe(true);
     expect(emittedIds(t)).toEqual(['r1', 'r2', 'r3']);
+    expect(feed.requestedTypes.length).toBeGreaterThan(0);
+    expect(feed.requestedTypes.every(types => types === DASHBOARD_SOURCE_EVENT_TYPES)).toBe(true);
   });
 
   test('a page of only filtered-out rows does not end the drain', async () => {
@@ -288,6 +293,43 @@ describe('DashboardEventPoller', () => {
     expect(feed.reads).toBe(0);
 
     t.open = true;
+    feed.write(row({ workflow_run_id: 'live', event_type: 'workflow_started' }));
+    await poller.drainNow();
+    poller.stop();
+
+    expect(emittedIds(t)).toEqual(['live']);
+  });
+
+  test('a client connecting during the idle head read still receives what commits after it', async () => {
+    const feed = makeFeed();
+    const t = makeTransport(false);
+    const poller = new DashboardEventPoller(feed);
+    await poller.start(t, 1e9);
+
+    const head = feed.getWorkflowEventHead;
+    feed.getWorkflowEventHead = async () => {
+      t.open = true;
+      feed.write(row({ workflow_run_id: 'during-connect', event_type: 'workflow_started' }));
+      return head();
+    };
+    await poller.drainNow();
+    poller.stop();
+
+    expect(emittedIds(t)).toEqual(['during-connect']);
+  });
+
+  test('a failed head read at start does not fail startup or replay history', async () => {
+    const feed = makeFeed();
+    feed.write(row({ workflow_run_id: 'before-start', event_type: 'workflow_started' }));
+    const head = feed.getWorkflowEventHead;
+    feed.getWorkflowEventHead = () => Promise.reject(new Error('store down'));
+    const t = makeTransport();
+    const poller = new DashboardEventPoller(feed);
+    await poller.start(t, 1e9);
+    expect(mockLog.warn).toHaveBeenCalledTimes(1);
+
+    feed.getWorkflowEventHead = head;
+    await poller.drainNow();
     feed.write(row({ workflow_run_id: 'live', event_type: 'workflow_started' }));
     await poller.drainNow();
     poller.stop();

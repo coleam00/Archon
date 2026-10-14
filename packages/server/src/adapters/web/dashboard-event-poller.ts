@@ -48,10 +48,15 @@ export class DashboardEventPoller {
   /**
    * Begin polling from the feed's current head — history is never replayed.
    * `intervalMs` is the (SQLite) poll cadence / (Postgres) backstop.
+   * A failed head read never fails startup: the first drain reads the head instead.
    */
   async start(transport: DashboardTransport, intervalMs: number): Promise<void> {
     if (this.intervalId) return;
-    this.cursor = await this.feed.getWorkflowEventHead();
+    try {
+      this.cursor = await this.feed.getWorkflowEventHead();
+    } catch (err) {
+      log.warn({ err }, 'dashboard_poller.start_head_failed');
+    }
     this.transport = transport;
     this.intervalId = setInterval(() => {
       void this.drain();
@@ -110,13 +115,22 @@ export class DashboardEventPoller {
 
   private async drainOnce(): Promise<void> {
     const transport = this.transport;
-    if (!transport || this.cursor === null) return;
-    // With no dashboard client, keep the cursor at the head so a later-connecting
-    // client streams only new events (its initial REST fetch already shows current
-    // state — no need to replay the idle gap).
-    if (!transport.hasActiveStream(DASHBOARD_STREAM)) {
+    if (!transport) return;
+    if (this.cursor === null) {
       this.cursor = await this.feed.getWorkflowEventHead();
       return;
+    }
+    // With no dashboard client, keep the cursor at the head so a later-connecting
+    // client streams only new events (its initial REST fetch already shows current
+    // state — no need to replay the idle gap). The stream is checked again after the
+    // head read: a client that connected during it drains from the old cursor, since
+    // the head may already cover an event committed after that client connected.
+    if (!transport.hasActiveStream(DASHBOARD_STREAM)) {
+      const head = await this.feed.getWorkflowEventHead();
+      if (!transport.hasActiveStream(DASHBOARD_STREAM)) {
+        this.cursor = head;
+        return;
+      }
     }
 
     // `next` advances past rows the type filter dropped, so a page can be empty
