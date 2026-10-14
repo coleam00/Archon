@@ -2,7 +2,12 @@ import { WORKTREE_SETUP_EVENT_TYPES } from './schemas/worktree-setup';
 import type { IStateDocumentStore } from './state-document-store';
 import type { IResourceStartStore } from './resource-start-store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
-import type { ExpectedApprovalGate } from './schemas/workflow-run';
+import {
+  answeredGateContinuation,
+  isScheduledWorkflowResume,
+  pendingWorkflowWaitDeadline,
+  type ExpectedApprovalGate,
+} from './schemas/workflow-run';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type { DeclaredOutputPaths } from './output-ref';
@@ -90,7 +95,39 @@ export type WorkflowWaitPause = { kind: 'started'; stepName: string } | { kind: 
 /** Exact persisted cursor expected by an automatic continuation claim. */
 export type WorkflowResumeCursor =
   | { kind: 'wait'; nodeId: string; resumeAt: string }
-  | { kind: 'quota'; attempt: number; resumeAt: string };
+  | { kind: 'quota'; attempt: number; resumeAt: string }
+  | { kind: 'gate'; nodeId: string; pauseId: string };
+
+/**
+ * True when `run` is still at the exact occurrence `cursor` names. Every store's resume
+ * claim and continuation deferral judge this one way, so a host that read an older wait,
+ * schedule or gate answer changes nothing.
+ */
+export function resumeCursorMatches(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>,
+  cursor: WorkflowResumeCursor
+): boolean {
+  switch (cursor.kind) {
+    case 'wait': {
+      const wait = pendingWorkflowWaitDeadline(run);
+      return wait?.nodeId === cursor.nodeId && wait.resumeAt === cursor.resumeAt;
+    }
+    case 'quota': {
+      const scheduled = run.metadata.scheduled_resume;
+      return (
+        run.status === 'failed' &&
+        isScheduledWorkflowResume(scheduled) &&
+        scheduled.triggeredAt === undefined &&
+        scheduled.attempt === cursor.attempt &&
+        scheduled.resumeAt === cursor.resumeAt
+      );
+    }
+    case 'gate': {
+      const gate = answeredGateContinuation(run);
+      return gate?.nodeId === cursor.nodeId && gate.pauseId === cursor.pauseId;
+    }
+  }
+}
 
 /** Composite primary key identifying a single persisted node session row. */
 export interface WorkflowNodeSessionKey {
@@ -501,9 +538,13 @@ export interface IWorkflowStore
     self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
   ): Promise<WorkflowRun | null>;
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
-  /** Return at most `limit` due continuations, defaulting to 25. */
+  /**
+   * Return at most `limit` due continuations, defaulting to 25: time waits past their
+   * deadline, signaled event waits, due quota resumes, and answered gates
+   * (`answeredGateContinuation`). Timed ones come earliest first, answered gates after.
+   */
   listDueWorkflowContinuations(now: Date, limit?: number): Promise<WorkflowRun[]>;
-  /** Back off only the unchanged wait/quota occurrence; a stale cursor writes nothing. */
+  /** Back off only the unchanged wait, quota or gate occurrence; a stale cursor writes nothing. */
   deferWorkflowContinuation(
     id: string,
     retryAt: string,

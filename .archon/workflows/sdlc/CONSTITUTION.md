@@ -24,7 +24,7 @@ Draw the workflow as nodes and outcomes before building it. Test each outcome on
 
 ## 6. CI is one agent node
 
-One agent waits for CI and judges it. Green: it marks the PR ready. Red because of the change: the work goes back to the implementer. Red for any other reason, such as a flake or a broken base branch: the run pauses, not ready, with the cause, as section 11 describes. No polling loops, no re-run machinery, no classification scripts. Every loop has a round limit. Never leave a red PR ready.
+One agent waits for CI and judges it. Green: it marks the PR ready. Red because of the change: the work goes back to the implementer. Red from a flake or an infrastructure failure on a path the change doesn't touch: the agent may re-run the failed jobs once and judge again, in the same round. Still red after that re-run, or red for any other reason, such as a broken base branch: the run pauses, not ready, with the cause, as section 11 describes. No polling loops, no retry nodes, no classification scripts. Every loop has a round limit. Never leave a red PR ready.
 
 ## 7. CI is the validation
 

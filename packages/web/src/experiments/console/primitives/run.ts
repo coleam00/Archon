@@ -197,7 +197,7 @@ export function toRun(raw: RawWorkflowRun): Run {
           pauseId: approval.pauseId,
           message: approval.message,
           completionSignaled: approval.completionSignaled === true,
-          decisions: approval.decisions ?? [{ id: 'approve' }, { id: 'reject' }],
+          decisions: approval.decisions ?? [],
           decisionsAuthored: approval.decisionsAuthored === true,
         }
       : null;

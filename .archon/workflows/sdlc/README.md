@@ -56,7 +56,9 @@ answers green, pr_caused, or other. On anything but green it puts the pull reque
 back to draft before it answers, so a red PR never stays ready. A red the change
 caused, or a conflict with the base, goes back to the implementer in the next
 round, which merges the base on a conflict, and that correction is reviewed before
-CI runs again; any other red ends the run not ready.
+CI runs again. A flake or infrastructure failure outside the change gets one re-run
+of its failed jobs before the agent answers, recorded as `rerun`; any other red ends
+the run not ready, and a defect outside the change becomes a discovery.
 
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is

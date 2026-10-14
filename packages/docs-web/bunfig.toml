@@ -1,2 +1,2 @@
 [test]
-preload = ["../../scripts/test-telemetry-off.ts"]
+preload = ["../../scripts/test-preload.ts"]

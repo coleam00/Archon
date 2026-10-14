@@ -815,6 +815,28 @@ describe('bridgeSession cleanup', () => {
     expect(disposeCount).toBe(1);
   });
 
+  // A wedged session answers abort() with nothing: prompt() never settles, no event arrives.
+  test('an aborted caller on a session that ignores abort still ends and disposes it', async () => {
+    let disposeCount = 0;
+    const session = {
+      sessionId: 'test-session-id',
+      prompt: () => new Promise<void>(() => undefined),
+      dispose: () => {
+        disposeCount++;
+      },
+      subscribe: () => () => {},
+      abort: async () => {},
+    } as unknown as AgentSession;
+    const controller = new AbortController();
+
+    const pending = bridgeSession(session, 'prompt', controller.signal).next();
+    controller.abort();
+    const stuck = new Promise<'stuck'>(resolve => setTimeout(() => resolve('stuck'), 1000));
+
+    await expect(Promise.race([pending, stuck])).rejects.toThrow('Query aborted');
+    expect(disposeCount).toBe(1);
+  });
+
   test('a caller aborted before the bridge starts never sends the prompt', async () => {
     let promptCount = 0;
     let disposeCount = 0;
