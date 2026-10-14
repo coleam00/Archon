@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   currentProcessOwner,
   isOwnerProvablyGone,
+  isSameOwner,
   parseProcessOwner,
   ProcessOwnerRecordError,
   type ProcessOwner,
@@ -156,10 +157,6 @@ async function readOwner(path: string): Promise<ProcessOwner | null> {
   return parseProcessOwner(record, path);
 }
 
-function sameOwner(a: ProcessOwner, b: ProcessOwner): boolean {
-  return a.host === b.host && a.pid === b.pid && a.instance === b.instance;
-}
-
 async function tryLink(source: string, target: string): Promise<boolean> {
   const { value } = await retryFileStoreHandles('link', target, async () => {
     try {
@@ -209,7 +206,7 @@ async function acquire(root: string, timeoutMs: number): Promise<() => Promise<v
         if (Date.now() >= deadline) throw new FileStoreLockHeldError(path, null);
         continue;
       }
-      if (stranded.has(path) && sameOwner(owner, currentProcessOwner)) {
+      if (stranded.has(path) && isSameOwner(owner, currentProcessOwner)) {
         log.warn({ path }, 'file_store.lock_reclaimed');
         await remove(path);
         stranded.delete(path);
@@ -224,14 +221,14 @@ async function acquire(root: string, timeoutMs: number): Promise<() => Promise<v
           stranded.delete(breaker);
           try {
             const now = await readOwner(path);
-            if (now && sameOwner(owner, now) && isOwnerProvablyGone(now)) await remove(path);
+            if (now && isSameOwner(owner, now) && isOwnerProvablyGone(now)) await remove(path);
           } finally {
             if (!(await discard(breaker))) stranded.add(breaker);
           }
           continue;
         }
         const breakOwner = await readOwner(breaker);
-        if (breakOwner && stranded.has(breaker) && sameOwner(breakOwner, currentProcessOwner)) {
+        if (breakOwner && stranded.has(breaker) && isSameOwner(breakOwner, currentProcessOwner)) {
           log.warn({ path: breaker }, 'file_store.lock_reclaimed');
           await remove(breaker);
           stranded.delete(breaker);
