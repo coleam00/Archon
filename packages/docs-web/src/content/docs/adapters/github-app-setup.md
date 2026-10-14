@@ -293,7 +293,7 @@ Repeated 401s on outbound API calls (`createComment`, `listComments`, `repos.get
 
 An installation token needs Contents write access to push branches. If the branch creates or changes files under `.github/workflows/`, GitHub also requires Workflows write access. Check the App and installation permissions:
 
-- Verify the App's permissions still include the scopes the operation needs (Contents:RW for cloning, pushing branches, and merging pull requests; Workflows:RW only when runs create or change `.github/workflows/` files; Issues:RW + Pull requests:RW for comments and reactions; Checks:Read for CI wake-ups; Metadata:Read is auto-included). Permission changes require operators to **review and accept** the new permissions on every installation; until accepted, that installation keeps its old permissions.
+Verify the App's permissions against the [permissions table](#step-2-permissions-fine-grained). Permission changes require operators to **review and accept** the new permissions on every installation; until accepted, that installation keeps its old permissions.
 
 ### Webhook deliveries fail signature verification
 
