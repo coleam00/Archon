@@ -492,7 +492,7 @@ mock.module('@archon/paths', () => ({
   }),
 }));
 
-import { parseCommand, handleCommand } from './command-handler';
+import { parseCommand, handleCommand, startWorkflow } from './command-handler';
 import { startRunLiveOwner } from '../services/run-live-owner';
 import { quoteCommandArg } from '../utils/command-args';
 
@@ -2979,6 +2979,32 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(startRequest(result.workflow).force).toBeUndefined();
         expect(startRequest(result.workflow).args).toBe('do it');
+      });
+
+      // The run route's entry: the message is the run's $ARGUMENTS byte for byte, and
+      // only the caller's `force` argument sets force (#4159).
+      test.each([
+        'Explain what git push --force does',
+        'Fix the "login bug"\n\nsteps:\n  1. a',
+        "'tis the season",
+      ])('startWorkflow keeps the message verbatim: %j', async message => {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({ name: 'test-workflow', description: 'A test workflow' }),
+          ],
+          errors: [],
+        });
+
+        const result = await startWorkflow(
+          conversationWithCodebase,
+          'test-workflow',
+          message,
+          false,
+          {}
+        );
+
+        expect(startRequest(result.workflow).args).toBe(message);
+        expect(startRequest(result.workflow).force).toBeUndefined();
       });
 
       test('should return not-found when no codebase is configured', async () => {

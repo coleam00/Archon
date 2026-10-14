@@ -699,30 +699,30 @@ describe('POST /api/workflows/:name/run', () => {
     expect(body.status).toBe('started');
   });
 
-  test('sends /workflow run <name> <message> to orchestrator', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockAddMessage.mockImplementationOnce(async () => ({
-      id: 'msg-1',
-      conversation_id: MOCK_CONV.id,
-      role: 'user' as const,
-      content: 'Run tests',
-      metadata: '{}',
-      created_at: NOW,
-    }));
+  // The message is data: it must reach the run byte for byte, and no word in it may
+  // set `--force` (#4159).
+  test.each([
+    'Explain what git push --force does',
+    'Fix the "login bug"\n\nsteps:\n  1. a',
+    "'tis the season",
+  ])('hands the orchestrator the message verbatim: %j', async message => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => null);
     mockHandleMessage.mockImplementationOnce(async () => {});
 
     const { app } = makeApp();
-    await app.request('/api/workflows/test-suite/run', {
+    const response = await app.request('/api/workflows/test-suite/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Run tests' }),
+      body: JSON.stringify({ conversationId: 'web-test-abc', message }),
     });
+    expect(response.status).toBe(200);
 
     expect(mockHandleMessage).toHaveBeenCalledWith(
       expect.anything(),
       'web-test-abc',
-      '/workflow run test-suite Run tests',
+      message,
       expect.objectContaining({
+        workflowName: 'test-suite',
         isolationHints: { workflowType: 'thread', workflowId: 'web-test-abc' },
       })
     );
@@ -769,10 +769,8 @@ describe('POST /api/workflows/:name/run', () => {
     expect(mockHandleMessage).toHaveBeenCalledWith(
       expect.anything(),
       'web-test-abc',
-      '/workflow run triage/review Run triage',
-      expect.objectContaining({
-        isolationHints: { workflowType: 'thread', workflowId: 'web-test-abc' },
-      })
+      'Run triage',
+      expect.objectContaining({ workflowName: 'triage/review' })
     );
   });
 
@@ -927,9 +925,9 @@ describe('POST /api/workflows/:name/run', () => {
     expect(mockHandleMessage).toHaveBeenCalledWith(
       expect.anything(),
       'web-test-abc',
-      // The command text is untouched — a supplied value must never be confusable
+      // The message is untouched — a supplied value must never be confusable
       // with $ARGUMENTS, and this route must not invent a chat grammar.
-      '/workflow run review-block Review it',
+      'Review it',
       expect.objectContaining({ workflowInputs: { diff: 'D1', style: 'terse' } })
     );
   });
@@ -1025,7 +1023,7 @@ describe('POST /api/workflows/:name/run', () => {
     expect(mockHandleMessage).toHaveBeenCalledWith(
       expect.anything(),
       'web-test-abc',
-      '/workflow run review-block Review it',
+      'Review it',
       expect.objectContaining({ workflowInputs: { diff: 'D1' } })
     );
   });
@@ -1064,7 +1062,7 @@ describe('POST /api/workflows/:name/run', () => {
     expect(mockHandleMessage).toHaveBeenCalledWith(
       expect.anything(),
       'web-test-abc',
-      '/workflow run bench Go',
+      'Go',
       expect.objectContaining({
         workflowModelOverrides: {
           tiers: { large: 'openai/gpt-5.6' },
@@ -1137,7 +1135,7 @@ describe('POST /api/workflows/:name/run', () => {
     expect(mockHandleMessage).toHaveBeenCalledWith(
       expect.anything(),
       'web-test-abc',
-      '/workflow run bench Go',
+      'Go',
       expect.objectContaining({
         workflowRunConfig: {
           source: { kind: 'http', label: 'inline' },

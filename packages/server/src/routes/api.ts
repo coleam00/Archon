@@ -3946,12 +3946,12 @@ export function registerApiRoutes(
         }
       }
 
-      // Declared inputs ride the context, never `fullMessage` — encoding them into the
-      // command string would make a supplied value indistinguishable from $ARGUMENTS
-      // and would amount to inventing a chat grammar as a side effect (#2554/#2555).
-      const fullMessage = `/workflow run ${workflowName} ${message}`;
+      // The message and every run option ride typed fields, never a chat command
+      // string: tokenizing the message would rewrite it and let a word in it set
+      // `--force` (#4159), and encoding inputs would invent a chat grammar (#2554/#2555).
       const extraContext: Omit<HandleMessageContext, 'isolationHints'> = {
         actor,
+        workflowName,
         ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
         ...(workflowInputs ? { workflowInputs } : {}),
         ...(workflowModelOverrides ? { workflowModelOverrides } : {}),
@@ -3962,7 +3962,7 @@ export function registerApiRoutes(
       const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
       const result = await dispatchToOrchestrator(
         conversationId,
-        fullMessage,
+        message,
         extraContext,
         filesToCleanup
       );
