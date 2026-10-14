@@ -109,7 +109,13 @@ interface GitCommandAnchors {
 }
 
 type WorktreeCreationResult =
-  | { kind: 'created'; warnings: string[]; cutFromCommit?: string; creationId: string }
+  | {
+      kind: 'created';
+      warnings: string[];
+      cutFromCommit?: string;
+      creationId: string;
+      branchCreated: boolean;
+    }
   | { kind: 'adopted'; environment: WorktreeCreationEnvironment };
 
 class WorktreeAddError extends Error {
@@ -282,6 +288,7 @@ export class WorktreeProvider implements IIsolationProvider {
         provenance: 'created',
         adopted: false,
         creationId: creation.creationId,
+        branchCreated: creation.branchCreated,
         request,
         ...(creation.cutFromCommit !== undefined ? { cutFromCommit: creation.cutFromCommit } : {}),
       },
@@ -975,8 +982,10 @@ export class WorktreeProvider implements IIsolationProvider {
     // recursively is enough.
     await mkdirAsync(worktreeBase, { recursive: true });
 
-    // Only a branch this call creates has a cut-from commit; reuse and adoption never do.
+    // Only a branch this call cuts or resets to its start point has a cut-from commit,
+    // so it says nothing about who owns the branch; `branchCreated` does.
     let cutFromCommit: string | undefined;
+    let branchCreated = false;
     if (request.workflowType === 'task' && request.taskBranch?.kind === 'existing') {
       // Adoption continues the local branch exactly as the prior run left it.
       // Do not fetch, sync, reset, or create a child branch here.
@@ -1003,13 +1012,14 @@ export class WorktreeProvider implements IIsolationProvider {
 
       if (isPRIsolationRequest(request)) {
         // For PRs: fetch and checkout the PR branch (actual or synthetic)
-        const adopted = await this.createFromPR(request, worktreePath, setupLockReason, remote);
-        if (adopted) {
-          return { kind: 'adopted', environment: adopted };
+        const pr = await this.createFromPR(request, worktreePath, setupLockReason, remote);
+        if ('adopted' in pr) {
+          return { kind: 'adopted', environment: pr.adopted };
         }
+        branchCreated = pr.branchCreated;
       } else {
         // For issues, tasks, threads: create new branch
-        cutFromCommit = await this.createNewBranch(
+        ({ cutFromCommit, branchCreated } = await this.createNewBranch(
           request,
           repoPath,
           worktreePath,
@@ -1017,7 +1027,7 @@ export class WorktreeProvider implements IIsolationProvider {
           baseBranch,
           setupLockReason,
           remote
-        );
+        ));
       }
     }
 
@@ -1070,6 +1080,7 @@ export class WorktreeProvider implements IIsolationProvider {
     return {
       kind: 'created',
       creationId,
+      branchCreated,
       warnings,
       ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
     };
@@ -1502,25 +1513,25 @@ export class WorktreeProvider implements IIsolationProvider {
     worktreePath: string,
     setupLockReason: string,
     remote = 'origin'
-  ): Promise<WorktreeCreationEnvironment | null> {
+  ): Promise<{ adopted: WorktreeCreationEnvironment } | { branchCreated: boolean }> {
     const repoPath = request.canonicalRepoPath;
     const prNumber = request.identifier;
 
     try {
       if (!request.isForkPR) {
         // Same-repo PR: Use the actual branch so changes push directly to PR
-        await this.createFromSameRepoPR(
+        const branchCreated = await this.createFromSameRepoPR(
           repoPath,
           worktreePath,
           request.prBranch,
           setupLockReason,
           remote
         );
-      } else {
-        // Fork PR: Use synthetic review branch
-        return await this.createFromForkPR(request, worktreePath, setupLockReason, remote);
+        return { branchCreated };
       }
-      return null;
+      // Fork PR: Use synthetic review branch, which is always (re)created here
+      const adopted = await this.createFromForkPR(request, worktreePath, setupLockReason, remote);
+      return adopted ? { adopted } : { branchCreated: true };
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       const wrapped = new Error(`Failed to create worktree for PR #${prNumber}: ${err.message}`, {
@@ -1589,7 +1600,8 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Create worktree for same-repo PR using the actual branch
+   * Create worktree for same-repo PR using the actual branch.
+   * Returns whether the local branch was created here (false when it already existed).
    */
   private async createFromSameRepoPR(
     repoPath: string,
@@ -1597,7 +1609,7 @@ export class WorktreeProvider implements IIsolationProvider {
     prBranch: string,
     setupLockReason: string,
     remote = 'origin'
-  ): Promise<void> {
+  ): Promise<boolean> {
     // Fetch the PR's actual branch. Delegate to syncWorkspace so the bounded
     // ref-lock retry lives in one place — concurrent same-repo launches collide
     // on Git's shared remote-tracking ref lock file, and the @archon/git owner
@@ -1618,7 +1630,8 @@ export class WorktreeProvider implements IIsolationProvider {
       throw new Error(`Fetch ${remote}/${prBranch} failed: ${original}`);
     }
 
-    const args = (await this.localBranchExists(repoPath, prBranch))
+    const branchExisted = await this.localBranchExists(repoPath, prBranch);
+    const args = branchExisted
       ? [worktreePath, prBranch]
       : [worktreePath, '-b', prBranch, `${remote}/${prBranch}`];
     await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, args);
@@ -1634,6 +1647,7 @@ export class WorktreeProvider implements IIsolationProvider {
       getLog().warn({ err: trackingError, worktreePath, prBranch }, 'upstream_tracking_failed');
       // Continue - the worktree was created successfully, tracking is just convenience
     }
+    return !branchExisted;
   }
 
   /**
@@ -1768,7 +1782,8 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Create worktree with new branch. Returns the commit the branch was cut from.
+   * Create worktree with new branch. Returns the commit the branch was cut from, and
+   * whether the branch was created here rather than an existing one reset to the start point.
    */
   private async createNewBranch(
     request: IsolationRequest,
@@ -1778,14 +1793,15 @@ export class WorktreeProvider implements IIsolationProvider {
     baseBranch: string,
     setupLockReason: string,
     remote = 'origin'
-  ): Promise<string> {
+  ): Promise<{ cutFromCommit: string; branchCreated: boolean }> {
     // Determine start-point: explicit fromBranch overrides base branch
     const startPoint =
       request.workflowType === 'task' && request.taskBranch?.kind === 'new'
         ? (request.taskBranch.fromBranch ?? `${remote}/${baseBranch}`)
         : `${remote}/${baseBranch}`;
 
-    if (await this.localBranchExists(repoPath, branchName)) {
+    const branchExisted = await this.localBranchExists(repoPath, branchName);
+    if (branchExisted) {
       const taskFromBranch =
         request.workflowType === 'task' && request.taskBranch?.kind === 'new'
           ? request.taskBranch.fromBranch
@@ -1829,7 +1845,7 @@ export class WorktreeProvider implements IIsolationProvider {
           timeout: GIT_OPERATION_TIMEOUT_MS,
         })
     );
-    return cutFrom.trim();
+    return { cutFromCommit: cutFrom.trim(), branchCreated: !branchExisted };
   }
 
   /**

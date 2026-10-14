@@ -135,6 +135,11 @@ export interface CreatedWorktreeMetadata {
   provenance: 'created';
   adopted: false;
   creationId: string;
+  /**
+   * True only when this creation made the checked-out branch. False when an existing
+   * local branch was checked out or reset, since it may hold work this creation does not own.
+   */
+  branchCreated: boolean;
   request?: IsolationRequest;
   /** The commit a newly created branch was cut from; absent when an existing branch was checked out. */
   cutFromCommit?: string;
@@ -457,6 +462,8 @@ export type ResolutionMethod =
       creationId: string;
       /** The repository the worktree was created from; part of its removal proof. */
       canonicalRepoPath: RepoPath;
+      /** Whether this resolution created the branch, so undoing it may delete the branch. */
+      branchCreated: boolean;
       autoCleanedCount?: number;
       /** The commit the new branch was cut from, when this resolution created one. */
       cutFromCommit?: string;

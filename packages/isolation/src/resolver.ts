@@ -577,9 +577,7 @@ export class IsolationResolver {
         await this.removeCreatedWorktree(isolatedEnv.workingPath, {
           canonicalRepoPath: canonicalPath,
           creationId: isolatedEnv.metadata.creationId,
-          ...(isolatedEnv.metadata.cutFromCommit !== undefined
-            ? { branchName: isolatedEnv.branchName }
-            : {}),
+          ...(isolatedEnv.metadata.branchCreated ? { branchName: isolatedEnv.branchName } : {}),
         });
       }
 
@@ -596,6 +594,7 @@ export class IsolationResolver {
               type: 'created',
               creationId: isolatedEnv.metadata.creationId,
               canonicalRepoPath: canonicalPath,
+              branchCreated: isolatedEnv.metadata.branchCreated,
               ...(isolatedEnv.metadata.cutFromCommit !== undefined
                 ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
                 : {}),
@@ -619,7 +618,7 @@ export class IsolationResolver {
     const removed = await this.removeCreatedWorktree(env.working_path, {
       canonicalRepoPath: method.canonicalRepoPath,
       creationId: method.creationId,
-      ...(method.cutFromCommit !== undefined ? { branchName: toBranchName(env.branch_name) } : {}),
+      ...(method.branchCreated ? { branchName: toBranchName(env.branch_name) } : {}),
     });
     if (!removed) return;
     try {
@@ -637,9 +636,9 @@ export class IsolationResolver {
    * Logs and returns false on any failure instead of throwing.
    *
    * The creation id proves only that this resolution created the checkout, not
-   * the branch: a same-repo PR checks out a local branch that may already exist
-   * and hold unpushed work. Callers pass `branchName` only when the resolution
-   * cut the branch itself, which `cutFromCommit` records.
+   * the branch: a same-repo PR or a reused branch name checks out a local branch
+   * that may already exist and hold unpushed work. Callers pass `branchName` only
+   * when the provider reports `branchCreated`.
    */
   private async removeCreatedWorktree(
     worktreePath: string,

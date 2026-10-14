@@ -343,6 +343,7 @@ describe('WorktreeProvider', () => {
 
       expect(env.provider).toBe('worktree');
       expect(env.branchName).toBe(git.toBranchName('archon/issue-42'));
+      expect(env.metadata).toHaveProperty('branchCreated', true);
       expect(env.workingPath).toContain('issue-42');
       expect(env.status).toBe('active');
 
@@ -648,6 +649,7 @@ describe('WorktreeProvider', () => {
       const environment = await provider.create(request);
 
       expect(environment.branchName).toBe(git.toBranchName('feature/auth'));
+      expect(environment.metadata).toHaveProperty('branchCreated', true);
 
       // PR branch fetch is delegated to syncWorkspace with fetch-only mode so
       // the bounded ref-lock retry lives in @archon/git.
@@ -700,6 +702,7 @@ describe('WorktreeProvider', () => {
       const environment = await provider.create(request);
 
       expect(environment.branchName).toBe(git.toBranchName('pr-42-review'));
+      expect(environment.metadata).toHaveProperty('branchCreated', true);
 
       // Verify fetch with PR ref (fork PRs use pull/N/head)
       expect(execSpy).toHaveBeenCalledWith(
@@ -749,6 +752,7 @@ describe('WorktreeProvider', () => {
       const environment = await provider.create(request);
 
       expect(environment.branchName).toBe(git.toBranchName('pr-42-review'));
+      expect(environment.metadata).toHaveProperty('branchCreated', true);
 
       // Verify fetch with PR ref and local branch creation
       expect(execSpy).toHaveBeenCalledWith(
@@ -1043,7 +1047,10 @@ describe('WorktreeProvider', () => {
     test('resets stale branch to start-point when it already exists', async () => {
       execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
 
-      await provider.create(baseRequest);
+      const env = await provider.create(baseRequest);
+
+      // A reset branch still has a cut-from commit, but this creation did not make it.
+      expect(env.metadata).toHaveProperty('branchCreated', false);
 
       // Verify branch was reset to start-point before checkout
       expect(execSpy).toHaveBeenCalledWith(
@@ -1310,8 +1317,9 @@ describe('WorktreeProvider', () => {
 
       execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
 
-      await provider.create(request);
+      const environment = await provider.create(request);
 
+      expect(environment.metadata).toHaveProperty('branchCreated', false);
       // The existing local branch is selected before add runs.
       expect(execSpy).toHaveBeenCalledWith(
         'git',

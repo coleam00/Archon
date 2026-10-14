@@ -79,6 +79,7 @@ function makeMockProvider() {
         provenance: 'created',
         adopted: false,
         creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        branchCreated: true,
       },
     }),
     destroy: async () => ({
@@ -391,6 +392,7 @@ describe('IsolationResolver', () => {
         type: 'created',
         creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
         canonicalRepoPath,
+        branchCreated: true,
       });
     }
   });
@@ -413,6 +415,7 @@ describe('IsolationResolver', () => {
               provenance: 'created',
               adopted: false,
               creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+              branchCreated: true,
             },
           };
         },
@@ -717,50 +720,56 @@ describe('IsolationResolver', () => {
     }
   });
 
-  test('store.create() failure triggers orphan worktree cleanup and rethrows', async () => {
-    let destroyCalled = false;
-    let destroyCalledWithForce = false;
+  for (const branchCreated of [true, false]) {
+    test(`store.create() failure removes the orphan worktree, ${branchCreated ? 'deleting' : 'keeping'} its branch, and rethrows`, async () => {
+      const destroyCalls: unknown[][] = [];
+      const provider = makeMockProvider();
+      const resolver = createResolver({
+        provider: {
+          ...provider,
+          create: async request => {
+            const env = await provider.create(request);
+            return { ...env, metadata: { ...env.metadata, branchCreated } };
+          },
+          destroy: async (...args) => {
+            destroyCalls.push(args);
+            return {
+              worktreeRemoved: true,
+              branchDeleted: null,
+              remoteBranchDeleted: null,
+              directoryClean: true,
+              warnings: [],
+            };
+          },
+        },
+        store: makeMockStore({
+          create: async () => {
+            throw new Error('DB constraint violation');
+          },
+        }),
+      });
 
-    const resolver = createResolver({
-      provider: {
-        ...makeMockProvider(),
-        destroy: async (_envId, options) => {
-          destroyCalled = true;
-          destroyCalledWithForce = options?.force === true;
-          expect(options).toEqual({
+      await expect(
+        resolver.resolve({
+          existingEnvId: null,
+          codebase: defaultCodebase,
+          hints: { workflowType: 'issue', workflowId: '602' },
+          platformType: 'web',
+        })
+      ).rejects.toThrow('DB constraint violation');
+      expect(destroyCalls).toEqual([
+        [
+          '/worktrees/new-branch',
+          {
             canonicalRepoPath: git.toRepoPath('/repos/myrepo'),
             creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
-            branchName: git.toBranchName('new-branch'),
+            ...(branchCreated ? { branchName: git.toBranchName('new-branch') } : {}),
             force: true,
-          });
-          return {
-            worktreeRemoved: true,
-            branchDeleted: null,
-            remoteBranchDeleted: null,
-            directoryClean: true,
-            warnings: [],
-          };
-        },
-      },
-      store: makeMockStore({
-        create: async () => {
-          throw new Error('DB constraint violation');
-        },
-      }),
+          },
+        ],
+      ]);
     });
-
-    await expect(
-      resolver.resolve({
-        existingEnvId: null,
-        codebase: defaultCodebase,
-        hints: { workflowType: 'issue', workflowId: '602' },
-        platformType: 'web',
-      })
-    ).rejects.toThrow('DB constraint violation');
-
-    expect(destroyCalled).toBe(true);
-    expect(destroyCalledWithForce).toBe(true);
-  });
+  }
 
   test('incomplete rollback reports the leftover without masking the store failure', async () => {
     mockCleanupError.mockClear();
@@ -834,7 +843,12 @@ describe('IsolationResolver', () => {
       status: 'resolved' as const,
       env: makeEnvRow(),
       cwd: '/worktrees/issue-42',
-      method: { type: 'created' as const, creationId, canonicalRepoPath },
+      method: {
+        type: 'created' as const,
+        creationId,
+        canonicalRepoPath,
+        branchCreated: false,
+      },
     };
 
     function releaseHarness(destroy: () => Promise<DestroyResult>): {
@@ -894,19 +908,38 @@ describe('IsolationResolver', () => {
       expect(statusUpdates).toEqual([['env-1', 'destroyed']]);
     });
 
-    test('deletes the branch only when the resolution cut it', async () => {
-      const { resolver, destroyCalls } = releaseHarness(async () => removed);
-      await resolver.releaseUnlinked({
-        ...created,
-        method: { ...created.method, cutFromCommit: 'abc123' },
+    // `cutFromCommit` does not track branch ownership: PR checkouts create a branch
+    // without one, and a reset pre-existing branch has one.
+    const branchCases: [string, ResolutionMethod & { type: 'created' }, boolean][] = [
+      [
+        'a new branch it cut',
+        { ...created.method, branchCreated: true, cutFromCommit: 'abc123' },
+        true,
+      ],
+      ['a PR branch it created', { ...created.method, branchCreated: true }, true],
+      [
+        'a pre-existing branch it reset',
+        { ...created.method, branchCreated: false, cutFromCommit: 'abc123' },
+        false,
+      ],
+    ];
+    for (const [shape, method, deletesBranch] of branchCases) {
+      test(`${deletesBranch ? 'deletes' : 'keeps'} ${shape}`, async () => {
+        const { resolver, destroyCalls } = releaseHarness(async () => removed);
+        await resolver.releaseUnlinked({ ...created, method });
+        expect(destroyCalls).toEqual([
+          [
+            '/worktrees/issue-42',
+            {
+              canonicalRepoPath,
+              creationId,
+              ...(deletesBranch ? { branchName: git.toBranchName('issue-42') } : {}),
+              force: true,
+            },
+          ],
+        ]);
       });
-      expect(destroyCalls).toEqual([
-        [
-          '/worktrees/issue-42',
-          { canonicalRepoPath, creationId, branchName: git.toBranchName('issue-42'), force: true },
-        ],
-      ]);
-    });
+    }
 
     const unverified: [string, () => Promise<DestroyResult>][] = [
       ['the worktree is still registered', async () => ({ ...removed, worktreeRemoved: false })],
@@ -949,6 +982,7 @@ describe('IsolationResolver', () => {
             provenance: 'created',
             adopted: false,
             creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+            branchCreated: true,
           },
           warnings: ['Config file could not be loaded — copyFiles not applied.'],
         }),
@@ -1004,6 +1038,7 @@ describe('IsolationResolver', () => {
               provenance: 'created',
               adopted: false,
               creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+              branchCreated: true,
             },
           };
         },
@@ -1043,6 +1078,7 @@ describe('IsolationResolver', () => {
               provenance: 'created',
               adopted: false,
               creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+              branchCreated: true,
             },
           };
         },
@@ -1085,6 +1121,7 @@ describe('IsolationResolver', () => {
               provenance: 'created',
               adopted: false,
               creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+              branchCreated: true,
             },
           };
         },
@@ -1481,6 +1518,7 @@ describe('IsolationResolver', () => {
             provenance: 'created',
             adopted: false,
             creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+            branchCreated: true,
           },
         })
       );

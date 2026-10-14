@@ -411,6 +411,7 @@ function createdMethod(overrides?: Partial<CreatedMethod>): CreatedMethod {
     type: 'created',
     creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
     canonicalRepoPath: toRepoPath('/workspace/test-repo'),
+    branchCreated: true,
     ...overrides,
   };
 }
