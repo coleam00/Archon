@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -84,6 +84,46 @@ posixOnly('a node whose root exited stays endable while its job holds the output
     expect(await settled).toBe('settled');
   } finally {
     trees.release();
+  }
+});
+
+function lifelineWatches(pgid: number): boolean {
+  const ps = Bun.spawnSync(['/bin/ps', '-A', '-o', 'args=']);
+  return ps.stdout
+    .toString()
+    .split('\n')
+    .some(args => args.trim().endsWith(`archon-node-lifeline ${String(pgid)}`));
+}
+
+posixOnly('a node that completes disarms its owner-death watcher', async () => {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-tree-')));
+  const pidFile = join(dir, 'pid');
+  const jobFile = join(dir, 'job');
+  const release = join(dir, 'release');
+  const trees = recordNodeProcessTrees();
+  let job: number | undefined;
+  try {
+    // The job leaves the node's output, so the node completes while its group lives on.
+    const node = runHostBash(
+      `/bin/sleep 30 >/dev/null 2>&1 & echo $! > '${jobFile}'; echo $$ > '${pidFile}'; ` +
+        `while [ ! -e '${release}' ]; do /bin/sleep 0.05; done`
+    );
+    await waitUntil(
+      'the node pid',
+      () => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== ''
+    );
+    const root = Number(readFileSync(pidFile, 'utf8'));
+    job = Number(readFileSync(jobFile, 'utf8'));
+    expect(lifelineWatches(root)).toBe(true);
+
+    writeFileSync(release, '');
+    await node;
+
+    await waitUntil('the watcher to exit', () => !lifelineWatches(root));
+    expect(processExists(job)).toBe(true);
+  } finally {
+    trees.release();
+    if (job !== undefined && processExists(job)) process.kill(job, 'SIGKILL');
   }
 });
 
