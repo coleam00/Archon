@@ -208,11 +208,7 @@ export async function createFileWorkflowStore(
         const run = view.resumableRun(id, cursor);
         const blocker = await admission.resume(run);
         if (!blocker) return await view.resumeWorkflowRun(id, cursor);
-        const busy = new WorkflowResourceBusyError(
-          id,
-          blocker,
-          resumeRefusal(run.status, run.metadata, cursor)
-        );
+        const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));
         if (!busy.waitsForCapacity || !view.recordCapacityWait(id)) throw busy;
         return busy;
       });

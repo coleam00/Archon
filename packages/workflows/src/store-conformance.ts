@@ -428,6 +428,56 @@ export function describeWorkflowStoreConformance(
       expect(await store.admitResourceStart(start())).toMatchObject({ status: 'admitted' });
       expect(await drain()).toEqual([]);
     });
+    test('a refused resume of a ready pause keeps its place without a cursor', async () => {
+      const notDue = { ...wait, resumeAt: '2999-01-01T00:00:00.000Z' };
+      const pauseAt = async (pause: 'answered' | 'due' | 'not-due'): Promise<string> => {
+        const intent = start();
+        expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'admitted' });
+        const id = intent.launch.run.id;
+        await store.claimPendingWorkflowRun(id);
+        if (pause === 'answered') {
+          await store.pauseWorkflowRun(id, approval);
+          await store.releasePausedRunSlot(id, gateCursor);
+          await store.resolveApprovalGate(
+            id,
+            { approval: { ...approval, resolved: 'approved' } },
+            []
+          );
+          return id;
+        }
+        const pending = pause === 'due' ? wait : notDue;
+        await store.pauseWorkflowRunForWait(id, pending, { kind: 'started', stepName: 'wait' });
+        await store.releasePausedRunSlot(id, {
+          kind: 'wait',
+          nodeId: pending.nodeId,
+          resumeAt: pending.resumeAt,
+        });
+        return id;
+      };
+      for (const pause of ['answered', 'due', 'not-due'] as const) {
+        const a = await pauseAt(pause);
+        const holder = start();
+        expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+        const ready = pause !== 'not-due';
+        // Answer surfaces (API, CLI, chat) resume without the host's cursor.
+        expect(await rejection(store.resumeWorkflowRun(a))).toMatchObject({
+          refusal: ready ? 'waiting' : 'paused',
+        });
+        expect(readCapacityWait((await store.getWorkflowRun(a))?.metadata) !== undefined).toBe(
+          ready
+        );
+        const later = start();
+        expect(await store.admitResourceStart(later)).toMatchObject({ status: 'queued' });
+        await end(holder.launch.run.id);
+        expect(await drain()).toHaveLength(ready ? 0 : 1);
+        if (ready) {
+          expect((await store.resumeWorkflowRun(a)).status).toBe('running');
+          await store.completeWorkflowRun(a, { duration_ms: 1 });
+          expect(await drain()).toHaveLength(1);
+        } else await store.cancelWorkflowRun(a);
+        await end(later.launch.run.id);
+      }
+    });
     test('a cancelled capacity waiter stops counting against capacity', async () => {
       const a = await admitPaused(start());
       expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: true });

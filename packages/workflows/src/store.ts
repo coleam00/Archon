@@ -629,8 +629,8 @@ export interface IWorkflowStore
   ): Promise<{ signaled: boolean }>;
   /**
    * A resume of a run admitted through a resource start takes a slot or throws
-   * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused on the
-   * continuation host's claim (a `cursor`) records its first refusal
+   * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused while ready
+   * to continue (answered, due, or claimed with a `cursor`) records its first refusal
    * (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown, so it keeps its place while
    * the host retries (`resumeRefusal`).
    */

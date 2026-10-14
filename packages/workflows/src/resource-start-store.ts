@@ -9,7 +9,13 @@ import type {
   startBindingPreparationStatusSchema,
   resourceStartRequestStatusSchema,
 } from './schemas/resource-start';
-import { readCapacityWait, type WorkflowRun, type WorkflowRunStatus } from './schemas/workflow-run';
+import {
+  answeredPauseContinuation,
+  pendingWorkflowWaitDeadline,
+  readCapacityWait,
+  type WorkflowRun,
+  type WorkflowRunStatus,
+} from './schemas/workflow-run';
 import type { ResumeRefusal, WorkflowResumeCursor } from './store';
 
 export class SourceReceiptDigestConflictError extends Error {}
@@ -190,17 +196,23 @@ export function resourceResumeBlocker(
 }
 
 /**
- * What a refused resume leaves behind. Only the continuation host's claim of a due wait or
- * an answered pause (a resume cursor) makes a paused run a capacity waiter: an early
- * manual resume must not hold capacity for a run that is not ready to continue.
+ * What a refused resume leaves behind. A paused run that is ready to continue (its pause
+ * answered, its wait due, or a continuation host's claim) becomes a capacity waiter, from
+ * whichever surface resumed it: answering a gate resumes without a cursor. An early resume
+ * of a pause that is not ready must not hold capacity for it.
  */
 export function resumeRefusal(
-  status: WorkflowRunStatus,
-  metadata: WorkflowRun['metadata'],
+  run: Pick<WorkflowRun, 'status' | 'metadata'>,
   cursor: WorkflowResumeCursor | undefined
 ): ResumeRefusal {
-  if (status !== 'paused') return 'failed';
-  return cursor !== undefined || readCapacityWait(metadata) !== undefined ? 'waiting' : 'paused';
+  if (run.status !== 'paused') return 'failed';
+  const wait = pendingWorkflowWaitDeadline(run);
+  const ready =
+    cursor !== undefined ||
+    readCapacityWait(run.metadata) !== undefined ||
+    answeredPauseContinuation(run) !== undefined ||
+    (wait !== undefined && Date.parse(wait.resumeAt) <= Date.now());
+  return ready ? 'waiting' : 'paused';
 }
 
 export interface IResourceStartStore {

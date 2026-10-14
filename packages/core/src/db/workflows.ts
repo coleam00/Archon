@@ -1085,7 +1085,7 @@ export async function resumeWorkflowRun(
           const busy = new WorkflowResourceBusyError(
             id,
             blocker,
-            resumeRefusal(status, metadata, cursor)
+            resumeRefusal({ status, metadata }, cursor)
           );
           // Committed with the refusal, so the paused run keeps its place as a waiter.
           if (busy.waitsForCapacity && readCapacityWait(metadata) === undefined)
