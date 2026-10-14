@@ -24,24 +24,7 @@ export async function mapWithLimit<T, R>(
   // `limit` is coerced to serial rather than throwing — a bad cap must not crash a run.
   const workerCount = Math.max(1, Math.min(Math.floor(limit) || 1, items.length));
 
-  // Shared cursor. `cursor++` is atomic in JS's single-threaded model (no await
-  // between the read and the increment), so no two workers ever claim the same index.
-  let cursor = 0;
-
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      const index = cursor++;
-      if (index >= items.length) return;
-      try {
-        const value = await fn(items[index], index);
-        results[index] = { status: 'fulfilled', value };
-      } catch (reason) {
-        results[index] = { status: 'rejected', reason };
-      }
-    }
-  };
-
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  await runPool(items, workerCount, fn, results, () => false);
   return results;
 }
 
@@ -61,6 +44,19 @@ export async function mapWithHeldSlots<T, R>(
 ): Promise<(PromiseSettledResult<R> | undefined)[]> {
   const results = new Array<PromiseSettledResult<R> | undefined>(items.length).fill(undefined);
   const workerCount = Math.max(0, Math.min(Math.floor(slots) || 0, items.length));
+  await runPool(items, workerCount, fn, results, holdsSlot);
+  return results;
+}
+
+async function runPool<T, R>(
+  items: readonly T[],
+  workerCount: number,
+  fn: (item: T, index: number) => Promise<R>,
+  results: (PromiseSettledResult<R> | undefined)[],
+  holdsSlot: (value: R) => boolean
+): Promise<void> {
+  // Shared cursor. `cursor++` is atomic in JS's single-threaded model (no await
+  // between the read and the increment), so no two workers ever claim the same index.
   let cursor = 0;
 
   const worker = async (): Promise<void> => {
@@ -78,5 +74,4 @@ export async function mapWithHeldSlots<T, R>(
   };
 
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return results;
 }
