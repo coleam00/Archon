@@ -29,6 +29,7 @@ Act directly on GitHub. Every change gets a one-line comment saying why. Per pas
 - Fix the order with `Depends on: #n` lines, and remove ones that point at closed or abandoned work.
 - Pull requests idle for more than 24 hours: comment what the builder should do next so the loop picks them up, or close one that is beyond saving and reopen its issue.
 - When one root cause keeps producing patches, open one issue that fixes the cause (replace or delete the flawed part, not another patch) and close the patch issues into it. When the same kind of defect or review finding has come up three or more times, open one issue to turn it into an automatic check or lint rule instead of another fix.
+- Run every holdout scenario on the default branch each pass (the reviewers only run the ones a change could affect). A failure with no open issue: open one, without quoting the scenario.
 - A defect that got past review: open an issue for it, and if a holdout file is named above, add a scenario to it that would have caught the defect (the file stays outside the repository; never copy its contents anywhere public).
 - `needs-owner`: when you can decide an item yourself (a mechanical blocker, a criterion you can make checkable without changing what the owner asked for), decide it, say so in a comment, and remove the label in the same pass. Product direction, scope, and anything in the mission or the product document are not yours to decide.
 - If the default branch is red, open an issue for it at the top of the order.

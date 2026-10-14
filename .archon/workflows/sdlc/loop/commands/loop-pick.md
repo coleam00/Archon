@@ -30,7 +30,9 @@ Decide how the chosen work should be built.
 
 - `continue`: finishing an open pull request (rule 1). The builder handles it.
 - `simple`: a contained change. The acceptance criteria are clear, it touches a few files in an area the codebase already shows how to do, and it involves no authentication, security, data model or migration, and no refactor across modules.
-- `complex`: anything else. An area of the code with patterns you have not seen, many modules, authentication, security, data or migrations, conventions to honour across the codebase, a design decision to make first, or the label `route:ship`. Also complex: an item a `simple` attempt already failed on. Escalation is one way; never route an item back to simple.
+- `complex`: anything else: changes across many modules, authentication, security, data or migrations, conventions to honour across the codebase, a design decision to make first, or the label `route:ship`. Also complex: an item a `simple` attempt already failed on. Escalation is one way; never route an item back to simple.
+
+Newness alone is not complexity. In a young codebase almost every area is new; a change that adds one contained feature in one or two places, with clear criteria, is `simple` even when nothing like it exists yet. If it turns out harder, the failed attempt escalates it.
 
 Say how confident you are. If you would call it `simple` with low confidence, route it `complex`. If you would call it `complex` with low confidence because the issue itself is unclear about what is wanted, do not route it: label it `needs-owner` with the exact question, and choose the next move.
 
