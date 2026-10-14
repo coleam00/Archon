@@ -46,6 +46,7 @@ interface TextNode {
 }
 
 function textContent(node: TextNode): string {
+  if (node.type === 'html') return '';
   return node.value ?? node.children?.map(textContent).join('') ?? '';
 }
 
@@ -54,6 +55,8 @@ async function referenceOperations(markdown: string): Promise<{ method: string; 
   const collectTables: RemarkPlugin = () => tree => {
     for (const node of tree.children) {
       if (node.type !== 'table') continue;
+      const headers = node.children[0].children.map(cell => textContent(cell).trim().toLowerCase());
+      if (headers.join('|') !== 'method|path|description') continue;
       for (const row of node.children.slice(1)) {
         const [method, path, purpose] = row.children.map(cell => textContent(cell).trim());
         if (method && path && purpose) operations.push({ method, path });
@@ -77,6 +80,8 @@ test('only visible table rows with a purpose count as documentation', async () =
     `<!--\n${table('/commented')}\n-->`,
     `~~~markdown\n${table('/example')}\n~~~`,
     table('/blank', '   '),
+    table('/hidden-purpose', '<!-- Read status -->'),
+    '| State | Source | Note |\n| --- | --- | --- |\n| GET | `/unrelated` | Read status |',
     '| GET | `/outside-table` | Read status |',
   ].join('\n\n');
   expect(await referenceOperations(fixture)).toEqual([{ method: 'GET', path: '/visible' }]);

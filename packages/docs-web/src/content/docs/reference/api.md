@@ -34,7 +34,7 @@ You can feed this into tools like Swagger UI or use it to generate typed API cli
 
 Authentication is optional for a local or trusted solo install. When Web authentication is enabled, the API requires a Better Auth session or a trusted proxy identity unless `ARCHON_WEB_AUTH_REQUIRED=false`. The `/api/auth/` and `/api/health` surfaces are exempt from that general gate, but per-user endpoints still require an identity.
 
-The trusted identity header defaults to `X-Archon-User` and can be changed with `ARCHON_WEB_AUTH_HEADER`. Bind the server to loopback or use a reverse proxy that strips client-supplied identity headers and sets its own authenticated value. For network deployments, see [Web authentication](/adapters/web/#authentication).
+The trusted identity header defaults to `X-Archon-User` and can be changed with `ARCHON_WEB_AUTH_HEADER`. Bind the server to loopback (`HOST=127.0.0.1`) or keep the app port reachable only through a trusted reverse proxy. The proxy must strip client-supplied identity headers and set its own value only from an authenticated identity. For network deployments, see the [reverse-proxy deployment guide](/deployment/reverse-proxy/#authentication-and-headers).
 
 | Method | Path | Description |
 |--------|------|-------------|
