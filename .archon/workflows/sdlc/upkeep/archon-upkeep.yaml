@@ -97,8 +97,9 @@ nodes:
   # branch's own outcome, ready or not (if_skipped binding, so a skipped branch
   # arrives as null).
   #
-  # A failed delivery cascades an `upstream_failed` skip that blocks this join,
-  # so the run's terminal record names the node that failed.
+  # A failed delivery reaches this node through deliver's report (`ready: false`,
+  # its summary saying a node failed) and is relayed like any other not-ready
+  # delivery; the run still fails, naming the node that failed.
   - id: outcome
     script: outcome
     runtime: bun

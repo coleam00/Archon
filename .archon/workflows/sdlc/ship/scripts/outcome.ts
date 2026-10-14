@@ -20,9 +20,9 @@
  *   deliver's `ready`, `summary`, `reason` and `pr_url`, or "null" when the deliver
  *   branch was skipped.
  *
- * A failed delivery cannot reach this node: the failure cascades an
- * `upstream_failed` skip that blocks this join, and the run's terminal record names
- * the node that actually failed.
+ * A failed delivery arrives as deliver's `ready: false, reason: failed` report and is
+ * relayed like any other not-ready delivery. A failure before delivery skips this
+ * node; the workflow's `report` node answers then.
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';

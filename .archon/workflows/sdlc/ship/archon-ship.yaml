@@ -33,7 +33,7 @@ inputs:
 # `delivered:false` is a valid completion: an honest "no work is owed" is a
 # successful run that shipped nothing, and lifecycle status and work outcome are
 # separate facts.
-returns: outcome
+returns: report
 outcome_field: delivered
 
 nodes:
@@ -112,8 +112,9 @@ nodes:
   # none_failed_min_one_success needs one completed dependency, and on the no_action
   # route `deliver` is the skipped one.
   #
-  # A failed delivery cascades an `upstream_failed` skip that blocks this join,
-  # so the run's terminal record names the node that failed.
+  # A failed delivery reaches this node through deliver's report (`reason: failed`)
+  # and is relayed like any other not-ready delivery. A failure before delivery
+  # skips this node, and `report` answers.
   - id: outcome
     script: outcome
     runtime: bun
@@ -132,6 +133,18 @@ nodes:
       delivery: { from: "$deliver.output.summary", if_skipped: null }
       delivery_reason: { from: "$deliver.output.reason", if_skipped: null }
       pr_url: { from: "$deliver.output.pr_url", if_skipped: null }
+
+  # The workflow's terminal report on every ending. A node failure skips `outcome`
+  # (never fails it), so `all_done` still runs this node and the binding reads null.
+  # `always_run` because it reads discoveries its dependency edge does not carry.
+  - id: report
+    script: report
+    runtime: bun
+    always_run: true
+    depends_on: [outcome]
+    trigger_rule: all_done
+    with:
+      outcome: { from: "$outcome.output", if_skipped: null }
     output_format:
       type: object
       properties:
@@ -147,6 +160,7 @@ nodes:
             - ci_pr_caused
             - ci_other
             - round_cap
+            - failed
             # the stops before delivery
             - no_action
             - blocked

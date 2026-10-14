@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { writeNodeArtifactsListing } from '../packages/workflows/src/artifacts-index';
-import { caveats } from '../.archon/workflows/sdlc/.shared/report';
+import { caveats, failed } from '../.archon/workflows/sdlc/.shared/report';
 
 /**
  * The SDLC pack's terminal-report module, tested where the pack lives in this
@@ -118,5 +118,21 @@ describe('discoveries', () => {
   it('names a missing listing instead of reading as no discoveries', () => {
     const dir = artifactsDir();
     expect(caveats(dir, { listingFile: undefined })).toContain('Discoveries could not be listed');
+  });
+});
+
+describe('failed', () => {
+  it('claims no result and still relays the discoveries the run recorded', async () => {
+    const dir = artifactsDir();
+    mkdirSync(join(dir, 'discoveries'));
+    writeFileSync(
+      join(dir, 'discoveries', 'implement.json'),
+      JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
+    );
+    const listingFile = await writeNodeArtifactsListing(dir, 'run');
+    const text = failed(dir, { listingFile });
+    expect(text.startsWith('Not done:')).toBe(true);
+    expect(text).toContain('- Guard refuses an empty diff [unreviewed]');
+    expect(text).not.toContain('Ready');
   });
 });
