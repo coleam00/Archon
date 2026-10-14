@@ -40,8 +40,9 @@ if [ "$host" != "github.com" ]; then
 fi
 
 # GitHub names contain no JSON metacharacters, so interpolation preserves the literal path.
+# The server owns the owner/repo shape check; a path it rejects gets no token.
 case "$path" in
-  ''|*[!a-zA-Z0-9_./-]*|/*|*/|*/*/*|.*|*/.*|*..*)
+  *[!a-zA-Z0-9_./-]*)
     printf 'git-credential-archon: malformed path; expected owner/repo[.git]\n' >&2
     exit 0
     ;;

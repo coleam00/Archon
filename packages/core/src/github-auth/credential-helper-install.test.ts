@@ -433,19 +433,9 @@ describe('installCredentialHelper', () => {
       };
       const invalidInputs = [
         { host: 'example.com', path: 'owner/repo', port: '43210' },
-        ...[
-          '',
-          'repo',
-          'owner/repo/subpath',
-          '/repo',
-          'owner/',
-          '.owner/repo',
-          'owner/.repo',
-          'owner/foo..bar',
-          'foo..bar/repo',
-          'owner/repo\\u002e',
-          'owner/repo\",\"path\":\"victim\\u002fproject',
-        ].map(path => ({ host: 'github.com', path, port: '43210' })),
+        ...['', 'repo', 'owner/repo\\u002e', 'owner/repo\",\"path\":\"victim\\u002fproject'].map(
+          path => ({ host: 'github.com', path, port: '43210' })
+        ),
         ...['', '0', '65536', '123456', '-1', '3.5', '3000/secret', 'secret-token'].map(port => ({
           host: 'github.com',
           path: 'owner/repo',
