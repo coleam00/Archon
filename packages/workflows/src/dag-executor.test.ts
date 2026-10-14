@@ -29808,6 +29808,182 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     });
   }
 
+  // Spike #4040 check 6: what a continued node does when the provider session it would
+  // resume is gone by the time an attention wait is answered. Not for merge.
+  describe('spike #4040: provider session lost across an answered attention wait', () => {
+    function attentionOwnerWorkflow(): DagNode[] {
+      const nodes = ownerWorkflow('claude', true);
+      const group = nodes[1];
+      if (group?.kind !== 'loop_group') throw new Error('missing group');
+      group.loop_group.until_bash = 'exit 1';
+      group.loop_group.nodes.push(
+        dagNodeSchema.parse({ id: 'pause', depends_on: ['review'], wait: { attention: 'Next?' } })
+      );
+      return nodes;
+    }
+
+    it('fails a named context: resume owner whose session is gone instead of starting over', async () => {
+      const nodes = attentionOwnerWorkflow();
+      let sessionDeleted = false;
+      mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session, options) {
+        yield {
+          type: 'agent_message_chunk',
+          text: prompt === 'review' ? '{"done":false}' : prompt,
+        };
+        const lost = sessionDeleted && session === 'O';
+        yield {
+          type: 'result',
+          sessionId: prompt === 'source' ? 'S' : prompt === 'owner' ? (lost ? 'O-cold' : 'O') : 'R',
+          ...(options?.outputFormat ? { structuredOutput: { done: false } } : {}),
+          ...(session ? { resumed: !lost } : {}),
+        };
+      });
+      const firstStore = createEscalationStore('addressable-run');
+      await runAddressableWorkflow(nodes, firstStore);
+      const metadata = JSON.parse(JSON.stringify(firstStore.getState().metadata));
+      expect(metadata.wait.bodySessionCursors).toEqual({
+        owner: { sessionId: 'O', provider: 'claude' },
+      });
+      metadata.wait.answer = { text: 'again' };
+      metadata.wait.answeredVia = 'cli';
+      metadata.wait.answeredAt = new Date().toISOString();
+      sessionDeleted = true;
+
+      const resumedStore = createEscalationStore('addressable-run');
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(resumedStore),
+          cwd: testDir,
+          workflow: { name: 'addressable', nodes },
+          workflowRun: makeWorkflowRun('addressable-run', { metadata }),
+          priorCompletedNodes: new Map([['source', { output: 'source', sessionId: 'S' }]]),
+        })
+      );
+
+      expect(
+        mockSendQueryDag.mock.calls
+          .filter(c => c[0] === 'owner')
+          .map(c => [c[2], c[3]?.forkSession])
+      ).toEqual([
+        ['S', true],
+        ['O', false],
+      ]);
+      expect(resumedStore.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(resumedStore.failWorkflowRun).toHaveBeenCalledWith(
+        'addressable-run',
+        expect.stringContaining("Node 'owner' could not resume the exact session from 'source'"),
+        expect.anything()
+      );
+    });
+
+    it('starts a context: shared node fresh after the answered wait, as documented', async () => {
+      const nodes: DagNode[] = [
+        { id: 'plan', kind: 'agent', source: { kind: 'inline', prompt: 'plan' } },
+        { id: 'ask', kind: 'wait', depends_on: ['plan'], wait: { attention: 'Go?' } },
+        {
+          id: 'act',
+          kind: 'agent',
+          depends_on: ['ask'],
+          context: 'shared',
+          source: { kind: 'inline', prompt: 'act' },
+        },
+      ];
+      mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session) {
+        yield { type: 'agent_message_chunk', text: prompt };
+        yield {
+          type: 'result',
+          sessionId: prompt === 'plan' ? 'P' : 'A',
+          ...(session ? { resumed: false } : {}),
+        };
+      });
+      const firstStore = createEscalationStore('addressable-run');
+      await runAddressableWorkflow(nodes, firstStore);
+      const metadata = JSON.parse(JSON.stringify(firstStore.getState().metadata));
+      metadata.wait.answer = { text: 'go' };
+
+      const resumedStore = createEscalationStore('addressable-run');
+      const platform = createMockPlatform();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(resumedStore),
+          platform,
+          cwd: testDir,
+          workflow: { name: 'addressable', nodes },
+          workflowRun: makeWorkflowRun('addressable-run', { metadata }),
+          priorCompletedNodes: new Map([['plan', { output: 'plan', sessionId: 'P' }]]),
+        })
+      );
+
+      expect(resumedStore.failWorkflowRun).not.toHaveBeenCalled();
+      expect(resumedStore.completeWorkflowRun).toHaveBeenCalled();
+      expect(mockSendQueryDag.mock.calls.map(c => [c[0], c[2]])).toEqual([
+        ['plan', undefined],
+        ['act', undefined],
+      ]);
+      expect(
+        deliveredMessages(platform).some(m => m.includes('could not resume the prior session'))
+      ).toBe(false);
+    });
+
+    it('fails a top-level named resume whose source session is gone after the answered wait', async () => {
+      const nodes: DagNode[] = [
+        { id: 'plan', kind: 'agent', source: { kind: 'inline', prompt: 'plan' } },
+        { id: 'ask', kind: 'wait', depends_on: ['plan'], wait: { attention: 'Go?' } },
+        {
+          id: 'act',
+          kind: 'agent',
+          depends_on: ['ask'],
+          context: { resume: 'plan' },
+          source: { kind: 'inline', prompt: 'act' },
+        },
+      ];
+      mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session) {
+        yield { type: 'agent_message_chunk', text: prompt };
+        yield {
+          type: 'result',
+          sessionId: prompt === 'plan' ? 'P' : 'A-cold',
+          ...(session ? { resumed: false } : {}),
+        };
+      });
+      const firstStore = createEscalationStore('addressable-run');
+      await runAddressableWorkflow(nodes, firstStore);
+      const metadata = JSON.parse(JSON.stringify(firstStore.getState().metadata));
+      metadata.wait.answer = { text: 'go' };
+
+      const resumedStore = createEscalationStore('addressable-run');
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(resumedStore),
+          cwd: testDir,
+          workflow: { name: 'addressable', nodes },
+          workflowRun: makeWorkflowRun('addressable-run', { metadata }),
+          priorCompletedNodes: new Map([['plan', { output: 'plan', sessionId: 'P' }]]),
+          priorNodeSessions: [
+            {
+              workflow_run_id: 'addressable-run',
+              node_id: 'plan',
+              provider: 'claude',
+              provider_session_id: 'P',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          ],
+        })
+      );
+
+      expect(mockSendQueryDag.mock.calls.map(c => [c[0], c[2], c[3]?.forkSession])).toEqual([
+        ['plan', undefined, undefined],
+        ['act', 'P', true],
+      ]);
+      expect(resumedStore.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(resumedStore.failWorkflowRun).toHaveBeenCalledWith(
+        'addressable-run',
+        expect.stringContaining("Node 'act' could not resume the exact session from 'plan'"),
+        expect.anything()
+      );
+    });
+  });
+
   for (const boundary of ['gate', 'interactive'] as const) {
     it(`restores enclosing owners after a nested ${boundary} and scopes new inner invocations`, async () => {
       const nodes = ownerWorkflow('claude', true);

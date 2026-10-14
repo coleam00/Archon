@@ -1,0 +1,15 @@
+name: spike-loop
+description: Spike 4040. A loop whose body ends in an attention wait, three answered rounds.
+nodes:
+  - id: rounds
+    loop_group:
+      max_iterations: 5
+      until_bash: test "$(wc -l < "$ARTIFACTS_DIR/rounds.txt")" -ge 3
+      nodes:
+        - id: work
+          bash: |
+            echo "prev=$LOOP_PREV.ask.output.text" >> "$ARTIFACTS_DIR/rounds.txt"
+        - id: ask
+          depends_on: [work]
+          wait:
+            attention: "Answer this round"

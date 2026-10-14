@@ -1,0 +1,9 @@
+name: spike-gate
+description: Spike 4040. A native approval gate, to record the current background refusal.
+nodes:
+  - id: gate
+    approval:
+      message: "Approve?"
+  - id: after
+    depends_on: [gate]
+    bash: echo after

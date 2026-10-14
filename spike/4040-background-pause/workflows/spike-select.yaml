@@ -1,0 +1,17 @@
+name: spike-select
+description: Spike 4040. Pause at a select-form attention wait, then record the answer.
+nodes:
+  - id: before
+    bash: echo before
+  - id: ask
+    depends_on: [before]
+    wait:
+      attention: "Pick one"
+      form: select
+      options:
+        - { id: go }
+        - { id: stop }
+  - id: after
+    depends_on: [ask]
+    bash: |
+      echo "decision=$ask.output.decision text=$ask.output.text" >> "$ARTIFACTS_DIR/after.txt"
