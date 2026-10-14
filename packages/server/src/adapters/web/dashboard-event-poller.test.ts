@@ -93,11 +93,14 @@ const emittedIds = (t: FakeTransport): string[] =>
   t.emitted.map(({ event }) => (JSON.parse(event) as { runId: string }).runId);
 
 describe('mapWorkflowEventRow', () => {
-  test.each(WORKFLOW_EVENT_TYPES)('source membership matches row mapping for %s', eventType => {
-    expect(DASHBOARD_SOURCE_EVENT_TYPES.includes(eventType)).toBe(
-      mapWorkflowEventRow(row({ event_type: eventType })) !== null
-    );
-  });
+  test.each([...WORKFLOW_EVENT_TYPES])(
+    'source membership matches row mapping for %s',
+    eventType => {
+      expect(DASHBOARD_SOURCE_EVENT_TYPES.includes(eventType)).toBe(
+        mapWorkflowEventRow(row({ event_type: eventType })) !== null
+      );
+    }
+  );
 
   test('workflow_started → workflow_status running', () => {
     const out = mapWorkflowEventRow(
