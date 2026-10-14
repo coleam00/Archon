@@ -86,12 +86,16 @@ function main(): void {
         ? triage.labels
         : mirrorLabels(next);
     assertNoSelfPromotion(next, add);
-    // Only labels on the issue at pickup: one added while this run worked is a request
-    // the next pickup reads, even before its own run has queued it.
+    // A request label added while this run worked is the next pickup's to read: one
+    // added after pickup is not in decision.labels, and one already there whose request
+    // queued after the claim waits in next.requests.
+    const requested = new Set(next.requests.map(request => request.label));
     labels = writeLabels(
       item,
       add,
-      decision.labels.filter(isOwnedLabel).filter(name => !add.includes(name))
+      decision.labels
+        .filter(isOwnedLabel)
+        .filter(name => !add.includes(name) && !requested.has(name))
     );
   }
   // Clearing the claim is what marks this run's requests honored; a run that stops

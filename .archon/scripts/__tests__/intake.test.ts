@@ -731,6 +731,25 @@ describe('the intake scripts', () => {
     expect(applied.gh.filter(call => call.includes('--remove-label'))).toEqual([]);
   }, 60_000);
 
+  test('a request label on the issue at pickup whose request queues after the claim stays on the issue', () => {
+    const at = install();
+    const decided = facts(at, { runId: 'run-1', issueLabels: ['archon-triage'] }).output;
+    const retriage = {
+      action: 'added',
+      label: 'archon-triage',
+      actor: 'Maintainer',
+      issueLabels: ['archon-triage'],
+    };
+    facts(at, { ...retriage, runId: 'run-2', statuses: { 'run-1': 'running' } });
+
+    const applied = outcome(at, { ...retriage, runId: 'run-1' }, decided, READY_VERDICT);
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(applied.gh.filter(call => call.includes('--remove-label'))).toEqual([]);
+    expect(stored(at).value.requests).toEqual([
+      expect.objectContaining({ run_id: 'run-2', label: 'archon-triage' }),
+    ]);
+  }, 60_000);
+
   test('a claim keeps the newest label requests and one other request', () => {
     const at = install();
     facts(at, { runId: 'run-1' });
