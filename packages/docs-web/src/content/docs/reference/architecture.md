@@ -666,13 +666,15 @@ export class WorktreeProvider implements IIsolationProvider {
 
 ### Branch Naming Convention
 
-| Workflow           | Identifier      | Generated Branch                |
-| ------------------ | --------------- | ------------------------------- |
-| issue              | `"42"`          | `issue-42`                      |
-| pr (same-repo)     | `"123"`         | `feature/auth` (actual branch)  |
-| pr (fork)          | `"123"`         | `pr-123-review`                 |
-| task               | `"my-feature"`  | `task-my-feature`               |
-| thread             | `"C123:ts.123"` | `thread-a1b2c3d4` (8-char hash) |
+| Workflow       | Identifier      | Generated Branch                      |
+| -------------- | --------------- | ------------------------------------- |
+| issue          | `"42"`          | `archon/issue-42`                      |
+| pr (same-repo) | `"123"`         | `feature/auth` (actual branch)         |
+| pr (fork)      | `"123"`         | `archon/pr-123-review`                 |
+| task           | `"my-feature"`  | `archon/task-my-feature`               |
+| thread         | `"C123:ts.123"` | `archon/thread-57078b80` (8-char hash)  |
+
+Same-repository PRs use the actual PR branch. Tasks with an explicitly selected branch use that name instead of the default `archon/task-` name.
 
 ### Storage Location
 
