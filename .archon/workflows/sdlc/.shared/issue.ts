@@ -109,12 +109,14 @@ function forgeView(item: QualifiedPr): IssueView {
   };
 }
 
+/** `current` when the creation body could not be recovered and the current one stands in. */
+export const BODY_SOURCES = ['creation', 'current'] as const;
+
 /** The title and body an issue was opened with, and whether the body really is that. */
 export interface IssueAtCreation {
   readonly title: string;
   readonly body: string;
-  /** `current` when the creation body could not be recovered and the current one stands in. */
-  readonly body_from: 'creation' | 'current';
+  readonly body_from: (typeof BODY_SOURCES)[number];
 }
 
 const CREATION_QUERY = [

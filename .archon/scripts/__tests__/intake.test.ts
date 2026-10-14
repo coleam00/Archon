@@ -9,6 +9,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
 } from '../../../packages/workflows/src/schemas/workflow-run';
+import { BODY_SOURCES } from '../../workflows/sdlc/.shared/issue';
 import {
   assertNoSelfPromotion,
   bodyDigest,
@@ -29,6 +30,7 @@ import {
   RANKS,
   sortCandidates,
   statePut,
+  TRUST_INPUTS,
   TRUSTS,
   type TriageFacts,
   type TrustInput,
@@ -352,6 +354,8 @@ describe('pickup', () => {
           properties: {
             path: Enum;
             decision?: { properties: { path: Enum; trust: Enum }; required: string[] };
+            seen?: { properties: { body_from: Enum } };
+            evaluation?: { properties: { trust_input: Enum } };
           };
         };
       }[];
@@ -365,6 +369,10 @@ describe('pickup', () => {
     expect(decision?.path.enum).toEqual([...INTAKE_PATHS]);
     expect(decision?.trust.enum).toEqual([...TRUSTS, null]);
     expect(output('outcome')?.properties.path.enum).toEqual(['idle', ...INTAKE_PATHS]);
+    expect(output('facts')?.properties.seen?.properties.body_from.enum).toEqual([...BODY_SOURCES]);
+    expect(output('outcome')?.properties.evaluation?.properties.trust_input.enum).toEqual([
+      ...TRUST_INPUTS,
+    ]);
   });
 
   test("a claim is released only when its run's status is one the engine calls terminal", () => {
@@ -1164,15 +1172,18 @@ describe('eval mode', () => {
   }, 60_000);
 
   test('a body whose creation revision cannot be recovered is shown as it is now, and says so', () => {
-    const at = install();
-    const decided = succeeded(
-      evalRun(at, 'facts', { body: 'The body now', history: { createdBody: null } }),
-      'facts'
-    );
-    expect(decided).toMatchObject({
-      target: '# An issue\n\nThe body now',
-      seen: { body_from: 'current' },
-    });
+    const unrecoverable: NonNullable<GhApiIssue['history']>[] = [
+      { createdBody: null },
+      { firstEditedBody: 'A later revision' },
+    ];
+    for (const history of unrecoverable) {
+      const at = install();
+      const decided = succeeded(evalRun(at, 'facts', { body: 'The body now', history }), 'facts');
+      expect(decided).toMatchObject({
+        target: '# An issue\n\nThe body now',
+        seen: { body_from: 'current' },
+      });
+    }
   }, 60_000);
 
   test('the forge source has no edit history, so it shows the current text, and only reads', () => {
