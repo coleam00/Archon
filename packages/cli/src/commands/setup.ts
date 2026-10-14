@@ -1280,9 +1280,6 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
 }
 
 /**
- * Collect Telegram credentials
- */
-/**
  * Offer the SDLC workflows' forge credential. Only `GH_TOKEN` is written: `GITHUB_TOKEN`
  * beside a `WEBHOOK_SECRET` switches the server's GitHub adapter into token mode.
  */
@@ -1319,6 +1316,9 @@ async function collectForgeToken(): Promise<string | undefined> {
   return token;
 }
 
+/**
+ * Collect Telegram credentials
+ */
 async function collectTelegramConfig(): Promise<TelegramConfig> {
   note(
     'SECURITY: Telegram bots are public by default — anyone can DM your bot.\n' +
