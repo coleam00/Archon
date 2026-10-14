@@ -1224,8 +1224,8 @@ export const GATE_AND_HALT_IGNORED_FIELDS: readonly string[] = [
 /**
  * Fields a wait cannot consume; its output contract and lifecycle are engine-owned.
  * `output_format` is absent because a wait node REJECTS it outright (the schema's
- * superRefine: the engine fixes the wait's own `{ status, waited_ms, … }` contract),
- * so it never reaches this warn set.
+ * superRefine: the engine fixes the wait's own contract, `waitOutputFormat`), so it
+ * never reaches this warn set.
  */
 export const WAIT_NODE_IGNORED_FIELDS: readonly string[] = [
   ...BASH_NODE_AI_FIELDS,
