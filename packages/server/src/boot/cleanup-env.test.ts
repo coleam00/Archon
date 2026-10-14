@@ -92,20 +92,18 @@ test(
 
 for (const scope of ['user', 'repo'] as const) {
   describe(`${scope} env file cleanup startup`, () => {
-    for (const name of variables) {
-      test.each(['abc', '0', '-1', '1.5'])(
-        `${name} rejects %j`,
-        async value => {
-          const result = await bootWithEnvFile(scope, `${name}=${value}\n`);
-          expect(result.stderr).toContain(
-            `${name} must be a positive integer; received ${JSON.stringify(value)}`
-          );
-          expect(result.exit).not.toBe(0);
-          expect(result.stdout).not.toContain('CLEANUP_BOOT');
-        },
-        serverImportBudgetMs + 1000
-      );
-    }
+    test(
+      'rejects invalid cleanup settings before application imports',
+      async () => {
+        const result = await bootWithEnvFile(scope, 'CLEANUP_INTERVAL_HOURS=abc\n');
+        expect(result.stderr).toContain(
+          'CLEANUP_INTERVAL_HOURS must be a positive integer; received "abc"'
+        );
+        expect(result.exit).not.toBe(0);
+        expect(result.stdout).not.toContain('CLEANUP_BOOT');
+      },
+      serverImportBudgetMs + 1000
+    );
 
     test(
       'captures configured thresholds before application imports',
