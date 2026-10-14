@@ -337,3 +337,21 @@ describe('review lens gating', () => {
     }
   });
 });
+
+describe('part assignment forwarding', () => {
+  // A fixture cannot run rereview's mode for real: a continuation needs the previous
+  // round's published report on disk. So every review deliver runs is held to the
+  // binding the first review's fixture proves.
+  it('hands the part assignment to every review deliver runs', async () => {
+    const source = await Bun.file(
+      join(import.meta.dir, '../../workflows/sdlc/deliver/archon-deliver.yaml')
+    ).text();
+    type Node = { id: string; include?: string; with?: Record<string, unknown>; loop_group?: { nodes: Node[] } };
+    const flatten = (nodes: Node[]): Node[] =>
+      nodes.flatMap(node => [node, ...flatten(node.loop_group?.nodes ?? [])]);
+    const workflow = Bun.YAML.parse(source) as { nodes: Node[] };
+    const reviews = flatten(workflow.nodes).filter(node => node.include === 'archon-review');
+    expect(reviews.map(node => node.id).sort()).toEqual(['rereview', 'review']);
+    for (const review of reviews) expect(review.with?.part).toBe('$INPUTS.part');
+  });
+});

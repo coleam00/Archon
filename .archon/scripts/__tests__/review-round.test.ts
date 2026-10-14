@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import { packScriptRunner, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -167,5 +168,45 @@ describe('review-round', () => {
     });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('records no reviewed commit');
+  });
+});
+
+// review-round passes the part assignment through unchecked, so the mode node's
+// output_format is the only thing that refuses a malformed one.
+describe("mode's part schema", () => {
+  async function partSchema(): Promise<Record<string, unknown>> {
+    const source = await Bun.file(
+      join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml')
+    ).text();
+    const workflow = Bun.YAML.parse(source) as {
+      nodes: { id: string; output_format?: { properties: Record<string, Record<string, unknown>> } }[];
+    };
+    const part = workflow.nodes.find(node => node.id === 'mode')?.output_format?.properties.part;
+    if (part === undefined) throw new Error('archon-review mode declares no part');
+    return part;
+  }
+
+  const valid = { delivers: 1, parts: [{ part: 1, items: ['now'] }, { part: 2, items: ['later'] }] };
+
+  it('admits the whole contract and a well-formed assignment', async () => {
+    const schema = await partSchema();
+    expect(validateStructuredOutput(null, schema).valid).toBe(true);
+    expect(validateStructuredOutput(valid, schema).valid).toBe(true);
+  });
+
+  it('refuses a malformed assignment', async () => {
+    const schema = await partSchema();
+    const { delivers: _delivers, ...noDelivers } = valid;
+    for (const malformed of [
+      { ...valid, delivers: 0 },
+      { ...valid, parts: [] },
+      { ...valid, deliver: 1 },
+      { ...valid, parts: [{ part: 1, items: [' '] }] },
+      { ...valid, parts: [{ part: 1, items: [] }] },
+      { ...valid, parts: [{ part: 1, items: ['now'], owner: 'x' }] },
+      noDelivers,
+    ]) {
+      expect(validateStructuredOutput(malformed, schema).valid).toBe(false);
+    }
   });
 });
