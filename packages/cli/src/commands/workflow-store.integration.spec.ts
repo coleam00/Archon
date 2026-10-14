@@ -13,7 +13,11 @@ import {
 } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
-import { isWorkflowWaitContext, runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  answeredGateContinuation,
+  isWorkflowWaitContext,
+  runAttention,
+} from '@archon/workflows/schemas/workflow-run';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
@@ -402,3 +406,67 @@ test('a source host with only Codex refuses a Claude workflow before any worktre
     clearConfigCache();
   }
 });
+
+test('approve reports a run the continuation host claimed first as continuing elsewhere', async () => {
+  const root = tempRoots(mkdtempSync(join(tmpdir(), 'archon-cli-store-')));
+  const project = join(root, 'project');
+  process.env.ARCHON_HOME = join(root, 'home');
+  process.env.ARCHON_TELEMETRY_DISABLED = '1';
+  delete process.env.DATABASE_URL;
+  setPlatformPolicies([]);
+  registerBuiltinProviders();
+  mkdirSync(join(project, '.archon', 'workflows'), { recursive: true });
+  writeFileSync(
+    join(project, '.archon', 'workflows', 'raced.yaml'),
+    `name: raced
+description: a gate the continuation host continues first
+interactive: true
+worktree:
+  enabled: false
+nodes:
+  - id: before
+    bash: echo before
+  - id: review
+    depends_on: [before]
+    approval:
+      message: Approve?
+  - id: after
+    depends_on: [review]
+    bash: echo after
+`
+  );
+  const host = createTestHost();
+  const { store } = host.deps;
+  const log = spyOn(console, 'log').mockImplementation(() => undefined);
+  try {
+    const { workflowRunCommand, workflowApproveCommand } = await import('./workflow');
+    await workflowRunCommand(host, project, 'raced', 'go', {
+      folder: true,
+      noWorktree: true,
+      quiet: true,
+    });
+    const paused = (await store.listWorkflowRuns()).runs[0];
+    if (!paused) throw new Error('Run not recorded');
+
+    // The host's scan claims the answered gate between recording and the inline resume.
+    const approve = host.operations.approveWorkflow;
+    host.operations.approveWorkflow = async (...args) => {
+      const result = await approve(...args);
+      const answered = await store.getWorkflowRun(paused.id);
+      const gate = answered ? answeredGateContinuation(answered) : undefined;
+      if (!gate) throw new Error('Approval did not leave an answered gate');
+      await store.resumeWorkflowRun(paused.id, { kind: 'gate', ...gate });
+      return result;
+    };
+    log.mockClear();
+
+    await workflowApproveCommand(host, paused.id, undefined, false, project);
+
+    expect((await store.getWorkflowRun(paused.id))?.status).toBe('running');
+    expect(log.mock.calls.map(call => call.join(' '))).toContain(
+      `Run ${paused.id} is already continuing in another process.`
+    );
+  } finally {
+    log.mockRestore();
+  }
+}, 30_000);

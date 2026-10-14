@@ -3857,7 +3857,7 @@ async function buildWaitResumeAttempt(
  *
  * Both signals mean the row already moved — another host claimed it (the
  * compare-and-swap) or still holds its endpoint — so the winner finishes it and
- * this process should stop quietly instead of reporting a failure.
+ * this process should say so and stop instead of reporting a failure.
  */
 function isResumeSuperseded(error: unknown): boolean {
   const MAX_CAUSE_DEPTH = 5;
@@ -3932,6 +3932,12 @@ export async function workflowRunCommand(
           { runId: attempt.options.continuationRun?.id, workflowName: attempt.workflowName },
           'cli.wait_continuation_superseded'
         );
+        // Without this line an approve that lost the claim to `archon serve` reads as a
+        // resume that stopped mid-dispatch. The --json contract owns its own stdout.
+        const runId = attempt.options.continuationRun?.id;
+        if (runId !== undefined && !options.json) {
+          console.log(`Run ${runId} is already continuing in another process.`);
+        }
         return;
       }
       throw error;
