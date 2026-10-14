@@ -8220,8 +8220,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
           mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _session, options) {
             calls++;
             if (calls > 1) {
-              // A timed-out loop iteration retries (after a fixed delay); this
-              // attempt finishes so the test does not wait out every retry.
+              // Complete the retry after the watchdog aborts the first attempt.
               yield { type: 'result', sessionId: 's', text: '<promise>COMPLETE</promise>' };
               yield { type: 'settled' };
               return;
@@ -8267,6 +8266,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
                         id: 'step1',
                         kind,
                         idle_timeout: 30,
+                        retry: { max_attempts: 1, delay_ms: 0 },
                         loop: {
                           prompt: 'Finish the work.',
                           fresh_context: false,
@@ -8594,66 +8594,238 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(new Set(envelopes.map(e => e.attemptId)).size).toBe(1);
     });
 
-    it(
-      'retries an iteration whose typed transient failure reads as fatal — #3520',
-      async () => {
+    it.each([
+      ['zero', { max_attempts: 1, delay_ms: 0 }, [0], true, 'transient'],
+      ['default', undefined, [3000, 6000], false, 'transient'],
+      ['declared default delay', { max_attempts: 3 }, [3000, 6000, 12000], false, 'transient'],
+      ['configured', { max_attempts: 3, delay_ms: 17 }, [17, 34, 68], false, 'transient'],
+      [
+        'capacity',
+        { max_attempts: 1, delay_ms: 0 },
+        [45000, 90000, 180000, 300000, 300000],
+        false,
+        'overloaded',
+      ],
+      [
+        'rate limit',
+        { max_attempts: 1, delay_ms: 0 },
+        [45000, 45000, 45000, 45000, 45000],
+        false,
+        'rate_limited',
+      ],
+    ] as const)(
+      'uses the %s loop iteration retry policy',
+      async (_name, retry, delays, recover, failureClass) => {
         const realSetTimeout = globalThis.setTimeout;
-        globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+        const realRandom = Math.random;
+        Math.random = () => 0.5;
+        let waiting = false;
+        const waitRequests: number[][] = [];
+        globalThis.setTimeout = ((fn: () => void, delay?: number) => {
+          if (waiting) {
+            waitRequests.at(-1)!.push(delay ?? 0);
+            return realSetTimeout(fn, recover ? delay : 0);
+          }
+          return realSetTimeout(fn, delay);
+        }) as typeof setTimeout;
         try {
-          let callCount = 0;
+          let calls = 0;
           mockSendQueryDag.mockImplementation(async function* () {
-            callCount++;
-            if (callCount === 1) {
+            waiting = false;
+            calls++;
+            if (recover && calls === 2) {
+              yield { type: 'result', sessionId: 'recovered', text: '<promise>COMPLETE</promise>' };
+            } else {
               yield {
                 type: 'result',
                 isError: true,
-                errorSubtype: 'error_during_execution',
-                errors: ['403 forbidden from the upstream gateway'],
-                failure: {
-                  class: 'transient',
-                  evidence: '403 forbidden from the upstream gateway',
-                },
+                errors: ['opaque transient failure'],
+                failure: { class: failureClass, evidence: 'opaque transient failure' },
               };
-              return;
             }
-            yield {
-              type: 'agent_message_chunk',
-              text: 'Did the task. <promise>COMPLETE</promise>',
-            };
-            yield { type: 'result', sessionId: 'loop-typed-retry-sess' };
           });
-
           const store = createMockStore();
+          const createEvent = store.createWorkflowEvent;
+          store.createWorkflowEvent = mock(async event => {
+            await createEvent(event);
+            if (event.event_type === 'node_retry_scheduled') {
+              waiting = true;
+              waitRequests.push([]);
+            }
+          });
           await executeDagWorkflow(
             dagOptions({
               deps: createMockDeps(store),
               platform: createMockPlatform(),
               cwd: testDir,
               workflow: {
-                name: 'loop-typed-retry',
+                name: 'loop-retry-policy',
                 nodes: [
                   {
                     id: 'my-loop',
                     kind: 'loop',
+                    ...(retry ? { retry } : {}),
                     loop: {
-                      fresh_context: false,
-                      prompt: 'Complete the task.',
+                      prompt: 'Work',
                       until: 'COMPLETE',
-                      max_iterations: 3,
+                      max_iterations: 2,
+                      fresh_context: false,
                     },
                   },
                 ],
               },
-              workflowRun: makeWorkflowRun('loop-typed-retry-run'),
+              workflowRun: makeWorkflowRun('loop-retry-policy-run'),
             })
           );
-
-          expect(callCount).toBe(2);
-          expect(store.completeWorkflowRun).toHaveBeenCalled();
-          expect(store.failWorkflowRun).not.toHaveBeenCalled();
+          expect(calls).toBe(delays.length + 1);
+          const events = store.createWorkflowEvent.mock.calls
+            .map(([event]) => event)
+            .filter(event => event.event_type === 'node_retry_scheduled');
+          expect(events.map(event => event.data?.delay_ms)).toEqual([...delays]);
+          expect(events.map(event => event.data?.max_retries)).toEqual(
+            delays.map(() => (failureClass === 'transient' ? (retry?.max_attempts ?? 2) : 5))
+          );
+          expect(events.map(event => event.data?.iteration)).toEqual(delays.map(() => 1));
+          expect(waitRequests.map(requests => requests.reduce((a, b) => a + b, 0))).toEqual([
+            ...delays,
+          ]);
+          if (recover) {
+            expect(waitRequests).toEqual([[]]);
+            expect(store.completeWorkflowRun).toHaveBeenCalled();
+          } else {
+            expect(store.failWorkflowRun).toHaveBeenCalled();
+            const failed = store.persistWorkflowEvent.mock.calls
+              .map(([event]) => event)
+              .find(event => event.event_type === 'node_failed');
+            expect(failed?.data).toMatchObject({
+              failure_kind: failureClass,
+              provider_failure: { class: failureClass, evidence: 'opaque transient failure' },
+              error: expect.stringContaining('opaque transient failure'),
+            });
+          }
         } finally {
           globalThis.setTimeout = realSetTimeout;
+          Math.random = realRandom;
         }
+      }
+    );
+
+    it('resets the retry budget after a successful iteration', async () => {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        if (calls % 2 === 1) {
+          yield {
+            type: 'result',
+            isError: true,
+            failure: { class: 'transient', evidence: 'temporary' },
+            errors: ['temporary'],
+          };
+        } else {
+          yield {
+            type: 'result',
+            sessionId: 'loop-session',
+            text: calls === 4 ? '<promise>COMPLETE</promise>' : 'Keep working',
+          };
+        }
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'iteration-budget',
+            nodes: [
+              {
+                id: 'my-loop',
+                kind: 'loop',
+                retry: { max_attempts: 1, delay_ms: 0 },
+                loop: {
+                  prompt: 'Work',
+                  until: 'COMPLETE',
+                  max_iterations: 2,
+                  fresh_context: false,
+                },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('iteration-budget-run'),
+        })
+      );
+      expect(calls).toBe(4);
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(
+        persistedEvents(store)
+          .filter(event => event.event_type === 'node_retry_scheduled')
+          .map(event => event.data)
+      ).toEqual([
+        expect.objectContaining({ iteration: 1, retry_attempt: 1, max_retries: 1, delay_ms: 0 }),
+        expect.objectContaining({ iteration: 2, retry_attempt: 1, max_retries: 1, delay_ms: 0 }),
+      ]);
+      expect(
+        persistedEvents(store)
+          .filter(event => event.event_type === 'loop_iteration_completed')
+          .map(event => event.data?.iteration)
+      ).toEqual([1, 2]);
+    });
+
+    it(
+      'retries an iteration whose typed transient failure reads as fatal — #3520',
+      async () => {
+        let callCount = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          callCount++;
+          if (callCount === 1) {
+            yield {
+              type: 'result',
+              isError: true,
+              errorSubtype: 'error_during_execution',
+              errors: ['403 forbidden from the upstream gateway'],
+              failure: {
+                class: 'transient',
+                evidence: '403 forbidden from the upstream gateway',
+              },
+            };
+            return;
+          }
+          yield {
+            type: 'agent_message_chunk',
+            text: 'Did the task. <promise>COMPLETE</promise>',
+          };
+          yield { type: 'result', sessionId: 'loop-typed-retry-sess' };
+        });
+
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform: createMockPlatform(),
+            cwd: testDir,
+            workflow: {
+              name: 'loop-typed-retry',
+              nodes: [
+                {
+                  id: 'my-loop',
+                  kind: 'loop',
+                  retry: { max_attempts: 1, delay_ms: 0 },
+                  loop: {
+                    fresh_context: false,
+                    prompt: 'Complete the task.',
+                    until: 'COMPLETE',
+                    max_iterations: 3,
+                  },
+                },
+              ],
+            },
+            workflowRun: makeWorkflowRun('loop-typed-retry-run'),
+          })
+        );
+
+        expect(callCount).toBe(2);
+        expect(store.completeWorkflowRun).toHaveBeenCalled();
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
       },
       testTimeout(10_000)
     );
@@ -8683,6 +8855,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
                 {
                   id: 'my-loop',
                   kind: 'loop',
+                  retry: { max_attempts: 1, delay_ms: 0 },
                   loop: {
                     fresh_context: false,
                     prompt: 'Complete the task.',
@@ -8697,6 +8870,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         );
 
         expect(callCount).toBe(1);
+        expect(
+          persistedEvents(store).filter(event => event.event_type === 'node_retry_scheduled')
+        ).toHaveLength(0);
         expect(store.failWorkflowRun).toHaveBeenCalled();
       } finally {
         globalThis.setTimeout = realSetTimeout;
@@ -8721,6 +8897,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
               {
                 id: 'my-loop',
                 kind: 'loop',
+                retry: { max_attempts: 1, delay_ms: 0 },
                 loop: {
                   fresh_context: false,
                   prompt: 'Complete the task.',
@@ -8737,6 +8914,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       const failed = persistedEvents(store).find(
         event => event.event_type === 'node_failed' && event.step_name === 'my-loop'
       );
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(
+        persistedEvents(store).filter(event => event.event_type === 'node_retry_scheduled')
+      ).toHaveLength(0);
       expect(failed?.data?.failure_kind).toBe('fatal');
       expect(failed?.data?.provider_failure).toEqual(failure);
     });
