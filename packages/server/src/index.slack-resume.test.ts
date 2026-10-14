@@ -294,7 +294,7 @@ class MockWebAdapter implements IWorkflowPlatform {
 }
 
 class MockDashboardEventPoller {
-  start(): void {}
+  async start(): Promise<void> {}
   stop(): void {}
 }
 
@@ -343,6 +343,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
     throw new Error('No plugin action expected during boot');
   },
 }));
+mock.module('@archon/core/workflows/store-adapter', () => ({ createWorkflowStore: () => ({}) }));
 
 mock.module('./services/workflow-resume-service', () => ({
   resumeWorkflowRunFromServer: mockResumeWorkflowRunFromServer,

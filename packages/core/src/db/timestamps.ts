@@ -14,10 +14,9 @@
  * reads — across a DST transition (#3271) — but it shifts every absolute
  * instant by the host offset.
  *
- * This is the inverse of how those columns are written for cutoff comparisons:
- * `toDbDateParam` in workflow-events.ts, and the inline
- * `createdBefore.toISOString().replace('T', ' ').slice(0, 19)` in
- * findLatestByCodebaseAndWorkingPath (isolation-environments.ts). Hydrating on
+ * This is the inverse of how those columns are written for cutoff comparisons,
+ * such as the inline `createdBefore.toISOString().replace('T', ' ').slice(0, 19)`
+ * in findLatestByCodebaseAndWorkingPath (isolation-environments.ts). Hydrating on
  * read keeps comparisons like `environment.created_at <= run.started_at`
  * (#2747 adoption) UTC-correct on both dialects instead of drifting by the
  * host's UTC offset.

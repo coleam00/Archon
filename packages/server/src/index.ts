@@ -95,6 +95,7 @@ import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import { hasStartReceiptForDelivery } from '@archon/core/db/resource-starts';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
+import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import {
   resumeWorkflowRunFromServer,
   startWorkflowContinuationScheduler,
@@ -345,18 +346,18 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Stream workflow runs started in ANY process (incl. the `archon` CLI / `--detach`)
   // to the console dashboard. The in-process WorkflowEventBridge only sees runs
-  // executed inside the server; this poller tails the events table. On Postgres,
-  // LISTEN/NOTIFY wakes it for near-instant push (poll becomes a slow backstop);
-  // on SQLite it polls fast.
-  const dashboardPoller = new DashboardEventPoller();
+  // executed inside the server; this poller follows the store's event feed. On
+  // Postgres, LISTEN/NOTIFY wakes it for near-instant push (poll becomes a slow
+  // backstop); on SQLite it polls fast.
+  const dashboardPoller = new DashboardEventPoller(createWorkflowStore());
   const dbNotifier = getDbNotificationListener();
   let pgNotifyListener: PgNotifyListener | undefined;
   if (dbNotifier) {
-    dashboardPoller.start(transport, 10_000);
+    await dashboardPoller.start(transport, 10_000);
     pgNotifyListener = new PgNotifyListener(dbNotifier, dashboardPoller);
     await pgNotifyListener.start();
   } else {
-    dashboardPoller.start(transport, 1_500);
+    await dashboardPoller.start(transport, 1_500);
   }
 
   // Mutable — pushed to as each adapter starts, read by the /api/health endpoint.
