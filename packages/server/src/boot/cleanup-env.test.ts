@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { cp, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { dependencies } from '../../package.json';
 
 const trackTempRoot = trackTempRoots();
 // Existing server boot tests observed 10.8 s cold imports on Windows CI.
@@ -19,11 +20,13 @@ async function bootWithEnvFile(scope: 'user' | 'repo' | 'source', contents: stri
   if (scope === 'source') {
     const source = join(root, 'packages/server/src');
     await cp(resolve(import.meta.dir, '..'), source, { recursive: true });
-    await symlink(
-      resolve(import.meta.dir, '../../node_modules'),
-      join(root, 'packages/server/node_modules'),
-      'junction'
-    );
+    // Windows resolves relative workspace links through the temporary checkout.
+    for (const name of Object.keys(dependencies)) {
+      const target = await realpath(resolve(import.meta.dir, '../../node_modules', name));
+      const link = join(root, 'packages/server/node_modules', name);
+      await mkdir(dirname(link), { recursive: true });
+      await symlink(target, link, 'junction');
+    }
     entry = join(source, 'index.ts');
   }
   const envDir = scope === 'source' ? root : scope === 'user' ? home : join(repo, '.archon');
