@@ -50,6 +50,11 @@ built from that absolute path in a single expression. Never assemble a path from
 split across lines or from a computed value (seen live: a helper script joined a path
 across a line break and wrote `10.4503373803295/raw/*.resp` into the checkout, and the
 read-only checkout guard failed an otherwise verified run).
+Run every shell command from the attempt directory: start each command with `cd` to
+its absolute path, so a stray relative write (a mistyped redirect, a debug print sent
+to `>` instead of a file) lands there instead of in the checkout (seen live: a debug
+loop wrote about a hundred files named after its own output lines, such as
+`t+1003 live=3 dist=6.01 ...`, into the checkout, and the guard failed the lap).
 
 Write a JSON report at this exact path:
 
