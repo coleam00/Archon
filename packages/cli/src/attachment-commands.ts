@@ -48,6 +48,19 @@ export const attachmentCommands = {
   },
 } as const;
 
+export function publicAttachmentEntries(command: keyof typeof attachmentCommands) {
+  return Object.entries(attachmentCommands[command]).filter(
+    ([, entry]) => !Object.hasOwn(entry, 'scopedOnly')
+  );
+}
+
+export function attachmentUsage(command: keyof typeof attachmentCommands): string {
+  const specs = publicAttachmentEntries(command).map(([, entry], index) =>
+    index === 0 ? entry.spec : entry.spec.slice(command.length + 1)
+  );
+  return `Usage: archon ${specs.join(' | ')}`;
+}
+
 export function isAttachmentVerb<C extends keyof typeof attachmentCommands>(
   command: C,
   verb: string | undefined

@@ -52,7 +52,7 @@ import {
   providerVersionMismatchMessage,
 } from '@archon/provider-contract';
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
-import { isAttachmentVerb } from '../attachment-commands';
+import { attachmentUsage, isAttachmentVerb } from '../attachment-commands';
 import { inspectChatPlugin } from './inspect-chat-plugin';
 import { publishPlugin } from './publish-plugin';
 import {
@@ -877,8 +877,7 @@ async function listPlugins(env: PluginEnvironment): Promise<void> {
   for (const entry of broken) console.log(`${entry.id}  unreadable  ${brokenReceiptNote(entry)}`);
 }
 
-const USAGE =
-  'Usage: archon plugin add <owner/repo[/path][@tag]> | update <id>[@tag] | remove <id> | copy <id> | list';
+const USAGE = attachmentUsage('plugin');
 
 export async function pluginCommand(
   subcommand: string | undefined,

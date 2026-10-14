@@ -1,7 +1,7 @@
 import { maintainedProviderPluginId } from '@archon/plugin-manifest';
 import { BUNDLED_IS_BINARY } from '@archon/paths';
 import { isMaintainedProvider, MAINTAINED_PROVIDER_IDS } from '@archon/provider-contract';
-import { isAttachmentVerb } from '../attachment-commands';
+import { attachmentUsage, isAttachmentVerb } from '../attachment-commands';
 import { replacePlugin, type PluginEnvironment } from './plugin';
 
 export async function providerCommand(
@@ -11,7 +11,7 @@ export async function providerCommand(
 ): Promise<number> {
   try {
     if (!isAttachmentVerb('provider', subcommand) || ids.length === 0) {
-      throw new Error('Usage: archon provider add <id...>');
+      throw new Error(attachmentUsage('provider'));
     }
     const maintainedIds = ids.map(id => {
       if (!isMaintainedProvider(id))

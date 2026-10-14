@@ -50,7 +50,7 @@ if (inheritedInstallContext) {
 import { installPipeSafeConsole } from './utils/safe-console';
 import { exitWithDrain, withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
-import { isAttachmentVerb } from './attachment-commands';
+import { isAttachmentVerb, publicAttachmentEntries } from './attachment-commands';
 import {
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
@@ -1490,7 +1490,10 @@ async function main(): Promise<number> {
             subcommand === undefined
               ? 'Missing skill subcommand'
               : `Unknown skill subcommand: ${subcommand}`;
-          return await fail(jsonFlag, `${problem}\nAvailable: add`);
+          const available = publicAttachmentEntries('skill')
+            .map(([verb]) => verb)
+            .join(', ');
+          return await fail(jsonFlag, `${problem}\nAvailable: ${available}`);
         }
         if (subcommand === 'install') {
           console.warn(

@@ -180,6 +180,42 @@ describe('skillInstallCommand', () => {
 });
 
 describe('skill CLI verbs', () => {
+  it('rejects an unknown verb without replacing existing skill files', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-skill-cli-reject-'));
+    try {
+      for (const destination of ['.claude', '.agents']) {
+        const skillRoot = join(root, destination, 'skills', 'archon-cli');
+        mkdirSync(skillRoot, { recursive: true });
+        writeFileSync(join(skillRoot, 'SKILL.md'), 'User-owned skill content');
+      }
+      const child = Bun.spawn(
+        [process.execPath, join(import.meta.dir, '../cli.ts'), 'skill', 'bogus', root],
+        {
+          cwd: root,
+          env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: root },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        }
+      );
+      const [out, err, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(code).toBe(1);
+      expect(err).toContain('Unknown skill subcommand: bogus');
+      expect(err).toContain('Available: add');
+      expect(out).not.toContain('Adding Archon skill');
+      for (const destination of ['.claude', '.agents']) {
+        expect(readFileSync(join(root, destination, 'skills/archon-cli/SKILL.md'), 'utf8')).toBe(
+          'User-owned skill content'
+        );
+      }
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+
   it('add and the deprecated alias write the bundled files, with one alias warning', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-skill-cli-'));
     try {
