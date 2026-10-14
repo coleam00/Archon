@@ -22,10 +22,15 @@ test('the architecture webhook route quotes the current server route', () => {
 
 test('the architecture webhook registration quotes the current server registration', () => {
   const server = readSource('../../server/src/index.ts');
-  const importLine = server.match(/^import \{[^\n]*registerGithubWebhookRoute[^\n]*$/m)?.[0];
+  const webhookImports = server.match(/^import \{([^}]+)\} from ('\.\/routes\/webhooks');$/m);
+  const githubImport = webhookImports?.[1]
+    ?.split(',')
+    .map(name => name.trim())
+    .find(name => name === 'registerGithubWebhookRoute');
   const registration = server.match(/^  if \(github\) \{\n[\s\S]*?^  \}/m)?.[0];
 
-  expect(importLine).toBeDefined();
+  expect(githubImport).toBeDefined();
   expect(registration).toBeDefined();
+  const importLine = `import { ${githubImport} } from ${webhookImports?.[2]};`;
   expect(blocks[1]).toBe(`${importLine}\n\n${registration?.replace(/^  /gm, '')}`);
 });

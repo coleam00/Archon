@@ -290,7 +290,7 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
 `packages/server/src/index.ts` imports and calls the route-registration function when the GitHub adapter is enabled:
 
 ```typescript
-import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
+import { registerGithubWebhookRoute } from './routes/webhooks';
 
 if (github) {
   registerGithubWebhookRoute(app, github);
