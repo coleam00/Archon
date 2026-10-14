@@ -1491,6 +1491,41 @@ export function describeWorkflowStoreConformance(
       expect(await store.listEventsForRuns([], ['workflow_artifact'])).toEqual(new Map());
       expect(await store.listEventsForRuns([first.id], [])).toEqual(new Map([[first.id, []]]));
     });
+    test('unawaited event writes for a run read back in issue order', async () => {
+      // The executor fires workflow_started without awaiting it and then writes node
+      // events. Each burst starts on an idle store, where concurrent writes race.
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const run = await running(store);
+        const writes: Promise<unknown>[] = [
+          store.createWorkflowEvent({ workflow_run_id: run.id, event_type: 'workflow_started' }),
+        ];
+        const expected = ['workflow_started'];
+        for (const node of ['plan', 'build', 'test']) {
+          const event = { workflow_run_id: run.id, step_name: node };
+          writes.push(
+            store.persistWorkflowEventIfRunning({ ...event, event_type: 'node_started' }),
+            store.createWorkflowEvent({ ...event, event_type: 'workflow_artifact' }),
+            store.persistWorkflowEvent({
+              ...event,
+              event_type: 'node_completed',
+              data: { node_output: node },
+            })
+          );
+          expected.push(
+            `node_started:${node}`,
+            `workflow_artifact:${node}`,
+            `node_completed:${node}`
+          );
+        }
+        await Promise.all(writes);
+        const events = await store.listWorkflowEvents(run.id);
+        expect(
+          events.map(event =>
+            event.step_name ? `${event.event_type}:${event.step_name}` : event.event_type
+          )
+        ).toEqual(expected);
+      }
+    });
     test('resume reduction preserves durable fan-out, starts and usage from failed and deferred attempts', async () => {
       const run = await create(store);
       const snapshots = [{ ordinal: 0, identity: 'one', item: 1, inputs: { value: 1 } }];
