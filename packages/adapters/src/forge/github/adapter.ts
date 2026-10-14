@@ -698,9 +698,9 @@ export class GitHubAdapter implements IPlatformAdapter {
 
   /**
    * Ensure repository is cloned and ready
-   * For new codebases: clone (directory won't exist)
+   * For new codebases: clone when git metadata is absent
    * For existing codebases: sync if shouldSync=true, skip if shouldSync=false
-   * @param shouldSync - Whether to sync if directory exists (pass true to ensure latest code)
+   * @param shouldSync - Whether to sync an existing clone (pass true to ensure latest code)
    */
   private async ensureRepoReady(
     owner: string,
@@ -709,11 +709,10 @@ export class GitHubAdapter implements IPlatformAdapter {
     repoPath: string,
     shouldSync: boolean
   ): Promise<void> {
-    // Check if directory exists
-    let directoryExists = false;
+    let repositoryExists = false;
     try {
-      await access(repoPath);
-      directoryExists = true;
+      await access(join(repoPath, '.git'));
+      repositoryExists = true;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
@@ -724,10 +723,10 @@ export class GitHubAdapter implements IPlatformAdapter {
             'Check permissions and disk health.'
         );
       }
-      // ENOENT means directory doesn't exist - we'll clone below
+      // Missing git metadata includes the empty source/ left by a failed clone.
     }
 
-    if (directoryExists) {
+    if (repositoryExists) {
       if (shouldSync) {
         getLog().info({ repoPath, defaultBranch }, 'github.repo_syncing');
         const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));
@@ -745,7 +744,6 @@ export class GitHubAdapter implements IPlatformAdapter {
       return;
     }
 
-    // Directory doesn't exist - clone the repository
     getLog().info({ owner, repo, repoPath }, 'github.repo_cloning');
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
@@ -773,7 +771,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     const cloneResult = await cloneRepository(
       repoUrl,
       toRepoPath(repoPath),
-      ghToken ? { credentials: { username: ghToken, password: '' } } : undefined
+      ghToken ? { credentials: { username: 'x-access-token', password: ghToken } } : undefined
     );
 
     if (!cloneResult.ok) {

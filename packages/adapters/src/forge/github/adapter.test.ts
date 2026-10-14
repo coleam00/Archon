@@ -34,6 +34,8 @@ import type { Mock } from 'bun:test';
 import type { Octokit } from '@octokit/rest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, access } from 'node:fs/promises';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'node:path';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
 import { parseWorkflow } from '@archon/workflows/loader';
@@ -1701,7 +1703,8 @@ describe('GitHubAdapter', () => {
         'fake-secret',
         mockLockManager
       );
-      mockCloneRepository.mockClear();
+      mockCloneRepository.mockReset();
+      mockCloneRepository.mockResolvedValue({ ok: true, value: undefined });
       mockSyncRepository.mockClear();
       mockAddSafeDirectory.mockClear();
       mockLogger.error.mockClear();
@@ -1732,11 +1735,61 @@ describe('GitHubAdapter', () => {
       expect(mockAddSafeDirectory).toHaveBeenCalledWith('/nonexistent/path');
     });
 
+    test('PAT clone uses the env token as the password', async () => {
+      const savedToken = process.env.GITHUB_TOKEN;
+      try {
+        process.env.GITHUB_TOKEN = 'ghp_pat_clone_token';
+        const repoPath = unclonedPath();
+        await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
+
+        expect(mockCloneRepository).toHaveBeenCalledWith(
+          'https://github.com/owner/repo.git',
+          repoPath,
+          { credentials: { username: 'x-access-token', password: 'ghp_pat_clone_token' } }
+        );
+        expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain('ghp_pat_clone_token');
+      } finally {
+        if (savedToken === undefined) delete process.env.GITHUB_TOKEN;
+        else process.env.GITHUB_TOKEN = savedToken;
+      }
+    });
+
+    test('retries a failed clone when the source directory remains empty', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'github-clone-retry-'));
+      const repoPath = join(root, 'source');
+      mockCloneRepository.mockImplementationOnce(async () => {
+        await mkdir(repoPath, { recursive: true });
+        return {
+          ok: false,
+          error: { code: 'permission_denied', path: 'https://github.com/owner/repo.git' },
+        };
+      });
+
+      try {
+        await expect(callEnsureRepoReady('owner', 'repo', 'main', repoPath, false)).rejects.toThrow(
+          'Authentication failed'
+        );
+        mockCloneRepository.mockImplementationOnce(async () => {
+          await mkdir(join(repoPath, '.git'), { recursive: true });
+          return { ok: true, value: undefined };
+        });
+
+        await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
+        expect(mockCloneRepository).toHaveBeenCalledTimes(2);
+        expect(mockSyncRepository).not.toHaveBeenCalled();
+        await access(join(repoPath, '.git'));
+
+        await callEnsureRepoReady('owner', 'repo', 'main', repoPath, false);
+        expect(mockCloneRepository).toHaveBeenCalledTimes(2);
+        await access(join(repoPath, '.git'));
+      } finally {
+        await removeTempTree(root);
+      }
+    });
+
     test('syncs repository when directory exists and shouldSync is true', async () => {
-      // Use a real temporary directory so access() succeeds
-      const { mkdtemp } = await import('fs/promises');
-      const { tmpdir } = await import('os');
       const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
+      await mkdir(join(tmpDir, '.git'));
 
       mockSyncRepository.mockResolvedValue({ ok: true, value: undefined });
 
@@ -1746,15 +1799,13 @@ describe('GitHubAdapter', () => {
         expect(mockSyncRepository).toHaveBeenCalledWith(tmpDir, 'main');
         expect(mockCloneRepository).not.toHaveBeenCalled();
       } finally {
-        const { rm } = await import('fs/promises');
-        await rm(tmpDir, { recursive: true, force: true });
+        await removeTempTree(tmpDir);
       }
     });
 
     test('skips sync when shouldSync is false and directory exists', async () => {
-      const { mkdtemp } = await import('fs/promises');
-      const { tmpdir } = await import('os');
       const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
+      await mkdir(join(tmpDir, '.git'));
 
       try {
         await callEnsureRepoReady('owner', 'repo', 'main', tmpDir, false);
@@ -1762,8 +1813,7 @@ describe('GitHubAdapter', () => {
         expect(mockSyncRepository).not.toHaveBeenCalled();
         expect(mockCloneRepository).not.toHaveBeenCalled();
       } finally {
-        const { rm } = await import('fs/promises');
-        await rm(tmpDir, { recursive: true, force: true });
+        await removeTempTree(tmpDir);
       }
     });
 
@@ -1790,9 +1840,8 @@ describe('GitHubAdapter', () => {
     });
 
     test('throws user-friendly error for sync branch_not_found', async () => {
-      const { mkdtemp } = await import('fs/promises');
-      const { tmpdir } = await import('os');
       const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
+      await mkdir(join(tmpDir, '.git'));
 
       mockSyncRepository.mockResolvedValue({
         ok: false,
@@ -1804,15 +1853,13 @@ describe('GitHubAdapter', () => {
           "Branch 'main' not found"
         );
       } finally {
-        const { rm } = await import('fs/promises');
-        await rm(tmpDir, { recursive: true, force: true });
+        await removeTempTree(tmpDir);
       }
     });
 
     test('throws for unknown sync error with message', async () => {
-      const { mkdtemp } = await import('fs/promises');
-      const { tmpdir } = await import('os');
       const tmpDir = await mkdtemp(`${tmpdir()}/github-test-`);
+      await mkdir(join(tmpDir, '.git'));
 
       mockSyncRepository.mockResolvedValue({
         ok: false,
@@ -1824,8 +1871,7 @@ describe('GitHubAdapter', () => {
           'Network timeout'
         );
       } finally {
-        const { rm } = await import('fs/promises');
-        await rm(tmpDir, { recursive: true, force: true });
+        await removeTempTree(tmpDir);
       }
     });
   });
@@ -2124,7 +2170,7 @@ describe('GitHubAdapter', () => {
     test('clone path resolves installation token (not env GITHUB_TOKEN)', async () => {
       const savedEnv = process.env.GITHUB_TOKEN;
       try {
-        delete process.env.GITHUB_TOKEN;
+        process.env.GITHUB_TOKEN = 'ghp_unused_env_token';
         const { adapter, provider } = createAppModeAdapter();
         // @ts-expect-error - calling private method
         await adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/nonexistent-test', false);
@@ -2133,7 +2179,7 @@ describe('GitHubAdapter', () => {
         expect(mockCloneRepository).toHaveBeenCalledWith(
           'https://github.com/owner/repo.git',
           '/tmp/nonexistent-test',
-          { credentials: { username: 'ghs_owner_token', password: '' } }
+          { credentials: { username: 'x-access-token', password: 'ghs_owner_token' } }
         );
         const [cloneUrl, clonePath] = mockCloneRepository.mock.calls[0] ?? [];
         expect(JSON.stringify([cloneUrl, clonePath])).not.toContain('ghs_owner_token');
