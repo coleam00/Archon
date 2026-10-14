@@ -181,6 +181,39 @@ describe('installCredentialHelper', () => {
     expect(stdout).toContain('credential.https://github.com.usehttppath=true');
   });
 
+  test('simultaneous installs configure each distinct repository', async () => {
+    execSpy.mockRestore();
+    const repoPaths = [join(archonHome, 'first-repo'), join(archonHome, 'second-repo')];
+    for (const repoPath of repoPaths) {
+      await git.execFileAsync('git', ['init', repoPath]);
+    }
+
+    const results = await Promise.all(repoPaths.map(repoPath => installCredentialHelper(repoPath)));
+    expect(results.map(result => result.kind)).toEqual(['installed', 'installed']);
+
+    const helperPath = join(archonHome, 'bin', 'git-credential-archon');
+    for (const repoPath of repoPaths) {
+      const { stdout: helper } = await git.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'config',
+        '--local',
+        '--get',
+        'credential.https://github.com.helper',
+      ]);
+      expect(helper.trim()).toBe(`!'${helperPath.replaceAll("'", "'\"'\"'")}'`);
+      const { stdout: useHttpPath } = await git.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'config',
+        '--local',
+        '--get',
+        'credential.https://github.com.useHttpPath',
+      ]);
+      expect(useHttpPath.trim()).toBe('true');
+    }
+  });
+
   test('returns failed instead of throwing when the git config write fails', async () => {
     execSpy.mockImplementation(() => Promise.reject(new Error('not a git repository')));
 
