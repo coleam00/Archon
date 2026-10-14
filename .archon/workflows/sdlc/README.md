@@ -46,11 +46,17 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-The ready preflight re-reads checks for the recorded qualified PR itself. It refuses
-pending, red, gated and unknown checks and any failed read, because a failed
-observation is not evidence that no CI exists. The flip targets that same qualified
-PR and reads the draft state back afterwards, because a successful exit is not proof
-the state changed.
+CI is the project's full validation; implementers run only focused checks. Whether
+CI is green is judgment, so one agent prompt owns it (`deliver/commands/ci.md`), run
+once a round's review passes. It never judges a stale head (it pushes the
+checkout's `HEAD` when the pull request is behind it), refuses a head that
+conflicts with its base, marks the pull request ready (a
+project whose CI skips drafts starts it then), waits however long CI takes, and
+answers green, pr_caused, or other. On anything but green it puts the pull request
+back to draft before it answers, so a red PR never stays ready. A red the change
+caused, or a conflict with the base, goes back to the implementer in the next
+round, which merges the base on a conflict, and that correction is reviewed before
+CI runs again; any other red ends the run not ready.
 
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is
@@ -59,12 +65,12 @@ that was already true when the node started.
 
 ## Forge source
 
-One switch selects the source for every pull-request and check read and write
-this pack makes; issue writes go through `gh` either way (see below).
-[`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected;
-[`.shared/checks.ts`](.shared/checks.ts) owns the check read and its gate policy,
-and [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes. Both
-return the same shapes from either source, so one policy classifies both:
+One switch selects the source for every pull-request read and write this pack
+makes; issue writes go through `gh` either way (see below). CI is read by the
+`ci` agent node, not through this switch.
+[`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected, and
+[`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes, returning
+the same shapes from either source:
 
 - **`gh` (default).** The GitHub CLI, acting on the recorded qualified PR. This
   needs only the authenticated `gh` the pack has always used.
@@ -76,23 +82,33 @@ return the same shapes from either source, so one policy classifies both:
 
 The source is never picked from what happens to be installed. When `forge` is
 selected and cannot answer (no host command, no plugin for the host, a failed
-operation), the node refuses and `ci-note` reports the failure on stderr; none of
-them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE` refuses too. The
+operation), the node refuses; none of them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE` refuses too. The
 forge source is for host execution: a container execution receives neither
 `ARCHON_SDLC_FORGE` nor `ARCHON_CLI_COMMAND`, so a containerized run uses `gh`.
 
 ## Public writes belong to a script
 
 An agent judges and authors; the node after it performs the one public write and
-proves it landed. `publish-pr` opens or reuses the pull request, `publish-pr-body`
-applies the resync, `publish-review` upserts the one marked review comment,
-`flip-ready` flips it out of draft, and `file-discoveries` files each discovery
-the review accepted as a tracker issue. The forge contract has no issue
-operation yet, so that one — like triage's labels — goes through `gh` whichever
-source the run selected. Each takes a recorded intent from the agent
-before it, writes through the selected source, and fails unless the result reads
-back — so "the write failed" and "the write may have landed" stay different
-outcomes, in the pack as in the forge contract.
+proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
+request, and `publish-review` upserts the one marked review comment. Triage's
+labels go through `gh` whichever source the run selected, because the forge
+contract has no label operation for issues yet. No node files discoveries: the
+outcome relays them to the operator. Each acts on the values the agent
+before it declared in its typed output, which the engine certified, writes through
+the selected source, and fails unless the result reads back — so "the write
+failed" and "the write may have landed" stay different outcomes, in the pack as in
+the forge contract. Three agents write directly with `gh`: the structure pass's
+implementer pushes its own commit to the pull request's branch, and CI pushes a
+head that was left behind before it judges anything, ending `other` if it cannot;
+`update-pr-body` edits the description, because judging which claims are stale and
+rewriting them is the whole job; and `ci` marks the pull request ready and back to
+draft around its CI wait. No script reads an
+agent-written file to find out what to write.
+
+Which remote holds a repository is decided by its configured URL, never by the
+remote's name (`.shared/remote.ts`), so a fork checkout whose `origin` is the fork
+and whose `upstream` is the canonical repository fetches the base and pushes the
+head where they belong.
 
 That split is also what keeps the source switch out of the prompts. A prompt that
 branched on `ARCHON_SDLC_FORGE` would be an invented protocol; `forge.ts` reads it
@@ -139,8 +155,9 @@ The engine retains what every exec node prints, so a node's output is the record
 whether it set out to keep one or not. Never print a value that can contain a
 secret: read it where it is normalized and pass on the normalized form. A remote
 URL is the common one — `https://<token>@host/repo` is a perfectly ordinary origin
-— so the ready flip normalizes `owner/repo` inside the substitution that reads the
-remote, and only that reaches a command line. Failure messages are the same
+— so `.shared/remote.ts` reads remote URLs only to normalize them to `host` and
+`owner/repo`, and only the remote's name and that identity reach a command line or
+a message. Failure messages are the same
 surface: interpolating the raw value into one leaks it just as effectively.
 
 That retention is also why a node does not need its own log. The ready flip once
@@ -149,14 +166,18 @@ the transcript now holds for free.
 
 ## The engineering-conventions sidecar
 
-A repository may declare its engineering conventions in an `engineering.md`
-(root, or a config directory such as `.archon/`), and its product direction in a
-direction document. Prompts that write code read both before coding, and every
-review prompt reads them before judging: they are the project's own values, so a
-taste finding cites one of them or is left out, and an owner declines a finding
-by the same standard. The check is conditional on the file existing, so the pack
-stays portable: a repository without one loses nothing. A new pack workflow that
-writes or judges code carries the same line.
+A repository may declare its architecture in an `architecture.md`, its
+engineering conventions in an `engineering.md`, and its product direction in a
+direction document, at the root, in a config directory such as `.archon/`, or
+wherever its steering files point. The steering files themselves (`AGENTS.md` or
+its equivalent) reach every node through the provider's own context, so no
+prompt tells a node to read them. Each prompt that judges reads the sidecar
+documents its judgment needs, in one shared sentence; the direction document
+only where the node decides or judges scope. They are the project's
+own values, so a taste finding cites one of them or is left out, and an owner
+declines a finding by the same standard. Each read is conditional on the file
+existing, so the pack stays portable: a repository without one loses nothing. A
+new pack prompt that writes or judges code carries the same sentence.
 
 ## A node's streams are the operator's channel
 

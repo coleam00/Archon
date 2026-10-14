@@ -40,9 +40,11 @@ test('registration sends null for the default and the explicit branch unchanged'
   }) as typeof fetch;
   await addProjectByUrl('https://example.com/repo');
   await addProjectByPath('/repo', 'release');
+  await addProjectByPath('/git-root', null, true);
   expect(bodies).toEqual([
     { url: 'https://example.com/repo', base_branch: null },
     { path: '/repo', base_branch: 'release' },
+    { path: '/git-root', base_branch: null, folder: true },
   ]);
 });
 

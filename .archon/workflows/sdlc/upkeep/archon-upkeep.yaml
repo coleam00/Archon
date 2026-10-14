@@ -67,11 +67,8 @@ nodes:
   # paid or public below, and an expected negative is a completed run with the
   # assessment as its result.
   #
-  # The order authorizes exactly the lockfile change implement's default forbids:
-  # implement.md's "never update a lockfile" exists to stop incidental churn, and
-  # the target dependency IS the work here — so the order re-scopes that rule
-  # explicitly (non-goals are transferable by the work item) while keeping it in
-  # force for every other dependency.
+  # The target dependency is the work, so implement's own lockfile rule (update it
+  # only for a dependency the work order changes) already covers this order.
   - id: deliver
     include: archon-deliver
     with:
@@ -82,11 +79,9 @@ nodes:
         is the verified work order, and you know nothing about this update
         beyond it and the repository itself. Follow its update order: use the
         project's own package manager, change the manifest only as the
-        assessment directs, and update the lockfile for the TARGET dependency
-        only — this work item explicitly authorizes that lockfile change; the
-        no-lockfile-updates default still applies to every other dependency, so
-        keep churn minimal and never downgrade anything unrelated. Fix what the
-        bump breaks, validate with the project's own checks, and if reality
+        assessment directs, update the lockfile for the target dependency with
+        it, keep churn minimal, and never downgrade anything unrelated. Fix what the
+        bump breaks, check it with the project's own tests for what changed, and if reality
         contradicts the assessment (version unavailable, an unlisted peer
         conflict), stop honestly with green false and the contradiction in your
         summary rather than improvising a different version. Carry the
@@ -98,9 +93,9 @@ nodes:
     when: "$assess.output.action == 'update'"
 
   # One return for every legitimate terminal result: a no_action assessment
-  # completes with its report path; a delivered update is reported from the
-  # flip's certified URL the deliver branch returned (if_skipped binding, so a
-  # skipped flip arrives as null).
+  # completes with its report path; an update is reported from the deliver
+  # branch's own outcome, ready or not (if_skipped binding, so a skipped branch
+  # arrives as null).
   #
   # A failed delivery cascades an `upstream_failed` skip that blocks this join,
   # so the run's terminal record names the node that failed.
@@ -112,10 +107,14 @@ nodes:
     with:
       action: "$assess.output.action"
       summary: "$assess.output.summary"
-      delivered: { from: "$deliver.output.pr_url", if_skipped: null }
+      delivered: { from: "$deliver.output.ready", if_skipped: null }
+      delivery: { from: "$deliver.output.summary", if_skipped: null }
+      pr_url: { from: "$deliver.output.pr_url", if_skipped: null }
     output_format:
       type: object
       properties:
         delivered: { type: boolean }
+        # The delivery's pull request, ready or not; '' when no delivery opened one.
+        pr_url: { type: string }
         summary: { type: string }
-      required: [delivered, summary]
+      required: [delivered, pr_url, summary]

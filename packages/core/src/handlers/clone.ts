@@ -676,9 +676,9 @@ function pathValidationError(path: string, error: Error): Error {
 }
 
 /**
- * Register a folder project (`kind: 'folder'`) — any directory that is NOT
- * required to be a git repository. Used for multi-repo roots (N service repos
- * under one root) and plain business-ops folders with no git at all.
+ * Register a folder project (`kind: 'folder'`). Archon applies no git machinery;
+ * runs happen in place by default. The directory may or may not be a git
+ * repository; git operations belong to the user and agent.
  *
  * Unlike {@link registerRepository}, this performs NO git validation and creates
  * NO `source/` symlink: a folder project runs in place at its real path. Named
@@ -717,6 +717,11 @@ export async function registerFolder(
   // Already registered by path — return the existing record unchanged.
   const existing = await codebases.findCodebaseByDefaultCwd(resolvedPath);
   if (existing) {
+    if (existing.kind !== 'folder') {
+      throw new ProjectRegistrationError(
+        `Project "${existing.name}" is already registered as a repo at ${resolvedPath}; cannot register it as a folder project.`
+      );
+    }
     rejectExistingChoice(options);
     return {
       codebaseId: existing.id,

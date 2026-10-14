@@ -306,7 +306,7 @@ The table below lists the key workflows in the bundled `sdlc` pack. All bundled 
 
 ## Parallel Agents: The PR Review Example
 
-On a full first round, `archon-review` runs specialist lenses in fresh sessions as shown below. The code lens uses the configured `large` model tier. A focused first round starts with seams and a general reviewer; an engaged full-review risk adds code, tests, and simplify before synthesis.
+On a first round, a quick route agent picks which specialist lenses the change earns, and `archon-review` runs them in fresh sessions as shown below. The code lens uses the configured `large` model tier.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -314,24 +314,24 @@ On a full first round, `archon-review` runs specialist lenses in fresh sessions 
 │   USER: "review this PR"                                               │
 │                                                                         │
 │   ┌─────────────────────────────────────────────────────────────────┐  │
-│   │ Step 1: scope                  Resolve the PR, its diff, and    │  │
-│   │                                the contract it must meet        │  │
+│   │ Step 1: scope + route          Resolve the PR, its diff, the    │  │
+│   │                                contract, and which lenses run   │  │
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                              │                                          │
 │                              ▼                                          │
 │   ┌─────────────────────────────────────────────────────────────────┐  │
 │   │ Step 2: PARALLEL LENSES (each in a fresh session)               │  │
 │   │                                                                 │  │
-│   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │  │
-│   │   │ code         │  │ seams        │  │ simplify     │         │  │
-│   │   │              │  │              │  │              │         │  │
-│   │   │ Bugs,        │  │ Contracts    │  │ Unneeded     │         │  │
-│   │   │ correctness  │  │ that drift   │  │ machinery    │         │  │
-│   │   └──────────────┘  └──────────────┘  └──────────────┘         │  │
+│   │   ┌──────────────┐  ┌──────────────┐                           │  │
+│   │   │ code         │  │ seams        │                           │  │
+│   │   │              │  │              │                           │  │
+│   │   │ Bugs,        │  │ Contracts    │                           │  │
+│   │   │ correctness  │  │ that drift   │                           │  │
+│   │   └──────────────┘  └──────────────┘                           │  │
 │   │                                                                 │  │
 │   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │  │
 │   │   │ tests        │  │ errors       │  │ docs         │         │  │
-│   │   │              │  │ (opt-in)     │  │ (when docs   │         │  │
+│   │   │              │  │              │  │ (when docs   │         │  │
 │   │   │ Missing      │  │ Visibility & │  │  change)     │         │  │
 │   │   │ coverage     │  │ containment  │  │ Stale docs   │         │  │
 │   │   └──────────────┘  └──────────────┘  └──────────────┘         │  │

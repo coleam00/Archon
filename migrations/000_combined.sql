@@ -871,8 +871,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id
   ON remote_agent_workflow_events(workflow_run_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_events_type
   ON remote_agent_workflow_events(event_type);
--- Global created_at index for the dashboard event poller's cross-run tail
--- (WHERE created_at >= $1 ORDER BY created_at ASC).
+-- Global created_at index. No cross-run created_at reader remains; it stays
+-- because shipped schema is additive-only.
 CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at
   ON remote_agent_workflow_events(created_at);
 -- Tie-breaker order within a run; NULL for rows written before event_order

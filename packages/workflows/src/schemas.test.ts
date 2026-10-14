@@ -28,6 +28,7 @@ import {
   dagNodeFlatSchema,
   dagNodeSchema,
   execNodeSchema,
+  loopNodeSchema,
   MAX_DURABLE_WAIT_MS,
   waitConfigSchema,
   inputEnvKey,
@@ -1499,6 +1500,55 @@ describe('LOOP_NODE_AI_FIELDS', () => {
 // ---------------------------------------------------------------------------
 // dagNodeSchema — loop field projection and author-facing classification
 // ---------------------------------------------------------------------------
+
+describe('loop iteration retry policy', () => {
+  const loop = { prompt: 'Work', until: 'DONE', max_iterations: 2, fresh_context: false };
+  test.each([
+    { max_attempts: 1, delay_ms: 0 },
+    { max_attempts: 5, delay_ms: 60000, on_error: 'transient' },
+    { max_attempts: 2, delay_ms: 17 },
+    { max_attempts: 3 },
+  ] as const)('preserves valid retry %j in authored and typed loops', retry => {
+    const authored = dagNodeSchema.parse({ id: 'work', loop, retry });
+    const typed = loopNodeSchema.parse({ id: 'work', kind: 'loop', loop, retry });
+    expect(authored.kind).toBe('loop');
+    if (authored.kind !== 'loop') throw new Error('Expected a loop');
+    expect(authored.retry).toEqual(retry);
+    expect(typed.retry).toEqual(retry);
+  });
+  test.each([
+    { delay_ms: 0 },
+    { max_attempts: 0 },
+    { max_attempts: 6 },
+    { max_attempts: 1.5 },
+    { max_attempts: 1, delay_ms: -1 },
+    { max_attempts: 1, delay_ms: 60001 },
+    { max_attempts: 1, on_error: 'all' },
+    { max_attempts: 1, delay_ms: 0, on_error: 'all' },
+  ])('rejects invalid retry %j in authored and typed loops', retry => {
+    const authored = dagNodeSchema.safeParse({ id: 'work', loop, retry });
+    expect(authored.success).toBe(false);
+    if (!authored.success)
+      expect(authored.error.issues.some(issue => issue.path[0] === 'retry')).toBe(true);
+    expect(loopNodeSchema.safeParse({ id: 'work', kind: 'loop', loop, retry }).success).toBe(false);
+  });
+  test.each([
+    { prompt: 'Work' },
+    { command: 'work' },
+    { bash: 'true' },
+    { script: 'work', runtime: 'bun' },
+  ])('preserves ordinary retry constraints for %j', mode => {
+    for (const delay_ms of [0, 17, 999]) {
+      expect(
+        dagNodeSchema.safeParse({ id: 'work', ...mode, retry: { max_attempts: 1, delay_ms } })
+          .success
+      ).toBe(false);
+    }
+    const retry = { max_attempts: 1, delay_ms: 1000, on_error: 'all' } as const;
+    const node = dagNodeSchema.parse({ id: 'work', ...mode, retry });
+    expect('retry' in node && node.retry).toEqual(retry);
+  });
+});
 
 describe('dagNodeSchema — LoopNode AI-field survival', () => {
   /**

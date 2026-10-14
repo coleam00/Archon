@@ -104,7 +104,12 @@ describe('codebases', () => {
     });
 
     test('administrative metadata remains readable with an invalid stored path', async () => {
-      const row = { id: 'id', name: 'project', stored_default_cwd: 'projects/repo' };
+      const row = {
+        id: 'id',
+        name: 'project',
+        kind: 'repo' as const,
+        stored_default_cwd: 'projects/repo',
+      };
       mockQuery.mockResolvedValueOnce(createQueryResult([row]));
       expect(await listCodebaseRegistrations()).toEqual([row]);
       expect(mockQuery.mock.calls[0]?.[0]).toContain('default_cwd AS stored_default_cwd');

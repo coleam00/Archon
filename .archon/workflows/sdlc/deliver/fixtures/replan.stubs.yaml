@@ -1,50 +1,37 @@
-# A proved scope conflict must not enter correction or reach validation. The
-# real verdict validator accepts the combination; the real ready gate fails
-# truthfully and leaves the draft PR plus canonical report intact, and the
-# discoveries that come with the replan are still filed.
-impl__implement:
+# Outcome: not ready, replan. The review finds the requested outcome needs work
+# outside the accepted scope: simplify and CI do not run, the pull request stays
+# draft, and the outcome relays its discoveries.
+implement__implement:
   done: true
   green: true
   red_cause: ""
-  summary: "stub: implemented inside the accepted contract"
-impl__assert-changed: "2 files changed"
-gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-pr__pr: { intent: "/fixture/pr-intent.json" }
-pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-review-policy: { risks: "fixture-owned-policy" }
-classify:
-  tier: full
-  errors: false
-  docs: false
-  reasons:
-    tier: "stub: touches persisted state"
-    errors: "stub: no failure paths"
-    docs: "stub: no docs changes"
-resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
-review__coverage: { full: true }
+  summary: "stub: implemented; focused checks pass"
+implement__assert-changed: "3 files changed"
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: target recorded" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false}'
+review__route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
 review__scope:
-  # accepted contract and scope conflict recorded
-  docs: false
-  pr: { repo: { host: "github.com", path: "example/repo" }, number: 3 }
-review__code: "1 blocking scope conflict"
-review__simplify__simplify: { findings: false }
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"
-shape__simplify: { findings: false }
+review__code: "0 findings"
 review__tests: "0 findings"
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 review__synthesize:
   ready: false
   action: replan
-  findings_summary: "stub: requested outcome requires crossing an explicit boundary"
+  findings_summary: "stub: replan"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: [{ title: "stub: scope conflict", claim: "stub: claim", evidence: ["a.ts:1"], relation: scope_conflict, source_nodes: [seams] }]
 review__publish:
   ready: false
   action: replan
-  findings_summary: "stub: requested outcome requires crossing an explicit boundary"
+  findings_summary: "stub: replan"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-file-discoveries: '{"issues":["https://github.com/example/repo/issues/9"]}'
+  discoveries: [{ title: "stub: scope conflict", claim: "stub: claim", evidence: ["a.ts:1"], relation: scope_conflict, source_nodes: [seams] }]
+update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
-  expect: failed
-  fail-node: gate-ready
-  reached: [file-discoveries]
+  expect: completed
+  reached: [round, update-pr-body, outcome]
 exec-code: true

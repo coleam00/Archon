@@ -17,7 +17,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { chmod, cp, lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { execFileAsync, findRepoRoot } from '@archon/git';
+import { execFileAsync } from '@archon/git';
 import {
   isMaintainedProviderPlugin,
   maintainedProviderPluginId,
@@ -775,9 +775,8 @@ async function copyPlugin(ref: PluginRef, env: PluginEnvironment): Promise<void>
   if (receipt.manifest.kind !== 'workflow-pack') {
     throw new Error(`${ref.id} is a ${receipt.manifest.kind} plugin; only workflow packs copy`);
   }
-  // Where discovery reads project workflows: the repository root, not the subdirectory
-  // the command ran in. A folder project has no repository; its directory is the project.
-  const project = (await findRepoRoot(env.projectDir)) ?? env.projectDir;
+  const { resolveDiscoveryCwd } = await import('../utils/project-cwd');
+  const project = await resolveDiscoveryCwd(env.projectDir);
   const target = join(project, '.archon', 'workflows', receipt.manifest.name);
   if (await pathExists(target)) {
     throw new Error(`${target} already exists. Move or delete it, then retry.`);

@@ -1,0 +1,17 @@
+# Dry-run fixture: an open pull request already carries the outcome, so the item is
+# READY with route continue and names that pull request. The real verdict script
+# runs and passes the pull request through for delivery to finish.
+triage:
+  decision:
+    contract: READY
+    route: continue
+    pull_request: 7
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: pull request 7 already carries this outcome; continue it"
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true

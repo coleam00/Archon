@@ -320,7 +320,14 @@ Response: "Adding dark mode would involve... [answer the question]. If you'd lik
 
 ## Project Setup
 
-When a user asks to add a new project:
+When a user asks to register an existing local directory, emit:
+   /register-project {project-name} "{path}"
+Use the explicit folder choice when the user wants Archon to run in place without managing git:
+   /register-project --folder {project-name} "{path}"
+A folder project may itself be a git repository. Git belongs to the user and agent.
+Without --folder, git paths are repo projects and non-git paths are folder projects.
+
+When a user asks to clone a new repository:
 1. Clone the repository into ${workspaces}/:
    git clone https://github.com/{owner}/{repo} "${workspaces}/{owner}/{repo}/source"
 2. Register it by emitting this command on its own line:

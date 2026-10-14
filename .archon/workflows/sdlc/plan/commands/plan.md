@@ -24,22 +24,36 @@ Ground the plan in the code as it is, not as the request describes it. Read the 
 
 When a prior report is provided, treat its claims like any inherited analysis: verify the load-bearing ones against current code before building on them, and note where you confirm or refute. Implementers will follow your plan literally — a plan that repeats an inherited wrong claim ships that wrong claim.
 
+Design calls are judged against the project's own guidance. Read, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — and any other document the steering files point to that bears on a call you are about to make, such as design rules for a language, API, or configuration surface. A call those documents already rule on is settled by them, not by your preference.
+
+When a call turns on a fact only trying can establish — whether an API behaves as documented, whether a shape fits the existing code — spike it: write throwaway code under `$ARTIFACTS_DIR/spike/`, run it, and keep the result as evidence. Need a checkout to spike against? Add a scratch worktree under `$ARTIFACTS_DIR/spike/` and remove it when you are done. Never spike in this checkout.
+
 ## Decide, don't defer
 
-Name the design decisions the work actually contains, choose, and record why — including the strongest alternative and the concrete reason it lost. A plan that defers its central decision is not a plan. Prefer the smallest coherent approach: no speculative abstraction, no capability without a current caller, deletion of superseded machinery over addition beside it, and a rewrite over a patch when it is clearly simpler and no riskier. If the path grows complicated while you plan it, step back and reconsider the approach rather than elaborating the first idea.
+Name the design decisions the work actually contains, choose, and record why — including the strongest alternative and the concrete reason it lost, and what settled the call: a project document and its section, spike evidence, usage data, or the code. A plan that defers its central decision is not a plan. Prefer the smallest coherent approach: no speculative abstraction, no capability without a current caller, deletion of superseded machinery over addition beside it, and a rewrite over a patch when it is clearly simpler and no riskier. If the path grows complicated while you plan it, step back and reconsider the approach rather than elaborating the first idea.
 
-The one thing you do not decide is missing intent. When the work genuinely cannot be planned without information only its owner has — a product choice, an unstated constraint — stop there: declare `ready: false` and name exactly what is missing. Never fill an intent gap with a guess.
+## Calls that belong to a person
+
+Settle every call you can. A call is a person's only when one of these holds, and you name which:
+
+- No project document covers it, and the code, a spike, and usage data do not settle it.
+- Two project documents disagree on it.
+- It changes a shipped contract — a persisted shape, a public API, a configuration or language surface users write, a shipped lifecycle, or what an existing persisted or shipped value means, even when no schema changes — and no project document already rules on that change. If the plan must rewrite the comment or reference text that defines a persisted or shipped value, it changes that value's meaning.
+- The plan you can responsibly execute delivers less than the request's stated outcome: it drops a path, an acceptance item, or an invariant.
+
+Each such call is an open question, and it always blocks the plan. Once a question meets one of these conditions, stop designing: write `plan.md` with what you verified and the question, declare `ready: false` with it in `open_questions`, and do not design the full solution first. Never fill the gap with a guess or a provisional choice. Meeting one of the conditions above is what makes it blocking; you may not judge it non-blocking, however cheap or reversible a choice looks. A question that meets none of the conditions is yours to settle. When the owner should still see it, proceed on a choice that is cheap to reverse, say in the plan that it is provisional, and declare the question as non-blocking. Do not edit the project's documents to settle any question.
 
 ## The plan
 
 Write `$ARTIFACTS_DIR/plan.md`:
 
 - **Problem** — what this work solves and why it matters, from the request.
-- **Approach** — the chosen design, and the alternatives rejected with reasons.
+- **Approach** — the chosen design, the alternatives rejected with reasons, and for each design call what settled it.
 - **Steps** — ordered, each independently verifiable, anchored to stable text anchors (a named function, a described test block) — never raw line numbers, which drift on every preceding edit.
 - **Validation** — which of the project's own gates prove the work, and the new tests to write: focused, behavior-proving, no padding.
 - **Risks and rollback** — blast radius, what could go wrong, and how the change reverts.
 - **Out of scope** — what this plan deliberately does not do, so the implementer does not helpfully do it.
+- **Open questions** — only when a call belongs to a person: each question, as declared below.
 
 Omit a section that does not apply; never write a placeholder to preserve one.
 
@@ -47,7 +61,7 @@ No one is watching this run: the plan file and your declared fields are all that
 
 ## Preserve proved unrelated defects
 
-A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/plan.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`plan`). Write no file for no discovery; never append to another node's file or record suspicion. When delivery follows in the same run, its review validates each record and delivery files it as an issue.
+A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/plan.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`plan`). Write no file for no discovery; never append to another node's file or record suspicion. When delivery follows in the same run, its review validates each record; the run's outcome relays them to the operator.
 
 ## Not your job
 
@@ -55,8 +69,9 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
 
 ## Declare the verdict
 
-- `ready` — true only when the plan is complete enough to execute without questions. False when missing intent blocked it — the plan is still written up to the block, with the gap named.
-- `summary` — a few sentences: the chosen approach (or the blocking gap), and that the full plan is at `$ARTIFACTS_DIR/plan.md`.
+- `ready` — your judgment that the plan can be executed as written without asking anyone. A blocking question means `ready` is false, and `open_questions` names it. `ready` may be true while questions remain only when every one of them is non-blocking.
+- `open_questions` — one entry per open question, blocking or not, empty when there is none. Say in each entry whether it blocks: an entry that meets one of the conditions above blocks, and only an entry that meets none may say it does not. Each entry states the decision, the options and what each one costs, which of the conditions makes it a person's call or that none does, and one line the project's direction document could carry so that a later run settles the same call without asking.
+- `summary` — a few sentences: the chosen approach (or the open questions), and that the full plan is at `$ARTIFACTS_DIR/plan.md`.
 - `report` — a pointer to the report you just wrote, copied exactly:
 
   ```json
@@ -67,4 +82,4 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
   declare. `run_id` is the value above verbatim, and `path` is relative to
   `$ARTIFACTS_DIR`.
 
-Before declaring, re-read the plan: confirm every named anchor exists in the current code, every decision has its why, and `git status` matches what you started with.
+Before declaring, re-read the plan: confirm every named anchor exists in the current code, every decision has its why and its source, and `git status` matches what you started with.

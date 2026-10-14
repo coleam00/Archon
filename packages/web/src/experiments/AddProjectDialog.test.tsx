@@ -75,7 +75,9 @@ interface ControlProps {
   children?: React.ReactNode;
   placeholder?: string;
   'aria-label'?: string;
-  onChange?: (event: { target: { value: string } }) => void;
+  disabled?: boolean;
+  type?: string;
+  onChange?: (event: { target: { value: string; checked?: boolean } }) => void;
   onClick?: () => void;
   onSubmit?: (event: { preventDefault: () => void }) => void;
 }
@@ -136,11 +138,58 @@ for (const mode of ['url', 'path'] as const) {
       await Promise.resolve();
       expect(mode === 'url' ? addUrl : addPath).toHaveBeenCalledWith(
         source,
-        edited === 'release' ? 'release' : null
+        edited === 'release' ? 'release' : null,
+        ...(mode === 'path' ? [false] : [])
       );
     });
   }
 }
+
+test('explicit folder selection submits a git root without inspection and ignores a late result', async () => {
+  let resolveInspection: ((value: BaseBranchInspection) => void) | undefined;
+  inspect.mockImplementationOnce(
+    () =>
+      new Promise(resolve => {
+        resolveInspection = resolve;
+      })
+  );
+  let tree = render();
+  control(
+    tree,
+    el => el.type === 'button' && React.Children.toArray(el.props.children).includes('Local path')
+  ).onClick?.();
+  tree = render();
+  control(tree, el => el.type === 'input' && el.props.placeholder !== undefined).onChange?.({
+    target: { value: '/git-root' },
+  });
+  tree = render();
+  for (const effect of effects.splice(0)) {
+    const cleanup = effect();
+    if (cleanup) cleanups.push(cleanup);
+  }
+  for (const timer of timers.splice(0)) timer();
+  control(tree, el => el.props.type === 'checkbox').onChange?.({
+    target: { value: '', checked: true },
+  });
+  for (const cleanup of cleanups.splice(0)) cleanup();
+  tree = render();
+  for (const effect of effects.splice(0)) {
+    const cleanup = effect();
+    if (cleanup) cleanups.push(cleanup);
+  }
+  resolveInspection?.({ kind: 'repo', defaultBranch: 'dev', reason: null });
+  await Promise.resolve();
+  tree = render();
+  const markup = renderToStaticMarkup(tree);
+  expect(markup).toContain('Register as a folder project');
+  expect(markup).toContain('even if this is a git repository');
+  expect(markup).not.toContain('Base branch');
+  expect(markup).not.toContain('Checking remote default');
+  expect(control(tree, el => el.props.type === 'submit').disabled).toBe(false);
+  control(tree, el => el.type === 'form').onSubmit?.({ preventDefault: noop });
+  await Promise.resolve();
+  expect(addPath).toHaveBeenCalledWith('/git-root', null, true);
+});
 
 afterAll(() => {
   globalThis.window = originalWindow;

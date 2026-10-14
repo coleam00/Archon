@@ -208,6 +208,7 @@ mock.module('../db/codebases', () => ({
     (await mockListCodebases()).map(row => ({
       id: row.id,
       name: row.name,
+      kind: row.kind,
       stored_default_cwd: row.default_cwd,
     })),
   createCodebase: mockCreateCodebase,
@@ -248,6 +249,14 @@ mock.module('../db/sessions', () => ({
   transitionSession: mockTransitionSession,
   SessionNotFoundError: MockSessionNotFoundError,
 }));
+
+const mockRegisterFolder = mock(async (path: string, name?: string) => ({
+  codebaseId: 'folder-id',
+  name: name ?? 'platform',
+  defaultCwd: path,
+  alreadyExisted: false,
+}));
+mock.module('../handlers/sql-registration', () => ({ registerFolder: mockRegisterFolder }));
 
 const mockParseCommand = mock<typeof CommandHandler.parseCommand>(() => ({
   command: 'help',
@@ -1009,6 +1018,24 @@ describe('parseOrchestratorCommands', () => {
   // ─── /register-project parsing ────────────────────────────────────────────────
 
   describe('/register-project parsing', () => {
+    test('parses explicit folder intent and quoted paths without reconstructing a command', () => {
+      expect(
+        parseOrchestratorCommands(
+          '/register-project --folder "My platform" "/home/user/my platform"',
+          codebases,
+          workflows
+        ).projectRegistration
+      ).toEqual({
+        projectName: 'My platform',
+        projectPath: '/home/user/my platform',
+        folder: true,
+      });
+      expect(
+        parseOrchestratorCommands('/register-project --folder only-name', codebases, workflows)
+          .projectRegistration
+      ).toBeNull();
+    });
+
     test('parses a basic /register-project command', () => {
       const response = '/register-project my-app /home/user/projects/my-app';
       const result = parseOrchestratorCommands(response, codebases, workflows);
@@ -1062,12 +1089,8 @@ describe('parseOrchestratorCommands', () => {
         '**/register-project SaberEngine "/.archon/workspaces/b1skit/SaberEngine/source"**';
       const result = parseOrchestratorCommands(response, codebases, workflows);
       expect(result.projectRegistration?.projectName).toBe('SaberEngine');
-      // parseOrchestratorCommands captures the path via (.+)$ which preserves the
-      // surrounding double-quotes. Downstream, handleRegisterProject reconstructs
-      // the command string and calls parseCommand(), which strips the quotes before
-      // calling existsSync(). So the path stored here intentionally includes quotes.
       expect(result.projectRegistration?.projectPath).toBe(
-        '"/.archon/workspaces/b1skit/SaberEngine/source"'
+        '/.archon/workspaces/b1skit/SaberEngine/source'
       );
     });
 
@@ -1076,8 +1099,7 @@ describe('parseOrchestratorCommands', () => {
         'The project has been set up.\n\n**/register-project SaberEngine "/path/to/repo"**';
       const result = parseOrchestratorCommands(response, codebases, workflows);
       expect(result.projectRegistration?.projectName).toBe('SaberEngine');
-      // Surrounding quotes are preserved by (.+)$ — see quoted-path test above.
-      expect(result.projectRegistration?.projectPath).toBe('"/path/to/repo"');
+      expect(result.projectRegistration?.projectPath).toBe('/path/to/repo');
     });
 
     test('strips single-asterisk italic from /register-project', () => {
@@ -1710,7 +1732,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     expect(mockSyncWorkspace).not.toHaveBeenCalled();
   });
 
-  test('does not call syncWorkspace for a folder project (no git to sync)', async () => {
+  test('does not call syncWorkspace for a folder project (no Archon-managed sync)', async () => {
     const conversation = makeConversation({ codebase_id: 'codebase-1' });
     const codebase = { ...makeCodebaseForSync(), kind: 'folder' as const, repository_url: null };
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
@@ -7412,3 +7434,109 @@ describe('handleMessage — legacy registration recovery', () => {
     );
   });
 });
+
+for (const mode of ['stream', 'batch'] as const) {
+  test(`${mode}: explicit folder command survives chunked quoted paths`, async () => {
+    mockRegisterFolder.mockClear();
+    mockListCodebases.mockResolvedValueOnce([]);
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: '/register-project --folder ' };
+      yield { type: 'agent_message_chunk', text: 'Platform ' };
+      yield { type: 'agent_message_chunk', text: '"/path/with ' };
+      yield { type: 'agent_message_chunk', text: 'spaces"\n' };
+      yield { type: 'result', sessionId: 'folder-session' };
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    await handleMessage(platform, 'conv-1', 'register my directory as a folder project', {
+      actor: operator,
+    });
+    expect(mockRegisterFolder).toHaveBeenCalledWith(
+      await canonicalizeProjectPath('/path/with spaces'),
+      'Platform'
+    );
+  });
+}
+
+test('direct explicit folder command uses the folder primitive and refuses an existing repo', async () => {
+  mockParseCommand.mockReset();
+  mockRegisterFolder.mockClear();
+  mockListCodebases.mockResolvedValueOnce([]);
+  mockParseCommand.mockReturnValueOnce({
+    command: 'register-project',
+    args: ['--folder', 'Platform', '/'],
+  });
+  const platform = makePlatform();
+  await handleMessage(platform, 'conv-1', '/register-project --folder Platform /', {
+    actor: operator,
+  });
+  expect(mockRegisterFolder).toHaveBeenCalledWith(await canonicalizeProjectPath('/'), 'Platform');
+  mockRegisterFolder.mockClear();
+  mockListCodebases.mockResolvedValueOnce([
+    { ...makeCodebase(), name: 'Platform', kind: 'repo', default_cwd: '/' },
+  ]);
+  mockParseCommand.mockReturnValueOnce({
+    command: 'register-project',
+    args: ['--folder', 'Platform', '/'],
+  });
+  await handleMessage(platform, 'conv-1', '/register-project --folder Platform /', {
+    actor: operator,
+  });
+  expect(mockRegisterFolder).not.toHaveBeenCalled();
+  const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+    .map(call => String(call[1]))
+    .join('\n');
+  expect(messages).toContain('already registered as a repo');
+});
+
+for (const mode of ['stream', 'batch'] as const) {
+  test(`${mode}: another registration command name cannot register a folder`, async () => {
+    mockRegisterFolder.mockClear();
+    mockCreateCodebase.mockClear();
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: '/register-project-backup --folder Platform /\n' };
+      yield { type: 'result', sessionId: 'other-command' };
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    await handleMessage(platform, 'conv-1', 'save project instructions', { actor: operator });
+    expect(mockRegisterFolder).not.toHaveBeenCalled();
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+  });
+
+  test(`${mode}: registration arguments cannot cross a line break`, async () => {
+    mockRegisterFolder.mockClear();
+    mockCreateCodebase.mockClear();
+    mockListCodebases.mockResolvedValueOnce([]);
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'agent_message_chunk',
+        text: '/register-project\n--folder unintended /tmp\n/register-project --folder intended /tmp/intended\n',
+      };
+      yield { type: 'result', sessionId: 'line-boundary' };
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    await handleMessage(platform, 'conv-1', 'register my folder', { actor: operator });
+    expect(mockRegisterFolder.mock.calls).toEqual([
+      [await canonicalizeProjectPath('/tmp/intended'), 'intended'],
+    ]);
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+  });
+
+  test(`${mode}: explicit folder registration preserves an apostrophe in an unquoted path`, async () => {
+    mockRegisterFolder.mockClear();
+    mockListCodebases.mockResolvedValueOnce([]);
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: "/register-project --folder demo /tmp/O'Brien\n" };
+      yield { type: 'result', sessionId: 'literal-path' };
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    await handleMessage(platform, 'conv-1', 'register my folder', { actor: operator });
+    expect(mockRegisterFolder).toHaveBeenCalledWith(
+      await canonicalizeProjectPath("/tmp/O'Brien"),
+      'demo'
+    );
+  });
+}

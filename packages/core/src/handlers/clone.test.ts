@@ -256,6 +256,17 @@ describe('findCodebaseForCheckoutPath', () => {
     return new gitUtils.CanonicalRepoPathUnavailableError(cwd, commonGitDir);
   }
 
+  test('folder identity is exact, not inherited through a linked git worktree', async () => {
+    const folder = makeCodebase({ kind: 'folder', default_cwd: resolve('/repo') });
+    const deps = {
+      findCodebaseByDefaultCwd: async (cwd: string) => (cwd === folder.default_cwd ? folder : null),
+      listCodebases: async () => [folder],
+      getCanonicalRepoPath: async () => folder.default_cwd,
+    };
+    expect(await findCodebaseForCheckoutPath(folder.default_cwd, deps)).toBe(folder);
+    expect(await findCodebaseForCheckoutPath(resolve('/external-worktree'), deps)).toBeNull();
+  });
+
   test('canonicalizes a forward-slash checkout before exact lookup', async () => {
     const gitSpelling = 'C:/workspace/primary';
     const canonical = resolve('/canonical/primary');
@@ -1409,10 +1420,28 @@ describe('registerFolder', () => {
     expect(mockCreateCodebase.mock.calls.length).toBe(0);
   });
 
+  test('rejects a base branch for explicit folder registration before touching git or storage', async () => {
+    await expect(registerFolder('/repo', undefined, { baseBranch: 'main' })).rejects.toThrow(
+      'Folder projects have no base branch'
+    );
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+    expect(spyExecFileAsync).not.toHaveBeenCalled();
+  });
+
+  test('refuses an existing repo registration without changing identity or storage', async () => {
+    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(
+      makeCodebase({ kind: 'repo', default_cwd: resolve('/tmp/platform') })
+    );
+    await expect(registerFolder('/tmp/platform')).rejects.toThrow('already registered as a repo');
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+    expect(spyExecFileAsync).not.toHaveBeenCalled();
+  });
+
   // ── Idempotency ────────────────────────────────────────────────────────
   test('returns the existing record when the path is already registered', async () => {
     const existing = makeCodebase({
       id: 'existing-folder-id',
+      kind: 'folder',
       name: 'platform',
       repository_url: null,
       default_cwd: '/tmp/platform',

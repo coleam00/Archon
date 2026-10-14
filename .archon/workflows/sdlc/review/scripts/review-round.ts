@@ -14,6 +14,11 @@
  * the delta run backwards or cover commits the previous round never read, so the
  * round refuses instead.
  *
+ * A first round's lenses are the route agent's call. A continuation reruns the
+ * lenses the previous round ran, which publish-review recorded beside the report,
+ * on the delta only. A light continuation, which follows a correction for CI
+ * rather than for review, runs the general code lens alone.
+ *
  * The prior report is a declared input an outside caller can fill with a path
  * from an earlier run, so its existence is checked here too: a continuation that
  * cannot read the report it continues from would review nothing and say it
@@ -21,16 +26,36 @@
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PRIOR_REPORT: the previous round's report path, or empty for round one.
+ * - INPUTS_LIGHT: "true" when this continuation follows a CI correction.
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
-import { FULL_REVIEW_RISKS } from '../../.shared/review-policy.ts';
+import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
 import { emit, refuse, trimmed } from '../../.shared/io.ts';
 
 /** Where publish-review records the commit a published report reviewed. */
 const REVIEWED_HEAD = 'reviewed-head';
+/** Where publish-review records the lenses that round ran. */
+const REVIEWED_LENSES = 'reviewed-lenses.json';
+type Lenses = Record<ReviewLens, boolean>;
+const NO_LENSES: Lenses = { seams: false, code: false, tests: false, errors: false, docs: false };
+
+/** The lens set publish-review recorded, refused unless it names every lens as a boolean. */
+function recordedLenses(path: string): Lenses {
+  if (!existsSync(path)) {
+    throw new Error(`the previous review report records no lenses (${path} is missing)`);
+  }
+  const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  const lenses = { ...NO_LENSES };
+  for (const lens of REVIEW_LENSES) {
+    const ran: unknown = (value as Record<string, unknown> | null)?.[lens];
+    if (typeof ran !== 'boolean') throw new Error(`${path} does not record lens '${lens}'`);
+    lenses[lens] = ran;
+  }
+  return lenses;
+}
 
 function isFile(path: string): boolean {
   try {
@@ -52,9 +77,11 @@ function descends(head: string, cursor: string): boolean {
 try {
   const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
   const head = nodeStartCommit();
+  // The engine's identity for this node, which synthesis uses to count only this
+  // round's lens artifacts.
   const execution: unknown = JSON.parse(process.env.ARCHON_NODE_EXECUTION ?? '');
   if (prior === '') {
-    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution });
+    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
     const recorded = join(dirname(prior), REVIEWED_HEAD);
@@ -69,7 +96,11 @@ try {
         `the checkout is at ${head}, which does not descend from ${cursor}, the commit the previous round reviewed; reviewing it would diff backwards or skip commits`
       );
     }
-    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, execution });
+    const lenses =
+      trimmed(process.env.INPUTS_LIGHT) === 'true'
+        ? { ...NO_LENSES, code: true }
+        : recordedLenses(join(dirname(prior), REVIEWED_LENSES));
+    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, execution, ...lenses });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);

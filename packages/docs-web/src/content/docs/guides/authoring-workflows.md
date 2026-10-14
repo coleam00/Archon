@@ -610,9 +610,10 @@ nodes:
     # The command file can use $classify.output or $classify.output.field
 ```
 
-Variable substitution order:
-1. Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.)
-2. Node output references (`$nodeId.output`, `$nodeId.output.field`)
+Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.) and node output
+references resolve in one pass over the template. A substituted value is inserted as written
+and never scanned again, so a message or an upstream output that quotes `$nodeId.output`
+reaches the node unchanged. See [Substitution Order](/reference/variables/#substitution-order).
 
 Output references can follow nested object fields. For example, this gate receives
 `Proposed: add` when `review` emits `{"proposal":{"action":"add"}}`:
@@ -837,9 +838,11 @@ YAML declares the engine-visible coordination condition; computation stays in a 
 
 ## Retry Configuration
 
-**AI nodes** (`command:`, `prompt:`) automatically retry on **transient** errors (failures the provider reports as transient or rate-limited, and timeouts) using a default configuration: **2 retries** (3 total attempts), **3 s base delay** with exponential backoff. You will see a platform notification before each retry attempt.
+**AI nodes** (`command:`, `prompt:`) and each `loop:` iteration automatically retry on **transient** errors (failures the provider reports as transient, rate-limited or overloaded, and timeouts) using a default configuration: **2 retries** (3 total attempts), **3 s base delay** with exponential backoff. You will see a platform notification before each retry attempt.
 
-**Deterministic nodes** (`bash:`, `script:`) do **not** auto-retry — they run exactly once unless you add an explicit `retry:` block. This keeps side-effectful scripts (deploys, `gh` mutations, external CLIs) from being silently re-run on a transient-looking failure; opt in per node when re-running is safe. `loop:` and `loop_group:` manage their own iteration and don't accept `retry:`.
+**Deterministic nodes** (`bash:`, `script:`) do **not** auto-retry — they run exactly once unless you add an explicit `retry:` block. This keeps side-effectful scripts (deploys, `gh` mutations, external CLIs) from being silently re-run on a transient-looking failure; opt in per node when re-running is safe. `loop_group:` does not accept `retry:`; configure retries on its body nodes.
+
+A `loop:` policy retries the failed iteration, without advancing `max_iterations` or replaying earlier iterations. Its retry budget resets after each successful iteration. Without a declaration, it keeps the same defaults as other AI nodes. Loops accept only omitted `on_error` or `transient`; `on_error: all` is rejected, so unknown and fatal failures and output-contract failures never gain retries.
 
 To enable or customise retry, add a `retry:` block:
 
@@ -858,6 +861,15 @@ nodes:
       max_attempts: 4       # 4 retries = 5 total attempts
       on_error: all         # Retry even non-transient errors (use with caution)
 
+  - id: iterate
+    retry:
+      max_attempts: 1
+      delay_ms: 0            # No wait for ordinary transient failures
+    loop:
+      prompt: "Finish the task and output <promise>DONE</promise>"
+      until: DONE
+      max_iterations: 5
+
   - id: deploy               # bash/script only retry when retry: is set
     bash: "./deploy.sh"
     retry:
@@ -868,13 +880,13 @@ nodes:
 
 ### Retry Fields
 
-`retry:` is required to enable retry on `bash:`/`script:` nodes; on `command:`/`prompt:` nodes it customises the defaults below.
+`retry:` is required to enable retry on `bash:`/`script:` nodes; on `command:`/`prompt:` nodes and `loop:` iterations it customises the defaults below. Whenever `retry:` is declared, `max_attempts` is required.
 
 | Field | Type | Default (AI nodes) | Constraints | Description |
 |-------|------|--------------------|-------------|-------------|
 | `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts). No default on `bash:`/`script:` — omitting `retry:` means a single attempt |
-| `delay_ms` | number | `3000` | 1000–60000 | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
-| `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
+| `delay_ms` | number | `3000` | 0–60000 on loops; 1000–60000 otherwise | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
+| `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. Loops accept only `'transient'` or omission. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
 
 ### Error Classification
 
@@ -888,7 +900,7 @@ Archon sorts a failed attempt into one of three buckets before deciding whether 
 
 `misconfigured` means the setup must change before the node can succeed: a bad proxy URL, a missing or too-old CLI, an unknown model, an unreadable MCP config file. Fix the configuration and run again.
 
-Capacity failures (`overloaded`) get at least five retries: six provider attempts with delay centers of 45, 90, 180, 300 and 300 seconds. Each delay has ±50% jitter; the 300-second cap applies before jitter, so a wait can reach 450 seconds. The nominal total wait is 15 minutes 15 seconds, excluding provider execution time. Node `delay_ms` does not change this schedule. The larger budget applies only while the current failure is capacity; ordinary transient failures keep their own budget. Rate limits keep their existing five-retry minimum and flat 45-second delay with ±50% jitter.
+Capacity failures (`overloaded`) get at least five retries: six provider attempts with delay centers of 45, 90, 180, 300 and 300 seconds. Each delay has ±50% jitter; the 300-second cap applies before jitter, so a wait can reach 450 seconds. The nominal total wait is 15 minutes 15 seconds, excluding provider execution time. Node `delay_ms` does not change this schedule, including a loop policy with zero delay. The larger budget applies only while the current failure is capacity; ordinary transient failures keep their own budget. Rate limits keep their existing five-retry minimum and flat 45-second delay with ±50% jitter; once a rate limit occurs, that larger budget remains for the rest of the iteration or node attempt sequence.
 
 Each retry wait is logged and recorded as `node_retry_scheduled`, with the node path, class, one-based retry attempt, effective budget and delay; loop retries also record the iteration. Exhaustion preserves the provider failure and message. These are retry delays, not a deadline that ends a run.
 
@@ -2189,9 +2201,9 @@ or use 'inherit' (shared checkout).
 
 You get this when:
 
-- the project is a **folder project** — a non-git workspace registered with `--folder`
-  ([Multi-Repo Projects](/guides/multi-repo-projects/)). There is no repository to make a
-  worktree in. Use `inherit`, or split the work so the writing step targets a real repo.
+- the project is a **folder project** — a directory registered for in-place execution with no Archon-managed git machinery; it may itself be a git repository
+  ([Multi-Repo Projects](/guides/multi-repo-projects/)). Archon does not manage worktrees
+  for folder projects. Use `inherit`, or target a separately registered repo project.
 - the run resolved no codebase at all (for example a background dispatch with no project
   bound, or a database lookup that failed at run start).
 

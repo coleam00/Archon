@@ -6,7 +6,7 @@
  * ├── workspaces/<project>/              # Project-centric layout, where <project> is
  * │   │                                  #   <owner>/<repo>   registered repo with a remote
  * │   │                                  #   _local/<basename>  no-remote local git repo
- * │   │                                  #   _folder/<slug>     folder project (non-git)
+ * │   │                                  #   _folder/<slug>     folder project (runs in place)
  * │   │                                  #   _cwd/<basename>    unregistered working dir
  * │   ├── source/                        # Clone or symlink → local path (repo kinds only)
  * │   ├── worktrees/                     # Git worktrees for this project (repo kinds only)
@@ -975,7 +975,7 @@ export function getRunWorkflowSourceDirForRoot(root: string, workflowRunId: stri
 // Folder-project ("_folder") path functions
 // =============================================================================
 //
-// Folder projects (kind: 'folder') are non-git workspaces — a multi-repo root
+// Folder projects (kind: 'folder') run without Archon-managed git — a multi-repo root
 // or a plain ops folder. They run in place at their real directory, so there is
 // no `source/` symlink and no `worktrees/` directory. Their named artifact and
 // log storage lives under a `_folder` pseudo-owner, mirroring the `_local`

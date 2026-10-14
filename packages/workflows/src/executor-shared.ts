@@ -23,7 +23,13 @@ import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
-import { substituteInputRefs, type JsonValue } from './output-ref';
+import {
+  inputRefToken,
+  substituteTemplate,
+  templateToken,
+  type JsonValue,
+  type TemplateToken,
+} from './output-ref';
 import { parsePackagedResourceReference } from './packaged-workflow';
 
 /** Lazy-initialized logger */
@@ -537,6 +543,17 @@ export const CONTEXT_VAR_PATTERN_STR =
   '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])';
 
 /**
+ * Reference grammars resolved in the same pass as the workflow variables, so nothing a
+ * variable inserts is scanned again (#4046). `before` wins a `$` a workflow variable could
+ * also match (an enclosing loop_group's `$LOOP_USER_INPUT` over the run-level one); `after`
+ * loses it (`$node.output` references).
+ */
+export interface TemplateReferences {
+  before: readonly TemplateToken[];
+  after: readonly TemplateToken[];
+}
+
+/**
  * Substitute workflow variables in a prompt.
  *
  * Supported variables:
@@ -563,6 +580,9 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $INPUTS.<name> - Named sub-run inputs (#2470), supplied by a caller's `with:` on a
  *   `workflow:` node. Resolved from `options.inputs` in the non-shell branch only; an
  *   unknown name THROWS. Shell (bash/script) nodes read `INPUTS_<UPPER_SNAKE>` env vars.
+ *
+ * Every variable and every `options.references` grammar resolves in one scan of the
+ * template: a substituted value is inserted verbatim and never read as template syntax.
  *
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.
@@ -591,108 +611,110 @@ export function substituteWorkflowVariables(
      * listing — the dry-run preview — and substitutes empty without throwing.
      */
     typedArtifactsFile?: string;
+    references?: TemplateReferences;
   }
 ): { prompt: string; contextSubstituted: boolean } {
-  // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
-  if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
-    throw new Error(
-      'No base branch could be resolved. Auto-detection failed and `worktree.baseBranch` is not set in .archon/config.yaml. ' +
-        'Set the config value or use the --from flag to select a branch (e.g., --from dev).'
-    );
-  }
+  const variable = (name: string, value: () => string): TemplateToken =>
+    templateToken(`\\$${name}`, value);
 
-  // Same fail-fast for $STATE_DIR. The state directory is threaded from the
-  // executor to every substitution site; a site that forgot to pass it would
-  // otherwise leave the variable literal (AI nodes) or empty (shell nodes),
-  // silently writing state to the wrong place. Loud beats silent.
-  if (!options?.stateDir && prompt.includes('$STATE_DIR')) {
-    throw new Error(
-      '$STATE_DIR is referenced but no state directory was resolved for this run. ' +
-        '$STATE_DIR is only available inside a workflow run; if you are seeing this from a workflow node, ' +
-        'please report it as a bug.'
-    );
-  }
-
-  // $ADOPTED_RUN_DIR (#2747) resolves only under an explicit adoption. A run
-  // that references it without one throws — mirroring $BASE_BRANCH/$STATE_DIR —
-  // because a literal or empty substitution would silently point work at
-  // nothing instead of telling the author the run was never started with --adopt.
-  if (!options?.adoptedRunDir && !currentAdoptedRunDir() && prompt.includes('$ADOPTED_RUN_DIR')) {
-    throw new Error(
-      '$ADOPTED_RUN_DIR is referenced but this run did not adopt a prior run. ' +
-        'Start it with `workflow run <name> --adopt <run-id>` (or adopt_run_id on the API) ' +
-        "to read an earlier run's artifacts by reference."
-    );
-  }
-
-  // $TYPED_ARTIFACTS_FILE is delivered by every executable invocation context (bash,
-  // script, agent prompt, loop attempt). A context that never supplied one must fail
-  // loudly: substituting '' would read as "no typed artifacts", which is the exact
-  // silent-empty lookup this contract exists to remove. An explicit empty string is
-  // different — a caller that knows it has no listing (the dry-run preview) says so.
-  if (options?.typedArtifactsFile === undefined && prompt.includes('$TYPED_ARTIFACTS_FILE')) {
-    throw new Error(
-      '$TYPED_ARTIFACTS_FILE is referenced but this invocation has no typed-artifact listing. ' +
-        'It is available inside bash, script, agent, loop, and approval-rework nodes; ' +
-        'if you are seeing this from one of those, please report it as a bug.'
-    );
-  }
-
-  // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
-  const resolvedDocsDir = docsDir || 'docs/';
-
-  // Substitute basic variables
-  // When shellSafe is true, skip user-controlled variables — they will be passed
-  // via subprocess environment variables instead to prevent shell injection.
-  let result = prompt
-    .replace(/\$WORKFLOW_ID/g, workflowId)
-    .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
+  const tokens: TemplateToken[] = [
+    variable('WORKFLOW_ID', () => workflowId),
+    variable('ARTIFACTS_DIR', () => artifactsDir),
     // Engine-controlled like $ARTIFACTS_DIR — substituted even under shellSafe,
-    // or `bash:`/`script:` bodies would never see it.
-    .replace(/\$STATE_DIR/g, options?.stateDir ?? '')
-    .replace(/\$ADOPTED_RUN_DIR/g, options?.adoptedRunDir ?? currentAdoptedRunDir() ?? '')
-    // Also engine-controlled; the same path is delivered as TYPED_ARTIFACTS_FILE to
-    // exec subprocesses, so a shell body resolves it either way.
-    .replace(/\$TYPED_ARTIFACTS_FILE/g, options?.typedArtifactsFile ?? '')
-    .replace(/\$BASE_BRANCH/g, baseBranch)
-    .replace(/\$DOCS_DIR/g, resolvedDocsDir);
+    // or `bash:`/`script:` bodies would never see it. The state directory is threaded
+    // from the executor to every substitution site; a site that forgot to pass it would
+    // otherwise leave the variable literal (AI nodes) or empty (shell nodes), silently
+    // writing state to the wrong place. Loud beats silent.
+    variable('STATE_DIR', () => {
+      if (!options?.stateDir) {
+        throw new Error(
+          '$STATE_DIR is referenced but no state directory was resolved for this run. ' +
+            '$STATE_DIR is only available inside a workflow run; if you are seeing this from a workflow node, ' +
+            'please report it as a bug.'
+        );
+      }
+      return options.stateDir;
+    }),
+    // $ADOPTED_RUN_DIR (#2747) resolves only under an explicit adoption. A run
+    // that references it without one throws — mirroring $BASE_BRANCH/$STATE_DIR —
+    // because a literal or empty substitution would silently point work at
+    // nothing instead of telling the author the run was never started with --adopt.
+    variable('ADOPTED_RUN_DIR', () => {
+      if (!options?.adoptedRunDir && !currentAdoptedRunDir()) {
+        throw new Error(
+          '$ADOPTED_RUN_DIR is referenced but this run did not adopt a prior run. ' +
+            'Start it with `workflow run <name> --adopt <run-id>` (or adopt_run_id on the API) ' +
+            "to read an earlier run's artifacts by reference."
+        );
+      }
+      return options?.adoptedRunDir ?? currentAdoptedRunDir() ?? '';
+    }),
+    // $TYPED_ARTIFACTS_FILE is delivered by every executable invocation context (bash,
+    // script, agent prompt, loop attempt), and to exec subprocesses as TYPED_ARTIFACTS_FILE.
+    // A context that never supplied one must fail loudly: substituting '' would read as
+    // "no typed artifacts", which is the exact silent-empty lookup this contract exists to
+    // remove. An explicit empty string is different — a caller that knows it has no
+    // listing (the dry-run preview) says so.
+    variable('TYPED_ARTIFACTS_FILE', () => {
+      if (options?.typedArtifactsFile === undefined) {
+        throw new Error(
+          '$TYPED_ARTIFACTS_FILE is referenced but this invocation has no typed-artifact listing. ' +
+            'It is available inside bash, script, agent, loop, and approval-rework nodes; ' +
+            'if you are seeing this from one of those, please report it as a bug.'
+        );
+      }
+      return options.typedArtifactsFile;
+    }),
+    variable('BASE_BRANCH', () => {
+      if (!baseBranch) {
+        throw new Error(
+          'No base branch could be resolved. Auto-detection failed and `worktree.baseBranch` is not set in .archon/config.yaml. ' +
+            'Set the config value or use the --from flag to select a branch (e.g., --from dev).'
+        );
+      }
+      return baseBranch;
+    }),
+    // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
+    variable('DOCS_DIR', () => docsDir || 'docs/'),
+  ];
 
+  // When shellSafe is true, user-controlled variables stay literal — they are passed via
+  // subprocess environment variables instead to prevent shell injection (#2115).
   if (!options?.shellSafe) {
-    result = result
-      .replace(/\$USER_MESSAGE/g, userMessage)
-      .replace(/\$ARGUMENTS/g, userMessage)
-      .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
-      .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
-      .replace(/\$LOOP_PREV_OUTPUT/g, loopPrevOutput ?? '');
-
-    // $INPUTS.<name> — named sub-run inputs (#2470). Substituted ONLY in the non-shell
-    // branch: a sub-run's input value can derive from AI output (e.g. `with: {plan:
-    // $plan.output}`), the exact user-controlled class shellSafe keeps out of shell
-    // source (#2115). Bash/script bodies read INPUTS_<UPPER_SNAKE> env vars instead.
-    // An unknown name THROWS (mirrors $node.output.field strictness) rather than
-    // substituting '' — a typo'd input silently emptying is worse than a load-visible error.
-    result = substituteInputRefs(result, options?.inputs);
+    tokens.push(
+      variable('USER_MESSAGE', () => userMessage),
+      variable('ARGUMENTS', () => userMessage),
+      variable('LOOP_USER_INPUT', () => loopUserInput ?? ''),
+      variable('REJECTION_REASON', () => rejectionReason ?? ''),
+      variable('LOOP_PREV_OUTPUT', () => loopPrevOutput ?? ''),
+      // $INPUTS.<name> — named sub-run inputs (#2470). Non-shell branch ONLY: a sub-run's
+      // input value can derive from AI output (e.g. `with: {plan: $plan.output}`), the
+      // exact user-controlled class shellSafe keeps out of shell source (#2115). An
+      // unknown name THROWS (mirrors $node.output.field strictness) rather than
+      // substituting '' — a typo'd input silently emptying is worse than a load-visible error.
+      inputRefToken(options?.inputs),
+      templateToken(CONTEXT_VAR_PATTERN_STR, () => issueContext ?? '')
+    );
   }
 
-  // Check if context variables exist (use fresh regex to avoid lastIndex issues)
-  const hasContextVariables = new RegExp(CONTEXT_VAR_PATTERN_STR).test(result);
-
-  // Substitute or clear context variables (use fresh global regex for replace)
-  if (!options?.shellSafe) {
-    if (!issueContext && hasContextVariables) {
-      getLog().debug(
-        {
-          action: 'clearing variables',
-          variables: ['$CONTEXT', '$EXTERNAL_CONTEXT', '$ISSUE_CONTEXT'],
-        },
-        'context_variables_cleared'
-      );
-    }
-    result = result.replace(new RegExp(CONTEXT_VAR_PATTERN_STR, 'g'), issueContext ?? '');
+  const hasContextVariables = new RegExp(CONTEXT_VAR_PATTERN_STR).test(prompt);
+  if (!options?.shellSafe && !issueContext && hasContextVariables) {
+    getLog().debug(
+      {
+        action: 'clearing variables',
+        variables: ['$CONTEXT', '$EXTERNAL_CONTEXT', '$ISSUE_CONTEXT'],
+      },
+      'context_variables_cleared'
+    );
   }
 
+  const references = options?.references;
   return {
-    prompt: result,
+    prompt: substituteTemplate(prompt, [
+      ...(references?.before ?? []),
+      ...tokens,
+      ...(references?.after ?? []),
+    ]),
     contextSubstituted: hasContextVariables && !!issueContext,
   };
 }
@@ -712,7 +734,8 @@ export function substituteWorkflowVariables(
  * @param logLabel - Human-readable label for logging (e.g., 'workflow step prompt')
  * @param options - Forwarded to {@link substituteWorkflowVariables}; carries `stateDir`
  *   for `$STATE_DIR` and `typedArtifactsFile` for `$TYPED_ARTIFACTS_FILE`, each of
- *   which throws when referenced without one.
+ *   which throws when referenced without one, `rejectionReason` for
+ *   `$REJECTION_REASON`, and the `references` resolved in the same pass.
  * @returns The final prompt with variables substituted and context optionally appended
  */
 export function buildPromptWithContext(
@@ -729,8 +752,11 @@ export function buildPromptWithContext(
     stateDir?: string;
     inputs?: Record<string, JsonValue>;
     typedArtifactsFile?: string;
+    rejectionReason?: string;
+    references?: TemplateReferences;
   }
 ): string {
+  const { rejectionReason, ...variableOptions } = options ?? {};
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
     workflowId,
@@ -740,9 +766,9 @@ export function buildPromptWithContext(
     docsDir,
     issueContext,
     undefined,
+    rejectionReason,
     undefined,
-    undefined,
-    options
+    variableOptions
   );
 
   if (issueContext && !contextSubstituted) {

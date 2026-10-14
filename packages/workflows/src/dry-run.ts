@@ -7,12 +7,15 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
-  applyLoopPrevToBody,
   checkComposedBlockBoundaries,
   checkTriggerRule,
+  loopBodyScope,
+  nodeTemplateReferences,
   resolveNodeBindings,
-  substituteNodeOutputRefs,
+  substituteLoopBodyText,
+  type LoopBodyScope,
   type ShellInputContext,
+  type TextSurface,
 } from './dag-executor';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import { evaluateCondition } from './condition-evaluator';
@@ -548,6 +551,11 @@ interface DryRunContext {
    */
   loopPrevOutputs?: ReadonlyMap<string, NodeOutput>;
   /**
+   * One scope per enclosing loop_group iteration, outermost first; every body text
+   * resolves against them, as in a real run (`RunLayersContext.loopBodyScopes`).
+   */
+  loopBodyScopes: readonly LoopBodyScope[];
+  /**
    * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR` / `$LOG_DIR`, under a uniquely named root in
    * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
    * only (#2619). Created lazily before the first `--exec-code` execution (#2617) and
@@ -597,16 +605,15 @@ function resolveText(
   text: string,
   ctx: DryRunContext,
   outputs: Map<string, NodeOutput>,
-  shellSafe = false,
+  surface: TextSurface = 'prompt',
   loopPrevOutput = '',
-  escapeNodeOutputs = shellSafe,
   // The `$INPUTS` bag for this text — run-level inputs unless the node carries
   // node-local `with:` bindings, which merge OVER them (#2637; nearest wins,
   // matching the executor's command-prompt path).
   inputs: Record<string, JsonValue> | undefined = ctx.inputs
 ): string {
   const docsDir = join(ctx.cwd, 'docs');
-  const substituted = substituteWorkflowVariables(
+  return substituteWorkflowVariables(
     text,
     'dry-run',
     ctx.userMessage,
@@ -620,9 +627,18 @@ function resolveText(
     // A dry run never writes typed artifacts, so it has no listing to point at. Pass
     // an explicit empty value: the preview substitutes '' rather than throwing the way
     // a real invocation that forgot to materialize a listing does.
-    { shellSafe, stateDir: ctx.stateDir, typedArtifactsFile: '', ...(inputs ? { inputs } : {}) }
+    {
+      shellSafe: surface !== 'prompt',
+      stateDir: ctx.stateDir,
+      typedArtifactsFile: '',
+      ...(inputs ? { inputs } : {}),
+      references: nodeTemplateReferences(
+        text,
+        { nodeOutputs: outputs, loopBodyScopes: ctx.loopBodyScopes },
+        surface
+      ),
+    }
   ).prompt;
-  return substituteNodeOutputRefs(substituted, outputs, escapeNodeOutputs);
 }
 
 /**
@@ -643,6 +659,7 @@ function bindingShellContext(
     baseBranch: 'dry-run-base',
     docsDir: join(ctx.cwd, 'docs'),
     nodeOutputs: outputs,
+    loopBodyScopes: ctx.loopBodyScopes,
   };
 }
 
@@ -941,7 +958,7 @@ async function simulateLoop(
   }
   let resolvedText = template;
   for (let current = 1; current <= node.loop.max_iterations; current++) {
-    resolvedText = resolveText(template, ctx, outputs, false, previous);
+    resolvedText = resolveText(template, ctx, outputs, 'prompt', previous);
     const stub = stubFor(node, ctx);
     if (stub === undefined) {
       ctx.missingStubs.add(node.id);
@@ -1056,22 +1073,24 @@ async function simulateLoopGroup(
   // nests correctly when a body contains another loop_group.
   const outerScope = ctx.scope;
   const outerLoopPrevOutputs = ctx.loopPrevOutputs;
+  const outerLoopBodyScopes = ctx.loopBodyScopes;
   let loopPrevOutputs: Map<string, NodeOutput> | undefined;
   let lastOutput = '';
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
     // A dry run never resumes, so `$LOOP_USER_INPUT` is '' on every iteration, as it is
     // in a real run outside an interactive resume.
-    const bodyPlan = planGraph(
-      applyLoopPrevToBody(bodyNodes, loopPrevOutputs, '', ctx.artifactsDir)
-    );
+    const iterScope = loopBodyScope(bodyNodes, loopPrevOutputs, '', ctx.artifactsDir);
+    const bodyPlan = planGraph(bodyNodes);
     const bodyOutputs = new Map(outputs);
     ctx.scope = bodyScope;
     ctx.loopPrevOutputs = loopPrevOutputs ?? new Map();
+    ctx.loopBodyScopes = [...outerLoopBodyScopes, iterScope];
     try {
       await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
     } finally {
       ctx.scope = outerScope;
       ctx.loopPrevOutputs = outerLoopPrevOutputs;
+      ctx.loopBodyScopes = outerLoopBodyScopes;
     }
     loopPrevOutputs = bodyOutputs;
     lastOutput =
@@ -1274,7 +1293,7 @@ async function simulateNode(
 
     const sourceText = isAgentNode(node)
       ? node.source.kind === 'command'
-        ? await loadDryRunCommand(ctx, node.source.name)
+        ? await loadDryRunCommand(ctx, substituteLoopBodyText(node.source.name, ctx.loopBodyScopes))
         : node.source.prompt
       : isExecNode(node)
         ? node.script
@@ -1301,18 +1320,14 @@ async function simulateNode(
       isAgentNode(node) && nodeBindings !== undefined
         ? { ...(ctx.inputs ?? {}), ...nodeBindings }
         : undefined;
-    const resolvedText =
-      isExecNode(node) && node.runtime !== 'sh'
-        ? resolveText(sourceText, ctx, outputs, true, '', false)
-        : resolveText(
-            sourceText,
-            ctx,
-            outputs,
-            isExecNode(node) && node.runtime === 'sh',
-            '',
-            undefined,
-            commandInputs
-          );
+    const resolvedText = resolveText(
+      sourceText,
+      ctx,
+      outputs,
+      isExecNode(node) ? (node.runtime === 'sh' ? 'shell' : 'script') : 'prompt',
+      '',
+      commandInputs
+    );
     const stub = stubFor(node, ctx);
     if (stub === undefined && isExecNode(node) && ctx.execCode) {
       const executed = await executeCodeNode(node, resolvedText, ctx, nodeBindings, execution);
@@ -1527,6 +1542,7 @@ export async function dryRunWorkflow(options: {
     stubs: options.stubs ?? {},
     checkoutProducers: collectCheckoutProducers(options.workflow.nodes),
     ...(inputs ? { inputs } : {}),
+    loopBodyScopes: [],
     artifactsDir: join(tempRoot, 'artifacts'),
     stateDir: join(tempRoot, 'state'),
     logDir: join(tempRoot, 'logs'),

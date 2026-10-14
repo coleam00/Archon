@@ -1,0 +1,15 @@
+# Sparse guard fixture: run with --default-stubs --exec-code. Triage declares the
+# item blocked, every delivery node stays skipped, and the real outcome node
+# completes with delivered: false and an outcome that names the requested work as
+# not done, never as a delivery nobody needed.
+triage__triage:
+  decision: { contract: BLOCKED, blocked_reason: "stub: waits on the forge contract's merge operation", blocked_by: ["https://github.com/example/repo/issues/1"] }
+  complexity: small
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  summary: "stub: blocked on an owned prerequisite"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+fixture:
+  expect: completed
+  reached: [outcome]
+exec-code: true

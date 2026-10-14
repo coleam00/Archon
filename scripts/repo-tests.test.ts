@@ -183,14 +183,7 @@ describe('repo-tests exit codes', () => {
     // one cheap test instead of the whole directory, and the exit code reads the same
     // whether or not Bun quiets its console output for an agent caller.
     const { exitCode } = Bun.spawnSync(
-      [
-        'bun',
-        'run',
-        'test',
-        '.archon/scripts/',
-        '-t',
-        'the tier consumers read their supplied policy',
-      ],
+      ['bun', 'run', 'test', '.archon/scripts/', '-t', 'synthesis reads its supplied policy'],
       { cwd: REPO_ROOT, stdout: 'ignore', stderr: 'ignore' }
     );
 

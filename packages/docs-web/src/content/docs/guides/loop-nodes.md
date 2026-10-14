@@ -597,17 +597,15 @@ nodes:
 
 ### What is NOT supported on loop nodes
 
-- `retry` — rejected at parse time. The loader fails the workflow if `retry:` is set on a loop node.
 - `context: fresh` — ignored. Session control is handled exclusively by `fresh_context` within the `loop:` config
 - `hooks` — per-node SDK hooks are not passed through to loop iterations
 - `mcp` — per-node MCP server configs are not loaded for loop nodes
 - `skills` — skill preloading is not applied to loop iterations
 
-These fields (except `retry`) are discarded at parse time — the workflow still
+These fields are discarded at parse time — the workflow still
 loads but the fields have no effect. The drop is reported as a warning naming the
 node and the fields, both in the loader log and in the author-facing output of
-`archon validate workflows` and `archon workflow list`. `retry` is the exception:
-it causes a hard load error.
+`archon validate workflows` and `archon workflow list`.
 
 The loop executor manages its own AI sessions independently from the standard
 node executor. If you need hooks, MCP, or skills, consider using a command node
@@ -625,11 +623,31 @@ If you need to accumulate results across iterations, write them to files in
 
 | Scenario | Behavior |
 |----------|----------|
-| Iteration fails | A transient or rate-limited failure retries the iteration. Any other failure fails the node (no more iterations) |
+| Iteration fails | A transient, rate-limited or capacity (`overloaded`) failure retries the iteration. Any other failure fails the node (no more iterations) |
 | Max iterations exceeded | Node fails with descriptive error |
 | Workflow cancelled | Detected between iterations, node stops |
 | Idle timeout per iteration | The iteration is retried as a transient failure, whether or not its provider produced output first |
-| `retry` configured on node | Rejected at parse time — workflow fails to load |
+| `retry` configured on node | Applies to each failed iteration; successful iterations are not replayed |
+
+By default, each iteration gets two retries after its initial attempt, with a 3000 ms base delay that doubles on each ordinary transient retry. Configure the existing node-level `retry:` block to change the budget and base delay:
+
+```yaml
+nodes:
+  - id: work
+    retry:
+      max_attempts: 1
+      delay_ms: 0
+    loop:
+      prompt: "Complete the task and output <promise>DONE</promise>"
+      until: DONE
+      max_iterations: 5
+```
+
+`max_attempts` is required when declaring `retry:` and accepts integers 1–5, counting retries after the initial attempt. `delay_ms` accepts 0–60000 on loops and defaults to 3000 when omitted. Zero skips ordinary transient retry waits. The budget resets for each iteration; retries do not consume `max_iterations`.
+
+Only `on_error: transient` or omission is supported on loops; `all` is a load error. Unknown, fatal and output-contract failures are not retried by this policy. Structured-output reasks have their own separate budget.
+
+Rate limits and capacity retain the shared AI-node exceptions: at least five retries, regardless of `max_attempts`. Rate limits wait around 45 seconds with ±50% jitter and keep the larger budget for the rest of the iteration. Capacity waits use centers of 45, 90, 180, 300 and 300 seconds with ±50% jitter; its larger budget applies only while the current failure is capacity. `delay_ms: 0` does not bypass either schedule. See [Retry Configuration](/guides/authoring-workflows/#retry-configuration).
 
 ## Cross-Node Loops with `loop_group`
 
@@ -749,6 +767,9 @@ On iteration 1 (no prior iteration), `$LOOP_PREV.*` resolves to an empty
 string. Field access uses the same strict semantics as `$nodeId.output.field`
 (a field not in the producer's declared schema fails the consuming node rather
 than silently degrading).
+
+A `command:` body node's command file gets the same `$LOOP_PREV.*` and
+`$LOOP_USER_INPUT` substitution as the same text written as an inline `prompt:`.
 
 A body node can also gate on the previous iteration's typed output with `when:`:
 

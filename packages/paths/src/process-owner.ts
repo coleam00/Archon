@@ -29,8 +29,13 @@ export function isOwnerProvablyGone(
 ): boolean {
   if (owner.host !== self.host) return false;
   if (owner.pid === self.pid) return owner.instance !== self.instance;
+  return isPidProvablyGone(owner.pid);
+}
+
+/** True only when no process with this pid exists on this host. */
+export function isPidProvablyGone(pid: number): boolean {
   try {
-    process.kill(owner.pid, 0);
+    process.kill(pid, 0);
     return false;
   } catch (error) {
     // EPERM means the pid exists under another user; only ESRCH proves it is gone.

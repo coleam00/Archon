@@ -72,6 +72,9 @@ function recordingEngine(): IWorkflowEngine & {
     async resume() {
       throw new Error('not used');
     },
+    async subscribe() {
+      throw new Error('not used');
+    },
   };
 }
 
@@ -98,8 +101,11 @@ interface Fixture {
 
 async function fixture(
   autoDrain = true,
-  isolation: { kind: 'in-place' } | { kind: 'worktree' } = { kind: 'in-place' },
-  initGit = true
+  isolation: { kind: 'in-place' } | { kind: 'worktree' } | { kind: 'default' } = {
+    kind: 'in-place',
+  },
+  initGit = true,
+  launchCwd?: string
 ): Promise<Fixture> {
   const project = join(root, 'project');
   await mkdir(join(project, '.archon', 'workflows'), { recursive: true });
@@ -181,7 +187,8 @@ async function fixture(
               resource: 'repo:hosted',
               capacity: 1,
               launch: {
-                cwd: project,
+                cwd: launchCwd ?? project,
+                discoveryCwd: project,
                 workflowName: 'hosted',
                 inputs: {},
                 isolation,
@@ -390,6 +397,39 @@ describe('server resource-start host', () => {
     await until(() => engine.claimed[0]);
     expect(child.codebaseId).not.toBe(parent.codebaseId);
     expect(engine.submitted[0]?.options?.preCreatedRun?.codebase_id).toBe(child.codebaseId);
+  });
+
+  test('a folder descendant inside Git prepares and starts in place', async () => {
+    expect(await Bun.spawn(['git', 'init', '-q', root]).exited).toBe(0);
+    const project = join(root, 'project');
+    const descendant = join(project, 'deep');
+    await mkdir(descendant, { recursive: true });
+    const folder = await registerFolder(project);
+    const before = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    const { deliver, engine, host } = await fixture(false, { kind: 'default' }, false, descendant);
+    expect((await deliver('folder-in-git', 'queue')).status).toBe(200);
+    await host.requestDrain();
+    await until(() => engine.claimed[0]);
+    const binding = await bindingOf('folder-in-git');
+    const request = await createSqlWorkflowHost().deps.store.getResourceStartRequest(
+      binding.disposition?.requestId ?? ''
+    );
+    expect(request?.launch).toMatchObject({
+      run: { codebase_id: folder.codebaseId, working_path: await realpath(descendant) },
+      execution: { cwd: await realpath(descendant), isolation: { kind: 'in-place' } },
+    });
+    expect(engine.submitted[0]?.cwd).toBe(await realpath(descendant));
+    expect(engine.submitted[0]?.options?.codebaseId).toBe(folder.codebaseId);
+    expect(engine.submitted[0]?.options?.ownedWorktree).toBeUndefined();
+    expect(
+      (await getDatabase().query('SELECT id FROM remote_agent_isolation_environments')).rows
+    ).toEqual([]);
+    expect(
+      execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: root, encoding: 'utf8' })
+    ).toBe(before);
   });
 
   test('retains parent folder resolution outside Git', async () => {
@@ -672,6 +712,9 @@ describe('server resource-start host', () => {
       async resume() {
         throw new Error('not used');
       },
+      async subscribe() {
+        throw new Error('not used');
+      },
     };
     const start = (target: IWorkflowEngine): ReturnType<typeof startAdmittedResourceStart> =>
       startAdmittedResourceStart({
@@ -699,6 +742,9 @@ describe('server resource-start host', () => {
           throw new Error('engine unavailable');
         },
         async resume() {
+          throw new Error('not used');
+        },
+        async subscribe() {
           throw new Error('not used');
         },
       },
