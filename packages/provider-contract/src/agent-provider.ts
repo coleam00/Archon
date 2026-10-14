@@ -47,22 +47,10 @@ export type MessageChunk = ProviderChunk;
 export type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
 
 /**
- * System prompt input accepted by all providers. Mirrors the Claude Agent SDK
- * preset-with-append shape so callers can opt into cacheable prefix behavior.
- * Kept SDK-free so external providers need no Claude SDK dependency.
+ * A system prompt that replaces the provider's own. Kept SDK-free so external
+ * providers need no vendor SDK dependency.
  */
-export const systemPromptPresetSchema = z.object({
-  type: z.literal('preset'),
-  preset: z.literal('claude_code'),
-  append: z.string().optional(),
-  excludeDynamicSections: z.boolean().optional(),
-});
-export type SystemPromptPreset = z.infer<typeof systemPromptPresetSchema>;
-export const systemPromptInputSchema = z.union([
-  z.string(),
-  z.array(z.string()),
-  systemPromptPresetSchema,
-]);
+export const systemPromptInputSchema = z.union([z.string(), z.array(z.string())]);
 export type SystemPromptInput = z.infer<typeof systemPromptInputSchema>;
 
 /**
@@ -111,6 +99,12 @@ export interface AgentRequestOptions {
   model?: string;
   abortSignal?: AbortSignal;
   systemPrompt?: SystemPromptInput;
+  /**
+   * Instructions added to the provider's own system prompt. A provider that
+   * cannot extend its prompt uses them as its system prompt. A `systemPrompt`
+   * (request or node) replaces the provider's prompt and takes precedence.
+   */
+  appendSystemPrompt?: string;
   outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
   env?: Record<string, string>;
   /**

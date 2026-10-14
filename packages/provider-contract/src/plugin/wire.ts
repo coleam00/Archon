@@ -53,6 +53,7 @@ export const providerSessionRequestSchema = z.strictObject({
   resumeSessionId: z.string().optional(),
   model: z.string().optional(),
   systemPrompt: systemPromptInputSchema.optional(),
+  appendSystemPrompt: z.string().optional(),
   outputFormat: z.object({ type: z.literal('json_schema'), schema: configSchema }).optional(),
   protectedEnvKeys: z.array(z.string()).readonly().optional(),
   maxBudgetUsd: z.number().optional(),

@@ -1094,31 +1094,11 @@
               "items": {
                 "type": "string"
               }
-            },
-            {
-              "type": "object",
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "const": "preset"
-                },
-                "preset": {
-                  "type": "string",
-                  "const": "claude_code"
-                },
-                "append": {
-                  "type": "string"
-                },
-                "excludeDynamicSections": {
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "type",
-                "preset"
-              ]
             }
           ]
+        },
+        "appendSystemPrompt": {
+          "type": "string"
         },
         "outputFormat": {
           "type": "object",

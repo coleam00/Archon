@@ -278,26 +278,29 @@ describe('CopilotProvider.sendQuery', () => {
     expect(opts.reasoningEffort).toBe('low');
   });
 
-  test('systemPrompt wraps to systemMessage with append mode', async () => {
-    const session = makeFakeSession();
-    nextCreateSessionResult = session;
+  test.each(['systemPrompt', 'appendSystemPrompt'] as const)(
+    '%s wraps to systemMessage with append mode',
+    async field => {
+      const session = makeFakeSession();
+      nextCreateSessionResult = session;
 
-    const p = new CopilotProvider();
-    const gen = p.sendQuery('hi', '/w', undefined, {
-      model: 'gpt-5',
-      systemPrompt: 'Be concise.',
-    });
-    const first = gen.next();
-    await new Promise(resolve => setTimeout(resolve, 5));
-    session.resolveSend(undefined);
-    await first;
-    await collect(gen);
+      const p = new CopilotProvider();
+      const gen = p.sendQuery('hi', '/w', undefined, {
+        model: 'gpt-5',
+        [field]: 'Be concise.',
+      });
+      const first = gen.next();
+      await new Promise(resolve => setTimeout(resolve, 5));
+      session.resolveSend(undefined);
+      await first;
+      await collect(gen);
 
-    const opts = createSessionSpy.mock.calls[0]![0] as {
-      systemMessage?: { content: string; mode: string };
-    };
-    expect(opts.systemMessage).toEqual({ content: 'Be concise.', mode: 'append' });
-  });
+      const opts = createSessionSpy.mock.calls[0]![0] as {
+        systemMessage?: { content: string; mode: string };
+      };
+      expect(opts.systemMessage).toEqual({ content: 'Be concise.', mode: 'append' });
+    }
+  );
 
   test('resume failure falls back to createSession with warning chunk', async () => {
     const session = makeFakeSession('sess-new');

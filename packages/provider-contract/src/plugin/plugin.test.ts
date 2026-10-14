@@ -163,12 +163,7 @@ test('serializable options and container environment survive', async () => {
     | undefined;
   const options: SendQueryOptions = {
     model: 'test-model',
-    systemPrompt: {
-      type: 'preset',
-      preset: 'claude_code',
-      append: 'Guide',
-      excludeDynamicSections: true,
-    },
+    appendSystemPrompt: 'Guide',
     outputFormat: { type: 'json_schema', schema: { type: 'object' } },
     protectedEnvKeys: ['KEY'],
     maxBudgetUsd: 2,

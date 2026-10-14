@@ -160,12 +160,13 @@ export function createSessionPromptBody(
   const singleAgent = agentOverride ?? selectSingleAgent(requestOptions?.nodeConfig?.agents);
   const adaptedAgentConfig = singleAgent ? adaptNamedAgentForOpencode(singleAgent) : undefined;
   const effectivePrompt = resolvePromptForAgent(singleAgent, prompt);
+  const system = requestOptions?.systemPrompt ?? requestOptions?.appendSystemPrompt;
   const promptBody: Record<string, unknown> = {
     parts: [{ type: 'text', text: effectivePrompt }],
     model: adaptedAgentConfig?.model ?? model,
     ...(adaptedAgentConfig?.agent ? { agent: adaptedAgentConfig.agent } : {}),
     ...(adaptedAgentConfig?.tools ? { tools: adaptedAgentConfig.tools } : {}),
-    ...(requestOptions?.systemPrompt ? { system: requestOptions.systemPrompt } : {}),
+    ...(system ? { system } : {}),
   };
 
   if (requestOptions?.outputFormat?.type === 'json_schema') {

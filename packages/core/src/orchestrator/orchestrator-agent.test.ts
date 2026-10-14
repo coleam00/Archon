@@ -1821,37 +1821,30 @@ describe('discoverAllWorkflows — remote sync', () => {
     expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
   });
 
-  test('passes preset systemPrompt for claude provider', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
-    );
+  test.each(['stub-plugin', 'claude'])(
+    'sends the orchestrator instructions as appendSystemPrompt to %s',
+    async provider => {
+      mockGetOrCreateConversation.mockReturnValueOnce(
+        Promise.resolve(makeConversation({ ai_assistant_type: provider }))
+      );
+      mockLoadConfig.mockResolvedValueOnce(
+        makeConfig({
+          tiers: {
+            small: { provider, model: 'small-model' },
+            large: { provider, model: 'large-model' },
+          },
+        })
+      );
 
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
-    expect(mockSendQuery).toHaveBeenCalled();
-    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-    const sp = requestOptions.systemPrompt as Record<string, unknown>;
-    expect(sp).toEqual({
-      type: 'preset',
-      preset: 'claude_code',
-      append: 'orchestrator system append',
-    });
-  });
-
-  test('passes plain string systemPrompt for non-claude provider', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ ai_assistant_type: 'codex' }))
-    );
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
-
-    expect(mockSendQuery).toHaveBeenCalled();
-    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-    expect(typeof requestOptions.systemPrompt).toBe('string');
-    expect(requestOptions.systemPrompt).toBe('orchestrator system append');
-  });
+      expect(mockSendQuery).toHaveBeenCalled();
+      const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+      expect(requestOptions.appendSystemPrompt).toBe('orchestrator system append');
+      expect(requestOptions).not.toHaveProperty('systemPrompt');
+    }
+  );
 
   test('appends the run-management section (and no native tool) for a project-scoped non-native-tool provider', async () => {
     const providers = await import('@archon/providers');
@@ -1869,8 +1862,7 @@ describe('discoverAllWorkflows — remote sync', () => {
       await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
       const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-      // Codex → plain-string prompt that now carries the CLI pointer section.
-      expect(requestOptions.systemPrompt).toContain('## Managing Workflow Runs');
+      expect(requestOptions.appendSystemPrompt).toContain('## Managing Workflow Runs');
       // Providers without native tools get NO in-process tool — bash CLI only.
       expect(requestOptions.nativeTools).toBeUndefined();
     } finally {
@@ -1894,10 +1886,8 @@ describe('discoverAllWorkflows — remote sync', () => {
       await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
       const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-      // Claude → preset object; the append must NOT carry the CLI pointer
-      // (it gets the in-process tool instead, so the pointer would be redundant).
-      const sp = requestOptions.systemPrompt as { append?: string };
-      expect(sp.append).not.toContain('## Managing Workflow Runs');
+      // The in-process tool replaces the CLI pointer, which would be redundant.
+      expect(requestOptions.appendSystemPrompt).not.toContain('## Managing Workflow Runs');
       // Native-tool provider gets the manage_run tool instead.
       expect(Array.isArray(requestOptions.nativeTools)).toBe(true);
     } finally {
