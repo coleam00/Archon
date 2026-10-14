@@ -483,21 +483,21 @@ describe('manage_run — destructive confirmation gate', () => {
     expect(mockAbandon).not.toHaveBeenCalled();
   });
 
-  test('approve without confirm previews the human gate and does NOT mutate', async () => {
+  test('approve without confirm previews the paused gate or attention wait and does NOT mutate', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'approve', runId: 'r1abcdef' });
     expect(out).toContain('confirm: true');
-    expect(out).toContain('human gate');
+    expect(out).toContain('the paused gate or attention wait');
     expect(mockApprove).not.toHaveBeenCalled();
   });
 
-  test('reject without confirm previews the human gate and does NOT mutate', async () => {
+  test('reject without confirm previews the paused gate or attention wait and does NOT mutate', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'reject', runId: 'r1abcdef' });
     expect(out).toContain('confirm: true');
-    expect(out).toContain('human gate');
+    expect(out).toContain('the paused gate or attention wait');
     expect(mockReject).not.toHaveBeenCalled();
   });
 
@@ -680,12 +680,12 @@ describe('manage_run — destructive confirmation gate', () => {
   // #2707 step 2 — the general drive verb, extended to manage_run so an agent's only
   // "not this" affordance on a gate declaring decisions beyond approve/reject isn't a
   // full cancel it never asked for.
-  test('respond without confirm previews the human gate and does NOT mutate', async () => {
+  test('respond without confirm previews the paused gate or attention wait and does NOT mutate', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'respond', runId: 'r1abcdef', decision: 'revise' });
     expect(out).toContain('confirm: true');
-    expect(out).toContain('human gate');
+    expect(out).toContain('the paused gate or attention wait');
     expect(mockRespond).not.toHaveBeenCalled();
   });
 
