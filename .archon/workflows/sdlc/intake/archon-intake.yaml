@@ -1,0 +1,127 @@
+name: archon-intake
+description: |
+  The standing front of the label-driven pack. Every issue event records a
+  request on the issue's work item; the run then claims the best waiting item
+  and decides, with a script and before any model reads the text, whether its
+  author is a listed maintainer. A maintainer's issue is triaged, and the
+  verdict becomes the item's stage and a route label. An outside issue gets
+  archon-needs-maintainer and starts no agent until a listed maintainer
+  promotes it by adding archon-triage or a route label.
+
+  Use when: trigger bindings start it on issue lifecycle and label events (see
+  the SDLC pack README, "Intake").
+  NOT for: triaging one item by hand (archon-triage), or delivering work.
+
+inputs:
+  repo_host:
+    description: The forge host of the issue's repository (binding field repository.host).
+  repo_path:
+    description: The owner/name path of the issue's repository (binding field repository.path).
+  number:
+    description: The issue number (binding field subject.number).
+  kind:
+    default: "issue"
+    description: >-
+      The event's subject kind (binding field subject.kind). Only an issue
+      records a request; a pull request's event only runs a pickup.
+  action:
+    default: "opened"
+    description: >-
+      The event's action (binding field event.action): opened, edited,
+      reopened, or added for a label.
+  label:
+    default: ""
+    description: The label a label event added (binding field label.name).
+  label_actor:
+    default: ""
+    description: >-
+      Who added the label, as the forge reported it (binding field
+      label.actor.login). A label promotes only when this login is on the
+      maintainer list.
+  order:
+    default: '["urgency desc","importance desc","size asc","created asc"]'
+    description: >-
+      Pickup order, a JSON array of "<key> <asc|desc>" with keys urgency,
+      importance, size, complexity and created. An item with no value for a
+      key sorts after every item that has one.
+
+returns: outcome
+
+nodes:
+  # Trust is decided here, by a script, from the maintainer list at the default
+  # branch's head. Writes only the request and the claim.
+  - id: facts
+    script: facts
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, quiet, outside, triage] }
+        # The claimed issue; null when nothing waits.
+        item:
+          type: [object, 'null']
+          properties:
+            repo:
+              type: object
+              properties:
+                host: { type: string }
+                path: { type: string }
+              required: [host, path]
+            number: { type: integer }
+          required: [repo, number]
+        # The claimed issue's URL, triage's target; empty when nothing waits.
+        target: { type: string }
+        decision:
+          type: [object, 'null']
+          properties:
+            path: { type: string, enum: [quiet, outside, triage] }
+            trust: { type: [string, 'null'], enum: [maintainer, outside, null] }
+            promoted: { type: [object, 'null'] }
+            stage: { type: string }
+            body_digest: { type: string }
+            notes: { type: array, items: { type: object } }
+          required: [path, trust, promoted, stage, body_digest, notes]
+      required: [path, item, target, decision]
+
+  # Only a maintainer's item, or an outside item a maintainer promoted at its
+  # current body, reaches this agent. Unpublished: the outcome writes the labels
+  # after the work item.
+  - id: triage
+    include: archon-triage
+    depends_on: [facts]
+    when: "$facts.output.path == 'triage'"
+    with:
+      target: "$facts.output.target"
+      publish: "false"
+
+  - id: outcome
+    script: outcome
+    runtime: bun
+    depends_on: [facts, triage]
+    trigger_rule: none_failed_min_one_success
+    with:
+      path: "$facts.output.path"
+      item: { from: "$facts.output.item" }
+      decision: { from: "$facts.output.decision" }
+      contract: { from: "$triage.output.contract", if_skipped: null }
+      route: { from: "$triage.output.route", if_skipped: null }
+      pull_request: { from: "$triage.output.pull_request", if_skipped: null }
+      type: { from: "$triage.output.type", if_skipped: null }
+      size: { from: "$triage.output.size", if_skipped: null }
+      complexity: { from: "$triage.output.complexity", if_skipped: null }
+      importance: { from: "$triage.output.importance", if_skipped: null }
+      urgency: { from: "$triage.output.urgency", if_skipped: null }
+      labels: { from: "$triage.output.labels", if_skipped: null }
+      summary: { from: "$triage.output.summary", if_skipped: null }
+      report: { from: "$triage.output.report", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, quiet, outside, triage] }
+        item: { type: [integer, 'null'] }
+        stage: { type: [string, 'null'] }
+        trust: { type: [string, 'null'] }
+        promoted: { type: boolean }
+        labels: { type: array, items: { type: string } }
+        summary: { type: string }
+      required: [path, item, stage, trust, promoted, labels, summary]

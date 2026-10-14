@@ -77,6 +77,16 @@ archon workflow run archon-triage "#142"
 
 ---
 
+#### `archon-intake`
+
+The standing front of the pack, started by trigger bindings on issue and label events rather than by hand. A script checks whether the issue's author is on the project's maintainer list (`.archon/sdlc/policy/maintainers.json`) before any model reads the text. A maintainer's issue is triaged and gets a route label; an outside issue gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label.
+
+**When to use it**: You want new issues triaged as they arrive without letting anyone who can open an issue spend tokens. The pack installs no binding; the SDLC pack README's "Intake" section shows the two bindings to add.
+
+**What it produces**: A work item per issue (`archon state get work/<number>`) holding its trust, stage, triage fields, and history, and the labels that mirror it.
+
+---
+
 #### `archon-investigate`
 
 Establishes the proven causal chain for a bug, unexplained behavior, or open question, down to the root cause whose fix prevents the symptom.
@@ -199,6 +209,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 |----------|----------|-------------|---------------|
 | `archon-ship` | Issue or request to reviewed PR | Yes | Yes |
 | `archon-triage` | Decide what an item needs next | No | No |
+| `archon-intake` | Triage new issues as they arrive (trigger-started) | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
 | `archon-implement` | Build decided work | No | Yes (commits) |
