@@ -393,7 +393,7 @@ for (const route of ['github', 'sources/configured'] as const) {
       return { app, receive, drain };
     }
 
-    test.each([bodyLimit - 1, bodyLimit])(
+    test.each([33_554_431, 33_554_432])(
       'authenticates all %s bytes at the inclusive boundary',
       async size => {
         const bytes = new TextEncoder().encode('{}' + ' '.repeat(size - 2));
@@ -462,8 +462,8 @@ for (const route of ['github', 'sources/configured'] as const) {
       expect(mockLogger.warn).toHaveBeenCalledWith({ err: cause }, 'webhook_body_cancel_failed');
     });
 
-    test('keeps stream failures on the logged 500 path', async () => {
-      const { app, receive } = setup();
+    test.each([true, false])('preserves stream failure responses (eligible=%s)', async eligible => {
+      const { app, receive, drain } = setup(eligible);
       const cause = new Error('read failed');
       const body = new ReadableStream<Uint8Array>({
         pull(controller) {
@@ -473,16 +473,28 @@ for (const route of ['github', 'sources/configured'] as const) {
       mockLogger.error.mockClear();
       const response = await app.request(`/webhooks/${route}`, {
         method: 'POST',
-        headers: { 'x-hub-signature-256': 'signed' },
+        headers: eligible ? { 'x-hub-signature-256': 'signed' } : {},
         body,
       });
-      expect(response.status).toBe(500);
+      expect(response.status).toBe(eligible ? 500 : route === 'github' ? 400 : 404);
+      expect(await response.json()).toEqual({
+        error: eligible
+          ? 'Internal server error'
+          : route === 'github'
+            ? 'Missing signature header'
+            : 'Unknown webhook source',
+      });
       expect(receive).not.toHaveBeenCalled();
+      expect(drain).not.toHaveBeenCalled();
       expect(body.locked).toBe(false);
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({ err: cause }),
-        expect.any(String)
-      );
+      if (eligible) {
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          expect.objectContaining({ err: cause }),
+          expect.any(String)
+        );
+      } else {
+        expect(mockLogger.error).not.toHaveBeenCalled();
+      }
     });
 
     test('returns 413 for a chunked HTTP request through Bun', async () => {

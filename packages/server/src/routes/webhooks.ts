@@ -25,7 +25,11 @@ function getLog(): ReturnType<typeof createLogger> {
 // GitHub caps deliveries at 25 MB; leave headroom without changing API body limits.
 export const MAX_WEBHOOK_BODY_BYTES = 32 * 1024 * 1024;
 
-type SignedBody = { kind: 'ok'; body: string } | { kind: 'invalid_utf8' } | { kind: 'too_large' };
+type SignedBody =
+  | { kind: 'ok'; body: string }
+  | { kind: 'invalid_utf8' }
+  | { kind: 'too_large' }
+  | { kind: 'read_failed'; error: unknown };
 
 async function cancelOversizedBody(
   body: Pick<ReadableStreamDefaultReader<Uint8Array>, 'cancel'>
@@ -59,6 +63,8 @@ async function readSignedBody(request: Request): Promise<SignedBody> {
         }
         chunks.push(value);
       }
+    } catch (error) {
+      return { kind: 'read_failed', error };
     } finally {
       reader.releaseLock();
     }
@@ -97,6 +103,7 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
         return c.json({ error: 'Missing signature header' }, 400);
       }
 
+      if (payload.kind === 'read_failed') throw payload.error;
       if (payload.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
 
       // Receipt acceptance is durable; it does not mean the workflow completed.
@@ -135,6 +142,7 @@ export function registerWebhookSourceRoutes(
       if (body.kind === 'too_large') return c.json({ error: 'Payload too large' }, 413);
       if (!sources.hasSource(sourceInstanceId))
         return c.json({ error: 'Unknown webhook source' }, 404);
+      if (body.kind === 'read_failed') throw body.error;
       if (body.kind === 'invalid_utf8') return c.json({ error: 'Body is not UTF-8' }, 400);
       const result = await sources.receive(sourceInstanceId, {
         body: body.body,
