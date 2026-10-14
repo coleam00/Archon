@@ -294,6 +294,8 @@ and `payload`.
     options:                  # select and multi_select only; or one whole "$plan.output.options"
       - { id: use-main, label: "Base on main" }
       - { id: use-dev }
+    labels:                   # optional; plain strings, runtime refs resolved at pause
+      about: "$plan.output.topic"
 ```
 
 The next node reads the answer: `{text}` for `message`, `{decision, text}` for `approval`
@@ -320,6 +322,9 @@ Pause only for an interactive session or a super load-bearing action. The run pa
 in the attention queue until answered, however it was started. To ask after each pass
 of a repeated body, end a `loop_group` body in the wait (it must be the body's sole
 terminal sink) and read the answer next iteration as `$LOOP_PREV.<wait-id>.output.text`.
+
+`labels` mean nothing to the engine; they let the user's handler workflows pick the
+pause out of `archon workflow attention --label k=v`.
 
 ## Wiring nodes together
 

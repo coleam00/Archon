@@ -1180,6 +1180,8 @@ export function validateDagStructure(
       if (node.wait.event !== undefined) waitSources.push(['wait.event', node.wait.event]);
       if (node.wait.attention !== undefined)
         waitSources.push(['wait.attention', node.wait.attention]);
+      for (const [key, label] of Object.entries(node.wait.labels ?? {}))
+        waitSources.push([`wait.labels.${key}`, label]);
       if (typeof node.wait.options === 'string') {
         waitSources.push(['wait.options', node.wait.options]);
         const shapeError = referencedOptionsShapeError(

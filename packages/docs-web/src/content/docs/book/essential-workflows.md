@@ -79,7 +79,7 @@ archon workflow run archon-triage "#142"
 
 #### `archon-intake`
 
-The standing front of the pack, started by trigger bindings on issue and label events rather than by hand. A script checks whether the issue's author is on the project's maintainer list (`.archon/sdlc/policy/maintainers.json`) before any model reads the text. A maintainer's issue is triaged and gets a route label; an outside issue gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label.
+The standing front of the pack, started by trigger bindings on issue and label events rather than by hand. A script checks whether the issue's author is on the project's maintainer list (`.archon/sdlc/policy/maintainers.json`) before any model reads the text. A maintainer's issue is triaged and gets a route label; an outside issue gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label. With `mode: eval` it writes nothing and returns what it would decide for the issue as it was opened, which is how to try it on real issues.
 
 **When to use it**: You want new issues triaged as they arrive without letting anyone who can open an issue spend tokens. The pack installs no binding; the SDLC pack README's "Intake" section shows the two bindings to add.
 

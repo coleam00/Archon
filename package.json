@@ -35,7 +35,7 @@
     "test": "bun run scripts/repo-tests.ts",
     "test:watch": "bun --filter @archon/server test:watch",
     "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json && bun x tsc --noEmit -p .archon/scripts/tsconfig.json && bun x tsc --noEmit -p .archon/workflows/tsconfig.json",
-    "lint": "bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-workflow-persistence.ts && biome lint --error-on-warnings .",
+    "lint": "bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-workflow-persistence.ts && bun run scripts/check-sdk-type-drift.ts && biome lint --error-on-warnings .",
     "lint:fix": "biome lint --write .",
     "format": "bun x prettier --write .",
     "format:check": "bun x prettier --check .",

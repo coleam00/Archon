@@ -101,6 +101,10 @@ const mockCancel = mock((_id: string) =>
   })
 );
 
+const mockLabel = mock<WorkflowOperations['labelAttentionWait']>(runId =>
+  Promise.resolve({ runId, occurrence: 'ask-1', revision: 2, labels: { class: 'ci-other' } })
+);
+
 const operations = {
   listWorkflowRuns: mockListDashboardRuns,
   findWorkflowRunsByIdPrefix: mockFindByPrefix,
@@ -110,8 +114,10 @@ const operations = {
   rejectWorkflow: mockReject,
   respondToWorkflow: mockRespond,
   resumeWorkflow: mockResume,
+  labelAttentionWait: mockLabel,
 } satisfies Pick<
   WorkflowOperations,
+  | 'labelAttentionWait'
   | 'abandonWorkflow'
   | 'cancelWorkflow'
   | 'approveWorkflow'
@@ -203,6 +209,7 @@ beforeEach(() => {
     mockReject,
     mockRespond,
     mockResume,
+    mockLabel,
   ]) {
     m.mockReset();
   }
@@ -364,6 +371,8 @@ describe('manage_run — reads', () => {
             pauseId: 'pause-1',
             form: 'select',
             options: [{ id: 'use-main' }, { id: 'use-dev' }],
+            labels: { ci: 'other' },
+            revision: 3,
           },
         },
       }),
@@ -374,6 +383,8 @@ describe('manage_run — reads', () => {
     expect(out).toContain('occurrence: pause-1');
     expect(out).toContain('form: select');
     expect(out).toContain('options: use-main, use-dev');
+    expect(out).toContain('labels: ci=other');
+    expect(out).toContain('revision: 3');
     expect(out).toContain('action=respond, decision=<one of the options>');
     expect(out).not.toContain('workflow resume');
   });
@@ -428,6 +439,47 @@ describe('manage_run — reads', () => {
     const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
     expect(out).toContain('completionSignaled: false');
     expect(out).not.toContain('FINALIZE');
+  });
+});
+
+describe('manage_run — label', () => {
+  test('writes labels through the operation, as the manage_run surface, without a confirm', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ id: 'r1abcdef-full', status: 'paused' })]);
+    mockLabel.mockResolvedValue({
+      runId: 'r1abcdef-full',
+      occurrence: 'pause-1',
+      revision: 2,
+      labels: { class: 'ci-other' },
+    });
+    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+    const out = await tool.handler({
+      action: 'label',
+      runId: 'r1abcdef',
+      occurrence: 'pause-1',
+      set: '{"class":"ci-other"}',
+      unset: '["urgency"]',
+    });
+
+    expect(mockLabel).toHaveBeenCalledWith(
+      'r1abcdef-full',
+      { occurrence: 'pause-1', set: { class: 'ci-other' }, unset: ['urgency'] },
+      operator,
+      'manage_run'
+    );
+    expect(out).toContain('revision 2: class=ci-other');
+  });
+
+  test.each([
+    [{ set: '{"class":"x"}' }, 'requires the occurrence'],
+    [{ occurrence: 'pause-1', set: 'class=x' }, 'set is not valid JSON'],
+    [{ occurrence: 'pause-1', set: '{"class":1}' }, 'set must be a JSON object'],
+    [{ occurrence: 'pause-1', unset: '"urgency"' }, 'unset must be a JSON array'],
+  ])('refuses %p before touching the run', async (params, message) => {
+    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'label', runId: 'r1abcdef', ...params });
+    expect(out).toContain(message);
+    expect(mockFindByPrefix).not.toHaveBeenCalled();
+    expect(mockLabel).not.toHaveBeenCalled();
   });
 });
 
@@ -1173,6 +1225,7 @@ describe('manage_run authorization refusal', () => {
           resolveApprovalGate: unexpected,
           resolveAndCancelApprovalGate: unexpected,
           answerAttentionWait: unexpected,
+          labelAttentionWait: unexpected,
           cancelResumableRunsForConversation: unexpected,
           deleteWorkflowNodeSessions: unexpected,
           signalWorkflowWait: unexpected,
