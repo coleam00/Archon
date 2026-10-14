@@ -399,6 +399,9 @@ export function describeWorkflowStoreConformance(
       expect(since).toBeDefined();
       await rejection(store.resumeWorkflowRun(a, answeredCursor));
       expect(readCapacityWait((await store.getWorkflowRun(a))?.metadata)).toEqual(since);
+      // A release that removes nothing leaves the waiter's place intact.
+      expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: false });
+      expect(readCapacityWait((await store.getWorkflowRun(a))?.metadata)).toEqual(since);
       // The waiter counts against capacity, so the new start queues behind the holder.
       expect(await store.admitResourceStart(c)).toMatchObject({ status: 'queued' });
       await end(b.launch.run.id);

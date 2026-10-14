@@ -241,8 +241,9 @@ export function createInMemoryWorkflowStore(
       write(async view => {
         const run = await view.getWorkflowRun(id);
         if (!run || !pauseCursorMatches(run, cursor)) return { released: false };
-        view.clearCapacityWait(id);
-        return { released: await admission.release(id) };
+        const released = await admission.release(id);
+        if (released) view.clearCapacityWait(id);
+        return { released };
       }),
     recoverCancelledFanOutRun: id => write(view => view.recoverCancelledFanOutRun(id)),
     pauseWorkflowRun: (id, approval, extra, suspension) =>

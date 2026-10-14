@@ -639,7 +639,7 @@ export interface IWorkflowStore
    * Give back the resource slot of a run admitted through a resource start, while it is
    * still paused at exactly `cursor`, and clear any capacity wait it carries. Called once
    * nothing of the run executes any more. `released` is false when the run moved on, never
-   * held a slot, or already gave it back.
+   * held a slot, or already gave it back; a capacity wait then stays, keeping its place.
    */
   releasePausedRunSlot(id: string, cursor: PauseCursor): Promise<{ released: boolean }>;
   /** Claim an engine-cancelled fan-out child for immediate in-process recovery. */

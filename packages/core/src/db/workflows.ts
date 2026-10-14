@@ -1680,14 +1680,14 @@ export async function releasePausedRunSlot(
     )
       return { released: false };
     await lockResourceSlot(query, row.resource_key);
-    await query(
-      `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 2)}
-        WHERE id = $1`,
-      [id, JSON.stringify({ [CAPACITY_WAIT_METADATA_KEY]: null })]
-    );
-    return {
-      released: await removeResourceSlotHolder(query, row.resource_key, { kind: 'run', id }),
-    };
+    const released = await removeResourceSlotHolder(query, row.resource_key, { kind: 'run', id });
+    if (released)
+      await query(
+        `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 2)}
+          WHERE id = $1`,
+        [id, JSON.stringify({ [CAPACITY_WAIT_METADATA_KEY]: null })]
+      );
+    return { released };
   });
 }
 
