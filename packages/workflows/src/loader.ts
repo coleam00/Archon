@@ -7,7 +7,9 @@ import type {
   WorkflowDefinition,
   WorkflowLoadError,
   DagNode,
+  GateNode,
   IncludeDirective,
+  WaitNode,
   WorkflowNodeHooks,
 } from './schemas';
 import {
@@ -16,6 +18,7 @@ import {
   isLoopNode,
   isLoopGroupNode,
   definedOutputPaths,
+  loopGroupOutputNodes,
   loopGroupSoleTerminalSink,
   isGateNode,
   isWaitNode,
@@ -391,13 +394,11 @@ function collectUnknownNodeKeys(raw: unknown, id: string, label: string, warning
  * transitively (a `loop:` node with `interactive: true`, the legacy mechanism,
  * or a `loop_group:` node that is itself `interactive: true` or whose own sole
  * terminal sink recurses into this same case, following a chain of well-formed
- * sole-terminal-sink nesting to any depth). A gate that is mid-body or
- * co-terminal with another sink breaks the chain here too — the placement
- * check in `collectLoopGroupSinkWarnings` below already warns about that
- * misplacement on its own. Mirrors `findLoopGroupTerminalSuspendNode`'s doc
- * comment (dag-executor.ts): the runtime has no unambiguous way to escalate
- * a pause through a sink that isn't a bare gate, so this only makes that gap
- * visible at load time.
+ * sole-terminal-sink nesting to any depth). A gate anywhere else in a body is a
+ * load error (`validateDagStructure`), so the chain never meets one. Mirrors
+ * `findLoopGroupTerminalSuspendNode`'s doc comment (dag-executor.ts): the runtime
+ * has no unambiguous way to escalate a pause through a sink that isn't a bare gate,
+ * so this only makes that gap visible at load time.
  */
 function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boolean {
   if (isIncludeDirective(node)) return false;
@@ -475,61 +476,43 @@ export function collectLoopGroupSinkWarnings(
       enclosingOwnerSessions ||
       node.loop_group.nodes.some(n => !isIncludeDirective(n) && isNodeContextResume(n.context));
 
-    // A gate node inside a loop_group body only pauses the enclosing loop when it is
-    // the body's SOLE terminal sink (#2707 step 3, target-model decision (b)) — a
-    // mid-body or co-terminal gate has no defined resume semantics and silently does
-    // not stop iteration (mid-body resume-to-node is deferred to #2708). Guidance for
-    // the new authoring pattern, not a rejection: the workflow keeps loading either
-    // way. A gate placed here by the legacy `on_reject` mechanism predates this
-    // pattern and is equally unable to stop the loop from this position, so it gets
-    // the same verdict.
-    //
-    // Every gate in the body, not just the first: a body may legitimately contain
-    // more than one (e.g. an "approve to start" gate followed by work followed by
-    // a "review the result" gate) — only ONE can validly be the sole terminal sink,
-    // but each needs its own placement/completion-reference verdict, not just the
-    // first one found.
-    const gatesInBody = node.loop_group.nodes.filter(n => !isIncludeDirective(n) && isGateNode(n));
-    for (const gate of gatesInBody) {
-      if (gate !== soleSink) {
+    // A gate that is the body's sole terminal sink (any other placement is a load
+    // error in `validateDagStructure`). Design A (#2707 step 3) is deliberately
+    // unopinionated about what a decision means — the group's own 'until_bash' is the
+    // completion channel, and it either reads the gate's '$<gateId>.output.decision'/
+    // '.text' or it doesn't. If it doesn't, the human's answer is captured (every
+    // resolution still writes node_completed) but never consulted for completion — the
+    // loop just runs to max_iterations, silently ignoring every response. Structural
+    // check (does the until_bash string reference the gate's node id), not
+    // prose-sniffing — no judgment about what the check DOES with it, only whether it
+    // looks at it at all. A gate with its own `when:` is exempt: when it skips it has
+    // no output, so an until_bash reading it would fail the group (#4043).
+    if (
+      soleSink !== undefined &&
+      !isIncludeDirective(soleSink) &&
+      isGateNode(soleSink) &&
+      soleSink.when === undefined
+    ) {
+      const untilBash = node.loop_group.until_bash;
+      const untilBashRefsGate =
+        untilBash !== undefined &&
+        Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
+          m => m[1] === soleSink.id
+        );
+      if (!untilBashRefsGate) {
+        const gateRef = `$${soleSink.id}.output`;
         const message =
-          `Node '${gate.id}': a gate node inside a loop_group body must be the ` +
-          "body's sole terminal sink to pause the enclosing loop (#2707 step 3) — this " +
-          'gate is not, so it will not stop loop iteration. Move it to the end of the ' +
-          'body with nothing else depending on it, and no other node left un-depended-on.';
+          `Node '${soleSink.id}': this gate is the loop_group's terminal sink, but ` +
+          `'loop_group.until_bash' does not reference '${gateRef}' — the human's ` +
+          'decision is captured but never consulted for completion, so the loop only ' +
+          `ends via max_iterations. Declare 'until_bash' checking '${gateRef}.decision' ` +
+          `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
+          'drives completion (#2707 step 3).';
         warnings.push(message);
-        getLog().debug({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
-      } else {
-        // Gate is validly the sole terminal sink. Design A (#2707 step 3) is
-        // deliberately unopinionated about what a decision means — the group's own
-        // 'until_bash' is the completion channel, and it either reads the gate's
-        // '$<gateId>.output.decision'/'.text' or it doesn't. If it doesn't, the
-        // human's answer is captured (every resolution still writes node_completed)
-        // but never consulted for completion — the loop just runs to max_iterations,
-        // silently ignoring every response. Structural check (does the until_bash
-        // string reference the gate's node id), not prose-sniffing — no judgment
-        // about what the check DOES with it, only whether it looks at it at all.
-        const untilBash = node.loop_group.until_bash;
-        const untilBashRefsGate =
-          untilBash !== undefined &&
-          Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
-            m => m[1] === gate.id
-          );
-        if (!untilBashRefsGate) {
-          const gateRef = `$${gate.id}.output`;
-          const message =
-            `Node '${gate.id}': this gate is the loop_group's terminal sink, but ` +
-            `'loop_group.until_bash' does not reference '${gateRef}' — the human's ` +
-            'decision is captured but never consulted for completion, so the loop only ' +
-            `ends via max_iterations. Declare 'until_bash' checking '${gateRef}.decision' ` +
-            `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
-            'drives completion (#2707 step 3).';
-          warnings.push(message);
-          getLog().debug(
-            { id: gate.id, warning: message },
-            'loop_group_gate_completion_not_referenced'
-          );
-        }
+        getLog().debug(
+          { id: soleSink.id, warning: message },
+          'loop_group_gate_completion_not_referenced'
+        );
       }
     }
 
@@ -1398,12 +1381,17 @@ export function validateDagStructure(
       if (workflowInBody) {
         return `loop_group '${node.id}' body: 'workflow' (sub-run) is not supported inside a loop_group body`;
       }
+      // A gate or wait pauses the enclosing loop only as the body's sole terminal sink
+      // (#2707 step 3). Anywhere else its resume would replay or skip sibling work, and a
+      // gate's answer would be silently ignored.
       const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
-      const misplacedWait = node.loop_group.nodes.find(
-        n => !isIncludeDirective(n) && isWaitNode(n) && n !== soleSink
+      const misplacedPause = node.loop_group.nodes.find(
+        (n): n is GateNode | WaitNode =>
+          !isIncludeDirective(n) && (isWaitNode(n) || isGateNode(n)) && n !== soleSink
       );
-      if (misplacedWait) {
-        return `loop_group '${node.id}' body: wait node '${misplacedWait.id}' must be the body's sole terminal sink`;
+      if (misplacedPause) {
+        const kind = misplacedPause.kind === 'gate' ? 'approval' : 'wait';
+        return `loop_group '${node.id}' body: ${kind} node '${misplacedPause.id}' must be the body's sole terminal sink`;
       }
       const nestedWaitGroup = node.loop_group.nodes.find(
         n => !isIncludeDirective(n) && isLoopGroupNode(n) && hasDurableWait(n)
@@ -1592,17 +1580,17 @@ export function validateLoopGroupProseCompletion(
     if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
     const bodyError = validateLoopGroupProseCompletion(node.loop_group.nodes);
     if (bodyError) return bodyError;
-    const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
-    if (
-      node.loop_group.until !== undefined &&
-      node.loop_group.until_bash === undefined &&
-      soleSink !== undefined &&
-      !isIncludeDirective(soleSink) &&
-      isOutputFormatEnforced(soleSink) &&
-      soleSink.output_format !== undefined &&
-      outputSchemaExcludesStrings(soleSink.output_format)
-    ) {
-      return `loop_group '${node.id}': terminal node '${soleSink.id}' declares a non-string output_format, so the prose until signal cannot be detected in serialized structured output. Use loop_group.until_bash to read the terminal node's structured field instead`;
+    if (node.loop_group.until === undefined || node.loop_group.until_bash !== undefined) continue;
+    // Any candidate can be the one an iteration's output is read from.
+    const outputNode = loopGroupOutputNodes(node.loop_group.nodes).find(
+      candidate =>
+        !isIncludeDirective(candidate) &&
+        isOutputFormatEnforced(candidate) &&
+        candidate.output_format !== undefined &&
+        outputSchemaExcludesStrings(candidate.output_format)
+    );
+    if (outputNode !== undefined) {
+      return `loop_group '${node.id}': node '${outputNode.id}', which the group's output is read from, declares a non-string output_format, so the prose until signal cannot be detected in serialized structured output. Use loop_group.until_bash to read that node's structured field instead`;
     }
   }
   return null;

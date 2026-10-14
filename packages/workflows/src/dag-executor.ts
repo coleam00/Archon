@@ -134,7 +134,7 @@ import {
   isAgentNode,
   isLoopGroupNode,
   definedOutputPaths,
-  loopGroupBodySinks,
+  loopGroupOutputNodes,
   loopGroupSoleTerminalSink,
   isGateNode,
   isWorkflowWaitContext,
@@ -4144,7 +4144,7 @@ async function finalizeLoopFromSignal(
 
 /**
  * Only a sole terminal gate or wait can resume through its enclosing group.
- * The loader warns about other placements, which have no unambiguous owner.
+ * The loader rejects other placements, which have no unambiguous owner.
  */
 function findLoopGroupTerminalSuspendNode(
   bodyNodes: readonly DagNode[]
@@ -4153,9 +4153,19 @@ function findLoopGroupTerminalSuspendNode(
   return sink !== undefined && (isGateNode(sink) || sink.kind === 'wait') ? sink : undefined;
 }
 
+/** An iteration's output: the first completed, non-empty one among its output nodes. */
+function loopGroupIterationOutput(
+  bodyNodes: readonly DagNode[],
+  outputs: ReadonlyMap<string, NodeOutput>
+): NodeOutput | undefined {
+  return loopGroupOutputNodes(bodyNodes)
+    .map(n => outputs.get(n.id))
+    .find(o => o?.state === 'completed' && o.output.trim().length > 0);
+}
+
 /**
  * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
- * completion condition (`until` signal in the body's terminal-node output, and/or
+ * completion condition (`until` signal in the iteration's output, and/or
  * `until_bash` exit code) or `max_iterations`.
  *
  * Mirrors {@link executeLoopNode} at subgraph granularity: each iteration runs the body's
@@ -4169,8 +4179,8 @@ function findLoopGroupTerminalSuspendNode(
  * `$LOOP_PREV.<id>.output` refs in body prompts resolve against a snapshot of the
  * *previous* iteration's body outputs (empty on iteration 1).
  *
- * `$groupId.output` (visible to the outer DAG) = the final iteration's terminal-node output
- * (mirrors the top-level run's terminal-output selection).
+ * `$groupId.output` (visible to the outer DAG) = the final iteration's output, chosen by
+ * {@link loopGroupIterationOutput}.
  *
  * Key behaviors:
  * - Returns NodeExecutionResult (not void) — the outer DAG executor owns run lifecycle
@@ -4525,10 +4535,10 @@ async function executeLoopGroupBody(
   // safe to reuse as-is; only the gate's own answer needed reconstructing.
   if ((isEscalatedGateResume || isEscalatedWaitResume) && loopPrevOutputs !== undefined) {
     const terminalNode = findLoopGroupTerminalSuspendNode(bodyNodes);
-    const terminalSink = terminalNode ? loopPrevOutputs.get(terminalNode.id) : undefined;
-    if (terminalSink !== undefined) {
+    if (terminalNode !== undefined && loopPrevOutputs.has(terminalNode.id)) {
+      const resumedResult = loopGroupIterationOutput(bodyNodes, loopPrevOutputs);
       const resumedIteration = resumeIteration;
-      const rawIterationOutput = terminalSink.output;
+      const rawIterationOutput = resumedResult?.output ?? '';
       const resumedSignalDetected =
         group.until !== undefined && detectCompletionSignal(rawIterationOutput, group.until);
       let resumedBashComplete = false;
@@ -4638,7 +4648,9 @@ async function executeLoopGroupBody(
       if (resumedSignalDetected || resumedBashComplete) {
         const resumedOutput = stripCompletionTags(rawIterationOutput, group.until);
         const resumedStructuredOutput =
-          'structuredOutput' in terminalSink ? terminalSink.structuredOutput : undefined;
+          resumedResult !== undefined && 'structuredOutput' in resumedResult
+            ? resumedResult.structuredOutput
+            : undefined;
         await safeSendMessage(
           platform,
           conversationId,
@@ -4961,16 +4973,12 @@ async function executeLoopGroupBody(
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
     loopPrevOutputs = new Map(scopedNodeOutputs);
 
-    // Determine this iteration's terminal output (first completed terminal node in
-    // definition order — mirrors the top-level run's terminal-output selection).
     // DELIBERATELY NOT `returns:`-aware (#2470): a loop_group's per-iteration output is
     // the iteration's own result, not a caller contract — `returns:` selects a WORKFLOW's
     // result and only rebinds a child run's terminal output (see executeDagWorkflow). Leave
     // this positional scan as-is; do not "fix" the inconsistency.
-    const terminalSink = loopGroupBodySinks(bodyNodes)
-      .map(n => scopedNodeOutputs.get(n.id))
-      .find(o => o?.state === 'completed' && o.output.trim().length > 0);
-    const iterationOutput = terminalSink?.output ?? '';
+    const iterationResult = loopGroupIterationOutput(bodyNodes, scopedNodeOutputs);
+    const iterationOutput = iterationResult?.output ?? '';
     // Capture the PREVIOUS iteration's (cleaned) output before overwriting — the
     // until_bash env below exposes it as LOOP_PREV_OUTPUT (previous iteration, same
     // semantics as executeLoopNode; empty on the first iteration).
@@ -4982,8 +4990,8 @@ async function executeLoopGroupBody(
     // The sink's structured payload rides along AS-IS (#2637): a JSON payload never
     // contains the completion tag, so no stripping applies to it.
     lastIterationStructuredOutput =
-      terminalSink !== undefined && 'structuredOutput' in terminalSink
-        ? terminalSink.structuredOutput
+      iterationResult !== undefined && 'structuredOutput' in iterationResult
+        ? iterationResult.structuredOutput
         : undefined;
 
     // Completion gate: until-signal in the terminal output, and/or until_bash exit 0.

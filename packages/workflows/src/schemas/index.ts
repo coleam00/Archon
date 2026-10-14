@@ -124,7 +124,7 @@ export {
   isLoopNode,
   isLoopGroupNode,
   definedOutputPaths,
-  loopGroupBodySinks,
+  loopGroupOutputNodes,
   loopGroupSoleTerminalSink,
   isWorkflowNode,
   isComposeFanOutNode,
