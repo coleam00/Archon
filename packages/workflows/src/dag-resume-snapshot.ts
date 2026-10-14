@@ -159,6 +159,9 @@ export async function foldDagResumeSnapshot(
   const budget = emptyRunBudgetUsage();
   // Started `agent` attempts with no terminal row yet: attempt id → path.
   const openAgentAttempts = new Map<string, string>();
+  // An attempt can carry a second terminal row (the dispatch catch re-finishes its start
+  // record after an engine-side throw); the live ledger charged only the first.
+  const settledAgentAttempts = new Set<string>();
   function addUsage(
     stepName: string,
     rawUsage: { tokens?: unknown; tokensUnknown?: boolean; costUsd?: unknown }
@@ -309,8 +312,12 @@ export async function foldDagResumeSnapshot(
       if (record.eventType === 'node_started') {
         openAgentAttempts.set(record.metadata.attempt.id, record.path);
       } else if (record.eventType === 'node_completed' || record.eventType === 'node_failed') {
-        openAgentAttempts.delete(record.metadata.attempt.id);
-        addAttemptSpend(budget, record.path, record.metadata);
+        const attemptId = record.metadata.attempt.id;
+        openAgentAttempts.delete(attemptId);
+        if (!settledAgentAttempts.has(attemptId)) {
+          settledAgentAttempts.add(attemptId);
+          addAttemptSpend(budget, record.path, record.metadata);
+        }
       }
     }
     if (record.metadata) {

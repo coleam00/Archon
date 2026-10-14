@@ -195,7 +195,8 @@ function usd(value: number): string {
 }
 
 const COST_UNAVAILABLE_CAUSE: Record<CostUnavailableReason, string> = {
-  not_reported: 'its provider reported no cost',
+  not_reported:
+    'its provider reported no cost (Claude reports none after resuming a session created by an earlier process, or for an attempt that failed with a provider error such as a rate limit)',
   unsupported: 'its provider does not report cost',
   unknown: 'its provider did not say whether it reports cost',
   invalid: 'its provider reported an invalid cost',
@@ -213,7 +214,7 @@ export function describeRunBudgetRefusal(refusal: RunBudgetRefusal, workflowName
     case 'spend_exhausted':
       return `Workflow '${workflowName}' reached its run budget of ${usd(refusal.limitUsd)} (${usd(refusal.consumedUsd)} spent); node '${refusal.path}' was not started. ${fixed}`;
     case 'cost_unavailable':
-      return `Workflow '${workflowName}' declares max_spend_usd: ${String(refusal.limitUsd)}, but the cost of node '${refusal.costPath}' is unknown: ${COST_UNAVAILABLE_CAUSE[refusal.cause]}. ${usd(refusal.consumedUsd)} of known spend is a floor, so the ceiling cannot be enforced and no further work starts. A spend ceiling needs a provider that reports cost on every attempt; Claude does not after resuming a session created by an earlier process. Use max_work_units alone for providers that do not report cost.`;
+      return `Workflow '${workflowName}' declares max_spend_usd: ${String(refusal.limitUsd)}, but the cost of node '${refusal.costPath}' is unknown: ${COST_UNAVAILABLE_CAUSE[refusal.cause]}. ${usd(refusal.consumedUsd)} of known spend is a floor, so the ceiling cannot be enforced and no further work starts. A spend ceiling needs a complete cost for every attempt; use max_work_units alone where that cannot be guaranteed.`;
   }
 }
 

@@ -226,12 +226,23 @@ export function validateWorkflowOutcomeDeclaration(
   return null;
 }
 
-const RUN_BUDGET_UNSUPPORTED_KINDS: ReadonlySet<string> = new Set([
-  'loop',
-  'loop_group',
-  'workflow',
-  'compose_fan_out',
-]);
+/**
+ * Whether the run budget counts each node kind's work and spend. Keyed by every kind so
+ * a new kind fails the type-check until it is classified. `include` is judged after
+ * expansion, by the kinds it flattens into.
+ */
+const RUN_BUDGET_SUPPORTS_KIND: Record<(DagNode | IncludeDirective)['kind'], boolean> = {
+  agent: true,
+  exec: true,
+  gate: true,
+  halt: true,
+  wait: true,
+  include: true,
+  loop: false,
+  loop_group: false,
+  workflow: false,
+  compose_fan_out: false,
+};
 
 /**
  * Reject node shapes whose work or spend the run budget does not yet count.
@@ -246,7 +257,7 @@ export function validateRunBudgetShape(
   }
 ): string | null {
   if (workflow.budget === undefined) return null;
-  const node = workflow.nodes.find(n => RUN_BUDGET_UNSUPPORTED_KINDS.has(n.kind));
+  const node = workflow.nodes.find(n => !RUN_BUDGET_SUPPORTS_KIND[n.kind]);
   if (node === undefined) return null;
   const shape = node.kind === 'compose_fan_out' ? 'include with fan_out' : node.kind;
   return `Workflow declares budget: but node '${node.id}' is a ${shape} node, whose work and spend the run budget does not count yet (loops, workflow: child runs and fan-out are not supported under a run budget). Remove budget: or restructure the workflow without that node.`;

@@ -43261,6 +43261,126 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('charges an attempt once on resume when its failure is recorded twice', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'error_during_execution',
+        errors: ['crash'],
+        failure: { class: 'transient', evidence: 'crash' },
+        sessionId: 's',
+        cost: 0.1,
+      };
+    });
+    const store = durableStore();
+    // The status read before the retry fails, so the dispatch catch re-finishes the
+    // attempt's start record: a second `node_failed` row for the same attempt id.
+    // The retry wait's own read tolerates a failure; the one before the attempt does not.
+    let readsAfterFailure = 0;
+    store.getWorkflowRunStatus.mockImplementation(async () => {
+      if (
+        persistedEvents(store).some(e => e.event_type === 'node_failed') &&
+        ++readsAfterFailure === 2
+      ) {
+        throw new Error('store unavailable');
+      }
+      return 'running';
+    });
+    await run(
+      {
+        name: 'double-terminal',
+        budget: { max_spend_usd: 5 },
+        nodes: [ai('a', undefined, { retry: { max_attempts: 2, delay_ms: 1 } })],
+      },
+      store
+    );
+    expect(
+      persistedEvents(store).filter(e => e.event_type === 'node_failed' && e.step_name === 'a')
+    ).toHaveLength(2);
+    const snapshot = await foldDagResumeSnapshot(persistedEvents(store), 'budget-run');
+    expect(snapshot.budget).toEqual({ workUnits: 1, spendUsd: 0.1 });
+  });
+
+  it('refuses later work in the same pass after an attempt throws once started', async () => {
+    providerCosts(0.1);
+    const nodes = [ai('a'), ai('b', ['a'], { trigger_rule: 'all_done' })];
+    // Throws inside node `a`'s attempt, after its execution has begun.
+    const throwingPlatform = () => {
+      const platform = createMockPlatform();
+      platform.getStreamingMode.mockImplementationOnce(() => {
+        throw new Error('platform gone');
+      });
+      return platform;
+    };
+
+    const spendLimited = await run(
+      { name: 'thrown', budget: { max_spend_usd: 5 }, nodes },
+      durableStore(),
+      { platform: throwingPlatform() }
+    );
+    expect(started(spendLimited, 'b')).toHaveLength(0);
+    expect(refusals(spendLimited)[0].data).toMatchObject({
+      reason: 'cost_unavailable',
+      node: 'b',
+      cost_unavailable: { node: 'a', reason: 'interrupted' },
+    });
+
+    const unitsOnly = await run(
+      { name: 'thrown-units', budget: { max_work_units: 5 }, nodes },
+      durableStore(),
+      { platform: throwingPlatform() }
+    );
+    expect(started(unitsOnly, 'b')).toHaveLength(1);
+    expect(refusals(unitsOnly)).toHaveLength(0);
+  });
+
+  it('treats an attempt whose later pass ended without a result as partial cost', async () => {
+    // A best-effort provider re-asks after invalid structured output; the re-ask
+    // stream ends without a result, so 0.2 is only a floor of what the attempt spent.
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      yield { type: 'result', sessionId: 's1', structuredOutput: { other: 'x' }, cost: 0.2 };
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'thinking' };
+    });
+    const store = await run(
+      {
+        name: 'no-result-pass',
+        budget: { max_spend_usd: 5 },
+        nodes: [
+          ai('a', undefined, {
+            provider: 'pi',
+            output_format: {
+              type: 'object',
+              properties: { verdict: { type: 'string' } },
+              required: ['verdict'],
+            },
+            retry: { max_attempts: 0 },
+          }),
+          ai('b', ['a'], { trigger_rule: 'all_done' }),
+        ],
+      },
+      durableStore(),
+      { workflowProvider: 'pi', config: { ...minimalConfig, assistant: 'pi' } }
+    );
+    expect(started(store, 'b')).toHaveLength(0);
+    expect(refusals(store)[0].data).toMatchObject({
+      reason: 'cost_unavailable',
+      cost_unavailable: { node: 'a', reason: 'partial' },
+    });
+  });
+
+  it('records no run cost when a run without AI attempts is refused', async () => {
+    const store = await run({
+      name: 'bash-refused',
+      budget: { max_work_units: 1 },
+      nodes: [sh('x'), sh('y', ['x'])],
+    });
+    expect(exitReason(store)).toBe('budget_refused');
+    expect(runUsageWrites(store).some(write => 'total_cost_usd' in write)).toBe(false);
+  });
+
   it('leaves an unbudgeted run untouched', async () => {
     providerCosts(0.1);
     const store = await run({ name: 'plain', nodes: [ai('a'), ai('b', ['a'])] });

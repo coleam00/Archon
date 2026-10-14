@@ -1043,9 +1043,13 @@ cost. The run fails as soon as one does not, before later work starts:
   that query;
 - an attempt where only some provider calls reported cost (for example a structured-output
   retry), recorded on the node as `spend.costUsd.partial: true`;
-- an attempt that started and never finished, such as one interrupted by a crash or Ctrl-C.
+- an attempt that started and never finished, such as one interrupted by a crash or Ctrl-C;
+- an attempt that failed with a provider error that reports no cost, such as a Claude rate
+  limit, overload or startup timeout. The failed attempt may already have made billed calls,
+  so the run fails instead of retrying the node.
 
-Use `max_work_units` alone for providers that do not report cost. Unknown cost is still
+Use `max_work_units` alone for providers that do not report cost, or when a failed attempt
+should be retried rather than end the run. Unknown cost is still
 recorded, but it does not refuse the run.
 
 **Resume.** The totals are rebuilt from the run's own durable records each time the run

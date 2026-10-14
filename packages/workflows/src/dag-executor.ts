@@ -12035,7 +12035,10 @@ export async function executeDagWorkflow(
       // the in-memory totals. The durable rows hold all of it.
       try {
         const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
-        runCtx.totalCostUsd = durable.costUsd;
+        // The fold sums to 0 when nothing reported cost; keep a run with no AI usage absent.
+        if (runCtx.totalCostUsd !== undefined || durable.costUsd !== 0) {
+          runCtx.totalCostUsd = durable.costUsd;
+        }
         runCtx.totalTokens = durable.tokens;
         runCtx.totalTokensUnknown = durable.tokensUnknown;
       } catch (readError) {
