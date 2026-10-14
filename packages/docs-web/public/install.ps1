@@ -6,6 +6,8 @@
 # Options:
 #   -Providers <ids> - Comma-separated providers to install (claude, codex, pi).
 #                      An empty value installs none. Without it, the installer asks.
+#                      Releases up to 0.11.1 bundle their providers and have no
+#                      `archon provider`; pin one with -Providers ''.
 #
 # Options (via environment variables):
 #   $env:VERSION          - Specific version to install (default: latest)
@@ -239,7 +241,12 @@ function ConvertTo-ProviderIds {
 function Read-ProviderSelection {
     if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { return $null }
     while ($true) {
-        $answer = Read-Host "Which providers should Archon install? ($($PROVIDER_IDS -join ', '), comma-separated; empty for none)"
+        # Read-Host throws in a -NonInteractive session, which UserInteractive does not reveal.
+        try {
+            $answer = Read-Host "Which providers should Archon install? ($($PROVIDER_IDS -join ', '), comma-separated; empty for none)"
+        } catch {
+            return $null
+        }
         try {
             return ,(ConvertTo-ProviderIds -Selection $answer)
         } catch {

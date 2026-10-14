@@ -439,4 +439,96 @@ PATH="$provider_mock_dir:$PATH" ARCHON_CPUINFO_PATH="$avx2_cpuinfo" \
   || fail "piped installer with --providers failed"
 assert_equals "provider install codex" "$(provider_calls_made)" "Piped installer passes --providers"
 
+# The same selection cases for install.ps1, where PowerShell is installed (the Linux CI
+# runner has it). The driver shadows the Invoke-WebRequest cmdlet with a function, so the
+# installer it invokes "downloads" the shell-script stub and leaves a marker.
+if command -v pwsh >/dev/null 2>&1; then
+  ps_stub="$tmp_dir/ps-archon-stub"
+  ps_calls="$tmp_dir/ps-provider-calls"
+  ps_download_marker="$tmp_dir/ps-downloaded"
+  cat >"$ps_stub" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "version" ]; then
+  echo "archon 1.2.3"
+  exit 0
+fi
+echo "\$*" >>"$ps_calls"
+[ "\$*" != "provider install pi" ]
+EOF
+  chmod +x "$ps_stub"
+  ps_driver="$tmp_dir/ps-driver.ps1"
+  cat >"$ps_driver" <<'EOF'
+param([string]$Installer, [string]$Stub, [string]$Marker, [string]$Providers)
+function Invoke-WebRequest {
+    param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing)
+    New-Item -ItemType File -Path $Marker -Force | Out-Null
+    Copy-Item -Path $Stub -Destination $OutFile -Force
+}
+# The two documented forms. In both, the installer's `exit` ends this process.
+$source = Get-Content -Raw $Installer
+if ($PSBoundParameters.ContainsKey('Providers')) {
+    & ([scriptblock]::Create($source)) -Providers $Providers
+} else {
+    $source | Invoke-Expression
+}
+exit 0
+EOF
+
+  # Prints the installer's output. With -Providers <ids> it runs the scriptblock form;
+  # without, the `irm | iex` form.
+  run_ps_install() {
+    rm -rf "$ps_calls" "$ps_download_marker" "$tmp_dir/ps-bin"
+    PROCESSOR_ARCHITECTURE=AMD64 INSTALL_DIR="$tmp_dir/ps-bin" SKIP_CHECKSUM=true \
+      pwsh -NoProfile -NonInteractive -File "$ps_driver" -Installer "$repo_root/scripts/install.ps1" \
+      -Stub "$ps_stub" -Marker "$ps_download_marker" "$@" </dev/null 2>&1
+  }
+
+  ps_calls_made() {
+    if [ -e "$ps_calls" ]; then cat "$ps_calls"; fi
+  }
+
+  output=$(run_ps_install -Providers codex,claude) || fail "-Providers install failed: $output"
+  assert_equals "provider install codex claude" "$(ps_calls_made)" "-Providers runs one provider install"
+
+  output=$(run_ps_install -Providers codex) || fail "single -Providers install failed: $output"
+  assert_equals "provider install codex" "$(ps_calls_made)" "-Providers with one id"
+
+  output=$(ARCHON_PROVIDERS="claude" run_ps_install -Providers codex) \
+    || fail "-Providers over env install failed: $output"
+  assert_equals "provider install codex" "$(ps_calls_made)" "-Providers wins over ARCHON_PROVIDERS"
+
+  output=$(ARCHON_PROVIDERS="claude" run_ps_install) || fail "ARCHON_PROVIDERS install failed: $output"
+  assert_equals "provider install claude" "$(ps_calls_made)" "ARCHON_PROVIDERS selects providers"
+
+  output=$(ARCHON_PROVIDERS="claude" run_ps_install -Providers "") \
+    || fail "explicit empty -Providers failed: $output"
+  assert_equals "" "$(ps_calls_made)" "An explicit empty -Providers installs none"
+
+  output=$(run_ps_install) || fail "PowerShell install without a selection failed: $output"
+  assert_equals "" "$(ps_calls_made)" "No console and no selection installs no provider"
+  case "$output" in
+    *"archon provider install <claude|codex|pi>"*) ;;
+    *) fail "PowerShell install without a selection does not print the provider install command" ;;
+  esac
+
+  ps_status=0
+  output=$(run_ps_install -Providers codex,claud) || ps_status=$?
+  [ "$ps_status" -ne 0 ] || fail "install.ps1 accepted an unknown provider in -Providers"
+  case "$output" in
+    *"Unknown provider 'claud'. Choose from: claude, codex, pi"*) ;;
+    *) fail "unknown -Providers id is not named with the valid choices" ;;
+  esac
+  [ ! -e "$ps_download_marker" ] || fail "install.ps1 downloaded a binary before rejecting -Providers"
+
+  ps_status=0
+  output=$(run_ps_install -Providers pi) || ps_status=$?
+  [ "$ps_status" -ne 0 ] || fail "install.ps1 succeeded when provider install failed"
+  case "$output" in
+    *"Retry with: archon provider install pi"*) ;;
+    *) fail "failed PowerShell provider install does not print the retry command" ;;
+  esac
+else
+  echo "SKIP: pwsh not found; install.ps1 provider selection not exercised"
+fi
+
 echo "Installer tests passed"
