@@ -175,8 +175,10 @@ nodes:
             type: object
             properties:
               state: { type: string, enum: [green, pr_caused, other] }
+              # Whether the agent re-ran failed jobs it judged other, and how that ended.
+              rerun: { type: string, enum: [none, green, red] }
               summary: { type: string, pattern: '\S' }
-            required: [state, summary]
+            required: [state, rerun, summary]
 
         # `until_bash` and the loop's output cannot read a skipped node, so this joins
         # the round's verdicts into the value the loop decides on.
@@ -200,6 +202,7 @@ nodes:
             rereview_action: { from: "$rereview.output.action", if_skipped: null }
             rereview_summary: { from: "$rereview.output.findings_summary", if_skipped: null }
             ci: { from: "$ci.output.state", if_skipped: null }
+            ci_rerun: { from: "$ci.output.rerun", if_skipped: null }
             ci_summary: { from: "$ci.output.summary", if_skipped: null }
           output_format:
             type: object
@@ -214,8 +217,9 @@ nodes:
               prior_report: { type: string }
               # A correction for CI gets a light review: the code lens alone.
               light_review: { type: boolean }
+              ci_rerun: { type: string, enum: [none, green, red] }
               summary: { type: string }
-            required: [round, done, ready, reason, pr_url, prior_report, light_review, summary]
+            required: [round, done, ready, reason, pr_url, prior_report, light_review, ci_rerun, summary]
 
   # Corrections and the base merge can falsify claims the description made when the
   # draft opened, and an implementer can pass red the description must disclose. One
@@ -252,5 +256,7 @@ nodes:
           type: string
           enum: [delivered, implement_blocked, review_open, replan, needs_human, ci_pr_caused, ci_other, round_cap]
         pr_url: { type: string }
+        # The last round's CI re-run: none, or how the one re-run of failed jobs ended.
+        ci_rerun: { type: string, enum: [none, green, red] }
         summary: { type: string }
-      required: [ready, reason, pr_url, summary]
+      required: [ready, reason, pr_url, ci_rerun, summary]
