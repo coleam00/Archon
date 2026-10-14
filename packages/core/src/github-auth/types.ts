@@ -73,11 +73,8 @@ export interface IGitHubAppAuthProvider {
   invalidateToken(installationId: number): void;
 
   /**
-   * Force-evict the cached install + token for (owner, repo). Used on 401
-   * from a per-installation Octokit so the next call re-resolves the
-   * installation id (App uninstall + reinstall assigns a NEW id; the stale
-   * lookupCache entry would otherwise serve the dead id for up to 1h).
-   * Synchronous because the lookup entry is the one we just populated.
+   * Evict the repository lookup and token/client caches after a 401, including
+   * the configured fixed installation when it differs from the repository's.
    */
   invalidateRepo(owner: string, repo: string): void;
 }

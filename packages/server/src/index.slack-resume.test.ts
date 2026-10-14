@@ -558,7 +558,7 @@ describe('Slack workflow resume composition', () => {
           stdout: 'pipe',
           stderr: 'pipe',
         });
-        child.stdin.write('protocol=https\nhost=github.com\npath=owner/repo.git\n\n');
+        child.stdin.write('protocol=https\nhost=github.com\npath=owner/.github-private.git\n\n');
         child.stdin.end();
         const [exitCode, stdout, stderr] = await Promise.all([
           child.exited,
@@ -569,7 +569,7 @@ describe('Slack workflow resume composition', () => {
         expect(stdout).toContain('password=inherited-port-token');
         expect(stderr).toBe('');
         expect(mockInstallationToken).toHaveBeenCalledTimes(1);
-        expect(mockInstallationToken).toHaveBeenCalledWith('owner', 'repo');
+        expect(mockInstallationToken).toHaveBeenCalledWith('owner', '.github-private');
       } finally {
         serveSpy.mockRestore();
         listener?.stop(true);

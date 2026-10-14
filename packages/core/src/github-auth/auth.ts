@@ -209,7 +209,6 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
   }
 
   function primeInstallationLookup(owner: string, repo: string, installationId: number): void {
-    if (config.defaultInstallationId) return; // priming is a no-op when fixed-install
     lookupCache.set(lookupKey(owner, repo), { installationId, cachedAt: Date.now() });
     getLog().debug({ owner, repo, installationId }, 'github_auth.install_lookup_primed');
   }
@@ -247,11 +246,9 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
         { owner, repo, installationId: lookup.installationId },
         'github_auth.repo_cache_evicted_on_401'
       );
-      return;
     }
-    // No cached lookup (default-installation-id mode, or the cache TTL'd
-    // since the call that 401'd). Still evict the default-install token +
-    // Octokit when applicable so the next call re-issues.
+    // API clients use the fixed installation even when repository tokens
+    // resolve to a different installation.
     if (config.defaultInstallationId) {
       tokenCache.delete(config.defaultInstallationId);
       octokitCache.delete(config.defaultInstallationId);

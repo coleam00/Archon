@@ -333,6 +333,17 @@ describe('token issuance retry', () => {
 });
 
 describe('primeInstallationLookup', () => {
+  test('fixed-install mode uses the webhook installation for repository tokens', async () => {
+    const provider = makeProvider({ defaultInstallationId: 555 });
+    provider.primeInstallationLookup('Owner', 'Repo', 99);
+    mockRequest.mockResolvedValueOnce(tokenResponse('ghs_webhook', 3600));
+
+    expect(await provider.getInstallationToken('owner', 'repo')).toBe('ghs_webhook');
+    expect(mockRequest.mock.calls).toEqual([
+      ['POST /app/installations/{installation_id}/access_tokens', { installation_id: 99 }],
+    ]);
+  });
+
   test('priming from webhook payload skips the lookup HTTP call', async () => {
     const provider = makeProvider();
     provider.primeInstallationLookup('o', 'r', 1234);
@@ -389,6 +400,32 @@ describe('invalidateToken', () => {
 });
 
 describe('invalidateRepo', () => {
+  test('evicts repository and fixed-install caches', async () => {
+    const provider = makeProvider({ defaultInstallationId: 555 });
+    mockRequest
+      .mockResolvedValueOnce(tokenResponse('ghs_fixed_before', 3600))
+      .mockResolvedValueOnce({ status: 200, data: { id: 99 } })
+      .mockResolvedValueOnce(tokenResponse('ghs_repo_before', 3600));
+    expect(await provider.getInstallationTokenById(555)).toBe('ghs_fixed_before');
+    expect(await provider.getInstallationToken('owner', 'repo')).toBe('ghs_repo_before');
+    expect(mockRequest.mock.calls.at(-1)?.[1]).toEqual({ installation_id: 99 });
+    const fixedClient = await provider.getOctokitForInstallation('owner', 'repo');
+
+    provider.invalidateRepo('owner', 'repo');
+
+    expect(await provider.getOctokitForInstallation('owner', 'repo')).not.toBe(fixedClient);
+    mockRequest
+      .mockResolvedValueOnce(tokenResponse('ghs_fixed_after', 3600))
+      .mockResolvedValueOnce({ status: 200, data: { id: 100 } })
+      .mockResolvedValueOnce(tokenResponse('ghs_repo_after', 3600))
+      .mockResolvedValueOnce(tokenResponse('ghs_old_repo_after', 3600));
+    expect(await provider.getInstallationTokenById(555)).toBe('ghs_fixed_after');
+    expect(await provider.getInstallationToken('owner', 'repo')).toBe('ghs_repo_after');
+    expect(mockRequest.mock.calls.at(-1)?.[1]).toEqual({ installation_id: 100 });
+    expect(await provider.getInstallationTokenById(99)).toBe('ghs_old_repo_after');
+    expect(mockRequest).toHaveBeenCalledTimes(7);
+  });
+
   test('evicts both lookup and token caches for the repo', async () => {
     const provider = makeProvider();
     mockRequest
