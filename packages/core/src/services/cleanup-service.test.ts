@@ -1822,6 +1822,36 @@ describe('cleanup environment configuration', () => {
     );
   });
 
+  test('preserves a 20-day worktree with a configured 21-day stale threshold', async () => {
+    process.env.STALE_THRESHOLD_DAYS = '21';
+    const service = await loadCleanupService();
+    const env = makeEnvironmentWithAge({
+      branch_name: 'twenty-day-branch',
+      created_by_platform: 'slack',
+      days_since_activity: 20,
+    });
+    mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
+    mockHasUncommittedChanges.mockResolvedValue(false);
+    mockGetLiveRunOwningEnv.mockResolvedValue(null);
+    mockGetById.mockResolvedValue(env);
+    mockGetCodebase.mockResolvedValue(makeCodebase());
+    mockWorktreeExists.mockResolvedValue(true);
+    mockDestroy.mockClear();
+    mockUpdateStatus.mockClear();
+
+    try {
+      const result = await service.cleanupStaleWorktrees(env.codebase_id, '/workspace/repo');
+
+      expect(result).toEqual({ removed: [], skipped: [] });
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+    } finally {
+      mockGetById.mockResolvedValue(null);
+      mockGetCodebase.mockResolvedValue(null);
+      mockWorktreeExists.mockResolvedValue(false);
+    }
+  });
+
   test.each([
     { values: undefined, staleDays: 14, intervalHours: 6, retentionDays: 30 },
     { values: ['1', '2', '3'], staleDays: 1, intervalHours: 2, retentionDays: 3 },
