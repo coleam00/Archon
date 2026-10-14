@@ -533,7 +533,7 @@ describe('manage_run — destructive confirmation gate', () => {
   test('a child-run redirect is spelled for the calling surface, not the chat default', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     mockApprove.mockRejectedValueOnce(
-      new ChildRunRedirectError('r1abcdef-1234', 'child-77', 'sub', 'approve')
+      new ChildRunRedirectError('r1abcdef-1234', ['child-77'], 'sub', 'approve')
     );
     const tool = buildManageRunTool({
       actor: operator,

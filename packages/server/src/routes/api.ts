@@ -3959,7 +3959,7 @@ export function registerApiRoutes(
         message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
       }
       if (result.blockedParentRunId) {
-        message += ` — parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused; resume it to fail the node cleanly or abandon it too`;
+        message += ` — parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused; resume it so it reads this sub-run's outcome, or abandon it too`;
       }
       return c.json({ success: true, message });
     } catch (error) {
@@ -4097,7 +4097,7 @@ export function registerApiRoutes(
         message += ` — warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
       }
       if (blockedParentRunId) {
-        message += ` — parent run ${blockedParentRunId} was blocked on this sub-run and stays paused; resume it to fail the node cleanly or abandon it too`;
+        message += ` — parent run ${blockedParentRunId} was blocked on this sub-run and stays paused; resume it so it reads this sub-run's outcome, or abandon it too`;
       }
       return c.json({ success: true, message });
     } catch (error) {
@@ -4143,6 +4143,15 @@ export function registerApiRoutes(
         return {
           error: `Run is paused waiting on sub-run ${attention.childRunId}. ${childRedirectAdvice}`,
           childRunId: attention.childRunId,
+        };
+      case 'blocked_on_children':
+        // A fan-out waits on several children; there is no single run to send the
+        // caller to, so the message names them all.
+        return {
+          error:
+            `Run is paused waiting on the sub-runs of fan-out node '${attention.nodeId}': ` +
+            `${attention.childRunIds.join(', ')}. Answer each paused sub-run by its own run id; ` +
+            'this run continues when they finish.',
         };
       case 'unreadable':
         if (attention.reason === 'malformed_gate') {

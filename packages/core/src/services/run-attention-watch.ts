@@ -34,7 +34,8 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 export const DEFAULT_ATTENTION_POLL_INTERVAL_MS = 1000;
-// Persisted child and parent links are not trusted to be acyclic.
+// Persisted child and parent links are not trusted to be acyclic. Bounds the rows one
+// sub-run tree walk visits, and the parent walk toward the process-entry ancestor.
 const MAX_CHAIN_RUNS = 500;
 
 export type NonTerminalWorkflowRunStatus = Exclude<
@@ -146,45 +147,64 @@ async function ownerRequired(
   return { kind: 'owner_required', activeRun, ownerCandidateIds, recordedOwner };
 }
 
-/** Resolve the child chain while retaining whether its current state needs a live process. */
+/**
+ * Resolve the sub-run tree under `run` while retaining whether its current state needs a
+ * live process. A parent blocked on children is never its own item: the walk goes depth
+ * first through the children in item order. The first child that has attention wins;
+ * failing that, the first that needs an owner; otherwise nobody is needed.
+ */
 async function resolveRun(store: RunAttentionReadStore, run: WorkflowRun): Promise<RunResolution> {
-  const executionChain = [run];
-  let current = run;
-  let attention = runAttention(current);
-  let steps = 0;
+  return resolveFrom(store, run, [run], new Set([run.id]));
+}
 
-  while (attention?.kind === 'blocked_on_child') {
-    steps += 1;
-    if (steps > MAX_CHAIN_RUNS) {
-      return {
-        kind: 'attention',
-        attention: unreadable(
-          attention.runId,
-          'child_chain_too_deep',
-          `sub-run chain is deeper than ${String(MAX_CHAIN_RUNS)} runs`
-        ),
-      };
+async function resolveFrom(
+  store: RunAttentionReadStore,
+  current: WorkflowRun,
+  executionChain: readonly WorkflowRun[],
+  visited: Set<string>
+): Promise<RunResolution> {
+  const attention = runAttention(current);
+  const isRoot = executionChain.length === 1;
+  if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
+    const childRunIds =
+      attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
+    let ownerNeeded: RunResolution | undefined;
+    for (const childRunId of childRunIds) {
+      if (visited.has(childRunId) || visited.size >= MAX_CHAIN_RUNS) {
+        return {
+          kind: 'attention',
+          attention: unreadable(
+            attention.runId,
+            'child_chain_too_deep',
+            `sub-run tree is larger than ${String(MAX_CHAIN_RUNS)} runs or revisits a run`
+          ),
+        };
+      }
+      visited.add(childRunId);
+      const child = await store.getWorkflowRun(childRunId);
+      if (!child) {
+        return {
+          kind: 'attention',
+          attention: unreadable(
+            attention.runId,
+            'child_run_missing',
+            `blocked on sub-run ${childRunId}, which has no row`
+          ),
+        };
+      }
+      const resolution = await resolveFrom(store, child, [...executionChain, child], visited);
+      if (resolution.kind === 'attention') return resolution;
+      if (resolution.kind === 'owner_required') ownerNeeded ??= resolution;
     }
-    const child = await store.getWorkflowRun(attention.childRunId);
-    if (!child) {
-      return {
-        kind: 'attention',
-        attention: unreadable(
-          attention.runId,
-          'child_run_missing',
-          `blocked on sub-run ${attention.childRunId}, which has no row`
-        ),
-      };
-    }
-    executionChain.push(child);
-    current = child;
-    const childAttention = runAttention(child);
-    if (childAttention?.kind === 'terminal') return ownerRequired(store, child, executionChain);
-    attention = childAttention;
+    return ownerNeeded ?? { kind: 'ownerless' };
   }
 
+  // A terminal child's hook is expected to continue its parent, in the child's process.
+  if (attention?.kind === 'terminal' && !isRoot) {
+    return ownerRequired(store, current, executionChain);
+  }
   if (attention) return { kind: 'attention', attention };
-  if (current.status === 'running' || (current !== run && current.status === 'pending')) {
+  if (current.status === 'running' || (!isRoot && current.status === 'pending')) {
     return ownerRequired(store, current, executionChain);
   }
   return { kind: 'ownerless' };

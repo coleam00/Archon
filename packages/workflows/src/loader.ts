@@ -1385,8 +1385,8 @@ export function validateDagStructure(
  * reports a parse warning, which closes #1991
  * for these workflows immediately: every dispatch surface reads the SAME
  * parsed `interactive` value this function's result feeds
- * (`assertInteractiveClassNotBackgrounded`, the fan-out spawn check, the web
- * console's own background-vs-foreground branch), so the coercion protects
+ * (`assertInteractiveClassNotBackgrounded`, the web console's own
+ * background-vs-foreground branch), so the coercion protects
  * them without waiting for the author to add the declaration. TODO(#2738):
  * once the grace period ends, delete the coercion in `parseWorkflow` and
  * restore the hard error — this function's return value already carries the
@@ -1414,10 +1414,8 @@ export function validateDagStructure(
  * workflow's class, not a class of its own).
  *
  * A `workflow:` node is also deliberately NOT checked here: its target
- * resolves at spawn, not load (#2200), so whether it can pause is unknowable
- * at this point — see `resolveFanOutChildDefinition`'s interactive-class
- * check in dag-executor.ts for the spawn-time equivalent (fan-out only; a 1:1
- * `workflow:` child is unaffected by design, see #2474's acceptance criteria).
+ * resolves at spawn, not load (#2200), and a child that pauses is its own run
+ * with its own gate — 1:1 or fan-out (#4044).
  */
 export function validateWorkflowClassPlacement(
   nodes: readonly (DagNode | IncludeDirective)[],

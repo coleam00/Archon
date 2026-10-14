@@ -868,7 +868,7 @@ describe('workflows database', () => {
       expect(query).toContain("IN ('time', 'event')");
       expect(query).toContain("metadata->>'continuation_retry_at' IS NULL");
       expect(query).toContain("metadata->'approval'->>'resolved' IN ('approved', 'rejected')");
-      expect(query).toContain("NOT IN ('child_workflow', 'writeback')");
+      expect(query).toContain("NOT IN ('child_workflow', 'fan_out', 'writeback')");
       expect(query).toContain("ORDER BY CASE WHEN COALESCE(metadata->>'continuation_retry_at'");
       expect(params).toEqual(['2026-08-25T10:00:00.000Z', 25]);
     });
@@ -2242,7 +2242,7 @@ describe('workflows database', () => {
     test('does not tag an already-terminal run', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
-      await expect(cancelFanOutRun('workflow-run-123', 'fan_out_gate')).resolves.toEqual({
+      await expect(cancelFanOutRun('workflow-run-123', 'fan_out_orphan')).resolves.toEqual({
         cancelled: false,
       });
       expect(mockQuery).toHaveBeenCalledTimes(1);
@@ -2251,7 +2251,7 @@ describe('workflows database', () => {
     test('surfaces a failed atomic update', async () => {
       mockQuery.mockRejectedValueOnce(new Error('Lock timeout'));
 
-      await expect(cancelFanOutRun('workflow-run-123', 'fan_out_gate')).rejects.toThrow(
+      await expect(cancelFanOutRun('workflow-run-123', 'fan_out_orphan')).rejects.toThrow(
         'Failed to cancel fan-out run: Lock timeout'
       );
     });

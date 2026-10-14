@@ -778,7 +778,7 @@ async function handleWorkflowCommand(
           message += `\n⚠️ ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
         }
         if (result.blockedParentRunId) {
-          message += `\n⚠️ Parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+          message += `\n⚠️ Parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
         }
         return { success: true, message };
       } catch (error) {
@@ -899,7 +899,7 @@ async function handleWorkflowCommand(
           message += `\n⚠️ ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
         }
         if (blockedParentRunId) {
-          message += `\n⚠️ Parent run ${blockedParentRunId} was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+          message += `\n⚠️ Parent run ${blockedParentRunId} was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
         }
         return { success: true, message };
       } catch (error) {
@@ -1451,7 +1451,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       parts.push(...describeReleasedWorktrees(releasedWorktrees));
       if (abandonBlockedParentRunId !== null) {
         parts.push(
-          `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`
+          `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`
         );
       }
 

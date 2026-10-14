@@ -831,7 +831,7 @@ describe('fan-out cancellation recovery — real SQLite', () => {
 
     await db.query('ALTER TABLE remote_agent_workflow_events RENAME TO events_stash', []);
     try {
-      await expect(cancelFanOutRun('fan-out-cancel-atomic', 'fan_out_gate')).rejects.toThrow(
+      await expect(cancelFanOutRun('fan-out-cancel-atomic', 'fan_out_orphan')).rejects.toThrow(
         'Failed to cancel fan-out run'
       );
     } finally {

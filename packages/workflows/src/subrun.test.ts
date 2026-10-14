@@ -4858,72 +4858,383 @@ nodes:
     expect(JSON.parse(String(workCompleted?.data?.node_output))).toEqual(['ok:keep0', 'recovered']);
   });
 
-  it('a fan-out target that is interactive-class is refused before any child is created (#2707 step 2, #2474)', async () => {
-    // Superseded by the spawn-time interactive-class preflight: an interactive-class
-    // target (declared `interactive: true`, the simple case #2474 scoped as in-scope) is
-    // now refused before ANY child run row exists, rather than spawning and reactively
-    // cancelling a paused child. The reactive backstop this test used to exercise remains
-    // in place for the cases #2474 named out of scope (a gate nested inside a loop_group
-    // body, or a grandchild `workflow:` node's gate) — see the sibling
-    // 'GAP (#2180 Defect A)' describe block below for that backstop still working.
-    await writeWorkflow(
-      'fan-child-gated',
-      `
-name: fan-child-gated
-description: a fan-out child with an approval gate (illegal — fan-out is autonomous)
+  /** A fan-out child that pauses at an approval gate only for the item `askFor`. */
+  const fanAskChild = (name: string, askFor: string): string => `
+name: ${name}
+description: asks for review on one item only
 interactive: true
-mutates_checkout: false
 nodes:
-  - id: impl
-    prompt: "implement $ARGUMENTS"
-  - id: gate
+  - id: echo
+    bash: |
+      printf '%s' "$ARGUMENTS"
+  - id: ask
     approval:
-      message: "review the fan-out child"
-    depends_on: [impl]
-`
-    );
-    await writeWorkflow(
-      'fan-gated-parent',
-      `
-name: fan-gated-parent
-description: fans out over a gated child
+      message: "review $echo.output"
+    depends_on: [echo]
+    when: "$echo.output == '${askFor}'"
+  - id: done
+    bash: |
+      printf 'did:%s' "$ARGUMENTS"
+    depends_on: [echo, ask]
+    trigger_rule: none_failed_min_one_success
+`;
+
+  const fanAskParent = (name: string, child: string, items: string, fanOut: string): string => `
+name: ${name}
+description: fans out over children that may pause
 interactive: true
 nodes:
   - id: plan
     bash: |
-      printf '%s' '["a","b"]'
+      printf '%s' '${items}'
   - id: work
-    workflow: fan-child-gated
+    workflow: ${child}
     depends_on: [plan]
     fan_out:
       items: "$plan.output"
-      max_parallel: 1
-`
+${fanOut}
+`;
+
+  /** Approve a paused child's gate and continue it, which fires the parent's hook. */
+  async function answerChild(
+    deps: WorkflowDeps,
+    store: InMemoryStore,
+    childId: string,
+    childWorkflow: string
+  ): Promise<void> {
+    store.approveGate(childId);
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(childId))!);
+    expect(hydrated).not.toBeNull();
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover(childWorkflow),
+      (await store.getWorkflowRun(childId))!.user_message,
+      { conversationId: 'conv-db' },
+      { ...hydrated! }
+    );
+  }
+
+  const childByItem = (store: InMemoryStore, workflowName: string): Map<string, WorkflowRun> =>
+    new Map(
+      [...store.runs.values()]
+        .filter(r => r.workflow_name === workflowName)
+        .map(r => [r.user_message, r])
     );
 
+  it('a fan-out child that pauses waits as its own run; the parent continues when it finishes (#4044)', async () => {
+    await writeWorkflow('fan-ask', fanAskChild('fan-ask', 'b'));
+    await writeWorkflow(
+      'fan-ask-parent',
+      fanAskParent('fan-ask-parent', 'fan-ask', '["a","b","c"]', '      max_parallel: 3')
+    );
     const store = new InMemoryStore();
     const deps = makeDeps(store);
-    const parent = await discover('fan-gated-parent');
-    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
-      conversationId: 'conv-db',
+
+    const r1 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-ask-parent'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    expect(r1.success && 'paused' in r1 && r1.paused).toBe(true);
+
+    const children = childByItem(store, 'fan-ask');
+    expect(children.get('a')?.status).toBe('completed');
+    expect(children.get('c')?.status).toBe('completed');
+    const b = children.get('b')!;
+    expect(b.status).toBe('paused');
+    expect(b.metadata.cancelled_reason).toBeUndefined();
+
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-ask-parent')!;
+    expect(parentRun.status).toBe('paused');
+    expect(parentRun.metadata.approval).toMatchObject({
+      type: 'fan_out',
+      nodeId: 'work',
+      childRunIds: [b.id],
+      unspawnedItems: 0,
+    });
+    expect(
+      store.events.some(
+        e =>
+          (e.event_type === 'node_completed' || e.event_type === 'node_failed') &&
+          e.step_name === 'work'
+      )
+    ).toBe(false);
+
+    await answerChild(deps, store, b.id, 'fan-ask');
+
+    expect((await store.getWorkflowRun(b.id))?.status).toBe('completed');
+    expect((await store.getWorkflowRun(parentRun.id))?.status).toBe('completed');
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    expect(JSON.parse(String(workCompleted?.data?.node_output))).toEqual([
+      'did:a',
+      'did:b',
+      'did:c',
+    ]);
+  });
+
+  it('a paused fan-out child keeps its max_parallel slot; later items start after it finishes (#4044 D2)', async () => {
+    await writeWorkflow('fan-ask-serial', fanAskChild('fan-ask-serial', 'a'));
+    await writeWorkflow(
+      'fan-ask-serial-parent',
+      fanAskParent(
+        'fan-ask-serial-parent',
+        'fan-ask-serial',
+        '["a","b","c"]',
+        '      max_parallel: 1'
+      )
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    // Track the most children of this fan-out ever unfinished at once.
+    let maxUnfinished = 0;
+    const observe = (): void => {
+      const unfinished = [...store.runs.values()].filter(
+        r =>
+          r.workflow_name === 'fan-ask-serial' &&
+          (r.status === 'running' || r.status === 'pending' || r.status === 'paused')
+      ).length;
+      maxUnfinished = Math.max(maxUnfinished, unfinished);
+    };
+    const createRun = store.createWorkflowRun;
+    store.createWorkflowRun = async data => {
+      observe();
+      return createRun(data);
+    };
+    const claim = store.claimPendingWorkflowRun;
+    store.claimPendingWorkflowRun = async (id, workingPath) => {
+      const claimed = await claim(id, workingPath);
+      observe();
+      return claimed;
+    };
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-ask-serial-parent'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+
+    const first = childByItem(store, 'fan-ask-serial');
+    expect([...first.keys()]).toEqual(['a']);
+    expect(first.get('a')?.status).toBe('paused');
+    const parentRun = [...store.runs.values()].find(
+      r => r.workflow_name === 'fan-ask-serial-parent'
+    )!;
+    expect(parentRun.metadata.approval).toMatchObject({
+      type: 'fan_out',
+      childRunIds: [first.get('a')!.id],
+      unspawnedItems: 2,
     });
 
-    expect(result.success).toBe(false);
-    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-gated-parent');
-    expect(parentRun?.status).toBe('failed');
-    // The parent must NOT be paused blocked-on-child — a fan-out node never holds the
-    // single gate slot (#2180); it fails instead.
-    expect((parentRun?.metadata as Record<string, unknown>).approval).toBeUndefined();
+    await answerChild(deps, store, first.get('a')!.id, 'fan-ask-serial');
 
-    // No child ever gets a row — refused before spawn, not spawned-then-cancelled.
-    const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-gated');
-    expect(children).toHaveLength(0);
+    expect((await store.getWorkflowRun(parentRun.id))?.status).toBe('completed');
+    const all = childByItem(store, 'fan-ask-serial');
+    expect([...all.keys()].sort()).toEqual(['a', 'b', 'c']);
+    expect([...all.values()].every(r => r.status === 'completed')).toBe(true);
+    expect(maxUnfinished).toBe(1);
+  });
 
-    const nodeFailed = store.events.find(
-      e => e.event_type === 'node_failed' && e.step_name === 'work'
+  it('continuing a fan-out does not re-drive a child that already failed (#4044 D3)', async () => {
+    await writeWorkflow(
+      'fan-ask-fail',
+      `
+name: fan-ask-fail
+description: fails on x, asks on y
+interactive: true
+nodes:
+  - id: echo
+    bash: |
+      printf '%s' "$ARGUMENTS"
+  - id: boom
+    bash: |
+      exit 3
+    depends_on: [echo]
+    when: "$echo.output == 'x'"
+  - id: ask
+    approval:
+      message: "review $echo.output"
+    depends_on: [echo]
+    when: "$echo.output == 'y'"
+  - id: done
+    bash: |
+      printf 'did:%s' "$ARGUMENTS"
+    depends_on: [boom, ask]
+    trigger_rule: none_failed_min_one_success
+`
     );
-    expect(String(nodeFailed?.data?.error)).toContain("'fan-child-gated'");
-    expect(String(nodeFailed?.data?.error)).toContain('interactive-class');
+    await writeWorkflow(
+      'fan-ask-fail-parent',
+      fanAskParent(
+        'fan-ask-fail-parent',
+        'fan-ask-fail',
+        '["x","y"]',
+        '      max_parallel: 2\n      join: all_done'
+      )
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-ask-fail-parent'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    const children = childByItem(store, 'fan-ask-fail');
+    const x = children.get('x')!;
+    const y = children.get('y')!;
+    expect(x.status).toBe('failed');
+    expect(y.status).toBe('paused');
+    // The answered sibling records the shared checkout on x's row again when it resumes;
+    // what must not change is x's own execution.
+    const xExecution = (): InMemoryStoreEvent[] =>
+      store.events.filter(
+        e => e.workflow_run_id === x.id && e.event_type !== 'workflow.checkout_shared'
+      );
+    const xEventsAfterFirstDrive = xExecution().length;
+
+    await answerChild(deps, store, y.id, 'fan-ask-fail');
+
+    const parentRun = [...store.runs.values()].find(
+      r => r.workflow_name === 'fan-ask-fail-parent'
+    )!;
+    expect(parentRun.status).toBe('completed');
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    const aggregate = JSON.parse(String(workCompleted?.data?.node_output)) as unknown[];
+    expect(aggregate[0]).toMatchObject({ archon_failed: true, status: 'failed' });
+    expect(aggregate[1]).toBe('did:y');
+    expect((await store.getWorkflowRun(x.id))?.status).toBe('failed');
+    expect(xExecution()).toHaveLength(xEventsAfterFirstDrive);
+  });
+
+  it('a fan-out parent continues itself when its last held child finishes before the pause commits (#4044 D5)', async () => {
+    await writeWorkflow('fan-ask-race', fanAskChild('fan-ask-race', 'b'));
+    await writeWorkflow(
+      'fan-ask-race-parent',
+      fanAskParent('fan-ask-race-parent', 'fan-ask-race', '["a","b"]', '      max_parallel: 2')
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    // The held child finishes between the node's refresh and its pause: its own hook
+    // would have seen the parent still running and stood down.
+    const pause = store.pauseWorkflowRun;
+    let raced = false;
+    store.pauseWorkflowRun = (id, approval, extra, suspension) => {
+      if (approval.type === 'fan_out' && !raced) {
+        raced = true;
+        for (const childId of approval.childRunIds ?? []) {
+          const child = store.runs.get(childId)!;
+          child.status = 'completed';
+          child.completed_at = new Date();
+          child.metadata = { ...child.metadata, summary: 'did:b' };
+        }
+      }
+      return pause(id, approval, extra, suspension);
+    };
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-ask-race-parent'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+
+    expect(raced).toBe(true);
+    expect(result.success).toBe(true);
+    expect('paused' in result && result.paused).toBeFalsy();
+    const parentRun = [...store.runs.values()].find(
+      r => r.workflow_name === 'fan-ask-race-parent'
+    )!;
+    expect(parentRun.status).toBe('completed');
+    const workCompleted = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    expect(JSON.parse(String(workCompleted?.data?.node_output))).toEqual(['did:a', 'did:b']);
+  });
+
+  it('a child cancelled by the old fan_out_gate behavior is re-driven and now waits (#4044 upgrade)', async () => {
+    await writeWorkflow('fan-ask-legacy', fanAskChild('fan-ask-legacy', 'x'));
+    await writeWorkflow(
+      'fan-ask-legacy-parent',
+      fanAskParent('fan-ask-legacy-parent', 'fan-ask-legacy', '["x"]', '      max_parallel: 1')
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+
+    // A parent that failed under the old behavior: its child paused and was cancelled
+    // with `fan_out_gate`, and the fan-out node failed.
+    const parentRun = await store.createWorkflowRun({
+      workflow_name: 'fan-ask-legacy-parent',
+      origin: { conversationId: 'conv-db' },
+      user_message: 'goal',
+      working_path: cwd,
+    });
+    store.events.push(
+      {
+        workflow_run_id: parentRun.id,
+        event_type: 'node_completed',
+        step_name: 'plan',
+        data: { node_output: '["x"]' },
+      },
+      {
+        workflow_run_id: parentRun.id,
+        event_type: 'node_failed',
+        step_name: 'work',
+        data: { error: 'paused at an approval gate' },
+      }
+    );
+    await store.failWorkflowRun(parentRun.id, 'fan-out gate rejected');
+    const legacy = await store.createWorkflowRun({
+      workflow_name: 'fan-ask-legacy',
+      origin: { conversationId: 'conv-db' },
+      user_message: 'x',
+      parent_run_id: parentRun.id,
+      working_path: cwd,
+      metadata: { parent_node_id: 'work', child_index: 0 },
+    });
+    await store.cancelFanOutRun(legacy.id, 'fan_out_gate');
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-ask-legacy-parent'),
+      'goal',
+      { conversationId: 'conv-db' },
+      { ...hydrated! }
+    );
+
+    expect(result.success && 'paused' in result && result.paused).toBe(true);
+    const child = await store.getWorkflowRun(legacy.id);
+    expect(child?.status).toBe('paused');
+    expect(child?.metadata.cancelled_reason).toBeUndefined();
+    expect((await store.getWorkflowRun(parentRun.id))?.metadata.approval).toMatchObject({
+      type: 'fan_out',
+      childRunIds: [legacy.id],
+    });
   });
 
   it('a running fan-out child found on resume fails the node WITHOUT cancelling it (C1)', async () => {
@@ -5159,91 +5470,6 @@ nodes:
     ).rejects.toThrow('terminal projection read failed');
     expect((await store.getWorkflowRun(parentRun.id))?.status).not.toBe('completed');
     expect((await store.getWorkflowRun(orphan.id))?.status).toBe('running');
-  });
-
-  it('a fan-out refused for an interactive-class target recovers on resume once the class is removed (#2707 step 2)', async () => {
-    // Superseded by the spawn-time interactive-class preflight (like the sibling test
-    // above): run 1 is now refused BEFORE any child row exists, so there is nothing to
-    // "re-drive in place" — the C2 recovery story becomes a fresh spawn attempt on retry,
-    // once the author fixes the target's class declaration.
-    const gatedChild = `
-name: fan-child-recover
-description: has an approval gate on the first pass
-interactive: true
-nodes:
-  - id: impl
-    prompt: "implement $ARGUMENTS"
-  - id: gate
-    approval:
-      message: "review"
-    depends_on: [impl]
-`;
-    const ungatedChild = `
-name: fan-child-recover
-description: gate removed
-nodes:
-  - id: impl
-    prompt: "implement $ARGUMENTS"
-`;
-    await writeWorkflow('fan-child-recover', gatedChild);
-    await writeWorkflow(
-      'fan-c2-recover',
-      `
-name: fan-c2-recover
-description: gate-cancelled children recover on resume (inherit, serial)
-interactive: true
-nodes:
-  - id: plan
-    bash: |
-      printf '%s' '["a","b"]'
-  - id: work
-    workflow: fan-child-recover
-    depends_on: [plan]
-    isolation: inherit
-    fan_out:
-      items: "$plan.output"
-      max_parallel: 1
-`
-    );
-
-    const store = new InMemoryStore();
-    const deps = makeDeps(store);
-    const parent = await discover('fan-c2-recover');
-
-    // Run 1: refused before any child row is created.
-    const r1 = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
-      conversationId: 'conv-db',
-    });
-    expect(r1.success).toBe(false);
-    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-c2-recover');
-    expect(
-      [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-recover')
-    ).toHaveLength(0);
-
-    // Author removes the gate, then resumes the parent.
-    await writeWorkflow('fan-child-recover', ungatedChild);
-    const parent2 = await discover('fan-c2-recover');
-    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
-    const resumeOpts = hydrated ?? {
-      preCreatedRun: await store.resumeWorkflowRun(parentRun!.id),
-    };
-    const r2 = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent2,
-      'goal',
-      { conversationId: 'conv-db' },
-      { ...resumeOpts }
-    );
-
-    expect(r2.success).toBe(true);
-    expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('completed');
-    // Both children spawn fresh on this attempt — no rows existed before it.
-    const recovered = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-recover');
-    expect(recovered).toHaveLength(2);
-    expect(recovered.every(r => r.status === 'completed')).toBe(true);
   });
 
   it('a user-cancelled fan-out child (untagged) is NOT resurrected on resume (C2)', async () => {

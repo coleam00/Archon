@@ -699,6 +699,52 @@ describe('waitForRunAttention', () => {
       });
     });
 
+    describe('a fan-out parent blocked on several children', () => {
+      const blockedOnAll = (...childRunIds: string[]) =>
+        gate({ type: 'fan_out', nodeId: 'work', childRunIds });
+
+      test('wakes with the first child that needs an answer, never the parent', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'completed', completed_at: new Date(), parent_run_id: 'parent' });
+        putRun('c2', {
+          status: 'paused',
+          parent_run_id: 'parent',
+          metadata: gate({ nodeId: 'c2-gate' }),
+        });
+
+        expect(await wait('parent')).toMatchObject({
+          kind: 'attention',
+          attention: {
+            kind: 'awaiting_response',
+            runId: 'c2',
+            respondTo: { runId: 'c2', nodeId: 'c2-gate' },
+          },
+        });
+      });
+
+      test('with no child needing an answer, watches the running child', async () => {
+        putRun('parent', { status: 'paused', metadata: blockedOnAll('c1', 'c2') });
+        putRun('c1', { status: 'running', parent_run_id: 'parent' });
+        putRun('c2', {
+          status: 'paused',
+          parent_run_id: 'parent',
+          metadata: {
+            wait: {
+              owner: 'node',
+              nodeId: 'hold',
+              kind: 'time',
+              waitingSince: '2026-08-28T10:00:00.000Z',
+              resumeAt: '2026-08-28T11:00:00.000Z',
+            },
+          },
+        });
+        reachableOwners = new Set(['c1']);
+
+        expect(await wait('parent', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+        expect(mockWatchRunLiveOwner.mock.calls[0]?.[0]).toBe('c1');
+      });
+    });
+
     test('a chain longer than the bound is unreadable, not an assumed state', async () => {
       for (let i = 0; i < 520; i += 1) {
         putRun(`r${String(i)}`, { status: 'paused', metadata: blockedOn(`r${String(i + 1)}`) });

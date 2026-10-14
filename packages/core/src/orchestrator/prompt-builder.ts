@@ -161,6 +161,16 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     );
   }
 
+  if (attention.kind === 'blocked_on_children') {
+    return (
+      header +
+      `Run \`${runId}\` (**${workflowName}**) is paused waiting on its fan-out sub-runs ` +
+      `${attention.childRunIds.map(id => `\`${id}\``).join(', ')}. This run has no gate you can ` +
+      'resolve — each sub-run that is waiting is answered by its own run id, and this one ' +
+      'continues on its own once they finish.'
+    );
+  }
+
   if (attention.kind === 'action_required') {
     return (
       '## Paused action required\n\n' +

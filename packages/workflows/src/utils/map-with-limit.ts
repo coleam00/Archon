@@ -44,3 +44,39 @@ export async function mapWithLimit<T, R>(
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return results;
 }
+
+/**
+ * Like {@link mapWithLimit}, but a worker whose fulfilled value satisfies `holdsSlot`
+ * keeps its slot and claims no further item. The fan-out executor uses it so a paused
+ * child keeps its `max_parallel` slot (#4044): a paused child is unfinished work that
+ * may hold edits in a shared checkout, so the next item must not start beside it.
+ *
+ * Indices no worker claimed stay `undefined`. `slots <= 0` starts no worker.
+ */
+export async function mapWithHeldSlots<T, R>(
+  items: readonly T[],
+  slots: number,
+  fn: (item: T, index: number) => Promise<R>,
+  holdsSlot: (value: R) => boolean
+): Promise<(PromiseSettledResult<R> | undefined)[]> {
+  const results = new Array<PromiseSettledResult<R> | undefined>(items.length).fill(undefined);
+  const workerCount = Math.max(0, Math.min(Math.floor(slots) || 0, items.length));
+  let cursor = 0;
+
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      try {
+        const value = await fn(items[index], index);
+        results[index] = { status: 'fulfilled', value };
+        if (holdsSlot(value)) return;
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
