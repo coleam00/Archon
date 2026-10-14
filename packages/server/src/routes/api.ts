@@ -10,6 +10,7 @@ import {
   webPushPayloadSchema,
 } from '@archon/core/schemas/web-push';
 import { getAgentProvider } from '@archon/core/services/provider-admission';
+import { detectProjectKind, ProjectKindDetectionError } from '@archon/core/services/project-kind';
 import { missingProviderMessage } from '@archon/provider-contract';
 import { RunActionForbiddenError } from '@archon/core/operations/run-authorization';
 /**
@@ -30,7 +31,7 @@ import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
-import { existsSync, readFileSync } from 'fs';
+import { readFileSync } from 'fs';
 import { normalize, join, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
@@ -90,7 +91,6 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import type { EffortLevel } from '@archon/workflows/schemas/effort';
 import {
   ConfiguredBaseBranchNotFoundError,
-  findRepoRoot,
   removeWorktree,
   toRepoPath,
   toWorktreePath,
@@ -3442,31 +3442,13 @@ export function registerApiRoutes(
         });
       } else {
         const localPath = await canonicalizeProjectPath(body.path);
-        // Detect git-ness. A resolvable repo root → register as a repo project;
-        // a definitive null ("not a git repository") → folder project. A THROW
-        // is ambiguous: findRepoRoot throws both for a nonexistent path (benign
-        // — fall through so registerFolder's own existence check produces the
-        // clean error) and for a genuine git failure (git missing, timeout,
-        // permission) on a path that DOES exist. The latter must NOT register:
-        // it would permanently misclassify a real repo as kind:'folder'.
-        let repoRoot: string | null = null;
-        try {
-          repoRoot = await findRepoRoot(localPath);
-        } catch (err) {
-          getLog().warn({ err, path: localPath }, 'api.add_codebase_repo_detect_failed');
-          if (existsSync(localPath)) {
-            return apiError(
-              c,
-              500,
-              'Could not determine whether the path is a git repository (git failed — is git installed and the path readable?). Nothing was registered; retry once the underlying issue is resolved.'
-            );
-          }
-        }
-        result = repoRoot
-          ? await registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
-          : await registerFolder(localPath, undefined, {
-              baseBranch: body.base_branch ?? undefined,
-            });
+        const kind = await detectProjectKind(localPath);
+        result =
+          kind === 'repo'
+            ? await registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
+            : await registerFolder(localPath, undefined, {
+                baseBranch: body.base_branch ?? undefined,
+              });
       }
 
       // Fetch the full codebase record for a consistent response
@@ -3477,6 +3459,10 @@ export function registerApiRoutes(
 
       return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
     } catch (error) {
+      if (error instanceof ProjectKindDetectionError) {
+        getLog().warn({ err: error }, 'api.add_codebase_repo_detect_failed');
+        return apiError(c, 500, error.message);
+      }
       if (
         error instanceof ProjectRegistrationError ||
         error instanceof ConfiguredBaseBranchNotFoundError
@@ -3960,12 +3946,12 @@ export function registerApiRoutes(
         }
       }
 
-      // Declared inputs ride the context, never `fullMessage` — encoding them into the
-      // command string would make a supplied value indistinguishable from $ARGUMENTS
-      // and would amount to inventing a chat grammar as a side effect (#2554/#2555).
-      const fullMessage = `/workflow run ${workflowName} ${message}`;
+      // The message and every run option ride typed fields, never a chat command
+      // string: tokenizing the message would rewrite it and let a word in it set
+      // `--force` (#4159), and encoding inputs would invent a chat grammar (#2554/#2555).
       const extraContext: Omit<HandleMessageContext, 'isolationHints'> = {
         actor,
+        workflowName,
         ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
         ...(workflowInputs ? { workflowInputs } : {}),
         ...(workflowModelOverrides ? { workflowModelOverrides } : {}),
@@ -3976,7 +3962,7 @@ export function registerApiRoutes(
       const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
       const result = await dispatchToOrchestrator(
         conversationId,
-        fullMessage,
+        message,
         extraContext,
         filesToCleanup
       );

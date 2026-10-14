@@ -675,6 +675,19 @@ categorical `reason` and the `signal` that arrived. Resuming the run clears it, 
 that resumed and then completed does not keep reporting an interrupt. Runs that stopped
 before this field existed carry no `stop_reason`.
 
+After recording why the run stopped, the owner ends the process tree of every `bash:` or
+`script:` node still running, including an `until_bash` check, so a resume does not overlap the
+interrupted attempt, apart from the escapes below. This applies to foreground `workflow run`, `workflow resume` and
+`trigger execute`. A node counts as running until its output closes, so a background job that
+still writes to the node's output ends with it. On macOS and Linux those subprocesses run in
+their own session during a foreground run, so they have no controlling terminal, and a small
+watcher process ends the node's process group if the owner dies before its teardown does (a
+terminal hangup, a second Ctrl-C, `kill -9`); a run whose stop was never recorded stays
+`running`. A process that starts its own session or process group (`setsid`, a daemon)
+escapes this. On Windows the tree is ended from the node's root process, so a descendant whose
+root already exited is not reached, and an owner killed before its teardown leaves the tree
+running.
+
 Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
 separate unsupported reporting, a supported value not reported, unknown capability, non-provider
 work and invalid reported numbers. A reported zero stays zero. Historical nodes omit `execution`
@@ -1593,10 +1606,13 @@ When using `--branch`, workflows run inside the worktree directory.
 > **Commands and workflows are loaded from the working directory at runtime.** The CLI reads directly from disk, so it picks up uncommitted changes immediately. This is different from the server (Telegram/Slack/GitHub), which reads from the workspace clone at `~/.archon/workspaces/` -- that clone only syncs from the remote before worktree creation, so changes must be pushed to take effect there.
 
 Legacy registrations with a relative stored project path fail with a project-named
-error. Repair them in Archon chat with
+error. Attempt repair in Archon chat with
 `/register-project "project-name" /absolute/path/to/project`; changing the CLI's
-working directory does not repair the stored path. Re-registration preserves the
-existing project's identity and history.
+working directory does not repair the stored path. Repair refuses a replacement
+path or kind that would move managed storage or worktrees. A successful repair
+preserves the existing project's identity and history. See
+[Stored project path is relative](/reference/troubleshooting/#stored-project-path-is-relative)
+for recovery details.
 
 ## Environment
 

@@ -3315,6 +3315,7 @@ async function runWorkflowWithOwnedSource(
         isStopRequested: () => runLiveOwner?.isStopRequested() ?? false,
         close: closeRunLiveOwner,
       },
+      endNodeProcessTrees: !detachedProcessOwner,
       teardown: async signal => {
         // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
         // PRIVILEGED container — the forced exit bypasses the teardown `finally`.

@@ -6,7 +6,8 @@ description: |
   clearly touches no type, contract, state or boundary. Reviews a PR when given
   one, otherwise the working diff. Every round also holds the change to the
   accepted contract: each stated acceptance item, invariant, and steering
-  constraint is met with cited evidence or raised as a blocking finding.
+  constraint is met with cited evidence or raised as a blocking finding. Given a
+  part assignment, items that only later parts own are deferred, not unmet.
   Advisory and read-only: it judges, it never edits. Given the previous round's
   report, the same lenses review only the correction delta since the reviewed
   commit, judging whether each prior finding was resolved or validly declined
@@ -48,6 +49,15 @@ inputs:
     description: >-
       "true" when this continuation follows a correction for CI rather than for
       review: the general code lens alone reviews the delta.
+  part:
+    default: ""
+    description: >-
+      The part of an approved multi-part plan this change delivers, as JSON
+      naming the delivered part and each part's contract items, quoted:
+      `{"delivers": 1, "parts": [{"part": 1, "items": ["..."]}, {"part": 2, "items": ["..."]}]}`.
+      A contract item that only later parts list is deferred, not unmet.
+      Empty reviews against the whole contract. The `mode` node's
+      `output_format` owns and enforces the shape.
   # Error review can be forced on or off; `auto` leaves it to the route agent.
   errors:
     default: "auto"
@@ -65,13 +75,16 @@ nodes:
   # every push after the PR opens. head-check refuses before lenses; publish
   # checks again before the public write. The node also turns the input into the
   # routable fact the lenses gate on: an include's inputs are substituted as text
-  # at load time and cannot be compared in a `when:`.
+  # at load time and cannot be compared in a `when:`. For the same reason it carries
+  # the part assignment, so scope and synthesis read a value certified against its
+  # schema, not raw text.
   - id: mode
     script: review-round
     runtime: bun
     with:
       prior_report: "$INPUTS.prior_report"
       light: "$INPUTS.light"
+      part: "$INPUTS.part"
     output_format:
       type: object
       properties:
@@ -88,7 +101,26 @@ nodes:
         tests: { type: boolean }
         errors: { type: boolean }
         docs: { type: boolean }
-      required: [continuation, head, cursor, risks, execution, seams, code, tests, errors, docs]
+        # The run's part assignment, null when the run delivers the whole contract.
+        # This schema is the one owner of the shape; ship and deliver forward the
+        # input as-is.
+        part:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            delivers: { type: integer, minimum: 1 }
+            parts:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  part: { type: integer, minimum: 1 }
+                  items: { type: array, minItems: 1, items: { type: string, pattern: '\S' } }
+                required: [part, items]
+          required: [delivers, parts]
+      required: [continuation, head, cursor, risks, execution, seams, code, tests, errors, docs, part]
 
   - id: scope
     command: review-scope

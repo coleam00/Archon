@@ -429,6 +429,23 @@ ${field}:
       );
     });
 
+    test('strict config reads use defaults only for missing files and preserve read failures', async () => {
+      const missing = Object.assign(new Error('missing'), { code: 'ENOENT' });
+      mockFsReadFile.mockRejectedValue(missing);
+      expect(await loadRepoConfig('/repo', { strict: true })).toEqual({});
+      const denied = Object.assign(new Error('denied'), { code: 'EACCES' });
+      mockFsReadFile.mockRejectedValue(denied);
+      expect(await loadRepoConfig('/repo', { strict: true }).catch(error => error)).toBe(denied);
+    });
+
+    test.each(['worktree: [', 'false', '[]'])(
+      'strict config reads reject invalid configuration: %s',
+      async content => {
+        mockFsReadFile.mockResolvedValue(content);
+        await expect(loadRepoConfig('/repo', { strict: true })).rejects.toThrow();
+      }
+    );
+
     test('parses recommendedWorkflows as an ordered string array', async () => {
       mockFsReadFile.mockResolvedValue(`
 recommendedWorkflows:
