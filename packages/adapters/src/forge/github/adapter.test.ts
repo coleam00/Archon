@@ -2221,6 +2221,76 @@ describe('GitHubAdapter', () => {
       }
     });
 
+    for (const mode of ['app', 'pat'] as const) {
+      test.each([false, true])(
+        `${mode} overlapping readiness preserves the checkout when the first clone fails: %s`,
+        async firstFails => {
+          const root = await mkdtemp(join(tmpdir(), 'github-clone-overlap-'));
+          const repoPath = join(root, 'source');
+          const makeAdapter = () =>
+            mode === 'app'
+              ? createAppModeAdapter().adapter
+              : new GitHubAdapter({ kind: 'pat', token: 'fake-token' }, 'secret', mockLockManager);
+          const firstAdapter = makeAdapter();
+          const secondAdapter = makeAdapter();
+          const entered = Promise.withResolvers<void>();
+          const release = Promise.withResolvers<void>();
+          mockCloneRepository.mockReset();
+          mockCloneRepository.mockImplementation(async (_url, target) => {
+            const attempt = mockCloneRepository.mock.calls.length;
+            if (attempt === 1) {
+              entered.resolve();
+              await release.promise;
+              if (firstFails) {
+                await mkdir(join(String(target), '.git'), { recursive: true });
+                await writeFile(join(String(target), 'partial.txt'), 'partial checkout');
+                return {
+                  ok: false,
+                  error: { code: 'permission_denied', path: String(target) },
+                };
+              }
+            }
+            if (await Bun.file(join(String(target), 'tracked.txt')).exists()) {
+              return {
+                ok: false,
+                error: { code: 'unknown', message: 'destination already exists and is not empty' },
+              };
+            }
+            await mkdir(join(String(target), '.git'), { recursive: true });
+            await writeFile(join(String(target), 'tracked.txt'), 'successful checkout');
+            return { ok: true, value: undefined };
+          });
+          const ready = (adapter: GitHubAdapter) => {
+            // @ts-expect-error - calling private method
+            return adapter.ensureRepoReady('owner', 'repo', 'main', repoPath, false);
+          };
+          const first = ready(firstAdapter);
+          await entered.promise;
+          const second = ready(secondAdapter);
+          const results = Promise.allSettled([first, second]);
+          try {
+            // Give the sibling webhook time to reach clone if readiness is unlocked.
+            await Bun.sleep(50);
+            expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+            release.resolve();
+            const [firstOutcome, secondOutcome] = await results;
+            expect(firstOutcome?.status).toBe(firstFails ? 'rejected' : 'fulfilled');
+            expect(secondOutcome?.status).toBe('fulfilled');
+            expect(mockCloneRepository).toHaveBeenCalledTimes(firstFails ? 2 : 1);
+            await access(join(repoPath, '.git'));
+            expect(await readFile(join(repoPath, 'tracked.txt'), 'utf8')).toBe(
+              'successful checkout'
+            );
+            expect(await Bun.file(join(repoPath, 'partial.txt')).exists()).toBe(false);
+          } finally {
+            release.resolve();
+            await results;
+            await removeTempTree(root);
+          }
+        }
+      );
+    }
+
     test('AppNotInstalledError on clone surfaces a clean message', async () => {
       const { AppNotInstalledError } = await import('@archon/core');
       const { adapter, provider } = createAppModeAdapter();

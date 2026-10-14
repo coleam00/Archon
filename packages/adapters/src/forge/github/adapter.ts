@@ -7,7 +7,7 @@ import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
 import { verifyGitHubWebhookSignature } from './webhook-signature';
 import { readdir, access, rm } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import type { IPlatformAdapter, MessageMetadata, GitHubAuth } from '@archon/core';
 import type { IsolationHints } from '@archon/isolation';
 import {
@@ -63,6 +63,9 @@ const MAX_LENGTH = 65000; // GitHub comment limit (~65,536, leave buffer for saf
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
+
+// Webhook readiness runs before conversation locking; adapter instances can share a checkout.
+const repositoryReadiness = new Map<string, Promise<void>>();
 
 interface PullRequestIdentity {
   host: string;
@@ -703,7 +706,24 @@ export class GitHubAdapter implements IPlatformAdapter {
    * For existing codebases: sync if shouldSync=true, skip if shouldSync=false
    * @param shouldSync - Whether to sync an existing clone (pass true to ensure latest code)
    */
-  private async ensureRepoReady(
+  private ensureRepoReady(
+    owner: string,
+    repo: string,
+    defaultBranch: string,
+    repoPath: string,
+    shouldSync: boolean
+  ): Promise<void> {
+    const key = resolve(repoPath);
+    const prepare = () => this.prepareRepository(owner, repo, defaultBranch, repoPath, shouldSync);
+    const previous = repositoryReadiness.get(key) ?? Promise.resolve();
+    const pending = previous.then(prepare, prepare).finally(() => {
+      if (repositoryReadiness.get(key) === pending) repositoryReadiness.delete(key);
+    });
+    repositoryReadiness.set(key, pending);
+    return pending;
+  }
+
+  private async prepareRepository(
     owner: string,
     repo: string,
     defaultBranch: string,
@@ -770,8 +790,8 @@ export class GitHubAdapter implements IPlatformAdapter {
     }
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
 
-    // Only an initially empty target belongs to this clone attempt. A failed
-    // clone into a nonempty directory must preserve its pre-existing files.
+    // Readiness is serialized through cleanup, so an empty target cannot be
+    // populated by a sibling webhook while this attempt owns it.
     let cloneOwnsTarget = true;
     try {
       cloneOwnsTarget = (await readdir(repoPath)).length === 0;
