@@ -53,9 +53,12 @@ async function canonicalizeForTest(p: string): Promise<string> {
   const absolute = resolve(p);
   return await realpath(absolute).catch(() => absolute);
 }
+const { getProjectStoragePaths, resolveProjectStorageKey } = await import('@archon/paths');
 const mockCanonicalizeProjectPath = mock(canonicalizeForTest);
 mock.module('@archon/paths', () => ({
   canonicalizeProjectPath: mockCanonicalizeProjectPath,
+  getProjectStoragePaths,
+  resolveProjectStorageKey,
   captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
@@ -1937,7 +1940,7 @@ describe('orchestrator-agent handleMessage', () => {
     });
 
     for (const kind of ['repo', 'folder'] as const) {
-      test(`/register-project repairs the path and detected ${kind} kind together`, async () => {
+      test(`/register-project refuses repair from the opposite kind to ${kind}`, async () => {
         const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(
           kind === 'repo' ? git.toRepoPath('/new/path') : null
         );
@@ -1954,14 +1957,11 @@ describe('orchestrator-agent handleMessage', () => {
           await handleMessage(platform, 'chat-456', '/register-project my-app /new/path', {
             actor: operator,
           });
-          expect(mockUpdateCodebase).toHaveBeenCalledWith(
-            expect.objectContaining({ id: mockCodebase.id }),
-            { default_cwd: '/new/path', kind }
-          );
+          expect(mockUpdateCodebase).not.toHaveBeenCalled();
           expect(mockCreateCodebase).not.toHaveBeenCalled();
           expect(platform.sendMessage).toHaveBeenCalledWith(
             'chat-456',
-            expect.stringContaining('re-registered successfully')
+            expect.stringContaining('would move its Archon storage')
           );
         } finally {
           repoSpy.mockRestore();
@@ -1969,40 +1969,53 @@ describe('orchestrator-agent handleMessage', () => {
       });
     }
 
-    test('/register-project on a real non-git dir creates a folder project (clean null path)', async () => {
-      // Use a REAL non-git temp dir so findRepoRoot returns null via the
-      // definitive "not a git repository" path (deterministic) — not the
-      // exception-fallback branch a fake/nonexistent path would take.
-      const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-folder-'));
-      const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
-      try {
-        mockExistsSync.mockReturnValue(true);
-        mockListCodebases.mockResolvedValue([]);
-        mockCreateCodebase.mockResolvedValue({
-          ...mockCodebase,
-          id: 'new-id',
-          name: 'my-app',
-          default_cwd: canonicalPath,
-        });
+    for (const trace of [
+      '',
+      'GIT_TRACE',
+      'GIT_TRACE_PERFORMANCE',
+      'GIT_TRACE2',
+      'GIT_TRACE2_EVENT',
+      'GIT_TRACE2_PERF',
+      'GIT_TRACE_SETUP',
+    ]) {
+      test(`/register-project on a real non-git dir creates a folder project with ${trace || 'no tracing'}`, async () => {
+        const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-folder-'));
+        const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
+        const previousTrace = trace ? process.env[trace] : undefined;
+        if (trace) process.env[trace] = '1';
+        try {
+          mockExistsSync.mockReturnValue(true);
+          mockListCodebases.mockResolvedValue([]);
+          mockCreateCodebase.mockResolvedValue({
+            ...mockCodebase,
+            id: 'new-id',
+            name: 'my-app',
+            default_cwd: canonicalPath,
+          });
 
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
-          actor: operator,
-        });
+          await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+            actor: operator,
+          });
 
-        expect(mockCreateCodebase).toHaveBeenCalledWith({
-          name: 'my-app',
-          default_cwd: canonicalPath,
-          default_branch: null,
-          kind: 'folder',
-        });
-        expect(platform.sendMessage).toHaveBeenCalledWith(
-          'chat-456',
-          expect.stringContaining('registered successfully')
-        );
-      } finally {
-        await removeTempTree(projectPath);
-      }
-    });
+          expect(mockCreateCodebase).toHaveBeenCalledWith({
+            name: 'my-app',
+            default_cwd: canonicalPath,
+            default_branch: null,
+            kind: 'folder',
+          });
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'chat-456',
+            expect.stringContaining('registered successfully')
+          );
+        } finally {
+          if (trace) {
+            if (previousTrace === undefined) delete process.env[trace];
+            else process.env[trace] = previousTrace;
+          }
+          await removeTempTree(projectPath);
+        }
+      });
+    }
 
     test('/register-project stores no branch choice and asks nothing', async () => {
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-project-'));

@@ -62,6 +62,7 @@ import type * as Paths from '@archon/paths';
 import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import { captureWorkflowSource } from '../../../workflows/src/workflow-source';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { quoteCommandArg } from '../utils/command-args';
 
 const operator: RunActor = { kind: 'operator' };
 
@@ -151,8 +152,11 @@ const mockCaptureApprovalResolved = mock(() => undefined);
 // Tests below derive their expected path from it rather than from a POSIX
 // literal: it makes a path absolute, and on Windows `resolve('/path')` is
 // drive-qualified (`D:\path`).
-const { canonicalizeProjectPath } = await import('@archon/paths');
+const { canonicalizeProjectPath, getProjectStoragePaths, resolveProjectStorageKey } =
+  await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  getProjectStoragePaths,
+  resolveProjectStorageKey,
   captureApprovalResolved: mockCaptureApprovalResolved,
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
@@ -7397,12 +7401,20 @@ describe('handleMessage — legacy registration recovery', () => {
       { ...makeNamedCodebase('other'), default_cwd: 'other/path' },
       { ...makeNamedCodebase('my-app'), default_cwd: 'projects/repo' },
     ]);
+    const repairRoot = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-legacy-repair-')));
+    const replacement = join(repairRoot, 'repo');
+    await mkdir(replacement, { recursive: true });
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/register-project My-App /', { actor: operator });
+    await handleMessage(
+      platform,
+      'conv-1',
+      `/register-project My-App ${quoteCommandArg(replacement)}`,
+      { actor: operator }
+    );
     expect(mockUpdateCodebase).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
       {
-        default_cwd: await canonicalizeProjectPath('/'),
+        default_cwd: await canonicalizeProjectPath(replacement),
         kind: 'repo',
       }
     );

@@ -32,7 +32,19 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
     const { stdout } = await execFileAsync(
       'git',
       ['-C', startPath, 'rev-parse', '--show-toplevel'],
-      { timeout: 10000, env: { ...process.env, LC_ALL: 'C' } }
+      {
+        timeout: 10000,
+        env: {
+          ...process.env,
+          // Trace output shares stderr with the discovery diagnostic.
+          ...Object.fromEntries(
+            Object.keys(process.env)
+              .filter(key => key.startsWith('GIT_TRACE'))
+              .map(key => [key, '0'])
+          ),
+          LC_ALL: 'C',
+        },
+      }
     );
     return toRepoPath(stdout.trim());
   } catch (error) {

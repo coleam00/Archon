@@ -29,7 +29,13 @@ import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflo
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'fs';
 import { isAbsolute } from 'node:path';
-import { createLogger, captureChatTurn, canonicalizeProjectPath } from '@archon/paths';
+import {
+  createLogger,
+  captureChatTurn,
+  canonicalizeProjectPath,
+  getProjectStoragePaths,
+  resolveProjectStorageKey,
+} from '@archon/paths';
 import type {
   IPlatformAdapter,
   HandleMessageContext,
@@ -3566,6 +3572,17 @@ Kind: folder project (runs in place)`;
     return toError(err).message;
   }
   if (alreadyExists) {
+    const current = { ...alreadyExists, default_cwd: alreadyExists.stored_default_cwd };
+    const replacement = { ...current, default_cwd: canonicalPath, kind };
+    const currentRoot = getProjectStoragePaths(
+      resolveProjectStorageKey(current, current.default_cwd)
+    ).root;
+    const replacementRoot = getProjectStoragePaths(
+      resolveProjectStorageKey(replacement, replacement.default_cwd)
+    ).root;
+    if (currentRoot !== replacementRoot) {
+      return `Repairing "${projectName}" would move its Archon storage (worktrees, state, logs, artifacts) from ${currentRoot} to ${replacementRoot}. Nothing was changed; use a replacement path and kind that keep the same storage location.`;
+    }
     await codebaseDb.updateCodebase(alreadyExists, { default_cwd: canonicalPath, kind });
     return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
   }
