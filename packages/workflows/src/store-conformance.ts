@@ -1235,52 +1235,6 @@ export function describeWorkflowStoreConformance(
         });
       }
     });
-    test('attention failure matches its exact owner and reports only the winner', async () => {
-      const run = await running(store);
-      const attention = {
-        owner: 'loop_group' as const,
-        nodeId: 'loop',
-        bodyWaitId: 'wait',
-        iteration: 2,
-        sessionId: null,
-        sessionProvider: null,
-        kind: 'attention' as const,
-        waitingSince: wait.waitingSince,
-        message: 'Act',
-      };
-      await store.pauseWorkflowRunForWait(run.id, attention, {
-        kind: 'started',
-        stepName: 'loop.wait',
-      });
-      for (const mismatch of [
-        { ...attention, iteration: 1 },
-        { ...attention, nodeId: 'other' },
-        { ...attention, bodyWaitId: 'other' },
-        { ...attention, waitingSince: wait.resumeAt },
-      ]) {
-        expect(await store.failPausedAttentionWait(run.id, mismatch, 'undelivered')).toEqual({
-          failed: false,
-        });
-      }
-      const results = await eight(() =>
-        store.failPausedAttentionWait(run.id, attention, 'undelivered')
-      );
-      expect(results.filter(result => result.failed)).toHaveLength(1);
-      expect(await types(store, run.id)).toEqual(['wait_started', 'workflow_failed']);
-      expect(harness.terminalReports()).toEqual([run.id]);
-      expect((await store.getWorkflowRun(run.id))?.status).toBe('failed');
-    });
-    test('an undelivered approval cannot fail a different or already resolved gate', async () => {
-      const run = await running(store);
-      await store.pauseWorkflowRun(run.id, approval);
-      expect(
-        await store.failPausedApproval(run.id, { ...approval, pauseId: 'stale' }, 'lost')
-      ).toEqual({ failed: false });
-      const results = await eight(() => store.failPausedApproval(run.id, approval, 'lost'));
-      expect(results.filter(result => result.failed)).toHaveLength(1);
-      expect(await types(store, run.id)).toEqual(['workflow_failed']);
-      expect(harness.terminalReports()).toEqual([run.id]);
-    });
     test('gate resolution has one winner and no loser events', async () => {
       await assertWorkflowGateRace(store);
     });
@@ -1369,80 +1323,59 @@ export function describeWorkflowStoreConformance(
         expect(harness.terminalReports()).toEqual([run.id]);
       }
     );
-    test.each([
-      'complete',
-      'fail',
-      'cancel',
-      'fan-out',
-      'reject',
-      'reset',
-      'attention',
-      'approval',
-    ] as const)('%s publishes terminal status together with its event', async mode => {
-      const run = await running(store, {
-        origin: { conversationId: CONFORMANCE_CONVERSATION_ID },
-      });
-      const attention = {
-        owner: 'node' as const,
-        nodeId: 'attention',
-        kind: 'attention' as const,
-        waitingSince: wait.waitingSince,
-        message: 'Act',
-      };
-      if (mode === 'reject' || mode === 'reset' || mode === 'approval')
-        await store.pauseWorkflowRun(run.id, approval);
-      if (mode === 'attention')
-        await store.pauseWorkflowRunForWait(run.id, attention, {
-          kind: 'started',
-          stepName: 'attention',
+    test.each(['complete', 'fail', 'cancel', 'fan-out', 'reject', 'reset'] as const)(
+      '%s publishes terminal status together with its event',
+      async mode => {
+        const run = await running(store, {
+          origin: { conversationId: CONFORMANCE_CONVERSATION_ID },
         });
-      const writers: Record<typeof mode, () => Promise<unknown>> = {
-        complete: () => store.completeWorkflowRun(run.id, { duration_ms: 1 }),
-        fail: () => store.failWorkflowRun(run.id, 'failed', { scheduledResume: schedule }),
-        cancel: () => store.cancelWorkflowRun(run.id),
-        'fan-out': () => store.cancelFanOutRun(run.id, 'fan_out_sibling'),
-        reject: () =>
-          store.resolveAndCancelApprovalGate(run.id, gateEvents(0), {
-            step_name: 'review',
-          }),
-        reset: () => store.cancelResumableRunsForConversation(CONFORMANCE_CONVERSATION_ID),
-        attention: () => store.failPausedAttentionWait(run.id, attention, 'lost'),
-        approval: () => store.failPausedApproval(run.id, approval, 'lost'),
-      };
-      let settled = false;
-      const pending = writers[mode]().finally(() => {
-        settled = true;
-      });
-      try {
-        do {
-          // Bracket the row read so a commit between port reads cannot look non-atomic.
-          const priorEvents = await store.listWorkflowEvents(run.id);
-          const observed = await store.getWorkflowRun(run.id);
-          const events = await store.listWorkflowEvents(run.id);
-          for (const status of TERMINAL_WORKFLOW_STATUSES) {
-            if (priorEvents.some(event => event.event_type === `workflow_${status}`))
-              expect(observed?.status).toBe(status);
-          }
-          if (observed && isTerminalRunStatus(observed.status)) {
-            const terminal = events.find(
-              event => event.event_type === `workflow_${observed.status}`
-            );
-            expect(terminal).toBeDefined();
-            expect(terminalRecordSchema.parse(terminal?.data.terminal_record).status).toBe(
-              observed.status
-            );
-          }
-          if (!settled) await new Promise<void>(resolve => setImmediate(resolve));
-        } while (!settled);
-      } finally {
-        await pending;
+        if (mode === 'reject' || mode === 'reset') await store.pauseWorkflowRun(run.id, approval);
+        const writers: Record<typeof mode, () => Promise<unknown>> = {
+          complete: () => store.completeWorkflowRun(run.id, { duration_ms: 1 }),
+          fail: () => store.failWorkflowRun(run.id, 'failed', { scheduledResume: schedule }),
+          cancel: () => store.cancelWorkflowRun(run.id),
+          'fan-out': () => store.cancelFanOutRun(run.id, 'fan_out_sibling'),
+          reject: () =>
+            store.resolveAndCancelApprovalGate(run.id, gateEvents(0), {
+              step_name: 'review',
+            }),
+          reset: () => store.cancelResumableRunsForConversation(CONFORMANCE_CONVERSATION_ID),
+        };
+        let settled = false;
+        const pending = writers[mode]().finally(() => {
+          settled = true;
+        });
+        try {
+          do {
+            // Bracket the row read so a commit between port reads cannot look non-atomic.
+            const priorEvents = await store.listWorkflowEvents(run.id);
+            const observed = await store.getWorkflowRun(run.id);
+            const events = await store.listWorkflowEvents(run.id);
+            for (const status of TERMINAL_WORKFLOW_STATUSES) {
+              if (priorEvents.some(event => event.event_type === `workflow_${status}`))
+                expect(observed?.status).toBe(status);
+            }
+            if (observed && isTerminalRunStatus(observed.status)) {
+              const terminal = events.find(
+                event => event.event_type === `workflow_${observed.status}`
+              );
+              expect(terminal).toBeDefined();
+              expect(terminalRecordSchema.parse(terminal?.data.terminal_record).status).toBe(
+                observed.status
+              );
+            }
+            if (!settled) await new Promise<void>(resolve => setImmediate(resolve));
+          } while (!settled);
+        } finally {
+          await pending;
+        }
+        expect(
+          (await types(store, run.id)).filter(type =>
+            TERMINAL_WORKFLOW_STATUSES.some(status => type === `workflow_${status}`)
+          )
+        ).toHaveLength(1);
       }
-      expect(
-        (await types(store, run.id)).filter(type =>
-          TERMINAL_WORKFLOW_STATUSES.some(status => type === `workflow_${status}`)
-        )
-      ).toHaveLength(1);
-    });
+    );
     test('a racing resume follows the failure event when it succeeds', async () => {
       const run = await running(store);
       const pending = store.failWorkflowRun(run.id, 'failed', { scheduledResume: schedule });

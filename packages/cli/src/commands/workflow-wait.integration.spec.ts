@@ -338,14 +338,13 @@ const SLOW_SUCCESS =
 const SLOW_FAILURE =
   'name: wait-failure\ndescription: Detached failure fixture.\n' +
   'nodes:\n  - id: fail\n    bash: "sleep 1; echo failed >&2; exit 42"\n';
-// `interactive: true` is refused for background dispatch by design (#2738), so this
-// one runs in the foreground OF ANOTHER PROCESS — which is the property that matters:
-// the waiter is not in the process that owns the run. The warm-up node is what lets
-// the waiter attach BEFORE the gate exists, so the gate is a wake and not a read.
+// The warm-up node is what lets the waiter attach BEFORE the gate exists, so the gate
+// is a wake and not a read.
 const GATED =
-  'name: wait-gated\ndescription: Out-of-process gate fixture.\ninteractive: true\n' +
+  'name: wait-gated\ndescription: Detached gate fixture.\n' +
   'nodes:\n  - id: warmup\n    bash: "sleep 3; echo ready"\n' +
-  '  - id: review\n    depends_on: [warmup]\n    approval:\n      message: Approve the plan?\n';
+  '  - id: review\n    depends_on: [warmup]\n    approval:\n      message: Approve the plan?\n' +
+  '  - id: after\n    depends_on: [review]\n    bash: "echo after"\n';
 
 /**
  * Read-only handle for inspecting the database while the detached owner process may be
@@ -355,23 +354,6 @@ function openReadOnly(databasePath: string): Database {
   const database = new Database(databasePath, { readonly: true });
   database.run('PRAGMA busy_timeout = 5000');
   return database;
-}
-
-/** The newest run of `workflowName`, read straight from the database file. */
-function readRunId(archonHome: string, workflowName: string): string | undefined {
-  const databasePath = join(archonHome, 'archon.db');
-  if (!existsSync(databasePath)) return undefined;
-  const database = openReadOnly(databasePath);
-  try {
-    return database
-      .query<{ id: string }, [string]>(
-        `SELECT id FROM remote_agent_workflow_runs
-         WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1`
-      )
-      .get(workflowName)?.id;
-  } finally {
-    database.close();
-  }
 }
 
 /** The status of one run, read straight from the database file. */
@@ -897,55 +879,43 @@ describe('archon workflow wait against a detached run', () => {
     90_000
   );
 
-  test('wakes with awaiting_response on a gate, then with cancelled when it is rejected', async () => {
-    const fixture = makeFixture('archon-wait-gate-', { 'wait-gated': GATED });
-    // Owned by another process; it exits on its own once the run parks on the gate.
-    const owner = startForegroundOwner(fixture, [
-      CLI_PATH,
-      'workflow',
-      'run',
-      'wait-gated',
-      'run-attention wait integration',
-      '--folder',
-    ]);
+  test.each([
+    ['approve', 'completed'],
+    ['reject', 'cancelled'],
+  ] as const)(
+    'a detached launch wakes with awaiting_response on a gate, then %s ends it %s',
+    async (decision, status) => {
+      const fixture = makeFixture('archon-wait-gate-', { 'wait-gated': GATED });
+      const { runId } = await launchDetached(fixture, 'wait-gated');
 
-    // Discovering the id is test setup, not the contract under test — the launcher
-    // above has no `--detach --json` ack to carry one.
-    const runId = await waitForRunBoot(
-      'the gated run row',
-      () => readRunId(fixture.archonHome, 'wait-gated'),
-      owner
-    );
-    activeRunIds.add(runId);
+      // Attached while the warm-up node is still running, so the gate is a WAKE.
+      const gate = await startWait(fixture, runId, 60).settled();
+      expectWaitExit(gate, 0);
+      expect(gate.payload).toMatchObject({
+        result: 'attention',
+        attention: {
+          kind: 'awaiting_response',
+          runId,
+          respondTo: { runId, nodeId: 'review' },
+          message: 'Approve the plan?',
+        },
+      });
+      await waitFor(
+        'the gated owner to release',
+        async () => ((await isRunOwnerAnswering(runId)) ? undefined : true),
+        30_000
+      );
 
-    // Attached while the warm-up node is still running, so the gate is a WAKE.
-    const gateWaiter = startWait(fixture, runId, 60);
-    const gate = await gateWaiter.settled();
-
-    expectWaitExit(gate, 0);
-    expect(gate.payload).toMatchObject({
-      result: 'attention',
-      attention: {
-        kind: 'awaiting_response',
-        runId,
-        respondTo: { runId, nodeId: 'review' },
-        message: 'Approve the plan?',
-      },
-    });
-    const ownerExit = await owner.settled;
-    if (ownerExit !== 0) throw new Error(`Gated owner failed: ${ownerDiagnostics(owner)}`);
-
-    // Resolving the gate is the ordinary next step, and it is what makes the wake
-    // actionable. Rejecting to termination also exercises the transition that writes
-    // `cancelled` from the gate path.
-    const rejected = await runCli(fixture, ['workflow', 'reject', runId, 'not this time']);
-    if (rejected.exitCode !== 0) {
-      throw new Error(`reject failed: ${rejected.stderr || rejected.stdout}`);
-    }
-    activeRunIds.delete(runId);
-    const detail = await runCli(fixture, ['workflow', 'get', runId, '--json']);
-    expect(JSON.parse(detail.stdout.trim())).toMatchObject({ id: runId, status: 'cancelled' });
-  }, 120_000);
+      const answered = await runCli(fixture, ['workflow', decision, runId]);
+      if (answered.exitCode !== 0) {
+        throw new Error(`${decision} failed: ${answered.stderr || answered.stdout}`);
+      }
+      activeRunIds.delete(runId);
+      const detail = await runCli(fixture, ['workflow', 'get', runId, '--json']);
+      expect(JSON.parse(detail.stdout.trim())).toMatchObject({ id: runId, status });
+    },
+    120_000
+  );
 
   test('wakes on a cancelled run stopped from a third process', async () => {
     // `cancelled` is the transition that never arrives on its own — someone else

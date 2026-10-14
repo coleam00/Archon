@@ -574,14 +574,9 @@ read the structured gate state first (`archon workflow get <id> --json` →
 `accept: true` — or iterate by passing feedback. The `--json` approve records the decision
 without resuming; the continuation host (`archon serve` or `archon workflow wake`), or a manual `resume`, then executes the finalize or the next iteration.
 
-> **Note**: Interactive loop nodes require `interactive: true` at the **workflow level** as
-> well. If only the loop node has `interactive: true`, a loader warning is emitted and the
-> workflow will not pause correctly in web background mode.
-
 ```yaml
 name: guided-refine
 description: Refine output with human review between iterations.
-interactive: true            # Required at workflow level for interactive loops
 nodes:
   - id: refine
     loop:

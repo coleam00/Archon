@@ -191,9 +191,9 @@ export function Inspector({
           style={{ background: `var(--node-${node.variant})` }}
         />
         <span className="text-[13px] font-semibold text-text-primary">{label}</span>
-        {capabilities.requiresInteractive === true ? (
+        {capabilities.pausesRun === true ? (
           <span className="rounded-full border border-border px-1.5 py-px font-mono text-[9px] uppercase tracking-widest text-text-tertiary">
-            interactive
+            pauses
           </span>
         ) : null}
       </div>
