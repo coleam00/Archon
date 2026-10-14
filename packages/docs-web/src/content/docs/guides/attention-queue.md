@@ -67,9 +67,9 @@ disagree about what a run needs.
 - **`kind`** says how to answer. `attention` is a `wait: attention` pause: answer it in
   its `form` with `answer`, or the `respond`/`approve`/`reject` shorthand. `awaiting_response`
   is an approval gate: answer it with `approve`, `reject` or `respond`. `unreadable` is a
-  paused run Archon cannot describe, or a parent whose sub-run tree it cannot read, such
-  as a sub-run with no row; `reason` and `detail` say why, and the action is to look at
-  it and resume or abandon it.
+  paused run Archon cannot describe, or a parent whose sub-run tree it cannot read: a
+  sub-run with no row, or a tree that revisits a run or exceeds 500 runs; `reason` and
+  `detail` say why, and the action is to look at it and resume or abandon it.
 - **`occurrence`** identifies the pause. Pass it back with `--occurrence`; an answer or
   label write for a pause the run has left is refused, naming the current occurrence.
 - **`revision`** starts at 1 and grows by one with every label write, so a consumer can

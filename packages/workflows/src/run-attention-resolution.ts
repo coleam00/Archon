@@ -111,10 +111,12 @@ async function resolveFrom(
     const children: WorkflowRun[] = [];
     for (const childRunId of childRunIds) {
       if (visited.has(childRunId) || visited.size >= MAX_CHAIN_RUNS) {
+        // Names the walk's root: the budget and the revisit are properties of this walk,
+        // and a walk started from the run below would read that run's tree fine.
         return {
           kind: 'attention',
           attention: unreadable(
-            attention.runId,
+            executionChain[0].id,
             'child_chain_too_deep',
             `sub-run tree is larger than ${String(MAX_CHAIN_RUNS)} runs or revisits a run`
           ),

@@ -1431,6 +1431,31 @@ export function describeWorkflowStoreConformance(
       ]);
       expect(await readAttentionQueueItem(source, parent.id)).toEqual(listed[0]);
     });
+    test('runs blocked on each other are each the same unreadable item listed and read', async () => {
+      const a = await running(store);
+      const b = await running(store);
+      const blockOn = (id: string, child: string) =>
+        store.pauseWorkflowRun(id, {
+          nodeId: 'each',
+          message: 'Waiting on sub-runs',
+          type: 'fan_out',
+          childRunIds: [child],
+          unspawnedItems: 0,
+        });
+      await blockOn(a.id, b.id);
+      await blockOn(b.id, a.id);
+      const source: AttentionQueueSource = { store, branchOf: async () => null };
+      const listed = (await listAttentionQueue(source)).filter(
+        item => item.runId === a.id || item.runId === b.id
+      );
+      expect(listed.map(item => item.runId).sort()).toEqual([a.id, b.id].sort());
+      for (const item of listed) {
+        expect(item).toEqual(
+          expect.objectContaining({ kind: 'unreadable', reason: 'child_chain_too_deep' })
+        );
+        expect(await readAttentionQueueItem(source, item.runId)).toEqual(item);
+      }
+    });
     test('a pause is due once answered exactly when continuablePause says the host continues it', async () => {
       const gate = (
         extra: Partial<Pick<ApprovalContext, 'type' | 'childRunId' | 'nodeId' | 'resolved'>>
