@@ -257,4 +257,17 @@ test('the queue scopes by project the way archon state names it, across a rename
     })
   );
   expect(conflicting).toMatchObject({ code: 1, json: { ok: false } });
+
+  // A short run id resolves from a project subdirectory, as it does for `approve`.
+  const subdir = join(registeredDir, 'src');
+  mkdirSync(subdir);
+  const prefix = current.slice(0, 8);
+  const byPrefix = await captured(() =>
+    workflowAttentionCommand(host, subdir, prefix, { json: true, labels: [] })
+  );
+  expect(byPrefix).toMatchObject({ code: 0, json: { ok: true, runId: current } });
+  const labeledByPrefix = await captured(() =>
+    workflowAttentionLabelCommand(host, prefix, `pause-${current}`, ['seen=yes'], [], true, subdir)
+  );
+  expect(labeledByPrefix).toMatchObject({ code: 0, json: { ok: true, runId: current } });
 });

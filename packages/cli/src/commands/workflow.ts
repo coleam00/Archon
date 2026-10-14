@@ -4624,6 +4624,20 @@ export interface WorkflowAttentionOptions {
   countBy?: string;
 }
 
+/**
+ * `workflow attention` skips the CLI's project gate, so `cwd` is the raw working
+ * directory, not its project root. Resolve its codebase the way the gate does, so a
+ * short run id still matches from a project subdirectory.
+ */
+async function resolveAttentionRunId(
+  host: WorkflowHost,
+  runId: string,
+  cwd: string
+): Promise<string> {
+  const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
+  return resolveRunIdArg(host, runId, undefined, false, codebase?.id);
+}
+
 /** The scope a list or count covers: `--all`, `--project`, or the working directory's project. */
 async function attentionScope(
   host: WorkflowHost,
@@ -4691,7 +4705,7 @@ export async function workflowAttentionCommand(
         throw new Error(
           'workflow attention <run-id> takes no --project, --all, --label, --sort or --count-by'
         );
-      const resolvedId = await resolveRunIdArg(host, runId, cwd);
+      const resolvedId = await resolveAttentionRunId(host, runId, cwd);
       const item = await readAttentionQueueItem(source, resolvedId);
       if (item === undefined) {
         if (opts.json)
@@ -4779,7 +4793,7 @@ export async function workflowAttentionLabelCommand(
   cwd?: string
 ): Promise<number> {
   try {
-    const resolvedId = await resolveRunIdArg(host, runId, cwd);
+    const resolvedId = cwd === undefined ? runId : await resolveAttentionRunId(host, runId, cwd);
     const result = await host.operations.labelAttentionWait(
       resolvedId,
       { occurrence, set: parseAttentionLabelPairs(set), unset },
