@@ -34,14 +34,11 @@ const pendingRevalidation = new Set<string>();
 // the value stays `undefined` and a value-identity snapshot would bail out and
 // never surface `error` (e.g. a 401 panel would hang on "Loading…").
 const versions = new Map<string, number>();
-// Per-key load sequence, bumped each time a load is initiated (via `ensureLoad`
-// or `revalidate`). A load captures the value at start and commits its result
-// only while the sequence still matches. This neutralizes a load orphaned by
-// the last unsubscribe — its promise keeps running (promises aren't
-// cancellable) — so it can't overwrite a value produced by a NEWER load that a
-// resubscriber started for the same key (#2101). Retained across unsubscribe
-// like `cache`/`errors` (so a load that settles with no resubscriber still
-// warms the cache) and released together with them by `invalidate()`.
+// Load IDs must not repeat after subscriber-less invalidation releases a key:
+// an abandoned promise may still settle after a resubscribe starts a new load.
+let nextLoadSeq = 0;
+// Retained across unsubscribe to allow warm settles; invalidate releases it
+// together with cache/errors so abandoned loads cannot resurrect a purged key.
 const loadSeq = new Map<string, number>();
 
 function notify(key: string): void {
@@ -56,15 +53,8 @@ function notify(key: string): void {
   for (const l of subs) l();
 }
 
-/**
- * Shared load runner for both load-initiation paths (`ensureLoad` on first
- * subscribe and `revalidate` on refetch/invalidate). Captures a per-key
- * sequence number so a stale settle — from a load whose key was torn down and
- * re-subscribed with a different loader — no-ops instead of clobbering the
- * current load's result (#2101).
- */
 function runLoad(key: string, loader: () => Promise<unknown>): void {
-  const seq = (loadSeq.get(key) ?? 0) + 1;
+  const seq = ++nextLoadSeq;
   loadSeq.set(key, seq);
   const p = loader()
     .then(v => {

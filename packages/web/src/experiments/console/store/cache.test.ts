@@ -1,5 +1,7 @@
 import { describe, test, expect } from 'bun:test';
-import { subscribeKey, versionOf, get, set, invalidate } from './cache';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { subscribeKey, versionOf, get, set, invalidate, useEntity } from './cache';
 
 // The store's Maps are module-level, so every test uses its own unique key —
 // no cross-test state to reset.
@@ -257,6 +259,58 @@ describe('subscribeKey — resubscribe during an abandoned in-flight load (#2101
 });
 
 describe('revalidate after an abandoned in-flight load', () => {
+  test.each(['resolve', 'reject'] as const)(
+    'an abandoned load cannot %s into a remounted key after subscriber-less invalidation',
+    async settlement => {
+      const key = `test:remount-after-invalidation:${settlement}`;
+      set(key, 'warm');
+      let resolveA: (value: string) => void = () => {};
+      let rejectA: (error: Error) => void = () => {};
+      const unsubscribeA = subscribeKey(
+        key,
+        () => {},
+        () =>
+          new Promise<string>((resolve, reject) => {
+            resolveA = resolve;
+            rejectA = reject;
+          })
+      );
+      invalidate(key);
+      expect(get(key)).toBe('warm');
+      unsubscribeA();
+      invalidate(key);
+      expect(get(key)).toBeUndefined();
+      expect(versionOf(key)).toBe(0);
+
+      let resolveB: (value: string) => void = () => {};
+      const loaderB = (): Promise<string> =>
+        new Promise(resolve => {
+          resolveB = resolve;
+        });
+      const unsubscribeB = subscribeKey(key, () => {}, loaderB);
+      function ErrorView(): string {
+        return useEntity(key, loaderB).error?.message ?? 'no error';
+      }
+      try {
+        resolveB('fresh');
+        await flush();
+        expect(get(key)).toBe('fresh');
+        expect(versionOf(key)).toBe(1);
+
+        if (settlement === 'resolve') resolveA('stale');
+        else rejectA(new Error('stale boom'));
+        await flush();
+
+        expect(renderToStaticMarkup(createElement(ErrorView))).toBe('no error');
+        expect(get(key)).toBe('fresh');
+        expect(versionOf(key)).toBe(1);
+      } finally {
+        unsubscribeB();
+        invalidate(key);
+      }
+    }
+  );
+
   test('invalidating an abandoned revalidation cannot resurrect a purged key', async () => {
     const key = 'test:invalidate-abandoned-revalidation';
     set(key, 'warm');
