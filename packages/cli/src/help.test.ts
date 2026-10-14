@@ -333,19 +333,19 @@ Examples:
     expect(`${renderHelp()}\n`).toBe(EXPECTED_GLOBAL_HELP);
   });
 
-  it.each(['plugin', 'skill'])(
-    'retains scoped help for the %s alias without advertising it globally',
-    command => {
-      const result = spawnSync(process.execPath, [CLI_ENTRY, command, 'install', '--help'], {
-        encoding: 'utf8',
-        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-      });
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(`${command} install `);
-      expect(result.stdout).toContain(`Deprecated alias for archon ${command} add`);
-      expect(renderHelp()).not.toContain(`${command} install`);
-    }
-  );
+  it.each([
+    ['plugin', '<owner/repo[/path][@tag]>'],
+    ['skill', '[path]'],
+  ])('retains scoped help for the %s alias without advertising it globally', (command, args) => {
+    const result = spawnSync(process.execPath, [CLI_ENTRY, command, 'install', '--help'], {
+      encoding: 'utf8',
+      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`${command} install ${args}`);
+    expect(result.stdout).toContain(`Deprecated alias for archon ${command} add`);
+    expect(renderHelp()).not.toContain(`${command} install`);
+  });
 
   it('archon help <cmd> [<subcmd>] matches archon <cmd> [<subcmd>] --help', () => {
     for (const argv of [
