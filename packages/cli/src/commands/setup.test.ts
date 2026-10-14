@@ -11,6 +11,7 @@ import { selectGitHubAuthMode } from '@archon/core/utils/github-auth-mode';
 import { loadGitHubAppConfig } from '@archon/core/github-auth/config';
 import {
   GITHUB_APP_KEYS,
+  GITHUB_APP_CREDENTIAL_KEYS,
   bootstrapProjectConfig,
   selectSetupProviders,
   collectAIConfig,
@@ -794,6 +795,19 @@ describe('writeScopedEnv (#1303)', () => {
     expect(parseDotenv(serializeEnv(entries))).toEqual(entries);
   });
 
+  it('merge preserves a bare custom value containing every quote delimiter', () => {
+    const value = '\"single\'back`tick';
+    const original = `CUSTOM_KEY=${value}\n`;
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, original);
+    expect(parseDotenv(original).CUSTOM_KEY).toBe(value);
+    writeScopedEnv('NEW_KEY=new\n', { scope: 'home', repoPath: REPO_DIR, force: false });
+    expect(parseDotenv(readFileSync(envPath, 'utf8'))).toEqual({
+      CUSTOM_KEY: value,
+      NEW_KEY: 'new',
+    });
+  });
+
   it.each(["'", '"', '`'])('merge preserves adjacent values that start and end with %s', quote => {
     const wrapper = quote === "'" ? '"' : "'";
     const original = `FIRST=${wrapper}${quote}start${wrapper}\nSECOND=${wrapper}end${quote}${wrapper}\n`;
@@ -1181,7 +1195,9 @@ describe('GitHub setup wizard', () => {
     .privateKey.export({ type: 'pkcs8', format: 'pem' })
     .toString();
   const pat = 'ghp_fixture_token';
-  const webhookSecret = 'fixture-webhook-secret';
+  let webhookSecret: string;
+  let keyPem: string;
+  let keyValidation: (string | Error | undefined)[];
   let root: string;
   let target: string;
   let keyPath: string;
@@ -1204,6 +1220,9 @@ describe('GitHub setup wizard', () => {
     mkdirSync(join(root, 'home'));
     mkdirSync(join(root, '.archon'));
     target = join(root, '.archon', '.env');
+    webhookSecret = 'fixture-webhook-secret';
+    keyPem = privateKey;
+    keyValidation = [];
     keyPath = join(root, 'app.pem');
     writeFileSync(keyPath, privateKey);
     authMode = 'app';
@@ -1238,7 +1257,11 @@ describe('GitHub setup wizard', () => {
       )
         return 'U222';
       if (options.message === 'GitHub App ID:') return '123';
-      if (options.message === 'GitHub App private key path:') return keyPath;
+      if (options.message === 'GitHub App private key path:') {
+        const error = await options.validate?.(keyPath);
+        keyValidation.push(error);
+        return error ? cancelled : keyPath;
+      }
       if (options.message === 'GitHub App slug (optional):') return 'fixture-app';
       return '';
     });
@@ -1246,8 +1269,12 @@ describe('GitHub setup wizard', () => {
       if (options.message === 'Enter your Telegram Bot Token:') return '123456:new-telegram';
       if (options.message === 'Enter your Slack Bot Token (xoxb-...):') return 'xoxb-new-slack';
       if (options.message === 'Enter your Slack App Token (xapp-...):') return 'xapp-new-slack';
-      if (options.message === 'GitHub App private key (PEM):')
-        return keySource === 'inline' ? privateKey.replace(/\n/g, '\\n') : privateKey;
+      if (options.message === 'GitHub App private key (PEM):') {
+        const value = keyPem.replace(/\n/g, '\\n');
+        const error = await options.validate?.(value);
+        keyValidation.push(error);
+        return error ? cancelled : value;
+      }
       if (options.message === 'GitHub webhook secret:') return webhookSecret;
       if (options.message === 'Enter your GitHub Personal Access Token:') return pat;
       throw new Error(`Unexpected password: ${options.message}`);
@@ -1382,6 +1409,15 @@ describe('GitHub setup wizard', () => {
       for (const match of source.matchAll(/\benv\.(GITHUB_APP_[A-Z_]+)\b/g)) readKeys.add(match[1]);
     }
     expect([...readKeys].sort()).toEqual([...GITHUB_APP_KEYS].sort());
+    const selector = readFileSync(
+      join(import.meta.dir, '../../../core/src/utils/github-auth-mode.ts'),
+      'utf8'
+    );
+    const activationKeys = Array.from(
+      selector.matchAll(/\benv\.(GITHUB_APP_[A-Z_]+)\b/g),
+      match => match[1]
+    );
+    expect([...new Set(activationKeys)].sort()).toEqual([...GITHUB_APP_CREDENTIAL_KEYS].sort());
   });
 
   it.each(['path', 'inline'] as const)(
@@ -1390,6 +1426,7 @@ describe('GitHub setup wizard', () => {
       keySource = source;
       expect(await run()).toBe(0);
       const env = read();
+      expect(keyValidation).toEqual([undefined]);
       expect(env.GITHUB_TOKEN).toBeUndefined();
       expect(env.GH_TOKEN).toBeUndefined();
       expect(env.WEBHOOK_SECRET).toBe(webhookSecret);
@@ -1403,6 +1440,29 @@ describe('GitHub setup wizard', () => {
       expect(messages).not.toContain(webhookSecret);
       expect(messages).not.toContain(privateKey);
       expect(existsSync(join(root, 'home', '.env'))).toBe(false);
+    }
+  );
+
+  it('writes an App webhook secret containing every quote delimiter', async () => {
+    webhookSecret = '\"single\'back`tick';
+    expect(await run()).toBe(0);
+    expect(read().WEBHOOK_SECRET).toBe(webhookSecret);
+    expect(selectGitHubAuthMode(read())).toEqual({ kind: 'app' });
+    expect(output.join('\n')).not.toContain(webhookSecret);
+  });
+
+  it.each(['path', 'inline'] as const)(
+    'rejects an EC private key from %s before writing env',
+    async source => {
+      keySource = source;
+      keyPem = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+        .privateKey.export({ type: 'pkcs8', format: 'pem' })
+        .toString();
+      writeFileSync(keyPath, keyPem);
+      expect(await run()).toBe(0);
+      expect(keyValidation).toEqual(['Use an RSA PEM private key']);
+      expect(existsSync(target)).toBe(false);
+      expect(output).toContain('Setup cancelled.');
     }
   );
 

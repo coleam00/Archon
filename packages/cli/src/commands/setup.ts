@@ -209,7 +209,10 @@ const GITHUB_APP_PRIVATE_KEY_KEYS = [
   'GITHUB_APP_PRIVATE_KEY',
   'GITHUB_APP_PRIVATE_KEY_PATH',
 ] as const;
-const GITHUB_APP_CREDENTIAL_KEYS = ['GITHUB_APP_ID', ...GITHUB_APP_PRIVATE_KEY_KEYS] as const;
+export const GITHUB_APP_CREDENTIAL_KEYS = [
+  'GITHUB_APP_ID',
+  ...GITHUB_APP_PRIVATE_KEY_KEYS,
+] as const;
 export const GITHUB_APP_KEYS = [
   ...GITHUB_APP_CREDENTIAL_KEYS,
   'GITHUB_APP_CLIENT_ID',
@@ -1830,7 +1833,7 @@ export function serializeEnv(entries: Record<string, string>): string {
   for (const [key, value] of Object.entries(entries)) {
     const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
     const candidates: string[] = [];
-    // A leading quote on a bare value can consume later entries as a multiline value.
+    // Prefer quoted forms for leading quotes, which can consume later entries.
     if (!/^["'`]/.test(value)) candidates.push(`${key}=${value}`);
     for (const [quote, contents] of [
       ['"', encodedLineBreaks],
@@ -1841,6 +1844,7 @@ export function serializeEnv(entries: Record<string, string>): string {
         candidates.push(`${key}=${quote}${contents}${quote}`);
       }
     }
+    candidates.push(`${key}=${value}`);
     const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
     if (line === undefined)
       throw new Error(`Cannot serialize env key ${key} without changing its value`);
