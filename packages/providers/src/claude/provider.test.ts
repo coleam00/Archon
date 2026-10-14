@@ -319,6 +319,60 @@ describe('ClaudeProvider', () => {
       });
     });
 
+    test.each(['forked-skill', 'subagent', 'no-handoff'])(
+      'includes every model’s tokens (%s)',
+      async scenario => {
+        const subagent = scenario === 'subagent';
+        mockQuery.mockImplementationOnce(async function* () {
+          yield {
+            type: 'result',
+            session_id: 'forked-skill',
+            total_cost_usd: 0.2384,
+            usage:
+              scenario !== 'forked-skill'
+                ? {
+                    input_tokens: 20,
+                    output_tokens: 5,
+                    cache_read_input_tokens: 70,
+                    cache_creation_input_tokens: 10,
+                  }
+                : {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                  },
+            modelUsage: {
+              main: {
+                inputTokens: 20,
+                outputTokens: 5,
+                cacheReadInputTokens: 70,
+                cacheCreationInputTokens: 10,
+              },
+              ...(subagent
+                ? {
+                    helper: {
+                      inputTokens: 30,
+                      outputTokens: 15,
+                      cacheReadInputTokens: 40,
+                      cacheCreationInputTokens: 20,
+                    },
+                  }
+                : {}),
+            },
+          };
+        });
+        const chunks: MessageChunk[] = [];
+        for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+        expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+          cost: 0.2384,
+          tokens: subagent
+            ? { input: 190, output: 20, cacheRead: 110, cacheWrite: 30 }
+            : { input: 100, output: 5, cacheRead: 70, cacheWrite: 10 },
+        });
+      }
+    );
+
     test('yields result with structuredOutput when SDK result has structured_output', async () => {
       mockQuery.mockImplementation(async function* () {
         yield {
@@ -354,6 +408,7 @@ describe('ClaudeProvider', () => {
               inputTokens: 100,
               outputTokens: 50,
               cacheReadInputTokens: 10,
+              cacheCreationInputTokens: 0,
             },
           },
         };
@@ -446,6 +501,144 @@ describe('ClaudeProvider', () => {
         }
         return cost;
       }
+
+      test.each([false, true])(
+        'differences all token axes for resumes and forks (fork=%s)',
+        async forkSession => {
+          const sessionId = '10000000-0000-4000-8000-000000000097';
+          persist({
+            session_id: sessionId,
+            total_cost_usd: 0.1,
+            modelUsage: {
+              main: {
+                inputTokens: 100,
+                outputTokens: 200,
+                cacheReadInputTokens: 300,
+                cacheCreationInputTokens: 400,
+              },
+            },
+          });
+          mockQuery.mockImplementationOnce(async function* () {
+            yield {
+              type: 'result',
+              session_id: sessionId,
+              total_cost_usd: 0.3,
+              usage: { input_tokens: 1, output_tokens: 2 },
+              modelUsage: {
+                main: {
+                  inputTokens: 110,
+                  outputTokens: 220,
+                  cacheReadInputTokens: 330,
+                  cacheCreationInputTokens: 440,
+                },
+                helper: {
+                  inputTokens: 5,
+                  outputTokens: 0,
+                  cacheReadInputTokens: 6,
+                  cacheCreationInputTokens: 7,
+                },
+              },
+            };
+          });
+          const chunks: MessageChunk[] = [];
+          for await (const chunk of client.sendQuery('test', '/workspace', sessionId, {
+            forkSession,
+            env: { CLAUDE_CONFIG_DIR: configRoot },
+          }))
+            chunks.push(chunk);
+          expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+            cost: expect.closeTo(0.2, 10),
+            tokens: { input: 98, output: 20, cacheRead: 36, cacheWrite: 47 },
+            resolvedModel: { id: 'main' },
+          });
+        }
+      );
+
+      test.each(['legacy', 'backwards', 'missing-model'])(
+        'incomplete or inconsistent token baseline omits tokens (%s)',
+        async scenario => {
+          const sessionId = '10000000-0000-4000-8000-000000000096';
+          persist({
+            session_id: sessionId,
+            total_cost_usd: 0.1,
+            modelUsage: {
+              main:
+                scenario === 'legacy'
+                  ? { outputTokens: 10 }
+                  : {
+                      inputTokens: 100,
+                      outputTokens: 10,
+                      cacheReadInputTokens: 30,
+                      cacheCreationInputTokens: 40,
+                    },
+            },
+          });
+          mockQuery.mockImplementationOnce(async function* () {
+            yield {
+              type: 'result',
+              session_id: sessionId,
+              total_cost_usd: 0.3,
+              modelUsage:
+                scenario === 'missing-model'
+                  ? {}
+                  : {
+                      main: {
+                        inputTokens: 110,
+                        outputTokens: 20,
+                        cacheReadInputTokens: scenario === 'backwards' ? 20 : 35,
+                        cacheCreationInputTokens: 45,
+                      },
+                    },
+            };
+          });
+          const chunks: MessageChunk[] = [];
+          for await (const chunk of client.sendQuery('test', '/workspace', sessionId, {
+            env: { CLAUDE_CONFIG_DIR: configRoot },
+          }))
+            chunks.push(chunk);
+          const result = chunks.find(chunk => chunk.type === 'result');
+          expect(result).not.toHaveProperty('tokens');
+          expect(result).toMatchObject({ cost: expect.closeTo(0.2, 10) });
+          expect(mockLogger.warn).toHaveBeenCalledWith(
+            expect.objectContaining({ baseline: 'known' }),
+            'claude.query_tokens_unknown'
+          );
+          if (scenario !== 'missing-model')
+            expect(result).toMatchObject({ resolvedModel: { id: 'main' } });
+        }
+      );
+
+      test('unknown baseline omits tokens even when main-agent usage is available', async () => {
+        mockQuery.mockImplementationOnce(async function* () {
+          yield {
+            type: 'result',
+            session_id: '20000000-0000-4000-8000-000000000097',
+            total_cost_usd: 0.3,
+            usage: { input_tokens: 1, output_tokens: 2 },
+            modelUsage: {
+              main: {
+                inputTokens: 110,
+                outputTokens: 220,
+                cacheReadInputTokens: 330,
+                cacheCreationInputTokens: 440,
+              },
+            },
+          };
+        });
+        const chunks: MessageChunk[] = [];
+        for await (const chunk of client.sendQuery(
+          'test',
+          '/workspace',
+          '20000000-0000-4000-8000-000000000097',
+          { env: { CLAUDE_CONFIG_DIR: configRoot } }
+        ))
+          chunks.push(chunk);
+        expect(chunks.find(chunk => chunk.type === 'result')).not.toHaveProperty('tokens');
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ baseline: 'unknown' }),
+          'claude.query_tokens_unknown'
+        );
+      });
 
       test('snapshots request-scoped state before eager SDK startup changes it', async () => {
         const sessionId = '10000000-0000-4000-8000-000000000099';

@@ -77,7 +77,7 @@ import {
 } from './binary-resolver';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { readSessionSpendBaseline } from './session-spend-reader';
-import { spendSince, type QuerySpend, type SpendBaseline } from './session-spend';
+import { spendSince, type SpendBaseline } from './session-spend';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
@@ -1392,10 +1392,10 @@ async function* streamClaudeMessages(
       // this result's share, advancing the baseline for any later result in this query.
       // Typed as required, but it crosses an IPC boundary (see selectResolvedModelId).
       const modelUsage = (resultMsg.modelUsage as Record<string, ModelUsage> | undefined) ?? {};
-      let spend: QuerySpend = { costUsd: undefined, modelUsage };
+      const baselineKind = spendBaseline.kind;
+      const spend = spendSince(spendBaseline, { costUsd: resultMsg.total_cost_usd, modelUsage });
       if (typeof resultMsg.total_cost_usd === 'number') {
         const cumulative = { costUsd: resultMsg.total_cost_usd, modelUsage };
-        spend = spendSince(spendBaseline, cumulative);
         if (spend.costUsd === undefined) {
           getLog().warn(
             {
@@ -1411,7 +1411,16 @@ async function* streamClaudeMessages(
       // The terminal result resolves any recorded synthetic error message.
       const syntheticError = pendingSdkError;
       pendingSdkError = undefined;
-      const tokens = normalizeClaudeUsage(resultMsg.usage);
+      // Results without per-model totals retain the SDK's query-scoped main-agent usage.
+      // With cumulative totals but no usable baseline, omit tokens rather than count earlier turns.
+      const tokens =
+        resultMsg.modelUsage === undefined ? normalizeClaudeUsage(resultMsg.usage) : spend.tokens;
+      if (resultMsg.modelUsage !== undefined && tokens === undefined) {
+        getLog().warn(
+          { sessionIdPreview: sessionPreview(resultMsg.session_id), baseline: baselineKind },
+          'claude.query_tokens_unknown'
+        );
+      }
       const sdkErrors = 'errors' in resultMsg ? resultMsg.errors : undefined;
 
       // `is_error: true` + `subtype: 'success'` is ambiguous: it is BOTH the

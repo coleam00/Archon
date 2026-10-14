@@ -1,4 +1,6 @@
 import type { ModelUsage } from '@anthropic-ai/claude-agent-sdk';
+import type { TokenUsage } from '../types';
+
 /**
  * Per-query spend for a session whose SDK totals are cumulative.
  *
@@ -10,12 +12,20 @@ import type { ModelUsage } from '@anthropic-ai/claude-agent-sdk';
  *
  * Resumes and forks use the SDK's persisted cost-state as their baseline.
  * Missing or invalid state leaves cost unknown rather than over-counting earlier
- * turns. The result's usage already covers only the current query.
+ * turns. Tokens are also unknown when persisted records lack any token axis.
  */
+
+export type ModelTokens = Pick<
+  ModelUsage,
+  'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+>;
+
+// Older cost-state records may retain only output, which still supports model selection.
+export type BaselineModelUsage = Pick<ModelTokens, 'outputTokens'> & Partial<ModelTokens>;
 
 /** A session's cumulative totals, as its latest result reported them. */
 export interface SessionSpend {
-  costUsd: number;
+  costUsd: number | undefined;
   modelUsage: Record<string, ModelUsage>;
 }
 
@@ -26,7 +36,7 @@ export type SpendBaseline =
   /** A resume or fork with persisted totals. */
   | {
       kind: 'known';
-      spend: { costUsd: number; modelUsage: Record<string, Pick<ModelUsage, 'outputTokens'>> };
+      spend: { costUsd: number; modelUsage: Record<string, BaselineModelUsage> };
     }
   /** A resume or fork with no persisted totals. */
   | { kind: 'unknown' };
@@ -40,29 +50,69 @@ export interface QuerySpend {
    * omitted). With an unknown baseline, the cumulative record if it names one model, else empty.
    */
   modelUsage: Record<string, ModelUsage>;
+  /** Unknown when the token baseline is missing, incomplete, or totals went backwards. */
+  tokens: TokenUsage | undefined;
 }
 
 export function spendSince(baseline: SpendBaseline, cumulative: SessionSpend): QuerySpend {
-  if (baseline.kind === 'fresh') return cumulative;
+  const tokens = tokensSince(baseline, cumulative.modelUsage);
+  if (baseline.kind === 'fresh') return { ...cumulative, tokens };
   if (baseline.kind === 'unknown') {
     // Without a baseline, only a session that has used a single model can name this query's.
     const single = Object.keys(cumulative.modelUsage).length === 1;
-    return { costUsd: undefined, modelUsage: single ? cumulative.modelUsage : {} };
+    return { costUsd: undefined, modelUsage: single ? cumulative.modelUsage : {}, tokens };
   }
 
   const base = baseline.spend;
-  const costUsd = cumulative.costUsd - base.costUsd;
-  // Only the output axis is differenced: it is what resolved-model selection reads.
+  const costUsd = cumulative.costUsd === undefined ? undefined : cumulative.costUsd - base.costUsd;
   const modelUsage: Record<string, ModelUsage> = {};
   for (const [model, usage] of Object.entries(cumulative.modelUsage)) {
     const outputTokens = usage.outputTokens - (base.modelUsage[model]?.outputTokens ?? 0);
-    if (outputTokens > 0) modelUsage[model] = { ...usage, outputTokens };
+    if (outputTokens > 0)
+      modelUsage[model] = {
+        ...usage,
+        ...modelTokenDelta(usage, base.modelUsage[model]),
+      };
   }
   return {
     // Totals below the baseline mean the SDK did not continue from it; the share is unknowable.
-    costUsd: costUsd >= 0 ? costUsd : undefined,
+    costUsd: costUsd !== undefined && costUsd >= 0 ? costUsd : undefined,
     // Empty when no model produced output in this query (a zeroed crash or startup result):
     // no model is named then, rather than one from the session's earlier turns.
     modelUsage,
+    tokens,
+  };
+}
+
+function tokensSince(
+  baseline: SpendBaseline,
+  cumulative: Record<string, ModelUsage>
+): TokenUsage | undefined {
+  if (baseline.kind === 'unknown') return undefined;
+  const base = baseline.kind === 'known' ? baseline.spend.modelUsage : {};
+  if (Object.keys(base).some(model => cumulative[model] === undefined)) return undefined;
+  const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const [model, usage] of Object.entries(cumulative)) {
+    const previous = base[model];
+    const delta = modelTokenDelta(usage, previous);
+    if (Object.values(delta).some(value => !Number.isFinite(value) || value < 0)) return undefined;
+    tokens.input += delta.inputTokens + delta.cacheReadInputTokens + delta.cacheCreationInputTokens;
+    tokens.output += delta.outputTokens;
+    tokens.cacheRead += delta.cacheReadInputTokens;
+    tokens.cacheWrite += delta.cacheCreationInputTokens;
+  }
+  return tokens;
+}
+
+function modelTokenDelta(usage: ModelUsage, previous: BaselineModelUsage | undefined): ModelTokens {
+  return {
+    inputTokens: usage.inputTokens - (previous === undefined ? 0 : (previous.inputTokens ?? NaN)),
+    outputTokens: usage.outputTokens - (previous?.outputTokens ?? 0),
+    cacheReadInputTokens:
+      usage.cacheReadInputTokens -
+      (previous === undefined ? 0 : (previous.cacheReadInputTokens ?? NaN)),
+    cacheCreationInputTokens:
+      usage.cacheCreationInputTokens -
+      (previous === undefined ? 0 : (previous.cacheCreationInputTokens ?? NaN)),
   };
 }
