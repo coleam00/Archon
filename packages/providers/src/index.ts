@@ -19,6 +19,7 @@ export {
   registerProvider,
   markProviderUnavailable,
   getAgentProvider,
+  setDeprecationReporter,
   getRegistration,
   getProviderCapabilities,
   parseProviderRunModel,

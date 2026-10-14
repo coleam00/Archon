@@ -95,6 +95,7 @@ export {
   isMaintainedProvider,
   missingProviderMessage,
   noDefaultProviderMessage,
+  installedProviders,
   NO_DEFAULT_PROVIDER_MESSAGE,
   NoDefaultProviderError,
   providerVersionMismatchMessage,

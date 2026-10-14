@@ -19,7 +19,7 @@ OpenCode and GitHub Copilot are deprecated. No Archon maintainer owns them, and 
 
 The plan is for each to become a community plugin, published from its owner's repository and installed with [`archon plugin install`](/reference/cli/#plugin). [#3642](https://github.com/coleam00/Archon/issues/3642) builds the route that lets a provider load as a plugin. If you use OpenCode or Copilot and would maintain its plugin, or want to follow the plan, [open a discussion](https://github.com/coleam00/Archon/discussions).
 
-Archon shows the notice once per command or process: `archon doctor` reports it when one of these is your default assistant, `archon ai default` prints it when you select one, and a process logs one warning the first time a run uses one.
+Archon shows the notice only to someone who uses one, at most once per command or process: `archon doctor` reports it when one of these is your default assistant, `archon ai default` prints it when you select one, and the first run in a process that uses one prints it on stderr. The server writes it to its log instead.
 
 ## Structured output guarantees
 
