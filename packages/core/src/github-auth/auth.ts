@@ -8,8 +8,8 @@
  *      entry still serves as fallback when the re-lookup fails with a 5xx or
  *      network error.
  *   2. tokenCache:   `installationId → CachedInstallationToken` (1h GitHub TTL,
- *      we refresh 5min before expiry on access). Used directly for clone-path
- *      URL embedding and the /internal/git-credential endpoint.
+ *      we refresh 5min before expiry on access). Used for clone credentials
+ *      and the /internal/git-credential endpoint.
  *   3. octokitCache: `installationId → Octokit` (memoisation, no TTL). Each
  *      Octokit holds its OWN private `createAppAuth` token state, opaque to
  *      us. THIS is the load-bearing reason invalidateToken / invalidateRepo
@@ -108,8 +108,7 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
   const lookupCache = new Map<string, RepoLookup>();
   const octokitCache = new Map<number, Octokit>();
 
-  async function resolveInstallationId(owner: string, repo: string): Promise<number> {
-    if (config.defaultInstallationId) return config.defaultInstallationId;
+  async function lookupInstallationId(owner: string, repo: string): Promise<number> {
     const key = lookupKey(owner, repo);
     const cached = lookupCache.get(key);
     if (cached && Date.now() - cached.cachedAt < LOOKUP_CACHE_TTL_MS) {
@@ -150,6 +149,10 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
     }
   }
 
+  async function resolveInstallationId(owner: string, repo: string): Promise<number> {
+    return config.defaultInstallationId ?? lookupInstallationId(owner, repo);
+  }
+
   async function getInstallationTokenById(installationId: number): Promise<string> {
     const cached = tokenCache.get(installationId);
     if (cached && Date.now() + REFRESH_BUFFER_MS < cached.expiresAtMs) {
@@ -180,7 +183,7 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
   }
 
   async function getInstallationToken(owner: string, repo: string): Promise<string> {
-    const installationId = await resolveInstallationId(owner, repo);
+    const installationId = await lookupInstallationId(owner, repo);
     return getInstallationTokenById(installationId);
   }
 

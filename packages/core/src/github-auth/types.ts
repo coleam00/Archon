@@ -16,9 +16,8 @@ export interface GitHubAppConfig {
   appId: string;
   privateKey: string;
   /**
-   * Optional: skip the per-(owner, repo) installation lookup when set. Useful
-   * for single-installation deployments to avoid one HTTP round trip per repo
-   * on first sight after a restart.
+   * Optional fixed installation for adapter API clients. Repository-token
+   * requests still resolve the repository installation to verify App access.
    */
   defaultInstallationId?: number;
   /** App slug (e.g. "archon"); used to derive the bot login `<slug>[bot]` for self-filter. */

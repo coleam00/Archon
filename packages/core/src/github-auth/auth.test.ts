@@ -3,8 +3,8 @@
  * Tests for the GitHub App auth module.
  *
  * Strictly mocked at the @octokit/rest boundary — no live api.github.com calls
- * in CI (PRD Q7). `mock.module` is process-global; this file is the ONLY place
- * in @archon/core that mocks @octokit/rest. The file directive requests a fresh process.
+ * in CI (PRD Q7). `mock.module` is process-global; the file directive requests
+ * a fresh process.
  */
 import { mock, spyOn, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
@@ -183,16 +183,17 @@ describe('getInstallationToken', () => {
     expect(mockRequest).toHaveBeenCalledTimes(3);
   });
 
-  test('skips lookup when defaultInstallationId is set', async () => {
+  test('repository tokens verify installation access even with a default installation', async () => {
     const provider = makeProvider({ defaultInstallationId: 555 });
-    mockRequest.mockResolvedValueOnce(tokenResponse('ghs_direct', 3600));
-
-    const token = await provider.getInstallationToken('whatever', 'repo');
-    expect(token).toBe('ghs_direct');
-    // Exactly one call — the token-issuance, no install lookup.
-    expect(mockRequest).toHaveBeenCalledTimes(1);
-    const firstCallArgs = mockRequest.mock.calls[0];
-    expect(firstCallArgs?.[0]).toBe('POST /app/installations/{installation_id}/access_tokens');
+    mockRequest
+      .mockResolvedValueOnce({ status: 200, data: { id: 99 } })
+      .mockResolvedValueOnce(tokenResponse('ghs_repository', 3600));
+    expect(await provider.getInstallationToken('owner', 'repo')).toBe('ghs_repository');
+    expect(mockRequest.mock.calls[0]).toEqual([
+      'GET /repos/{owner}/{repo}/installation',
+      { owner: 'owner', repo: 'repo' },
+    ]);
+    expect(mockRequest.mock.calls[1]?.[1]).toEqual({ installation_id: 99 });
   });
 });
 
@@ -326,7 +327,7 @@ describe('token issuance retry', () => {
       .mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 503 }))
       .mockResolvedValueOnce(tokenResponse('ghs_retry', 3600));
 
-    expect(await provider.getInstallationToken('o', 'r')).toBe('ghs_retry');
+    expect(await provider.getInstallationTokenById(9)).toBe('ghs_retry');
     expect(mockRequest).toHaveBeenCalledTimes(2);
   });
 });
@@ -351,12 +352,12 @@ describe('invalidateToken', () => {
       .mockResolvedValueOnce(tokenResponse('ghs_first', 3600))
       .mockResolvedValueOnce(tokenResponse('ghs_second', 3600));
 
-    const first = await provider.getInstallationToken('o', 'r');
+    const first = await provider.getInstallationTokenById(1);
     expect(first).toBe('ghs_first');
 
     provider.invalidateToken(1);
 
-    const second = await provider.getInstallationToken('o', 'r');
+    const second = await provider.getInstallationTokenById(1);
     expect(second).toBe('ghs_second');
     expect(mockRequest).toHaveBeenCalledTimes(2);
   });
@@ -411,12 +412,12 @@ describe('invalidateRepo', () => {
     mockRequest
       .mockResolvedValueOnce(tokenResponse('ghs_one', 3600))
       .mockResolvedValueOnce(tokenResponse('ghs_two', 3600));
-    const first = await provider.getInstallationToken('o', 'r');
+    const first = await provider.getInstallationTokenById(123);
     expect(first).toBe('ghs_one');
 
     provider.invalidateRepo('o', 'r');
 
-    const second = await provider.getInstallationToken('o', 'r');
+    const second = await provider.getInstallationTokenById(123);
     expect(second).toBe('ghs_two');
   });
 });

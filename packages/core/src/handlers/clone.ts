@@ -204,8 +204,10 @@ export interface CloneOptions extends RegistrationOptions {
 function appRepository(url: string, options: CloneOptions): { owner: string; repo: string } | null {
   if (!options.githubAppAuth) return null;
   const parsed = safeParseUrl(url);
-  if (!parsed || !['http:', 'https:'].includes(parsed.protocol) || parsed.hostname !== 'github.com')
-    return null;
+  if (!parsed || parsed.hostname !== 'github.com') return null;
+  if (parsed.protocol === 'http:')
+    throw new ProjectRegistrationError('GitHub App URLs require HTTPS.');
+  if (parsed.protocol !== 'https:') return null;
   const identity = parseOwnerRepo(
     parsed.pathname
       .replace(/\/+$/, '')

@@ -98,9 +98,8 @@ WEBHOOK_SECRET=<same value as on the GitHub side>
 # Optional:
 # GITHUB_APP_SLUG=archon-bot         # defaults to 'archon'; set this if you named your App
 #                                    # differently. The bot's posted-comment login is `<slug>[bot]`.
-# GITHUB_APP_INSTALLATION_ID=98765   # skip the per-(owner, repo) installation lookup when you only
-#                                    # have one installation. Saves one HTTP round trip per new
-#                                    # repo after a restart.
+# GITHUB_APP_INSTALLATION_ID=98765   # use a fixed installation for adapter API operations.
+#                                    # Repository tokens still verify the repository installation.
 ```
 
 CLI workflow run, `--detach`, resume, wake, and signal use `GITHUB_APP_ID` plus either private-key setting. They do not require `WEBHOOK_SECRET`; that setting is required for the server's webhook adapter. Each detached child initializes its own provider from the inherited configuration.

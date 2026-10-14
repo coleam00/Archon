@@ -351,7 +351,10 @@ mock.module('./adapters/web/pg-notify-listener', () => ({
 }));
 mock.module('./static-cache', () => ({ serveWebUi: (): void => undefined }));
 mock.module('./routes/openapi-defaults', () => ({ validationErrorHook: (): void => undefined }));
-mock.module('./routes/api', () => ({ registerApiRoutes: (): void => undefined }));
+const mockRegisterApiRoutes = mock<typeof import('./routes/api').registerApiRoutes>(
+  () => undefined
+);
+mock.module('./routes/api', () => ({ registerApiRoutes: mockRegisterApiRoutes }));
 mock.module('./routes/webhooks', () => ({
   registerGiteaWebhookRoute: (): void => undefined,
   registerGithubWebhookRoute: (): void => undefined,
@@ -459,6 +462,28 @@ afterAll(async () => {
 });
 
 describe('Slack workflow resume composition', () => {
+  test('server passes its configured App provider to the URL API routes', async () => {
+    process.env.GITHUB_APP_ID = '123';
+    process.env.GITHUB_APP_PRIVATE_KEY = 'test-key';
+    process.env.WEBHOOK_SECRET = 'test-webhook';
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 12345,
+    })) as unknown as typeof Bun.serve);
+    try {
+      mockRegisterApiRoutes.mockClear();
+      const { startServer } = await import('./index');
+      await startServer({ port: 12345 });
+      expect(mockRegisterApiRoutes.mock.calls.at(-1)?.[5]?.githubAppAuth).toBe(
+        installationTokenProvider
+      );
+    } finally {
+      serveSpy.mockRestore();
+      delete process.env.GITHUB_APP_ID;
+      delete process.env.GITHUB_APP_PRIVATE_KEY;
+      delete process.env.WEBHOOK_SECRET;
+    }
+  });
+
   test('server publishes the bound port to credential-helper children', async () => {
     process.env.ARCHON_PORT = '3090';
     process.env.PORT = '3000';
