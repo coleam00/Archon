@@ -44,7 +44,6 @@ async function waitUntil(label: string, check: () => boolean): Promise<void> {
 async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<{
   descendant: number;
   descendantAliveAtFail: boolean;
-  descendantAliveAtExit: boolean;
   failedWith: unknown;
 }> {
   const pidFile = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-owned-run-'))), 'pid');
@@ -91,12 +90,7 @@ async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<
     process.emit('SIGTERM', 'SIGTERM');
     await exitCalled;
 
-    return {
-      descendant,
-      descendantAliveAtFail,
-      descendantAliveAtExit: processExists(descendant),
-      failedWith,
-    };
+    return { descendant, descendantAliveAtFail, failedWith };
   } finally {
     deregister();
     exitSpy.mockRestore();
@@ -115,5 +109,7 @@ posixOnly('a detached owner leaves its node trees to the cancel controller', asy
   const result = await interruptWithNodeInFlight(false);
 
   expect(result.failedWith).toEqual({ exitReason: 'process_terminated', signal: 'SIGTERM' });
-  expect(result.descendantAliveAtExit).toBe(true);
+  // A group kill returns once SIGKILL is sent; give it time to land before asserting.
+  await new Promise<void>(resolve => setTimeout(resolve, 300));
+  expect(processExists(result.descendant)).toBe(true);
 });
