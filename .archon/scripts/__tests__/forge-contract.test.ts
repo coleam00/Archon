@@ -1,6 +1,7 @@
 import { providerRegistry } from '@archon/providers';
 import { expect, test } from 'bun:test';
 import {
+  forgeErrorSchema,
   type ForgeRequest,
   type ForgeResponse,
   type ForgeMutationFailure,
@@ -11,6 +12,7 @@ import { validateStructuredOutput } from '../../../packages/workflows/src/struct
 import { parseWorkflow } from '../../../packages/workflows/src/loader';
 import {
   parseQualifiedPr,
+  REMEDY,
   type PrRecord,
   type QualifiedPr,
   type MergeRequest,
@@ -54,6 +56,13 @@ test('standalone pack consumes the owning qualified identity and pull-request re
     maintainer_can_modify: null,
   });
   expect(producesPrRecord(consumesPrRecord(pr))).toEqual(pr);
+});
+
+// A remedy keyed by a kind the contract no longer names would never be shown.
+test("every refusal remedy is keyed by a kind the forge contract's errors carry", () => {
+  expect(forgeErrorSchema.shape.kind.options).toEqual(
+    expect.arrayContaining(Object.keys(REMEDY))
+  );
 });
 
 // archon-review's scope node declares the pull request that publish-review then

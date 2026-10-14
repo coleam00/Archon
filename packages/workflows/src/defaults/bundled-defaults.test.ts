@@ -469,7 +469,7 @@ describe('bundled-defaults', () => {
       for (const name of ['archon-deliver', 'archon-pr', 'archon-ship', 'archon-upkeep']) {
         expect(raw(name).requires).toBeUndefined();
       }
-      for (const name of ['archon-deliver', 'archon-ship', 'archon-upkeep']) {
+      for (const name of ['archon-deliver', 'archon-pr', 'archon-ship', 'archon-upkeep']) {
         const [first, ...rest] = raw(name).nodes;
         expect(first).toMatchObject({ id: 'forge', script: 'forge-check' });
         const roots = rest.filter(

@@ -24,11 +24,23 @@ inputs:
 returns: publish
 
 nodes:
+  # Refuses the run before the agent spends when the selected forge source cannot
+  # act: no plugin for the host, no usable credential, or an unauthenticated gh.
+  - id: forge
+    script: forge-check
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        source: { type: string, enum: [gh, forge] }
+      required: [source]
+
   # The agent judges: which repository the work is proposed to, the base, whether
   # the run continues an existing pull request, and what the title and body say.
   # It performs no push and no forge write.
   - id: prepare
     command: pr
+    depends_on: [forge]
     output_type: pull-request-intent
     output_format:
       type: object

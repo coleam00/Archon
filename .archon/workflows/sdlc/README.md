@@ -88,7 +88,7 @@ failed operation), the node refuses; neither source falls back to the other. Any
 other value of `ARCHON_SDLC_FORGE` refuses too. A container execution receives no
 `ARCHON_CLI_COMMAND`, so the forge source refuses there.
 
-`archon-ship`, `archon-deliver` and `archon-upkeep` start with a `forge` node
+`archon-ship`, `archon-deliver`, `archon-upkeep` and `archon-pr` start with a `forge` node
 ([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the selected source
 can act before any agent spends: on `forge`, one authenticated repository read for
 the repositories the checkout's remotes name, at least one of which must answer; on
@@ -125,8 +125,10 @@ head where they belong.
 That split is also what keeps the source switch out of the prompts. A prompt that
 branched on `ARCHON_SDLC_FORGE` would be an invented protocol; `forge.ts` reads it,
 and an agent that acts on the forge receives the certified `source` value instead.
-The one exception is triage's read of the repository's labels, which names the
-switch because `archon-triage` also runs without a `forge` node before it.
+The two exceptions are triage's read of the repository's labels and implement's
+check that it sits on the pull request it was launched onto, which name the switch
+because `archon-triage` and `archon-implement` also run without a `forge` node
+before them.
 
 ## Deterministic scripts
 

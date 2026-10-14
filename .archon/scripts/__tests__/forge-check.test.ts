@@ -17,6 +17,7 @@ const SETUP = [
   'archon plugin add coleam00/Archon/plugins/forge-github',
   'GH_TOKEN',
   '~/.archon/.env',
+  'archon auth github',
   'ARCHON_SDLC_FORGE=gh',
 ];
 
