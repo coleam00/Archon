@@ -1,6 +1,12 @@
 import { DefaultResourceLoader, getAgentDir } from '@earendil-works/pi-coding-agent';
 import type { ProviderConfig } from '@earendil-works/pi-coding-agent';
-import { ClassifiedProviderError } from '../../shared/failure';
+import { createLogger } from '@archon/paths';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('provider.pi.resource-loader');
+  return cachedLog;
+}
 
 /**
  * In pi-coding-agent <= 0.67.x, DefaultResourceLoader and PackageManager
@@ -131,19 +137,14 @@ export function createPiResourceLoader(
  * this cache prevents. Time/idle-based reclamation belongs with isolation
  * cleanup (a future cross-package hook), not a blind cap here.
  *
- * A reload that never settles is not evicted either, for the same reason. Once a
- * caller is aborted while waiting on it (an idle-watchdog timeout), the entry is
- * marked abandoned and later callers fail fast instead of waiting a full idle
- * timeout on the same wedged load (issue #3769). Only a fresh process clears it.
- * Source and Docker hosts already run each Pi query in its own process, so this
- * only matters where Pi runs in-process (release binaries).
+ * A reload that never settles is not evicted either, for the same reason, and an
+ * abort cannot tell a wedged reload from a slow one (issue #3769). A retry waits
+ * on the same reload again: it succeeds once a slow reload settles, and times out
+ * again on a wedged one, which only a fresh process clears. Source and Docker
+ * hosts already run each Pi query in its own process, so a wedge persists only
+ * where Pi runs in-process (release binaries).
  */
-interface CachedReload {
-  pending: Promise<ReloadedExtensionLoader>;
-  settled: boolean;
-  abandoned: boolean;
-}
-const reloadedExtensionLoaderCache = new Map<string, CachedReload>();
+const reloadedExtensionLoaderCache = new Map<string, Promise<ReloadedExtensionLoader>>();
 
 /**
  * One extension provider registration captured at load time — the payload an
@@ -208,8 +209,7 @@ function extensionLoaderCacheKey(
  * Concurrency: the cache stores the in-flight Promise (not the resolved entry)
  * so concurrent same-layer nodes await a single shared `reload()` instead of
  * racing into two. A failed reload is evicted so the next call retries cleanly.
- * `abortSignal` ends only this caller's wait, never the shared reload; aborting
- * while the reload is pending makes later callers fail fast as `misconfigured`.
+ * `abortSignal` ends only this caller's wait, never the shared reload.
  */
 export async function getOrCreateReloadedExtensionLoader(
   cwd: string,
@@ -223,17 +223,9 @@ export async function getOrCreateReloadedExtensionLoader(
     options.systemPrompt,
     options.additionalSkillPaths ?? []
   );
-  let entry = reloadedExtensionLoaderCache.get(key);
-  if (entry && !entry.settled && entry.abandoned) {
-    throw new ClassifiedProviderError(
-      'misconfigured',
-      `Pi extension loading for ${cwd} has not finished after an earlier node was aborted ` +
-        'while waiting for it, and it cannot be safely restarted in this process. Restart Archon, ' +
-        'or set `assistants.pi.enableExtensions: false` to run without extensions.'
-    );
-  }
-  if (!entry) {
-    const pending = (async (): Promise<ReloadedExtensionLoader> => {
+  let pending = reloadedExtensionLoaderCache.get(key);
+  if (!pending) {
+    pending = (async (): Promise<ReloadedExtensionLoader> => {
       const loader = createPiResourceLoader(cwd, { ...options, enableExtensions: true });
       // reload() loads the extensions into the loader so createAgentSession can
       // build session.extensionRunner. Without it the runner is undefined and the
@@ -263,31 +255,23 @@ export async function getOrCreateReloadedExtensionLoader(
         );
       }
     })();
-    const created: CachedReload = { pending, settled: false, abandoned: false };
-    entry = created;
-    reloadedExtensionLoaderCache.set(key, created);
-    pending.then(
-      () => {
-        created.settled = true;
-      },
-      () => {
-        created.settled = true;
-        // Evict on failure so a transient reload error doesn't poison the cache.
-        reloadedExtensionLoaderCache.delete(key);
-      }
-    );
+    reloadedExtensionLoaderCache.set(key, pending);
+    // Evict on failure so a transient reload error doesn't poison the cache.
+    pending.catch(() => reloadedExtensionLoaderCache.delete(key));
   }
-  if (!abortSignal) return entry.pending;
-  const waited = entry;
+  if (!abortSignal) return pending;
+  const shared = pending;
+  const waitStartedAt = Date.now();
   return new Promise((resolve, reject) => {
     const onAbort = (): void => {
-      if (!waited.settled) waited.abandoned = true;
+      getLog().warn(
+        { cwd, waitedMs: Date.now() - waitStartedAt },
+        'pi.extension_reload_wait_aborted'
+      );
       reject(new Error('Query aborted'));
     };
     abortSignal.addEventListener('abort', onAbort, { once: true });
-    waited.pending
-      .then(resolve, reject)
-      .finally(() => abortSignal.removeEventListener('abort', onAbort));
+    shared.then(resolve, reject).finally(() => abortSignal.removeEventListener('abort', onAbort));
   });
 }
 

@@ -3581,13 +3581,17 @@ describe('PiProvider', () => {
       expect(mockResourceLoaderReload).toHaveBeenCalledTimes(2);
     });
 
-    // #3769: a watchdog abort while the shared reload hangs must not leave the retry
-    // waiting on the same reload, and must not start a second one.
-    test('a retry after a watchdog abort during a hung reload fails fast without reloading', async () => {
+    // #3769: a watchdog abort ends the attempt waiting on a slow shared reload, and the
+    // retry waits on that same reload instead of starting a second one.
+    test('a retry after a watchdog abort during a slow reload reuses it once it settles', async () => {
       process.env.GEMINI_API_KEY = 'sk-test';
       resetScript(scriptedAgentEnd());
+      let settleReload: () => void = () => undefined;
       mockResourceLoaderReload.mockImplementationOnce(
-        () => new Promise<undefined>(() => undefined)
+        () =>
+          new Promise<undefined>(resolve => {
+            settleReload = () => resolve(undefined);
+          })
       );
 
       const watchdog = new AbortController();
@@ -3606,13 +3610,13 @@ describe('PiProvider', () => {
       const retry = consume(
         new PiProvider().sendQuery('retry', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
       );
-      const outcome = await Promise.race([
-        retry,
-        new Promise<'stuck'>(resolve => setTimeout(() => resolve('stuck'), 1000)),
-      ]);
+      // Let the retry reach the shared reload while it is still pending.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      settleReload();
+      const outcome = await retry;
 
-      expect(outcome).not.toBe('stuck');
-      expect(outcome === 'stuck' ? undefined : outcome.failure?.class).toBe('misconfigured');
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.failure).toBeUndefined();
       expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
     });
   });
