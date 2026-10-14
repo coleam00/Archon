@@ -4607,8 +4607,7 @@ async function executeLoopGroupBody(
         output: '',
         error: `Workflow ${effectiveStatus}`,
         failureKind: 'cancelled',
-        costUsd: usage.costUsd,
-        ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+        ...usage,
       };
     }
 
@@ -4767,8 +4766,7 @@ async function executeLoopGroupBody(
         output: lastIterationOutput,
         error: `Workflow ${effectiveStatus}`,
         failureKind: 'cancelled',
-        costUsd: usage.costUsd,
-        ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+        ...usage,
       };
     }
     // Carry the body's final sequential session into the next iteration (unless
@@ -4805,8 +4803,7 @@ async function executeLoopGroupBody(
         error: errorMsg,
         failureKind: 'child_failed',
         ...(providerFailure !== undefined ? { providerFailure } : {}),
-        costUsd: usage.costUsd,
-        ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+        ...usage,
         loopIterations: i,
       };
     }
@@ -4838,8 +4835,7 @@ async function executeLoopGroupBody(
         return {
           state: 'running',
           output: lastIterationOutput,
-          costUsd: usage.costUsd,
-          ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+          ...usage,
           loopIterations: i,
           ...(suspensionPoint !== undefined ? { suspensionPoint } : {}),
         };
@@ -4856,8 +4852,7 @@ async function executeLoopGroupBody(
       return {
         state: 'running',
         output: lastIterationOutput,
-        costUsd: usage.costUsd,
-        ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+        ...usage,
         loopIterations: i,
       };
     }
@@ -5058,8 +5053,7 @@ async function executeLoopGroupBody(
       return {
         state: 'completed',
         output: lastIterationOutput,
-        costUsd: usage.costUsd,
-        ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+        ...usage,
         loopIterations: i,
         // The final iteration's sink payload, so downstream `$group.output.field`
         // resolves from the logical value (#2637). No declaredOutputPaths: a group's
@@ -5084,8 +5078,7 @@ async function executeLoopGroupBody(
         { status: 'suspended', point: 'interactive_loop' },
         {
           output: { text: lastIterationOutput, structured: lastIterationStructuredOutput },
-          costUsd: usage.costUsd,
-          tokens: usage.tokens,
+          ...usage,
           diagnostics: { loopIterations: i },
         }
       );
@@ -5127,8 +5120,7 @@ async function executeLoopGroupBody(
         return {
           state: 'running',
           output: lastIterationOutput,
-          costUsd: usage.costUsd,
-          ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+          ...usage,
           loopIterations: i,
         };
       await recordDerivedExecution({ logDir }, suspended);
@@ -5154,8 +5146,7 @@ async function executeLoopGroupBody(
           return {
             state: 'running',
             output: lastIterationOutput,
-            costUsd: usage.costUsd,
-            ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+            ...usage,
             loopIterations: i,
           };
         getLog().error(
@@ -5167,8 +5158,7 @@ async function executeLoopGroupBody(
           output: lastIterationOutput,
           failureKind: 'unknown',
           error: undeliveredGatePromptError('Loop-group gate', node.id),
-          costUsd: usage.costUsd,
-          ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+          ...usage,
         };
       }
       deps.store
@@ -5198,8 +5188,7 @@ async function executeLoopGroupBody(
     output: lastIterationOutput,
     error: errorMsg,
     failureKind: 'max_iterations',
-    costUsd: usage.costUsd,
-    ...(usage.tokens !== undefined ? { tokens: usage.tokens } : {}),
+    ...usage,
     loopIterations: iterationLimit,
   };
 }
